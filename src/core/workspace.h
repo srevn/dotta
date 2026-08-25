@@ -649,9 +649,10 @@ error_t *workspace_anchor(
  * observation's INSERT first. DB and memory stay consistent for downstream readers
  * in the same run.
  *
- * The join runs last: every prune order whose path the view has is void (its
- * lifetime rule, state.h), enforced here because the flush is where the view
- * and the loaded order set are both in hand.
+ * The joins run last — each fact's lifetime rule (state.h), enforced here because
+ * the flush is where the view, the record and both loaded fact sets are in hand:
+ * every prune order whose path the view has is void, and every released copy
+ * whose path's record again carries a confirmed blob is forgotten.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

@@ -1943,29 +1943,59 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             print_cleanup_results(out, cleanup_res);
 
             /* The record behind a gone or let-go path retires; a skipped or failed
-             * one stays. Which outcomes retire is cleanup's rule, read off its
-             * result (cleanup.h); the act is apply's. The record is one table
-             * for both kinds, so every bucket takes the same statement. Non-fatal
-             * per row: the filesystem effect, if any, already happened, and a
-             * record that fails to retire is reported and read as an orphan again
-             * by the next apply. */
-            const ptr_array_t *retiring[] = {
+             * one stays. Which outcomes settle is cleanup's rule, read off its
+             * result (cleanup.h); the act is apply's. Kind decides nothing here
+             * — reason decides the verb: a gone copy (pruned, reclaimed) plainly
+             * retires, there is no fact to keep; a let-go copy (released) still
+             * stands on disk, so its record's content-proof is kept through
+             * state_release — except a TYPE-displaced item, whose path holds
+             * something that is not dotta's copy: the released fact would be
+             * false at birth, so it takes the plain retire (a released directory
+             * needs no carve-out — the release verb's blob guard makes it a plain
+             * retire on its own). Non-fatal per row: the filesystem effect, if
+             * any, already happened, and a record that fails to settle is reported
+             * and read as an orphan again by the next apply. */
+            const ptr_array_t *gone[] = {
                 &cleanup_res->pruned_files,
                 &cleanup_res->reclaimed_files,
-                &cleanup_res->released_files,
                 &cleanup_res->pruned_dirs,
                 &cleanup_res->reclaimed_dirs,
+            };
+            const ptr_array_t *let_go[] = {
+                &cleanup_res->released_files,
                 &cleanup_res->released_dirs,
             };
             size_t retired = 0;
 
-            for (size_t b = 0; b < sizeof(retiring) / sizeof(retiring[0]); b++) {
-                workspace_items_t items = workspace_items_view(retiring[b]);
+            for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
+                workspace_items_t items = workspace_items_view(gone[b]);
 
                 for (size_t i = 0; i < items.count; i++) {
                     const workspace_item_t *item = items.entries[i];
 
                     err = state_retire_anchor(state, item->filesystem_path);
+                    if (err) {
+                        output_warning(
+                            out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
+                            item->filesystem_path, error_message(err)
+                        );
+                        error_free(err);
+                        err = NULL;  /* Don't propagate - continue operation */
+                        continue;
+                    }
+                    retired++;
+                }
+            }
+
+            for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+                workspace_items_t items = workspace_items_view(let_go[b]);
+
+                for (size_t i = 0; i < items.count; i++) {
+                    const workspace_item_t *item = items.entries[i];
+
+                    err = (item->divergence & DIVERGENCE_TYPE)
+                        ? state_retire_anchor(state, item->filesystem_path)
+                        : state_release(state, item->filesystem_path);
                     if (err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
@@ -2144,6 +2174,64 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 }
 
                 acknowledged_count++;
+            }
+        }
+
+        /* The released-copies sweep: disk-side retirement of the facts whose
+         * condition provably ended. A fresh read — the run's own release writes
+         * included — then one lstat per row, each forget clause a truth statement:
+         * an absent path took the fact's copy with it; a live size that differs
+         * from the recorded triple's proves the bytes are not the blob's (a deploy
+         * this run wrote over a released-base stale path lands here). Everything
+         * else keeps — a same-size drift or an UNSET triple (mtime == 0: no usable
+         * size to test) is possibly still true and the read verifies before
+         * trusting, and a failed look (EACCES, ...) never retires a fact.
+         * Bookkeeping only, never a filesystem effect, so it is apply's own —
+         * not a cleanup.c concern — and non-fatal like the record step around
+         * it. */
+        {
+            released_copy_t *swept = NULL;
+            size_t swept_count = 0;
+            error_t *sweep_err = state_get_all_released(
+                state, ctx->arena, &swept, &swept_count
+            );
+            if (sweep_err) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Released-copies sweep skipped: %s",
+                    error_message(sweep_err)
+                );
+                error_free(sweep_err);
+            }
+
+            size_t forgotten = 0;
+            for (size_t i = 0; i < swept_count; i++) {
+                const released_copy_t *copy = &swept[i];
+
+                struct stat live;
+                fs_occupant_t occupant = fs_lstat_occupant(copy->filesystem_path, &live);
+
+                bool dead = occupant == FS_OCCUPANT_NONE ||
+                    (occupant != FS_OCCUPANT_UNKNOWN && copy->stat.mtime != 0 &&
+                    (int64_t) live.st_size != copy->stat.size);
+                if (!dead) continue;
+
+                sweep_err = state_forget_released(state, copy->filesystem_path);
+                if (sweep_err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to forget released copy for %s: %s",
+                        copy->filesystem_path, error_message(sweep_err)
+                    );
+                    error_free(sweep_err);
+                    continue;
+                }
+                forgotten++;
+            }
+
+            if (forgotten > 0) {
+                output_print(
+                    out, OUTPUT_VERBOSE, "  Swept %zu released cop%s\n",
+                    forgotten, forgotten == 1 ? "y" : "ies"
+                );
             }
         }
     }

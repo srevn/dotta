@@ -124,6 +124,15 @@ struct workspace {
     size_t order_count;                          /* Number of ordered paths */
     hashmap_t *prune_orders;                     /* fs_path → the path (membership; heap-allocated) */
 
+    /* The released copies, snapshot at load the same way. Two readers only, by
+     * design: the base derivation in analyze_file_divergence (through the index,
+     * and only when the path's record carries no confirmed blob — a released
+     * fact is not a claim) and the flush's join (through the array). No third
+     * reader may grow without revisiting the reap design. */
+    released_copy_t *released;                   /* Arena snapshot from state_get_all_released */
+    size_t released_count;                       /* Number of released copies */
+    hashmap_t *released_index;                   /* fs_path → released_copy_t * (heap-allocated) */
+
     /* State and profile set — the view's profiles (manifest_profiles), in
      * precedence order: the untracked scan walks them in that order. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
@@ -527,8 +536,9 @@ static workspace_state_t classify_absent(const anchor_t *anchor) {
  * queries, no Git; the record dotta keeps of the path is paired with it from
  * the anchors snapshot.
  *
- * Content is judged three-way, with the deployment anchor as base (see Phase
- * 1): DIVERGENCE_STALE says Git moved past the blob dotta last deployed,
+ * Content is judged three-way, with dotta's last content confirmation as base
+ * (see Phase 1 — the record's blob, or a released fact's when the record carries
+ * none): DIVERGENCE_STALE says Git moved past the blob dotta last deployed,
  * DIVERGENCE_CONTENT says disk left it. Each is a verdict in its own right —
  * STALE without CONTENT is apply-side work that overwrites nothing of the user's;
  * CONTENT without STALE is a local edit Git has not raced; both together is a
@@ -657,11 +667,11 @@ static error_t *analyze_file_divergence(
      * - Stat propagation (single stat used for all checks)
      * - TOCTOU-aware (handles files deleted during analysis)
      *
-     * The content verdict is a three-way comparison with the deployment anchor
-     * as base:
+     * The content verdict is a three-way comparison with dotta's last content
+     * confirmation as base:
      *
      *   theirs = row->blob_oid          what Git expects now
-     *   base   = anchor->blob_oid       what dotta last confirmed on disk
+     *   base   = the confirmed blob     what dotta last confirmed on disk
      *   ours   = disk
      *
      *   git_moved   := base set  && base ≠ theirs   Git advanced since dotta
@@ -675,10 +685,11 @@ static error_t *analyze_file_divergence(
      * moved. Without a base there is no second question — any difference from
      * theirs is the user's.
      *
-     * Source of truth for the base: the persistent record (the path_anchors row's
-     * blob_oid). A path with no record, or one observed but never confirmed (zero
-     * blob), has no base. Cross-process correct by construction — every invocation
-     * sees the same answer.
+     * Source of truth for the base: the record (the path_anchors row's blob)
+     * when it carries one; the released fact when it does not — a released path
+     * re-claimed, whose record is gone or is the window's blob-less observation.
+     * A path with neither has no base. Cross-process correct by construction —
+     * every invocation sees the same answer.
      */
     if (occupant != FS_OCCUPANT_NONE) {
         /* The row's blob_oid is already a 20-byte binary OID — no parse step. */
@@ -698,40 +709,72 @@ static error_t *analyze_file_divergence(
 
         error_t *err = NULL;
 
-        /* The first question of the three-way frame is answered from the row
-         * and the record alone; the second (disk_at_anchor — ours == base) is
-         * answered by whichever path below settles it, and only when it can change
-         * the verdict. */
-        bool git_moved = anchor && !git_oid_is_zero(&anchor->blob_oid) &&
-            !git_oid_equal(&anchor->blob_oid, blob_oid_ptr);
-        bool disk_at_anchor = false;
+        /* The base: dotta's last content confirmation at this path — the record's,
+         * when it carries one; the released fact's, when it does not (a released
+         * path re-claimed: the record is gone, or is the window's blob-less
+         * observation). The claim questions — absence, reassignment, the item's
+         * record column — stay the anchor's alone: a released fact is not a claim,
+         * and never fabricates a record, a reassignment, or a DELETED absence.
+         * The decryption pair rides with its base: an anchored base compares
+         * under the row's (storage_path, profile); a released base under its
+         * own recorded pair — the only binding on file, and the one its blob
+         * was written whole with. */
+        bool anchor_has_blob = anchor && !git_oid_is_zero(&anchor->blob_oid);
+        const released_copy_t *released = anchor_has_blob ? NULL
+            : hashmap_get(ws->released_index, fs_path);
 
-        /* ANCHOR FAST PATH (safety-grade)
+        const git_oid *base_blob = anchor_has_blob ? &anchor->blob_oid
+                                 : released        ? &released->blob_oid : NULL;
+        const stat_cache_t *base_stat = anchor_has_blob ? &anchor->stat
+                                      : released        ? &released->stat : NULL;
+        path_type_t base_type = anchor_has_blob ? anchor->type
+                              : released        ? released->type : row->type;
+        const char *base_storage = released ? released->storage_path : storage_path;
+        const char *base_profile = released ? released->profile : profile;
+
+        /* The first question of the three-way frame is answered from the row
+         * and the base alone; the second (disk_at_base — ours == base) is answered
+         * by whichever path below settles it, and only when it can change the
+         * verdict. */
+        bool git_moved = base_blob && !git_oid_equal(base_blob, blob_oid_ptr);
+        bool disk_at_base = false;
+
+        /* BASE FAST PATH (safety-grade)
          *
-         * The record binds three pieces of information: the blob dotta last
-         * confirmed on disk (anchor->blob_oid), the stat triple captured at that
-         * confirmation (anchor->stat), and the time of ownership
-         * (anchor->deployed_at). If the live stat matches anchor->stat, the
-         * following invariant holds by construction:
+         * The base binds the blob dotta last confirmed on disk and the stat triple
+         * captured at that confirmation. If the live stat matches the triple,
+         * the following invariant holds by construction:
          *
-         *     stat_match  ⟹  disk == anchor->blob_oid
+         *     stat_match  ⟹  disk == base blob
          *
-         * The pair is advanced only by state_anchor() after dotta has verified
-         * disk content; nothing else writes it. So a stat match is a
-         * cryptographically-grade proof that disk still equals anchor->blob_oid
-         * — no re-hash needed, and the second question is answered for free:
-         * ours == base. Whether that is CMP_EQUAL (base == theirs: clean) or
-         * CMP_DIFFERENT (Git moved: STALE alone) is then read straight from
-         * git_moved, without loading blobs or hashing. A path with no record
-         * has no triple to match. */
-        if (anchor && anchor->stat.mtime != 0
-            && anchor->stat.mtime == (int64_t) initial_stat.st_mtime
-            && anchor->stat.size == (int64_t) initial_stat.st_size
-            && anchor->stat.ino == (uint64_t) initial_stat.st_ino) {
-            /* stat match ⟹ disk == anchor.blob_oid */
+         * The pair is advanced only after dotta has verified disk content —
+         * state_anchor and state_confirm are its writers, and a released row's
+         * pair was copied verbatim from a record those verbs advanced, so the
+         * proof holds through the copy. A stat match is a cryptographically-grade
+         * proof that disk still equals the base blob — no re-hash needed, and
+         * the second question is answered for free: ours == base. Whether that
+         * is CMP_EQUAL (base == theirs: clean) or CMP_DIFFERENT (Git moved: STALE
+         * alone) is then read straight from git_moved, without loading blobs or
+         * hashing. A path with no base has no triple to match. */
+        if (base_stat && base_stat->mtime != 0
+            && base_stat->mtime == (int64_t) initial_stat.st_mtime
+            && base_stat->size == (int64_t) initial_stat.st_size
+            && base_stat->ino == (uint64_t) initial_stat.st_ino) {
+            /* stat match ⟹ disk == base blob */
             file_stat = initial_stat;
-            disk_at_anchor = true;
+            disk_at_base = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
+
+            /* A verification that establishes a pair the record does not hold
+             * is queued as the record's own confirmation — which is exactly the
+             * released-base hit: the record is blob-less or absent, while an
+             * anchored base IS the record's pair and re-writing it would be a
+             * no-op (the fast path stays write-free for it). The record gains
+             * the blob, and the flush's join then forgets the released row the
+             * fresher confirmation subsumes. */
+            if (cmp_result == CMP_EQUAL && released) {
+                workspace_record_confirmation(ws, row, &file_stat);
+            }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
              *
@@ -804,41 +847,43 @@ static error_t *analyze_file_divergence(
              * (touch(1), an editor's rename-write, a fresh checkout) although
              * disk content may still be the blob dotta last deployed.
              *
-             * Route the anchor comparison by the anchor blob's own bytes.
+             * Route the base comparison by the base blob's own bytes.
              *
              * The latent bug class this avoids: routing on row->encrypted silently
              * miscategorised the staleness check across encryption-policy
              * transitions. Both directions failed:
-             *   - encrypted anchor / plaintext current → compare_oid_to_disk
-             *     hashed plaintext disk against an encrypted-blob OID, never
-             *     equal, STALE never set.
-             *   - plaintext anchor / encrypted current → content_cache called
-             *     with expected_encrypted=true on a plaintext blob, the old
-             *     cross-check raised ERR_STATE_INVALID, swallowed below.
+             *   - encrypted base / plaintext current → compare_oid_to_disk hashed
+             *     plaintext disk against an encrypted-blob OID, never equal,
+             *     STALE never set.
+             *   - plaintext base / encrypted current → content_cache called with
+             *     expected_encrypted=true on a plaintext blob, the old cross-check
+             *     raised ERR_STATE_INVALID, swallowed below.
              *
              * content_compare_blob_to_disk classifies by bytes, so the routing
              * decision lives with the blob whose comparison we are doing. A
              * routing-on-stale-flag bug is structurally impossible.
              *
-             * A failed or inconclusive compare leaves disk_at_anchor false: the
+             * A failed or inconclusive compare leaves disk_at_base false: the
              * edit is taken as real (CONTENT), the conservative answer — STALE
-             * still holds, because git_moved is a fact about two OIDs. */
+             * still holds, because git_moved is a fact about two OIDs. A failed
+             * look on a released base retires nothing: only the sweep and the
+             * join forget rows, and neither reads compare results. */
             if (cmp_result == CMP_DIFFERENT && git_moved) {
-                compare_result_t at_anchor = CMP_UNVERIFIED;
+                compare_result_t at_base = CMP_UNVERIFIED;
                 error_t *verify_err = content_compare_blob_to_disk(
                     ws->repo,
-                    &anchor->blob_oid,
+                    base_blob,
                     fs_path,
                     expected_mode,
                     &initial_stat,
-                    storage_path,
-                    profile,
+                    base_storage,
+                    base_profile,
                     ws->content_cache,
-                    &at_anchor,
+                    &at_base,
                     NULL
                 );
                 if (verify_err) error_free(verify_err);
-                disk_at_anchor = (at_anchor == CMP_EQUAL);
+                disk_at_base = (at_base == CMP_EQUAL);
             }
         }
 
@@ -851,7 +896,7 @@ static error_t *analyze_file_divergence(
 
             case CMP_DIFFERENT:
                 /* ours ≠ theirs — name which side moved; both can have */
-                if (!disk_at_anchor) divergence |= DIVERGENCE_CONTENT;
+                if (!disk_at_base) divergence |= DIVERGENCE_CONTENT;
                 if (git_moved) divergence |= DIVERGENCE_STALE;
                 break;
 
@@ -859,28 +904,29 @@ static error_t *analyze_file_divergence(
                 /* The occupant is not the row's kind (file ↔ symlink, or a
                  * directory, FIFO, socket or device standing on the row). When
                  * Git moved the kind out from under an untouched deployment,
-                 * the second question — asked against the record, routed by the
-                 * anchor's own kind — answers it: an occupant that is exactly
-                 * what dotta confirmed, kind and content, diverges by Git's move
-                 * alone. STALE, the fast path's answer for the same state when
-                 * the triple vouches for it; the verdict must not depend on which
-                 * path looked. */
+                 * the second question — asked against the base, routed by the
+                 * base's own kind — answers it: an occupant that is exactly what
+                 * dotta confirmed, kind and content, diverges by Git's move alone.
+                 * STALE, the fast path's answer for the same state when the triple
+                 * vouches for it; the base's kind is what keeps the two paths
+                 * agreeing — the module's invariant that the verdict must not
+                 * depend on which path looked rests on this routing. */
                 if (git_moved) {
-                    compare_result_t at_anchor = CMP_UNVERIFIED;
+                    compare_result_t at_base = CMP_UNVERIFIED;
                     error_t *verify_err = content_compare_blob_to_disk(
                         ws->repo,
-                        &anchor->blob_oid,
+                        base_blob,
                         fs_path,
-                        path_type_to_git_filemode(anchor->type),
+                        path_type_to_git_filemode(base_type),
                         &initial_stat,
-                        storage_path,
-                        profile,
+                        base_storage,
+                        base_profile,
                         ws->content_cache,
-                        &at_anchor,
+                        &at_base,
                         NULL
                     );
                     if (verify_err) error_free(verify_err);
-                    if (at_anchor == CMP_EQUAL) {
+                    if (at_base == CMP_EQUAL) {
                         divergence |= DIVERGENCE_STALE;
                         break;
                     }
@@ -2338,8 +2384,8 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * pair each row with its record through workspace_get_anchor, and the two writers
  * patch the index's values — and every record whose path the view lacks is
  * collected into ws->orphans, in the snapshot's path order. The prune orders
- * load beside the record, unconditionally (the flush's join needs them even with
- * zero orphans).
+ * and the released copies load beside the record, unconditionally (the flush's
+ * join needs both even when no analysis consults them).
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -2464,6 +2510,29 @@ static error_t *workspace_partition(workspace_t *ws) {
             err = hashmap_set(ws->prune_orders, ws->order_paths[i], ws->order_paths[i]);
             if (err) {
                 return error_wrap(err, "Failed to populate order index");
+            }
+        }
+    }
+
+    /* The released copies, the same way. */
+    err = state_get_all_released(
+        ws->state, ws->arena, &ws->released, &ws->released_count
+    );
+    if (err) {
+        return error_wrap(err, "Failed to read released copies from state");
+    }
+
+    if (ws->released_count > 0) {
+        ws->released_index = hashmap_borrow(ws->released_count);
+        if (!ws->released_index) {
+            return ERROR(ERR_MEMORY, "Failed to create released index");
+        }
+        for (size_t i = 0; i < ws->released_count; i++) {
+            err = hashmap_set(
+                ws->released_index, ws->released[i].filesystem_path, &ws->released[i]
+            );
+            if (err) {
+                return error_wrap(err, "Failed to populate released index");
             }
         }
     }
@@ -3169,9 +3238,10 @@ error_t *workspace_anchor(
  * one has not seen — so the observation's INSERT must land first. Observed first,
  * the confirmation then finds its row on both sides.
  *
- * The join, last: every prune order whose path the view has is void — its lifetime
- * rule ("an order lives only while its path is out of the view"), enforced where
- * the view and the order set are both in hand.
+ * The joins, last — each fact's lifetime rule, enforced where the view, the record
+ * and both fact sets are in hand: every prune order whose path the view has is
+ * void, and every released copy whose path's record again carries a confirmed
+ * blob (post-patch) is forgotten.
  *
  * Begins its own transaction only when state isn't already in one
  * (status/diff/sync). Apply always passes state already-in-transaction.
@@ -3179,17 +3249,26 @@ error_t *workspace_anchor(
 error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    /* The join's pending work, counted up front so the gate below is exact: a
-     * pure-join flush (nothing observed, nothing confirmed, one stale order)
-     * still takes its scoped transaction, and the common all-empty flush still
-     * costs nothing. One loop over the almost-always-empty order set. */
+    /* The joins' pending work, counted up front so the gate below is exact: a
+     * pure-join flush (nothing observed, nothing confirmed, one stale order or
+     * subsumed released row) still takes its scoped transaction, and the common
+     * all-empty flush still costs nothing. One loop over each almost-always-empty
+     * set. The released count is read against the pre-patch snapshot — exact
+     * here, because with zero confirmations nothing below patches a record; with
+     * any, the gate passes regardless and the join re-reads post-patch. */
     size_t pending_voids = 0;
     for (size_t i = 0; i < ws->order_count; i++) {
         if (manifest_lookup(ws->manifest, ws->order_paths[i])) pending_voids++;
     }
+    size_t pending_forgets = 0;
+    for (size_t i = 0; i < ws->released_count; i++) {
+        const anchor_t *anchor =
+            hashmap_get(ws->anchor_index, ws->released[i].filesystem_path);
+        if (anchor && !git_oid_is_zero(&anchor->blob_oid)) pending_forgets++;
+    }
 
     if (ws->observation_count == 0 && ws->confirmation_count == 0 &&
-        pending_voids == 0) {
+        pending_voids == 0 && pending_forgets == 0) {
         return NULL;
     }
 
@@ -3248,13 +3327,16 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         }
     }
 
-    /* The join: an order lives only while its path is out of the view, so every
-     * order whose path the view has is void — the removal it answered was reverted
-     * (a revert, a sync pulling the path back, an enable providing it), verified
-     * or not. Left standing, the order would outlive the removal and prune the
-     * copy at the next scope exit instead of the probe releasing it; voided here,
-     * a later discovered departure executes as a release, which is the stated
-     * policy for every discovered departure. */
+    /* The joins: each fact's lifetime rule, enforced where the view, the record
+     * and both fact sets are in hand.
+     *
+     * An order lives only while its path is out of the view, so every order whose
+     * path the view has is void — the removal it answered was reverted (a revert,
+     * a sync pulling the path back, an enable providing it), verified or not.
+     * Left standing, the order would outlive the removal and prune the copy at
+     * the next scope exit instead of the probe releasing it; voided here, a later
+     * discovered departure executes as a release, which is the stated policy
+     * for every discovered departure. */
     for (size_t i = 0; i < ws->order_count; i++) {
         if (!manifest_lookup(ws->manifest, ws->order_paths[i])) continue;
 
@@ -3265,6 +3347,32 @@ error_t *workspace_flush_updates(workspace_t *ws) {
             }
             return error_wrap(
                 err, "Failed to void prune order for '%s'", ws->order_paths[i]
+            );
+        }
+    }
+
+    /* A released copy is subsumed once its path's record again carries a confirmed
+     * blob — the record is then the base and the row is redundant (or false:
+     * the fresher confirmation says what disk holds now). Read against the
+     * post-patch snapshot — the confirmation loop above has advanced it — so a
+     * released-base fast-path hit forgets its row in the same flush that confirms
+     * it. Lazily covers every route back to managed, add/update's workspace-less
+     * captures included: their row dies at the next flush-bearing load, and until
+     * then the base derivation's no-confirmed-blob predicate shadows it
+     * correctly. */
+    for (size_t i = 0; i < ws->released_count; i++) {
+        const anchor_t *anchor =
+            hashmap_get(ws->anchor_index, ws->released[i].filesystem_path);
+        if (!anchor || git_oid_is_zero(&anchor->blob_oid)) continue;
+
+        error_t *err = state_forget_released(ws->state, ws->released[i].filesystem_path);
+        if (err) {
+            if (needs_transaction) {
+                state_rollback(ws->state);
+            }
+            return error_wrap(
+                err, "Failed to forget released copy for '%s'",
+                ws->released[i].filesystem_path
             );
         }
     }
@@ -3305,10 +3413,11 @@ void workspace_free(workspace_t *ws) {
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
      * anchor_index values are records in ws->arena — also borrowed, as are the
-     * order index's arena paths. */
+     * order index's arena paths and the released index's rows. */
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
     hashmap_free(ws->prune_orders, NULL);
+    hashmap_free(ws->released_index, NULL);
 
     /* The view is borrowed (the dispatcher's); the slices, the snapshot and the
      * orphans array are arena-allocated and the caller's arena releases them

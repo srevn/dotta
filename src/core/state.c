@@ -28,7 +28,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "17"
+#define STATE_SCHEMA_VERSION "18"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -71,6 +71,8 @@ struct state {
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
     sqlite3_stmt *stmt_prune;               /* INSERT prune_orders, guarded by the record */
     sqlite3_stmt *stmt_order_void;          /* DELETE FROM prune_orders */
+    sqlite3_stmt *stmt_release;             /* INSERT OR REPLACE released_copies from the record */
+    sqlite3_stmt *stmt_released_forget;     /* DELETE FROM released_copies */
 };
 
 /**
@@ -225,6 +227,26 @@ static error_t *initialize_schema(sqlite3 *db) {
          * foreign key, per the rule above). */
         "CREATE TABLE IF NOT EXISTS prune_orders ("
         "    filesystem_path TEXT PRIMARY KEY"
+        ") STRICT;"
+
+        /* The content-proof half of a record that released (identity + confirmed
+         * pair), claim-free: disk still held dotta's last confirmation when dotta
+         * let go of the path. File kinds only — a directory has no content
+         * confirmation to outlive its record (blob IS NOT NULL is the write guard's
+         * filter; the CHECKs are the schema's own restatement). A row lives only
+         * while its fact can still be true: the read verifies it against live
+         * disk before trusting it, the flush's join forgets it once the path's
+         * record again carries a confirmed blob, and apply's sweep retires it
+         * when disk provably left it. */
+        "CREATE TABLE IF NOT EXISTS released_copies ("
+        "    filesystem_path TEXT PRIMARY KEY,"
+        "    storage_path TEXT NOT NULL,"
+        "    profile TEXT NOT NULL,"
+        "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
+        "    blob_oid BLOB NOT NULL CHECK(length(blob_oid) = 20 AND blob_oid != zeroblob(20)),"
+        "    stat_mtime INTEGER NOT NULL,"
+        "    stat_size  INTEGER NOT NULL,"
+        "    stat_ino   INTEGER NOT NULL"
         ") STRICT;";
 
     /* Execute schema SQL */
@@ -477,6 +499,8 @@ static void finalize_statements(state_t *state) {
         &state->stmt_retire,
         &state->stmt_prune,
         &state->stmt_order_void,
+        &state->stmt_release,
+        &state->stmt_released_forget,
     };
 
     for (size_t i = 0; i < sizeof(roster) / sizeof(roster[0]); i++) {
@@ -636,6 +660,39 @@ static error_t *prepare_statements(state_t *state) {
     if (rc != SQLITE_OK) {
         finalize_statements(state);
         return sqlite_error(state->db, "Failed to prepare order-void statement");
+    }
+
+    /* Release, the INSERT arm: the record's content-proof half, copied verbatim.
+     * The blob filter is the guard — a directory or never-confirmed record has
+     * no content proof to keep, so nothing is inserted and the composed retire
+     * is the whole of the release. OR REPLACE keeps the latest fact where a
+     * proof-bearing release lands on a path released before. */
+    const char *sql_release =
+        "INSERT OR REPLACE INTO released_copies "
+        "(filesystem_path, storage_path, profile, type, blob_oid, "
+        " stat_mtime, stat_size, stat_ino) "
+        "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
+        "       stat_mtime, stat_size, stat_ino "
+        "FROM path_anchors WHERE filesystem_path = ?1 AND blob_oid IS NOT NULL;";
+
+    rc = sqlite3_prepare_v2(state->db, sql_release, -1, &state->stmt_release, NULL);
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare release statement");
+    }
+
+    /* Released forget: one end of the fact's lifetime — the flush's join (the
+     * path's record again carries a confirmed blob) and apply's sweep (disk
+     * provably left the copy). */
+    const char *sql_released_forget =
+        "DELETE FROM released_copies WHERE filesystem_path = ?1;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_released_forget, -1, &state->stmt_released_forget, NULL
+    );
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare released-forget statement");
     }
 
     return NULL;
@@ -1959,6 +2016,165 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path) {
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to void prune order");
+    }
+
+    return NULL;
+}
+
+/**
+ * Release a managed path: keep the record's content-proof, retire the record
+ *
+ * The INSERT arm reads the record before the retire deletes it — the order of
+ * the two is the function. The retire is composed, not duplicated: the same call
+ * every retire site makes, both its deletes included.
+ */
+error_t *state_release(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_release);
+
+    sqlite3_stmt *stmt = state->stmt_release;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to release path");
+    }
+
+    return state_retire_anchor(state, filesystem_path);
+}
+
+/**
+ * Get every released copy, in filesystem_path order
+ *
+ * The released_copies read, the shape of state_get_all_anchors: count, allocate
+ * once, hydrate into the caller's arena.
+ */
+error_t *state_get_all_released(
+    const state_t *state,
+    arena_t *arena,
+    released_copy_t **out,
+    size_t *count
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+    CHECK_NULL(count);
+
+    *out = NULL;
+    *count = 0;
+
+    /* Empty state (no DB file) — return empty results */
+    if (!state->db) return NULL;
+
+    const char *sql_count = "SELECT COUNT(*) FROM released_copies;";
+    sqlite3_stmt *stmt_count = NULL;
+
+    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare released count query");
+    }
+
+    rc = sqlite3_step(stmt_count);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt_count);
+        return sqlite_error(state->db, "Failed to count released copies");
+    }
+
+    size_t released_count = (size_t) sqlite3_column_int64(stmt_count, 0);
+    sqlite3_finalize(stmt_count);
+
+    if (released_count == 0) {
+        return NULL;  /* Success, no released copies */
+    }
+
+    released_copy_t *rows = arena_calloc(arena, released_count, sizeof(released_copy_t));
+    if (!rows) {
+        return ERROR(ERR_MEMORY, "Failed to allocate released copies array");
+    }
+
+    /* Column layout: 0-2 identity, 3-7 the confirmed pair. Every column is NOT
+     * NULL by schema; the blob is 20 bytes by CHECK. */
+    const char *sql_released =
+        "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
+        "stat_mtime, stat_size, stat_ino "
+        "FROM released_copies ORDER BY filesystem_path;";
+
+    sqlite3_stmt *stmt = NULL;
+    rc = sqlite3_prepare_v2(state->db, sql_released, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return sqlite_error(state->db, "Failed to prepare released query");
+    }
+
+    size_t i = 0;
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < released_count) {
+        released_copy_t *row = &rows[i];
+
+        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
+        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
+        const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
+
+        if (!fs_path || !storage_path || !profile || !type_str) {
+            sqlite3_finalize(stmt);
+            return ERROR(
+                ERR_STATE_INVALID, "NULL value in required column at released copy %zu", i
+            );
+        }
+
+        row->filesystem_path = arena_strdup(arena, fs_path);
+        row->storage_path = arena_strdup(arena, storage_path);
+        row->profile = arena_strdup(arena, profile);
+        row->type = path_type_from_sql_text(type_str);
+        memcpy(row->blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
+        row->stat = (stat_cache_t){
+            .mtime = sqlite3_column_int64(stmt, 5),
+            .size = sqlite3_column_int64(stmt, 6),
+            .ino = (uint64_t) sqlite3_column_int64(stmt, 7),
+        };
+
+        if (!row->filesystem_path || !row->storage_path || !row->profile) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to copy released copy strings");
+        }
+
+        i++;
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to query released copies");
+    }
+
+    *out = rows;
+    *count = i;
+
+    return NULL;
+}
+
+/**
+ * Forget one released copy
+ *
+ * DELETE by filesystem_path; a missing row is success (see the header contract).
+ */
+error_t *state_forget_released(state_t *state, const char *filesystem_path) {
+    CHECK_NULL(state);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_released_forget);
+
+    sqlite3_stmt *stmt = state->stmt_released_forget;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to forget released copy");
     }
 
     return NULL;

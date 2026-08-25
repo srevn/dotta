@@ -1,15 +1,20 @@
 /**
- * state.h - The enabled profiles, the record, and the order (SQLite)
+ * state.h - The enabled profiles, the record, and the path-keyed facts (SQLite)
  *
  * Persists what dotta cannot recompute: which profiles the user enabled here
  * (and in what order, with what targets), the record of what dotta did to each
- * managed path, and the one deferred intent keyed beside it — the prune order.
- * Each carrier has a one-sentence lifetime rule:
+ * managed path, and the two facts keyed beside it — the prune order (a deferred
+ * intent) and the released copy (a fact that outlives its record). Each carrier
+ * has a one-sentence lifetime rule:
  *   - the enabled set lives until the user changes it;
  *   - a record lives from first observation to explicit retire;
  *   - an order lives only while its path is out of the view — it dies when the
  *     path re-enters (the flush's join), when its record retires (the retire's
- *     sibling delete), or when apply executes it.
+ *     sibling delete), or when apply executes it;
+ *   - a released copy lives only while its fact can still be true — the read
+ *     verifies it against live disk before trusting it, the flush's join forgets
+ *     it once its path's record again carries a confirmed blob, and apply's sweep
+ *     retires it when disk provably left it.
  * Everything else — what should stand at a path, from whom — is computed from
  * Git at every load (core/manifest.h) and never stored.
  *
@@ -22,6 +27,8 @@
  *     against, and what it confirmed there (both kinds, one row per path)
  *   - prune_orders: The one deferred intent — remove --delete-files ordered the
  *     deployed copy pruned at the next apply (row existence is the fact)
+ *   - released_copies: The content-proof half of a record that released — disk
+ *     still held dotta's last confirmation when dotta let go of the path
  *
  * Design principles:
  * - Binary format (fast, compact)
@@ -163,6 +170,39 @@ typedef struct anchor {
     time_t observed_at;       /* First sighting on disk in scope (> 0 always: a row exists iff observed) */
     time_t deployed_at;       /* Last active-ownership event (advances; 0 = never owned) */
 } anchor_t;
+
+/**
+ * Released copy — a fact that outlives its record (released_copies row)
+ *
+ * One row says: at this filesystem path, dotta's last content confirmation —
+ * this blob, this kind, under this claim pair — was still standing when dotta
+ * let go of the path. Exactly the content-proof half of the record it descends
+ * from (identity + confirmed pair, verbatim), claim-free: the claim and lifecycle
+ * halves died with the record, so a released fact never fabricates a record, a
+ * reassignment, or a DELETED absence. File kinds only — a directory has no content
+ * confirmation to outlive its record.
+ *
+ * The row is a claim about the past, verified against the present at every use:
+ * the analyzer reads it as the base of the three-way content question only when
+ * the path's record carries no confirmed blob, and never trusts it without the
+ * live stat or content check it performs for any base. The storage_path and profile
+ * are the blob's own binding — an encrypted blob decrypts under its writer's
+ * subkey (profile name → KDF) with its tree path as AAD — so a released base
+ * stays verifiable even after the branch that wrote it is gone. The type routes
+ * the TYPE arm's second question by the base's own kind, keeping the fast and
+ * slow paths in agreement.
+ */
+typedef struct {
+    /* Identity — the record's, at release */
+    char *filesystem_path;    /* Released path (PRIMARY KEY) */
+    char *storage_path;       /* Path in profile — AAD of an encrypted blob */
+    char *profile;            /* Subkey of an encrypted blob */
+
+    /* The confirmed pair, copied verbatim from the record */
+    path_type_t type;         /* FILE, SYMLINK or EXECUTABLE — never DIRECTORY */
+    git_oid blob_oid;         /* Content-confirmed blob (never zero: the write guard filters) */
+    stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
+} released_copy_t;
 
 /**
  * Enabled profile entry
@@ -599,9 +639,9 @@ error_t *state_anchor(
  * order cannot outlive its record, and the rule is kept by this explicit sibling
  * delete, never a constraint (nothing is a parent, nothing cascades). A missing
  * row is success: the callers name paths that may have no record — never seen
- * here, nothing to retire. Called by apply's record step for every pruned,
- * reclaimed or released orphan, by update's purge of a deleted path, and by
- * remove's release.
+ * here, nothing to retire. Called by apply's record step for every pruned or
+ * reclaimed orphan (the copy is gone — there is no fact), by update's purge of
+ * a deleted path, and — composed inside state_release — for every release.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)
@@ -670,5 +710,71 @@ error_t *state_get_prune_orders(
  * @return Error or NULL on success (not found is OK)
  */
 error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
+
+/**
+ * Release a managed path: keep the record's content-proof, retire the record
+ *
+ * The record's death when the copy stays on disk. The INSERT arm moves the
+ * content-proof half (identity + confirmed pair) into released_copies; it inserts
+ * nothing for a directory or a never-confirmed record (blob IS NULL) — for those
+ * this IS state_retire_anchor, so callers never branch on kind. OR REPLACE: a
+ * path can release more than once across its life, and the latest fact is what
+ * disk holds — while a proof-less re-release leaves an older, still-true row
+ * standing. Then the retire, composed: the same call state_retire_anchor's callers
+ * make, both its deletes included.
+ *
+ * The write is blind — remove and apply's release sites never lstat first. A
+ * row false at birth (the user edited before releasing) degrades safely: the
+ * read verifies against live disk before trusting it, and the sweep retires what
+ * disk provably left. A rekey'd repository leaves old released rows permanently
+ * UNVERIFIED at the read; they die by the same sweep or the flush's join when
+ * the path is re-owned.
+ *
+ * A missing record is success: nothing observed, nothing to remember.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path Path being released (must not be NULL)
+ * @return Error or NULL on success (no record is OK)
+ */
+error_t *state_release(state_t *state, const char *filesystem_path);
+
+/**
+ * Get every released copy, in filesystem_path order
+ *
+ * The released_copies read, the shape of state_get_all_anchors: the array and
+ * its strings are the caller's arena's. The workspace loads it once per run,
+ * unconditionally, beside the record; apply's sweep takes a fresh read inside
+ * its own transaction so the run's release writes are included.
+ *
+ * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
+ *
+ * @param state State (must not be NULL)
+ * @param arena Arena for allocations (must not be NULL)
+ * @param out Output array (must not be NULL)
+ * @param count Output count (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *state_get_all_released(
+    const state_t *state,
+    arena_t *arena,
+    released_copy_t **out,
+    size_t *count
+);
+
+/**
+ * Forget one released copy
+ *
+ * DELETE by filesystem_path; a missing row is success. Two callers, each an end
+ * of the fact's lifetime rule: the flush's join (the path's record again carries
+ * a confirmed blob — the fresher confirmation subsumes the fact) and apply's
+ * sweep (disk provably left the copy: the path is absent, or its live size differs
+ * from the recorded triple's). Never a compare-result consumer: a failed look
+ * retires no fact.
+ *
+ * @param state State (must not be NULL, must have active transaction)
+ * @param filesystem_path Path whose released copy is forgotten (must not be NULL)
+ * @return Error or NULL on success (not found is OK)
+ */
+error_t *state_forget_released(state_t *state, const char *filesystem_path);
 
 #endif /* DOTTA_STATE_H */

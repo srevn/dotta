@@ -954,7 +954,8 @@ static error_t *remove_files_from_profile(
      * after-view still provides is a fallback — kept, it reads [reassigned] until
      * apply hands it over; one the view no longer provides takes the fate the
      * user chose — --delete-files orders the deployed copy pruned at the next
-     * apply, the default retires the record (released from management now).
+     * apply, the default releases (the record retires, its content-proof kept
+     * as the released copy — the write is blind, the read self-verifies).
      * Enablement is not consulted: a record dotta holds under a disabled profile
      * is still dotta's record — the rule delete_profile_branch runs over every
      * record naming the profile, run here over the candidates.
@@ -1052,7 +1053,7 @@ static error_t *remove_files_from_profile(
 
                 record_err = opts->delete_files
                     ? state_order_prune(state, candidates[i])
-                    : state_retire_anchor(state, candidates[i]);
+                    : state_release(state, candidates[i]);
                 if (!record_err) settled_count++;
             }
 
@@ -1480,9 +1481,11 @@ static error_t *delete_profile_branch(
      * fallback — its record is kept and reads [reassigned] P → Q until apply
      * deploys Q's; a path the view lacks gets the fate the user chose —
      * --delete-files orders the deployed copy pruned at the next apply, the default
-     * retires the record (released from management now). One rule whether P was
-     * enabled or not, and whether P's tree still claimed the path or had let it
-     * go: the user is deleting P and P's files.
+     * releases (the record retires, its content-proof kept as the released copy
+     * — decryptable even with the branch gone: subkey derivation needs only the
+     * profile name). One rule whether P was enabled or not, and whether P's tree
+     * still claimed the path or had let it go: the user is deleting P and P's
+     * files.
      *
      * Non-fatal: the branch is gone and stands. A record this block fails to
      * write is an orphan the next apply reads, asks Git about, finds the branch
@@ -1513,7 +1516,7 @@ static error_t *delete_profile_branch(
 
                 delete_err = opts->delete_files
                     ? state_order_prune(state, anchor->filesystem_path)
-                    : state_retire_anchor(state, anchor->filesystem_path);
+                    : state_release(state, anchor->filesystem_path);
                 if (!delete_err) settled++;
             }
 

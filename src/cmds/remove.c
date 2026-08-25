@@ -939,14 +939,11 @@ static error_t *remove_files_from_profile(
     }
 
     /*
-     * Architectural note: We do NOT delete files from the filesystem here. This
-     * maintains separation of concerns:
-     * - `remove` modifies the Git repository (profile branches)
-     * - `apply` synchronizes the filesystem (prunes orphaned files by default)
-     *
-     * This ensures `apply` has global context from all enabled profiles to
-     * correctly determine if a file should be removed (avoiding premature deletion
-     * of files still needed by higher-priority profiles).
+     * Architectural note: no filesystem deletion here. Only apply writes to a
+     * managed filesystem path — core/deploy and core/cleanup are the only mutators
+     * — so remove's whole effect is the commit above and the record below. The
+     * deployed copy's fate is decided at the next apply, against the view standing
+     * then.
      */
 
     /* The record phase: the record answers to the record. The candidates are
@@ -1476,7 +1473,7 @@ static error_t *delete_profile_branch(
      * is not that.
      *
      * The order of the branch deletion and this block does not matter: the view
-     * is computed, and prune_ordered is the one fact the workspace reads for
+     * is computed, and the prune order is the one fact the workspace reads for
      * these records — written once, here, after the branch is gone. The profile
      * leaves the enabled set (if it was in it), and every record under it is
      * decided against the view that remains: a path the view still has is a
@@ -1611,11 +1608,8 @@ static error_t *delete_profile_branch(
         }
     }
 
-    /*
-     * Architectural note: the profile's records were prune-ordered (with
-     * --delete-files) or retired in the post-deletion block above. The prune
-     * itself happens on `apply`.
-     */
+    /* The prune itself happens on `apply` — see the Architectural note in
+     * remove_files_from_profile. */
 
     /* Execute post-remove hook */
     hook_fire_post(config, out, repo_path, &hook_inv);

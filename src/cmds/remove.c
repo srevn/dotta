@@ -142,7 +142,6 @@ static error_t *resolve_removal_claims(
     error_t *err = NULL;
     string_array_t *profile_files = NULL;
     metadata_t *metadata = NULL;
-    const metadata_item_t **dir_items = NULL;
 
     /* The branch's claims: the tree's blobs, then the metadata's directory
      * claims. */
@@ -164,11 +163,14 @@ static error_t *resolve_removal_claims(
         err = NULL;
     }
 
+    size_t item_count = 0;
     size_t dir_count = 0;
+    const metadata_item_t *const *items = NULL;
     if (metadata) {
-        dir_items = metadata_get_items_by_kind(
-            metadata, METADATA_ITEM_DIRECTORY, &dir_count
-        );
+        items = metadata_items(metadata, &item_count);
+        for (size_t i = 0; i < item_count; i++) {
+            if (items[i]->kind == METADATA_ITEM_DIRECTORY) dir_count++;
+        }
     }
 
     removal_claim_t *claims = NULL;
@@ -199,8 +201,9 @@ static error_t *resolve_removal_claims(
         };
     }
 
-    for (size_t i = 0; i < dir_count; i++) {
-        const char *key = dir_items[i]->key;
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+        const char *key = items[i]->key;
 
         /* Same-profile rule as the view's claim routine (manifest.c): a key the
          * tree holds as a blob cannot also stand as a directory claim — the tree's
@@ -318,7 +321,6 @@ static error_t *resolve_removal_claims(
 
 cleanup:
     /* Free all resources */
-    free(dir_items);
     if (metadata) metadata_free(metadata);
     if (profile_files) string_array_free(profile_files);
 
@@ -1382,20 +1384,19 @@ static error_t *delete_profile_branch(
         if (meta_err) {
             error_free(meta_err);
         } else {
-            size_t dir_count = 0;
-            const metadata_item_t **dir_items = metadata_get_items_by_kind(
-                branch_metadata, METADATA_ITEM_DIRECTORY, &dir_count
-            );
-            for (size_t i = 0; i < dir_count; i++) {
+            size_t item_count = 0;
+            const metadata_item_t *const *items =
+                metadata_items(branch_metadata, &item_count);
+            for (size_t i = 0; i < item_count; i++) {
+                if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
                 bool held_as_blob = false;
                 for (size_t j = 0; j < files->count && !held_as_blob; j++) {
-                    held_as_blob = strcmp(files->items[j], dir_items[i]->key) == 0;
+                    held_as_blob = strcmp(files->items[j], items[i]->key) == 0;
                 }
                 if (!held_as_blob) {
-                    string_array_push(hook_storage, dir_items[i]->key);
+                    string_array_push(hook_storage, items[i]->key);
                 }
             }
-            free(dir_items);
             metadata_free(branch_metadata);
         }
     }

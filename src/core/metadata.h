@@ -419,32 +419,6 @@ const metadata_item_t *const *metadata_items(
 );
 
 /**
- * Get items filtered by kind
- *
- * Returns allocated array of pointers to matching items. Caller must free the
- * returned pointer array (but not the items themselves).
- *
- * This performs a small allocation (pointers only, ~8 bytes per item). Items
- * themselves remain in the metadata structure and are not copied.
- *
- * @param metadata Metadata collection (must not be NULL)
- * @param kind Item kind to filter by (METADATA_ITEM_FILE or
- *             METADATA_ITEM_DIRECTORY)
- * @param count Output count (must not be NULL)
- * @return Allocated array of item pointers (caller must free), or NULL if no
- *         matches
- *
- * Return value semantics:
- * - NULL with count=0: No matches, or allocation failure, or invalid input
- * - Non-NULL with count=N: Array of N item pointers (caller must free array)
- */
-const metadata_item_t **metadata_get_items_by_kind(
-    const metadata_t *metadata,
-    metadata_item_kind_t kind,
-    size_t *count
-);
-
-/**
  * Capture metadata from filesystem file
  *
  * Creates a file metadata item from stat data. For symlinks, delegates to

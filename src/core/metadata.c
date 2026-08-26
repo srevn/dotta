@@ -466,10 +466,10 @@ error_t *metadata_remove_item(
 /**
  * Prune redundant directory entries
  *
- * Two-pass collect-then-prune: metadata_remove_item frees the item it removes,
- * so the pass that decides cannot also be the pass that acts — it would be reading
- * keys it had already freed. string_array_push duplicates each key, so the prune
- * pass operates on independent strings.
+ * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
+ * and shifts the spine behind it, so the pass that decides cannot also be the
+ * pass that acts. string_array_push duplicates each key, so the prune pass operates
+ * on independent strings.
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
@@ -480,24 +480,18 @@ error_t *metadata_prune_directories(
     CHECK_NULL(index);
     CHECK_NULL(pruned);
 
-    size_t dir_count = 0;
-    const metadata_item_t **directories = metadata_get_items_by_kind(
-        metadata, METADATA_ITEM_DIRECTORY, &dir_count
-    );
-    if (!directories || dir_count == 0) {
-        free(directories);
-        return NULL;
-    }
-
     /* The keys this call appends start here; the removal pass below walks only
      * them. */
-    error_t *err = NULL;
     const size_t first = pruned->count;
 
     const size_t entry_count = git_index_entrycount(index);
 
-    for (size_t d = 0; d < dir_count; d++) {
-        const metadata_item_t *dir = directories[d];
+    size_t item_count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+
+    for (size_t d = 0; d < item_count; d++) {
+        const metadata_item_t *dir = items[d];
+        if (dir->kind != METADATA_ITEM_DIRECTORY) continue;
 
         /* Preserve any entry that carries distinguishing information: custom
          * mode, or any owner/group overlay. Today this is the only signal that
@@ -522,29 +516,24 @@ error_t *metadata_prune_directories(
         }
 
         if (!anchored) {
-            err = string_array_push(pruned, dir_key);
+            error_t *err = string_array_push(pruned, dir_key);
             if (err) {
-                err = error_wrap(err, "Failed to record redundant directory");
-                goto cleanup;
+                return error_wrap(err, "Failed to record redundant directory");
             }
         }
     }
 
     for (size_t i = first; i < pruned->count; i++) {
-        err = metadata_remove_item(metadata, pruned->items[i]);
+        error_t *err = metadata_remove_item(metadata, pruned->items[i]);
         if (err) {
-            err = error_wrap(
+            return error_wrap(
                 err, "Failed to prune redundant directory '%s'",
                 pruned->items[i]
             );
-            goto cleanup;
         }
     }
 
-cleanup:
-    free(directories);
-
-    return err;
+    return NULL;
 }
 
 /**
@@ -642,59 +631,6 @@ const metadata_item_t *const *metadata_items(
     /* Return the spine (borrowed reference) Note: it is always allocated (even
      * for an empty collection), so this is safe even when count=0 */
     return (const metadata_item_t *const *) metadata->items;
-}
-
-/**
- * Get items filtered by kind
- *
- * Returns allocated array of pointers to matching items. Caller must free the
- * returned pointer array (but not the items themselves).
- *
- * This performs a small allocation (pointers only, ~8 bytes per item). Items
- * themselves remain in the metadata structure and are not copied.
- *
- * @param metadata Metadata collection (must not be NULL)
- * @param kind Item kind to filter by (METADATA_ITEM_FILE or
- *             METADATA_ITEM_DIRECTORY)
- * @param count Output count (must not be NULL)
- * @return Allocated array of item pointers (caller must free), or NULL if no
- *         matches
- *
- * Return value semantics:
- * - NULL with count=0: No matches, or allocation failure, or invalid input
- * - Non-NULL with count=N: Array of N item pointers (caller must free array)
- *
- * Important: Always maintain invariant: if return is NULL, count must be 0
- */
-const metadata_item_t **metadata_get_items_by_kind(
-    const metadata_t *metadata,
-    metadata_item_kind_t kind,
-    size_t *count
-) {
-    /* Handle invalid inputs */
-    if (!metadata || !count) {
-        if (count) *count = 0;
-        return NULL;
-    }
-
-    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
-    for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->items[i]->kind == kind) {
-            error_t *err = ptr_array_push(
-                &matches,
-                metadata->items[i]
-            );
-            if (err) {
-                /* Surface NULL/0 to preserve the documented
-                 * "return == NULL <=> count == 0" invariant. */
-                error_free(err);
-                *count = 0;
-                return NULL;
-            }
-        }
-    }
-
-    return (const metadata_item_t **) ptr_array_steal(&matches, count);
 }
 
 /**

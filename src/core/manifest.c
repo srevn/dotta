@@ -521,14 +521,15 @@ static error_t *manifest_claim_tree(
 
     if (!metadata) return NULL;
 
-    /* Extract directories from metadata */
-    size_t dir_count = 0;
-    const metadata_item_t **directories = metadata_get_items_by_kind(
-        metadata, METADATA_ITEM_DIRECTORY, &dir_count
-    );
+    /* The directory claims: every DIRECTORY item the profile's metadata carries.
+     * A tree holds no empty directory, so the item is the claim's whole
+     * footprint. */
+    size_t item_count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
 
-    for (size_t j = 0; j < dir_count; j++) {
-        const metadata_item_t *item = directories[j];
+    for (size_t j = 0; j < item_count; j++) {
+        const metadata_item_t *item = items[j];
+        if (item->kind != METADATA_ITEM_DIRECTORY) continue;
 
         /* Resolve before claiming so the error path claims nothing. */
         mount_resolve_outcome_t outcome;
@@ -584,7 +585,6 @@ static error_t *manifest_claim_tree(
         }
     }
 
-    free(directories);
     return err;
 }
 

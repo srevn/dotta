@@ -7,7 +7,8 @@
  * - Common fields (mode, owner, group) apply to all kinds
  * - Kind-specific fields stored in discriminated union
  * - Single hashmap for O(1) lookup of all kinds
- * - Ownership tracking: ONLY for root/ prefix when running as root
+ * - Ownership tracking: only for paths whose label tracks it (root/, custom/),
+ *   and only when running as root
  * - home/ prefix: always owned by current user
  * - Per-profile storage for natural layering
  * - Automatic capture during add/update operations
@@ -16,7 +17,7 @@
  * Symlink metadata:
  * - mode is always 0 (symlink permissions are OS-dependent and not settable)
  * - Only ownership is tracked (lchown changes the link itself, not its target)
- * - Only created for root/ prefix symlinks when running as root
+ * - Only created for symlinks whose label tracks ownership, when running as root
  * - home/ prefix symlinks: no metadata entry needed (always current user)
  *
  * JSON Schema (Version 4):
@@ -114,7 +115,7 @@ typedef enum {
  *
  * Symlink semantics:
  * - mode is always 0 (symlink permissions are not settable via symlink())
- * - owner/group are tracked for root/ prefix symlinks (applied via lchown)
+ * - owner/group are tracked for ownership-tracking labels (applied via lchown)
  * - No encrypted flag (symlinks are never encrypted)
  */
 typedef struct {
@@ -125,8 +126,8 @@ typedef struct {
 
     /* Common metadata fields */
     mode_t mode;                     /* Permission mode (0 for symlinks) */
-    char *owner;                     /* Owner username (optional, only for root/ prefix) */
-    char *group;                     /* Group name (optional, only for root/ prefix) */
+    char *owner;                     /* Owner username (optional, ownership-tracking labels only) */
+    char *group;                     /* Group name (optional, ownership-tracking labels only) */
 
     /* Kind-specific data (discriminated union) */
     union {
@@ -456,7 +457,8 @@ const metadata_item_t **metadata_get_items_by_kind(
  * metadata_capture_from_symlink().
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ prefix files when running as root (UID 0)
+ * - ONLY captured for files whose label tracks ownership (root/, custom/), and
+ *   only when running as root (UID 0)
  * - home/ prefix files: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *
@@ -481,11 +483,13 @@ error_t *metadata_capture_from_file(
  * Creates a symlink metadata item with ownership data only. Mode is always 0
  * (symlink permissions are not settable).
  *
- * Symlinks only need metadata for ownership tracking on root/ prefix paths. For
- * home/ prefix or non-root users, returns *out = NULL (no metadata needed).
+ * Symlinks only need metadata for ownership tracking on paths whose label tracks
+ * it. For home/ prefix or non-root users, returns *out = NULL (no metadata
+ * needed).
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ prefix symlinks when running as root (UID 0)
+ * - ONLY captured for symlinks whose label tracks ownership (root/, custom/),
+ *   and only when running as root (UID 0)
  * - home/ prefix symlinks: always owned by current user, no metadata needed
  * - Regular users: can't lchown anyway, no metadata needed
  *
@@ -508,7 +512,8 @@ error_t *metadata_capture_from_symlink(
  * rules as file capture.
  *
  * Ownership capture (user/group):
- * - ONLY captured for root/ prefix directories when running as root (UID 0)
+ * - ONLY captured for directories whose label tracks ownership (root/, custom/),
+ *   and only when running as root (UID 0)
  * - home/ prefix directories: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
  *

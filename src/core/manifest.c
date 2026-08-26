@@ -737,7 +737,9 @@ error_t *manifest_build(
             profile_metadata = NULL;
         }
 
-        err = manifest_claim_tree(manifest, tree, profile, mounts, profile_metadata, arena);
+        err = manifest_claim_tree(
+            manifest, tree, profile, mounts, profile_metadata, arena
+        );
         git_tree_free(tree);
         metadata_free(profile_metadata);
 
@@ -789,7 +791,9 @@ error_t *manifest_build_tree(
 
     /* mounts and metadata borrow from function parameters — both outlive the
      * tree walk. */
-    err = manifest_claim_tree(manifest, tree, owned_profile, mounts, metadata, arena);
+    err = manifest_claim_tree(
+        manifest, tree, owned_profile, mounts, metadata, arena
+    );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from tree");
         goto cleanup;

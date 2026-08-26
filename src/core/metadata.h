@@ -21,28 +21,44 @@
  *
  * JSON Schema (Version 4):
  * {
- *   "version": 4, "items": [
+ *   "version": 4,
+ *   "items": [
  *     {
- *       "kind": "file", "key": "home/.bashrc", "mode": "0644"
+ *       "kind": "file",
+ *       "key": "home/.bashrc",
+ *       "mode": "0644"
  *     },
  *     {
- *       "kind": "file", "key": "home/.ssh/id_rsa", "mode": "0600", "encrypted":
- *       true
+ *       "kind": "file",
+ *       "key": "home/.ssh/id_rsa",
+ *       "mode": "0600",
+ *       "encrypted": true
  *     },
  *     {
- *       "kind": "file", "key": "root/etc/nginx.conf", "mode": "0644", "owner":
- *       "root", "group": "wheel"
+ *       "kind": "file",
+ *       "key": "root/etc/nginx.conf",
+ *       "mode": "0644",
+ *       "owner": "root",
+ *       "group": "wheel"
  *     },
  *     {
- *       "kind": "directory", "key": "home/.config/nvim", "mode": "0700"
+ *       "kind": "directory",
+ *       "key": "home/.config/nvim",
+ *       "mode": "0700"
  *     },
  *     {
- *       "kind": "directory", "key": "root/etc/nginx", "mode": "0755", "owner":
- *       "root", "group": "wheel"
+ *       "kind": "directory",
+ *       "key": "root/etc/nginx",
+ *       "mode": "0755",
+ *       "owner": "root",
+ *       "group": "wheel"
  *     },
  *     {
- *       "kind": "symlink", "key": "root/etc/alternatives/python", "mode": "0000",
- *       "owner": "root", "group": "wheel"
+ *       "kind": "symlink",
+ *       "key": "root/etc/alternatives/python",
+ *       "mode": "0000",
+ *       "owner": "root",
+ *       "group": "wheel"
  *     }
  *   ]
  * }
@@ -306,12 +322,13 @@ error_t *metadata_remove_item(
  *     umask default).
  *   - owner == NULL AND group == NULL (no ownership override to preserve).
  *
- * Anchoring is judged against the post-edit index (the tree the impending
- * commit will record) — the sole authority for which paths the profile tracks. Metadata items are deliberately NOT the
- * universe: the collection is sparse by design (a symlink carries an item only
- * when captured with ownership, i.e. elevated), so "no item descendants" does
- * not imply "no tracked descendants". A directory whose only tracked content is
- * an item-less symlink is anchored by the index and survives.
+ * Anchoring is judged against the post-edit index (the tree the impending commit
+ * will record) — the sole authority for which paths the profile tracks. Metadata
+ * items are deliberately NOT the universe: the collection is sparse by design
+ * (a symlink carries an item only when captured with ownership, i.e. elevated),
+ * so "no item descendants" does not imply "no tracked descendants". A directory
+ * whose only tracked content is an item-less symlink is anchored by the index
+ * and survives.
  *
  * Such an entry has no role in any downstream pipeline: file deploy already mkdirs
  * ancestors at the same default mode, the view would only claim it as a
@@ -330,10 +347,11 @@ error_t *metadata_remove_item(
  * Caller pattern: invoke after every index edit for the impending commit (additions
  * staged, deletions removed) and before the metadata blob is serialized for the
  * commit (worktree file or ODB blob alike), so the prune sees the commit's exact
- * tracked set and lands in the same commit as the triggering removals. The keys pruned are appended to `pruned`, in item order:
- * the entry leaves the view by the verb's own commit, so the verb retires its
- * record the way it does a path it removed. Nothing appended means nothing was
- * pruned (caller may use this to skip a no-op rewrite).
+ * tracked set and lands in the same commit as the triggering removals. The keys
+ * pruned are appended to `pruned`, in item order: the entry leaves the view by
+ * the verb's own commit, so the verb retires its record the way it does a path
+ * it removed. Nothing appended means nothing was pruned (caller may use this to
+ * skip a no-op rewrite).
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
  * @param index Post-edit worktree index (must not be NULL)

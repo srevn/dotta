@@ -1257,50 +1257,60 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
     CHECK_NULL(out);
 
+    /* Three resources, one tail. Every refusal below names the item it refused,
+     * and the name it prints is borrowed from `root` — cJSON owns those strings
+     * and the message is formatted out of them. The one tail is what keeps the
+     * two in order: the refusal is built while the tree still stands, and the
+     * tree is deleted once, after it. `item` is the loop's scratch and the tail's
+     * too, so an iteration that gives up midway leaves nothing behind. */
+    error_t *err = NULL;
+    cJSON *root = NULL;
+    metadata_t *metadata = NULL;
+    metadata_item_t *item = NULL;
+
     /* Parse JSON */
-    cJSON *root = cJSON_Parse(json_str);
+    root = cJSON_Parse(json_str);
     if (!root) {
-        return ERROR(
+        err = ERROR(
             ERR_INVALID_ARG, "Failed to parse metadata JSON: %s",
             cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown error"
         );
+        goto cleanup;
     }
 
     /* Get and validate version */
     cJSON *version_obj = cJSON_GetObjectItem(root, "version");
     if (!version_obj || !cJSON_IsNumber(version_obj)) {
-        cJSON_Delete(root);
-        return ERROR(
+        err = ERROR(
             ERR_INVALID_ARG, "Missing or invalid version in metadata"
         );
+        goto cleanup;
     }
 
     int version = version_obj->valueint;
     if (version != METADATA_VERSION) {
-        cJSON_Delete(root);
-        return ERROR(
+        err = ERROR(
             ERR_INVALID_ARG,
             "Unsupported metadata version: %d (expected %d). "
             "Please re-run 'dotta add' for all your files.",
             version, METADATA_VERSION
         );
+        goto cleanup;
     }
 
     /* Get items array */
     cJSON *items_array = cJSON_GetObjectItem(root, "items");
     if (!items_array || !cJSON_IsArray(items_array)) {
-        cJSON_Delete(root);
-        return ERROR(
+        err = ERROR(
             ERR_INVALID_ARG, "Missing or invalid items array in metadata"
         );
+        goto cleanup;
     }
 
     /* Create metadata collection */
-    metadata_t *metadata = NULL;
-    error_t *err = metadata_create_empty(&metadata);
+    err = metadata_create_empty(&metadata);
     if (err) {
-        cJSON_Delete(root);
-        return err;
+        goto cleanup;
     }
 
     metadata->version = version;
@@ -1309,21 +1319,19 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     cJSON *item_obj = NULL;
     cJSON_ArrayForEach(item_obj, items_array) {
         if (!cJSON_IsObject(item_obj)) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(
+            err = ERROR(
                 ERR_INVALID_ARG, "Invalid item in items array (not an object)"
             );
+            goto cleanup;
         }
 
         /* Get kind discriminator (required) */
         cJSON *kind_obj = cJSON_GetObjectItem(item_obj, "kind");
         if (!kind_obj || !cJSON_IsString(kind_obj) || !kind_obj->valuestring) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(
+            err = ERROR(
                 ERR_INVALID_ARG, "Item missing kind field"
             );
+            goto cleanup;
         }
 
         metadata_item_kind_t kind;
@@ -1334,74 +1342,66 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         } else if (strcmp(kind_obj->valuestring, "symlink") == 0) {
             kind = METADATA_ITEM_SYMLINK;
         } else {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(
+            err = ERROR(
                 ERR_INVALID_ARG, "Invalid kind value: %s "
                 "(expected 'file', 'directory', or 'symlink')",
                 kind_obj->valuestring
             );
+            goto cleanup;
         }
 
         /* Get key (required) */
         cJSON *key_obj = cJSON_GetObjectItem(item_obj, "key");
         if (!key_obj || !cJSON_IsString(key_obj) || !key_obj->valuestring) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(
+            err = ERROR(
                 ERR_INVALID_ARG, "Item missing key field"
             );
+            goto cleanup;
         }
 
         /* Validate key format (prevent path traversal) */
         err = mount_validate_storage(key_obj->valuestring);
         if (err) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return error_wrap(
+            err = error_wrap(
                 err, "Invalid key in metadata: %s",
                 key_obj->valuestring
             );
+            goto cleanup;
         }
 
         /* Get mode (required) */
         cJSON *mode_obj = cJSON_GetObjectItem(item_obj, "mode");
         if (!mode_obj || !cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(
+            err = ERROR(
                 ERR_INVALID_ARG, "Item missing mode field (key: %s)",
                 key_obj->valuestring
             );
+            goto cleanup;
         }
 
         /* Parse mode string */
         mode_t mode;
         err = metadata_parse_mode(mode_obj->valuestring, &mode);
         if (err) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to parse mode for item: %s",
                 key_obj->valuestring
             );
+            goto cleanup;
         }
 
         /* Create temporary item structure */
-        metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
+        item = calloc(1, sizeof(metadata_item_t));
         if (!item) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(ERR_MEMORY, "Failed to allocate temporary item");
+            err = ERROR(ERR_MEMORY, "Failed to allocate temporary item");
+            goto cleanup;
         }
 
         item->kind = kind;
         item->key = strdup(key_obj->valuestring);
         if (!item->key) {
-            metadata_item_free(item);
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return ERROR(ERR_MEMORY, "Failed to duplicate key string");
+            err = ERROR(ERR_MEMORY, "Failed to duplicate key string");
+            goto cleanup;
         }
         item->mode = mode;
 
@@ -1415,10 +1415,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
             item->owner = strdup(owner_obj->valuestring);
             if (!item->owner) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+                err = ERROR(ERR_MEMORY, "Failed to duplicate owner string");
+                goto cleanup;
             }
         }
 
@@ -1427,10 +1425,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
             item->group = strdup(group_obj->valuestring);
             if (!item->group) {
-                metadata_item_free(item);
-                metadata_free(metadata);
-                cJSON_Delete(root);
-                return ERROR(ERR_MEMORY, "Failed to duplicate group string");
+                err = ERROR(ERR_MEMORY, "Failed to duplicate group string");
+                goto cleanup;
             }
         }
 
@@ -1445,21 +1441,27 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         /* Add item to metadata collection (copies item internally) */
         err = metadata_add_item(metadata, item);
         metadata_item_free(item);  /* Free temporary item (add_item copied it) */
+        item = NULL;
 
         if (err) {
-            metadata_free(metadata);
-            cJSON_Delete(root);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to add item to metadata: %s",
                 key_obj->valuestring
             );
+            goto cleanup;
         }
     }
 
-    /* Success */
-    cJSON_Delete(root);
+    /* Success - transfer to caller */
     *out = metadata;
-    return NULL;
+    metadata = NULL;
+
+cleanup:
+    metadata_item_free(item);
+    metadata_free(metadata);
+    cJSON_Delete(root);
+
+    return err;
 }
 
 /**

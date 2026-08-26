@@ -1657,7 +1657,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * summary below. */
     if (stale_count > 0) {
         output_info(
-            out, OUTPUT_NORMAL, "Found %zu stale file%s (changed in Git since deployment)",
+            out, OUTPUT_NORMAL,
+            "Found %zu stale file%s (changed in Git since deployment)",
             stale_count, stale_count == 1 ? "" : "s"
         );
     }

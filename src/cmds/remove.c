@@ -827,15 +827,7 @@ static error_t *remove_files_from_profile(
             removed_dirs++;
         }
 
-        if (metadata && metadata_has_item(metadata, claim->storage_path)) {
-            err = metadata_remove_item(metadata, claim->storage_path);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to remove metadata item: %s",
-                    claim->storage_path
-                );
-                goto cleanup;
-            }
+        if (metadata_remove_item(metadata, claim->storage_path)) {
             meta_edits++;
         }
 

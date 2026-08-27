@@ -542,13 +542,7 @@ static error_t *update_profile(
                         goto cleanup;
                     }
                     /* Remove metadata entry if it exists */
-                    if (metadata_has_item(metadata, item->storage_path)) {
-                        err = metadata_remove_item(metadata, item->storage_path);
-                        if (err) {
-                            err = error_wrap(err, "Failed to remove metadata entry");
-                            goto cleanup;
-                        }
-                    }
+                    metadata_remove_item(metadata, item->storage_path);
                     err = ptr_array_push(&commit->deleted, item);
                     if (err) {
                         goto cleanup;
@@ -661,14 +655,7 @@ static error_t *update_profile(
                  * bookkeeping like a deleted file, so the commit gate counts
                  * it, the message names it, and the record loop retires it. */
                 if (item->state == WORKSPACE_STATE_DELETED) {
-                    if (metadata_has_item(metadata, item->storage_path)) {
-                        err = metadata_remove_item(metadata, item->storage_path);
-                        if (err) {
-                            err = error_wrap(
-                                err, "Failed to remove directory metadata entry"
-                            );
-                            goto cleanup;
-                        }
+                    if (metadata_remove_item(metadata, item->storage_path)) {
                         output_info(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
                             item->filesystem_path

@@ -1515,17 +1515,9 @@ static error_t *compute_orphan_authority(
         /* Backed iff metadata still claims the path as a directory. An item of
          * another kind at the key is a path Git turned into a blob: the directory
          * dotta made is no longer claimed as one. */
-        const metadata_item_t *item = NULL;
-        error_t *err = metadata_get_item(entry->metadata, storage_path, &item);
-        if (!err) {
-            *out = (item->kind == METADATA_ITEM_DIRECTORY)
-                ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
-        } else if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            *out = ORPHAN_AUTHORITY_LOST;
-        } else {
-            error_free(err);                    /* *out stays UNVERIFIED */
-        }
+        const metadata_item_t *item = metadata_lookup(entry->metadata, storage_path);
+        *out = (item && item->kind == METADATA_ITEM_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
+                                                               : ORPHAN_AUTHORITY_LOST;
 
         return NULL;
     }

@@ -272,32 +272,31 @@ error_t *metadata_add_item(
 );
 
 /**
- * Get metadata item (const version)
+ * Look up an item by key
  *
- * Works for both files and directories. Caller should check item->kind after
- * retrieval if type matters.
+ * Works for every kind; callers that want one test item->kind. A key the collection
+ * does not hold is the answer, not a failure — it is NULL.
  *
- * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for both files and directories)
- * @param out Item pointer (must not be NULL, borrowed reference - do not free)
- * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
+ * @param metadata Metadata collection (NULL returns NULL)
+ * @param key Lookup key, the storage path for every kind (NULL returns NULL)
+ * @return Borrowed item pointer (do not free), or NULL if the key is not held
  */
-error_t *metadata_get_item(
+const metadata_item_t *metadata_lookup(
     const metadata_t *metadata,
-    const char *key,
-    const metadata_item_t **out
+    const char *key
 );
 
 /**
  * Remove metadata item
  *
- * Works for both files and directories.
+ * Works for every kind. Removing a key the collection does not hold changes nothing
+ * and is not a failure — the answer is false.
  *
- * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for both files and directories)
- * @return Error or NULL on success (not found returns ERR_NOT_FOUND)
+ * @param metadata Metadata collection (NULL returns false)
+ * @param key Lookup key, the storage path for every kind (NULL returns false)
+ * @return true if an item was removed
  */
-error_t *metadata_remove_item(
+bool metadata_remove_item(
     metadata_t *metadata,
     const char *key
 );
@@ -357,33 +356,14 @@ error_t *metadata_prune_directories(
 );
 
 /**
- * Check if metadata item exists
+ * Encrypted flag for a file entry
  *
- * Works for both files and directories.
- *
- * @param metadata Metadata collection (must not be NULL)
- * @param key Lookup key (storage_path for both files and directories)
- * @return true if item exists
- */
-bool metadata_has_item(
-    const metadata_t *metadata,
-    const char *key
-);
-
-/**
- * Get encrypted flag for file from metadata
- *
- * Convenience accessor that safely extracts the encrypted flag for a specific
- * file entry. This is a type-safe accessor that validates the item is a file
- * (not a directory) before accessing the file-specific encrypted field.
- *
- * Gracefully handles all error conditions by returning false:
- * - NULL metadata or storage_path
- * - Item not found in metadata
- * - Item exists but is a directory (not a file)
+ * Type-safe accessor: it reads the file union member from behind its discriminator,
+ * so a key that is absent, or held as a directory or a symlink, answers false
+ * rather than misreading a union.
  *
  * Common usage pattern for historical operations:
- *   bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+ *   bool encrypted = metadata_file_encrypted(metadata, storage_path);
  *   err = content_get_from_blob_oid(..., encrypted, ...);
  *
  * Note: the view carries the flag on its rows (manifest_row_t.encrypted, projected
@@ -391,9 +371,9 @@ bool metadata_has_item(
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)
- * @return Encrypted flag (false if not found, error, or not a file)
+ * @return Encrypted flag (false if not found or not a file)
  */
-bool metadata_get_file_encrypted(
+bool metadata_file_encrypted(
     const metadata_t *metadata,
     const char *storage_path
 );

@@ -190,12 +190,7 @@ static mode_t export_entry_mode(
     metadata_item_kind_t kind,
     git_filemode_t filemode
 ) {
-    const metadata_item_t *item = NULL;
-    error_t *err = metadata_get_item(metadata, storage_path, &item);
-    if (err) {
-        error_free(err);
-        item = NULL;
-    }
+    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
 
     if (item && item->kind == kind && item->mode != 0) {
         return item->mode;
@@ -301,11 +296,9 @@ static int collect_tree_callback(
                 ctx->metadata, e.storage_path, METADATA_ITEM_DIRECTORY,
                 GIT_FILEMODE_TREE
             );
-            const metadata_item_t *item = NULL;
-            error_t *item_err = metadata_get_item(
-                ctx->metadata, e.storage_path, &item
+            const metadata_item_t *item = metadata_lookup(
+                ctx->metadata, e.storage_path
             );
-            if (item_err) error_free(item_err);
             e.claimed = item && item->kind == METADATA_ITEM_DIRECTORY;
             break;
         }
@@ -890,12 +883,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             /* Not in the tree. An empty tracked directory has no tree entry —
              * its claim lives only in the metadata, and the export is then the
              * claim itself: the directory, at its stored mode. */
-            const metadata_item_t *claim_item = NULL;
-            error_t *item_err = metadata_get_item(metadata, storage, &claim_item);
-            if (item_err) {
-                error_free(item_err);
-                claim_item = NULL;
-            }
+            const metadata_item_t *claim_item = metadata_lookup(metadata, storage);
             if (!claim_item || claim_item->kind != METADATA_ITEM_DIRECTORY) {
                 error_free(err);
                 err = ERROR(
@@ -1153,12 +1141,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         }
     }
     if (claims_base) {
-        const metadata_item_t *root_item = NULL;
-        error_t *root_err = metadata_get_item(metadata, claims_base, &root_item);
-        if (root_err) {
-            error_free(root_err);
-            root_item = NULL;
-        }
+        const metadata_item_t *root_item = metadata_lookup(metadata, claims_base);
         if (root_item && root_item->kind == METADATA_ITEM_DIRECTORY) {
             dir_claims++;
         }
@@ -1201,10 +1184,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     output_styled(
         out, OUTPUT_NORMAL,
-        "Exported %s to {cyan}%s{reset} "
-        "(from {magenta}%s{reset}%s)\n",
-        counts, dest_display, opts->profile,
-        commit_suffix
+        "Exported %s to {cyan}%s{reset} (from {magenta}%s{reset}%s)\n",
+        counts, dest_display, opts->profile, commit_suffix
     );
 
 cleanup:

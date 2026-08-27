@@ -115,7 +115,7 @@ static error_t *print_blob_content(
      * "(encrypted)" annotation): it is byte-truth via the write-time invariant
      * in `content_store_file_to_worktree`, but does not influence routing inside
      * the content layer. */
-    bool encrypted = metadata_get_file_encrypted(metadata, storage_path);
+    bool encrypted = metadata_file_encrypted(metadata, storage_path);
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
@@ -174,12 +174,7 @@ static error_t *print_blob_content(
     output_newline(out, OUTPUT_NORMAL);
 
     /* Mode and ownership from metadata */
-    const metadata_item_t *item = NULL;
-    error_t *meta_err = metadata_get_item(metadata, storage_path, &item);
-    if (meta_err) {
-        error_free(meta_err);
-        item = NULL;
-    }
+    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
     if (item) {
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",

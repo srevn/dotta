@@ -613,22 +613,18 @@ static error_t *revert_file_in_branch(
     if (is_symlink) {
         /* Symlinks: only restore ownership metadata if present at target commit.
          * No defaults needed — symlinks have no settable mode or encryption. */
-        const metadata_item_t *target_meta_item = NULL;
-        error_t *lookup_err = metadata_get_item(
-            target_metadata, file_path, &target_meta_item
-        );
+        /* No metadata for a symlink at the target commit is fine — old profiles
+         * won't have it */
+        const metadata_item_t *target_meta_item =
+            metadata_lookup(target_metadata, file_path);
 
-        if (!lookup_err && target_meta_item &&
+        if (target_meta_item &&
             target_meta_item->kind == METADATA_ITEM_SYMLINK) {
             err = metadata_item_clone(target_meta_item, &meta_to_restore);
             if (err) {
                 err = error_wrap(err, "Failed to clone symlink metadata item");
                 goto cleanup;
             }
-        }
-        /* No metadata for symlink at target commit is fine — old profiles won't have it */
-        if (lookup_err) {
-            error_free(lookup_err);
         }
     } else {
         /* The encrypted bit revert writes must be true of the blob it restores:
@@ -645,13 +641,10 @@ static error_t *revert_file_in_branch(
         }
         bool target_encrypted = (target_kind != CONTENT_PLAINTEXT);
 
-        const metadata_item_t *target_meta_item = NULL;
-        error_t *lookup_err = metadata_get_item(
-            target_metadata, file_path, &target_meta_item
-        );
+        const metadata_item_t *target_meta_item =
+            metadata_lookup(target_metadata, file_path);
 
-        if (!lookup_err && target_meta_item &&
-            target_meta_item->kind == METADATA_ITEM_FILE) {
+        if (target_meta_item && target_meta_item->kind == METADATA_ITEM_FILE) {
             /* Found metadata entry - clone it. Mode and ownership have no byte
              * source, so the entry is their authority; the encrypted bit is the
              * blob's (above). */
@@ -685,10 +678,6 @@ static error_t *revert_file_in_branch(
             if (err) {
                 err = error_wrap(err, "Failed to create default metadata item");
                 goto cleanup;
-            }
-
-            if (lookup_err) {
-                error_free(lookup_err);
             }
         }
     }

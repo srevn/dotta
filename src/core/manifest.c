@@ -109,8 +109,8 @@ struct claim_ctx {
  *               storage_path is stale metadata, and the tree is the content
  *               authority — the item contributes nothing, not even its owner/group
  *
- * NULL metadata, missing item, and ERR_NOT_FOUND all leave the row's Git-derived
- * defaults intact. Other lookup failures propagate.
+ * NULL metadata and a key the profile does not carry both leave the row's
+ * Git-derived defaults intact.
  *
  * Override-path callers may freely overwrite owner/group: prior values are
  * arena-borrowed and abandoned to the arena, no per-pointer free required.
@@ -125,19 +125,10 @@ static error_t *manifest_apply_metadata(
     const metadata_t *metadata,
     arena_t *arena
 ) {
-    if (!metadata) return NULL;
-
-    const metadata_item_t *item = NULL;
-    error_t *err = metadata_get_item(metadata, row->storage_path, &item);
-    if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-            return NULL;
-        }
-        return err;
+    const metadata_item_t *item = metadata_lookup(metadata, row->storage_path);
+    if (!item || item->kind == METADATA_ITEM_DIRECTORY) {
+        return NULL;
     }
-
-    if (item->kind == METADATA_ITEM_DIRECTORY) return NULL;
 
     /* owner/group apply to both remaining kinds; copy first so the mode/encrypted
      * overrides below can short-circuit after the allocations have already

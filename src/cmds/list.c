@@ -497,7 +497,7 @@ static error_t *list_files(
             int git_err = git_tree_entry_bypath(&entry, tree, file_path);
             if (git_err == 0) {
                 /* Check encryption status and display indicator */
-                bool encrypted = metadata_get_file_encrypted(metadata, file_path);
+                bool encrypted = metadata_file_encrypted(metadata, file_path);
                 if (encrypted) {
                     output_styled(
                         out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} "

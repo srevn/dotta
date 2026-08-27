@@ -396,27 +396,20 @@ error_t *metadata_add_item(
 }
 
 /**
- * Get metadata item (const version)
+ * Look up an item by key
  *
- * Works for both files and directories. Caller should check item->kind after
- * retrieval if type matters.
+ * Works for every kind. A key the collection does not hold is the answer, not a
+ * failure.
  */
-error_t *metadata_get_item(
+const metadata_item_t *metadata_lookup(
     const metadata_t *metadata,
-    const char *key,
-    const metadata_item_t **out
+    const char *key
 ) {
-    CHECK_NULL(metadata);
-    CHECK_NULL(key);
-    CHECK_NULL(out);
-
-    const metadata_item_t *item = hashmap_get(metadata->index, key);
-    if (!item) {
-        return ERROR(ERR_NOT_FOUND, "Metadata item not found: %s", key);
+    if (!metadata || !key) {
+        return NULL;
     }
 
-    *out = item;
-    return NULL;
+    return hashmap_get(metadata->index, key);
 }
 
 /**
@@ -426,14 +419,15 @@ error_t *metadata_get_item(
  * - metadata_remove_entry() (files)
  * - metadata_remove_tracked_directory() (directories)
  *
- * Works for both files and directories.
+ * Works for every kind. A key the collection does not hold changes nothing.
  */
-error_t *metadata_remove_item(
+bool metadata_remove_item(
     metadata_t *metadata,
     const char *key
 ) {
-    CHECK_NULL(metadata);
-    CHECK_NULL(key);
+    if (!metadata || !key) {
+        return false;
+    }
 
     /* Linear: what the removal needs is the item's place in the spine, and only
      * a walk gives that. */
@@ -457,10 +451,10 @@ error_t *metadata_remove_item(
             );
         }
 
-        return NULL;
+        return true;
     }
 
-    return ERROR(ERR_NOT_FOUND, "Metadata item not found: %s", key);
+    return false;
 }
 
 /**
@@ -523,80 +517,37 @@ error_t *metadata_prune_directories(
         }
     }
 
+    /* Every key here was read off an item the walk above just saw, so each names
+     * something that is there to remove. */
     for (size_t i = first; i < pruned->count; i++) {
-        error_t *err = metadata_remove_item(metadata, pruned->items[i]);
-        if (err) {
-            return error_wrap(
-                err, "Failed to prune redundant directory '%s'",
-                pruned->items[i]
-            );
-        }
+        metadata_remove_item(metadata, pruned->items[i]);
     }
 
     return NULL;
 }
 
 /**
- * Check if metadata item exists
+ * Encrypted flag for a file entry
  *
- * Works for both files and directories.
- */
-bool metadata_has_item(
-    const metadata_t *metadata,
-    const char *key
-) {
-    if (!metadata || !key) {
-        return false;
-    }
-
-    return hashmap_get(metadata->index, key) != NULL;
-}
-
-/**
- * Get encrypted flag for file from metadata
+ * Reads the file union member from behind its discriminator, so a key that is
+ * absent, or held as a directory or a symlink, answers false rather than misreading
+ * a union.
  *
- * Convenience accessor that safely extracts the encrypted flag for a specific
- * file entry. This is a type-safe accessor that validates the item is a file
- * (not a directory) before accessing the file-specific encrypted field.
- *
- * Gracefully handles all error conditions by returning false:
- * - NULL metadata or storage_path
- * - Item not found in metadata
- * - Item exists but is a directory (not a file)
- *
- * This function is used by historical operations (diff, show, revert) to extract
- * the encrypted flag from metadata loaded from Git commits. Workspace-backed
- * operations read the view row's encrypted flag, which manifest_build projects
- * from this metadata.
+ * Used by historical operations (diff, show, revert) to extract the encrypted
+ * flag from metadata loaded from Git commits. Workspace-backed operations read
+ * the view row's encrypted flag, which manifest_build projects from this metadata.
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)
- * @return Encrypted flag (false if not found, error, or not a file)
+ * @return Encrypted flag (false if not found or not a file)
  */
-bool metadata_get_file_encrypted(
+bool metadata_file_encrypted(
     const metadata_t *metadata,
     const char *storage_path
 ) {
-    /* Graceful handling - return safe default for invalid input */
-    if (!metadata || !storage_path) {
-        return false;
-    }
+    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
 
-    /* Lookup item using existing accessor (reuse lookup logic) */
-    const metadata_item_t *item = NULL;
-    error_t *err = metadata_get_item(metadata, storage_path, &item);
-
-    /* Extract encrypted flag with type safety */
-    bool encrypted = false;
-    if (err == NULL && item && item->kind == METADATA_ITEM_FILE) {
-        /* Safe to access file union member */
-        encrypted = item->file.encrypted;
-    }
-
-    /* Cleanup - free error if lookup failed (not found is expected) */
-    error_free(err);
-
-    return encrypted;
+    return item && item->kind == METADATA_ITEM_FILE && item->file.encrypted;
 }
 
 /**

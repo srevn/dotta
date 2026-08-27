@@ -372,6 +372,22 @@ static int manifest_claim_blob(
         return 0;
     }
 
+    /* The entry name is Git's, not this machine's. mount_resolve joins a label's
+     * tail verbatim on the strength of the path having been validated at its write
+     * boundary, and for a branch this machine authored it was — but a branch that
+     * arrived by clone or sync was validated by whoever wrote it, which is to say
+     * not at all. A tree can name a subtree "..", so the shape has to be checked
+     * where the tree is read, the same reason metadata's key loop checks its own
+     * (core/metadata.c). Malformed here is corruption, not a lifecycle stage: it
+     * takes the err branch below rather than the unbound note. */
+    error_t *err = mount_validate_storage(storage_path);
+    if (err) {
+        ctx->error = error_wrap(
+            err, "Invalid path in profile '%s'", ctx->profile
+        );
+        return -1;
+    }
+
     /* Convert storage path to filesystem path against the mount table.
      *
      * MOUNT_RESOLVE_UNBOUND fires when storage_path is custom/... and ctx->profile
@@ -387,7 +403,7 @@ static int manifest_claim_blob(
      * (malformed path, OOM) propagate via the err branch. */
     mount_resolve_outcome_t outcome;
     const char *filesystem_path = NULL;
-    error_t *err = mount_resolve(
+    err = mount_resolve(
         ctx->mounts, ctx->profile, storage_path, ctx->arena,
         &outcome, &filesystem_path
     );

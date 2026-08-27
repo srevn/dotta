@@ -145,23 +145,15 @@ typedef struct {
     };
 } metadata_item_t;
 
-/* Forward declaration */
-typedef struct hashmap hashmap_t;
-
 /**
- * Unified metadata collection
+ * Unified metadata collection (opaque)
  *
- * Uses single array (for iteration/serialization) and single hashmap (for O(1)
- * lookups). The hashmap values point to items in the array (no separate
- * allocation).
+ * Owns every item it holds and hands them out borrowed. An item pointer stays
+ * valid until that item is itself removed or the collection is freed, whatever
+ * else is added or removed meanwhile; the slice metadata_items returns is the
+ * collection's own storage and does not survive either.
  */
-typedef struct metadata {
-    metadata_item_t *items;          /* Unified array of files and directories */
-    size_t count;                    /* Number of items */
-    size_t capacity;                 /* Array capacity */
-    int version;                     /* Schema version */
-    hashmap_t *index;                /* Maps key -> item* (O(1) lookup for both kinds) */
-} metadata_t;
+typedef struct metadata metadata_t;
 
 /**
  * Create empty metadata collection
@@ -175,15 +167,11 @@ error_t *metadata_create_empty(metadata_t **out);
 /**
  * Free metadata structure
  *
- * Frees all items and the structure itself. Handles kind-specific union fields
- * correctly.
+ * Frees every item it holds and the structure itself.
  *
- * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
- * void* to match standard C cleanup callback pattern.
- *
- * @param ptr Metadata to free (can be NULL)
+ * @param metadata Metadata to free (can be NULL)
  */
-void metadata_free(void *ptr);
+void metadata_free(metadata_t *metadata);
 
 /**
  * Create file metadata item
@@ -263,21 +251,24 @@ error_t *metadata_item_clone(
 );
 
 /**
- * Add or update metadata item
+ * Add or update metadata item, transferring ownership
  *
- * Works for both files and directories. If an item with the same key exists, it
- * is updated. Otherwise, a new item is added.
+ * Works for every kind. If an item with the same key exists it is replaced in
+ * place; otherwise the item is appended.
  *
- * IMPORTANT: This function COPIES the item, so caller must still free the source
- * item.
+ * The collection TAKES the item it is handed rather than duplicating it: the
+ * item keeps its place in memory, the collection keeps the pointer, and *item
+ * is left NULL. On error nothing was published — the collection is exactly as
+ * it was and the caller still owns the item.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param source Source item to copy from (must not be NULL)
+ * @param item Item to hand over (neither it nor *item may be NULL; *item is NULL
+ *             on success, unchanged on error)
  * @return Error or NULL on success
  */
 error_t *metadata_add_item(
     metadata_t *metadata,
-    const metadata_item_t *source
+    metadata_item_t **item
 );
 
 /**
@@ -408,18 +399,21 @@ bool metadata_get_file_encrypted(
 );
 
 /**
- * Get all items (unfiltered)
+ * Every item the collection holds, in insertion order
  *
- * Returns direct pointer to internal items array (borrowed reference). Zero-cost
- * operation - no allocation, no copying.
+ * Returns the collection's own storage, borrowed. Zero-cost operation - no
+ * allocation, no copying.
  *
- * The returned pointer is only valid until the next modification to metadata.
+ * Anything that grows or shrinks the collection invalidates the returned array;
+ * the items it points at are not moved by it — each stands until it is itself
+ * removed.
  *
- * @param metadata Metadata collection (must not be NULL)
+ * @param metadata Metadata collection (NULL yields count 0)
  * @param count Output count (must not be NULL)
- * @return Array of items (borrowed reference - do not free), or NULL if empty
+ * @return Borrowed array of item pointers (do not free), NULL only when metadata
+ *         is NULL
  */
-const metadata_item_t *metadata_get_all_items(
+const metadata_item_t *const *metadata_items(
     const metadata_t *metadata,
     size_t *count
 );
@@ -484,8 +478,7 @@ error_t *metadata_capture_from_file(
  * (symlink permissions are not settable).
  *
  * Symlinks only need metadata for ownership tracking on paths whose label tracks
- * it. For home/ prefix or non-root users, returns *out = NULL (no metadata
- * needed).
+ * it. For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
  *
  * Ownership capture (user/group):
  * - ONLY captured for symlinks whose label tracks ownership (root/, custom/),

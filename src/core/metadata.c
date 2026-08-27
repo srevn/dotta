@@ -28,6 +28,26 @@
 #define INITIAL_CAPACITY 16
 
 /**
+ * Unified metadata collection
+ *
+ * A spine of pointers to items the collection owns, and a key index over them.
+ * An item is stable from the moment it is created — only the spine is ever
+ * reallocated — so the index stores item pointers directly and metadata_items
+ * hands the spine out as the public slice. The index borrows each item's own
+ * key (hashmap_borrow), which is why it is freed before the items are.
+ *
+ * The schema version is the document's, not the collection's: metadata_to_json
+ * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
+ * is nothing here for a version field to say.
+ */
+struct metadata {
+    metadata_item_t **items;         /* Spine of stable items, in insertion order */
+    size_t count;                    /* Items held */
+    size_t capacity;                 /* Spine slots allocated */
+    hashmap_t *index;                /* key -> item*, borrowing the item's own key */
+};
+
+/**
  * Create empty metadata collection
  */
 error_t *metadata_create_empty(metadata_t **out) {
@@ -38,8 +58,8 @@ error_t *metadata_create_empty(metadata_t **out) {
         return ERROR(ERR_MEMORY, "Failed to allocate metadata structure");
     }
 
-    /* Allocate unified items array */
-    metadata->items = calloc(INITIAL_CAPACITY, sizeof(metadata_item_t));
+    /* Allocate the item spine */
+    metadata->items = calloc(INITIAL_CAPACITY, sizeof(*metadata->items));
     if (!metadata->items) {
         free(metadata);
         return ERROR(ERR_MEMORY, "Failed to allocate metadata items array");
@@ -55,7 +75,6 @@ error_t *metadata_create_empty(metadata_t **out) {
 
     metadata->count = 0;
     metadata->capacity = INITIAL_CAPACITY;
-    metadata->version = METADATA_VERSION;
 
     *out = metadata;
     return NULL;
@@ -83,32 +102,19 @@ void metadata_item_free(metadata_item_t *item) {
 /**
  * Free metadata structure
  *
- * Frees all items (handling union fields correctly) and the structure itself.
- *
- * Generic callback signature for use with containers (e.g., hashmap_free). Accepts
- * void* to match standard C cleanup callback pattern.
+ * Frees every item it holds and the structure itself.
  */
-void metadata_free(void *ptr) {
-    /* Safe cast: this function is designed to accept metadata_t* via void* */
-    metadata_t *metadata = ptr;
-
+void metadata_free(metadata_t *metadata) {
     if (!metadata) {
         return;
     }
 
-    /* Free index first — it borrows key pointers from items array */
-    if (metadata->index) {
-        hashmap_free(metadata->index, NULL);
-    }
+    /* Free index first — it borrows the key pointer of every item */
+    hashmap_free(metadata->index, NULL);
 
     /* Free all items (files, directories, and symlinks) */
     for (size_t i = 0; i < metadata->count; i++) {
-        metadata_item_t *item = &metadata->items[i];
-
-        /* Free common fields */
-        free(item->key);
-        free(item->owner);
-        free(item->group);
+        metadata_item_free(metadata->items[i]);
     }
 
     free(metadata->items);
@@ -243,9 +249,8 @@ error_t *metadata_item_create_symlink(
 /**
  * Clone metadata item (deep copy)
  *
- * Creates a deep copy of a metadata item, duplicating all strings and union fields
- * based on the item's kind. This is useful when you need to preserve an item
- * while modifying the original collection.
+ * Creates a deep copy of a metadata item, duplicating all strings. This is useful
+ * when you need to preserve an item while modifying the original collection.
  *
  * @param source Source item to clone (must not be NULL)
  * @param out Cloned item (must not be NULL, caller must free with
@@ -261,52 +266,19 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
         return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
     }
 
-    /* Copy kind discriminator */
-    item->kind = source->kind;
-
-    /* Deep copy common fields */
+    /* Everything that is not a pointer copies wholesale — kind, mode, and the
+     * union with them, so a kind added later needs no line here. The three strings
+     * are then re-owned, and the one refusal covers all three. */
+    *item = *source;
     item->key = strdup(source->key);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate key");
-    }
+    item->owner = source->owner ? strdup(source->owner) : NULL;
+    item->group = source->group ? strdup(source->group) : NULL;
 
-    item->mode = source->mode;
-
-    if (source->owner) {
-        item->owner = strdup(source->owner);
-        if (!item->owner) {
-            free(item->key);
-            free(item);
-            return ERROR(ERR_MEMORY, "Failed to duplicate owner");
-        }
-    } else {
-        item->owner = NULL;
-    }
-
-    if (source->group) {
-        item->group = strdup(source->group);
-        if (!item->group) {
-            free(item->owner);
-            free(item->key);
-            free(item);
-            return ERROR(ERR_MEMORY, "Failed to duplicate group");
-        }
-    } else {
-        item->group = NULL;
-    }
-
-    /* Deep copy kind-specific union fields */
-    switch (source->kind) {
-        case METADATA_ITEM_FILE:
-            item->file.encrypted = source->file.encrypted;
-            break;
-        case METADATA_ITEM_DIRECTORY:
-            item->directory._reserved = 0;
-            break;
-        case METADATA_ITEM_SYMLINK:
-            item->symlink._reserved = 0;
-            break;
+    if (!item->key ||
+        (source->owner && !item->owner) ||
+        (source->group && !item->group)) {
+        metadata_item_free(item);
+        return ERROR(ERR_MEMORY, "Failed to duplicate metadata item strings");
     }
 
     *out = item;
@@ -314,44 +286,10 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
 }
 
 /**
- * Safely rebuild hashmap index after array reallocation
+ * Grow the item spine if it is full
  *
- * After realloc, all pointers in the hashmap are invalid and must be updated.
- * If rebuild fails, the hashmap is freed and set to NULL, causing fallback to
- * linear search. This ensures the data structure remains consistent even if hashmap
- * rebuild fails.
- *
- * @param metadata Metadata structure (must not be NULL)
- */
-static void rebuild_hashmap_index(metadata_t *metadata) {
-    if (!metadata || !metadata->index) {
-        return;
-    }
-
-    /* Clear existing index (all pointers are stale after realloc) */
-    hashmap_clear(metadata->index, NULL);
-
-    /* Rebuild index with new pointers */
-    for (size_t i = 0; i < metadata->count; i++) {
-        metadata_item_t *item = &metadata->items[i];
-
-        error_t *err = hashmap_set(metadata->index, item->key, item);
-        if (err) {
-            /* Rebuild failed - free hashmap and set to NULL This causes fallback
-             * to linear search (slower but correct) */
-            hashmap_free(metadata->index, NULL);
-            metadata->index = NULL;
-            error_free(err);
-            return;
-        }
-    }
-}
-
-/**
- * Grow metadata items array if needed
- *
- * Doubles the array capacity when full. After realloc, the hashmap index must
- * be rebuilt since all pointers have changed.
+ * Doubles the spine when it fills. Only the spine moves — the items it points
+ * at stay where they were created — so the index needs no maintenance here.
  *
  * @param metadata Metadata structure (must not be NULL)
  * @return Error or NULL on success
@@ -363,15 +301,15 @@ static error_t *ensure_capacity(metadata_t *metadata) {
         return NULL; /* No need to grow */
     }
 
-    /* Check for overflow before doubling capacity */
-    if (metadata->capacity > SIZE_MAX / 2) {
-        return ERROR(ERR_MEMORY, "Metadata capacity would overflow");
+    size_t new_capacity = metadata->capacity * 2;
+    if (new_capacity < metadata->capacity ||
+        new_capacity > SIZE_MAX / sizeof(*metadata->items)) {
+        return ERROR(ERR_MEMORY, "Metadata collection too large to grow");
     }
 
-    size_t new_capacity = metadata->capacity * 2;
-    metadata_item_t *new_items = realloc(
+    metadata_item_t **new_items = realloc(
         metadata->items,
-        new_capacity * sizeof(metadata_item_t)
+        new_capacity * sizeof(*new_items)
     );
 
     if (!new_items) {
@@ -381,172 +319,78 @@ static error_t *ensure_capacity(metadata_t *metadata) {
     metadata->items = new_items;
     metadata->capacity = new_capacity;
 
-    /* Rebuild hashmap index since array pointers changed after realloc Non-fatal:
-     * if rebuild fails, index is set to NULL and we fall back to linear search */
-    rebuild_hashmap_index(metadata);
-
     return NULL;
 }
 
 /**
- * Add or update metadata item
+ * Add or update metadata item, transferring ownership
  *
- * Works for both files and directories. If an item with the same key exists, it
- * is updated. Otherwise, a new item is added.
+ * Works for every kind. If an item with the same key exists it is replaced in
+ * place; otherwise the item is appended.
  *
- * IMPORTANT: This function COPIES the source item. Caller must still free the
- * source item after calling this function.
+ * The collection stores pointers, so an item handed to it is taken rather than
+ * copied: it keeps its place in memory, the collection keeps the pointer, and
+ * the caller's handle is cleared. Both steps that can refuse — growing the spine
+ * and indexing the item — run before anything is published, so a refusal leaves
+ * the collection exactly as it was and the item still the caller's.
  *
- * Memory allocation strategy:
- * 1. For UPDATE: Allocate all new strings first (fail-fast), then update in-place
- * 2. For ADD: Allocate all strings first (fail-fast), then append to array
- * 3. This ensures no partial updates on allocation failure
+ * A mode arrives already validated: the three factories are the only construction
+ * paths, metadata_item_clone copies an item one of them built, and no caller
+ * mutates the field afterwards. Re-checking it here would be a second boundary
+ * for a fact this function does not own.
  */
 error_t *metadata_add_item(
     metadata_t *metadata,
-    const metadata_item_t *source
+    metadata_item_t **item
 ) {
     CHECK_NULL(metadata);
-    CHECK_NULL(source);
-    CHECK_NULL(source->key);
+    CHECK_NULL(item);
+    CHECK_NULL(*item);
+    CHECK_NULL((*item)->key);
 
-    /* Validate mode */
-    if (source->mode > 0777) {
-        return ERROR(ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)", source->mode);
-    }
+    metadata_item_t *incoming = *item;
 
-    /* Check if item exists (try hashmap O(1) lookup first) */
-    metadata_item_t *existing = NULL;
-    if (metadata->index) {
-        existing = (metadata_item_t *) hashmap_get(metadata->index, source->key);
-    } else {
-        /* Hashmap rebuild failed - fallback to linear search O(n) */
-        for (size_t i = 0; i < metadata->count; i++) {
-            if (strcmp(metadata->items[i].key, source->key) == 0) {
-                existing = &metadata->items[i];
-                break;
-            }
-        }
-    }
-
+    metadata_item_t *existing = hashmap_get(metadata->index, incoming->key);
     if (existing) {
-        /* UPDATE EXISTING ITEM */
+        /* UPDATE EXISTING ITEM
+         *
+         * The slot keeps the key it was indexed under — the index borrows that
+         * pointer, so it must outlive the overwrite — and the incoming key, equal
+         * to it by construction, is dropped and its place taken before the copy,
+         * so nothing reads a pointer that has been freed. Everything else the
+         * slot held is freed and replaced wholesale, the kind and its union
+         * included, so a kind change leaves no residue of the old one. Nothing
+         * here can fail. */
+        free(incoming->key);
+        incoming->key = existing->key;
 
-        /* Allocate new strings first (fail-fast before modifying anything) */
-        char *new_owner = NULL;
-        char *new_group = NULL;
-
-        if (source->owner) {
-            new_owner = strdup(source->owner);
-            if (!new_owner) {
-                return ERROR(ERR_MEMORY, "Failed to duplicate owner");
-            }
-        }
-
-        if (source->group) {
-            new_group = strdup(source->group);
-            if (!new_group) {
-                free(new_owner);
-                return ERROR(ERR_MEMORY, "Failed to duplicate group");
-            }
-        }
-
-        /* All allocations succeeded - now update */
-
-        /* Free old strings */
         free(existing->owner);
         free(existing->group);
 
-        /* Update common fields */
-        existing->owner = new_owner;
-        existing->group = new_group;
-        existing->mode = source->mode;
-
-        /* Update kind (can change between file/directory/symlink) */
-        existing->kind = source->kind;
-
-        /* Update kind-specific union fields */
-        switch (source->kind) {
-            case METADATA_ITEM_FILE:
-                existing->file.encrypted = source->file.encrypted;
-                break;
-            case METADATA_ITEM_DIRECTORY:
-                existing->directory._reserved = 0;
-                break;
-            case METADATA_ITEM_SYMLINK:
-                existing->symlink._reserved = 0;
-                break;
-        }
+        *existing = *incoming;
+        free(incoming);
+        *item = NULL;
 
         return NULL;
     }
 
-    /* ADD NEW ITEM */
-
-    /* Ensure we have capacity (may trigger realloc + hashmap rebuild) */
+    /* APPEND NEW ITEM
+     *
+     * Both refusals come first: a spine that cannot grow, and an index that cannot
+     * take the key. Neither has published anything, so the caller keeps the item
+     * and the collection is untouched. */
     error_t *err = ensure_capacity(metadata);
     if (err) {
         return err;
     }
 
-    /* Get pointer to new slot (append to end) */
-    metadata_item_t *item = &metadata->items[metadata->count];
-    memset(item, 0, sizeof(metadata_item_t));
-
-    /* Allocate all strings first (fail-fast) */
-    item->key = strdup(source->key);
-    if (!item->key) {
-        return ERROR(ERR_MEMORY, "Failed to duplicate key");
+    err = hashmap_set(metadata->index, incoming->key, incoming);
+    if (err) {
+        return error_wrap(err, "Failed to index metadata item");
     }
 
-    if (source->owner) {
-        item->owner = strdup(source->owner);
-        if (!item->owner) {
-            free(item->key);
-            return ERROR(ERR_MEMORY, "Failed to duplicate owner");
-        }
-    }
-
-    if (source->group) {
-        item->group = strdup(source->group);
-        if (!item->group) {
-            free(item->key);
-            free(item->owner);
-            return ERROR(ERR_MEMORY, "Failed to duplicate group");
-        }
-    }
-
-    /* Copy kind and common fields */
-    item->kind = source->kind;
-    item->mode = source->mode;
-
-    /* Copy kind-specific union fields */
-    switch (source->kind) {
-        case METADATA_ITEM_FILE:
-            item->file.encrypted = source->file.encrypted;
-            break;
-        case METADATA_ITEM_DIRECTORY:
-            item->directory._reserved = 0;
-            break;
-        case METADATA_ITEM_SYMLINK:
-            item->symlink._reserved = 0;
-            break;
-    }
-
-    /* Add to hashmap (if available) */
-    if (metadata->index) {
-        err = hashmap_set(metadata->index, item->key, item);
-        if (err) {
-            /* Hashmap insertion failed - clean up and return error */
-            free(item->key);
-            free(item->owner);
-            free(item->group);
-            return error_wrap(err, "Failed to update index");
-        }
-    }
-
-    /* Success - increment count */
-    metadata->count++;
+    metadata->items[metadata->count++] = incoming;
+    *item = NULL;
 
     return NULL;
 }
@@ -566,21 +410,7 @@ error_t *metadata_get_item(
     CHECK_NULL(key);
     CHECK_NULL(out);
 
-    const metadata_item_t *item = NULL;
-
-    /* Try hashmap first (O(1)) */
-    if (metadata->index) {
-        item = (const metadata_item_t *) hashmap_get(metadata->index, key);
-    } else {
-        /* Hashmap rebuild failed - fallback to linear search (O(n)) */
-        for (size_t i = 0; i < metadata->count; i++) {
-            if (strcmp(metadata->items[i].key, key) == 0) {
-                item = &metadata->items[i];
-                break;
-            }
-        }
-    }
-
+    const metadata_item_t *item = hashmap_get(metadata->index, key);
     if (!item) {
         return ERROR(ERR_NOT_FOUND, "Metadata item not found: %s", key);
     }
@@ -605,60 +435,41 @@ error_t *metadata_remove_item(
     CHECK_NULL(metadata);
     CHECK_NULL(key);
 
-    /* Find item index (use linear search since we need index anyway) */
-    ssize_t index = -1;
+    /* Linear: what the removal needs is the item's place in the spine, and only
+     * a walk gives that. */
     for (size_t i = 0; i < metadata->count; i++) {
-        if (strcmp(metadata->items[i].key, key) == 0) {
-            index = (ssize_t) i;
-            break;
+        metadata_item_t *item = metadata->items[i];
+        if (strcmp(item->key, key) != 0) {
+            continue;
         }
-    }
 
-    if (index < 0) {
-        return ERROR(ERR_NOT_FOUND, "Metadata item not found: %s", key);
-    }
-
-    metadata_item_t *item = &metadata->items[index];
-
-    /* Remove from hashmap first (before freeing key) */
-    if (metadata->index) {
+        /* Remove from hashmap first (before freeing key) */
         hashmap_remove(metadata->index, item->key, NULL);
+        metadata_item_free(item);
+        metadata->count--;
+
+        /* Close the gap. Only the spine shifts — every surviving item stays where
+         * it was, so every index entry stays valid. */
+        if (i < metadata->count) {
+            memmove(
+                &metadata->items[i], &metadata->items[i + 1],
+                (metadata->count - i) * sizeof(*metadata->items)
+            );
+        }
+
+        return NULL;
     }
 
-    /* Free item's allocated fields */
-    free(item->key);
-    free(item->owner);
-    free(item->group);
-
-    /* Shift array left to fill gap (if not last item) */
-    if ((size_t) index < metadata->count - 1) {
-        memmove(
-            &metadata->items[index],
-            &metadata->items[index + 1],
-            (metadata->count - index - 1) * sizeof(metadata_item_t)
-        );
-    }
-
-    /* Decrement count */
-    metadata->count--;
-
-    /* Rebuild hashmap since array pointers changed after memmove Non-fatal: if
-     * rebuild fails, index is set to NULL and we fall back to linear search */
-    if (metadata->index && (size_t) index < metadata->count) {
-        /* Only rebuild if we moved items (not if we removed the last item) */
-        rebuild_hashmap_index(metadata);
-    }
-
-    return NULL;
+    return ERROR(ERR_NOT_FOUND, "Metadata item not found: %s", key);
 }
 
 /**
  * Prune redundant directory entries
  *
- * Two-pass collect-then-prune: metadata_remove_item shifts the items array, which
- * would invalidate borrowed pointers from metadata_get_items_by_kind.
- * string_array_push duplicates each key, so the prune pass operates on independent
- * strings.
+ * Two-pass collect-then-prune: metadata_remove_item frees the item it removes,
+ * so the pass that decides cannot also be the pass that acts — it would be reading
+ * keys it had already freed. string_array_push duplicates each key, so the prune
+ * pass operates on independent strings.
  */
 error_t *metadata_prune_directories(
     metadata_t *metadata,
@@ -749,19 +560,7 @@ bool metadata_has_item(
         return false;
     }
 
-    /* Try hashmap first (O(1)) */
-    if (metadata->index) {
-        return hashmap_get(metadata->index, key) != NULL;
-    }
-
-    /* Fallback to linear search (O(n)) */
-    for (size_t i = 0; i < metadata->count; i++) {
-        if (strcmp(metadata->items[i].key, key) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    return hashmap_get(metadata->index, key) != NULL;
 }
 
 /**
@@ -812,18 +611,21 @@ bool metadata_get_file_encrypted(
 }
 
 /**
- * Get all items (unfiltered)
+ * Every item the collection holds, in insertion order
  *
- * Returns direct pointer to internal items array (borrowed reference). Zero-cost
- * operation - no allocation, no copying.
+ * Returns the spine itself (borrowed reference). Zero-cost operation - no
+ * allocation, no copying.
  *
- * The returned pointer is only valid until the next modification to metadata.
+ * Anything that grows or shrinks the collection invalidates the returned array;
+ * the items it points at are not moved by it — each stands until it is itself
+ * removed.
  *
- * @param metadata Metadata collection (must not be NULL)
+ * @param metadata Metadata collection (NULL yields count 0)
  * @param count Output count (must not be NULL)
- * @return Array of items (borrowed reference - do not free), or NULL if empty
+ * @return Borrowed array of item pointers (do not free), NULL only when metadata
+ *         is NULL
  */
-const metadata_item_t *metadata_get_all_items(
+const metadata_item_t *const *metadata_items(
     const metadata_t *metadata,
     size_t *count
 ) {
@@ -837,10 +639,9 @@ const metadata_item_t *metadata_get_all_items(
 
     *count = metadata->count;
 
-    /* Return direct pointer to array (borrowed reference) Note: metadata->items
-     * is always allocated (even for empty metadata), so this is safe even when
-     * count=0 */
-    return metadata->items;
+    /* Return the spine (borrowed reference) Note: it is always allocated (even
+     * for an empty collection), so this is safe even when count=0 */
+    return (const metadata_item_t *const *) metadata->items;
 }
 
 /**
@@ -878,10 +679,10 @@ const metadata_item_t **metadata_get_items_by_kind(
 
     ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < metadata->count; i++) {
-        if (metadata->items[i].kind == kind) {
+        if (metadata->items[i]->kind == kind) {
             error_t *err = ptr_array_push(
                 &matches,
-                &metadata->items[i]
+                metadata->items[i]
             );
             if (err) {
                 /* Surface NULL/0 to preserve the documented
@@ -1135,7 +936,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
 
     /* Serialize each item (unified loop for files and directories) */
     for (size_t i = 0; i < metadata->count; i++) {
-        const metadata_item_t *item = &metadata->items[i];
+        const metadata_item_t *item = metadata->items[i];
 
         /* Create item object */
         cJSON *item_obj = cJSON_CreateObject();
@@ -1313,8 +1114,6 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         goto cleanup;
     }
 
-    metadata->version = version;
-
     /* Parse each item in the unified array */
     cJSON *item_obj = NULL;
     cJSON_ArrayForEach(item_obj, items_array) {
@@ -1390,10 +1189,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             goto cleanup;
         }
 
-        /* Build the item through the factory its kind names, the way every
-         * other producer does. Each owns its kind's invariants — a link has no
-         * settable mode, so the document's is read, validated and dropped by
-         * the factory that never took it. */
+        /* Build the item through the factory its kind names, the way every other
+         * producer does. Each owns its kind's invariants — a link has no settable
+         * mode, so the document's is read, validated and dropped by the factory
+         * that never took it. */
         switch (kind) {
             case METADATA_ITEM_FILE: {
                 cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
@@ -1443,11 +1242,9 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
         }
 
-        /* Add item to metadata collection (copies item internally) */
-        err = metadata_add_item(metadata, item);
-        metadata_item_free(item);  /* Free temporary item (add_item copied it) */
-        item = NULL;
-
+        /* Hand the item to the collection; it takes it, and leaves the loop's
+         * scratch pointer NULL for the next iteration and the tail. */
+        err = metadata_add_item(metadata, &item);
         if (err) {
             err = error_wrap(
                 err, "Failed to add item to metadata: %s",

@@ -813,15 +813,15 @@ error_t *profile_get_stats(
     }
 
     size_t item_count = 0;
-    const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
     for (size_t i = 0; i < item_count; i++) {
-        if (items[i].kind != METADATA_ITEM_DIRECTORY) continue;
+        if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
 
         /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
          * blob is stale metadata, and the tree is the content authority — the
          * same rule manifest_claim_tree applies when the profile is enabled. */
         git_tree_entry *held = NULL;
-        if (git_tree_entry_bypath(&held, tree, items[i].key) == 0) {
+        if (git_tree_entry_bypath(&held, tree, items[i]->key) == 0) {
             bool is_blob = git_tree_entry_type(held) == GIT_OBJECT_BLOB;
             git_tree_entry_free(held);
             if (is_blob) continue;

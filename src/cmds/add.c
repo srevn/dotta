@@ -573,10 +573,9 @@ static error_t *add_file_to_worktree(
             );
         }
 
-        err = metadata_add_item(metadata, item);
-        metadata_item_free(item);
-
+        err = metadata_add_item(metadata, &item);
         if (err) {
+            metadata_item_free(item);
             return error_wrap(
                 err, "Failed to add metadata item for '%s'",
                 filesystem_path
@@ -1530,11 +1529,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Add directory to metadata */
-        err = metadata_add_item(metadata, dir_item);
-        metadata_item_free(dir_item);
-
+        err = metadata_add_item(metadata, &dir_item);
         if (err) {
             /* Non-fatal: log warning and continue */
+            metadata_item_free(dir_item);
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to track directory '%s': %s",
                 filesystem_path, error_message(err)

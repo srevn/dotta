@@ -721,7 +721,7 @@ static error_t *revert_file_in_branch(
 
     /* Update metadata entry (if not symlink) */
     if (meta_to_restore) {
-        err = metadata_add_item(current_metadata, meta_to_restore);
+        err = metadata_add_item(current_metadata, &meta_to_restore);
         if (err) {
             err = error_wrap(err, "Failed to update metadata");
             goto cleanup;

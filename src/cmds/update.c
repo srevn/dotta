@@ -605,8 +605,8 @@ static error_t *update_profile(
                         meta_item->file.encrypted = copy_encrypted;
                     }
 
-                    /* Say what the capture took before metadata_add_item copies
-                     * and frees it */
+                    /* Say what the capture took before metadata_add_item takes
+                     * it */
                     bool is_encrypted = (meta_item->kind == METADATA_ITEM_FILE)
                                       ? meta_item->file.encrypted : false;
                     if (meta_item->owner || meta_item->group) {
@@ -628,10 +628,9 @@ static error_t *update_profile(
                     }
 
                     /* Add to metadata collection */
-                    err = metadata_add_item(metadata, meta_item);
-                    metadata_item_free(meta_item);
-
+                    err = metadata_add_item(metadata, &meta_item);
                     if (err) {
+                        metadata_item_free(meta_item);
                         err = error_wrap(err, "Failed to add metadata entry");
                         goto cleanup;
                     }
@@ -723,8 +722,7 @@ static error_t *update_profile(
                     continue;
                 }
 
-                /* Say what the capture took before metadata_add_item copies and
-                 * frees it */
+                /* Say what the capture took before metadata_add_item takes it */
                 if (meta_item->owner || meta_item->group) {
                     output_info(
                         out, OUTPUT_VERBOSE,
@@ -742,10 +740,9 @@ static error_t *update_profile(
                 }
 
                 /* Add to metadata collection (upsert - updates if exists) */
-                err = metadata_add_item(metadata, meta_item);
-                metadata_item_free(meta_item);
-
+                err = metadata_add_item(metadata, &meta_item);
                 if (err) {
+                    metadata_item_free(meta_item);
                     err = error_wrap(
                         err, "Failed to update directory metadata for '%s'",
                         item->filesystem_path

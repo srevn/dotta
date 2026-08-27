@@ -399,10 +399,10 @@ static error_t *list_files(
             error_free(meta_err);  /* no metadata: no claims to count */
         } else {
             size_t item_count = 0;
-            const metadata_item_t *items =
-                metadata_get_all_items(empty_meta, &item_count);
+            const metadata_item_t *const *items =
+                metadata_items(empty_meta, &item_count);
             for (size_t i = 0; i < item_count; i++) {
-                if (items[i].kind == METADATA_ITEM_DIRECTORY) {
+                if (items[i]->kind == METADATA_ITEM_DIRECTORY) {
                     dir_count++;
                 }
             }

@@ -1034,10 +1034,10 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         size_t appended_from = list.count;
         size_t base_len = claims_base ? strlen(claims_base) : 0;
         size_t item_count = 0;
-        const metadata_item_t *items = metadata_get_all_items(metadata, &item_count);
+        const metadata_item_t *const *items = metadata_items(metadata, &item_count);
         for (size_t i = 0; i < item_count; i++) {
-            if (items[i].kind != METADATA_ITEM_DIRECTORY) continue;
-            const char *key = items[i].key;
+            if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+            const char *key = items[i]->key;
 
             const char *rel = key;
             if (base_len > 0) {
@@ -1071,7 +1071,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
                 goto cleanup;
             }
-            e.mode = items[i].mode != 0 ? items[i].mode : DIR_MODE_DEFAULT;
+            e.mode = items[i]->mode != 0 ? items[i]->mode : DIR_MODE_DEFAULT;
 
             err = entry_list_append(&list, arena, &e);
             if (err) goto cleanup;

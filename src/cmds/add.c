@@ -899,6 +899,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     worktree_handle_t *wt = NULL;
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
     size_t added_count = 0;
+    bool profile_exists = false;
     bool profile_was_new = false;
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;   /* The command's table: see below */
@@ -911,6 +912,36 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
+    }
+
+    /* The branch this add will write to: checked out below when it is there,
+     * created when it is not. Both answers are needed here, before the command
+     * has any effect — a name Git's ref namespace cannot hold beside the names
+     * already there is refused now, ahead of the pre-add hook and the worktree,
+     * because a refusal that has already run the user's hook is not a refusal.
+     *
+     * A branch and any branch beneath it are exclusive, which is why a base profile
+     * and its variants are (docs/profiles.md). libgit2 refuses at commit time
+     * with a message about directories that names neither profile; this refuses
+     * by name, and names both. */
+    err = gitops_branch_exists(repo, opts->profile, &profile_exists);
+    if (err) goto cleanup;
+
+    if (!profile_exists) {
+        char *blocker = NULL;
+        err = gitops_branch_blocker(repo, opts->profile, &blocker);
+        if (err) goto cleanup;
+        if (blocker) {
+            const char *base = strlen(blocker) < strlen(opts->profile)
+                ? blocker : opts->profile;
+            err = ERROR(
+                ERR_INVALID_ARG, "Profile '%s' cannot exist beside profile '%s'\n\n"
+                "Git stores each profile as a branch, and '%s' cannot be both "
+                "a branch and a folder of branches.\n", opts->profile, blocker, base
+            );
+            free(blocker);
+            goto cleanup;
+        }
     }
 
     /* Validate deployment target if provided */
@@ -1170,11 +1201,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Checkout or create profile branch */
-    bool profile_exists = false;
-    err = gitops_branch_exists(repo, opts->profile, &profile_exists);
-    if (err) goto cleanup;
-
+    /* Checkout or create the profile branch, as the pre-flight above resolved it */
     if (profile_exists) {
         err = worktree_checkout_branch(wt, opts->profile);
     } else {

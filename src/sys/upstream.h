@@ -121,6 +121,11 @@ error_t *upstream_discover_branches(
  * Creates a local branch that tracks a remote branch, setting the local branch
  * to point at the same commit as the remote.
  *
+ * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
+ * cannot hold the name beside one already there (`gitops_branch_blocker`) — the
+ * one failure here that is about the two names rather than the wire, and the
+ * one the ref write would otherwise report in libgit2's own words.
+ *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin")
  * @param branch_name Branch name

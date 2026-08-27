@@ -5,6 +5,7 @@
 #include "sys/upstream.h"
 
 #include <git2.h>
+#include <stdlib.h>
 
 #include "base/array.h"
 #include "base/error.h"
@@ -217,9 +218,29 @@ error_t *upstream_create_tracking_branch(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
 
+    /* A name Git's ref namespace cannot hold beside the ones already here. The
+     * remote cannot ship a colliding pair — Git forbids it there too — so the
+     * blocker is always a local branch: a profile added on this machine and never
+     * pushed, standing where a fetched one would go. Refused by name, ahead of
+     * the ref write whose own message names only one of the two. */
+    char *blocker = NULL;
+    error_t *err = gitops_branch_blocker(repo, branch_name, &blocker);
+    if (err) {
+        return err;
+    }
+    if (blocker) {
+        error_t *conflict = ERROR(
+            ERR_CONFLICT,
+            "Branch '%s' already exists, and Git cannot hold '%s' beside it: "
+            "one is a name, the other a folder of names", blocker, branch_name
+        );
+        free(blocker);
+        return conflict;
+    }
+
     /* Get remote ref */
     git_oid target_oid;
-    error_t *err = gitops_resolve_remote_branch_oid(
+    err = gitops_resolve_remote_branch_oid(
         repo, remote_name, branch_name, &target_oid
     );
     if (err) {

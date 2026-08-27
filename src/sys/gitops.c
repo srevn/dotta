@@ -164,6 +164,51 @@ error_t *gitops_branch_exists(
     return NULL;
 }
 
+error_t *gitops_branch_blocker(
+    git_repository *repo,
+    const char *name,
+    char **out_blocker
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
+    CHECK_NULL(out_blocker);
+    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
+
+    *out_blocker = NULL;
+
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) {
+        return err;
+    }
+
+    size_t len = strlen(name);
+    for (size_t i = 0; i < branches->count; i++) {
+        const char *other = branches->items[i];
+        size_t other_len = strlen(other);
+
+        /* Nested names: one is a folder the other lives in — the shorter matched
+         * whole, with a '/' where the longer one continues past it. Equal names
+         * are not nested, and the boundary test says so on its own: the shorter
+         * length indexes the other name's terminator. */
+        size_t shorter = other_len < len ? other_len : len;
+        bool nested = strncmp(other, name, shorter) == 0
+            && (other_len > len ? other[len] : name[other_len]) == '/';
+
+        if (nested) {
+            *out_blocker = strdup(other);
+            if (!*out_blocker) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate branch name");
+            }
+            break;
+        }
+    }
+
+    string_array_free(branches);
+
+    return err;
+}
+
 error_t *gitops_create_orphan_branch(
     git_repository *repo,
     const char *name

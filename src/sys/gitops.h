@@ -109,6 +109,32 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exists);
 
 /**
+ * Find the existing branch that blocks a name
+ *
+ * Git's ref namespace is a directory tree: refs/heads/<n> is a name and
+ * refs/heads/<n>/<v> is a folder of names, and one path cannot be both. So a
+ * branch and any branch beneath it are mutually exclusive, in every ref backend
+ * — packing the refs does not lift it, it only rewords the refusal ("path to
+ * reference collides with existing one" instead of a failure to remove a
+ * directory). Git refuses the second at creation; libgit2 refuses it too, and
+ * neither of its wordings names both branches.
+ *
+ * Answers which existing branch stands in the way of `name`, so a caller can
+ * refuse in its own vocabulary before doing any work. An exact match does not
+ * block — that is `gitops_branch_exists`'s question, and its answer is a different
+ * one.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param name Branch name to test (must not be NULL)
+ * @param out_blocker Receives the blocking branch's name (caller frees), or NULL
+ *                    when nothing blocks (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_branch_blocker(
+    git_repository *repo, const char *name, char **out_blocker
+);
+
+/**
  * Create orphan branch (no parent commits)
  *
  * @param repo Repository (must not be NULL)

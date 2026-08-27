@@ -22,18 +22,17 @@ else
     FEATURE_MACROS := -D_XOPEN_SOURCE=700 -D_DEFAULT_SOURCE
 endif
 
-# Build type: release | debug. `make debug` = `make BUILD_TYPE=debug`. Each
-# type owns an object tree (build/<type>/) and a binary (bin/dotta,
-# bin/dotta-debug), so the two stand side by side: switching rebuilds nothing,
-# and a sanitizer run of the suites never displaces the release binary.
-BUILD_TYPE ?= $(if $(filter debug,$(MAKECMDGOALS)),debug,release)
-ifeq ($(filter $(BUILD_TYPE),release debug),)
-$(error BUILD_TYPE must be 'release' or 'debug' (got '$(BUILD_TYPE)'))
+# Build type: release | debug | coverage
+BUILD_TYPE ?= $(firstword $(filter debug coverage,$(MAKECMDGOALS:coverage-report=coverage)) release)
+ifeq ($(filter $(BUILD_TYPE),release debug coverage),)
+$(error BUILD_TYPE must be 'release', 'debug' or 'coverage' (got '$(BUILD_TYPE)'))
 endif
 
 CFLAGS := -std=c11 -Wall -Wextra -Wpedantic -Werror $(FEATURE_MACROS)
 ifeq ($(BUILD_TYPE),debug)
 CFLAGS += -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer
+else ifeq ($(BUILD_TYPE),coverage)
+CFLAGS += -g -O0 -fprofile-instr-generate -fcoverage-mapping
 else
 CFLAGS += -O2 -flto
 endif
@@ -177,6 +176,8 @@ MAIN_SRC := $(SRC_DIR)/main.c
 MAIN_OBJ := $(BUILD_DIR)/main.o
 ifeq ($(BUILD_TYPE),debug)
 TARGET := $(BIN_DIR)/dotta-debug
+else ifeq ($(BUILD_TYPE),coverage)
+TARGET := $(BIN_DIR)/dotta-coverage
 else
 TARGET := $(BIN_DIR)/dotta
 endif
@@ -283,7 +284,7 @@ $(TESTS_BIN_DIR)/%: $(TESTS_DIR)/%.c $(LIBDOTTA) | $(TESTS_BIN_DIR)
 	    $< $(LIBDOTTA) $(LIBGIT2_LIBS) $(SQLITE3_LIBS) -o $@
 
 # Suites are independent; run this many at a time (JOBS=1 keeps start order)
-JOBS ?= 4
+JOBS ?= 8
 
 # The runner drives this build type's binary and unit binaries; run by hand
 # it defaults to the release ones (tests/run.sh).
@@ -301,6 +302,46 @@ test-cli: $(TARGET)
 .PHONY: test-all
 test-all: $(TESTS_BIN) $(TARGET)
 	@$(RUN_SUITES) $(SUITE)
+
+# Coverage — which lines of src/ the suites run.
+#
+# `%m` expands to the binary's own signature, so thousands of dotta processes
+# merge online into one file per binary instead of one file each.
+#
+# The tools are the compiler's: a profile is read by the clang whose runtime
+# wrote it, and a Homebrew clang beside an Xcode llvm-cov is how this breaks.
+COVERAGE_DIR := $(BUILD_DIR)/profile
+COVERAGE_RAW := $(COVERAGE_DIR)/raw
+COVERAGE_DATA := $(COVERAGE_DIR)/dotta.profdata
+
+LLVM_PROFDATA := $(shell $(CC) -print-prog-name=llvm-profdata 2>/dev/null)
+ifeq ($(filter /%,$(LLVM_PROFDATA)),)
+LLVM_PROFDATA := llvm-profdata
+endif
+LLVM_COV := $(shell $(CC) -print-prog-name=llvm-cov 2>/dev/null)
+ifeq ($(filter /%,$(LLVM_COV)),)
+LLVM_COV := llvm-cov
+endif
+
+# The suites' exit status is the target's, so a failing run still reports.
+.PHONY: coverage
+coverage: $(TESTS_BIN) $(TARGET)
+	@rm -rf $(COVERAGE_RAW) $(COVERAGE_DATA)
+	@mkdir -p $(COVERAGE_RAW)
+	@LLVM_PROFILE_FILE=$(CURDIR)/$(COVERAGE_RAW)/%m.profraw $(RUN_SUITES) $(SUITE); \
+	 suites=$$?; $(MAKE) --no-print-directory coverage-report; exit $$suites
+
+# Re-render the last run's profile without re-running the suites.
+.PHONY: coverage-report
+coverage-report:
+	@ls $(COVERAGE_RAW)/*.profraw > /dev/null 2>&1 || \
+	    { echo "no profile in $(COVERAGE_RAW) — run 'make coverage' first"; exit 2; }
+	@$(LLVM_PROFDATA) merge -sparse $(COVERAGE_RAW)/*.profraw -o $(COVERAGE_DATA)
+	@echo ""
+	@$(LLVM_COV) report $(TARGET) $(addprefix -object ,$(TESTS_BIN)) \
+	    -instr-profile=$(COVERAGE_DATA) $(SRC_DIR)
+	@echo ""
+	@echo "one file: $(LLVM_COV) show $(TARGET) -instr-profile=$(COVERAGE_DATA) src/cmds/diff.c"
 
 # Clean build artifacts — both build types
 .PHONY: clean
@@ -518,6 +559,8 @@ help:
 	@echo "  test                  - Build and run unit tests"
 	@echo "  test-cli              - Run CLI suites (SUITE=\"ghosts export\" to filter, JOBS=1 for start order)"
 	@echo "  test-all              - Run unit tests and CLI suites"
+	@echo "  coverage              - Run the suites instrumented and report line coverage of src/"
+	@echo "  coverage-report       - Re-render the last coverage run without re-running it"
 	@echo "  clean                 - Remove build artifacts (both build types)"
 	@echo "  completions           - Generate the fish completion script from the binary"
 	@echo "  install               - Install binary, configs, and hooks to $(PREFIX)"
@@ -537,8 +580,8 @@ help:
 	@echo "  help                  - Show this help message"
 	@echo ""
 	@echo "Build type: 'debug' as a goal or BUILD_TYPE=debug sets the whole invocation,"
-	@echo "so 'make debug test-all' runs the suites under ASan/UBSan. Each type has its"
-	@echo "own tree (build/<type>/) and binary, so the two coexist."
+	@echo "so 'make debug test-all' runs the suites under ASan/UBSan; 'coverage' likewise."
+	@echo "Each type has its own tree (build/<type>/) and binary, so the three coexist."
 	@echo ""
 	@echo "Installation paths:"
 	@echo "  Binary:       $(BINDIR)/dotta"

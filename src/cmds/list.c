@@ -987,7 +987,7 @@ const args_command_t spec_list = {
     .post_parse  = list_post_parse,
     .complete    = list_complete,
     .payload     = &(const dotta_needs_t){
-        .repo    = true,
+        .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_READ,
         .mounts  = true,
     },

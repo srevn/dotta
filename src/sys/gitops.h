@@ -48,6 +48,19 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo);
 /**
  * Open git repository at path
  *
+ * The open is the presence test: there is no separate "is this a repository"
+ * predicate, because answering it requires this call and discarding this call's
+ * failure turns every unreadable repository into an absent one.
+ *
+ * The failure is classified so a caller can tell the cases apart:
+ *   ERR_NOT_FOUND  — libgit2 found no repository here. It reports an
+ *                    unreadable .git the same way and words both the same, so a
+ *                    caller that needs the distinction asks the filesystem.
+ *   ERR_PERMISSION — the repository is owned by another user.
+ *   ERR_GIT        — everything else, carrying libgit2's own message: a
+ *                    config file that will not parse (the user's ~/.gitconfig
+ *                    is loaded on open), a damaged object database.
+ *
  * @param out Repository handle (must not be NULL)
  * @param path Repository path (must not be NULL)
  * @return Error or NULL on success
@@ -84,14 +97,6 @@ error_t *gitops_discover_repository(char **out, const char *start_path);
  * @return Error or NULL on success
  */
 error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
-
-/**
- * Check if path is a valid git repository
- *
- * @param path Path to check (must not be NULL)
- * @return true if path exists and is a valid git repository
- */
-bool gitops_is_repository(const char *path);
 
 /**
  * Check if branch exists
@@ -472,8 +477,8 @@ typedef struct {
  * paths are "upserts" without needing an explicit remove-before-add.
  *
  * A removal naming a path the branch tree lacks is a hard error (nothing is
- * committed): the caller's model of the tree is wrong, and the mismatch
- * surfaces instead of silently no-op'ing.
+ * committed): the caller's model of the tree is wrong, and the mismatch surfaces
+ * instead of silently no-op'ing.
  *
  * At least one update or removal is required. Supported modes are
  * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and GIT_FILEMODE_LINK

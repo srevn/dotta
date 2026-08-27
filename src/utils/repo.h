@@ -37,23 +37,30 @@ error_t *resolve_repo_path(const config_t *config, char **out);
 /**
  * Open dotta repository
  *
- * Resolves the repository path, validates it exists and is a valid git repository,
- * then opens it. This is the standard way to open a repository for dotta commands.
+ * Resolves the repository path and opens it, then holds dotta's own invariant:
+ * HEAD on the `dotta-worktree` branch, recovered automatically when a manual
+ * checkout moved it. This is the standard way to open a repository for dotta
+ * commands — the pass-through (`dotta git`) is the one that deliberately does
+ * not, taking only the path (`dotta_repo_mode_t` in include/runtime.h).
  *
  * RESOLUTION ORDER:
  * 1. DOTTA_REPO_DIR environment variable
  * 2. Config file repo_dir setting
  * 3. Default: ~/.local/share/dotta/repo
  *
- * VALIDATION:
- * - Checks path exists and is a valid git repository
- * - Returns detailed error with helpful hints if not found
- * - Includes DOTTA_REPO_DIR hint in error if set
+ * THE OPEN IS THE PRESENCE TEST: there is no separate "is a repository here"
+ * question — asking it means opening, and a predicate that opens and throws the
+ * failure away reports "absent" for every reason an open can fail. So the open's
+ * own failure is what gets classified, and only the one case that is genuinely
+ * an absence is reworded:
  *
- * ERROR MESSAGES: If repository not found, error includes:
- * - Path that was checked
- * - Hint to run 'dotta init'
- * - DOTTA_REPO_DIR value if set
+ * - ERR_NOT_FOUND — the path holds no git directory. Names the path, the hint
+ *   to run 'dotta init', and DOTTA_REPO_DIR when the path came from it.
+ * - ERR_GIT — a git directory is present but libgit2 could not read it (the same
+ *   GIT_ENOTFOUND, told apart by the filesystem), or the open failed for its
+ *   own reason — a config file that will not parse, a damaged object database —
+ *   in which case libgit2's message is wrapped, not replaced.
+ * - ERR_PERMISSION — the repository is owned by another user.
  *
  * OWNERSHIP:
  * - Caller must free repository with git_repository_free()

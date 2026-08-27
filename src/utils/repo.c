@@ -198,43 +198,73 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
     git_repository *repo = NULL;
     error_t *err = NULL;
 
-    /* Resolve repository path */
+    /* Resolve repository path — resolve_repo_path names its own failure. */
     err = resolve_repo_path(config, &repo_path);
     if (err) {
-        return error_wrap(err, "Failed to resolve repository path");
-    }
-
-    /* Check if repository exists and is valid */
-    if (!gitops_is_repository(repo_path)) {
-        /* Build helpful error message with actionable hints */
-        const char *env_repo = getenv("DOTTA_REPO_DIR");
-
-        if (env_repo) {
-            err = ERROR(
-                ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
-                "Run 'dotta init' to create a new repository\n"
-                "Note: DOTTA_REPO_DIR is set to: %s", repo_path, env_repo
-            );
-        } else {
-            err = ERROR(
-                ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
-                "Run 'dotta init' to create a new repository", repo_path
-            );
-        }
-
-        free(repo_path);
         return err;
     }
 
-    /* Open repository */
+    /*
+     * Open the repository, and let the open be the answer to whether one is there.
+     * Only ERR_NOT_FOUND is dotta's to reword, and only after the filesystem
+     * has been asked which of the two cases libgit2 folds into it: a path that
+     * is not a repository, and a repository that could not be read. Every other
+     * failure is already the truth — a config file that will not parse, an object
+     * database that will not open — and is wrapped, not replaced. Telling a user
+     * with a broken ~/.gitconfig to run 'dotta init' costs them the repository
+     * they still have.
+     */
     err = gitops_open_repository(&repo, repo_path);
     if (err) {
-        error_t *wrapped = error_wrap(
-            err, "Failed to open repository at: %s",
-            repo_path
-        );
+        error_t *answer;
+
+        if (error_code(err) == ERR_NOT_FOUND) {
+            /* Which of the two it is. libgit2 words them identically — "could
+             * not find repository at X" for an empty directory, for a .git it
+             * cannot read, and for a path that is not there — so the filesystem
+             * is the one that can tell them apart, and the question to ask it
+             * is about the git directory rather than the directory holding it:
+             * an empty directory at the path is the absence of a repository,
+             * not an unreadable one. A path dotta cannot look into at all answers
+             * neither and reads as the absence; 'dotta init' then names the
+             * permission itself. */
+            char *git_dir = NULL;
+            error_t *join_err = fs_path_join(repo_path, ".git", &git_dir);
+            bool holds_repository = !join_err && fs_lexists(git_dir);
+            free(git_dir);
+            error_free(join_err);
+
+            /* Where the path came from, when it did not come from the default.
+             * The same test config_get_repo_dir's priority 1 makes, so the note
+             * cannot name an origin the resolution did not use. */
+            const char *env_repo = getenv("DOTTA_REPO_DIR");
+            bool from_env = env_repo && env_repo[0] != '\0';
+            const char *env_note = from_env ? "\nDOTTA_REPO_DIR is set to: " : "";
+            const char *env_value = from_env ? env_repo : "";
+
+            if (holds_repository) {
+                answer = ERROR(
+                    ERR_GIT, "Cannot read the repository at: %s\n\n"
+                    "A git directory is present, so this is not a missing "
+                    "repository.\n"
+                    "Check its ownership and permissions — a dotta run under "
+                    "sudo can leave root-owned files behind.%s%s",
+                    repo_path, env_note, env_value
+                );
+            } else {
+                answer = ERROR(
+                    ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
+                    "Run 'dotta init' to create a new repository%s%s",
+                    repo_path, env_note, env_value
+                );
+            }
+            error_free(err);
+        } else {
+            answer = error_wrap(err, "Failed to open repository at: %s", repo_path);
+        }
+
         free(repo_path);
-        return wrapped;
+        return answer;
     }
 
     /*

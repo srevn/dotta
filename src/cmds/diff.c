@@ -1569,8 +1569,8 @@ static error_t *diff_post_parse(
 /**
  * What can stand at the cursor: an enabled profile, a path of the view (files,
  * and directory claims as subtree filters) or a commit, in any order, as
- * diff_classify routes them — the view and the histories narrowed to the
- * profiles named so far — or a filesystem path.
+ * diff_classify routes them — the view and the histories narrowed to the profiles
+ * named so far — or a filesystem path.
  */
 static args_want_t diff_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1667,7 +1667,7 @@ const args_command_t spec_diff = {
     .post_parse   = diff_post_parse,
     .complete     = diff_complete,
     .payload      = &(const dotta_needs_t){
-        .repo     = true,
+        .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_READ,
         .mounts   = true,
         .crypto   = true,

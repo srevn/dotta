@@ -528,8 +528,8 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What can stand at the cursor: a local profile, by -p or bare — any
- * profile's script, enabled or not.
+ * What can stand at the cursor: a local profile, by -p or bare — any profile's
+ * script, enabled or not.
  */
 static args_want_t bootstrap_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -630,7 +630,7 @@ const args_command_t spec_bootstrap = {
     .opts        = bootstrap_opts,
     .complete    = bootstrap_complete,
     .payload     = &(const dotta_needs_t){
-        .repo    = true,
+        .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_READ,
     },
     .dispatch    = bootstrap_dispatch,

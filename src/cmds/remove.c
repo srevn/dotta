@@ -1852,7 +1852,7 @@ const args_command_t spec_remove = {
     .post_parse  = remove_post_parse,
     .complete    = remove_complete,
     .payload     = &(const dotta_needs_t){
-        .repo    = true,
+        .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_READ,
         .mounts  = true,
     },

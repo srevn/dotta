@@ -45,12 +45,36 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
 
 /**
  * Repository operations
+ *
+ * The open is also the presence test: whether a repository stands at a path is
+ * not a separate question from whether it opens, and a predicate that answers
+ * it by opening and throwing the failure away can only report "absent" for every
+ * reason an open can fail — a config parse error in the user's own ~/.gitconfig
+ * among them, which libgit2 loads on open. So the failure is classified here,
+ * where the libgit2 code is in scope and the only place it ever will be, and
+ * the caller reads the code rather than a boolean.
+ *
+ * GIT_ENOTFOUND is libgit2's answer for both an absent repository and one it
+ * could not read (an unreadable .git directory reports as not found), and it
+ * words them identically — "could not find repository at X" for either — so nothing
+ * is lost in replacing that message, and the caller disambiguates the pair against
+ * the filesystem, which is the authority on presence. Everything else keeps
+ * libgit2's own message.
  */
 error_t *gitops_open_repository(git_repository **out, const char *path) {
     CHECK_NULL(out);
     CHECK_NULL(path);
 
     int err = git_repository_open(out, path);
+    if (err == GIT_ENOTFOUND) {
+        return ERROR(ERR_NOT_FOUND, "No git repository at: %s", path);
+    }
+    if (err == GIT_EOWNER) {
+        return ERROR(
+            ERR_PERMISSION,
+            "Repository at %s is not owned by the current user", path
+        );
+    }
     if (err < 0) {
         return error_from_git(err);
     }
@@ -2783,25 +2807,6 @@ error_t *gitops_diff_get_stats(
     }
 
     return NULL;
-}
-
-/**
- * Check if path is a valid git repository
- */
-bool gitops_is_repository(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    /* Try to open as git repository */
-    git_repository *repo = NULL;
-    int err = git_repository_open(&repo, path);
-    if (err < 0) {
-        return false;
-    }
-
-    git_repository_free(repo);
-    return true;
 }
 
 /**

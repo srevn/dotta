@@ -145,7 +145,7 @@ const args_command_t spec_git = {
         "  %s git log --oneline\n"
         "  %s git show HEAD:home/.bashrc\n"
         "  %s git reflog\n",
-    .payload     = &(const dotta_needs_t){ .repo = true },
+    .payload     = &(const dotta_needs_t){ .repo = DOTTA_REPO_PATH },
     .dispatch    = git_dispatch,
     .passthrough = true,
 };

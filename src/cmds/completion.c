@@ -608,7 +608,7 @@ const args_command_t spec_complete = {
     .opts_size      = sizeof(cmd_complete_options_t),
     .opts           = complete_opts,
     .payload        = &(const dotta_needs_t){
-        .repo       = true,
+        .repo       = DOTTA_REPO_OPEN,
         .state      = DOTTA_STATE_READ,
         .tolerant   = true,
     },

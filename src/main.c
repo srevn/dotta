@@ -57,9 +57,9 @@
  *
  *   - args_resolve_root / args_render_root_usage — direct calls from main,
  *     resolving argv[1] and rendering top-level help;
- *   - cmds/completion.c — the fish completion exporter and the candidates
- *     driver reach the array through dotta_registry() so the cmds layer never
- *     names the registry symbol.
+ *   - cmds/completion.c — the fish completion exporter and the candidates driver
+ *     reach the array through dotta_registry() so the cmds layer never names
+ *     the registry symbol.
  *
  * Ordered for root-help readability: setup → file ops → deploy/undo → inspect →
  * remote → profile/remote mgmt → config → passthrough → special. Every projection
@@ -95,11 +95,11 @@ const args_command_t *const *dotta_registry(void) {
 /**
  * Open the run: every member the spec declares, in dependency order.
  *
- * The needs are checked for closure first — the spec names the full set its
- * handler reads, and the set must hold its own inputs (runtime.h). Then the
- * repository, state, the crypto handles, the mount table and the view, each
- * iff declared; every member starts NULL and is populated in place, so on an
- * error the members already opened are exactly what `close_run` releases.
+ * The needs are checked for closure first — the spec names the full set its handler
+ * reads, and the set must hold its own inputs (runtime.h). Then the repository,
+ * state, the crypto handles, the mount table and the view, each iff declared;
+ * every member starts NULL and is populated in place, so on an error the members
+ * already opened are exactly what `close_run` releases.
  *
  * The first open that fails returns its own error — it names the resource and,
  * for the salt and the view, the repair — and the run stays partially open for
@@ -115,18 +115,22 @@ static error_t *open_run(
     /* Closure: a derived member's input is declared beside it. An incoherent
      * spec is a programming error, caught on the command's first run. */
     bool has_state = needs->state != DOTTA_STATE_NONE;
-    CHECK_ARG(!has_state || needs->repo, "Spec declares state without repo");
-    CHECK_ARG(!needs->crypto || needs->repo, "Spec declares crypto without repo");
+    bool has_repo = needs->repo == DOTTA_REPO_OPEN;
+    CHECK_ARG(!has_state || has_repo, "Spec declares state without the repository handle");
+    CHECK_ARG(!needs->crypto || has_repo, "Spec declares crypto without the repository handle");
     CHECK_ARG(!needs->mounts || has_state, "Spec declares mounts without state");
     CHECK_ARG(!needs->manifest || has_state, "Spec declares manifest without state");
 
     error_t *err = NULL;
 
-    /* The repository and its path. `repo_open` resolves the path to open the
-     * repo; the run keeps an arena copy so it holds no heap string. */
-    if (needs->repo) {
+    /* The repository, in the declared shape. OPEN opens it and gets the path
+     * opening it resolved; PATH resolves the path and opens nothing, which is
+     * what lets the pass-through run over a repository dotta cannot open. Either
+     * way the run keeps an arena copy so it holds no heap string. */
+    if (needs->repo != DOTTA_REPO_NONE) {
         char *repo_path = NULL;
-        err = repo_open(config, &run->repo, &repo_path);
+        err = has_repo ? repo_open(config, &run->repo, &repo_path)
+                       : resolve_repo_path(config, &repo_path);
         if (err) goto done;
 
         run->repo_path = arena_strdup(arena, repo_path);
@@ -137,18 +141,17 @@ static error_t *open_run(
         }
     }
 
-    /* State, in the shape the spec declared. A WRITE handle holds BEGIN
-     * IMMEDIATE for the whole dispatch; the command calls state_save, and
-     * close_run's state_free rolls back anything it did not. */
+    /* State, in the shape the spec declared. A WRITE handle holds BEGIN IMMEDIATE
+     * for the whole dispatch; the command calls state_save, and close_run's
+     * state_free rolls back anything it did not. */
     if (has_state) {
         err = (needs->state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
                                                   : state_load(run->repo, &run->state);
         if (err) goto done;
     }
 
-    /* The crypto handles: the keymgr iff encryption is enabled, the content
-     * cache always (possibly with a NULL keymgr — see runtime.h's crypto
-     * rationale). */
+    /* The crypto handles: the keymgr iff encryption is enabled, the content cache
+     * always (possibly with a NULL keymgr — see runtime.h's crypto rationale). */
     if (needs->crypto) {
         if (config->encryption_enabled) {
             /* Load the per-repo Argon2id salt from refs/dotta/salt before
@@ -163,8 +166,7 @@ static error_t *open_run(
                         "Encryption requires repository config (%s)\n"
                         "  - For new repositories: run 'dotta init'\n"
                         "  - For clones: re-run with the salt fetched "
-                        "(remote may not be a dotta v7 repository)",
-                        SALT_REF
+                        "(remote may not be a dotta v8 repository)", SALT_REF
                     );
                 }
                 goto done;
@@ -192,10 +194,10 @@ static error_t *open_run(
         run->mounts = mounts;
     }
 
-    /* The view over the enabled set as it stands. The builder's error is
-     * returned as it is: it names the profile and, for a custom/ path under a
-     * profile with no target, the repair. The rows land in the command arena;
-     * the index is close_run's to release. */
+    /* The view over the enabled set as it stands. The builder's error is returned
+     * as it is: it names the profile and, for a custom/ path under a profile
+     * with no target, the repair. The rows land in the command arena; the index
+     * is close_run's to release. */
     if (needs->manifest) {
         err = manifest_build(run->repo, run->state, arena, &run->manifest);
         if (err) goto done;
@@ -212,13 +214,13 @@ done:
 /**
  * Close the run: LIFO over what open_run opened.
  *
- * The view's index first (its rows are the arena's), then the content cache
- * (holds a borrowed keymgr pointer but does not dereference it at teardown),
- * then the keymgr, then state (state_free auto-rolls-back any uncommitted
- * transaction per state.h's contract), then the repository. The mount table and
- * the repository path are the arena's. Every dotta primitive is NULL-safe, so
- * a run that opened partway — an acquisition error, or a tolerant open that
- * stopped early — closes the same way as a whole one.
+ * The view's index first (its rows are the arena's), then the content cache (holds
+ * a borrowed keymgr pointer but does not dereference it at teardown), then the
+ * keymgr, then state (state_free auto-rolls-back any uncommitted transaction
+ * per state.h's contract), then the repository. The mount table and the repository
+ * path are the arena's. Every dotta primitive is NULL-safe, so a run that opened
+ * partway — an acquisition error, or a tolerant open that stopped early — closes
+ * the same way as a whole one.
  */
 static void close_run(dotta_run_t *run) {
     manifest_free(run->manifest);
@@ -231,9 +233,9 @@ static void close_run(dotta_run_t *run) {
 /**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
- * Owns a command-scoped arena (destroyed before return) and the run that is
- * opened into it. Follows the parse → open → dispatch → close sequence. Never
- * calls exit(); the caller's cleanup chain is preserved unchanged.
+ * Owns a command-scoped arena (destroyed before return) and the run that is opened
+ * into it. Follows the parse → open → dispatch → close sequence. Never calls
+ * exit(); the caller's cleanup chain is preserved unchanged.
  */
 static int run_spec(
     const args_command_t *cmd,
@@ -260,7 +262,8 @@ static int run_spec(
     const args_command_t *resolved = cmd;
 
     /* Passthrough commands (e.g. `git`) skip parsing but still open their run,
-     * so the repository path reaches dispatch without a second `repo_open`. */
+     * so the repository path reaches dispatch without a second
+     * `resolve_repo_path`. */
     void *opts = NULL;
     if (!cmd->passthrough) {
         if (cmd->opts_size > 0) {
@@ -295,10 +298,9 @@ static int run_spec(
         }
     }
 
-    /* The spec's needs — every run member its handler reads (runtime.h); a
-     * spec without a payload opens nothing. The run starts zeroed: open_run
-     * populates it in place, and what it opened is what close_run releases,
-     * on every path. */
+    /* The spec's needs — every run member its handler reads (runtime.h); a spec
+     * without a payload opens nothing. The run starts zeroed: open_run populates
+     * it in place, and what it opened is what close_run releases, on every path. */
     int exit_override = 0;
     dotta_ctx_t ctx = {
         .arena     = arena,
@@ -316,8 +318,8 @@ static int run_spec(
     close_run(&ctx.run);
     arena_destroy(arena);
 
-    /* One line renders every failure — an open that refused and a handler
-     * that did, under the same flag. */
+    /* One line renders every failure — an open that refused and a handler that
+     * did, under the same flag. */
     if (err != NULL) {
         if (!resolved->silent_failure) error_print(err, stderr);
         error_free(err);
@@ -333,8 +335,8 @@ static int run_spec(
  *
  * Forwards the signal to any active child process group — sys/process.h's
  * active_child_pgid, published by process_run() while a PROCESS_PGRP_NEW child
- * is alive, so a hook dies atomically with dotta — and re-raises with the
- * default disposition so the kernel can terminate the process.
+ * is alive, so a hook dies atomically with dotta — and re-raises with the default
+ * disposition so the kernel can terminate the process.
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)

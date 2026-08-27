@@ -1901,7 +1901,7 @@ static const args_command_t spec_profile_list = {
     .opts          = profile_list_opts,
     .init_defaults = profile_list_defaults,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,
+        .repo      = DOTTA_REPO_OPEN,
         .state     = DOTTA_STATE_READ,
     },
     .dispatch      = profile_dispatch,
@@ -1949,7 +1949,7 @@ static const args_command_t spec_profile_fetch = {
     .opts          = profile_fetch_opts,
     .init_defaults = profile_fetch_defaults,
     .complete      = profile_fetch_complete,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = profile_dispatch,
 };
 
@@ -2021,7 +2021,7 @@ static const args_command_t spec_profile_enable = {
     .init_defaults = profile_enable_defaults,
     .complete      = profile_enable_complete,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,
+        .repo      = DOTTA_REPO_OPEN,
         .state     = DOTTA_STATE_WRITE,
         .manifest  = true,
     },
@@ -2081,7 +2081,7 @@ static const args_command_t spec_profile_disable = {
     .init_defaults = profile_disable_defaults,
     .complete      = profile_disable_complete,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,
+        .repo      = DOTTA_REPO_OPEN,
         .state     = DOTTA_STATE_WRITE,
     },
     .dispatch      = profile_dispatch,
@@ -2133,7 +2133,7 @@ static const args_command_t spec_profile_reorder = {
     .init_defaults = profile_reorder_defaults,
     .complete      = profile_reorder_complete,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,
+        .repo      = DOTTA_REPO_OPEN,
         .state     = DOTTA_STATE_WRITE,
     },
     .dispatch      = profile_dispatch,
@@ -2163,7 +2163,7 @@ static const args_command_t spec_profile_validate = {
     .opts          = profile_validate_opts,
     .init_defaults = profile_validate_defaults,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,
+        .repo      = DOTTA_REPO_OPEN,
         .state     = DOTTA_STATE_READ,
     },
     .dispatch      = profile_dispatch,

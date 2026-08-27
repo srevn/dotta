@@ -35,8 +35,8 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a
-     * command that declares crypto. See runtime.h's run invariants. */
+    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a command
+     * that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
     error_t *err = NULL;
@@ -152,14 +152,15 @@ static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
         );
     }
 
-    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a
-     * command that declares crypto. See runtime.h's run invariants. */
+    /* Invariant: encryption_enabled implies ctx->run.keymgr != NULL for a command
+     * that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
     /* Probe consults both in-memory and on-disk caches, loading the latter into
-     * memory if present. ctx->run.keymgr is freshly-created for this command (one
-     * process, one dispatch), so an in-memory hit is impossible — `true` here
-     * means the on-disk cache existed, which is what users mean by "had a key". */
+     * memory if present. ctx->run.keymgr is freshly-created for this command
+     * (one process, one dispatch), so an in-memory hit is impossible — `true`
+     * here means the on-disk cache existed, which is what users mean by "had a
+     * key". */
     bool had_key = keymgr_probe_key(keymgr);
 
     /* Always clear both memory and file cache (even if no in-memory key) */
@@ -423,8 +424,8 @@ error_t *cmd_key(const dotta_ctx_t *ctx, const cmd_key_options_t *opts) {
 /**
  * Single dispatch wrapper shared by every subcommand.
  *
- * Each sub's `init_defaults` already set the `action` discriminator, so
- * `cmd_key`'s switch routes the call.
+ * Each sub's `init_defaults` already set the `action` discriminator, so `cmd_key`'s
+ * switch routes the call.
  */
 static error_t *key_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
@@ -457,7 +458,10 @@ static const args_command_t spec_key_set = {
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_set_opts,
     .init_defaults = key_set_defaults,
-    .payload       = &(const dotta_needs_t){ .repo = true,  .crypto= true },
+    .payload       = &(const dotta_needs_t){
+        .repo      = DOTTA_REPO_OPEN,
+        .crypto    = true,
+    },
     .dispatch      = key_dispatch,
 };
 
@@ -484,7 +488,10 @@ static const args_command_t spec_key_clear = {
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_clear_opts,
     .init_defaults = key_clear_defaults,
-    .payload       = &(const dotta_needs_t){ .repo = true,       .crypto= true },
+    .payload       = &(const dotta_needs_t){
+        .repo      = DOTTA_REPO_OPEN,
+        .crypto    = true,
+    },
     .dispatch      = key_dispatch,
 };
 
@@ -512,7 +519,7 @@ static const args_command_t spec_key_status = {
     .opts          = key_status_opts,
     .init_defaults = key_status_defaults,
     .payload       = &(const dotta_needs_t){
-        .repo      = true,                     .state= DOTTA_STATE_READ,
+        .repo      = DOTTA_REPO_OPEN,          .state= DOTTA_STATE_READ,
         .crypto    = true,
     },
     .dispatch      = key_dispatch,

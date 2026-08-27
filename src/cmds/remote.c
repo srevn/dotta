@@ -465,8 +465,8 @@ error_t *cmd_remote(const dotta_ctx_t *ctx, const cmd_remote_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
-    /* The operands are required rows of their subcommands: the parser
-     * rejected a line without them. */
+    /* The operands are required rows of their subcommands: the parser rejected
+     * a line without them. */
     switch (opts->subcommand) {
         case REMOTE_LIST:
             return remote_list(repo, out, opts->verbose);
@@ -507,8 +507,8 @@ static error_t *remote_dispatch(const void *ctx_v, void *opts_v) {
 }
 
 /**
- * What can stand at the cursor of the subcommands that act on a remote: its
- * name, while the row is open; what follows — a URL, a new name — is typed.
+ * What can stand at the cursor of the subcommands that act on a remote: its name,
+ * while the row is open; what follows — a URL, a new name — is typed.
  */
 static args_want_t remote_name_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -545,7 +545,7 @@ static const args_command_t spec_remote_list = {
     .opts_size     = sizeof(cmd_remote_options_t),
     .opts          = remote_list_opts,
     .init_defaults = remote_list_defaults,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 
@@ -576,7 +576,7 @@ static const args_command_t spec_remote_add = {
     .opts_size     = sizeof(cmd_remote_options_t),
     .opts          = remote_add_opts,
     .init_defaults = remote_add_defaults,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 
@@ -603,7 +603,7 @@ static const args_command_t spec_remote_remove = {
     .opts          = remote_remove_opts,
     .init_defaults = remote_remove_defaults,
     .complete      = remote_name_complete,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 
@@ -635,7 +635,7 @@ static const args_command_t spec_remote_set_url = {
     .opts          = remote_set_url_opts,
     .init_defaults = remote_set_url_defaults,
     .complete      = remote_name_complete,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 
@@ -667,7 +667,7 @@ static const args_command_t spec_remote_rename = {
     .opts          = remote_rename_opts,
     .init_defaults = remote_rename_defaults,
     .complete      = remote_name_complete,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 
@@ -694,7 +694,7 @@ static const args_command_t spec_remote_show = {
     .opts          = remote_show_opts,
     .init_defaults = remote_show_defaults,
     .complete      = remote_name_complete,
-    .payload       = &(const dotta_needs_t){ .repo = true },
+    .payload       = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN },
     .dispatch      = remote_dispatch,
 };
 

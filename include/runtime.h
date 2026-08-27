@@ -81,6 +81,33 @@ typedef struct manifest manifest_t;
 typedef struct args_command args_command_t;
 
 /**
+ * The shape a command opens the repository in
+ *
+ * OPEN is `repo_open`: the libgit2 handle, and the path that opening it resolved.
+ * PATH is `resolve_repo_path` alone — the path from the config, with no open at
+ * all — for a command that never touches the handle because it forks the real
+ * git over the directory (git).
+ *
+ * The split is not a saved open. Everything `repo_open` does past resolving the
+ * path is dotta asserting its own model of the repository: libgit2's open, which
+ * reads files of the user's that dotta itself commonly deploys (~/.gitconfig)
+ * and can refuse over one of them, and then the snap of HEAD back to
+ * `dotta-worktree`. The pass-through is what a user reaches for when that model
+ * does not hold, so it cannot be gated on the model holding —
+ * `repo_ensure_dotta_worktree`'s own refusal names `dotta git stash` as the way
+ * out, and an opening pass-through would answer that remedy with the very error
+ * the remedy is for.
+ *
+ * CREATE-style commands (init, clone) declare NONE and open the repository
+ * themselves, because it does not exist before dispatch runs.
+ */
+typedef enum dotta_repo_mode {
+    DOTTA_REPO_NONE,   /* No repository member */
+    DOTTA_REPO_PATH,   /* resolve_repo_path: the path, and no open */
+    DOTTA_REPO_OPEN    /* repo_open: the handle, and the path it resolved */
+} dotta_repo_mode_t;
+
+/**
  * The shape a command opens state in
  *
  * READ is `state_load`: a command that declares it may still take scoped write
@@ -107,7 +134,8 @@ typedef enum dotta_state_mode {
  *
  * Pointed at by `args_command_t::payload`, in place on the spec:
  *
- *     .payload = &(const dotta_needs_t){ .repo = true, .state = DOTTA_STATE_READ },
+ *     .payload = &(const dotta_needs_t){ .repo = DOTTA_REPO_OPEN, .state =
+ *     DOTTA_STATE_READ },
  *
  * a file-scope compound literal — static storage, its address an address constant
  * (C11 §6.5.2.5p5, §6.6p9). A spec without a payload opens nothing (init, clone,
@@ -125,13 +153,15 @@ typedef enum dotta_state_mode {
  *
  * repo
  * ----
- * `repo_open`: the handle and its path. A command that only forks a child over
- * the repository (git) holds the handle while the child runs — libgit2 takes no
- * lock on open, and nothing the child writes is read back afterwards.
+ * The repository in the declared shape (`dotta_repo_mode_t`): the handle and
+ * the path opening it resolved, the path alone, or neither. Three strengths of
+ * one need, in one member — the two the dispatcher can supply are ordered, so
+ * there is no combination to reconcile and no way to ask for the path twice.
  *
  * state
  * -----
- * The handle in the declared shape (`dotta_state_mode_t`). Requires `repo`.
+ * The handle in the declared shape (`dotta_state_mode_t`). Requires `repo` at
+ * OPEN — state lives in the repository dotta opened, not beside its path.
  *
  * mounts
  * ------
@@ -208,10 +238,10 @@ typedef enum dotta_state_mode {
  * `state` (a database that will not load) and returns on the first NULL it reads.
  */
 typedef struct dotta_needs {
-    bool repo;                  /* The repository handle and its path */
-    dotta_state_mode_t state;   /* NONE, READ or WRITE. Requires repo */
+    dotta_repo_mode_t repo;     /* NONE, PATH or OPEN */
+    dotta_state_mode_t state;   /* NONE, READ or WRITE. Requires repo OPEN */
     bool mounts;                /* This machine's topology over the enabled set. Requires state */
-    bool crypto;                /* The content cache, and the keymgr iff encryption is on. Requires repo */
+    bool crypto;                /* The content cache, and the keymgr iff encryption is on. Requires repo OPEN */
     bool manifest;              /* The view at dispatch. Requires state */
     bool tolerant;              /* Open what opens; a failure ends the open without error */
 } dotta_needs_t;
@@ -226,12 +256,14 @@ typedef struct dotta_needs {
  * Handlers read them as `ctx->run.x` and name them, one by one, at every call
  * into core; commands never free a member.
  *
- *   - `repo_path` is non-NULL iff `repo` is. `repo_open` already resolves the
- *     path to open the repo; threading it out costs nothing and gives commands
- *     that need both (bootstrap, which exports DOTTA_REPO_DIR to child scripts;
- *     git, which forks the child over it) a single source of truth instead of a
- *     second `resolve_repo_path` call. An arena copy: the run holds only borrowed
- *     or arena-owned strings, and `close_run` frees no `const char *`.
+ *   - `repo_path` is non-NULL iff `repo` was declared at all, and `repo` itself
+ *     only at OPEN. `repo_open` already resolves the path to open the repo, so
+ *     threading it out costs nothing and gives commands that need both (bootstrap,
+ *     which exports DOTTA_REPO_DIR to child scripts) a single source of truth
+ *     instead of a second `resolve_repo_path` call; a command that needs only
+ *     the path (git) declares PATH and the run never opens. An arena copy: the
+ *     run holds only borrowed or arena-owned strings, and `close_run` frees no
+ *     `const char *`.
  *   - `state` is the handle in the declared shape; dispatch closes it on return
  *     (`state_free` rolls back any uncommitted transaction).
  *   - `mounts` is a value: built into the command arena from the state's rows
@@ -278,8 +310,8 @@ typedef struct dotta_needs {
  *      context, at every layer.
  */
 typedef struct dotta_run {
-    struct git_repository *repo;        /* needs->repo */
-    const char *repo_path;              /* Non-NULL iff repo; an arena copy */
+    struct git_repository *repo;        /* needs->repo == OPEN */
+    const char *repo_path;              /* needs->repo != NONE; an arena copy */
     state_t *state;                     /* needs->state != NONE; the READ or WRITE shape */
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
     keymgr *keymgr;                     /* needs->crypto, and only if encryption is on */

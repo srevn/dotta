@@ -786,14 +786,13 @@ static bool source_gitignore_matches(
 /**
  * Test if path is ignored across profiles
  *
- * The argument is resolved the way `add` resolves its arguments — a storage
- * path is the subject as typed; a filesystem path (absolute, tilde, relative)
- * is normalized and classified through the mount table — and the rules are
- * evaluated on the mount-relative path, exactly as the walk would evaluate
- * them. The path need not exist: a trailing slash on one that does not is
- * the directory hint, so directory-only patterns (`cache/`) can be tested.
- * The source tree's `.gitignore` is asked on the filesystem path, when the
- * argument has one.
+ * The argument is resolved the way `add` resolves its arguments — a storage path
+ * is the subject as typed; a filesystem path (absolute, tilde, relative) is
+ * normalized and classified through the mount table — and the rules are evaluated
+ * on the mount-relative path, exactly as the walk would evaluate them. The path
+ * need not exist: a trailing slash on one that does not is the directory hint,
+ * so directory-only patterns (`cache/`) can be tested. The source tree's
+ * `.gitignore` is asked on the filesystem path, when the argument has one.
  */
 static error_t *test_path_ignore(
     const dotta_ctx_t *ctx,
@@ -832,9 +831,9 @@ static error_t *test_path_ignore(
         }
         storage_path = input;
 
-        /* Its location, for the source check and the kind: a custom/ path
-         * binds only through a profile with a target — without one, the hint
-         * stands in for the kind and the source tree is not asked. */
+        /* Its location, for the source check and the kind: a custom/ path binds
+         * only through a profile with a target — without one, the hint stands
+         * in for the kind and the source tree is not asked. */
         mount_resolve_outcome_t bound;
         const char *resolved = NULL;
         err = mount_resolve(
@@ -1178,8 +1177,8 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What can stand at the cursor: a local profile, by -p or as the one
- * positional; for --test, a filesystem path. Patterns are typed.
+ * What can stand at the cursor: a local profile, by -p or as the one positional;
+ * for --test, a filesystem path. Patterns are typed.
  */
 static args_want_t ignore_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -1294,7 +1293,7 @@ const args_command_t spec_ignore = {
     .opts        = ignore_opts,
     .complete    = ignore_complete,
     .payload     = &(const dotta_needs_t){
-        .repo    = true,
+        .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_READ,
         .mounts  = true,
     },

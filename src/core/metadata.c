@@ -1390,27 +1390,40 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             goto cleanup;
         }
 
-        /* Create temporary item structure */
-        item = calloc(1, sizeof(metadata_item_t));
-        if (!item) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate temporary item");
+        /* Build the item through the factory its kind names, the way every
+         * other producer does. Each owns its kind's invariants — a link has no
+         * settable mode, so the document's is read, validated and dropped by
+         * the factory that never took it. */
+        switch (kind) {
+            case METADATA_ITEM_FILE: {
+                cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
+                err = metadata_item_create_file(
+                    key_obj->valuestring, mode,
+                    encrypted_obj && cJSON_IsTrue(encrypted_obj), &item
+                );
+                break;
+            }
+            case METADATA_ITEM_DIRECTORY:
+                err = metadata_item_create_directory(
+                    key_obj->valuestring, mode, &item
+                );
+                break;
+            case METADATA_ITEM_SYMLINK:
+                err = metadata_item_create_symlink(
+                    key_obj->valuestring, &item
+                );
+                break;
+        }
+        if (err) {
+            err = error_wrap(
+                err, "Failed to build item from metadata: %s",
+                key_obj->valuestring
+            );
             goto cleanup;
         }
 
-        item->kind = kind;
-        item->key = strdup(key_obj->valuestring);
-        if (!item->key) {
-            err = ERROR(ERR_MEMORY, "Failed to duplicate key string");
-            goto cleanup;
-        }
-        item->mode = mode;
-
-        /* Symlink mode invariant: always 0 (permissions are not settable) */
-        if (kind == METADATA_ITEM_SYMLINK) {
-            item->mode = 0;
-        }
-
-        /* Parse optional owner (only present for root/ prefix) */
+        /* Ownership is the overlay every producer stamps beside the factory,
+         * present only for the labels that track it. */
         cJSON *owner_obj = cJSON_GetObjectItem(item_obj, "owner");
         if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
             item->owner = strdup(owner_obj->valuestring);
@@ -1429,14 +1442,6 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 goto cleanup;
             }
         }
-
-        /* Parse kind-specific fields */
-        if (kind == METADATA_ITEM_FILE) {
-            /* FILE: Parse optional encrypted flag */
-            cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
-            item->file.encrypted = (encrypted_obj && cJSON_IsTrue(encrypted_obj));
-        }
-        /* DIRECTORY, SYMLINK: No additional fields to parse */
 
         /* Add item to metadata collection (copies item internally) */
         err = metadata_add_item(metadata, item);

@@ -476,17 +476,17 @@ static error_t *add_file_to_worktree(
         err = encryption_policy_should_encrypt(
             config,
             storage_path,
-            opts->encrypt_mode == ADD_ENCRYPT_FORCE_ON,
-            opts->encrypt_mode == ADD_ENCRYPT_FORCE_OFF,
+            opts->encrypt_mode,
             previously_encrypted,
             &should_encrypt
         );
+        /* Returned as it is. The policy's refusals are the user's to read — they
+         * name the path, the fact that stood and the way on — and a wrap saying
+         * the policy could not be determined would say the opposite of what
+         * happened. */
         if (err) {
             free(dest_path);
-            return error_wrap(
-                err, "Failed to determine encryption policy for '%s'",
-                storage_path
-            );
+            return err;
         }
 
         /* Store file to worktree (handles read → encrypt → write) and capture
@@ -1829,52 +1829,52 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
 static const args_opt_t add_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_STRING(
-        "p profile",          "<name>",
-        cmd_add_options_t,    profile,
+        "p profile",                 "<name>",
+        cmd_add_options_t,           profile,
         "Profile name (alternative to positional)"
     ),
     ARGS_STRING(
-        "target",             "<path>",
-        cmd_add_options_t,    target,
+        "target",                    "<path>",
+        cmd_add_options_t,           target,
         "Declare a relocatable storage root"
     ),
     ARGS_STRING(
-        "m message",          "<msg>",
-        cmd_add_options_t,    message,
+        "m message",                 "<msg>",
+        cmd_add_options_t,           message,
         "Commit message"
     ),
     ARGS_APPEND(
-        "e exclude",          "<pattern>",
-        cmd_add_options_t,    exclude_patterns, exclude_count,
+        "e exclude",                 "<pattern>",
+        cmd_add_options_t,           exclude_patterns, exclude_count,
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
         "f force",
-        cmd_add_options_t,    force,
+        cmd_add_options_t,           force,
         "Overwrite existing entries in the profile"
     ),
     ARGS_FLAG(
         "v verbose",
-        cmd_add_options_t,    verbose,
+        cmd_add_options_t,           verbose,
         "Verbose output"
     ),
     ARGS_FLAG_SET(
         "encrypt",
-        cmd_add_options_t,    encrypt_mode,
-        ADD_ENCRYPT_FORCE_ON,
+        cmd_add_options_t,           encrypt_mode,
+        ENCRYPTION_REQUEST_ENCRYPT,
         "Force encryption for the given files"
     ),
     ARGS_FLAG_SET(
         "no-encrypt",
-        cmd_add_options_t,    encrypt_mode,
-        ADD_ENCRYPT_FORCE_OFF,
+        cmd_add_options_t,           encrypt_mode,
+        ENCRYPTION_REQUEST_PLAINTEXT,
         "Bypass auto-encryption patterns"
     ),
     /* <profile> <file|dir>... — order-dependent, first is profile. Mirrors clone's
      * raw-bucket-plus-post_parse approach. */
     ARGS_POSITIONAL_RAW(
-        cmd_add_options_t,    positional_args,  positional_count,
-        0,                    0
+        cmd_add_options_t,           positional_args,  positional_count,
+        0,                           0
     ),
     ARGS_END,
 };

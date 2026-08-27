@@ -12,7 +12,7 @@
  * Policy hierarchy (priority order):
  * 0. Meta-file protection → PLAINTEXT or ERROR (system integrity)
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
- * 2. Explicit --no-encrypt flag → PLAINTEXT (override auto-encrypt)
+ * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR over stored ciphertext
  * 3. File previously encrypted (byte truth) → ENCRYPT (maintain state)
  * 4. Auto-encrypt patterns → ENCRYPT (pattern match)
  * 5. Default → PLAINTEXT (safe default)
@@ -31,6 +31,23 @@
 #include <types.h>
 
 /**
+ * What the user asked for on the command line
+ *
+ * Three intentions, one closed enum: no flag, `--encrypt`, `--no-encrypt`. The
+ * flags are mutually exclusive at the CLI, and the enum is how that reaches the
+ * policy — a bool pair would carry a fourth state ("both") that no caller can
+ * produce and the policy would still have to reconcile.
+ *
+ * `cmd_add_options_t::encrypt_mode` holds this (as int, for ARGS_FLAG_SET); a
+ * command with no such flags passes NONE.
+ */
+typedef enum {
+    ENCRYPTION_REQUEST_NONE = 0,   /* No flag: the priorities below decide */
+    ENCRYPTION_REQUEST_ENCRYPT,    /* --encrypt */
+    ENCRYPTION_REQUEST_PLAINTEXT   /* --no-encrypt */
+} encryption_request_t;
+
+/**
  * Determine if file should be encrypted based on policy
  *
  * This is the SINGLE SOURCE OF TRUTH for encryption decisions across all commands
@@ -43,11 +60,16 @@
  *    --encrypt → ERROR; otherwise → PLAINTEXT Rationale: System files must be
  *    readable/executable by dotta
  *
- * 1. If explicit_encrypt=true → ENCRYPT (highest priority) Example: User ran
- *    `dotta add --encrypt file`
+ * 1. If request is ENCRYPT → ENCRYPT (highest priority) Example: User ran `dotta
+ *    add --encrypt file`
  *
- * 2. If explicit_no_encrypt=true → PLAINTEXT (override auto-encrypt) Example:
- *    User ran `dotta add --no-encrypt file`
+ * 2. If request is PLAINTEXT → PLAINTEXT, or ERROR when the path's committed
+ *    content is already encrypted Example: User ran `dotta add --no-encrypt file`
+ *    Rationale: the flag's job is to keep a path out of the auto-encrypt patterns'
+ *    reach (priority 4), not to declassify. Storing ciphertext back as plaintext
+ *    would publish the secret to the branch and its history, so the conflict is
+ *    refused rather than silently resolved either way; declassifying is
+ *    remove-then-add, which leaves no prior state for priority 3 to read
  *
  * 3. If previously_encrypted=true → ENCRYPT (maintain state) Example: `dotta
  *    update` on already-encrypted file Rationale: Preserve encryption state to
@@ -61,6 +83,10 @@
  *
  * Implementation notes:
  * - NULL config (or config without compiled rules) disables priority-4
+ * - The refusal at priority 2 states the route out (remove, then add again) in
+ *   words rather than in commands: the profile and the path as the user typed
+ *   them are the command's to know, and a decision function that took them only
+ *   to fill a format string would be taking inputs it does not decide on
  * - Priorities 1 and 3 are NOT gated on `config->encryption_enabled`. This is
  *   intentional: if the user explicitly asked to encrypt or a file's prior state
  *   says "encrypted", the policy says so, and the content layer is the single
@@ -79,8 +105,7 @@
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)
- * @param explicit_encrypt Explicit --encrypt flag from user
- * @param explicit_no_encrypt Explicit --no-encrypt flag from user
+ * @param request What the user asked for on the command line
  * @param previously_encrypted Whether the file's prior bytes were encrypted (or
  *                             attempt-encrypted at an unsupported version)
  * @param out_should_encrypt Output decision (must not be NULL)
@@ -88,12 +113,12 @@
  *
  * Errors:
  * - ERR_INVALID_ARG: Required arguments are NULL
+ * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over ciphertext
  */
 error_t *encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,
-    bool explicit_encrypt,
-    bool explicit_no_encrypt,
+    encryption_request_t request,
     bool previously_encrypted,
     bool *out_should_encrypt
 );

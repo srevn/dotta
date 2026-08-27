@@ -12,19 +12,6 @@
 #include <types.h>
 
 /**
- * Encryption policy selector.
- *
- * Three user intentions: unset (let config policy decide), explicit --encrypt
- * (force on), explicit --no-encrypt (force off). Modelled as a closed enum so
- * the consumer can switch without bool-pair reconciliation.
- */
-typedef enum {
-    ADD_ENCRYPT_DEFAULT = 0, /* No flag: config policy applies */
-    ADD_ENCRYPT_FORCE_ON,    /* --encrypt:    force encryption */
-    ADD_ENCRYPT_FORCE_OFF    /* --no-encrypt: force no encryption */
-} add_encrypt_mode_t;
-
-/**
  * Command options
  *
  * `profile` and `files` are populated from the raw positional bucket by
@@ -41,7 +28,7 @@ typedef struct {
     size_t exclude_count;    /* Number of exclude patterns */
     bool force;              /* Overwrite existing files in profile */
     bool verbose;            /* Print verbose output */
-    int encrypt_mode;        /* add_encrypt_mode_t (int for ARGS_FLAG_SET) */
+    int encrypt_mode;        /* encryption_request_t (int for ARGS_FLAG_SET) */
 
     /* Raw positional bucket (engine-populated; interpreted in post_parse). */
     char **positional_args;

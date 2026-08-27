@@ -148,16 +148,11 @@ static error_t *copy_file_to_worktree(
         err = encryption_policy_should_encrypt(
             ctx->config,
             storage_path,
-            false,                  /* No explicit --encrypt flag in update.c */
-            false,                  /* No explicit --no-encrypt flag in update.c */
+            ENCRYPTION_REQUEST_NONE,  /* update carries no encryption flags */
             previously_encrypted,
             &should_encrypt
         );
         if (err) {
-            err = error_wrap(
-                err, "Failed to determine encryption policy for '%s'",
-                storage_path
-            );
             goto cleanup;
         }
 

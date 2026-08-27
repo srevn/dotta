@@ -106,8 +106,7 @@ static bool encryption_policy_matches_auto_patterns(
 error_t *encryption_policy_should_encrypt(
     const config_t *config,
     const char *storage_path,
-    bool explicit_encrypt,
-    bool explicit_no_encrypt,
+    encryption_request_t request,
     bool previously_encrypted,
     bool *out_should_encrypt
 ) {
@@ -134,7 +133,7 @@ error_t *encryption_policy_should_encrypt(
      * these files, ensuring system integrity.
      */
     if (is_protected_meta_file(storage_path)) {
-        if (explicit_encrypt) {
+        if (request == ENCRYPTION_REQUEST_ENCRYPT) {
             return ERROR(
                 ERR_VALIDATION,
                 "Cannot encrypt system file '%s': this file must remain plaintext "
@@ -142,7 +141,7 @@ error_t *encryption_policy_should_encrypt(
                 "System files that cannot be encrypted:\n"
                 "  - .bootstrap (must be executable)\n"
                 "  - .dottaignore (must be readable for ignore patterns)\n"
-                "  - .dotta/metadata.json (must be readable for file tracking)\n\n",
+                "  - .dotta/metadata.json (must be readable for file tracking)",
                 storage_path
             );
         }
@@ -155,13 +154,37 @@ error_t *encryption_policy_should_encrypt(
     }
 
     /* Priority 1: Explicit --encrypt flag wins (highest priority) */
-    if (explicit_encrypt) {
+    if (request == ENCRYPTION_REQUEST_ENCRYPT) {
         *out_should_encrypt = true;
         return NULL;
     }
 
-    /* Priority 2: Explicit --no-encrypt blocks all encryption */
-    if (explicit_no_encrypt) {
+    /* Priority 2: Explicit --no-encrypt keeps a path out of the auto-encrypt
+     * patterns' reach — that is the whole of its job, and what its help says.
+     *
+     * It is not a declassification verb. A blob that is already ciphertext is
+     * not a pattern's doing, and rewriting it as plaintext would put the secret
+     * into the branch, into its history, and into every clone that pulls it —
+     * with no way to take it back and nothing on screen to say it happened. The
+     * two facts together are a conflict, not a race for precedence, so the flag
+     * is refused here the way an --encrypt on a meta-file is refused above: the
+     * user is told which fact stood and what to do instead.
+     *
+     * Declassifying is remove-then-add: with no prior blob there is no prior
+     * state, priority 3 has nothing to say, and the file is stored plaintext. */
+    if (request == ENCRYPTION_REQUEST_PLAINTEXT) {
+        if (previously_encrypted) {
+            return ERROR(
+                ERR_VALIDATION,
+                "Cannot store '%s' as plaintext: its committed content is encrypted.\n\n"
+                "--no-encrypt keeps a path out of the auto-encrypt patterns; it "
+                "does not decrypt content that is already stored encrypted.\n\n"
+                "To store it as plaintext from here on, remove the path from the "
+                "profile and add it again with --no-encrypt: a path with no prior "
+                "blob has no prior state to maintain.", storage_path
+            );
+        }
+
         *out_should_encrypt = false;
         return NULL;
     }

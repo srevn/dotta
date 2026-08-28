@@ -35,6 +35,47 @@
 error_t *resolve_repo_path(const config_t *config, char **out);
 
 /**
+ * Where a create-style command puts the repository
+ *
+ * `resolve_repo_path` answers "where does this machine's repository live"; this
+ * answers "where does a command that creates one put it". Two questions, two
+ * tails: only the second has a positional to honour, parent directories to make,
+ * and a caller to warn.
+ *
+ * `explicit_path` is the command's optional positional (`init [path]`, `clone
+ * <url> [path]`); NULL means "wherever this machine's repository lives", which
+ * is `resolve_repo_path` and nothing else. Both branches expand `~`, settle a
+ * relative path against the current directory, and create the parent directories
+ * — an explicit path is not a lesser path, and each of the two commands used to
+ * drop a different one of those three steps: a quoted `dotta init "~/dotfiles"`
+ * created a literal `./~/dotfiles`, and `dotta clone` re-derived the implicit
+ * branch without $DOTTA_REPO_DIR in it.
+ *
+ * `*out_elsewhere` is where later commands will look, set only when that is not
+ * `*out_path` — NULL when the two are the same place, so a non-NULL answer is
+ * exactly "this repository is somewhere dotta will not find it". Both sides are
+ * normalised here, by one function, which is what makes the comparison mean
+ * anything. The caller says so on success, because nothing else will: every later
+ * command resolves the configured location and stops there, so a `dotta status`
+ * run straight afterwards answers "No dotta repository found... Run 'dotta init'"
+ * about the repository just created.
+ *
+ * @param config        Loaded configuration (must not be NULL)
+ * @param explicit_path The command's positional, or NULL for the configured
+ *                      location
+ * @param out_path      Resolved absolute path (must not be NULL, caller frees)
+ * @param out_elsewhere Optional: the configured location when out_path is not
+ *                      it, NULL otherwise (can be NULL; caller frees)
+ * @return Error or NULL on success
+ */
+error_t *repo_create_target(
+    const config_t *config,
+    const char *explicit_path,
+    char **out_path,
+    char **out_elsewhere
+);
+
+/**
  * Open dotta repository
  *
  * Resolves the repository path and opens it, then holds dotta's own invariant:

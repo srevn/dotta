@@ -42,6 +42,79 @@ error_t *resolve_repo_path(const config_t *config, char **out) {
 }
 
 /**
+ * Where a create-style command puts the repository
+ */
+error_t *repo_create_target(
+    const config_t *config,
+    const char *explicit_path,
+    char **out_path,
+    char **out_elsewhere
+) {
+    CHECK_NULL(config);
+    CHECK_NULL(out_path);
+
+    /* Where this machine's repository lives, in the one shape the comparison at
+     * the end can trust. Both sides are normalised by this function, which is
+     * the whole reason the answer means anything: `resolve_repo_path` expands
+     * `~`, and `fs_make_absolute` settles a relative repo_dir against the current
+     * directory exactly as it settles a relative positional below. */
+    char *resolved = NULL;
+    RETURN_IF_ERROR(resolve_repo_path(config, &resolved));
+
+    char *configured = NULL;
+    error_t *err = fs_make_absolute(resolved, &configured);
+    free(resolved);
+    if (err) {
+        return err;
+    }
+
+    char *path = NULL;
+    if (explicit_path == NULL) {
+        /* No positional: the configured location is the answer, already in hand
+         * and already normalised. */
+        path = configured;
+        configured = NULL;
+    } else {
+        char *expanded = NULL;
+        err = fs_expand_tilde(explicit_path, &expanded);
+        if (!err) {
+            err = fs_make_absolute(expanded, &path);
+            free(expanded);
+        }
+        if (err) {
+            free(configured);
+            return err;
+        }
+    }
+
+    /* The directory holding the repository, not the repository: `git_clone` refuses
+     * a non-empty target and `git_repository_init_ext` makes its own, so neither
+     * caller wants this to reach the leaf. */
+    err = fs_ensure_parent_dirs(path);
+    if (err) {
+        free(configured);
+        free(path);
+        return err;
+    }
+
+    /* An explicit path may still name the configured location — `dotta clone
+     * <url> "$DOTTA_REPO_DIR"` does — and that is not elsewhere. */
+    if (configured != NULL && strcmp(path, configured) == 0) {
+        free(configured);
+        configured = NULL;
+    }
+
+    if (out_elsewhere != NULL) {
+        *out_elsewhere = configured;
+    } else {
+        free(configured);
+    }
+
+    *out_path = path;
+    return NULL;
+}
+
+/**
  * Ensure repository HEAD points to dotta-worktree
  *
  * Dotta requires the main worktree to always be on the dotta-worktree branch.

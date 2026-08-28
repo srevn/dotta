@@ -15,7 +15,6 @@
 #include "core/ignore.h"
 #include "core/state.h"
 #include "infra/salt.h"
-#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "utils/repo.h"
 
@@ -246,33 +245,20 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     git_repository *repo = NULL;
     error_t *err = NULL;
-    char *resolved_path = NULL;
-    const char *path = NULL;
+    char *path = NULL;
+    char *elsewhere = NULL;
 
     /* Handle quiet flag */
     if (opts->quiet) {
         output_set_verbosity(out, OUTPUT_QUIET);
     }
 
-    /* Determine repository path */
-    if (opts->repo_path) {
-        /* User provided explicit path */
-        path = opts->repo_path;
-    } else {
-        /* Use resolved repository location */
-        err = resolve_repo_path(config, &resolved_path);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve repository path");
-            goto cleanup;
-        }
-        path = resolved_path;
-
-        /* Ensure parent directories exist */
-        err = fs_ensure_parent_dirs(path);
-        if (err) {
-            err = error_wrap(err, "Failed to create parent directories");
-            goto cleanup;
-        }
+    /* Where the repository goes: the positional when one was given, this machine's
+     * configured location otherwise — one answer, expanded, absolute and with
+     * its parents made (utils/repo.h). */
+    err = repo_create_target(config, opts->repo_path, &path, &elsewhere);
+    if (err) {
+        goto cleanup;
     }
 
     /* Initialize or open repository */
@@ -344,13 +330,30 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
     output_newline(out, OUTPUT_NORMAL);
 
+    /* A repository outside the configured location is one no later command will
+     * find: every one of them resolves that location and stops there, so the
+     * next `dotta status` would answer "No dotta repository found... Run 'dotta
+     * init'" about the repository this run just made. */
+    if (elsewhere) {
+        output_warning(
+            out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
+        );
+        output_hint(out, OUTPUT_NORMAL, "To use the one just created, either:");
+        output_hintline(out, OUTPUT_NORMAL, "  export DOTTA_REPO_DIR=%s", path);
+        output_hintline(
+            out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
+        );
+        output_newline(out, OUTPUT_NORMAL);
+    }
+
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     output_hintline(out, OUTPUT_NORMAL, "  Create profile: dotta add --profile global ~/.bashrc");
     output_hintline(out, OUTPUT_NORMAL, "  Apply profiles: dotta apply");
 
 cleanup:
     if (repo) git_repository_free(repo);
-    if (resolved_path) free(resolved_path);
+    free(path);
+    free(elsewhere);
 
     return err;
 }

@@ -14,7 +14,6 @@
 #include <git2.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "base/args.h"
 #include "base/array.h"
@@ -31,63 +30,7 @@
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 #include "utils/bootstrap.h"
-
-/* Default repository name when URL parsing fails */
-#define DEFAULT_REPO_NAME "dotta-repo"
-
-/**
- * Extract repository name from URL
- *
- * Handles both HTTP-style URLs (https://host/user/repo.git) and SCP-style URLs
- * (git@host:user/repo.git)
- */
-static char *extract_repo_name(const char *url) {
-    const char *last_slash = strrchr(url, '/');
-    const char *last_colon = strrchr(url, ':');
-
-    /* Use the rightmost separator (either / or :) */
-    const char *separator = NULL;
-    if (last_slash && last_colon) {
-        separator = (last_slash > last_colon) ? last_slash : last_colon;
-    } else if (last_slash) {
-        separator = last_slash;
-    } else if (last_colon) {
-        separator = last_colon;
-    }
-
-    /* No separator found - use default name */
-    if (!separator) {
-        return strdup(DEFAULT_REPO_NAME);
-    }
-
-    const char *name = separator + 1;
-
-    /* Handle edge case: URL ends with separator */
-    if (*name == '\0') {
-        return strdup(DEFAULT_REPO_NAME);
-    }
-
-    /* Remove .git extension if present */
-    size_t len = strlen(name);
-    if (len > 4 && strcmp(name + len - 4, ".git") == 0) {
-        len -= 4;
-    }
-
-    /* Edge case: name was only ".git" */
-    if (len == 0) {
-        return strdup(DEFAULT_REPO_NAME);
-    }
-
-    char *repo_name = malloc(len + 1);
-    if (!repo_name) {
-        return NULL;
-    }
-
-    memcpy(repo_name, name, len);
-    repo_name[len] = '\0';
-
-    return repo_name;
-}
+#include "utils/repo.h"
 
 /**
  * Fetch profiles and create local tracking branches
@@ -388,10 +331,9 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     output_t *out = ctx->out;
 
     error_t *err = NULL;
-    error_t *final_err = NULL;
     git_repository *repo = NULL;
-    const char *local_path = NULL;
-    bool allocated_path = false;
+    char *local_path = NULL;
+    char *elsewhere = NULL;
     bool path_preexisted = false;
     bool clone_landed = false;
     transfer_context_t *xfer = NULL;
@@ -405,34 +347,13 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Determine local path */
-    if (opts->path) {
-        local_path = opts->path;
-    } else {
-        if (config->repo_dir) {
-            /* Use default repo location from config */
-            char *expanded_path = NULL;
-            err = fs_expand_tilde(config->repo_dir, &expanded_path);
-            if (err) {
-                final_err = error_wrap(
-                    err, "Failed to expand default repo path"
-                );
-                goto cleanup;
-            }
-            local_path = expanded_path;
-            allocated_path = true;
-        } else {
-            /* Fallback: extract repo name from URL */
-            local_path = extract_repo_name(opts->url);
-            if (!local_path) {
-                final_err = ERROR(
-                    ERR_MEMORY, "Failed to allocate repository name"
-                );
-                goto cleanup;
-            }
-            allocated_path = true;
-        }
-    }
+    /* Where the repository goes: the positional when one was given, this machine's
+     * configured location otherwise — one answer, expanded, absolute and with
+     * its parents made (utils/repo.h). Absolute matters twice over here: the
+     * bootstrap below hands it to a script as $DOTTA_REPO_DIR, and the rollback
+     * removes it. */
+    err = repo_create_target(config, opts->path, &local_path, &elsewhere);
+    if (err) goto cleanup;
 
     output_section(out, OUTPUT_NORMAL, "Cloning dotta repository");
     output_info(out, OUTPUT_NORMAL, "  URL: %s", opts->url);
@@ -443,8 +364,8 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         .output = out,
         .url    = opts->url,
     };
-    final_err = transfer_context_create(&xfer_opts, &xfer);
-    if (final_err) goto cleanup;
+    err = transfer_context_create(&xfer_opts, &xfer);
+    if (err) goto cleanup;
 
     /* Track whether the target directory predates the clone (git_clone accepts
      * an existing empty directory): rollback preserves a pre-existing directory
@@ -454,7 +375,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Clone repository with progress reporting */
     err = gitops_clone(&repo, opts->url, local_path, xfer);
     if (err) {
-        final_err = error_wrap(err, "Failed to clone repository");
+        err = error_wrap(err, "Failed to clone repository");
         goto cleanup;
     }
     clone_landed = true;
@@ -468,8 +389,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = salt_fetch(repo, "origin", xfer, NULL);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
-            error_free(err);
-
             /* Split the diagnostic: an empty remote is a publish-first problem,
              * a ref-bearing one is simply not dotta's. On a listing failure fall
              * through to the foreign diagnostic. */
@@ -485,8 +404,10 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 string_array_free(remote_refs);
             }
 
+            error_free(err);
+
             if (remote_empty) {
-                final_err = ERROR(
+                err = ERROR(
                     ERR_NOT_FOUND,
                     "Remote is empty - nothing to clone\n\n"
                     "To publish a new dotta repository:\n"
@@ -495,7 +416,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     "  dotta sync"
                 );
             } else {
-                final_err = ERROR(
+                err = ERROR(
                     ERR_NOT_FOUND,
                     "Remote is not a dotta repository ('%s' not advertised)\n\n"
                     "Check the URL. If this remote should be one, run "
@@ -520,7 +441,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             error_free(err);
             err = NULL;
         } else {
-            final_err = error_wrap(err, "Failed to fetch repository salt");
+            err = error_wrap(err, "Failed to fetch repository salt");
             goto cleanup;
         }
     }
@@ -528,7 +449,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Determine which profiles to fetch */
     fetched_profiles = string_array_new(0);
     if (!fetched_profiles) {
-        final_err = ERROR(ERR_MEMORY, "Failed to create profile array");
+        err = ERROR(ERR_MEMORY, "Failed to create profile array");
         goto cleanup;
     }
 
@@ -549,6 +470,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             );
             /* Continue - some profiles may have been fetched */
             error_free(err);
+            err = NULL;
         }
 
         output_success(
@@ -567,6 +489,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 error_message(err)
             );
             error_free(err);
+            err = NULL;
         } else {
             /* Use all fetched profiles */
             string_array_free(fetched_profiles);
@@ -588,6 +511,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 error_message(err)
             );
             error_free(err);
+            err = NULL;
             remote_branches = NULL;
         }
 
@@ -600,6 +524,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     error_message(err)
                 );
                 error_free(err);
+                err = NULL;
             }
         }
 
@@ -622,6 +547,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     error_message(err)
                 );
                 error_free(err);
+                err = NULL;
             }
 
             if (fetched_count > 0) {
@@ -684,7 +610,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
         err = initialize_state(repo, ctx->arena, fetched_profiles, out);
         if (err) {
-            final_err = error_wrap(err, "Failed to initialize state");
+            err = error_wrap(err, "Failed to initialize state");
             goto cleanup;
         }
     } else {
@@ -693,7 +619,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         string_array_t empty = { 0 };
         err = initialize_state(repo, ctx->arena, &empty, out);
         if (err) {
-            final_err = error_wrap(err, "Failed to initialize state");
+            err = error_wrap(err, "Failed to initialize state");
             goto cleanup;
         }
     }
@@ -702,7 +628,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     bool worktree_exists;
     err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
     if (err) {
-        final_err = error_wrap(
+        err = error_wrap(
             err, "Failed to check for dotta-worktree branch"
         );
         goto cleanup;
@@ -713,7 +639,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
         err = gitops_create_orphan_branch(repo, "dotta-worktree");
         if (err) {
-            final_err = error_wrap(
+            err = error_wrap(
                 err, "Failed to create dotta-worktree branch"
             );
             goto cleanup;
@@ -723,7 +649,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     /* Checkout dotta-worktree */
     int git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
     if (git_err < 0) {
-        final_err = error_from_git(git_err);
+        err = error_from_git(git_err);
         goto cleanup;
     }
 
@@ -733,7 +659,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
     git_err = git_checkout_head(repo, &checkout_opts);
     if (git_err < 0) {
-        final_err = error_from_git(git_err);
+        err = error_from_git(git_err);
         goto cleanup;
     }
 
@@ -748,7 +674,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * Seeded once: a branch that already carries the file is left alone. */
     err = ignore_seed_baseline(repo);
     if (err) {
-        final_err = error_wrap(err, "Failed to seed baseline .dottaignore");
+        err = error_wrap(err, "Failed to seed baseline .dottaignore");
         goto cleanup;
     }
 
@@ -771,7 +697,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             if (!bootstrap_exists(repo, profile)) continue;
             err = string_array_push(&bootstrap_found, profile);
             if (err) {
-                final_err = error_wrap(
+                err = error_wrap(
                     err, "Failed to collect bootstrap profiles"
                 );
                 goto cleanup;
@@ -840,6 +766,22 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         }
     }
 
+    /* A repository outside the configured location is one no later command will
+     * find: every one of them resolves that location and stops there, so the
+     * next `dotta status` would answer "No dotta repository found... Run 'dotta
+     * init'" about the repository this run just cloned. */
+    if (elsewhere) {
+        output_warning(
+            out, OUTPUT_NORMAL, "dotta looks for its repository at %s", elsewhere
+        );
+        output_hint(out, OUTPUT_NORMAL, "To use the one just cloned, either:");
+        output_hintline(out, OUTPUT_NORMAL, "  export DOTTA_REPO_DIR=%s", local_path);
+        output_hintline(
+            out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
+        );
+        output_newline(out, OUTPUT_NORMAL);
+    }
+
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     if (!run_bootstrap && bootstrap_available) {
         output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");
@@ -865,16 +807,14 @@ cleanup:
      * half-initialized repository that blocks the retry (git_clone refuses a
      * non-empty directory). Runs after the repo handle is closed so nothing holds
      * the directory open. */
-    if (final_err && clone_landed) {
+    if (err && clone_landed) {
         rollback_clone_dir(local_path, path_preexisted, out);
     }
 
-    if (allocated_path && local_path) {
-        /* Safe to cast: we know it's heap-allocated when allocated_path is true */
-        free((char *) local_path);
-    }
+    free(local_path);
+    free(elsewhere);
 
-    return final_err;
+    return err;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -964,7 +904,7 @@ static const args_opt_t clone_opts[] = {
     ARGS_POSITIONAL_ANY_ARG(
         "[path]",
         cmd_clone_options_t,  path,           0,
-        "Local directory (default: the repository's name)"
+        "Local directory (default: this machine's repository location)"
     ),
     ARGS_END,
 };

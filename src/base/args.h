@@ -36,12 +36,18 @@
  *                          the positionals of their class in declaration order
  *                          (`<url> [path]` is two rows) and may be required. A
  *                          grammar the order of rows cannot state — a verb read
- *                          from the first positional, a refspec whose shape
- *                          decides the next — uses POSITIONAL_RAW.
+ *                          from the first positional, a refspec whose shape decides
+ *                          the next — uses POSITIONAL_RAW.
  *
- *   Tri-state flags        Model as `int` fields with init_defaults seeding
- *                          a default value; use `ARGS_FLAG_SET` rows whose
- *                          set_value is the enum value.
+ *   Tri-state flags        One `int` field and one `ARGS_FLAG_SET` row per
+ *                          value it can take, 0 reserved for "no flag given".
+ *                          The zeroed opts struct is that sentinel, so
+ *                          `init_defaults` leaves the field alone and `post_parse`
+ *                          resolves unset to the default — which is what lets a
+ *                          command tell "the user asked for the default" from
+ *                          "the user asked for nothing". Two rows of one group
+ *                          naming different values is a contradiction in the
+ *                          grammar, and the engine refuses it.
  *
  *   Subcommand trees       Parent has `subcommands`. Every subcommand in a
  *                          tree MUST share the parent's options struct type (so
@@ -77,16 +83,15 @@
  *   Subcommand tree        Use when the first word is a verb: each sub is an
  *   (.subcommands)         action with rows of its own. Subs may repeat a
  *                          flag — `-v` on each of `key {set|clear|status}` is
- *                          three rows, not a reason for a router. A bare
- *                          `<prog> <cmd>` runs the `default_subcommand`.
- *                          Example: `dotta profile {list|enable|...}`.
+ *                          three rows, not a reason for a router. A bare `<prog>
+ *                          <cmd>` runs the `default_subcommand`. Example: `dotta
+ *                          profile {list|enable|...}`.
  *
  *   POSITIONAL_RAW         Use when what a positional means is decided by
  *   + post_parse           its shape or by what follows it — `[profile:]file
- *                          [@commit]`, a `<file> <commit>` told from a
- *                          `<profile> <file>` by the tokens themselves — which
- *                          no order of rows can state. Example: `dotta show`,
- *                          `dotta revert`.
+ *                          [@commit]`, a `<file> <commit>` told from a `<profile>
+ *                          <file>` by the tokens themselves — which no order of
+ *                          rows can state. Example: `dotta show`, `dotta revert`.
  *
  *   Classify + POSITIONAL  Use for a SINGLE action whose positionals
  *   (multiple class rows)  are polymorphic by shape. The classifier
@@ -130,7 +135,7 @@ typedef enum args_kind {
     ARGS_KIND_END,             /* Sentinel. Terminates an opts[] table */
     ARGS_KIND_GROUP,           /* Help-only: section title for render */
     ARGS_KIND_FLAG,            /* bool field → true when flag is seen */
-    ARGS_KIND_FLAG_SET,        /* int  field → `set_value` when seen */
+    ARGS_KIND_FLAG_SET,        /* int  field → `set_value`; 0 = no flag given */
     ARGS_KIND_STRING,          /* const char * field → next token */
     ARGS_KIND_APPEND,          /* char ** + size_t → appends one */
     ARGS_KIND_INT,             /* long field → typed int in [min,max] */
@@ -299,7 +304,7 @@ struct args_opt {
 
     /* Per-kind details */
     args_class_t class_accept;  /* POSITIONAL[_ONE]: command-local class ID; 0 = unclassified */
-    int set_value;              /* FLAG_SET: value assigned to the int field */
+    int set_value;              /* FLAG_SET: value assigned to the int field (non-zero) */
     long int_min;               /* INT: inclusive lower bound */
     long int_max;               /* INT: inclusive upper bound */
     size_t positional_min;      /* Positional rows: minimum count; an ARG row's 1 = required */
@@ -319,11 +324,11 @@ struct args_opt {
  *
  * A `shortcut` — read on the subcommands of a top-level command — also stands
  * at the root by its aliases: `<prog> enable <name>` for `<prog> profile enable
- * <name>`. The root resolver answers it with the subcommand's own spec, so
- * parse, help and dispatch are the subcommand's as if its parent had been
- * typed; the root usage lists it under "Shortcuts:" as the word and the
- * subcommand it stands for, and the completion export gives it a command's
- * rows. A command's name wins over a shortcut's alias.
+ * <name>`. The root resolver answers it with the subcommand's own spec, so parse,
+ * help and dispatch are the subcommand's as if its parent had been typed; the
+ * root usage lists it under "Shortcuts:" as the word and the subcommand it stands
+ * for, and the completion export gives it a command's rows. A command's name
+ * wins over a shortcut's alias.
  */
 struct args_subcommand {
     const char *name;               /* "remove rm" — space-separated */
@@ -435,8 +440,8 @@ struct args_errors {
  * @param commands    NULL-terminated registry of top-level commands.
  * @param argc        Process argc.
  * @param argv        Process argv.
- * @param command_out On ARGS_ROOT_COMMAND, populated with the matched spec —
- *                    a shortcut's is the subcommand's own, which `args_parse()`
+ * @param command_out On ARGS_ROOT_COMMAND, populated with the matched spec — a
+ *                    shortcut's is the subcommand's own, which `args_parse()`
  *                    reads from argv[2] like any command's; unchanged otherwise.
  *                    NULL is allowed.
  * @return            One of `args_root_outcome_t`.
@@ -462,8 +467,8 @@ args_root_outcome_t args_resolve_root(
  * Behavior:
  *   - Seeds defaults via `init_defaults` if set.
  *   - For subcommand trees: recurses into the matching child, or into
- *     `default_subcommand` when the user passes no positional, or a flag at
- *     the slot.
+ *     `default_subcommand` when the user passes no positional, or a flag at the
+ *     slot.
  *   - Otherwise walks the token stream applying opts, collecting parse errors
  *     up to ARGS_ERRORS_CAP.
  *   - Runs `post_parse` if no errors so far.
@@ -549,9 +554,8 @@ void args_complete_candidates(
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Render the root-level usage banner and command summary list, then the
- * shortcuts — each as the word and the subcommand it stands for — and the
- * root options.
+ * Render the root-level usage banner and command summary list, then the shortcuts
+ * — each as the word and the subcommand it stands for — and the root options.
  *
  * Hidden commands and subcommands are skipped. The commands array is terminated
  * by a NULL entry.
@@ -712,6 +716,11 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
  * Flag → int field is set to `value` when any listed name is seen. Use for
  * tri-state enums where multiple flags write distinct values into the same field
  * (e.g., `--encrypt` sets 1, `--no-encrypt` sets 2). Field type: int.
+ *
+ * `value` must be non-zero and distinct within the group: zero is the field's
+ * "no flag given" sentinel, so a row writing it would be inert, and the engine
+ * reads the field back to tell one spelling of the group from a second. The engine
+ * is that field's only writer — nothing else in a spec may seed it.
  */
 #define ARGS_FLAG_SET(flags_s, type, field, value, help_s) \
     { .kind      = ARGS_KIND_FLAG_SET, \
@@ -798,10 +807,10 @@ error_t *args_parse_long(const char *text, long min, long max, long *out);
 /**
  * Unclassified documented positional: single-value target with an inline label
  * + help (rendered under "Arguments:"). Companion to ANY: the rows take the
- * positionals in declaration order — `<url> [path]` is two rows — and `min_c`
- * 1 makes a row required. A row whose field a flag has already written (a
- * `-p <name>` beside a `[name]` positional) is passed over the same way, and
- * the positional it would have taken is unexpected.
+ * positionals in declaration order — `<url> [path]` is two rows — and `min_c` 1
+ * makes a row required. A row whose field a flag has already written (a `-p <name>`
+ * beside a `[name]` positional) is passed over the same way, and the positional
+ * it would have taken is unexpected.
  */
 #define ARGS_POSITIONAL_ANY_ARG(label_s, type, field, min_c, help_s) \
     { .kind           = ARGS_KIND_POSITIONAL_ARG, \

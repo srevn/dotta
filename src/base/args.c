@@ -8,8 +8,8 @@
  *
  * Layout:
  *   1) internal cursor + token classifier,
- *   2) names — the space-separated lists a spec is written in — and the
- *      matchers over them,
+ *   2) names — the space-separated lists a spec is written in — and the matchers
+ *      over them,
  *   3) error collector helpers,
  *   4) typed-int parser,
  *   5) per-kind "apply" routines that write into the options struct,
@@ -145,8 +145,8 @@ static bool next_name(const char **cursor, const char **name, size_t *len) {
 }
 
 /**
- * Return true iff a name in `flags` equals `tok[0..tok_len)` and has the
- * expected is_long length class (single-char = short, multi-char = long).
+ * Return true iff a name in `flags` equals `tok[0..tok_len)` and has the expected
+ * is_long length class (single-char = short, multi-char = long).
  *
  * Zero allocation, zero bookkeeping. For N ≤ 12 opts per command this scans the
  * whole table in a handful of memcmps per parse.
@@ -332,6 +332,11 @@ static char **ensure_array(
 /**
  * True if this opt kind consumes the next token (or an inline `=value`).
  */
+/* The help renderer's flag label ("--force, -f"), defined with the rest of the
+ * rendering below. Forward-declared because one parse error names a flag the
+ * way `--help` does; it stays where it belongs rather than being hoisted here. */
+static size_t format_flag_label(char *buf, size_t buf_size, const char *flags);
+
 static bool opt_takes_value(const args_opt_t *o) {
     switch (o->kind) {
         case ARGS_KIND_STRING:
@@ -409,6 +414,45 @@ static void apply_value_opt(
     }
 }
 
+/**
+ * Apply a FLAG_SET row, refusing a second spelling of a different value.
+ *
+ * A FLAG_SET group is one int field and one row per value it can take, with 0
+ * reserved for "no flag given" — so a field already holding a different value
+ * means the user named two values for one field. That is a contradiction in the
+ * grammar rather than in any command's semantics, which is why it is answered
+ * here and not in a post_parse hook: it holds for every group the registry has
+ * and every group it will have. The same flag twice names one value and is applied
+ * silently, as repeating any flag is.
+ */
+static void apply_flag_set(
+    const args_command_t *cmd, const args_opt_t *opt, const char *tok,
+    void *opts, arena_t *arena, args_errors_t *errors, int tok_idx
+) {
+    int *field = int_field(opts, opt);
+
+    if (*field != 0 && *field != opt->set_value) {
+        /* Name the row that got there first. The engine is this field's only
+         * writer and writes nothing but a row's set_value, so the row of this
+         * group carrying the value the field holds is the one already given. */
+        char given[64] = "";
+        for (const args_opt_t *o = cmd->opts; o->kind != ARGS_KIND_END; o++) {
+            if (o->kind == ARGS_KIND_FLAG_SET &&
+                o->offset == opt->offset && o->set_value == *field) {
+                format_flag_label(given, sizeof(given), o->flags);
+                break;
+            }
+        }
+        record_error(
+            errors, arena, tok_idx, opt,
+            "option '%s' contradicts '%s'; give one or the other", tok, given
+        );
+        return;
+    }
+
+    *field = opt->set_value;
+}
+
 static void apply_long_opt(
     const args_command_t *cmd, char *tok, args_cursor_t *cur, void *opts,
     arena_t *arena, args_errors_t *errors, int tok_idx
@@ -448,7 +492,7 @@ static void apply_long_opt(
                 );
                 return;
             }
-            *int_field(opts, opt) = opt->set_value;
+            apply_flag_set(cmd, opt, tok, opts, arena, errors, tok_idx);
             break;
 
         case ARGS_KIND_STRING:
@@ -495,7 +539,7 @@ static void apply_short_opt(
             *bool_field(opts, opt) = true;
             break;
         case ARGS_KIND_FLAG_SET:
-            *int_field(opts, opt) = opt->set_value;
+            apply_flag_set(cmd, opt, tok, opts, arena, errors, tok_idx);
             break;
         case ARGS_KIND_STRING:
         case ARGS_KIND_APPEND:
@@ -523,8 +567,8 @@ static void apply_positional(
 
     /* Select the row:
      *   - the first POSITIONAL or POSITIONAL_ARG of the token's class that can
-     *     still take it — an ARG row holds one value and is passed over once
-     *     it does, whoever wrote it (an earlier positional, or a flag writing
+     *     still take it — an ARG row holds one value and is passed over once it
+     *     does, whoever wrote it (an earlier positional, or a flag writing
      *     the same field), so ARG rows take positionals in declaration order;
      *   - else the first POSITIONAL_RAW bucket (if any).
      */
@@ -584,9 +628,9 @@ static void apply_positional(
 }
 
 /**
- * Validate every positional row's count against its declared minimum — an
- * array's or a RAW bucket's count, an ARG row's one value or none. The RAW
- * `max` bound is enforced during parse (it's a cap, not a floor).
+ * Validate every positional row's count against its declared minimum — an array's
+ * or a RAW bucket's count, an ARG row's one value or none. The RAW `max` bound
+ * is enforced during parse (it's a cap, not a floor).
  */
 static void check_positional_counts(
     const args_command_t *cmd, void *opts,
@@ -780,9 +824,9 @@ static args_outcome_t consume_tokens(
             return ARGS_FAILED;
         }
 
-        /* The slot reads its token as the option loop does: `-h` is help; a
-         * flag name, or `--`, is the default subcommand's to read; a word —
-         * `-` and `-<digit>` included — names a subcommand. */
+        /* The slot reads its token as the option loop does: `-h` is help; a flag
+         * name, or `--`, is the default subcommand's to read; a word — `-` and
+         * `-<digit>` included — names a subcommand. */
         const char *first = cur->argv[cur->index];
         switch (classify_token(first, false)) {
             case TOK_HELP:
@@ -1030,7 +1074,9 @@ static void render_with_prog(FILE *out, const char *text, const char *prog) {
  *
  * Used by every renderer that needs a human-readable flag label:
  * `render_option_row` (per-command options table) and `args_render_root_usage`
- * (root-level aliases in the Options block).
+ * (root-level aliases in the Options block) — and, forward-declared beside the
+ * apply routines, by `apply_flag_set`, so the flag a contradiction names is spelled
+ * the way `--help` spells it.
  */
 static size_t format_flag_label(
     char *buf, size_t buf_size, const char *flags
@@ -1114,8 +1160,8 @@ void args_render_root_usage(
         );
     }
 
-    /* Shortcuts section: a subcommand's word at the root, and the subcommand
-     * it stands for — its qualified name says where it lives. */
+    /* Shortcuts section: a subcommand's word at the root, and the subcommand it
+     * stands for — its qualified name says where it lives. */
     bool shortcuts = false;
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
@@ -1217,8 +1263,8 @@ static bool is_positional_kind(args_kind_t k) {
  * prose-in-description keep working unchanged).
  *
  * Called between `description` and the options table so the order mirrors the
- * natural reading of a usage line: positional args first, then flags. Opens
- * with the section's blank line, like every section after the usage line.
+ * natural reading of a usage line: positional args first, then flags. Opens with
+ * the section's blank line, like every section after the usage line.
  */
 static void render_arguments(FILE *out, const args_opt_t *opts) {
     if (opts == NULL) return;
@@ -1275,11 +1321,11 @@ void args_render_help(
     const char *prog
 ) {
     /* One blank line before every section, none after — a trailing blank would
-     * double with the next section's leading one, as notes → examples once
-     * did. The usage line is always first, so each section that follows opens
-     * with the blank that separates it from whatever came before — the same
-     * spacing for any subset of sections. A free-form block ends with its own
-     * `\n` for its last line to terminate. */
+     * double with the next section's leading one, as notes → examples once did.
+     * The usage line is always first, so each section that follows opens with
+     * the blank that separates it from whatever came before — the same spacing
+     * for any subset of sections. A free-form block ends with its own `\n` for
+     * its last line to terminate. */
     args_render_usage_line(out, command, prog);
 
     if (command->summary != NULL) {
@@ -1297,8 +1343,8 @@ void args_render_help(
      * row-level argument docs. */
     render_arguments(out, command->opts);
 
-    /* Options — sectioned by ARGS_GROUP rows, a blank before each group; a
-     * table without a group opens the section before its first row. */
+    /* Options — sectioned by ARGS_GROUP rows, a blank before each group; a table
+     * without a group opens the section before its first row. */
     bool opened = false;
     if (command->opts != NULL) {
         for (const args_opt_t *o = command->opts;
@@ -1379,14 +1425,14 @@ static void fputs_fish_escaped(FILE *out, const char *s) {
 }
 
 /**
- * True when `s[0..len)` can stand as a fish word — a token fish reads as
- * itself, unquoted: letters, digits, `_` and `-`, at least one. Descriptions
- * are free text and are written quoted (`fputs_fish_escaped`); a name is
- * written bare — as a candidate, an option name, a guard's argument, a fragment
- * of a helper's function name — and fish would read a space as two of them, a
- * `$` or a glob as an expansion, a quote or a `/` as a script that does not
- * load. A wider grammar would need the dialect's quoting, which this exporter
- * does not do: the check is the contract.
+ * True when `s[0..len)` can stand as a fish word — a token fish reads as itself,
+ * unquoted: letters, digits, `_` and `-`, at least one. Descriptions are free
+ * text and are written quoted (`fputs_fish_escaped`); a name is written bare —
+ * as a candidate, an option name, a guard's argument, a fragment of a helper's
+ * function name — and fish would read a space as two of them, a `$` or a glob
+ * as an expansion, a quote or a `/` as a script that does not load. A wider grammar
+ * would need the dialect's quoting, which this exporter does not do: the check
+ * is the contract.
  */
 static bool fish_word_ok(const char *s, size_t len) {
     if (len == 0) return false;
@@ -1400,11 +1446,11 @@ static bool fish_word_ok(const char *s, size_t len) {
 }
 
 /**
- * Check every name the script would carry as a word for `cmd` and the tree
- * beneath it: its root aliases, its flags, each subcommand's aliases and, in
- * turn, the subcommand's own — hidden ones too, since the grammar is the
- * registry's, not the emission's. The command's own `name` is the caller's to
- * check: a subcommand's is the qualified "parent sub", never written.
+ * Check every name the script would carry as a word for `cmd` and the tree beneath
+ * it: its root aliases, its flags, each subcommand's aliases and, in turn, the
+ * subcommand's own — hidden ones too, since the grammar is the registry's, not
+ * the emission's. The command's own `name` is the caller's to check: a subcommand's
+ * is the qualified "parent sub", never written.
  *
  * @return NULL, or an error naming the first offender (caller frees).
  */
@@ -1466,8 +1512,8 @@ static error_t *check_command_names(const args_command_t *cmd) {
  * The `-n` guard a rule is emitted under: `__<prog>_<helper> <command> [<sub>]`.
  * Printed from its parts at every rule rather than formatted into a buffer once
  * per context — `using_command <cmd>` for a command's own rows, `needs_subcommand
- * <cmd>` for a tree's subcommand names, `using_default_subcommand <cmd>` for the
- * default sub's flags, `using_subcommand <cmd> <aliases>` for one subcommand's
+ * <cmd>` for a tree's subcommand names, `using_default_subcommand <cmd>` for
+ * the default sub's flags, `using_subcommand <cmd> <aliases>` for one subcommand's
  * rows, its alias list verbatim so every spelling of the sub matches.
  */
 typedef struct fish_guard {
@@ -1486,9 +1532,9 @@ static void emit_guard(FILE *out, const char *prog, const fish_guard_t *guard) {
 
 /**
  * Emit the names of a flags list as the option they declare: every short name
- * as `-o X`, every long one as `-l XXX`. Fish renders the names of one
- * `complete` line as a single entry (that's the whole reason we can list them
- * all on one line).
+ * as `-o X`, every long one as `-l XXX`. Fish renders the names of one `complete`
+ * line as a single entry (that's the whole reason we can list them all on one
+ * line).
  *
  * `-o` — fish's "old-style option" — declares a single-dash option that is exactly
  * `-X`: never grouped, its value the next token. That is what the parser reads
@@ -1592,9 +1638,9 @@ static void emit_sub_row(
 
 /**
  * Walk a command and its subcommand tree, emitting its rules under `names` —
- * the words it stands under at the root: a top-level command's name, or a
- * shortcut subcommand's alias list. The guards of a tree's slot and of a
- * passthrough read one word — the first.
+ * the words it stands under at the root: a top-level command's name, or a shortcut
+ * subcommand's alias list. The guards of a tree's slot and of a passthrough read
+ * one word — the first.
  */
 static void emit_command(
     FILE *out,
@@ -1887,12 +1933,12 @@ error_t *args_export_completion_fish(
     }
     fputc('\n', out);
 
-    /* Per-command rules, each block under a `# NAME` header — a command's,
-     * then its shortcut subcommands' under their aliases. The block is rendered
-     * first so a command with nothing to say — a dispatch shell reachable by
-     * bareword or root alias alone, like `interactive` — leaves no orphan header.
-     * Without a memstream (out of memory) the block goes straight through, header
-     * and all: a cosmetic degradation. */
+    /* Per-command rules, each block under a `# NAME` header — a command's, then
+     * its shortcut subcommands' under their aliases. The block is rendered first
+     * so a command with nothing to say — a dispatch shell reachable by bareword
+     * or root alias alone, like `interactive` — leaves no orphan header. Without
+     * a memstream (out of memory) the block goes straight through, header and
+     * all: a cosmetic degradation. */
     for (size_t i = 0; commands[i] != NULL; i++) {
         const args_command_t *c = commands[i];
         if (c->hidden) continue;

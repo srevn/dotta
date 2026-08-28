@@ -45,7 +45,7 @@
 #define SALT_BLOB_MODE 0100644
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
- * salt_init's malformed-ref repair gates on it too. */
+ * salt_init gates every fresh mint on it. */
 static error_t *local_has_ciphertext(
     git_repository *repo,
     const uint8_t *local_fp,
@@ -109,6 +109,11 @@ static error_t *resolve_salt_tree(
  *
  * Wipes `out_salt` via memset on every error path so a caller cannot accidentally
  * proceed with stale stack content under a swallowed error code.
+ *
+ * ERR_NOT_FOUND belongs to the ref alone (`resolve_salt_tree`), so nothing here
+ * returns it: a ref that resolves to a commit whose tree carries no salt blob
+ * is a broken shape, not an uninitialized repository. `salt_init` reads exactly
+ * that distinction to decide whether there is a ref to delete before it mints.
  */
 static error_t *read_salt_blob(
     git_repository *repo,
@@ -121,7 +126,7 @@ static error_t *read_salt_blob(
     if (entry == NULL) {
         memset(out_salt, 0, KDF_SALT_SIZE);
         return ERROR(
-            ERR_NOT_FOUND,
+            ERR_CRYPTO,
             "Salt blob '%s' missing from %s tree",
             SALT_BLOB_NAME, SALT_REF
         );
@@ -195,25 +200,37 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
     if (probe_err == NULL) {
         return NULL;  /* already initialized */
     }
+
+    /* The ref yielded no salt. Damaged or gone, its bytes are unavailable either
+     * way, so no blob's fingerprint can be matched against anything: any ciphertext
+     * in this repository (any fingerprint, any version) may be keyed by what
+     * the ref held, and minting over it would orphan that ciphertext permanently.
+     * One census answers both because it is one danger, and a census that cannot
+     * prove absence is the same verdict (fail closed). */
+    bool any_ciphertext = true;
+    error_t *cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
+    if (cerr) {
+        error_free(cerr);
+        any_ciphertext = true;
+    }
+
     if (probe_err->code != ERR_NOT_FOUND) {
-        /* Malformed ref. Regenerating is provably safe only when NO reachable
-         * ciphertext exists at all: the true salt's bytes are gone, so a blob's
-         * fingerprint cannot be matched against anything — any ciphertext (any
-         * fingerprint, any version) may be keyed by the salt this ref was before
-         * it was damaged. In that case keep the error and leave the evidence in
-         * place for a restore; the census failing is the same verdict (fail
-         * closed). A clean census makes the garbage ref pure noise — delete it
-         * and mint fresh, and tell the caller a repair happened. */
-        bool any_ciphertext = true;
-        error_t *cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
-        if (cerr) {
-            error_free(cerr);
-            any_ciphertext = true;
-        }
+        /* The ref is there and damaged. Over reachable ciphertext it may be the
+         * damaged form of the salt that keys it, so the refusal keeps the probe
+         * as its cause — salt_load names what is wrong with the blob — and the
+         * evidence stays in place for a restore. A clean census makes the ref
+         * pure noise: delete it, mint fresh, and tell the caller a repair
+         * happened. */
         if (any_ciphertext) {
             return error_wrap(
                 probe_err,
-                "Repository salt exists but is malformed"
+                "Repository salt '%s' is malformed and encrypted files depend "
+                "on it\n\n"
+                "Minting a new one would seal every encrypted file in this "
+                "repository away permanently. Restore the ref instead:\n"
+                "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
+                "or copy it from a machine that still has this repository.",
+                SALT_REF
             );
         }
         error_free(probe_err);
@@ -228,9 +245,25 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
         if (out_repaired) {
             *out_repaired = true;
         }
-        /* fall through to mint a fresh salt */
     } else {
+        /* The ref is gone: nothing to repair, nothing to delete, and nothing
+         * for the probe to add — "not found" is what the refusal's own first
+         * line already says. Only the census stands between the mint and whatever
+         * the ref used to key. */
         error_free(probe_err);
+
+        if (any_ciphertext) {
+            return ERROR(
+                ERR_CRYPTO,
+                "Repository salt '%s' is missing and encrypted files depend "
+                "on it\n\n"
+                "Minting a new one would seal every encrypted file in this "
+                "repository away permanently. Restore the ref instead:\n"
+                "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
+                "or copy it from a machine that still has this repository.",
+                SALT_REF
+            );
+        }
     }
 
     /* Generate the salt. entropy_fill scrubs the buffer to zeros on any failure,

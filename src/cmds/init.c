@@ -316,18 +316,10 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     bool salt_repaired = false;
     err = salt_init(repo, &salt_repaired);
     if (err) {
-        /* ERR_CRYPTO here is the refusal to regenerate over reachable ciphertext:
-         * the damaged ref may be the salt that keys it, so the fix is restoration,
-         * never a fresh mint. */
-        if (err->code == ERR_CRYPTO) {
-            err = error_wrap(
-                err,
-                "Failed to initialize repository salt\n"
-                "Hint: Encrypted data may depend on the damaged salt. If a "
-                "remote holds the true salt, 'dotta sync' adopts it; otherwise "
-                "restore refs/dotta/salt from a machine that has it."
-            );
-        } else {
+        /* ERR_CRYPTO is the refusal to mint over reachable ciphertext. It already
+         * names the state of the ref and the restore that repairs it, so a wrap
+         * would only push both under a line that says less. */
+        if (err->code != ERR_CRYPTO) {
             err = error_wrap(err, "Failed to initialize repository salt");
         }
         goto cleanup;

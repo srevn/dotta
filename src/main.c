@@ -161,12 +161,20 @@ static error_t *open_run(
             err = salt_load(run->repo, salt);
             if (err) {
                 if (err->code == ERR_NOT_FOUND) {
+                    /* Restoration leads. Minting a fresh salt is safe only on a
+                     * repository that holds no encrypted files, and `dotta init`
+                     * is what decides that — so the user never has to answer it
+                     * before acting. */
                     err = error_wrap(
                         err,
-                        "Encryption requires repository config (%s)\n"
-                        "  - For new repositories: run 'dotta init'\n"
-                        "  - For clones: re-run with the salt fetched "
-                        "(remote may not be a dotta v8 repository)", SALT_REF
+                        "Encryption is enabled but this repository has no salt "
+                        "(%s); every encrypted file is sealed under it\n"
+                        "  - Restore it: dotta git fetch origin "
+                        "'refs/dotta/*:refs/dotta/*'\n"
+                        "  - Or mint a fresh one with 'dotta init', which refuses "
+                        "if any encrypted file would be orphaned\n"
+                        "  - Or set encryption.enabled = false to work without "
+                        "encryption for now", SALT_REF
                     );
                 }
                 goto done;

@@ -58,16 +58,22 @@
  * Initialize the per-repository salt ref.
  *
  * If `refs/dotta/salt` exists with a valid salt blob, no-op (idempotent on repeat
- * `dotta init`, and across partial-init repair paths). If the ref exists but is
- * malformed (wrong-size blob, broken shape), the ciphertext census decides: with
- * no reachable ciphertext anywhere the garbage ref is deleted and a fresh salt
- * minted (`*out_repaired` set — the caller renders the repair); with any reachable
- * ciphertext — or a census that cannot prove its absence — the malformed ref
- * may be the damaged form of the salt that keyed it, so the error propagates
- * and the evidence stays in place for a restore (a remote holding the true salt
- * heals this via sync's adopt path instead). Otherwise generates KDF_SALT_SIZE
- * random bytes via `entropy_fill`, writes a commit→tree→`salt` blob, and points
- * the ref at the new commit.
+ * `dotta init`, and across partial-init repair paths). Otherwise generates
+ * KDF_SALT_SIZE random bytes via `entropy_fill`, writes a commit→tree→`salt`
+ * blob, and points the ref at the new commit.
+ *
+ * Every fresh mint is gated on the ciphertext census, on both ways the ref can
+ * fail to yield a salt — malformed (wrong-size blob, broken shape) and absent.
+ * The danger is one danger: with the salt's bytes unavailable no blob's fingerprint
+ * can be matched against anything, so any reachable ciphertext (any fingerprint,
+ * any version) may be keyed by what the ref held, and a fresh salt would orphan
+ * it permanently. With any reachable ciphertext — or a census that cannot prove
+ * its absence — ERR_CRYPTO propagates naming the state of the ref and the restore
+ * that repairs it, and the evidence stays in place (a remote holding the true
+ * salt heals a divergence via sync's adopt path instead). With a clean census
+ * the ref binds nothing: a malformed one is deleted and re-minted (`*out_repaired`
+ * set — the caller renders the repair), an absent one is simply a repository
+ * that has no salt yet.
  *
  * Called by `cmd_init` after the dotta-worktree branch is established.
  * Encryption-disabled installations still produce the ref so a future `dotta
@@ -86,14 +92,16 @@ error_t *salt_init(git_repository *repo, bool *out_repaired);
  * Walks `refs/dotta/salt` → commit → tree → `salt` blob and copies exactly
  * KDF_SALT_SIZE bytes into `out_salt`.
  *
- * Returns ERR_NOT_FOUND when the ref is missing — the canonical diagnostic for
- * "this dotta repo has not been initialized" or "this clone fetched from a remote
- * that does not host the salt ref". Caller (typically
- * `main.c::open_crypto_for_mode`) wraps with an actionable hint pointing to `dotta
- * init` or sync.
+ * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
+ * canonical diagnostic for "this dotta repo has not been initialized" or "this
+ * clone fetched from a remote that does not host the salt ref". The dispatcher
+ * wraps it with an actionable hint; `salt_init` reads it as "there is no ref to
+ * delete before minting", which is why the code stops at the ref and never speaks
+ * for the payload.
  *
- * Returns ERR_CRYPTO when the ref exists but the blob is the wrong size, indicating
- * tampering or a partial / format-broken commit.
+ * Returns ERR_CRYPTO when the ref exists but yields no salt — the tree carries
+ * no `salt` blob, the entry is not a blob, or the blob is the wrong size — each
+ * indicating tampering or a partial / format-broken commit.
  *
  * @param repo     Repository (must not be NULL)
  * @param out_salt Output buffer for KDF_SALT_SIZE bytes

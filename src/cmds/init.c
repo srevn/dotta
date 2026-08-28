@@ -60,6 +60,97 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
 }
 
 /**
+ * May dotta make this repository its own?
+ *
+ * Everything below writes — HEAD moves, the working directory is checked out
+ * against dotta-worktree's empty tree, a salt ref and a baseline `.dottaignore`
+ * are committed. Right for dotta's repository, destructive for somebody else's,
+ * so the question is asked once here, before the first of them, and answered
+ * from refs alone: nothing on disk tells the two apart.
+ *
+ * Adoptable, cheapest test first:
+ *
+ *   is_new_repo             this run created it — no history to displace
+ *   dotta-worktree exists   dotta's local marker, and `repo_open`'s own identity
+ *                           test — the row that keeps its "Run 'dotta init'"
+ *                           true when only the branch is gone
+ *   refs/dotta/salt exists  dotta's synced marker, in a namespace nothing else
+ *                           writes. Presence alone: a malformed salt is still
+ *                           dotta's, and `salt_init` is what judges the payload
+ *   no references at all    a bare `git init`. Untracked files are not history
+ *                           and no step below touches them — the one that could,
+ *                           the `.dottaignore` seed, adopts rather than overwrites
+ *
+ * Anything else holds a history dotta did not write. Warn-and-continue would be
+ * worse than refusing: by the time a warning printed, HEAD would have moved. A
+ * plain `git clone` of a dotta remote lands here too, and rightly — git never
+ * fetches `refs/dotta`, and the clone is checked out on a profile branch. `dotta
+ * clone` is the way in. `is_new_repo` being the first row is what keeps a refusal
+ * from stranding a repository this run created.
+ */
+static error_t *ensure_repository_adoptable(
+    git_repository *repo, const char *path, bool is_new_repo
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(path);
+
+    if (is_new_repo) {
+        return NULL;
+    }
+
+    bool worktree_exists = false;
+    error_t *err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
+    if (err) {
+        return error_wrap(err, "Failed to check for dotta-worktree branch");
+    }
+    if (worktree_exists) {
+        return NULL;
+    }
+
+    git_reference *salt_ref = NULL;
+    int git_err = git_reference_lookup(&salt_ref, repo, SALT_REF);
+    if (git_err == 0) {
+        git_reference_free(salt_ref);
+        return NULL;
+    }
+    if (git_err != GIT_ENOTFOUND) {
+        return error_wrap(
+            error_from_git(git_err), "Failed to look up '%s'", SALT_REF
+        );
+    }
+
+    /* Any reference at all is history this run did not write.
+     * `git_repository_is_empty` answers a narrower question — it also requires
+     * HEAD to name the configured initial branch, so `git init` followed by `git
+     * checkout -b x` would fail it and be refused with nothing to lose. */
+    git_strarray refs = { 0 };
+    git_err = git_reference_list(&refs, repo);
+    if (git_err < 0) {
+        return error_wrap(
+            error_from_git(git_err), "Failed to list repository references"
+        );
+    }
+    size_t ref_count = refs.count;
+    git_strarray_dispose(&refs);
+
+    if (ref_count == 0) {
+        return NULL;
+    }
+
+    return ERROR(
+        ERR_CONFLICT,
+        "'%s' is a Git repository that dotta did not create\n\n"
+        "'dotta init' would move HEAD to 'dotta-worktree', check the working "
+        "directory out against its empty tree, and commit a baseline "
+        ".dottaignore there.\n\n"
+        "Move the existing repository aside first, or point dotta elsewhere:\n"
+        "  DOTTA_REPO_DIR=<path> dotta init\n"
+        "  or set repo_dir under [core] in the config file",
+        path
+    );
+}
+
+/**
  * Ensure the dotta-worktree branch exists and HEAD points at it.
  *
  * Idempotent across self-healing re-init: the orphan commit is only created when
@@ -191,6 +282,13 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
+    /* Whose repository is this? Asked before the first step below writes, so a
+     * refusal leaves it exactly as it was found. */
+    err = ensure_repository_adoptable(repo, path, is_new_repo);
+    if (err) {
+        goto cleanup;
+    }
+
     /*
      * Idempotent setup. Each step is safe to re-run on an existing repository:
      * a fully-healthy repo no-ops at every step, and a partial prior init.
@@ -310,6 +408,12 @@ const args_command_t spec_init = {
         "Create an empty Git repository wired for dotta profiles. The\n"
         "repository path defaults to $DOTTA_REPO_DIR, then the path\n"
         "configured in config.toml, then the per-user default directory.\n",
+    .notes       =
+        "Existing Directories:\n"
+        "  A directory holding a Git repository that dotta did not create is\n"
+        "  refused: init would move its HEAD to dotta-worktree and leave its\n"
+        "  files staged for deletion. An empty repository, or no repository\n"
+        "  at all, is initialized in place; dotta's own is repaired in place.\n",
     .examples    =
         "  %s init                    # Default location\n"
         "  %s init ~/dotfiles         # Custom path\n"

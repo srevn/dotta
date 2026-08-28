@@ -157,7 +157,8 @@ static error_t *ensure_repository_adoptable(
  * the branch is absent. Recreating an existing branch would silently overwrite
  * its history — including any user-customised baseline `.dottaignore` blob —
  * which is the bug the old `is_initialized` short-circuit was guarding against.
- * The guard now lives here, where it is precisely scoped to the destructive step.
+ * This is one of the two steps that short-circuit covered; the other is the
+ * baseline seed, which guards itself (`ignore_seed_baseline`).
  *
  * `set_head` runs unconditionally so a partial prior init that left HEAD on a
  * profile branch (or on the freshly-init'd repo's default `main`) gets corrected.
@@ -338,8 +339,9 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         );
     }
 
-    /* Baseline .dottaignore on dotta-worktree. Idempotent — gitops_update_file
-     * no-ops on identical content. */
+    /* Baseline .dottaignore on dotta-worktree. Seeded once: a branch that already
+     * carries the file keeps whatever the user made of it, and an untracked one
+     * sitting at the repository root is adopted rather than overwritten. */
     err = ignore_seed_baseline(repo);
     if (err) {
         err = error_wrap(err, "Failed to seed baseline .dottaignore");
@@ -413,7 +415,9 @@ const args_command_t spec_init = {
         "  A directory holding a Git repository that dotta did not create is\n"
         "  refused: init would move its HEAD to dotta-worktree and leave its\n"
         "  files staged for deletion. An empty repository, or no repository\n"
-        "  at all, is initialized in place; dotta's own is repaired in place.\n",
+        "  at all, is initialized in place; dotta's own is repaired in place.\n"
+        "  An existing .dottaignore is never rewritten: one already on the\n"
+        "  branch is kept, one sitting in the directory becomes the baseline.\n",
     .examples    =
         "  %s init                    # Default location\n"
         "  %s init ~/dotfiles         # Custom path\n"

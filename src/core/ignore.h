@@ -18,8 +18,8 @@
  * The source tree's own `.gitignore` (when the user runs `dotta add` against
  * files that live inside a different git repository) is a separate mechanism in
  * `sys/source.h`. Callers that want that behaviour build a `source_filter_t`
- * alongside and consult it explicitly — where no layer above decided, so it
- * is the lowest layer and a `!` rule in any of the four overrides it.
+ * alongside and consult it explicitly — where no layer above decided, so it is
+ * the lowest layer and a `!` rule in any of the four overrides it.
  *
  * Runtime shape
  * -------------
@@ -33,9 +33,9 @@
  * -----------
  * A ruleset is evaluated against the mount-relative path — `mount_strip_label`
  * of the storage path, what a `.gitignore` at `~`, at `/` or at the deployment
- * target would see. Every consumer classifies what it found before it asks,
- * and asks with the tail: `.cache/` means `~/.cache` for a `home/` path and
- * `/.cache` for a `root/` one, and nothing above the mount root takes part.
+ * target would see. Every consumer classifies what it found before it asks, and
+ * asks with the tail: `.cache/` means `~/.cache` for a `home/` path and `/.cache`
+ * for a `root/` one, and nothing above the mount root takes part.
  *
  * Full .gitignore grammar is supported:
  *   - Glob patterns (*, ?, [abc]) and `**` recursive globs
@@ -235,9 +235,22 @@ error_t *ignore_blob_write(
 /**
  * Seed the baseline `.dottaignore` on `dotta-worktree`.
  *
- * Writes the compiled default patterns. Called by `dotta init` and `dotta clone`
- * so every repo has a visible, editable starting point for machine-local ignore
- * extensions. Idempotent via `ignore_blob_write`'s no-op detection.
+ * Called by `dotta init` and `dotta clone` so every repo has a visible, editable
+ * starting point for machine-local ignore extensions.
+ *
+ * Seed, not set: once the file is on the branch its content is the user's, and
+ * `dotta ignore` is how it changes. `dotta init` is idempotent by re-running
+ * its steps, and this step's idempotence is "already seeded → nothing to do" —
+ * not "rewrite with the defaults", which is what `ignore_blob_write` does (it
+ * no-ops only on *identical* content) and which silently discarded a customised
+ * baseline on every re-init, blob and checked-out copy alike.
+ *
+ * When nothing is seeded yet, a non-empty `.dottaignore` already at the repository
+ * root is adopted rather than overwritten: that path is the baseline's own checkout
+ * location, so a file there is the baseline the user wrote before dotta tracked it.
+ *
+ * The branch is the caller's to establish — `dotta init` and `dotta clone` both
+ * create it a few steps above this call, and the write loads its tree either way.
  *
  * @param repo Repository (must not be NULL; must have dotta-worktree)
  * @return Error or NULL on success

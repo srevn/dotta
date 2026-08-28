@@ -532,12 +532,66 @@ const char *ignore_profile_template(void) {
 error_t *ignore_seed_baseline(git_repository *repo) {
     CHECK_NULL(repo);
 
-    return ignore_blob_write(
-        repo, "dotta-worktree",
-        DEFAULT_DOTTAIGNORE,
-        strlen(DEFAULT_DOTTAIGNORE),
-        "Initialize .dottaignore with default patterns"
+    /* Already seeded? Read the tree rather than ignore_blob_read: that reader
+     * folds "no file" and "empty file" into one NULL, and an emptied baseline
+     * is the user having removed every pattern — re-seeding would resurrect them.
+     * The entry's presence is the whole question here, not its size.
+     *
+     * dotta-worktree is the caller's to have created — both callers do, a few
+     * steps above — and the write below loads its tree anyway, so a missing branch
+     * is the load's to report rather than a guard's here. */
+    git_tree *tree = NULL;
+    RETURN_IF_ERROR(gitops_load_branch_tree(repo, "dotta-worktree", &tree, NULL));
+    bool seeded = git_tree_entry_byname(tree, ".dottaignore") != NULL;
+    git_tree_free(tree);
+    if (seeded) {
+        return NULL;
+    }
+
+    /* Nothing seeded yet, so this is the one call that writes. A `.dottaignore`
+     * already sitting at the repository root is one the user wrote at the
+     * baseline's own location before dotta tracked it — adopt its bytes, because
+     * committing the defaults would FORCE-check-out over it. Only the bytes make
+     * that call: an empty file has none to keep, and treating it as absent is
+     * the same fold ignore_blob_read applies to an empty blob.
+     *
+     * `dotta clone` reaches here with a provably empty working directory (git
+     * refuses to clone into a non-empty one, gitops_clone checks nothing out,
+     * and cmd_clone force-checks-out dotta-worktree's empty tree first), so the
+     * adoption is init's in practice.
+     *
+     * The read carries its own unwinding: fs_read_file names the path in its
+     * error and leaves the buffer as it found it, so the join's allocation is
+     * the only thing here with a lifetime. A bare repository has no root to look
+     * in and fails the join, which the checkout a few steps above has already
+     * ruled out. */
+    char *path = NULL;
+    RETURN_IF_ERROR(
+        fs_path_join(git_repository_workdir(repo), ".dottaignore", &path)
     );
+
+    buffer_t existing = BUFFER_INIT;
+    error_t *err = NULL;
+    if (fs_file_exists(path)) {
+        err = fs_read_file(path, &existing);
+    }
+    free(path);
+    RETURN_IF_ERROR(err);
+
+    const char *content = DEFAULT_DOTTAIGNORE;
+    size_t size = strlen(DEFAULT_DOTTAIGNORE);
+    const char *message = "Initialize .dottaignore with default patterns";
+
+    if (existing.size > 0) {
+        content = existing.data;
+        size = existing.size;
+        message = "Adopt existing .dottaignore as the baseline";
+    }
+
+    err = ignore_blob_write(repo, "dotta-worktree", content, size, message);
+    buffer_free(&existing);
+
+    return err;
 }
 
 error_t *ignore_seed_profile(worktree_handle_t *wt) {

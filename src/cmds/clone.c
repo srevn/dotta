@@ -745,8 +745,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
      * defaults are applied via the baseline path rather than only through the
      * compiled fallback.
      *
-     * Idempotent via gitops_update_file's no-op detection; no-op when the branch
-     * already has matching content (e.g. repeat invocations). */
+     * Seeded once: a branch that already carries the file is left alone. */
     err = ignore_seed_baseline(repo);
     if (err) {
         final_err = error_wrap(err, "Failed to seed baseline .dottaignore");

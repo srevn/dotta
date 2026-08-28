@@ -231,6 +231,32 @@ static void close_run(dotta_run_t *run) {
 }
 
 /**
+ * The name the program was invoked by, for every usage line, hint and parse error.
+ *
+ * argv[0] is an invocation — a bare word after a PATH lookup, a relative or an
+ * absolute path — and what those spellings have in common is the last component.
+ * The name is what a usage line means: installed, `%s` must render `dotta`, not
+ * `/usr/local/bin/dotta`.
+ *
+ * Derived once and passed down, because "what is this program called" is one
+ * question with one answer; a second `argv[0]` at a render site is a second answer
+ * to it.
+ *
+ * POSIX basename(3) may modify its argument and may return a pointer into static
+ * storage; argv[0] is neither ours to modify nor safe to alias, so the split is
+ * done here. Total on what execve(2) can hand a process: argc may be zero (no
+ * argv[0] at all) and argv[0] may be empty, and neither carries a name, so both
+ * answer with the installed one. A trailing slash carries no name either, and
+ * the whole invocation is more use to a reader than the empty string after it.
+ */
+static const char *program_name(const char *argv0) {
+    if (argv0 == NULL || argv0[0] == '\0') return "dotta";
+
+    const char *slash = strrchr(argv0, '/');
+    return (slash != NULL && slash[1] != '\0') ? slash + 1 : argv0;
+}
+
+/**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
  * Owns a command-scoped arena (destroyed before return) and the run that is opened
@@ -239,12 +265,10 @@ static void close_run(dotta_run_t *run) {
  */
 static int run_spec(
     const args_command_t *cmd,
-    int argc, char **argv,
+    int argc, char **argv, const char *prog,
     const config_t *config,
     output_t *out
 ) {
-    const char *prog = argv[0];
-
     /* Command-scoped arena. Sized for the median command — parsing needs ~few
      * KB, but workspace/scope/manifest paths fit ~140 KB worst case in one or
      * two blocks at this initial size. Borrowed by handlers via ctx->arena and
@@ -403,17 +427,19 @@ int main(int argc, char **argv) {
      * that closes early). */
     signal(SIGPIPE, SIG_IGN);
 
+    const char *prog = program_name(argc > 0 ? argv[0] : NULL);
+
     /* Root-level dispatch resolution — pure data projection of the registry. No
      * config/output needed for help/version/usage, so resolve first and let those
      * branches exit early without paying for config loading. */
     const args_command_t *spec = NULL;
     switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
         case ARGS_ROOT_NONE:
-            args_render_root_usage(stderr, dotta_commands, argv[0]);
+            args_render_root_usage(stderr, dotta_commands, prog);
             git_libgit2_shutdown();
             return 1;
         case ARGS_ROOT_HELP:
-            args_render_root_usage(stdout, dotta_commands, argv[0]);
+            args_render_root_usage(stdout, dotta_commands, prog);
             git_libgit2_shutdown();
             return 0;
         case ARGS_ROOT_VERSION:
@@ -422,7 +448,7 @@ int main(int argc, char **argv) {
             return 0;
         case ARGS_ROOT_UNKNOWN:
             fprintf(stderr, "Error: Unknown command '%s'\n", argv[1]);
-            args_render_root_usage(stderr, dotta_commands, argv[0]);
+            args_render_root_usage(stderr, dotta_commands, prog);
             git_libgit2_shutdown();
             return 1;
         case ARGS_ROOT_COMMAND:
@@ -461,7 +487,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int ret = run_spec(spec, argc, argv, config, out);
+    int ret = run_spec(spec, argc, argv, prog, config, out);
 
     /* Fix repository ownership if running under sudo
      *

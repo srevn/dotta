@@ -74,6 +74,35 @@ error_t *profile_detect(
 );
 
 /**
+ * Order profile names by layering precedence — least specific first.
+ *
+ * Enabled order IS precedence, so any command that turns a *set* of profiles
+ * into an enabled *list* is answering this question, and there is one answer:
+ *
+ *     rank 0   "global"          the universal base
+ *     rank 1   everything else   a base sorts before its own variants, because
+ *                                '\0' < '/' — "darwin" < "darwin/home"
+ *     rank 2   "hosts/..."       the most specific layer
+ *
+ * Within a rank, byte order on the name. That is a total order on names alone:
+ * it needs no machine, so a hub machine enabling every profile and a bare clone
+ * enabling the three that match it agree on the relative order of the three —
+ * which is the whole point, since a path two profiles both provide must deploy
+ * the same bytes on both.
+ *
+ * profile_detect selects *which* names this machine layers and returns them in
+ * this order; a caller that already holds its set needs only the order. Selection
+ * and ordering are separate questions and this is the second one, on its own,
+ * so both kinds of caller can have it.
+ *
+ * Sorts in place. Stable is not required — the key is total on distinct names,
+ * and branch names are distinct.
+ *
+ * @param names Profile names to order in place (NULL is a no-op)
+ */
+void profile_order(string_array_t *names);
+
+/**
  * Resolve CLI profile names for operation filtering
  *
  * Lightweight validation of CLI profile arguments: checks that each name

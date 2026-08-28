@@ -48,12 +48,14 @@ bool profile_exists(git_repository *repo, const char *profile) {
 /**
  * Match hierarchical profiles from available branches
  *
- * Finds base match (exact prefix) and sub-matches (prefix/variant, one level
- * deep only). Sub-matches are sorted alphabetically for deterministic ordering.
+ * Appends the base match (exact prefix) and its sub-matches (prefix/variant,
+ * one level deep only) to `out`, in the order `available` holds them. Selection
+ * only: the ordering is profile_detect's, which sorts everything it selected
+ * with profile_order once the three steps have run.
  *
  * @param available Available branch names to match against
  * @param prefix Prefix to match (e.g., "darwin", "hosts/myhost")
- * @param out Output array to append matches to (base first, then sorted subs)
+ * @param out Output array to append matches to
  * @return Error or NULL on success
  */
 static error_t *match_hierarchical_profiles(
@@ -61,15 +63,7 @@ static error_t *match_hierarchical_profiles(
     const char *prefix,
     string_array_t *out
 ) {
-    error_t *err = NULL;
     size_t prefix_len = strlen(prefix);
-
-    string_array_t *sub_profiles = string_array_new(0);
-    if (!sub_profiles) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate sub-profiles array"
-        );
-    }
 
     for (size_t i = 0; i < available->count; i++) {
         const char *profile = available->items[i];
@@ -80,40 +74,54 @@ static error_t *match_hierarchical_profiles(
         }
 
         const char *suffix = profile + prefix_len;
+        error_t *err = NULL;
 
         if (suffix[0] == '\0') {
-            /* Exact match: base profile — add directly to output */
+            /* Exact match: base profile */
             err = string_array_push(out, profile);
-            if (err) {
-                goto cleanup;
-            }
         } else if (suffix[0] == '/') {
             const char *variant = suffix + 1;
             /* One level deep only: non-empty variant with no further '/' */
             if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
-                err = string_array_push(sub_profiles, profile);
-                if (err) {
-                    goto cleanup;
-                }
+                err = string_array_push(out, profile);
             }
+        }
+
+        if (err) {
+            return err;
         }
     }
 
-    /* Sort sub-profiles alphabetically for deterministic ordering */
-    if (sub_profiles->count > 1) {
-        string_array_sort(sub_profiles);
+    return NULL;
+}
+
+/**
+ * The layer a profile name stands in — see profile_order.
+ */
+static int profile_rank(const char *name) {
+    if (strcmp(name, "global") == 0) return 0;
+    if (str_starts_with(name, "hosts/")) return 2;
+    return 1;
+}
+
+static int profile_order_cmp(const void *a, const void *b) {
+    const char *x = *(const char *const *) a;
+    const char *y = *(const char *const *) b;
+
+    int rx = profile_rank(x), ry = profile_rank(y);
+    if (rx != ry) {
+        return rx < ry ? -1 : 1;
     }
 
-    /* Append sorted sub-profiles after base */
-    for (size_t i = 0; i < sub_profiles->count; i++) {
-        err = string_array_push(out, sub_profiles->items[i]);
-        if (err) goto cleanup;
+    return strcmp(x, y);
+}
+
+void profile_order(string_array_t *names) {
+    if (!names || names->count < 2) {
+        return;
     }
 
-cleanup:
-    string_array_free(sub_profiles);
-
-    return err;
+    qsort(names->items, names->count, sizeof(char *), profile_order_cmp);
 }
 
 /**
@@ -190,6 +198,12 @@ error_t *profile_detect(
         }
     }
     /* Non-fatal: continue if gethostname() fails */
+
+    /* The three steps above answer *which* names this machine layers; this is
+     * the order they layer in. Each step appends in branch-listing order, so
+     * the one sort is what makes the result precedence — the module's one answer,
+     * shared with every caller that already holds its set. */
+    profile_order(profiles);
 
     /* Success */
     free(os_name);

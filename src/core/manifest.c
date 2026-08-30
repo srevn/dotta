@@ -102,12 +102,11 @@ struct claim_ctx {
  * a single profile's claim to the row; precedence across profiles is resolved
  * by manifest_claim's reset and the paired re-application of this helper.
  *
- * Per-kind semantics when an item exists for the row's storage_path:
- *   FILE      → override mode; set encrypted; copy owner/group
- *   SYMLINK   → leave mode at 0 (links carry no settable mode); copy owner/group
- *   DIRECTORY → no-op: a path is a tree or a blob, so a DIRECTORY item at a blob's
- *               storage_path is stale metadata, and the tree is the content
- *               authority — the item contributes nothing, not even its owner/group
+ * When an item exists for the row's storage_path: owner/group ride every blob
+ * row; mode/encrypted are the tree's to admit. The item's kind decides only the
+ * one rule left — a DIRECTORY item at a blob's storage_path is stale metadata
+ * (a path is a tree or a blob, and the tree is the content authority), so it
+ * contributes nothing, not even its owner/group.
  *
  * NULL metadata and a key the profile does not carry both leave the row's
  * Git-derived defaults intact.
@@ -130,8 +129,9 @@ static error_t *manifest_apply_metadata(
         return NULL;
     }
 
-    /* owner/group apply to both remaining kinds; copy first so the mode/encrypted
-     * overrides below can short-circuit after the allocations have already
+    /* owner/group apply to every blob row, links included: the ownership claim
+     * is true regardless of what the path became. Copied first so the
+     * mode/encrypted override below runs after the allocations have already
      * succeeded. arena_strdup returns NULL only on real failure (NULL
      * item->owner/group bypasses the if-guards and leaves the dup NULL). */
     char *owner_dup = NULL;
@@ -160,17 +160,12 @@ static error_t *manifest_apply_metadata(
     row->owner = owner_dup;
     row->group = group_dup;
 
-    switch (item->kind) {
-        case METADATA_ITEM_FILE:
-            row->mode = item->mode;
-            row->encrypted = item->file.encrypted;
-            break;
-        case METADATA_ITEM_SYMLINK:
-            /* mode stays 0 (Git default for links); encrypted stays false. */
-            break;
-        case METADATA_ITEM_DIRECTORY:
-            /* Returned above. */
-            break;
+    /* mode/encrypted apply only where a mode can stand — the tree's word
+     * (row->type), never the item's stale kind — and only from a FILE item: a
+     * SYMLINK item's mode is the format's filler, not a claim. */
+    if (row->type != PATH_TYPE_SYMLINK && item->kind == METADATA_ITEM_FILE) {
+        row->mode = item->mode;
+        row->encrypted = item->file.encrypted;
     }
 
     return NULL;
@@ -373,13 +368,13 @@ static int manifest_claim_blob(
     }
 
     /* The entry name is Git's, not this machine's. mount_resolve joins a label's
-     * tail verbatim on the strength of the path having been validated at its write
-     * boundary, and for a branch this machine authored it was — but a branch that
-     * arrived by clone or sync was validated by whoever wrote it, which is to say
-     * not at all. A tree can name a subtree "..", so the shape has to be checked
-     * where the tree is read, the same reason metadata's key loop checks its own
-     * (core/metadata.c). Malformed here is corruption, not a lifecycle stage: it
-     * takes the err branch below rather than the unbound note. */
+     * tail verbatim on the strength of the path having been validated at its
+     * write boundary, and for a branch this machine authored it was — but a branch
+     * that arrived by clone or sync was validated by whoever wrote it, which is
+     * to say not at all. A tree can name a subtree "..", so the shape has to be
+     * checked where the tree is read, the same reason metadata's key loop checks
+     * its own (core/metadata.c). Malformed here is corruption, not a lifecycle
+     * stage: it takes the err branch below rather than the unbound note. */
     error_t *err = mount_validate_storage(storage_path);
     if (err) {
         ctx->error = error_wrap(

@@ -461,6 +461,14 @@ static error_t *add_file_to_worktree(
                 );
             }
             *out_stat = stat_cache_from_stat(&link_stat);
+
+            /* The capture claims nothing (a link with no ownership to track):
+             * an item standing at the key is the replaced state's — retire it.
+             * Inside the lstat-success branch on purpose: a failed look must
+             * not retire a real claim. */
+            if (!item) {
+                metadata_remove_item(metadata, storage_path);
+            }
         }
 
         output_info(

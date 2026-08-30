@@ -536,7 +536,8 @@ cleanup:
  * - Files that exist in both current and target (normal revert)
  * - Files deleted from HEAD (restore from history)
  * - Missing metadata gracefully (mode from the tree's filemode, with a warning)
- * - Symlinks (restore ownership metadata if present at target commit)
+ * - Symlinks (restore ownership metadata if present at target commit; absent,
+ *   the standing entry is retired — the target records no claim for the link)
  */
 static error_t *revert_file_in_branch(
     const dotta_ctx_t *ctx,
@@ -708,13 +709,18 @@ static error_t *revert_file_in_branch(
 
     /* PHASE 3: Merge target metadata item, serialize, stage blob */
 
-    /* Update metadata entry (if not symlink) */
+    /* Merge the target state's claim: an item to restore upserts over the standing
+     * one. */
     if (meta_to_restore) {
         err = metadata_add_item(current_metadata, &meta_to_restore);
         if (err) {
             err = error_wrap(err, "Failed to update metadata");
             goto cleanup;
         }
+    } else {
+        /* The target commit records no claim for this link; a standing item is
+         * the reverted-away state's — retire it. */
+        metadata_remove_item(current_metadata, file_path);
     }
 
     /* Serialize updated metadata to JSON */

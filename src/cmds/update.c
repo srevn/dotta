@@ -586,8 +586,9 @@ static error_t *update_profile(
                 }
 
                 /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
-                 * Non-NULL for files and root/ prefix symlinks (ownership
-                 * tracked). */
+                 * Non-NULL for files and root/ prefix symlinks (ownership tracked).
+                 * A capture that claims nothing retires the standing claim: an
+                 * item at the key is the replaced state's. */
                 if (meta_item) {
                     /* Only set encrypted flag for FILE kind (symlinks are never encrypted) */
                     if (meta_item->kind == METADATA_ITEM_FILE) {
@@ -625,6 +626,8 @@ static error_t *update_profile(
                     }
 
                     captured_file_count++;
+                } else {
+                    metadata_remove_item(metadata, item->storage_path);
                 }
 
                 /* Stage file */

@@ -37,7 +37,11 @@
  * downstream re-checks. One section for every skip, both kinds, in decision order
  * — a skipped squatter precedes the rows it holds back, which is the reading
  * order — capped like every preview list (one squatter can hold a subtree, so
- * this one has a multiplier cleanup's uncapped block does not).
+ * this one has a multiplier cleanup's uncapped block does not). The header is
+ * the block's only prose, as it is in every block on both sides: no one sentence
+ * covers both families here — the consent holds --force lifts and the hard blocks
+ * it does not — and "not deployed" would say the header again. Each row names
+ * its own reason, and the remedies close.
  *
  * Two line families. The landing and occupancy reasons keep their exact
  * parentheticals — facts about the path's surroundings, no profile. The row-fact
@@ -50,21 +54,21 @@
  * item exists by construction — content_conflicts(NULL) is false — and is DEPLOYED
  * (no path bit survives absence), so the route read is total here.
  *
- * The remedies come last, each gated by the class actually present
- * (deploy_skip_needs_force) — a conflict-only run is not told to fix paths by
- * hand, and an unreadable-only run is not offered a flag that will not lift it.
- * The consent remedy teaches both directions: --force keeps Git's, and a CONTENT
- * skip adds the disk-wins verb — 'dotta update', with 'dotta add --force' for
- * the rows Git has moved past, which update refuses. The block sits between the
- * deploy preview and cleanup's, so each engine tells its story the same way —
- * what it will do, then what it will not and why, remedies nearest the prompt
- * (the rule cleanup's printer states). No total-count line: the exit error's
- * message is the count's one home.
+ * The remedies close the block, indented under the rows the way every block closes,
+ * each gated by the class actually present (deploy_skip_needs_force) — a
+ * conflict-only run is not told to fix paths by hand, and an unreadable-only
+ * run is not offered a flag that will not lift it. The consent remedy teaches
+ * both directions: --force keeps Git's, and a CONTENT skip adds the disk-wins
+ * verb, 'dotta update' — gated on CONTENT and not on the class, because update
+ * refuses a retyped row (update.c's retyped_skipped). It stops there: the 'dotta
+ * add --force' a Git-moved row needs is what update's own refusal says at the
+ * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
+ * one. The block sits between the deploy preview and cleanup's, so each engine
+ * tells its story the same way — what it will do, then what it will not and why.
+ * No total-count line: the exit error's message is the count's one home.
  */
 static void print_deploy_preflight_results(
-    const output_t *out,
-    const workspace_t *ws,
-    const deploy_preflight_result_t *result
+    const output_t *out, const workspace_t *ws, const deploy_preflight_result_t *result
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
 
@@ -77,14 +81,13 @@ static void print_deploy_preflight_results(
     }
 
     output_section(out, OUTPUT_NORMAL, "Skipped paths");
-    output_warning(out, OUTPUT_NORMAL, "The following were not deployed:");
 
     for (size_t i = 0; i < result->skipped.count && i < limit; i++) {
         const deploy_skip_t *s = &result->skipped.entries[i];
         const char *path = s->row->filesystem_path;
 
         switch (s->reason) {
-            case DEPLOY_SKIP_PERMISSION:
+            case DEPLOY_SKIP_PERMISSION: {
                 if (s->ancestor) {
                     output_styled(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
@@ -97,23 +100,25 @@ static void print_deploy_preflight_results(
                     );
                 }
                 break;
+            }
 
-            case DEPLOY_SKIP_ANCESTOR:
+            case DEPLOY_SKIP_ANCESTOR: {
                 output_styled(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not a directory)\n",
                     path, (int) s->ancestor, path
                 );
                 break;
+            }
 
-            case DEPLOY_SKIP_OCCUPIED:
+            case DEPLOY_SKIP_OCCUPIED: {
                 output_styled(
-                    out, OUTPUT_NORMAL,
-                    "  {red}✗{reset} %s (a non-empty directory is in the way)\n",
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (non-empty directory in the way)\n",
                     path
                 );
                 break;
+            }
 
-            case DEPLOY_SKIP_TYPE:
+            case DEPLOY_SKIP_TYPE: {
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ⚠");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
                 if (s->ancestor) {
@@ -127,6 +132,7 @@ static void print_deploy_preflight_results(
                 output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
+            }
 
             case DEPLOY_SKIP_CONTENT: {
                 bool conflict = workspace_item_route(workspace_get_item(ws, path))
@@ -143,17 +149,19 @@ static void print_deploy_preflight_results(
                 break;
             }
 
-            case DEPLOY_SKIP_UNREADABLE:
+            case DEPLOY_SKIP_UNREADABLE: {
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(cannot verify from ");
                 output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
+            }
 
-            case DEPLOY_SKIP_NONE:
+            case DEPLOY_SKIP_NONE: {
                 /* Unreachable: a row is in skipped because a reason names it */
                 break;
+            }
         }
     }
 
@@ -163,35 +171,23 @@ static void print_deploy_preflight_results(
         );
     }
 
-    /* Each remedy prints iff its class is present, off the same predicate the
-     * exit contract reads (deploy_skip_needs_force) — asked here, where the answer
-     * is used, first match wins. The disk-wins lines follow the same rule off
-     * their own predicates: any CONTENT skip, and any of those Git has moved
-     * past (route CONFLICT — the rows update refuses). */
-    output_newline(out, OUTPUT_NORMAL);
+    /* One line per question, each asked where its answer is used, first match
+     * wins — the class the exit contract reads (deploy_skip_needs_force), then
+     * the disk-wins direction on its own gate, because 'dotta update' refuses a
+     * retyped row (update.c's retyped_skipped) and a TYPE-only block must not
+     * be told to use it. */
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
-            output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
+            output_info(
+                out, OUTPUT_NORMAL, "  Use --force to overwrite or replace them"
+            );
             break;
         }
     }
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (result->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
             output_info(
-                out, OUTPUT_NORMAL, "To keep what is on disk instead: 'dotta update <path>'"
-            );
-            break;
-        }
-    }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        const deploy_skip_t *s = &result->skipped.entries[i];
-
-        if (s->reason == DEPLOY_SKIP_CONTENT &&
-            workspace_item_route(workspace_get_item(ws, s->row->filesystem_path))
-            == WORKSPACE_ROUTE_CONFLICT) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  ('dotta add --force <profile> <path>' where Git has moved too)"
+                out, OUTPUT_NORMAL, "  To keep what is on disk instead: 'dotta update <path>'"
             );
             break;
         }
@@ -200,11 +196,7 @@ static void print_deploy_preflight_results(
         if (!deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Fix the path by hand, or widen the scope so a tracked ancestor is planned"
-            );
-            output_info(
-                out, OUTPUT_NORMAL,
-                "'dotta apply -e <pattern>' leaves a path out of the run"
+                "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
             );
             break;
         }
@@ -750,7 +742,7 @@ static void print_cleanup_results(
     }
 
     if (reclaimed_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files (already absent)");
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
         for (size_t i = 0; i < reclaimed_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
@@ -772,7 +764,7 @@ static void print_cleanup_results(
     }
 
     if (released_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released files (left on disk)");
+        output_section(out, OUTPUT_VERBOSE, "Released files");
         for (size_t i = 0; i < released_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
@@ -802,7 +794,7 @@ static void print_cleanup_results(
     }
 
     if (reclaimed_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories (already absent)");
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
         for (size_t i = 0; i < reclaimed_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
@@ -822,7 +814,7 @@ static void print_cleanup_results(
     }
 
     if (released_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released directories (left on disk)");
+        output_section(out, OUTPUT_VERBOSE, "Released directories");
         for (size_t i = 0; i < released_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
@@ -857,16 +849,17 @@ static void print_cleanup_results(
             );
         }
 
-        /* State-only outcomes: rows retired for paths already absent from the
-         * filesystem. Reported separately from "Pruned" — no removal happened
-         * or was needed. */
+        /* Orphans already gone from the filesystem when the run loaded. Reported
+         * separately from "Pruned" — no removal happened or was needed — and
+         * named for the paths, not for the record rows that retire behind them:
+         * what the user has here is a path that is already gone. */
         size_t reclaimed = reclaimed_files.count + reclaimed_dirs.count;
 
         if (reclaimed > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
-                "Reclaimed {cyan}%zu{reset} stale state entr%s (absent from filesystem)\n",
-                reclaimed, reclaimed == 1 ? "y" : "ies"
+                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)\n",
+                reclaimed, reclaimed == 1 ? "" : "s"
             );
         }
 
@@ -979,15 +972,14 @@ static void print_cleanup_preflight_results(
     size_t present_dirs = verdicts->prunable_dirs.count + verdicts->skipped_dirs.count +
         verdicts->released_dirs.count;
 
-    size_t absent = verdicts->absent_files.count + verdicts->absent_dirs.count;
-
     /* An empty plan — no orphans in scope, --keep-orphans — has nothing to say,
      * and says nothing. */
-    if (present_files + present_dirs + absent == 0) {
+    if (present_files + present_dirs + verdicts->absent_files.count +
+        verdicts->absent_dirs.count == 0) {
         return;
     }
 
-    if (present_files > 0) {
+    if (present_files + verdicts->absent_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
         /* The prunable summary splits by the relocation the item carries
@@ -1020,6 +1012,12 @@ static void print_cleanup_preflight_results(
             );
         }
 
+        /* Every list follows the count that promises it, so a name is never read
+         * against the wrong fate. One list here, under the two prune lines it
+         * spans: the skipped and released files are named, with their reasons,
+         * in blocks of their own below, so their counts stand alone. */
+        print_path_list(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
+
         if (released.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
@@ -1038,12 +1036,22 @@ static void print_cleanup_preflight_results(
             );
         }
 
-        /* Only the files the count above promises — the skipped and released
-         * ones are named, with their reasons, below. */
-        print_path_list(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
+        /* A state effect with no filesystem effect: the path was already gone
+         * when the run loaded, so only the record retires. Said in the block's
+         * own noun and gated into it, because a run whose orphans are all absent
+         * still has this to say. It breaks the block's future tense on purpose
+         * — every other line promises an action, this one reports there is none. */
+        if (verdicts->absent_files.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {cyan}%zu{reset} file%s already gone (nothing to remove)\n",
+                verdicts->absent_files.count,
+                verdicts->absent_files.count == 1 ? " is" : "s are"
+            );
+        }
     }
 
-    if (present_dirs > 0) {
+    if (present_dirs + verdicts->absent_dirs.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned directories");
 
         if (verdicts->prunable_dirs.count > 0) {
@@ -1054,6 +1062,17 @@ static void print_cleanup_preflight_results(
             );
         }
 
+        print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
+
+        /* All three fates are named here, each list under its own count, because
+         * a directory gets no block of its own: nothing is asked of the user
+         * about a released one (the arrow says "left alone"), and a directory
+         * left behind is not the event a file left behind is — whether the
+         * workspace released it or it holds something this run will never remove
+         * (cleanup.h's classes). A skipped directory holds something the run
+         * holds back, could not be verified (status tags it [unverified]), or
+         * sits under a moved home ([relocated] — the hold --force lifts); the
+         * slash says "left alone this run" for each. */
         if (verdicts->released_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
@@ -1063,6 +1082,8 @@ static void print_cleanup_preflight_results(
             );
         }
 
+        print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
+
         if (verdicts->skipped_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped\n",
@@ -1071,48 +1092,32 @@ static void print_cleanup_preflight_results(
             );
         }
 
-        /* Released directories are named here, inline, with the other two fates:
-         * nothing is asked of the user about them (the arrow says "left alone"),
-         * and a directory left behind is not the event a file left behind is,
-         * so no block of its own — whether the workspace released it or it holds
-         * something this run will never remove (cleanup.h's classes). A skipped
-         * directory holds something the run holds back, could not be verified
-         * (status tags it [unverified]), or sits under a moved home ([relocated]
-         * — the hold --force lifts); the slash says "left alone this run" for
-         * each. */
-        print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
-        print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
-    }
 
-    if (absent > 0) {
-        /* A state effect with no filesystem effect, said here so the dry run
-         * and the real run agree — the receipt reports it as "Reclaimed N stale
-         * state entries". Not indented under a section: it may be the only thing
-         * cleanup has to say. */
-        if (present_files + present_dirs > 0) {
-            output_newline(out, OUTPUT_NORMAL);
+        if (verdicts->absent_dirs.count > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {cyan}%zu{reset} director%s already gone (nothing to remove)\n",
+                verdicts->absent_dirs.count,
+                verdicts->absent_dirs.count == 1 ? "y is" : "ies are"
+            );
         }
-        output_styled(
-            out, OUTPUT_NORMAL, "{cyan}%zu{reset} stale state entr%s will be reclaimed\n",
-            absent, absent == 1 ? "y" : "ies"
-        );
     }
 
-    /* Skipped files: each is named with its reason, then the one line the
-     * deploy-side conflict block also ends with — --force overrides the hold.
-     * The header names the fate (the preview's word, "Released files"'s sibling);
-     * the labels name the reasons, because no one reason covers the block — a
-     * held relocation is byte-clean and an unverifiable copy may be — and the
-     * closing line names the cost the same way: what stands there, whatever its
-     * state. The ways to keep a held file are the inverse of the command that
-     * orphaned it (profile enable, add) or a move aside, and every line names
-     * the profile; they are not spelled out. */
+    /* Skipped orphaned files: each is named with its reason, then the one line
+     * the deploy-side conflict block also ends with — --force overrides the hold.
+     * The header names the fate in the receipt's own words for this bucket —
+     * the two blocks that map one-to-one onto a receipt section, this and "Released
+     * files", name it identically there and here — which also keeps it clear of
+     * the deploy block's "Skipped paths" a few lines up, whose rows carry the
+     * same shape. The labels name the reasons, because no one reason covers the
+     * block — a held relocation is byte-clean and an unverifiable copy may be —
+     * and the closing line names the cost the same way: what stands there, whatever
+     * its state. The ways to keep a held file are the inverse of the command
+     * that orphaned it (profile enable, add) or a move aside, and every line
+     * names the profile; they are not spelled out. */
     if (skipped.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Skipped files");
-        output_warning(
-            out, OUTPUT_NORMAL, "The following files cannot be safely removed:"
-        );
+        output_section(out, OUTPUT_NORMAL, "Skipped orphaned files");
 
         for (size_t i = 0; i < skipped.count; i++) {
             const workspace_item_t *item = skipped.entries[i];
@@ -1160,23 +1165,23 @@ static void print_cleanup_preflight_results(
             output_colored(out, OUTPUT_NORMAL, color, ")\n");
         }
 
-        output_newline(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL,
-            "Use --force to prune them anyway (discards what stands there)"
+            "  Use --force to prune them anyway (discards what stands there)"
         );
     }
 
     /* Released files are informational: nothing is asked of the user, and --force
-     * does not change their fate (see cleanup.h). */
+     * does not change their fate (see cleanup.h). So the block closes with the
+     * consequence, indented under the rows the way "Profile reassignments" closes
+     * — not a remedy, which stands off — and that closing line carries the half
+     * the header cannot: pruned removes and released keeps, and only the line
+     * under the rows says which. The causes are not listed: a release is the
+     * workspace's verdict (state RELEASED), and cleanup has no per-row reason
+     * for it the way cleanup_skip_reason answers for a skip, so the only honest
+     * form would be a disjunction naming all three at every row. */
     if (released.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
-        output_info(
-            out, OUTPUT_NORMAL,
-            "The following files are no longer backed by their profile's Git "
-            "branch, were never deployed by dotta, or have another kind of path "
-            "in their place, and will be left on the filesystem:"
-        );
 
         for (size_t i = 0; i < released.count; i++) {
             const workspace_item_t *item = released.entries[i];
@@ -1184,6 +1189,11 @@ static void print_cleanup_preflight_results(
             output_styled(out, OUTPUT_NORMAL, "  {cyan}→{reset} %s", item->filesystem_path);
             output_styled(out, OUTPUT_NORMAL, " {dim}(from %s){reset}\n", item->profile);
         }
+
+        output_info(
+            out, OUTPUT_NORMAL,
+            "  These paths are left on disk, no longer managed by dotta."
+        );
     }
 
     output_newline(out, OUTPUT_NORMAL);
@@ -1910,7 +1920,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * on the way — an owner this system does not know — print as warnings with
      * the skip block, after the preview.
      */
-    output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
+    /* The trailing blank is this heading's own: the first preview section after
+     * it is the run's first section, so output_section has no separator to emit
+     * (has_content is still false). "Executing deployment plan..." needs none —
+     * by then the preview has printed and the separator comes for free. */
+    output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n\n");
 
     deploy_options_t deploy_opts = {
         .force            = opts->force,
@@ -1925,8 +1939,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The previews: the reassignments the run acknowledges, then each engine's
      * story told the same way — what it will do (the preview), then what it will
-     * not and why (the skip block), remedies last, nearest the prompt — read
-     * the same way in a real run and a dry run. */
+     * not and why (the skip block), each block closing with its own remedies —
+     * read the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, ws, deploy_verdicts);
     print_deploy_preflight_results(out, ws, deploy_verdicts);
@@ -2122,8 +2136,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 &cleanup_res->released_files,
                 &cleanup_res->released_dirs,
             };
-            size_t retired = 0;
-
             for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
                 workspace_items_t items = workspace_items_view(gone[b]);
 
@@ -2140,7 +2152,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         err = NULL;  /* Don't propagate - continue operation */
                         continue;
                     }
-                    retired++;
                 }
             }
 
@@ -2162,15 +2173,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         err = NULL;  /* Don't propagate - continue operation */
                         continue;
                     }
-                    retired++;
                 }
-            }
-
-            if (retired > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Retired %zu state entr%s\n",
-                    retired, retired == 1 ? "y" : "ies"
-                );
             }
 
             /* For the exit fold at the tail, read before the free. Attempted
@@ -2240,10 +2243,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (deploy_result) {
             deploy_writes_t deployed = deploy_result->deployed;
 
-            if (deployed.count > 0) {
-                output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
-            }
-
             for (size_t i = 0; i < deployed.count; i++) {
                 const deploy_written_t *w = &deployed.entries[i];
                 const manifest_row_t *file = w->row;
@@ -2269,13 +2268,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 }
 
                 if (acknowledges) acknowledged_count++;
-            }
-
-            if (deployed.count > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Updated %zu anchor%s\n",
-                    deployed.count, deployed.count == 1 ? "" : "s"
-                );
             }
 
             const manifest_rows_t made[] = {
@@ -2371,7 +2363,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 error_free(sweep_err);
             }
 
-            size_t forgotten = 0;
             for (size_t i = 0; i < copy_count; i++) {
                 const released_copy_t *copy = &copies[i];
 
@@ -2392,14 +2383,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     error_free(sweep_err);
                     continue;
                 }
-                forgotten++;
-            }
-
-            if (forgotten > 0) {
-                output_print(
-                    out, OUTPUT_VERBOSE, "  Swept %zu released cop%s\n",
-                    forgotten, forgotten == 1 ? "y" : "ies"
-                );
             }
         }
     }

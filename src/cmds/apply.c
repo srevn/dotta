@@ -43,18 +43,27 @@
  * parentheticals — facts about the path's surroundings, no profile. The row-fact
  * reasons read the way cleanup's skip block three lines away reads: a short label,
  * then the profile whose claim goes undelivered — red where content or type moved
- * away from the row, yellow where dotta cannot vouch for what stands there.
+ * away from the row, yellow where dotta cannot vouch for what stands there. A
+ * CONTENT label reads the row's route (workspace_item_route — one producer for
+ * the characterization; deploy keeps its decision): modified locally where only
+ * disk moved, changed in Git and on disk where both sides did. A CONTENT skip's
+ * item exists by construction — content_conflicts(NULL) is false — and is DEPLOYED
+ * (no path bit survives absence), so the route read is total here.
  *
  * The remedies come last, each gated by the class actually present
  * (deploy_skip_needs_force) — a conflict-only run is not told to fix paths by
  * hand, and an unreadable-only run is not offered a flag that will not lift it.
- * The block sits between the deploy preview and cleanup's, so each engine tells
- * its story the same way — what it will do, then what it will not and why, remedies
- * nearest the prompt (the rule cleanup's printer states). No total-count line:
- * the exit error's message is the count's one home.
+ * The consent remedy teaches both directions: --force keeps Git's, and a CONTENT
+ * skip adds the disk-wins verb — 'dotta update', with 'dotta add --force' for
+ * the rows Git has moved past, which update refuses. The block sits between the
+ * deploy preview and cleanup's, so each engine tells its story the same way —
+ * what it will do, then what it will not and why, remedies nearest the prompt
+ * (the rule cleanup's printer states). No total-count line: the exit error's
+ * message is the count's one home.
  */
 static void print_deploy_preflight_results(
     const output_t *out,
+    const workspace_t *ws,
     const deploy_preflight_result_t *result
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
@@ -119,13 +128,20 @@ static void print_deploy_preflight_results(
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
 
-            case DEPLOY_SKIP_CONTENT:
+            case DEPLOY_SKIP_CONTENT: {
+                bool conflict = workspace_item_route(workspace_get_item(ws, path))
+                    == WORKSPACE_ROUTE_CONFLICT;
+
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ✗");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(modified locally from ");
+                output_colored(
+                    out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(%s from ",
+                    conflict ? "changed in Git and on disk" : "modified locally"
+                );
                 output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
+            }
 
             case DEPLOY_SKIP_UNREADABLE:
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
@@ -149,11 +165,34 @@ static void print_deploy_preflight_results(
 
     /* Each remedy prints iff its class is present, off the same predicate the
      * exit contract reads (deploy_skip_needs_force) — asked here, where the answer
-     * is used, first match wins. */
+     * is used, first match wins. The disk-wins lines follow the same rule off
+     * their own predicates: any CONTENT skip, and any of those Git has moved
+     * past (route CONFLICT — the rows update refuses). */
     output_newline(out, OUTPUT_NORMAL);
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (result->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
+            output_info(
+                out, OUTPUT_NORMAL, "To keep what is on disk instead: 'dotta update <path>'"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        const deploy_skip_t *s = &result->skipped.entries[i];
+
+        if (s->reason == DEPLOY_SKIP_CONTENT &&
+            workspace_item_route(workspace_get_item(ws, s->row->filesystem_path))
+            == WORKSPACE_ROUTE_CONFLICT) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  ('dotta add --force <profile> <path>' where Git has moved too)"
+            );
             break;
         }
     }
@@ -1889,7 +1928,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, ws, deploy_verdicts);
-    print_deploy_preflight_results(out, deploy_verdicts);
+    print_deploy_preflight_results(out, ws, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate

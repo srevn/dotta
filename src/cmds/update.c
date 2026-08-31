@@ -1711,7 +1711,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu file%s skipped: changed in Git and on disk — 'dotta diff' shows "
-            "Git's version against disk, 'dotta apply --force' keeps Git's",
+            "Git's version against disk, 'dotta apply --force' keeps Git's, "
+            "'dotta add --force' keeps disk's",
             conflict_skipped, conflict_skipped == 1 ? "" : "s"
         );
     }

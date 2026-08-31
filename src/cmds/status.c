@@ -496,7 +496,8 @@ static void display_workspace_status(
                     out, "Conflicts",
                     "changed on both sides or a different kind on disk; "
                     "\"dotta diff\" to compare, \"dotta apply --force\" to "
-                    "keep Git's, \"dotta remove\" to untrack"
+                    "keep Git's, \"dotta add --force\" to keep disk's, "
+                    "\"dotta remove\" to untrack"
                 );
 
                 if (list) {

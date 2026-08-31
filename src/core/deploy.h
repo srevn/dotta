@@ -151,18 +151,20 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * One planned row the run does not deploy
  *
  * The shape deploy_verdict_t gives a row the run does deploy: the row, and the
- * facts decided about it. `detail` is the path the reason names — the ancestor
+ * facts decided about it. `ancestor` is the path the reason names — the ancestor
  * that refused, the non-directory in the way, the squatted tracked directory
- * above an inheriting row — or NULL where the reason has no path to name: it is
- * about the planned path itself, or (PERMISSION alone) the ancestry could not
- * even be reached to name its refusing node. Owned; deploy_preflight_result_free
- * releases it. The row is borrowed (workspace lifetime), as every row in this
- * module is.
+ * above an inheriting row. Every such path is an ancestor of the row's own, and
+ * so a prefix of filesystem_path by construction (check_landing truncates the
+ * planned path; an inheriting row's squatter stands strictly above it) — carried
+ * as the byte length of that prefix, not a copy. 0 where the reason has no ancestor
+ * to name: it is about the planned path itself, or (PERMISSION alone) the ancestry
+ * could not even be reached to name its refusing node. Nothing here is owned:
+ * the row is borrowed (workspace lifetime), as every row in this module is.
  */
 typedef struct {
     const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
     deploy_skip_reason_t reason;
-    char *detail;                 /* Owned; NULL when the reason needs no path */
+    size_t ancestor;              /* Prefix length of the named ancestor; 0 = none */
 } deploy_skip_t;
 
 /**

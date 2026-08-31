@@ -76,10 +76,10 @@ static void print_deploy_preflight_results(
 
         switch (s->reason) {
             case DEPLOY_SKIP_PERMISSION:
-                if (s->detail) {
+                if (s->ancestor) {
                     output_styled(
-                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s is not writable)\n",
-                        path, s->detail
+                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
+                        path, (int) s->ancestor, path
                     );
                 } else {
                     output_styled(
@@ -91,8 +91,8 @@ static void print_deploy_preflight_results(
 
             case DEPLOY_SKIP_ANCESTOR:
                 output_styled(
-                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s is not a directory)\n",
-                    path, s->detail
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not a directory)\n",
+                    path, (int) s->ancestor, path
                 );
                 break;
 
@@ -107,10 +107,10 @@ static void print_deploy_preflight_results(
             case DEPLOY_SKIP_TYPE:
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ⚠");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
-                if (s->detail) {
+                if (s->ancestor) {
                     output_colored(
-                        out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type at %s from ",
-                        s->detail
+                        out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type at %.*s from ",
+                        (int) s->ancestor, path
                     );
                 } else {
                     output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type from ");
@@ -2456,12 +2456,12 @@ static const args_opt_t apply_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",        "<name>",
-        cmd_apply_options_t,profiles,           profile_count,
+        cmd_apply_options_t,profiles,         profile_count,
         "Filter deployment to profile(s) (repeatable)"
     ),
     ARGS_APPEND(
         "e exclude",        "<pattern>",
-        cmd_apply_options_t,exclude_patterns,   exclude_count,
+        cmd_apply_options_t,exclude_patterns, exclude_count,
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
@@ -2495,11 +2495,11 @@ static const args_opt_t apply_opts[] = {
      * order. */
     ARGS_POSITIONAL(
         APPLY_CLASS_FILE,
-        cmd_apply_options_t,files,              file_count
+        cmd_apply_options_t,files,            file_count
     ),
     ARGS_POSITIONAL(
         APPLY_CLASS_PROFILE,
-        cmd_apply_options_t,profiles,           profile_count
+        cmd_apply_options_t,profiles,         profile_count
     ),
     ARGS_END,
 };

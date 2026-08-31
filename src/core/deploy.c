@@ -633,7 +633,7 @@ static bool beneath_replaced_directory(
  *
  * FIRST MATCH WINS, in decision order — directories are decided parents-first,
  * so the first skip above the path is the outermost, the true squatter, never
- * one of its inheriting children. That keeps the detail naming the node actually
+ * one of its inheriting children. That keeps the named ancestor the node actually
  * in the way.
  */
 static const deploy_skip_t *skipped_squatter_above(
@@ -718,28 +718,30 @@ static bool content_conflicts(const workspace_item_t *item) {
  * (ensure_parents), so this is a prediction of the run, not a model of it.
  *
  * Both outs are written only on a refusal — the caller's initialization (NONE,
- * NULL) stands when the landing is clear. A PERMISSION with a detail reads
- * "<detail> is not writable"; without one, "ancestry cannot be reached" — the
- * absence of a detail is itself the honest fact (the offender could not be named).
+ * 0) stands when the landing is clear. The named ancestor is a prefix of the
+ * planned path itself, so it travels as a byte length (deploy_skip_t). A PERMISSION
+ * with an ancestor reads "<ancestor> is not writable"; without one, "ancestry
+ * cannot be reached" — the zero length is itself the honest fact (the offender
+ * could not be named).
  *
  * @param ws Workspace, for the tracked-ancestor lookup (must not be NULL)
  * @param result Preflight result, for the deployable-directory test (must not
  *        be NULL)
  * @param path Planned path (must not be NULL)
  * @param out_reason NONE / PERMISSION / ANCESTOR (must not be NULL)
- * @param out_detail Owned ancestor path, or NULL (must not be NULL)
+ * @param out_ancestor Prefix length of the refusing ancestor, or 0 (must not be
+ *        NULL)
  * @return Error or NULL on success (a skip is not an error)
  */
 static error_t *check_landing(
     const workspace_t *ws, const deploy_preflight_result_t *result,
-    const char *path, deploy_skip_reason_t *out_reason, char **out_detail
+    const char *path, deploy_skip_reason_t *out_reason, size_t *out_ancestor
 ) {
     char *scratch = strdup(path);
     if (!scratch) {
         return ERROR(ERR_MEMORY, "Failed to copy path for landing check");
     }
 
-    error_t *err = NULL;
     size_t slash;
     fs_occupant_t occ;
     bool is_dir;
@@ -747,9 +749,9 @@ static error_t *check_landing(
 
     if (!nearest_ancestor(scratch, &slash, &occ, &is_dir, &st)) {
         if (errno == EACCES) {
-            *out_reason = DEPLOY_SKIP_PERMISSION;   /* detail stays NULL */
+            *out_reason = DEPLOY_SKIP_PERMISSION; /* no ancestor to name */
         }
-        goto cleanup;  /* anything else: the write reports it */
+        goto cleanup;                             /* anything else: the write reports it */
     }
 
     scratch[ancestor_len(slash)] = '\0';  /* the ancestor, on its own */
@@ -765,14 +767,11 @@ static error_t *check_landing(
     }
 
     *out_reason = is_dir ? DEPLOY_SKIP_PERMISSION : DEPLOY_SKIP_ANCESTOR;
-    *out_detail = strdup(scratch);
-    if (!*out_detail) {
-        err = ERROR(ERR_MEMORY, "Failed to copy landing ancestor");
-    }
+    *out_ancestor = ancestor_len(slash);
 
 cleanup:
     free(scratch);
-    return err;
+    return NULL;
 }
 
 /**
@@ -1068,16 +1067,11 @@ error_t *deploy_preflight(
          * can be trusted — the row inherits that skip, ancestor named. */
         const deploy_skip_t *above = skipped_squatter_above(result, path);
         if (above) {
-            char *inherited = strdup(above->row->filesystem_path);
-            if (!inherited) {
-                err = ERROR(ERR_MEMORY, "Failed to copy squatting ancestor");
-                goto cleanup;
-            }
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
             s->reason = above->reason;
-            s->detail = inherited;
+            s->ancestor = strlen(above->row->filesystem_path);
             continue;
         }
 
@@ -1100,7 +1094,7 @@ error_t *deploy_preflight(
         const workspace_item_t *item = workspace_get_item(ws, path);
         fs_occupant_t occupant = item->occupant;
         deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        char *detail = NULL;
+        size_t ancestor = 0;
 
         /* The rungs, first match wins — the enum's own order. A directory already
          * there is converged in place: fchmod and fchown ask for ownership, not
@@ -1108,7 +1102,7 @@ error_t *deploy_preflight(
          * An unexaminable occupant is asked too, and skipped on its own account
          * only when the landing had nothing to say — as for a file. */
         if (occupant != FS_OCCUPANT_DIRECTORY) {
-            err = check_landing(ws, result, path, &reason, &detail);
+            err = check_landing(ws, result, path, &reason, &ancestor);
             if (err) goto cleanup;
         }
 
@@ -1132,7 +1126,7 @@ error_t *deploy_preflight(
 
             s->row = row;
             s->reason = reason;
-            s->detail = detail;             /* ownership moves; NULL is a fact */
+            s->ancestor = ancestor;
             continue;
         }
 
@@ -1153,16 +1147,11 @@ error_t *deploy_preflight(
          * by now. */
         const deploy_skip_t *above = skipped_squatter_above(result, path);
         if (above) {
-            char *inherited = strdup(above->row->filesystem_path);
-            if (!inherited) {
-                err = ERROR(ERR_MEMORY, "Failed to copy squatting ancestor");
-                goto cleanup;
-            }
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
             s->reason = above->reason;
-            s->detail = inherited;
+            s->ancestor = strlen(above->row->filesystem_path);
             continue;
         }
 
@@ -1185,13 +1174,13 @@ error_t *deploy_preflight(
         const workspace_item_t *item = workspace_get_item(ws, path);
         fs_occupant_t occupant = item->occupant;
         deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        char *detail = NULL;
+        size_t ancestor = 0;
 
         /* The rungs, first match wins — the enum's own order. Every file row
          * lands through its parent, whichever arm writes it and whether or not
          * something is already at the path — so one question covers both, and
          * it is never about the path itself. */
-        err = check_landing(ws, result, path, &reason, &detail);
+        err = check_landing(ws, result, path, &reason, &ancestor);
         if (err) goto cleanup;
 
         if (reason == DEPLOY_SKIP_NONE) {
@@ -1232,7 +1221,7 @@ error_t *deploy_preflight(
 
             s->row = row;
             s->reason = reason;
-            s->detail = detail;             /* ownership moves; NULL is a fact */
+            s->ancestor = ancestor;
             continue;
         }
 
@@ -1981,16 +1970,12 @@ done:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * Free preflight result — the skips (each owning its detail), the warnings, and
- * the verdict arrays. The rows they all point at belong to the workspace.
+ * Free preflight result — the warnings, the skip array and the verdict arrays.
+ * The rows they all point at belong to the workspace.
  */
 void deploy_preflight_result_free(deploy_preflight_result_t *result) {
     if (!result) {
         return;
-    }
-
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        free(result->skipped.entries[i].detail);
     }
 
     string_array_free(result->warnings);

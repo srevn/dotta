@@ -36,6 +36,10 @@ bool str_ends_with(const char *str, const char *suffix) {
     return strcmp(str + (str_len - suffix_len), suffix) == 0;
 }
 
+bool str_path_beneath(const char *path, const char *dir, size_t dir_len) {
+    return strncmp(path, dir, dir_len) == 0 && path[dir_len] == '/';
+}
+
 char *str_trim(char *str) {
     if (!str) {
         return NULL;

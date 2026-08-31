@@ -214,12 +214,8 @@ static bool beneath_squatted_directory(
 
     for (size_t i = 0; i < dirs.count; i++) {
         const char *dir = dirs.entries[i]->filesystem_path;
-        size_t len = strlen(dir);
 
-        /* Strictly beneath: a prefix and then a separator, the same test cleanup's
-         * managed_beneath makes (strncmp == 0 guarantees path has at least len
-         * bytes, so path[len] is in bounds). */
-        if (strncmp(path, dir, len) != 0 || path[len] != '/') {
+        if (!str_path_beneath(path, dir, strlen(dir))) {
             continue;
         }
 
@@ -595,10 +591,8 @@ static bool beneath_replaced_directory(
     for (size_t i = 0; i < result->directories.count; i++) {
         const deploy_verdict_t *v = &result->directories.entries[i];
         const char *dir = v->row->filesystem_path;
-        size_t len = strlen(dir);
 
-        /* Strictly beneath — the same test beneath_squatted_directory makes. */
-        if (strncmp(path, dir, len) != 0 || path[len] != '/') {
+        if (!str_path_beneath(path, dir, strlen(dir))) {
             continue;
         }
         if (occupant_present(v->occupant) && v->occupant != FS_OCCUPANT_DIRECTORY) {
@@ -642,14 +636,12 @@ static const deploy_skip_t *skipped_squatter_above(
     for (size_t i = 0; i < result->skipped.count; i++) {
         const deploy_skip_t *s = &result->skipped.entries[i];
         const char *dir = s->row->filesystem_path;
-        size_t len;
 
         if (s->reason != DEPLOY_SKIP_TYPE || s->row->type != PATH_TYPE_DIRECTORY) {
             continue;
         }
 
-        len = strlen(dir);
-        if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+        if (str_path_beneath(path, dir, strlen(dir))) {
             return s;
         }
     }
@@ -958,8 +950,7 @@ static error_t *resolve_metadata(
  * above no deployable row is never reached. The reach is the verdicts', not the
  * plan's: a skipped row is never written, so an absent tracked ancestor whose
  * only descendants this run skips is never planned, never created, and can neither
- * warn nor fail strict mode (see deploy_preflight's invariant). Strictly beneath
- * — the same test beneath_squatted_directory makes.
+ * warn nor fail strict mode (see deploy_preflight's invariant).
  *
  * @param result Preflight result, both verdict kinds decided (must not be NULL)
  * @param dir Directory path (must not be NULL)
@@ -972,9 +963,7 @@ static bool above_deployable_row(
 
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
-            const char *path = kinds[k]->entries[i].row->filesystem_path;
-
-            if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+            if (str_path_beneath(kinds[k]->entries[i].row->filesystem_path, dir, len)) {
                 return true;
             }
         }
@@ -1051,7 +1040,7 @@ error_t *deploy_preflight(
      * pass the plan's prefix order puts every row after its own ancestors.
      * core/cleanup's preflight decides in its own run's order for the same reason
      * — there, children before parents, so a directory reads the fates of
-     * everything it holds. The findings and the warnings come out in that order
+     * everything it holds. The skips and the warnings come out in that order
      * too: the order the run would have met them.
      *
      * The ancestors come last though the run creates them first: which tracked
@@ -1636,10 +1625,6 @@ cleanup:
 static error_t *deploy_file(
     deploy_run_t *run, const deploy_verdict_t *v, stat_cache_t *out_stat
 ) {
-    CHECK_NULL(run);
-    CHECK_NULL(v);
-    CHECK_NULL(out_stat);
-
     /* The proof's resting state: UNSET unless the regular arm's write lands and
      * binds its own fstat below. The symlink arm never does — a link is made by
      * path (symlink(2) opens no descriptor to describe), and readlink is its
@@ -1648,9 +1633,8 @@ static error_t *deploy_file(
 
     const manifest_row_t *file = v->row;
 
-    /* Declare all resources at top, initialized to NULL */
     error_t *err = NULL;
-    const buffer_t *content_buffer = NULL;  /* Borrowed from cache (const) */
+    const buffer_t *content_buffer = NULL;  /* Borrowed from cache */
     char *target_str = NULL;
 
     /* Whether the occupant must go before the write, which is mechanism rather
@@ -1709,8 +1693,6 @@ static error_t *deploy_file(
             }
         }
 
-        /* Success for symlink - goto cleanup will handle freeing */
-        err = NULL;
         goto cleanup;
     }
 
@@ -1719,7 +1701,7 @@ static error_t *deploy_file(
         run->cache,
         &file->blob_oid,
         file->storage_path,
-        file->profile ? file->profile : "unknown",
+        file->profile,
         &content_buffer
     );
 
@@ -1731,7 +1713,6 @@ static error_t *deploy_file(
         goto cleanup;
     }
 
-    /* Get content pointer and size from buffer */
     const unsigned char *content = (const unsigned char *) content_buffer->data;
     size_t size = content_buffer->size;
 
@@ -1768,9 +1749,6 @@ static error_t *deploy_file(
      * needs no smudge (stat_cache_from_write). */
     *out_stat = stat_cache_from_write(&written);
 
-    /* Success */
-    err = NULL;
-
 cleanup:
     free(target_str);
     return err;
@@ -1794,9 +1772,6 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
-    CHECK_NULL(run);
-    CHECK_NULL(v);
-
     const manifest_row_t *dir = v->row;
     const char *path = dir->filesystem_path;
     error_t *err = NULL;
@@ -1817,8 +1792,8 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
             break;
 
         case FS_OCCUPANT_UNKNOWN:
-            /* Not a verdict: preflight turned it into a finding, and a caller
-             * with a finding does not execute. Said here rather than unlinked. */
+            /* Not a verdict: preflight turned it into a skip, and a skip never
+             * enters the verdict arrays. Said here rather than unlinked. */
             return ERROR(ERR_INTERNAL, "No verdict for '%s' (occupant unknown)", path);
 
         default:
@@ -1923,19 +1898,17 @@ error_t *deploy_execute(
      * == 0 are apply's adoption step, which stamps the anchor without deploy_file.
      *
      * The receipt is sized to the verdicts up front — one slot per pending file,
-     * zeroed, filled in verdict order as each write lands. count gates what a
-     * consumer reads, so a fail-stop's half-written slot is invisible and the
-     * partial receipt holds exactly the writes that happened, each with its own
-     * write's proof. */
-    if (verdicts->files.count > 0) {
-        result->deployed.entries = calloc(
-            verdicts->files.count,
-            sizeof(*result->deployed.entries)
-        );
-        if (!result->deployed.entries) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
-            goto done;
-        }
+     * zeroed, filled in verdict order as each write lands (a zero count allocates
+     * one slot rather than nothing, so every array is an array). count gates
+     * what a consumer reads, so a fail-stop's half-written slot is invisible
+     * and the partial receipt holds exactly the writes that happened, each with
+     * its own write's proof. */
+    result->deployed.entries = calloc(
+        verdicts->files.count + 1, sizeof(*result->deployed.entries)
+    );
+    if (!result->deployed.entries) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
+        goto done;
     }
 
     for (size_t i = 0; i < verdicts->files.count; i++) {

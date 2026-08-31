@@ -30,6 +30,21 @@ bool str_starts_with(const char *str, const char *prefix);
 bool str_ends_with(const char *str, const char *suffix);
 
 /**
+ * Is `path` strictly beneath directory `dir`?
+ *
+ * A prefix and then a separator, so "/a/bc" is not beneath "/a/b" — and neither
+ * is "/a/b" itself. strncmp == 0 guarantees `path` has at least dir_len bytes,
+ * so reading path[dir_len] is in bounds: it is either the terminator or a real
+ * character. Both sides are canonical paths without a trailing separator.
+ *
+ * @param path Candidate path
+ * @param dir Directory path
+ * @param dir_len strlen(dir), passed so a caller testing many pairs hoists it
+ * @return true if path is strictly beneath dir
+ */
+bool str_path_beneath(const char *path, const char *dir, size_t dir_len);
+
+/**
  * Trim whitespace from both ends of string (in-place)
  *
  * @param str String to trim (modified in place)

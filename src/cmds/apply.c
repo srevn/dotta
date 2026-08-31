@@ -171,11 +171,12 @@ static void print_deploy_preflight_results(
         );
     }
 
-    /* One line per question, each asked where its answer is used, first match
-     * wins — the class the exit contract reads (deploy_skip_needs_force), then
-     * the disk-wins direction on its own gate, because 'dotta update' refuses a
-     * retyped row (update.c's retyped_skipped) and a TYPE-only block must not
-     * be told to use it. */
+    /* The remedies, one line per family, each printed once: the consent line
+     * when any skip is --force's to lift (the class the exit contract reads,
+     * deploy_skip_needs_force), the disk-wins direction only when a CONTENT skip
+     * is present — 'dotta update' refuses a retyped row (update.c's
+     * retyped_skipped), so a TYPE-only block must not be told to use it — and
+     * the incapacity line when any skip is not --force's to lift. */
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(
@@ -1205,9 +1206,11 @@ static void print_cleanup_preflight_results(
  * Examines the deployment plan's pending files and directories (deployed /
  * converged) plus the file and directory orphans being removed, for root/ paths.
  * This ensures we have required privileges BEFORE attempting any filesystem
- * modifications — and, reading the plans, it is exact by construction: parents
- * deploy creates on the way are prefixes of planned paths, so a planned path's
- * own label already covers them.
+ * modifications. Reading the plans is an accepted over-approximation, the same
+ * one the orphan loops below make: the pending buckets include rows preflight
+ * will then skip, and being ready to touch a path the run then leaves alone costs
+ * nothing. Parents deploy creates on the way are prefixes of planned paths, so
+ * a planned path's own label already covers them.
  *
  * Called before the first write of the run — the adoption loop's — so a re-exec
  * restarts a process that has recorded nothing and printed no receipt line twice.
@@ -1848,13 +1851,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and confirmations, and the ownership events above, which claim rows the
      * analysis found clean — and it stays a fact whatever the rest of the run
      * does. What follows can end without writing anything else: the nothing-to-do
-     * exit below, a blocking finding, a strict-mode ownership error, a hook that
-     * refuses, a declined prompt. The dispatch transaction is committed here so
-     * that none of those exits rolls the present back — "Adopted N files" has
-     * already been said, and the record must say it too, or the next run adopts
-     * them again and the next status reads a path the load observed as never
-     * seen. Dry run included: its flush is as true as a real run's, and status
-     * persists the same writes.
+     * exit below, a strict-mode ownership error, a hook that refuses, a declined
+     * prompt. The dispatch transaction is committed here so that none of those
+     * exits rolls the present back — "Adopted N files" has already been said,
+     * and the record must say it too, or the next run adopts them again and the
+     * next status reads a path the load observed as never seen. Dry run included:
+     * its flush is as true as a real run's, and status persists the same writes.
      *
      * The record of the run's own effects — the anchors the deployment writes,
      * the records cleanup retires — is the run's second transaction, begun past

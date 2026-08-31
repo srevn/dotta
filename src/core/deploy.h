@@ -14,16 +14,14 @@
  * no decision of its own. Same shape as core/cleanup.
  *
  * Design principles:
- * - Pre-flight checks before any changes
- * - Explicit, per-row skip verdicts
- * - Permission preservation
+ * - Every decision is taken at preflight, before anything changes, from the
+ *   occupant the workspace observed (workspace_item_t.occupant) and the row —
+ *   one fate per planned row, a verdict or an explicit skip. A confirmation prompt
+ *   may sit between preflight and execute; nothing re-observes across it, and
+ *   nothing pretends to: the mechanisms refuse what a verdict no longer describes
+ *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops with the partial
+ *   receipt. The same stance as core/cleanup
  * - Fail-stop on error (not transactional, but clear reporting)
- * - Every decision is taken at preflight, from the occupant the workspace observed
- *   (workspace_item_t.occupant) and the row. A confirmation prompt may sit between
- *   preflight and execute; nothing re-observes across it, and nothing pretends
- *   to: the mechanisms refuse what a verdict no longer describes (O_NOFOLLOW,
- *   EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops with the partial receipt.
- *   The same stance as core/cleanup
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree
@@ -32,6 +30,9 @@
  *   exact recorded mode, deepest-first — the same way cmd_export materializes a
  *   profile. A tracked directory therefore never refuses a tracked path beneath
  *   it, and preflight predicts no modes
+ * - Metadata is reproduced, not negotiated: every write applies the row's mode
+ *   and resolved ownership atomically through its own descriptor, so there is
+ *   never a moment when a path stands with the wrong owner
  * - Silent: outcomes travel in the result, verdicts and skips in the preflight
  *   result — with the anomalies met while deciding (an identity that could not
  *   be resolved), which are the caller's to print — and failures in the error
@@ -243,12 +244,13 @@ typedef struct {
  * partition per kind. Free with deploy_plan_free BEFORE workspace_free (the same
  * ordering rule scope.h documents for scope_free).
  *
- * Both slices come out of state ordered by filesystem_path, so a tracked parent
- * precedes its tracked children within directories.pending. Three consumers lean
- * on that: the planner classifies a directory row after its ancestors, preflight
- * keeps the verdicts in the same order, and the execute loop converges a parent
- * before the paths beneath it — which is what lets a replaced directory settle
- * its subtree for the rows that follow (see deploy_plan_build, deploy_execute).
+ * Both of the workspace's slices arrive ordered by filesystem_path, so a tracked
+ * parent precedes its tracked children within directories.pending. Three consumers
+ * lean on that: the planner classifies a directory row after its ancestors,
+ * preflight keeps the verdicts in the same order, and the execute loop converges
+ * a parent before the paths beneath it — which is what lets a replaced directory
+ * settle its subtree for the rows that follow (see deploy_plan_build,
+ * deploy_execute).
  */
 typedef struct {
     deploy_partition_t files;         /* manifest_row_t * (blob types) */

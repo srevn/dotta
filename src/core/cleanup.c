@@ -21,6 +21,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/string.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "infra/mount.h"
@@ -164,9 +165,9 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
     }
 
     /* A held relocation: the claim's row rides the item and the label is not
-     * the user's to re-target — the copy here is the claim's old home. The
-     * same test as cleanup_verdict's hold arm, its inputs in hand; guarded by
-     * the label so a re-targeted custom/ copy never trips it. */
+     * the user's to re-target — the copy here is the claim's old home. The same
+     * test as cleanup_verdict's hold arm, its inputs in hand; guarded by the
+     * label so a re-targeted custom/ copy never trips it. */
     if (item->row) {
         const mount_spec_t *label = mount_spec_for_path(item->storage_path);
         if (label && !label->per_profile) {
@@ -231,11 +232,11 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
         return CLEANUP_RELEASED;
     }
 
-    /* The relocation hold, both kinds (the table in cleanup.h): the claim's
-     * row rides the item, and a label the user cannot re-target (!per_profile
-     * — home/; root/'s projection is fixed and never gets here) means $HOME
-     * itself differs, so the copy is real dotfiles under the claim's real
-     * home. --force lifts it — the escape for a deliberate home migration. */
+    /* The relocation hold, both kinds (the table in cleanup.h): the claim's row
+     * rides the item, and a label the user cannot re-target (!per_profile — home/;
+     * root/'s projection is fixed and never gets here) means $HOME itself differs,
+     * so the copy is real dotfiles under the claim's real home. --force lifts
+     * it — the escape for a deliberate home migration. */
     if (item->row && !force) {
         const mount_spec_t *label = mount_spec_for_path(item->storage_path);
         if (label && !label->per_profile) {
@@ -339,16 +340,9 @@ static bool managed_beneath(const workspace_t *ws, const char *dir) {
     size_t len = strlen(dir);
     const manifest_rows_t slices[] = { workspace_files(ws), workspace_directories(ws) };
 
-    /* Strictly beneath: a prefix and then a separator, so "/a/bc" is not beneath
-     * "/a/b" — and neither is "/a/b" itself. strncmp == 0 guarantees the candidate
-     * has at least len bytes, so reading path[len] is in bounds: it is either
-     * the terminator or a real character. Both sides are canonical filesystem
-     * paths without a trailing separator. */
     for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
         for (size_t i = 0; i < slices[s].count; i++) {
-            const char *path = slices[s].entries[i]->filesystem_path;
-
-            if (strncmp(path, dir, len) == 0 && path[len] == '/') {
+            if (str_path_beneath(slices[s].entries[i]->filesystem_path, dir, len)) {
                 return true;
             }
         }

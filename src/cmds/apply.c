@@ -1311,6 +1311,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_result = NULL;
+    size_t failed_prunes = 0;                          /* Cleanup's undelivered half, for the exit fold */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -2172,6 +2173,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 );
             }
 
+            /* For the exit fold at the tail, read before the free. Attempted
+             * and refused only — the skipped orphans stay out: cleanup's plan
+             * is permission, not obligation. */
+            failed_prunes =
+                cleanup_res->failed_files.count + cleanup_res->failed_dirs.count;
+
             cleanup_result_free(cleanup_res);
         }
 
@@ -2433,11 +2440,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * run's promise: a row the user's own flags withheld (-e, --skip-existing)
      * or that dotta held for want of consent (--force) was never promised, and
      * the receipt is the whole of its report; a row the run planned and could
-     * not deliver was promised, and the exit code says so. Every skip was already
-     * rendered where it happened, so the error carries the one fact the receipt
-     * does not — that the run did not keep its promise. Dry runs reach this too,
-     * so `apply -n` predicts the real run's exit. ERR_FS, not ERR_CONFLICT: the
-     * class is filesystem incapacity, and a conflict no longer ends the run. */
+     * not deliver was promised, and the exit code says so — as does an orphan
+     * the run tried to prune and could not (failed_prunes, off cleanup's receipt;
+     * an execution fact, so a dry run predicts the preflight half alone). Every
+     * skip and failure was already rendered where it happened, so the error carries
+     * the one fact the receipt does not — that the run did not keep its promise.
+     * Dry runs reach this too, so `apply -n` predicts the real run's exit. ERR_FS,
+     * not ERR_CONFLICT: the class is filesystem incapacity, and a conflict no
+     * longer ends the run. */
     size_t undelivered = 0;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
@@ -2445,10 +2455,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             undelivered++;
         }
     }
-    if (undelivered > 0) {
+    if (undelivered > 0 && failed_prunes > 0) {
+        err = ERROR(
+            ERR_FS, "%zu path%s could not be deployed, %zu orphan%s could not be pruned",
+            undelivered, undelivered == 1 ? "" : "s",
+            failed_prunes, failed_prunes == 1 ? "" : "s"
+        );
+    } else if (undelivered > 0) {
         err = ERROR(
             ERR_FS, "%zu path%s could not be deployed",
             undelivered, undelivered == 1 ? "" : "s"
+        );
+    } else if (failed_prunes > 0) {
+        err = ERROR(
+            ERR_FS, "%zu orphan%s could not be pruned",
+            failed_prunes, failed_prunes == 1 ? "" : "s"
         );
     }
 

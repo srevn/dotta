@@ -168,6 +168,9 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
+    /* fs_read_fd clears this too, but an open that fails never reaches it. */
+    *out = (buffer_t){ 0 };
+
     /* Open file */
     int fd = open(path, O_RDONLY);
     if (fd < 0) {

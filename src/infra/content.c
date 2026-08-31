@@ -309,6 +309,10 @@ error_t *content_get_from_blob_oid(
     CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
+    /* get_plaintext_from_blob clears this too, but a blob that will not open
+     * never reaches it. */
+    *out_content = (buffer_t){ 0 };
+
     /* Open zero-copy view onto the blob */
     gitops_blob_view_t view;
     error_t *err = gitops_blob_view_open(repo, blob_oid, &view);

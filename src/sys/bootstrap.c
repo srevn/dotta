@@ -123,6 +123,8 @@ error_t *bootstrap_read(
     CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
+    *out_content = (buffer_t){ 0 };
+
     git_tree *tree = NULL;
     const git_tree_entry *entry = NULL;
     void *raw = NULL;

@@ -19,6 +19,18 @@
  * caller already knows is waste, and for a payload that is itself a power of
  * two — a 4 KiB, 1 MiB or 64 MiB file — it is a doubling of the whole allocation.
  *
+ * Out parameters — a buffer_t a function fills on its caller's behalf is written,
+ * never read. The callee clears the struct once the arguments are accepted, so
+ * what the caller passed in is neither read nor freed by it: callers pass
+ * BUFFER_INIT or a buffer they have already freed, since one still holding bytes
+ * has them dropped rather than released.
+ *
+ * On success the caller owns the bytes. On failure it owns whatever the callee
+ * left there — usually nothing, occasionally a partial write the callee could
+ * not free itself, as a request half-built out of a password must reach the
+ * caller's wiping free rather than a plain one. So freeing an out buffer is correct
+ * and sufficient either way; reading one after a failure is neither.
+ *
  * Stack usage (common):
  *   buffer_t buf = BUFFER_INIT;
  *   buffer_append_string(&buf, "hello");

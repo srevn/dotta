@@ -260,6 +260,8 @@ static error_t *build_credential_request(
     const char *username,
     const char *password
 ) {
+    *out = (buffer_t){ 0 };
+
     /* Upper bound: fixed keywords/newlines/terminator + field lengths. */
     size_t upper = 64
         + strlen(protocol)

@@ -693,6 +693,10 @@ error_t *keymgr_encrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(out_ciphertext);
 
+    /* cipher_encrypt clears this too, but subkey derivation stands in front of
+     * it and can refuse. */
+    *out_ciphertext = (buffer_t){ 0 };
+
     uint8_t mac_key[KDF_KEY_SIZE];
     uint8_t prf_key[KDF_KEY_SIZE];
 
@@ -740,6 +744,10 @@ error_t *keymgr_decrypt(
     CHECK_NULL(storage_path);
     CHECK_NULL(ciphertext);
     CHECK_NULL(out_plaintext);
+
+    /* cipher_decrypt clears this too, but the salt gate below stands in front
+     * of it and can refuse. */
+    *out_plaintext = (buffer_t){ 0 };
 
     /* Salt-lineage gate: the blob header names the salt its keys derive from. A
      * foreign fingerprint means no passphrase can ever verify here — the master

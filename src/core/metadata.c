@@ -722,6 +722,8 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     CHECK_NULL(metadata);
     CHECK_NULL(out);
 
+    *out = (buffer_t){ 0 };
+
     error_t *err = NULL;
     cJSON *root = NULL;
     cJSON *items_array = NULL;

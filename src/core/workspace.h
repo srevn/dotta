@@ -396,38 +396,6 @@ const workspace_item_t *workspace_get_item(
 );
 
 /**
- * Check for metadata (mode and ownership) divergence (data-centric design)
- *
- * Compares filesystem metadata with expected values to detect changes in
- * permissions (mode) and ownership (user/group). Checks both independently.
- *
- * Data-centric approach: Accepts values directly instead of structs, enabling
- * use with both manifest rows (manifest_row_t) and metadata (metadata_item_t)
- * without conversion.
- *
- * Stat propagation: Caller must provide pre-captured stat to avoid redundant
- * syscalls. This function performs zero filesystem operations.
- *
- * @param expected_mode Expected permission mode (0 = skip mode check, no metadata
- *                      tracked)
- * @param expected_owner Expected owner username (NULL = skip owner check)
- * @param expected_group Expected group name (NULL = skip group check)
- * @param st File stat data (must not be NULL, pre-captured by caller)
- * @param out_mode_differs Output flag for mode divergence (must not be NULL)
- * @param out_ownership_differs Output flag for ownership divergence (must not
- *                              be NULL)
- * @return Error or NULL on success
- */
-error_t *check_item_metadata_divergence(
-    mode_t expected_mode,
-    const char *expected_owner,
-    const char *expected_group,
-    const struct stat *st,
-    bool *out_mode_differs,
-    bool *out_ownership_differs
-);
-
-/**
  * Get the active file slice
  *
  * Returns a borrowed view over the view's file rows — every path an enabled profile

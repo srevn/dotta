@@ -721,9 +721,10 @@ cleanup:
  * - Fallback: filesystem_path is under actual user's home (catches custom/ prefix
  *   files reclassified by --target that still land under $HOME)
  *
- * Strict ownership mode (strict_ownership=true):
- * - ERR_NOT_FOUND (user/group missing): Fatal error, abort deployment
- * - ERR_PERMISSION (not root): Silent (can't chown anyway; see below)
+ * Strict ownership mode (strict_ownership=true): an unknown user/group is a fatal
+ * error, aborting deployment. An unelevated run never asks the resolver: it cannot
+ * chown, so the claim stays unresolved (-1/-1) — reachable only in a dry run, a
+ * real run's privilege check having re-exec'd under sudo before preflight.
  *
  * Pure decision, taken at preflight — no filesystem mutation — so the strict-mode
  * abort is met before the prompt and never mid-run. A warning is an anomaly report
@@ -788,24 +789,20 @@ static error_t *resolve_deployment_ownership(
 
     /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
     if (requires_root_privileges && (owner || group)) {
+        if (!privilege_is_elevated()) {
+            /* An unelevated run cannot chown; reachable only in a dry one — a
+             * real run's privilege check re-exec'd under sudo before preflight.
+             * The claim stays unresolved (-1/-1, set above). */
+            return NULL;
+        }
+
         error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
         if (err) {
-            /* Determine error type and whether it should be fatal
-             *
-             * ERR_NOT_FOUND: User/group doesn't exist on this system
-             *   - strict_ownership=true: Fatal (configuration/environment mismatch)
-             *   - strict_ownership=false: Warning, continue with default ownership
-             *
-             * ERR_PERMISSION: Not running as root (can't chown anyway)
-             *   - Silent. Not an anomaly but the expected shape of an unelevated
-             *     run, and reachable only in a dry one: a real run's privilege
-             *     check has re-exec'd under sudo or failed hard before preflight.
-             */
-            bool is_resolution_failure = (err->code == ERR_NOT_FOUND);
-            bool should_fail = is_resolution_failure && strict_ownership;
-
-            if (should_fail) {
-                /* Fatal: Return error to abort deployment */
+            /* ERR_NOT_FOUND only: the user/group does not exist on this system.
+             * Fatal under strict_ownership (configuration/environment mismatch);
+             * otherwise a warning, and the deployment continues with default
+             * ownership. */
+            if (strict_ownership) {
                 return error_wrap(
                     err, "Ownership resolution failed for '%s' (strict_mode enabled)\n"
                     "Hint: Create the user/group on this system, or disable strict_mode",
@@ -813,23 +810,21 @@ static error_t *resolve_deployment_ownership(
                 );
             }
 
-            /* Non-fatal: record the anomaly and continue */
-            if (err->code != ERR_PERMISSION) {
-                error_t *push_err = push_entry(
-                    warnings,
-                    str_format(
-                    "Could not resolve ownership for %s: %s",
-                    storage_path, error_message(err)
-                    )
-                );
-                if (push_err) {
-                    error_free(err);
-                    return push_err;
-                }
+            error_t *push_err = push_entry(
+                warnings,
+                str_format(
+                "Could not resolve ownership for %s: %s",
+                storage_path, error_message(err)
+                )
+            );
+            if (push_err) {
+                error_free(err);
+                return push_err;
             }
 
             error_free(err);
-            /* Reset to "no change" */
+            /* Reset to "no change": a resolved owner must not survive its group's
+             * failure. */
             *out_uid = (uid_t) -1;
             *out_gid = (gid_t) -1;
         }

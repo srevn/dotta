@@ -70,10 +70,10 @@
 
 #include <git2.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <types.h>
 
-#define METADATA_FILE_PATH ".dotta/metadata.json"
+#define METADATA_DIR ".dotta"
+#define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
 #define METADATA_VERSION 4
 
 /**
@@ -574,36 +574,13 @@ error_t *metadata_save_to_worktree(
 );
 
 /**
- * Parse mode string to mode_t
- *
- * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
- * that mode is within valid range (0000-0777).
- *
- * @param mode_str Mode string (must not be NULL)
- * @param out Mode value (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *metadata_parse_mode(const char *mode_str, mode_t *out);
-
-/**
- * Format mode_t to string
- *
- * Formats mode_t as octal string (e.g., 0600 -> "0600").
- *
- * @param mode Mode value
- * @param out Mode string (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *metadata_format_mode(mode_t mode, char **out);
-
-/**
  * Resolve ownership from owner/group strings to UID/GID
  *
  * Converts owner and group names to UID/GID values. This is pure data
- * transformation - no filesystem operations.
+ * transformation - no filesystem operations, no privilege questions: whether
+ * the resolved pair can be applied (chown needs root) is the applier's to ask.
  *
  * Rules:
- * - Only works when running as root (returns ERR_PERMISSION otherwise)
  * - Validates that user/group exist on the system
  * - If owner is set but group is not, uses owner's primary group
  * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
@@ -621,7 +598,6 @@ error_t *metadata_format_mode(mode_t mode, char **out);
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_PERMISSION: Not running as root
  * - ERR_NOT_FOUND: User or group doesn't exist on this system
  */
 error_t *metadata_resolve_ownership(

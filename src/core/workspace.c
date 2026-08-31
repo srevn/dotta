@@ -228,7 +228,7 @@ static error_t *workspace_create_empty(
  *                              be NULL)
  * @return Error or NULL on success
  */
-error_t *check_item_metadata_divergence(
+static error_t *check_item_metadata_divergence(
     mode_t expected_mode,
     const char *expected_owner,
     const char *expected_group,
@@ -700,7 +700,7 @@ static error_t *analyze_file_divergence(
          * Extracted before comparison strategy selection because both paths need
          * this value. Uses shared helper for consistent mapping.
          */
-        git_filemode_t expected_mode = path_type_to_git_filemode(row->type);
+        git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
 
         /* Prepare for comparison - both paths capture stat for permission checking */
         struct stat file_stat;
@@ -807,7 +807,7 @@ static error_t *analyze_file_divergence(
                 err = compare_oid_to_disk(
                     blob_oid_ptr,
                     fs_path,
-                    expected_mode,
+                    expected_filemode,
                     &initial_stat,
                     &cmp_result,
                     &file_stat
@@ -826,7 +826,7 @@ static error_t *analyze_file_divergence(
                     err = compare_buffer_to_disk(
                         expected_content,
                         fs_path,
-                        expected_mode,
+                        expected_filemode,
                         &initial_stat,
                         &cmp_result,
                         &file_stat
@@ -886,7 +886,7 @@ static error_t *analyze_file_divergence(
                     ws->repo,
                     base_blob,
                     fs_path,
-                    expected_mode,
+                    expected_filemode,
                     &initial_stat,
                     base_storage,
                     base_profile,
@@ -1002,8 +1002,8 @@ static error_t *analyze_file_divergence(
         if (occupant != FS_OCCUPANT_NONE && cmp_result != CMP_TYPE_DIFF
             && cmp_result != CMP_MISSING) {
             /* PHASE A: Check executable bit (skip symlinks) */
-            if (expected_mode != GIT_FILEMODE_LINK) {
-                bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+            if (expected_filemode != GIT_FILEMODE_LINK) {
+                bool expect_exec = (expected_filemode == GIT_FILEMODE_BLOB_EXECUTABLE);
                 bool is_exec = fs_stat_is_executable(&file_stat);
 
                 if (expect_exec != is_exec) {
@@ -1166,7 +1166,7 @@ static divergence_type_t compute_orphan_divergence(
      * Calculate once, use for both content comparison and mode checking. Uses
      * shared helper for consistent mapping across modules.
      */
-    git_filemode_t expected_mode = path_type_to_git_filemode(anchor->type);
+    git_filemode_t expected_filemode = path_type_to_git_filemode(anchor->type);
 
     /* Stat for permission checking (receives copy from in_stat via comparison functions) */
     struct stat fresh_stat;
@@ -1200,7 +1200,7 @@ static divergence_type_t compute_orphan_divergence(
             ws->repo,
             reference,
             fs_path,
-            expected_mode,
+            expected_filemode,
             in_stat,
             storage_path,
             profile,
@@ -1282,7 +1282,7 @@ static divergence_type_t compute_orphan_divergence(
      *    compare)
      *
      * PHASE A: Git filemode (executable bit)
-     *   - Uses expected_mode from Step 2
+     *   - Uses expected_filemode from Step 2
      *   - Skips symlinks (exec bit doesn't apply)
      *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
      *
@@ -1294,8 +1294,8 @@ static divergence_type_t compute_orphan_divergence(
      */
     if (file_exists && !(divergence & DIVERGENCE_TYPE)) {
         /* PHASE A: Check executable bit (skip symlinks) */
-        if (expected_mode != GIT_FILEMODE_LINK) {
-            bool expect_exec = (expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE);
+        if (expected_filemode != GIT_FILEMODE_LINK) {
+            bool expect_exec = (expected_filemode == GIT_FILEMODE_BLOB_EXECUTABLE);
             bool is_exec = fs_stat_is_executable(&fresh_stat);
 
             if (expect_exec != is_exec) {

@@ -461,65 +461,41 @@ static char *build_revert_commit_message(
 /**
  * Load metadata from a specific commit
  *
- * Extracts .dotta/metadata.json from a commit's tree and parses it. If
- * metadata.json doesn't exist in the commit, returns empty metadata (graceful
+ * Composed: the commit's tree via git_commit_tree, then metadata_load_from_tree.
+ * If metadata.json doesn't exist in the commit, returns empty metadata (graceful
  * fallback for old commits or commits without metadata).
  *
  * @param repo Repository (must not be NULL)
  * @param commit Commit to load from (must not be NULL)
+ * @param profile Profile name for error messages (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 static error_t *load_metadata_from_commit(
     git_repository *repo,
     git_commit *commit,
+    const char *profile,
     metadata_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(commit);
+    CHECK_NULL(profile);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
     git_tree *tree = NULL;
-    git_tree_entry *entry = NULL;
-    char *json_str = NULL;
-
-    /* Get commit's tree */
     int ret = git_commit_tree(&tree, commit);
     if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
+        return error_from_git(ret);
     }
 
-    /* Try to find .dotta/metadata.json in tree */
-    ret = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
-    if (ret == GIT_ENOTFOUND) {
+    error_t *err = metadata_load_from_tree(repo, tree, profile, out);
+    git_tree_free(tree);
+
+    if (err && err->code == ERR_NOT_FOUND) {
         /* No metadata in this commit - return empty metadata (graceful fallback) */
-        git_tree_free(tree);
+        error_free(err);
         return metadata_create_empty(out);
-    } else if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
     }
-
-    /* Read blob content (null-terminated for JSON parsing) */
-    size_t size = 0;
-    err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), (void **) &json_str, &size
-    );
-    if (err) goto cleanup;
-
-    /* Parse JSON content */
-    err = metadata_from_json(json_str, out);
-    if (err) {
-        err = error_wrap(err, "Failed to parse metadata from commit");
-        goto cleanup;
-    }
-
-cleanup:
-    if (json_str) free(json_str);
-    if (entry) git_tree_entry_free(entry);
-    if (tree) git_tree_free(tree);
 
     return err;
 }
@@ -604,7 +580,7 @@ static error_t *revert_file_in_branch(
     is_symlink = (target_mode == GIT_FILEMODE_LINK);
 
     /* Load metadata from target commit */
-    err = load_metadata_from_commit(repo, target_commit, &target_metadata);
+    err = load_metadata_from_commit(repo, target_commit, profile, &target_metadata);
     if (err) {
         err = error_wrap(err, "Failed to load metadata from target commit");
         goto cleanup;
@@ -701,7 +677,7 @@ static error_t *revert_file_in_branch(
     }
 
     /* Load current metadata */
-    err = load_metadata_from_commit(repo, head_commit, &current_metadata);
+    err = load_metadata_from_commit(repo, head_commit, profile, &current_metadata);
     if (err) {
         err = error_wrap(err, "Failed to load current metadata");
         goto cleanup;

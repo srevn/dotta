@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "base/array.h"
@@ -478,8 +477,6 @@ error_t *metadata_prune_directories(
      * them. */
     const size_t first = pruned->count;
 
-    const size_t entry_count = git_index_entrycount(index);
-
     size_t item_count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &item_count);
 
@@ -493,27 +490,24 @@ error_t *metadata_prune_directories(
         if (dir->mode != DIR_MODE_DEFAULT) continue;
         if (dir->owner != NULL || dir->group != NULL) continue;
 
-        const char *dir_key = dir->key;
-        size_t dir_key_len = strlen(dir_key);
-        bool anchored = false;
-
         /* Anchor against the index: any tracked path under the directory blocks
          * the prune. Metadata items are not the universe — a symlink tracked
-         * without elevation carries no item, yet still anchors its parent. */
-        for (size_t e = 0; e < entry_count && !anchored; e++) {
-            const git_index_entry *entry = git_index_get_byindex(index, e);
-            if (entry &&
-                str_starts_with(entry->path, dir_key) &&
-                entry->path[dir_key_len] == '/') {
-                anchored = true;
-            }
+         * without elevation carries no item, yet still anchors its parent. The
+         * index is sorted, so one prefix probe answers; a failed look must not
+         * prune. */
+        char *prefix = str_format("%s/", dir->key);
+        if (!prefix) {
+            return ERROR(ERR_MEMORY, "Failed to build directory prefix");
         }
+        size_t position;
+        int rc = git_index_find_prefix(&position, index, prefix);
+        free(prefix);
+        if (rc == 0) continue;
+        if (rc != GIT_ENOTFOUND) return error_from_git(rc);
 
-        if (!anchored) {
-            error_t *err = string_array_push(pruned, dir_key);
-            if (err) {
-                return error_wrap(err, "Failed to record redundant directory");
-            }
+        error_t *err = string_array_push(pruned, dir->key);
+        if (err) {
+            return error_wrap(err, "Failed to record redundant directory");
         }
     }
 
@@ -786,6 +780,32 @@ error_t *metadata_capture_from_directory(
 }
 
 /**
+ * Format mode_t to string
+ *
+ * Formats mode_t as octal string (e.g., 0600 -> "0600").
+ */
+static error_t *format_mode(mode_t mode, char **out) {
+    CHECK_NULL(out);
+
+    if (mode > 0777) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
+        );
+    }
+
+    char *mode_str = str_format("%04o", mode);
+    if (!mode_str) {
+        return ERROR(
+            ERR_MEMORY, "Failed to format mode string"
+        );
+    }
+
+    *out = mode_str;
+    return NULL;
+}
+
+/**
  * Convert metadata to JSON
  *
  * Creates unified JSON with single "items" array containing both files and
@@ -858,7 +878,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
 
         /* Format and add mode */
         char *mode_str = NULL;
-        err = metadata_format_mode(item->mode, &mode_str);
+        err = format_mode(item->mode, &mode_str);
         if (err) {
             cJSON_Delete(item_obj);
             goto cleanup;
@@ -941,6 +961,38 @@ cleanup:
  * Parses unified JSON with single "items" array. REJECTS old versions with clear
  * error message (NO migration code).
  */
+/**
+ * Parse mode string to mode_t
+ *
+ * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
+ * that mode is within valid range (0000-0777).
+ */
+static error_t *parse_mode(const char *mode_str, mode_t *out) {
+    CHECK_NULL(mode_str);
+    CHECK_NULL(out);
+
+    char *endptr;
+    unsigned long mode = strtoul(mode_str, &endptr, 8); /* Octal base */
+
+    /* Reject empty/whitespace-only strings and trailing non-octal characters */
+    if (endptr == mode_str || *endptr != '\0') {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode string: '%s' (not valid octal)",
+            mode_str
+        );
+    }
+
+    if (mode > 0777) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04lo (must be <= 0777)",
+            mode
+        );
+    }
+
+    *out = (mode_t) mode;
+    return NULL;
+}
+
 error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
     CHECK_NULL(out);
@@ -1067,7 +1119,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
         /* Parse mode string */
         mode_t mode;
-        err = metadata_parse_mode(mode_obj->valuestring, &mode);
+        err = parse_mode(mode_obj->valuestring, &mode);
         if (err) {
             err = error_wrap(
                 err, "Failed to parse mode for item: %s",
@@ -1156,14 +1208,11 @@ cleanup:
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from the branch's tree. Handles both commit-backed
- * branches (the common shape) and orphan refs that point directly to a tree (no
- * enclosing commit) — the same shape distinction gitops.c:resolve_ref_to_tree
- * handles for general tree loads.
- *
- * Returns ERR_NOT_FOUND if either the branch ref or the metadata blob is absent,
- * distinguished by the error message prefix. Other failures (peel error, unexpected
- * ref target type, blob read, JSON parse) propagate as ERR_GIT or wrapped causes.
+ * Composed: the branch's tree via gitops_load_branch_tree (which accepts both
+ * commit-backed branches and orphan refs pointing directly at a tree), then
+ * metadata_load_from_tree. ERR_NOT_FOUND still means "no metadata file in the
+ * branch"; a missing branch is the tree loader's failure (ERR_GIT), no longer
+ * folded into the same code.
  */
 error_t *metadata_load_from_branch(
     git_repository *repo,
@@ -1174,114 +1223,14 @@ error_t *metadata_load_from_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(out);
 
-    error_t *err = NULL;
-    git_reference *ref = NULL;
-    git_object *peeled = NULL;
     git_tree *tree = NULL;
-    git_tree_entry *entry = NULL;
-    char *json_str = NULL;
-    metadata_t *metadata = NULL;
-
-    /* Look up branch reference */
-    char ref_name[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        ref_name, sizeof(ref_name), "refs/heads/%s", branch_name
-    );
+    error_t *err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
     if (err) {
-        err = error_wrap(err, "Invalid branch name '%s'", branch_name);
-        goto cleanup;
+        return error_wrap(err, "Failed to load tree of branch '%s'", branch_name);
     }
 
-    int git_err = git_reference_lookup(&ref, repo, ref_name);
-    if (git_err < 0) {
-        if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(ERR_NOT_FOUND, "Branch not found: %s", branch_name);
-        } else {
-            err = error_from_git(git_err);
-        }
-        goto cleanup;
-    }
-
-    /* Peel ref to its underlying object, then dispatch on type:
-     *   - GIT_OBJECT_COMMIT → derive tree via git_commit_tree (common case)
-     *   - GIT_OBJECT_TREE   → ref points directly at a tree (orphan-tree
-     *                         ref); use it as-is.
-     * Anything else is a malformed ref. Mirrors the dispatch in
-     * gitops.c:resolve_ref_to_tree so both entry points accept the same set of
-     * ref shapes. */
-    git_err = git_reference_peel(&peeled, ref, GIT_OBJECT_ANY);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    git_object_t peeled_type = git_object_type(peeled);
-    if (peeled_type == GIT_OBJECT_COMMIT) {
-        /* SAFETY: type-checked above. git_commit_tree allocates a fresh git_tree;
-         * peeled (the commit) and tree have independent lifetimes and are both
-         * freed in cleanup. */
-        git_err = git_commit_tree(&tree, (git_commit *) peeled);
-        if (git_err < 0) {
-            err = error_from_git(git_err);
-            goto cleanup;
-        }
-    } else if (peeled_type == GIT_OBJECT_TREE) {
-        /* SAFETY: type-checked above. The peeled object IS the tree — transfer
-         * ownership to `tree` and null out `peeled` to avoid double-free in cleanup
-         * (git_tree_free will dispose of it). */
-        tree = (git_tree *) peeled;
-        peeled = NULL;
-    } else {
-        err = ERROR(
-            ERR_GIT, "Branch '%s' points to unexpected object type: %d",
-            branch_name, peeled_type
-        );
-        goto cleanup;
-    }
-
-    /* Look for .dotta/metadata.json (use bypath for nested paths) */
-    git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
-    if (git_err < 0) {
-        if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Metadata file not found in branch: %s",
-                branch_name
-            );
-        } else {
-            err = error_from_git(git_err);
-        }
-        goto cleanup;
-    }
-
-    /* Read blob content (null-terminated for JSON parsing) */
-    size_t size = 0;
-    err = gitops_read_blob_content(
-        repo, git_tree_entry_id(entry), (void **) &json_str, &size
-    );
-    if (err) goto cleanup;
-
-    /* Parse JSON */
-    err = metadata_from_json(json_str, &metadata);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to parse metadata from branch: %s",
-            branch_name
-        );
-        goto cleanup;
-    }
-
-    /* Success - transfer ownership to caller */
-    *out = metadata;
-    metadata = NULL;
-
-cleanup:
-    if (json_str) free(json_str);
-    if (entry) git_tree_entry_free(entry);
-    if (tree) git_tree_free(tree);
-    if (peeled) git_object_free(peeled);
-    if (ref) git_reference_free(ref);
-    if (metadata) metadata_free(metadata);
-
+    err = metadata_load_from_tree(repo, tree, branch_name, out);
+    git_tree_free(tree);
     return err;
 }
 
@@ -1422,7 +1371,7 @@ error_t *metadata_save_to_worktree(
     buffer_t json_buf = BUFFER_INIT;
 
     /* Build path to .dotta directory */
-    dotta_dir = str_format("%s/.dotta", worktree_path);
+    dotta_dir = str_format("%s/%s", worktree_path, METADATA_DIR);
     if (!dotta_dir) {
         err = ERROR(ERR_MEMORY, "Failed to allocate .dotta directory path");
         goto cleanup;
@@ -1465,71 +1414,13 @@ cleanup:
 }
 
 /**
- * Parse mode string to mode_t
- *
- * Parses octal mode string (e.g., "0600", "0644", "0755") to mode_t. Validates
- * that mode is within valid range (0000-0777).
- */
-error_t *metadata_parse_mode(const char *mode_str, mode_t *out) {
-    CHECK_NULL(mode_str);
-    CHECK_NULL(out);
-
-    char *endptr;
-    unsigned long mode = strtoul(mode_str, &endptr, 8); /* Octal base */
-
-    /* Reject empty/whitespace-only strings and trailing non-octal characters */
-    if (endptr == mode_str || *endptr != '\0') {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode string: '%s' (not valid octal)",
-            mode_str
-        );
-    }
-
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04lo (must be <= 0777)",
-            mode
-        );
-    }
-
-    *out = (mode_t) mode;
-    return NULL;
-}
-
-/**
- * Format mode_t to string
- *
- * Formats mode_t as octal string (e.g., 0600 -> "0600").
- */
-error_t *metadata_format_mode(mode_t mode, char **out) {
-    CHECK_NULL(out);
-
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
-
-    char *mode_str = str_format("%04o", mode);
-    if (!mode_str) {
-        return ERROR(
-            ERR_MEMORY, "Failed to format mode string"
-        );
-    }
-
-    *out = mode_str;
-    return NULL;
-}
-
-/**
  * Resolve ownership from owner/group strings to UID/GID
  *
  * Converts owner and group names to UID/GID values. This is pure data
- * transformation - no filesystem operations.
+ * transformation - no filesystem operations, no privilege questions: whether
+ * the resolved pair can be applied (chown needs root) is the applier's to ask.
  *
  * Rules:
- * - Only works when running as root (returns ERR_PERMISSION otherwise)
  * - Validates that user/group exist on the system
  * - If owner is set but group is not, uses owner's primary group
  * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
@@ -1553,13 +1444,6 @@ error_t *metadata_resolve_ownership(
     /* Skip if no ownership specified */
     if (!owner && !group) {
         return NULL;
-    }
-
-    /* Commands enforce privileges upfront to prevent partial operations */
-    if (!privilege_is_elevated()) {
-        return ERROR(
-            ERR_PERMISSION, "Cannot resolve ownership (not running as root)"
-        );
     }
 
     /* Resolve owner to UID */

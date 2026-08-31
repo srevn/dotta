@@ -41,6 +41,7 @@ Checks: >
   -readability-avoid-nested-conditional-operator,
   -readability-math-missing-parentheses,
   -readability-misleading-indentation,
+  -readability-trailing-comma,
   -clang-analyzer-optin.performance.Padding,
   -clang-analyzer-security.insecureAPI.*
 

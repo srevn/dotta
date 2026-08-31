@@ -384,15 +384,27 @@ bool metadata_remove_item(
         return false;
     }
 
-    /* Linear: what the removal needs is the item's place in the spine, and only
-     * a walk gives that. */
+    /* The index answers identity. A key the collection does not hold is answered
+     * here and costs one probe — the walk below is for position, and there is
+     * no position to find. */
+    metadata_item_t *item = hashmap_get(metadata->index, key);
+    if (!item) {
+        return false;
+    }
+
+    /* Only the spine carries position, so only a walk gives it. What the index
+     * bought is the comparison: the item is already named, so this reads the
+     * spine's own pointers rather than chasing each item's key into a strcmp.
+     * The two agree by construction — the add publishes to both or neither and
+     * its update arm mutates the standing item in place, so the value the index
+     * holds is the pointer some spine slot holds. */
     for (size_t i = 0; i < metadata->count; i++) {
-        metadata_item_t *item = metadata->items[i];
-        if (strcmp(item->key, key) != 0) {
+        if (metadata->items[i] != item) {
             continue;
         }
 
-        /* Remove from hashmap first (before freeing key) */
+        /* Unpublish before freeing: the index borrows this item's key, so the
+         * removal's own strcmp reads it. */
         hashmap_remove(metadata->index, item->key, NULL);
         metadata_item_free(item);
         metadata->count--;
@@ -409,6 +421,9 @@ bool metadata_remove_item(
         return true;
     }
 
+    /* Unreachable while the spine and the index agree. Reached, it would mean
+     * the index named an item no slot holds — nothing above changed anything,
+     * so the honest answer is that nothing was removed. */
     return false;
 }
 

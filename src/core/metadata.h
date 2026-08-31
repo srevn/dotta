@@ -257,7 +257,11 @@ const metadata_item_t *metadata_lookup(
  * Remove metadata item
  *
  * Works for every kind. Removing a key the collection does not hold changes nothing
- * and is not a failure — the answer is false.
+ * and is not a failure — the answer is false, arrived at by one index probe.
+ *
+ * A key the collection does hold costs a walk on top of that: closing the gap
+ * in insertion order needs the item's position, and only the spine has it. Callers
+ * removing many keys pay that walk once per key.
  *
  * @param metadata Metadata collection (NULL returns false)
  * @param key Lookup key, the storage path for every kind (NULL returns false)

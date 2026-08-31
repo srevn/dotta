@@ -322,14 +322,42 @@ static size_t next_power_of_two(size_t n) {
     return p;
 }
 
-/* Create new hash map */
-hashmap_t *hashmap_create(size_t initial_capacity) {
-    if (initial_capacity == 0)
-        initial_capacity = HASHMAP_DEFAULT_CAPACITY;
-    else if (initial_capacity < HASHMAP_MIN_CAPACITY)
-        initial_capacity = HASHMAP_MIN_CAPACITY;
+/* Slots needed to hold `expected` entries without a resize.
+ *
+ * The caller counts entries; only this file knows what an entry costs in slots.
+ * hashmap_insert grows once count reaches grow_at, so a table sized at the caller's
+ * number outright would rehash on the way to filling it — the hint asked for
+ * room and bought a resize. Dividing by the load factor first is what makes the
+ * number mean what the header says it means, and it lands on the same capacity
+ * the map would have reached by growing into those entries, so an honest hint
+ * costs no memory and saves the rehash. */
+static size_t slots_for(size_t expected) {
+    if (expected == 0) {
+        return HASHMAP_DEFAULT_CAPACITY;
+    }
 
-    size_t cap = next_power_of_two(initial_capacity);
+    /* Guard the multiply and its rounding term. No allocator would serve a table
+     * this size either, but the arithmetic must refuse rather than wrap into a
+     * small capacity: a mask that does not cover the slots loses entries in
+     * silence. */
+    if (expected > (SIZE_MAX - (HASHMAP_LOAD_PERCENT - 1)) / 100) {
+        return 0;
+    }
+
+    size_t needed = (expected * 100 + HASHMAP_LOAD_PERCENT - 1)
+        / HASHMAP_LOAD_PERCENT;
+
+    size_t cap = next_power_of_two(needed);
+    if (cap != 0 && cap < HASHMAP_MIN_CAPACITY) {
+        cap = HASHMAP_MIN_CAPACITY;
+    }
+
+    return cap;
+}
+
+/* Create new hash map */
+hashmap_t *hashmap_create(size_t expected) {
+    size_t cap = slots_for(expected);
     if (cap == 0) return NULL;
 
     hashmap_t *map = calloc(1, sizeof(hashmap_t));
@@ -348,8 +376,8 @@ hashmap_t *hashmap_create(size_t initial_capacity) {
 }
 
 /* Create hash map with borrowed keys (caller must ensure key lifetimes) */
-hashmap_t *hashmap_borrow(size_t initial_capacity) {
-    hashmap_t *map = hashmap_create(initial_capacity);
+hashmap_t *hashmap_borrow(size_t expected) {
+    hashmap_t *map = hashmap_create(expected);
     if (map) map->borrow_keys = true;
 
     return map;
@@ -469,6 +497,11 @@ bool hashmap_remove(hashmap_t *map, const char *key, void **out_old) {
 /* Get number of entries */
 size_t hashmap_size(const hashmap_t *map) {
     return map ? map->count : 0;
+}
+
+/* Get number of slots */
+size_t hashmap_capacity(const hashmap_t *map) {
+    return map ? map->capacity : 0;
 }
 
 /* Check if empty */

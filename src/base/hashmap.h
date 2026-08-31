@@ -60,11 +60,14 @@ typedef struct hashmap_iter {
 /**
  * Create new hash map (owning mode — keys are strdup'd on insert, freed on remove)
  *
- * @param initial_capacity Hint for expected entry count (0 = default 16). Rounded
- *                         up to next power of two internally.
+ * @param expected Number of entries the caller expects to hold (0 = no expectation,
+ *                 giving 16 slots). The map allocates the slots those entries
+ *                 need in order to fit without a resize — more slots than entries,
+ *                 since the table grows at its load factor rather than when full,
+ *                 and rounded up to a power of two.
  * @return New hash map, or NULL on allocation failure
  */
-hashmap_t *hashmap_create(size_t initial_capacity);
+hashmap_t *hashmap_create(size_t expected);
 
 /**
  * Create hash map in borrowing mode — keys stored by reference, not copied.
@@ -76,10 +79,11 @@ hashmap_t *hashmap_create(size_t initial_capacity);
  *
  * hashmap_remove() will NOT free the key — the original owner is responsible.
  *
- * @param initial_capacity Hint for expected entry count (0 = default 16).
+ * @param expected Entries the caller expects to hold, read exactly as
+ *                 hashmap_create reads it.
  * @return New hash map, or NULL on allocation failure
  */
-hashmap_t *hashmap_borrow(size_t initial_capacity);
+hashmap_t *hashmap_borrow(size_t expected);
 
 /**
  * Remove all entries without freeing the map itself
@@ -164,6 +168,19 @@ bool hashmap_remove(hashmap_t *map, const char *key, void **out_old);
  * @return Number of key-value pairs (0 if map is NULL)
  */
 size_t hashmap_size(const hashmap_t *map);
+
+/**
+ * Slots allocated, always a power of two (0 if map is NULL)
+ *
+ * The sibling of hashmap_size, and the answer this container owes for the same
+ * reason the transparent ones give it away as a field: string_array_t and buffer_t
+ * both carry a public `capacity`, and an opaque table should not be the one
+ * collection that cannot say how much room it took.
+ *
+ * What it is good for is checking that a sizing hint held — a capacity that stands
+ * unchanged across the inserts it was sized for is a map that never rehashed.
+ */
+size_t hashmap_capacity(const hashmap_t *map);
 
 /**
  * @return true if map is NULL or contains no entries

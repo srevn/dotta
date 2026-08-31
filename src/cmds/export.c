@@ -179,25 +179,26 @@ static bool storage_namespace_contains(const char *path) {
 /**
  * Resolve an entry's final mode.
  *
- * Stored metadata mode wins; the fallback is the git filemode for files (mirroring
- * deploy's corruption fallback) and the canonical default for directories.
+ * A claimed mode wins; the fallback is the git filemode for files (the same floor
+ * the view resolves absence into) and the canonical default for directories.
  * Kind-checked so a stale item of the wrong kind cannot leak its mode across
  * entry types.
  */
 static mode_t export_entry_mode(
     const metadata_t *metadata,
     const char *storage_path,
-    metadata_item_kind_t kind,
+    path_kind_t kind,
     git_filemode_t filemode
 ) {
     const metadata_item_t *item = metadata_lookup(metadata, storage_path);
 
-    if (item && item->kind == kind && item->mode != 0) {
+    if (item && item->kind == kind && item->mode != MODE_UNCLAIMED) {
         return item->mode;
     }
-    if (kind == METADATA_ITEM_DIRECTORY) {
+    if (kind == PATH_KIND_DIRECTORY) {
         return DIR_MODE_DEFAULT;
     }
+
     return (filemode == GIT_FILEMODE_BLOB_EXECUTABLE) ? 0755 : 0644;
 }
 
@@ -293,13 +294,13 @@ static int collect_tree_callback(
         case GIT_OBJECT_TREE: {
             e.kind = EXPORT_ENTRY_DIRECTORY;
             e.mode = export_entry_mode(
-                ctx->metadata, e.storage_path, METADATA_ITEM_DIRECTORY,
+                ctx->metadata, e.storage_path, PATH_KIND_DIRECTORY,
                 GIT_FILEMODE_TREE
             );
             const metadata_item_t *item = metadata_lookup(
                 ctx->metadata, e.storage_path
             );
-            e.claimed = item && item->kind == METADATA_ITEM_DIRECTORY;
+            e.claimed = item && item->kind == PATH_KIND_DIRECTORY;
             break;
         }
 
@@ -311,7 +312,7 @@ static int collect_tree_callback(
             } else {
                 e.kind = EXPORT_ENTRY_FILE;
                 e.mode = export_entry_mode(
-                    ctx->metadata, e.storage_path, METADATA_ITEM_FILE,
+                    ctx->metadata, e.storage_path, PATH_KIND_FILE,
                     filemode
                 );
             }
@@ -884,7 +885,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
              * its claim lives only in the metadata, and the export is then the
              * claim itself: the directory, at its stored mode. */
             const metadata_item_t *claim_item = metadata_lookup(metadata, storage);
-            if (!claim_item || claim_item->kind != METADATA_ITEM_DIRECTORY) {
+            if (!claim_item || claim_item->kind != PATH_KIND_DIRECTORY) {
                 error_free(err);
                 err = ERROR(
                     ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
@@ -916,7 +917,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             if (err) goto cleanup;
 
             root_mode = export_entry_mode(
-                metadata, storage, METADATA_ITEM_DIRECTORY,
+                metadata, storage, PATH_KIND_DIRECTORY,
                 GIT_FILEMODE_TREE
             );
             tree_export = true;
@@ -964,7 +965,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             } else {
                 e.kind = EXPORT_ENTRY_FILE;
                 e.mode = export_entry_mode(
-                    metadata, storage, METADATA_ITEM_FILE, filemode
+                    metadata, storage, PATH_KIND_FILE, filemode
                 );
             }
 
@@ -1024,7 +1025,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         size_t item_count = 0;
         const metadata_item_t *const *items = metadata_items(metadata, &item_count);
         for (size_t i = 0; i < item_count; i++) {
-            if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+            if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
             const char *key = items[i]->key;
 
             const char *rel = key;
@@ -1059,7 +1060,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
                 goto cleanup;
             }
-            e.mode = items[i]->mode != 0 ? items[i]->mode : DIR_MODE_DEFAULT;
+            e.mode = items[i]->mode != MODE_UNCLAIMED ? items[i]->mode : DIR_MODE_DEFAULT;
 
             err = entry_list_append(&list, arena, &e);
             if (err) goto cleanup;
@@ -1142,7 +1143,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
     if (claims_base) {
         const metadata_item_t *root_item = metadata_lookup(metadata, claims_base);
-        if (root_item && root_item->kind == METADATA_ITEM_DIRECTORY) {
+        if (root_item && root_item->kind == PATH_KIND_DIRECTORY) {
             dir_claims++;
         }
     }

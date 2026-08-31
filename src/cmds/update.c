@@ -585,20 +585,17 @@ static error_t *update_profile(
                     goto cleanup;
                 }
 
-                /* meta_item is NULL for home/ prefix symlinks (no metadata needed).
-                 * Non-NULL for files and root/ prefix symlinks (ownership tracked).
-                 * A capture that claims nothing retires the standing claim: an
-                 * item at the key is the replaced state's. */
+                /* meta_item is NULL for a link that claims nothing — no mode to
+                 * take, no ownership tracked. A capture that claims nothing retires
+                 * the standing claim: an item at the key is the replaced
+                 * state's. */
                 if (meta_item) {
-                    /* Only set encrypted flag for FILE kind (symlinks are never encrypted) */
-                    if (meta_item->kind == METADATA_ITEM_FILE) {
-                        meta_item->file.encrypted = copy_encrypted;
-                    }
+                    /* Stamp the encrypted cache from the copy's byte truth (false
+                     * for a link — the copy never encrypts one) */
+                    meta_item->encrypted = copy_encrypted;
 
                     /* Say what the capture took before metadata_add_item takes
                      * it */
-                    bool is_encrypted = (meta_item->kind == METADATA_ITEM_FILE)
-                                      ? meta_item->file.encrypted : false;
                     if (meta_item->owner || meta_item->group) {
                         output_info(
                             out, OUTPUT_VERBOSE,
@@ -606,14 +603,14 @@ static error_t *update_profile(
                             item->filesystem_path, meta_item->mode,
                             meta_item->owner ? meta_item->owner : "?",
                             meta_item->group ? meta_item->group : "?",
-                            is_encrypted ? ", encrypted" : ""
+                            meta_item->encrypted ? ", encrypted" : ""
                         );
                     } else {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "  Captured metadata: %s (mode: %04o%s)",
                             item->filesystem_path, meta_item->mode,
-                            is_encrypted ? ", encrypted" : ""
+                            meta_item->encrypted ? ", encrypted" : ""
                         );
                     }
 

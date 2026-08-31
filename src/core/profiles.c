@@ -829,7 +829,7 @@ error_t *profile_get_stats(
     size_t item_count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &item_count);
     for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
 
         /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
          * blob is stale metadata, and the tree is the content authority — the

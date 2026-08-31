@@ -26,7 +26,6 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/policy.h"
-#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
 #include "infra/mount.h"
@@ -325,10 +324,9 @@ static error_t *collect_tree(
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
  * @param metadata Metadata collection (captured entry will be added here)
- * @param out_stat The capture's stat triple — taken from the same lstat as the
+ * @param out_stat The capture's stat triple — taken from the same stat as the
  *                 bytes stored, so the record can bind the committed blob to it
- *                 (must not be NULL; unset when a symlink could not be stat'd:
- *                 the next read takes the slow path)
+ *                 (must not be NULL; set on every success)
  * @return Error or NULL on success
  */
 static error_t *add_file_to_worktree(
@@ -447,28 +445,34 @@ static error_t *add_file_to_worktree(
             return error_wrap(err, "Failed to create symlink in worktree");
         }
 
-        /* Capture symlink ownership metadata (root/ prefix + root user only).
-         * Uses lstat to get the symlink's own uid/gid, not the target's. Returns
-         * NULL item for home/ prefix or non-root (no metadata needed). */
+        /* Capture the link's claim from its own lstat (the link's uid/gid, not
+         * the target's). The link was read and copied lines above, so a failed
+         * look here is a mid-add race — refused, the way the regular arm's store
+         * fails on its equivalent. */
         struct stat link_stat;
-        if (lstat(filesystem_path, &link_stat) == 0) {
-            err = metadata_capture_from_symlink(storage_path, &link_stat, &item);
-            if (err) {
-                free(dest_path);
-                return error_wrap(
-                    err, "Failed to capture symlink metadata for '%s'",
-                    filesystem_path
-                );
-            }
-            *out_stat = stat_cache_from_stat(&link_stat);
+        if (lstat(filesystem_path, &link_stat) != 0) {
+            free(dest_path);
+            return ERROR(
+                ERR_FS, "Failed to stat symlink '%s': %s",
+                filesystem_path, strerror(errno)
+            );
+        }
+        err = metadata_capture_from_file(
+            filesystem_path, storage_path, &link_stat, &item
+        );
+        if (err) {
+            free(dest_path);
+            return error_wrap(
+                err, "Failed to capture symlink metadata for '%s'",
+                filesystem_path
+            );
+        }
+        *out_stat = stat_cache_from_stat(&link_stat);
 
-            /* The capture claims nothing (a link with no ownership to track):
-             * an item standing at the key is the replaced state's — retire it.
-             * Inside the lstat-success branch on purpose: a failed look must
-             * not retire a real claim. */
-            if (!item) {
-                metadata_remove_item(metadata, storage_path);
-            }
+        /* The capture claims nothing (a link with no ownership to track): an
+         * item standing at the key is the replaced state's — retire it. */
+        if (!item) {
+            metadata_remove_item(metadata, storage_path);
         }
 
         output_info(
@@ -536,9 +540,7 @@ static error_t *add_file_to_worktree(
         /* Stamp metadata.encrypted from byte truth, NOT from policy. This is
          * the write-time invariant: bytes-on-disk and the metadata cache are
          * bound at the same boundary, by construction. */
-        if (item && item->kind == METADATA_ITEM_FILE) {
-            item->file.encrypted = (written_kind != CONTENT_PLAINTEXT);
-        }
+        if (item) item->encrypted = (written_kind != CONTENT_PLAINTEXT);
 
         /* Verbose output */
         if (written_kind == CONTENT_ENCRYPTED) {
@@ -1521,12 +1523,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *filesystem_path = path->fs_path;
         const char *storage_path = path->storage_path;
 
-        /* Stat directory to capture mode (and ownership if root/custom). */
+        /* Stat directory to capture mode (and ownership if root/custom). lstat
+         * + S_ISDIR: the race guard update's capture arm has. The walk classified
+         * with lstat, so anything else standing here changed since — skip; a
+         * follow-stat would launder the target's attributes into the claim. */
         struct stat dir_stat;
-        if (stat(filesystem_path, &dir_stat) != 0) {
+        if (lstat(filesystem_path, &dir_stat) != 0) {
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
                 filesystem_path, strerror(errno)
+            );
+            continue;
+        }
+        if (!S_ISDIR(dir_stat.st_mode)) {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Skipping '%s': walked as directory but type changed on disk",
+                filesystem_path
             );
             continue;
         }

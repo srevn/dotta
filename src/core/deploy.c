@@ -836,28 +836,14 @@ static error_t *resolve_deployment_ownership(
 }
 
 /**
- * The metadata a row's write applies: the mode, then the ownership — in that
- * order, so a corrupt row is named even when a strict-mode ownership failure
- * ends preflight there.
+ * The metadata a row's write applies
  *
- * A row's mode is its metadata item's — a blob row's the filemode default (0644
- * / 0755) unless the profile's metadata claims otherwise, a directory row's the
- * claim alone — and 0 is the one value the item can carry that is no claim at
- * all: a "0000" in the profile's metadata.json. The workspace reads that zero
- * as "no claim" (check_item_metadata_divergence skips the mode check), so preflight
- * reads it the same way — the default keyed on the row's type — and says so,
- * because the recorded value is the user's and they may want to know it is not
- * being honoured. One decision for both kinds; the default is the only thing
- * the kind changes.
- *
- * A symlink row is the one honest zero: the view carries mode 0 for
- * GIT_FILEMODE_LINK and metadata keeps it there, symlink(2) takes no mode and
- * the symlink arm never reads it. Its zero is the recorded value, not a hole —
- * so the question is asked only of the kinds that carry a mode.
- *
- * Ownership is resolved ahead of the write so the write applies it atomically
- * through the descriptor (fchown on the file or directory fd, lchown on a link):
- * there is never a moment when the path exists with the wrong owner.
+ * The mode is the row's, verbatim — total for every kind that carries one (the
+ * claim, or the floor manifest_build resolved absence into); a symlink row is
+ * never asked (symlink(2) takes no mode). Ownership is resolved ahead of the
+ * write so the write applies it atomically through the descriptor (fchown on
+ * the file or directory fd, lchown on a link): there is never a moment when the
+ * path exists with the wrong owner.
  *
  * @param row View row (must not be NULL; borrowed, read-only)
  * @param opts Deployment options (must not be NULL)
@@ -871,25 +857,7 @@ static error_t *resolve_metadata(
     string_array_t *warnings,
     deploy_verdict_t *v
 ) {
-    mode_t mode = row->mode;
-
-    if (row->type != PATH_TYPE_SYMLINK && mode == 0) {
-        mode = (row->type == PATH_TYPE_DIRECTORY) ? 0755
-             : (row->type == PATH_TYPE_EXECUTABLE) ? 0755 : 0644;
-
-        error_t *err = push_entry(
-            warnings,
-            str_format(
-            "Mode 0000 recorded for '%s' in profile '%s' "
-            "(.dotta/metadata.json), using default %04o",
-            row->filesystem_path, row->profile, mode
-            )
-        );
-        if (err) {
-            return err;
-        }
-    }
-    v->mode = mode;
+    v->mode = row->mode;
 
     error_t *err = resolve_deployment_ownership(
         row->storage_path,

@@ -61,12 +61,21 @@ typedef struct anchor anchor_t;
  * core/state.h) is written from one of these.
  *
  * Per kind:
- *   blob types  — blob_oid is the tree entry; mode defaults from the
- *                 filemode (0644 / 0755, 0 for a link) and metadata may override
- *                 it; encrypted is the metadata-projected cache of the blob's
- *                 own bytes (docs/encryption-spec.md)
- *   DIRECTORY   — claimed from metadata alone: blob_oid is zero,
- *                 encrypted is false, mode/owner/group are the item's
+ *   blob types  — blob_oid is the tree entry; mode is the metadata claim, or
+ *                 the filemode floor (0644 / 0755) where none is claimed;
+ *                 encrypted is the metadata-projected cache of the blob's own
+ *                 bytes (docs/encryption-spec.md)
+ *   DIRECTORY   — claimed from metadata alone: blob_oid is zero, encrypted is
+ *                 false, owner/group are the item's, mode is the claim or
+ *                 DIR_MODE_DEFAULT
+ *
+ * Totality: after build, mode is THE mode for every non-link row — floor or claim,
+ * never a hole; consumers compare and apply it without a fallback. A link row's
+ * mode stays 0 as a don't-care (the discriminator is type, the tree's own truth;
+ * symlink(2) takes no mode), and MODE_UNCLAIMED never leaves the claim sheet.
+ * Authority, stated once: the filemode is authoritative for type, the metadata
+ * claim for permission bits — a hand-edit that contradicts the x-bit across the
+ * two is resolved by that contract, not detected per-read.
  *
  * Strings are arena-backed by the producer; rows are read through `const
  * manifest_row_t *` and live for the producer's arena. The precedence oracle
@@ -82,7 +91,7 @@ typedef struct manifest_row {
     /* What stands there */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
-    mode_t mode;                /* Permission mode: the filemode's default (0644 / 0755, 0 for a link) or the metadata claim */
+    mode_t mode;                /* Total for every kind that carries one (claim or floor); 0 on a link row, a don't-care */
     char *owner;                /* Owner username (root/ paths only, can be NULL) */
     char *group;                /* Group name (root/ paths only, can be NULL) */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */

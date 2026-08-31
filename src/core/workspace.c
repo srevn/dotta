@@ -207,93 +207,38 @@ static error_t *workspace_create_empty(
 }
 
 /**
- * Check for metadata (mode and ownership) divergence (data-centric design)
+ * Does disk ownership diverge from the claim?
  *
- * Compares filesystem metadata with expected values to detect changes in
- * permissions (mode) and ownership (user/group). Always checks both mode and
- * ownership independently, setting flags for each.
- *
- * Data-centric approach: Accepts values directly instead of structs, enabling
- * use with both manifest rows (manifest_row_t) and metadata (metadata_item_t)
- * without conversion. This eliminates Git loads for files (uses the row's fields)
- * while preserving metadata functionality for directories.
- *
- * @param expected_mode Expected permission mode (0 = skip mode check, no metadata
- *                      tracked)
- * @param expected_owner Expected owner username (NULL = skip owner check)
- * @param expected_group Expected group name (NULL = skip group check)
- * @param st File stat data (must not be NULL, pre-captured by caller)
- * @param out_mode_differs Output flag for mode divergence (must not be NULL)
- * @param out_ownership_differs Output flag for ownership divergence (must not
- *                              be NULL)
- * @return Error or NULL on success
+ * The ownership half of every divergence check — one rule for the file, orphan
+ * and directory analyzers. Only an elevated run compares (an unelevated one cannot
+ * chown, so ownership is not its question), and only the names actually claimed
+ * (NULL skips that half). A UID/GID the system cannot resolve to a name reads
+ * as divergence: unknown ≠ expected (security-first).
  */
-static error_t *check_item_metadata_divergence(
-    mode_t expected_mode,
-    const char *expected_owner,
-    const char *expected_group,
-    const struct stat *st,
-    bool *out_mode_differs,
-    bool *out_ownership_differs
+static bool ownership_diverges(
+    const char *owner,
+    const char *group,
+    const struct stat *st
 ) {
-    CHECK_NULL(st);
-    CHECK_NULL(out_mode_differs);
-    CHECK_NULL(out_ownership_differs);
+    if (!privilege_is_elevated() || (!owner && !group)) {
+        return false;
+    }
 
-    /* Clear output flags */
-    *out_mode_differs = false;
-    *out_ownership_differs = false;
-
-    /* Check full mode (all permission bits, not just executable) */
-    if (expected_mode > 0) {
-        mode_t actual_mode = st->st_mode & 0777;
-        if (actual_mode != expected_mode) {
-            *out_mode_differs = true;
+    if (owner) {
+        struct passwd *pwd = getpwuid(st->st_uid);
+        if (!pwd || !pwd->pw_name || strcmp(owner, pwd->pw_name) != 0) {
+            return true;
         }
     }
 
-    /* Check ownership - only when running as root AND expected values provided */
-    bool running_as_root = privilege_is_elevated();
-    bool has_ownership = (expected_owner != NULL || expected_group != NULL);
-
-    if (running_as_root && has_ownership) {
-        bool owner_differs = false;
-        bool group_differs = false;
-
-        /* Check owner independently */
-        if (expected_owner) {
-            struct passwd *pwd = getpwuid(st->st_uid);
-            if (pwd && pwd->pw_name) {
-                if (strcmp(expected_owner, pwd->pw_name) != 0) {
-                    owner_differs = true;
-                }
-            } else {
-                /* getpwuid failed - orphaned UID or system error Treat as
-                 * divergence: unknown ≠ expected (security-first) */
-                owner_differs = true;
-            }
-        }
-
-        /* Check group independently - no short-circuit */
-        if (expected_group) {
-            struct group *grp = getgrgid(st->st_gid);
-            if (grp && grp->gr_name) {
-                if (strcmp(expected_group, grp->gr_name) != 0) {
-                    group_differs = true;
-                }
-            } else {
-                /* getgrgid failed - orphaned GID or system error Treat as
-                 * divergence: unknown ≠ expected (security-first) */
-                group_differs = true;
-            }
-        }
-
-        if (owner_differs || group_differs) {
-            *out_ownership_differs = true;
+    if (group) {
+        struct group *grp = getgrgid(st->st_gid);
+        if (!grp || !grp->gr_name || strcmp(group, grp->gr_name) != 0) {
+            return true;
         }
     }
 
-    return NULL;
+    return false;
 }
 
 /**
@@ -982,66 +927,28 @@ static error_t *analyze_file_divergence(
                 );
         }
 
-        /* PERMISSION CHECKING: Two-phase approach
+        /* PERMISSION CHECKING
          *
-         * Only check permissions if file still exists and no critical divergence.
-         * Guards against file deletion (CMP_MISSING) and type mismatches.
+         * Only when the path still stands and the content phase did not already
+         * rule it absent or another type — properties of what is not there (or
+         * not that) cannot be compared.
          *
-         * PHASE A: Git filemode (executable bit)
-         *   - Check using the row's type field (converted to expected_mode)
-         *   - Skip symlinks (exec bit doesn't apply)
-         *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
-         *
-         * PHASE B: Full metadata (all permission bits + ownership)
-         *   - Only if metadata exists for this file
-         *   - Catches: granular changes like 0600->0644, ownership changes
-         *
-         * Both phases use the SAME file_stat (captured above), so no extra
-         * syscalls. Flags are accumulated with |=.
+         * The row's mode is total for every kind that carries one — the claim,
+         * or the filemode floor manifest_build resolved absence into — so one
+         * full-bit compare answers, the executable bit riding in it; a symlink
+         * row is never asked (its 0 is a don't-care, not a value). Ownership is
+         * its own axis, links included. Both read the same file_stat captured
+         * above — no extra syscalls.
          */
-        if (occupant != FS_OCCUPANT_NONE && cmp_result != CMP_TYPE_DIFF
-            && cmp_result != CMP_MISSING) {
-            /* PHASE A: Check executable bit (skip symlinks) */
-            if (expected_filemode != GIT_FILEMODE_LINK) {
-                bool expect_exec = (expected_filemode == GIT_FILEMODE_BLOB_EXECUTABLE);
-                bool is_exec = fs_stat_is_executable(&file_stat);
-
-                if (expect_exec != is_exec) {
-                    /* Executable bit differs between git and filesystem */
-                    divergence |= DIVERGENCE_MODE;
-                }
+        if (occupant != FS_OCCUPANT_NONE &&
+            cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
+            if (row->type != PATH_TYPE_SYMLINK
+                && (file_stat.st_mode & 0777) != row->mode) {
+                divergence |= DIVERGENCE_MODE;
             }
-
-            /* PHASE B: Check full metadata using the row
-             *
-             * Mode sentinel: row->mode == 0 means "no metadata tracked";
-             * the check will be skipped by check_item_metadata_divergence().
-             */
-            bool mode_differs = false;
-            bool ownership_differs = false;
-
-            error_t *check_err = check_item_metadata_divergence(
-                row->mode,     /* From the row (mode_t, 0 = no metadata) */
-                row->owner,    /* From the row (can be NULL) */
-                row->group,    /* From the row (can be NULL) */
-                &file_stat,
-                &mode_differs,
-                &ownership_differs
-            );
-
-            if (check_err) {
-                return error_wrap(check_err, "Failed to check metadata for '%s'", fs_path);
+            if (ownership_diverges(row->owner, row->group, &file_stat)) {
+                divergence |= DIVERGENCE_OWNERSHIP;
             }
-
-            /* Accumulate metadata divergence flags
-             *
-             * Examples of detected divergence:
-             * - Phase A passed (both non-exec), but file is 0600 in the row,
-             *   0644 on disk
-             * - Phase A detected exec bit diff, also detects group/other bits
-             *   differ */
-            if (mode_differs) divergence |= DIVERGENCE_MODE;
-            if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
         }
     }
 
@@ -1091,7 +998,8 @@ static error_t *analyze_file_divergence(
 
     /* Add to workspace if there's any state change, divergence, or a reassignment
      * (derived at the top, beside the record pairing). */
-    if (state != WORKSPACE_STATE_DEPLOYED || divergence != DIVERGENCE_NONE || profile_changed) {
+    if (state != WORKSPACE_STATE_DEPLOYED ||
+        divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
             ws, row, anchor, state, divergence, occupant
         );
@@ -1125,7 +1033,7 @@ static error_t *analyze_file_divergence(
  * - Anchor stat triple as the fast path, the same proof the active slice relies
  *   on: a match means the exact node dotta wrote, no hashing
  * - Leverages content cache with transparent encryption handling
- * - Two-phase permission checking (exec bit + full metadata)
+ * - Full-bit permission checking against the record's mode, ownership beside it
  * - Single-stat-per-file (caller provides pre-captured stat)
  *
  * Performance Safeguards:
@@ -1273,71 +1181,24 @@ static divergence_type_t compute_orphan_divergence(
             return DIVERGENCE_UNVERIFIED;
     }
 
-    /* Step 5: Permission checking (two-phase, if file still exists)
+    /* Step 5: Permission checking (if the path still stands)
      *
-     * Only check permissions if:
-     * 1. File still exists (not deleted during analysis)
-     * 2. No type divergence (type mismatch makes mode checking nonsensical)
-     * 3. Verification didn't fail (we have fresh_stat from the fast path or the
-     *    compare)
-     *
-     * PHASE A: Git filemode (executable bit)
-     *   - Uses expected_filemode from Step 2
-     *   - Skips symlinks (exec bit doesn't apply)
-     *   - Catches: file is 0755 in git but 0644 on disk (or vice versa)
-     *
-     * PHASE B: Full metadata (all permission bits + ownership)
-     *   - Uses check_item_metadata_divergence() helper
-     *   - Reuses fresh_stat from Step 3 (zero extra syscalls)
-     *   - Skipped if anchor->mode == 0 (no metadata claim recorded)
-     *   - Separately tracks MODE and OWNERSHIP divergence
+     * Only when the file still exists and its type still matches the record — a
+     * mode question over a different type answers nothing. The record's mode is
+     * total for every kind that carries one (written from a view row after the
+     * build resolved absence), so one full-bit compare answers; a symlink record
+     * is never asked. Both halves read fresh_stat — the stat the content verdict
+     * was made from (the fast path's, or the compare's out-param), not the caller's
+     * earlier look — for zero extra syscalls.
      */
     if (file_exists && !(divergence & DIVERGENCE_TYPE)) {
-        /* PHASE A: Check executable bit (skip symlinks) */
-        if (expected_filemode != GIT_FILEMODE_LINK) {
-            bool expect_exec = (expected_filemode == GIT_FILEMODE_BLOB_EXECUTABLE);
-            bool is_exec = fs_stat_is_executable(&fresh_stat);
-
-            if (expect_exec != is_exec) {
-                /* Executable bit differs between git and filesystem */
-                divergence |= DIVERGENCE_MODE;
-            }
+        if (anchor->type != PATH_TYPE_SYMLINK
+            && (fresh_stat.st_mode & 0777) != anchor->mode) {
+            divergence |= DIVERGENCE_MODE;
         }
-
-        /* PHASE B: Check full metadata using helper function
-         *
-         * Mode sentinel: anchor->mode == 0 means "no metadata claim recorded",
-         * check will be skipped by check_item_metadata_divergence().
-         *
-         * Uses fresh_stat populated by comparison function (same data as in_stat,
-         * copied via out_stat parameter for consistent access pattern).
-         */
-        bool mode_differs = false;
-        bool ownership_differs = false;
-
-        error_t *check_err = check_item_metadata_divergence(
-            anchor->mode,         /* From the record (mode_t, 0 = no claim) */
-            anchor->owner,        /* From the record (can be NULL) */
-            anchor->group,        /* From the record (can be NULL) */
-            &fresh_stat,          /* Reuse stat from compare (CRITICAL: not initial_stat!) */
-            &mode_differs,
-            &ownership_differs
-        );
-
-        if (check_err) {
-            /* Metadata check failed (rare: getpwuid/getgrgid failure) Preserve
-             * already-accumulated divergence (content/type) while signaling that
-             * metadata verification was incomplete. */
-            error_free(check_err);
-            return divergence | DIVERGENCE_UNVERIFIED;
+        if (ownership_diverges(anchor->owner, anchor->group, &fresh_stat)) {
+            divergence |= DIVERGENCE_OWNERSHIP;
         }
-
-        /* Accumulate metadata divergence flags
-         *
-         * OWNERSHIP is tracked separately for granular reporting.
-         */
-        if (mode_differs) divergence |= DIVERGENCE_MODE;
-        if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
     }
 
     return divergence;
@@ -1516,8 +1377,8 @@ static error_t *compute_orphan_authority(
          * another kind at the key is a path Git turned into a blob: the directory
          * dotta made is no longer claimed as one. */
         const metadata_item_t *item = metadata_lookup(entry->metadata, storage_path);
-        *out = (item && item->kind == METADATA_ITEM_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
-                                                               : ORPHAN_AUTHORITY_LOST;
+        *out = (item && item->kind == PATH_KIND_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
+                                                           : ORPHAN_AUTHORITY_LOST;
 
         return NULL;
     }
@@ -2305,25 +2166,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             continue;  /* Recorded, move to next directory */
         }
 
-        /* Check metadata divergence using unified helper */
-        bool mode_differs = false;
-        bool ownership_differs = false;
-
-        err = check_item_metadata_divergence(
-            row->mode,   /* Expected mode from state */
-            row->owner,  /* Expected owner from state */
-            row->group,  /* Expected group from state */
-            &dir_stat,
-            &mode_differs,
-            &ownership_differs
-        );
-
-        if (err) {
-            return error_wrap(
-                err, "Failed to check metadata for directory '%s'",
-                filesystem_path
-            );
-        }
+        /* One rule, three analyzers: the row's mode is total (claim or floor)
+         * and a directory row is never a link, so the compare needs no gate. */
+        bool mode_differs = (dir_stat.st_mode & 0777) != row->mode;
+        bool ownership_differs = ownership_diverges(row->owner, row->group, &dir_stat);
 
         /* Record divergence if any metadata differs, or a pending handover stands
          * (derived at the top, beside the record pairing) — the tail the file

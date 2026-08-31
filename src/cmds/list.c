@@ -372,8 +372,7 @@ static error_t *list_files(
     error_t *err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
     if (err) {
         return error_wrap(
-            err, "Failed to list files in profile '%s'",
-            opts->profile
+            err, "Failed to list files in profile '%s'", opts->profile
         );
     }
 
@@ -382,8 +381,7 @@ static error_t *list_files(
     if (err) {
         git_tree_free(tree);
         return error_wrap(
-            err, "Failed to list files in profile '%s'",
-            opts->profile
+            err, "Failed to list files in profile '%s'", opts->profile
         );
     }
 
@@ -399,10 +397,9 @@ static error_t *list_files(
             error_free(meta_err);  /* no metadata: no claims to count */
         } else {
             size_t item_count = 0;
-            const metadata_item_t *const *items =
-                metadata_items(empty_meta, &item_count);
+            const metadata_item_t *const *items = metadata_items(empty_meta, &item_count);
             for (size_t i = 0; i < item_count; i++) {
-                if (items[i]->kind == METADATA_ITEM_DIRECTORY) {
+                if (items[i]->kind == PATH_KIND_DIRECTORY) {
                     dir_count++;
                 }
             }
@@ -417,7 +414,9 @@ static error_t *list_files(
                 opts->profile, counts
             );
         } else {
-            output_info(out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile);
+            output_info(
+                out, OUTPUT_NORMAL, "No files in profile '%s'", opts->profile
+            );
         }
         string_array_free(files);
         git_tree_free(tree);

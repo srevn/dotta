@@ -191,7 +191,7 @@ void completion_directories(
     size_t count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &count);
     for (size_t i = 0; i < count; i++) {
-        if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
         fprintf(out, "%s/\t%s\n", items[i]->key, branch);
     }
 

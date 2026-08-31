@@ -160,7 +160,7 @@ typedef struct anchor {
 
     /* What dotta set there */
     path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
-    mode_t mode;              /* Recorded mode claim (0 = none) */
+    mode_t mode;              /* Recorded mode; meaningful iff type != SYMLINK */
     char *owner;              /* Recorded owner (can be NULL) */
     char *group;              /* Recorded group (can be NULL) */
 

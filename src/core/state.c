@@ -1571,7 +1571,8 @@ error_t *state_get_all_anchors(
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
 
-        /* Read mode as integer (0 if NULL) */
+        /* Read mode as integer (NULL — a link's record — hydrates to 0, read
+         * only under the type gate) */
         mode_t mode = 0;
         if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
             mode = (mode_t) sqlite3_column_int(stmt, 4);
@@ -1649,8 +1650,10 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
     /* 4. type */
     sqlite3_bind_text(stmt, 4, path_type_to_sql_text(row->type), -1, SQLITE_STATIC);
 
-    /* 5. mode (optional) */
-    if (row->mode > 0) {
+    /* 5. mode — meaningful iff the type carries one: a link row's 0 is a
+     * don't-care and binds NULL; every other row's mode is total (claim or floor),
+     * a 0000 claim binding 0 and comparing like any other value */
+    if (row->type != PATH_TYPE_SYMLINK) {
         sqlite3_bind_int(stmt, 5, row->mode);
     } else {
         sqlite3_bind_null(stmt, 5);

@@ -31,10 +31,10 @@
 /**
  * Print deploy pre-flight results: the warnings, then the findings
  *
- * A warning is an anomaly preflight met while deciding — a mode it substituted,
- * an ownership it could not resolve — and the run goes on; it prints first, so
- * that when a finding follows, the remedy is the last thing on the screen. The
- * findings block the run, and the caller tests their counts after this prints.
+ * A warning is an anomaly preflight met while deciding — an ownership it could
+ * not resolve — and the run goes on; it prints first, so that when a finding
+ * follows, the remedy is the last thing on the screen. The findings block the
+ * run, and the caller tests their counts after this prints.
  */
 static void print_deploy_preflight_results(
     const output_t *out,
@@ -381,10 +381,9 @@ static void print_skipped(
  * the other buckets never carry one, since the verb already says what the path
  * held.
  *
- * Mode and ownership print as recorded on the row, corruption included: a mode-0
- * row shows (mode: 0000) under the preflight warning that named the substitution.
- * The receipt reports the row, the warning reports the repair. A symlink row
- * records no mode by design and says so instead.
+ * Mode and ownership print as the row carries them — total by build, a 0000 claim
+ * included: the receipt reports the row, and (mode: 0000) is the claim honoured,
+ * not an anomaly. A symlink row records no mode by design and says so instead.
  *
  * Work the run skipped is not here: the plan decided it, print_skipped reports
  * it, and it must be said even on runs that never execute. Nor is a failure:
@@ -1746,9 +1745,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Divergence verdicts and occupants come from workspace_load's analysis (O(1)
      * index probes); the landing check is filesystem-level. The mode and ownership
      * every write applies are decided here too, so a strict-mode ownership failure
-     * ends the run before the prompt, and the anomalies met on the way — a mode
-     * substituted, an owner this system does not know — print as warnings ahead
-     * of the preview.
+     * ends the run before the prompt, and the anomalies met on the way — an owner
+     * this system does not know — print as warnings ahead of the preview.
      */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 

@@ -1507,14 +1507,6 @@ bool fs_stat_is_directory(const struct stat *st) {
     return S_ISDIR(st->st_mode);
 }
 
-bool fs_stat_is_executable(const struct stat *st) {
-    if (!st) {
-        return false;
-    }
-
-    return (st->st_mode & S_IXUSR) != 0;
-}
-
 /**
  * Ensure parent directories exist
  */

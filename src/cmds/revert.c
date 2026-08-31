@@ -588,15 +588,14 @@ static error_t *revert_file_in_branch(
 
     /* Extract or create metadata item for this file/symlink */
     if (is_symlink) {
-        /* Symlinks: only restore ownership metadata if present at target commit.
-         * No defaults needed — symlinks have no settable mode or encryption. */
-        /* No metadata for a symlink at the target commit is fine — old profiles
-         * won't have it */
+        /* A link's entry is a FILE item without a mode. Restore it as recorded
+         * — revert restores history, it does not reinterpret it; whatever the
+         * entry carries, the view adjudicates against the tree. No entry → the
+         * retire arm below takes the standing item. */
         const metadata_item_t *target_meta_item =
             metadata_lookup(target_metadata, file_path);
 
-        if (target_meta_item &&
-            target_meta_item->kind == METADATA_ITEM_SYMLINK) {
+        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
             err = metadata_item_clone(target_meta_item, &meta_to_restore);
             if (err) {
                 err = error_wrap(err, "Failed to clone symlink metadata item");
@@ -621,7 +620,7 @@ static error_t *revert_file_in_branch(
         const metadata_item_t *target_meta_item =
             metadata_lookup(target_metadata, file_path);
 
-        if (target_meta_item && target_meta_item->kind == METADATA_ITEM_FILE) {
+        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
             /* Found metadata entry - clone it. Mode and ownership have no byte
              * source, so the entry is their authority; the encrypted bit is the
              * blob's (above). */
@@ -630,7 +629,7 @@ static error_t *revert_file_in_branch(
                 err = error_wrap(err, "Failed to clone metadata item");
                 goto cleanup;
             }
-            meta_to_restore->file.encrypted = target_encrypted;
+            meta_to_restore->encrypted = target_encrypted;
         } else {
             /* No metadata entry at target commit - mode falls back to the tree's
              * filemode; ownership is not recoverable */

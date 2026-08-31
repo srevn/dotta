@@ -33,7 +33,9 @@
  * An item is stable from the moment it is created — only the spine is ever
  * reallocated — so the index stores item pointers directly and metadata_items
  * hands the spine out as the public slice. The index borrows each item's own
- * key (hashmap_borrow), which is why it is freed before the items are.
+ * key (hashmap_borrow), which is why it is freed before the items are — and why
+ * metadata_add_item's update arm must adopt the standing key before it overwrites
+ * the slot: the key-adoption dance is the borrow's cost.
  *
  * The schema version is the document's, not the collection's: metadata_to_json
  * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
@@ -81,16 +83,12 @@ error_t *metadata_create_empty(metadata_t **out) {
 
 /**
  * Free metadata item
- *
- * Handles both file and directory items correctly. Frees kind-specific union
- * fields based on kind discriminator.
  */
 void metadata_item_free(metadata_item_t *item) {
     if (!item) {
         return;
     }
 
-    /* Free common fields */
     free(item->key);
     free(item->owner);
     free(item->group);
@@ -132,8 +130,8 @@ error_t *metadata_item_create_file(
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
-    /* Validate mode */
-    if (mode > 0777) {
+    /* A mode is claimed bits or absence — nothing in between */
+    if (mode != MODE_UNCLAIMED && mode > 0777) {
         return ERROR(
             ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
             mode
@@ -145,7 +143,7 @@ error_t *metadata_item_create_file(
         return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
     }
 
-    item->kind = METADATA_ITEM_FILE;
+    item->kind = PATH_KIND_FILE;
 
     item->key = strdup(storage_path);
     if (!item->key) {
@@ -156,9 +154,7 @@ error_t *metadata_item_create_file(
     item->mode = mode;
     item->owner = NULL;  /* Optional, set by caller if needed */
     item->group = NULL;  /* Optional, set by caller if needed */
-
-    /* Set file-specific union field */
-    item->file.encrypted = encrypted;
+    item->encrypted = encrypted;
 
     *out = item;
     return NULL;
@@ -175,8 +171,8 @@ error_t *metadata_item_create_directory(
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
-    /* Validate mode */
-    if (mode > 0777) {
+    /* A mode is claimed bits or absence — nothing in between */
+    if (mode != MODE_UNCLAIMED && mode > 0777) {
         return ERROR(
             ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
             mode
@@ -188,7 +184,7 @@ error_t *metadata_item_create_directory(
         return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
     }
 
-    item->kind = METADATA_ITEM_DIRECTORY;
+    item->kind = PATH_KIND_DIRECTORY;
 
     item->key = strdup(storage_path);
     if (!item->key) {
@@ -197,49 +193,9 @@ error_t *metadata_item_create_directory(
     }
 
     item->mode = mode;
-    item->owner = NULL;  /* Optional, set by caller if needed */
-    item->group = NULL;  /* Optional, set by caller if needed */
-
-    /* Initialize directory union */
-    item->directory._reserved = 0;
-
-    *out = item;
-    return NULL;
-}
-
-/**
- * Create symlink metadata item
- *
- * Mode is always 0: symlink permissions are not settable via symlink() syscall,
- * and chmod() on symlinks changes the target or fails (OS-dependent). Only
- * ownership is meaningful (applied via lchown during deployment).
- */
-error_t *metadata_item_create_symlink(
-    const char *storage_path,
-    metadata_item_t **out
-) {
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out);
-
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
-    }
-
-    item->kind = METADATA_ITEM_SYMLINK;
-
-    item->key = strdup(storage_path);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-    }
-
-    item->mode = 0;       /* Symlink permissions are not trackable */
-    item->owner = NULL;   /* Optional, set by caller if needed */
-    item->group = NULL;   /* Optional, set by caller if needed */
-
-    /* Initialize symlink union */
-    item->symlink._reserved = 0;
+    item->owner = NULL;      /* Optional, set by caller if needed */
+    item->group = NULL;      /* Optional, set by caller if needed */
+    item->encrypted = false; /* A directory has no blob to stamp */
 
     *out = item;
     return NULL;
@@ -265,9 +221,9 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
         return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
     }
 
-    /* Everything that is not a pointer copies wholesale — kind, mode, and the
-     * union with them, so a kind added later needs no line here. The three strings
-     * are then re-owned, and the one refusal covers all three. */
+    /* Everything that is not a pointer copies wholesale — kind, mode and encrypted,
+     * so a field added later needs no line here. The three strings are then
+     * re-owned, and the one refusal covers all three. */
     *item = *source;
     item->key = strdup(source->key);
     item->owner = source->owner ? strdup(source->owner) : NULL;
@@ -333,7 +289,7 @@ static error_t *ensure_capacity(metadata_t *metadata) {
  * and indexing the item — run before anything is published, so a refusal leaves
  * the collection exactly as it was and the item still the caller's.
  *
- * A mode arrives already validated: the three factories are the only construction
+ * A mode arrives already validated: the two factories are the only construction
  * paths, metadata_item_clone copies an item one of them built, and no caller
  * mutates the field afterwards. Re-checking it here would be a second boundary
  * for a fact this function does not own.
@@ -482,12 +438,14 @@ error_t *metadata_prune_directories(
 
     for (size_t d = 0; d < item_count; d++) {
         const metadata_item_t *dir = items[d];
-        if (dir->kind != METADATA_ITEM_DIRECTORY) continue;
+        if (dir->kind != PATH_KIND_DIRECTORY) continue;
 
-        /* Preserve any entry that carries distinguishing information: custom
-         * mode, or any owner/group overlay. Today this is the only signal that
-         * separates legitimate empty-dir intent from walker-captured residue. */
-        if (dir->mode != DIR_MODE_DEFAULT) continue;
+        /* Preserve any entry that carries distinguishing information: a real
+         * mode override, or any owner/group overlay. Today this is the only signal
+         * that separates legitimate empty-dir intent from walker-captured residue.
+         * An unclaimed mode claims even less than the default, so a hand-sparse
+         * entry is residue-eligible the same way. */
+        if (dir->mode != DIR_MODE_DEFAULT && dir->mode != MODE_UNCLAIMED) continue;
         if (dir->owner != NULL || dir->group != NULL) continue;
 
         /* Anchor against the index: any tracked path under the directory blocks
@@ -523,9 +481,7 @@ error_t *metadata_prune_directories(
 /**
  * Encrypted flag for a file entry
  *
- * Reads the file union member from behind its discriminator, so a key that is
- * absent, or held as a directory or a symlink, answers false rather than misreading
- * a union.
+ * A key that is absent, held as a directory, or held unstamped answers false.
  *
  * Used by historical operations (diff, show, revert) to extract the encrypted
  * flag from metadata loaded from Git commits. Workspace-backed operations read
@@ -533,7 +489,7 @@ error_t *metadata_prune_directories(
  *
  * @param metadata Metadata collection (can be NULL)
  * @param storage_path Storage path to lookup (can be NULL)
- * @return Encrypted flag (false if not found or not a file)
+ * @return Encrypted flag (false if not found or not a stamped file)
  */
 bool metadata_file_encrypted(
     const metadata_t *metadata,
@@ -541,7 +497,7 @@ bool metadata_file_encrypted(
 ) {
     const metadata_item_t *item = metadata_lookup(metadata, storage_path);
 
-    return item && item->kind == METADATA_ITEM_FILE && item->file.encrypted;
+    return item && item->kind == PATH_KIND_FILE && item->encrypted;
 }
 
 /**
@@ -617,18 +573,12 @@ static error_t *capture_ownership(
 }
 
 /**
- * Capture metadata from filesystem file
+ * Capture a path's claim from stat data (regular file or symlink)
  *
- * Creates a file metadata item from stat data. For symlinks, delegates to
- * metadata_capture_from_symlink().
- *
- * Ownership capture (user/group):
- * - ONLY captured for root/ and custom/ prefix files when running as root (UID 0)
- * - home/ prefix files: ownership never captured (always current user)
- * - Regular users: ownership never captured (can't chown anyway)
- *
- * This function creates a metadata_item_t with kind=FILE. The encryption flag
- * is set to false by default; caller should update it if needed.
+ * One existence rule: an item exists iff it claims something. A regular file
+ * always claims its mode (0000 included), so a NULL answer is a links-only answer
+ * — a link claims no mode, and when it has no ownership to claim either, no item
+ * is authored.
  */
 error_t *metadata_capture_from_file(
     const char *filesystem_path,
@@ -641,20 +591,17 @@ error_t *metadata_capture_from_file(
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Symlinks need ownership tracking, not file metadata. Delegate to
-     * symlink-specific capture (handles root/ prefix check). */
-    if (S_ISLNK(st->st_mode)) {
-        return metadata_capture_from_symlink(storage_path, st, out);
+    /* Reject devices, FIFOs, sockets */
+    if (!S_ISREG(st->st_mode) && !S_ISLNK(st->st_mode)) {
+        return ERROR(
+            ERR_INVALID_ARG, "Not a regular file or symlink: %s",
+            filesystem_path
+        );
     }
 
-    /* Reject non-regular files (devices, FIFOs, sockets) */
-    if (!S_ISREG(st->st_mode)) {
-        return ERROR(ERR_INVALID_ARG, "Not a regular file: %s", filesystem_path);
-    }
+    /* A link claims no mode — symlink(2) takes none */
+    mode_t mode = S_ISLNK(st->st_mode) ? MODE_UNCLAIMED : (st->st_mode & 0777);
 
-    /* Create file item via factory (handles allocation, key duplication, mode
-     * validation) */
-    mode_t mode = st->st_mode & 0777;
     metadata_item_t *item = NULL;
     error_t *err = metadata_item_create_file(storage_path, mode, false, &item);
     if (err) {
@@ -674,52 +621,13 @@ error_t *metadata_capture_from_file(
     }
     /* For home/ prefix or when not running as root: owner/group remain NULL */
 
-    *out = item;
-    return NULL;
-}
-
-/**
- * Capture metadata from filesystem symlink
- *
- * Creates a symlink metadata item with ownership data only. Mode is always 0
- * (symlink permissions are not settable).
- *
- * Symlinks only need metadata for ownership tracking on root/ prefix paths. For
- * home/ prefix or non-root users, returns *out = NULL (no metadata needed).
- *
- * Ownership capture uses lstat data (st parameter), which returns the symlink's
- * own uid/gid, not the target's.
- */
-error_t *metadata_capture_from_symlink(
-    const char *storage_path,
-    const struct stat *st,
-    metadata_item_t **out
-) {
-    CHECK_NULL(storage_path);
-    CHECK_NULL(st);
-    CHECK_NULL(out);
-
-    /* Only capture metadata for root/ and custom/ labels when running as root.
-     * home/ symlinks are always owned by the current user — no metadata needed.
-     * Non-root users can't lchown anyway — no metadata needed. */
-    const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (!spec || !spec->tracks_ownership || !privilege_is_elevated()) {
+    /* An item exists iff it claims something. Asked after ownership resolution,
+     * so an elevated link whose UID/GID resolve to no name falls out of the same
+     * rule — no empty entry is ever authored. */
+    if (item->mode == MODE_UNCLAIMED && !item->owner && !item->group) {
+        metadata_item_free(item);
         *out = NULL;
         return NULL;
-    }
-
-    /* Create symlink item via factory */
-    metadata_item_t *item = NULL;
-    error_t *err = metadata_item_create_symlink(storage_path, &item);
-    if (err) {
-        return err;
-    }
-
-    /* Capture ownership from lstat data */
-    err = capture_ownership(item, st);
-    if (err) {
-        metadata_item_free(item);
-        return err;
     }
 
     *out = item;
@@ -780,36 +688,20 @@ error_t *metadata_capture_from_directory(
 }
 
 /**
- * Format mode_t to string
- *
- * Formats mode_t as octal string (e.g., 0600 -> "0600").
+ * Sort helper for the serializer: byte order on the item key
  */
-static error_t *format_mode(mode_t mode, char **out) {
-    CHECK_NULL(out);
+static int item_key_cmp(const void *a, const void *b) {
+    const metadata_item_t *const *ia = a;
+    const metadata_item_t *const *ib = b;
 
-    if (mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
-
-    char *mode_str = str_format("%04o", mode);
-    if (!mode_str) {
-        return ERROR(
-            ERR_MEMORY, "Failed to format mode string"
-        );
-    }
-
-    *out = mode_str;
-    return NULL;
+    return strcmp((*ia)->key, (*ib)->key);
 }
 
 /**
  * Convert metadata to JSON
  *
- * Creates unified JSON with single "items" array containing both files and
- * directories. Each item has explicit "kind" discriminator.
+ * One "items" array, key-ordered, each object carrying its "kind" discriminator
+ * and then only what the item claims.
  */
 error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     CHECK_NULL(metadata);
@@ -818,6 +710,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     error_t *err = NULL;
     cJSON *root = NULL;
     cJSON *items_array = NULL;
+    const metadata_item_t **sorted = NULL;
     char *json_str = NULL;
     buffer_t buf = BUFFER_INIT;
 
@@ -841,9 +734,23 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         goto cleanup;
     }
 
-    /* Serialize each item (unified loop for files and directories) */
+    /* Serialize in key order — a write-side norm only (the parser accepts any
+     * order, so a hand-edit cannot brick on placement), buying byte-determinism
+     * across machines: sync's merge then conflicts only on genuine same-path
+     * edits, never on capture-order divergence. The sort is over a transient
+     * copy of the spine; the collection's insertion order is untouched. */
+    if (metadata->count > 0) {
+        sorted = malloc(metadata->count * sizeof(*sorted));
+        if (!sorted) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate serialization order");
+            goto cleanup;
+        }
+        memcpy(sorted, metadata->items, metadata->count * sizeof(*sorted));
+        qsort(sorted, metadata->count, sizeof(*sorted), item_key_cmp);
+    }
+
     for (size_t i = 0; i < metadata->count; i++) {
-        const metadata_item_t *item = metadata->items[i];
+        const metadata_item_t *item = sorted[i];
 
         /* Create item object */
         cJSON *item_obj = cJSON_CreateObject();
@@ -853,16 +760,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         }
 
         /* Add kind discriminator */
-        const char *kind_str;
-        switch (item->kind) {
-            case METADATA_ITEM_FILE:      kind_str = "file"; break;
-            case METADATA_ITEM_DIRECTORY: kind_str = "directory"; break;
-            case METADATA_ITEM_SYMLINK:   kind_str = "symlink"; break;
-            default:
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_INTERNAL, "Unknown metadata item kind: %d", item->kind);
-                goto cleanup;
-        }
+        const char *kind_str = item->kind == PATH_KIND_DIRECTORY ? "directory" : "file";
         if (!cJSON_AddStringToObject(item_obj, "kind", kind_str)) {
             cJSON_Delete(item_obj);
             err = ERROR(ERR_MEMORY, "Failed to add kind to item object");
@@ -876,23 +774,18 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             goto cleanup;
         }
 
-        /* Format and add mode */
-        char *mode_str = NULL;
-        err = format_mode(item->mode, &mode_str);
-        if (err) {
-            cJSON_Delete(item_obj);
-            goto cleanup;
+        /* Add mode — a claimed one; an unclaimed one has no line to print */
+        if (item->mode != MODE_UNCLAIMED) {
+            char mode_str[8];
+            snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned) item->mode);
+            if (!cJSON_AddStringToObject(item_obj, "mode", mode_str)) {
+                cJSON_Delete(item_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add mode to item object");
+                goto cleanup;
+            }
         }
 
-        if (!cJSON_AddStringToObject(item_obj, "mode", mode_str)) {
-            free(mode_str);
-            cJSON_Delete(item_obj);
-            err = ERROR(ERR_MEMORY, "Failed to add mode to item object");
-            goto cleanup;
-        }
-        free(mode_str);
-
-        /* Add optional owner (only present for root/ prefix) */
+        /* Add optional owner (only present for ownership-tracking labels) */
         if (item->owner) {
             if (!cJSON_AddStringToObject(item_obj, "owner", item->owner)) {
                 cJSON_Delete(item_obj);
@@ -901,7 +794,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             }
         }
 
-        /* Add optional group (only present for root/ prefix) */
+        /* Add optional group (only present for ownership-tracking labels) */
         if (item->group) {
             if (!cJSON_AddStringToObject(item_obj, "group", item->group)) {
                 cJSON_Delete(item_obj);
@@ -910,25 +803,30 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             }
         }
 
-        /* Add kind-specific fields */
-        if (item->kind == METADATA_ITEM_FILE) {
-            /* FILE: Add encrypted flag (only if true - omit if false) */
-            if (item->file.encrypted) {
-                if (!cJSON_AddBoolToObject(item_obj, "encrypted", true)) {
-                    cJSON_Delete(item_obj);
-                    err = ERROR(ERR_MEMORY, "Failed to add encrypted flag to item object");
-                    goto cleanup;
-                }
+        /* Add encrypted flag iff true — false for DIRECTORY by construction at
+         * both boundaries, so no kind test stands here */
+        if (item->encrypted) {
+            if (!cJSON_AddBoolToObject(item_obj, "encrypted", true)) {
+                cJSON_Delete(item_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add encrypted flag to item object");
+                goto cleanup;
             }
         }
-        /* DIRECTORY, SYMLINK: No additional fields */
 
-        /* Add item object to items array (ownership transferred to array) */
+        /* Add item object to items array (ownership transferred to array). A
+         * NULL array or item is cJSON's only refusal here, and neither can stand,
+         * so there is nothing to check. */
         cJSON_AddItemToArray(items_array, item_obj);
     }
 
-    /* Add items array to root (ownership transferred to root) */
-    cJSON_AddItemToObject(root, "items", items_array);
+    /* Add items array to root (ownership transferred to root). This one duplicates
+     * the key, so unlike the array above it can refuse — and a dropped refusal
+     * would leak the array, print a claimless document, and report success: a
+     * sheet our own parser then refuses to read. */
+    if (!cJSON_AddItemToObject(root, "items", items_array)) {
+        err = ERROR(ERR_MEMORY, "Failed to add items array to JSON");
+        goto cleanup;
+    }
     items_array = NULL;  /* Owned by root now */
 
     /* Convert to formatted string */
@@ -948,6 +846,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
 
 cleanup:
     buffer_free(&buf);
+    free(sorted);
     if (json_str) cJSON_free(json_str);
     if (items_array) cJSON_Delete(items_array);  /* Only if not added to root */
     if (root) cJSON_Delete(root);
@@ -955,12 +854,6 @@ cleanup:
     return err;
 }
 
-/**
- * Parse metadata from JSON
- *
- * Parses unified JSON with single "items" array. REJECTS old versions with clear
- * error message (NO migration code).
- */
 /**
  * Parse mode string to mode_t
  *
@@ -993,6 +886,15 @@ static error_t *parse_mode(const char *mode_str, mode_t *out) {
     return NULL;
 }
 
+/**
+ * Parse metadata from JSON
+ *
+ * Parses unified JSON with single "items" array. REJECTS other versions with a
+ * clear error message (NO migration code), and refuses a duplicated key — ambiguity
+ * is not noise. Absence parses as itself: a missing mode is MODE_UNCLAIMED, missing
+ * owner/group NULL, and an item that claims nothing is accepted and inert —
+ * strictness lives where the fact is authored, not here.
+ */
 error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
     CHECK_NULL(out);
@@ -1031,8 +933,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     if (version != METADATA_VERSION) {
         err = ERROR(
             ERR_INVALID_ARG,
-            "Unsupported metadata version: %d (expected %d). "
-            "Please re-run 'dotta add' for all your files.",
+            "Unsupported metadata version: %d (this build reads %d)",
             version, METADATA_VERSION
         );
         goto cleanup;
@@ -1072,18 +973,15 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             goto cleanup;
         }
 
-        metadata_item_kind_t kind;
+        path_kind_t kind;
         if (strcmp(kind_obj->valuestring, "file") == 0) {
-            kind = METADATA_ITEM_FILE;
+            kind = PATH_KIND_FILE;
         } else if (strcmp(kind_obj->valuestring, "directory") == 0) {
-            kind = METADATA_ITEM_DIRECTORY;
-        } else if (strcmp(kind_obj->valuestring, "symlink") == 0) {
-            kind = METADATA_ITEM_SYMLINK;
+            kind = PATH_KIND_DIRECTORY;
         } else {
             err = ERROR(
                 ERR_INVALID_ARG, "Invalid kind value: %s "
-                "(expected 'file', 'directory', or 'symlink')",
-                kind_obj->valuestring
+                "(expected 'file' or 'directory')", kind_obj->valuestring
             );
             goto cleanup;
         }
@@ -1107,33 +1005,46 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             goto cleanup;
         }
 
-        /* Get mode (required) */
-        cJSON *mode_obj = cJSON_GetObjectItem(item_obj, "mode");
-        if (!mode_obj || !cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
+        /* Refuse a duplicated key before the factory runs. The collection's upsert
+         * would resolve the contradiction silently, last-wins; a document saying
+         * two things about one path gets the same loud refusal every other
+         * malformation does. Only a hand-edit or a mis-resolved merge can author
+         * one. */
+        if (metadata_lookup(metadata, key_obj->valuestring)) {
             err = ERROR(
-                ERR_INVALID_ARG, "Item missing mode field (key: %s)",
+                ERR_INVALID_ARG, "Duplicate key in metadata: %s",
                 key_obj->valuestring
             );
             goto cleanup;
         }
 
-        /* Parse mode string */
-        mode_t mode;
-        err = parse_mode(mode_obj->valuestring, &mode);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to parse mode for item: %s",
-                key_obj->valuestring
-            );
-            goto cleanup;
+        /* Get mode (optional — absence is the mode a claim does not make) */
+        mode_t mode = MODE_UNCLAIMED;
+        cJSON *mode_obj = cJSON_GetObjectItem(item_obj, "mode");
+        if (mode_obj) {
+            if (!cJSON_IsString(mode_obj) || !mode_obj->valuestring) {
+                err = ERROR(
+                    ERR_INVALID_ARG, "Invalid mode field (key: %s)",
+                    key_obj->valuestring
+                );
+                goto cleanup;
+            }
+            err = parse_mode(mode_obj->valuestring, &mode);
+            if (err) {
+                err = error_wrap(
+                    err, "Failed to parse mode for item: %s",
+                    key_obj->valuestring
+                );
+                goto cleanup;
+            }
         }
 
         /* Build the item through the factory its kind names, the way every other
-         * producer does. Each owns its kind's invariants — a link has no settable
-         * mode, so the document's is read, validated and dropped by the factory
-         * that never took it. */
+         * producer does. Each owns its kind's invariants: encrypted is consulted
+         * for a file and never handed to the directory factory, so a hand-written
+         * flag on a directory item is waved through inert, not refused. */
         switch (kind) {
-            case METADATA_ITEM_FILE: {
+            case PATH_KIND_FILE: {
                 cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
                 err = metadata_item_create_file(
                     key_obj->valuestring, mode,
@@ -1141,14 +1052,9 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 );
                 break;
             }
-            case METADATA_ITEM_DIRECTORY:
+            case PATH_KIND_DIRECTORY:
                 err = metadata_item_create_directory(
                     key_obj->valuestring, mode, &item
-                );
-                break;
-            case METADATA_ITEM_SYMLINK:
-                err = metadata_item_create_symlink(
-                    key_obj->valuestring, &item
                 );
                 break;
         }

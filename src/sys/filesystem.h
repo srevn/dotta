@@ -39,16 +39,15 @@ error_t *fs_read_file(const char *path, buffer_t *out);
 /**
  * Read a file descriptor to EOF into buffer
  *
- * The primitive beneath fs_read_file, for callers that must bind the bytes
- * they read to the descriptor they hold: an fd's fstat and its content are one
- * inode by construction, where a path-based re-open is a second look that can
- * land on a different file.
+ * The primitive beneath fs_read_file, for callers that must bind the bytes they
+ * read to the descriptor they hold: an fd's fstat and its content are one inode
+ * by construction, where a path-based re-open is a second look that can land on
+ * a different file.
  *
- * Refuses descriptors that are not regular files — "the entire file" is
- * defined only for a file with an extent; a FIFO or device would drain without
- * bound. Reads from the descriptor's current offset to EOF; never closes it.
- * Errors carry no path (an fd has none): callers wrap with the name they
- * opened.
+ * Refuses descriptors that are not regular files — "the entire file" is defined
+ * only for a file with an extent; a FIFO or device would drain without bound.
+ * Reads from the descriptor's current offset to EOF; never closes it. Errors
+ * carry no path (an fd has none): callers wrap with the name they opened.
  *
  * @param fd Readable file descriptor
  * @param out Output buffer (must not be NULL)
@@ -292,19 +291,19 @@ typedef enum {
  * Is the directory empty once the entries the caller vouches for are looked past?
  *
  * An entry is looked past when it is OS metadata — exactly what fs_remove_empty_dir
- * clears — or when `vouch`, handed the entry's full path, answers true: the
- * caller is about to remove it, or has decided it does not count. That lets a
- * caller who is about to remove things beneath a directory ask whether the
- * directory will then be empty, without mutating anything and without a second
- * walk of its own. With vouch == NULL only metadata is looked past.
+ * clears — or when `vouch`, handed the entry's full path, answers true: the caller
+ * is about to remove it, or has decided it does not count. That lets a caller
+ * who is about to remove things beneath a directory ask whether the directory
+ * will then be empty, without mutating anything and without a second walk of
+ * its own. With vouch == NULL only metadata is looked past.
  *
  * One walk, so a prediction and the removal that follows it cannot mean different
  * things by "empty". The walk stops at the first entry nobody vouches for, so
  * the predicate is not asked about every entry.
  *
  * UNREADABLE when the directory cannot be opened or read (absent, not a directory,
- * permission denied, an I/O error) and for a NULL path. An entry whose path
- * cannot be built is OCCUPIED — don't promise a removal you cannot verify.
+ * permission denied, an I/O error) and for a NULL path. An entry whose path cannot
+ * be built is OCCUPIED — don't promise a removal you cannot verify.
  *
  * @param path Directory path to check (NULL reads UNREADABLE)
  * @param vouch Predicate answering "look past that entry" (may be NULL)
@@ -391,10 +390,10 @@ error_t *fs_ensure_parent_dirs(const char *path);
  * this function makes a path absolute while preserving symlink locations.
  *
  * Converts relative paths to absolute by prepending current working directory.
- * A pure string operation: the path need not exist — a command that names a
- * file dotta manages but the disk no longer has (apply to redeploy it, remove,
- * revert, show) resolves it like any other. Callers that need the path to
- * exist check that themselves (add does, with lexists).
+ * A pure string operation: the path need not exist — a command that names a file
+ * dotta manages but the disk no longer has (apply to redeploy it, remove, revert,
+ * show) resolves it like any other. Callers that need the path to exist check
+ * that themselves (add does, with lexists).
  *
  * This preserves symlink locations for storage path determination, preventing
  * accidental tracking of symlink targets at unintended locations.
@@ -596,13 +595,12 @@ bool fs_lexists(const char *path);
  *
  * The link itself, never its target: a symlink is a distinct occupant, not the
  * thing it points to. Every reader that removes or replaces a path acts on the
- * node at the path, so the target's type and permissions are none of its
- * business.
+ * node at the path, so the target's type and permissions are none of its business.
  *
- * Two failures are absence: ENOENT, and ENOTDIR — a component above the path
- * is not a directory, so nothing can be at the path either. Any other failure
- * (EACCES, ELOOP, EIO, …) is UNKNOWN: something may well be there, and a reader
- * must never infer absence from a failure to look.
+ * Two failures are absence: ENOENT, and ENOTDIR — a component above the path is
+ * not a directory, so nothing can be at the path either. Any other failure (EACCES,
+ * ELOOP, EIO, …) is UNKNOWN: something may well be there, and a reader must never
+ * infer absence from a failure to look.
  */
 typedef enum {
     FS_OCCUPANT_NONE,        /* absent, or beneath a non-directory */
@@ -656,14 +654,6 @@ bool fs_stat_is_regular(const struct stat *st);
  * @return true if S_ISDIR(st->st_mode)
  */
 bool fs_stat_is_directory(const struct stat *st);
-
-/**
- * Check if stat represents an executable file
- *
- * @param st Stat data (must not be NULL)
- * @return true if owner execute bit is set (st->st_mode & S_IXUSR)
- */
-bool fs_stat_is_executable(const struct stat *st);
 
 /**
  * Fix ownership recursively for a directory tree

@@ -103,10 +103,12 @@ struct claim_ctx {
  * by manifest_claim's reset and the paired re-application of this helper.
  *
  * When an item exists for the row's storage_path: owner/group ride every blob
- * row; mode/encrypted are the tree's to admit. The item's kind decides only the
- * one rule left — a DIRECTORY item at a blob's storage_path is stale metadata
- * (a path is a tree or a blob, and the tree is the content authority), so it
- * contributes nothing, not even its owner/group.
+ * row; mode/encrypted are the tree's to admit, and the mode only when claimed —
+ * an unclaimed one leaves the filemode floor standing, so the row leaves the
+ * build total either way. The item's kind decides only the one rule left — a
+ * DIRECTORY item at a blob's storage_path is stale metadata (a path is a tree
+ * or a blob, and the tree is the content authority), so it contributes nothing,
+ * not even its owner/group.
  *
  * NULL metadata and a key the profile does not carry both leave the row's
  * Git-derived defaults intact.
@@ -125,7 +127,7 @@ static error_t *manifest_apply_metadata(
     arena_t *arena
 ) {
     const metadata_item_t *item = metadata_lookup(metadata, row->storage_path);
-    if (!item || item->kind == METADATA_ITEM_DIRECTORY) {
+    if (!item || item->kind == PATH_KIND_DIRECTORY) {
         return NULL;
     }
 
@@ -161,11 +163,13 @@ static error_t *manifest_apply_metadata(
     row->group = group_dup;
 
     /* mode/encrypted apply only where a mode can stand — the tree's word
-     * (row->type), never the item's stale kind — and only from a FILE item: a
-     * SYMLINK item's mode is the format's filler, not a claim. */
-    if (row->type != PATH_TYPE_SYMLINK && item->kind == METADATA_ITEM_FILE) {
-        row->mode = item->mode;
-        row->encrypted = item->file.encrypted;
+     * (row->type), never the item's kind — and only the mode the item claims:
+     * an unclaimed one leaves the filemode floor. */
+    if (row->type != PATH_TYPE_SYMLINK) {
+        if (item->mode != MODE_UNCLAIMED) {
+            row->mode = item->mode;      /* A 0000 claim is a claim */
+        }
+        row->encrypted = item->encrypted;
     }
 
     return NULL;
@@ -531,7 +535,7 @@ static error_t *manifest_claim_tree(
 
     for (size_t j = 0; j < item_count; j++) {
         const metadata_item_t *item = items[j];
-        if (item->kind != METADATA_ITEM_DIRECTORY) continue;
+        if (item->kind != PATH_KIND_DIRECTORY) continue;
 
         /* Resolve before claiming so the error path claims nothing. */
         mount_resolve_outcome_t outcome;
@@ -572,11 +576,12 @@ static error_t *manifest_claim_tree(
         if (err) break;
 
         /* A directory row is claimed from metadata alone: blob_oid stays zero
-         * and encrypted false; mode, owner and group are the item's. */
+         * and encrypted false; owner and group are the item's, and the mode is
+         * the claim or the floor — the row leaves the build total. */
         row->storage_path = arena_strdup(arena, item->key);
         row->profile = (char *) profile;
         row->type = PATH_TYPE_DIRECTORY;
-        row->mode = item->mode;
+        row->mode = item->mode != MODE_UNCLAIMED ? item->mode : DIR_MODE_DEFAULT;
         row->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
         row->group = item->group ? arena_strdup(arena, item->group) : NULL;
 

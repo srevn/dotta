@@ -1,29 +1,49 @@
 /**
- * metadata.h - Unified metadata system
+ * metadata.h - The claim sheet
  *
- * UNIFIED DESIGN: Single discriminated union for files, directories, and symlinks.
+ * Each profile branch carries one document, .dotta/metadata.json: the claims
+ * the profile makes about its paths beyond what its tree can say. An item exists
+ * iff it claims something — every field beyond the key is a claim (or the one
+ * cache), a capture whose answer claims nothing authors no item, and one that
+ * finds a stale item standing at its key retires it.
  *
- * Design principles:
- * - Common fields (mode, owner, group) apply to all kinds
- * - Kind-specific fields stored in discriminated union
- * - Single hashmap for O(1) lookup of all kinds
- * - Ownership tracking: only for paths whose label tracks it (root/, custom/),
- *   and only when running as root
- * - home/ prefix: always owned by current user
- * - Per-profile storage for natural layering
- * - Automatic capture during add/update operations
- * - Automatic restoration during apply/revert operations
+ * Authority, per fact:
+ * - content and type: the tree's (a blob, a link, an executable) — never restated
+ *   here, and the tree's word wins over a stale item's kind
+ * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
+ *   (owner-execute), the sheet holds them all
+ * - ownership: the sheet's ("owner"/"group") — captured only for paths whose
+ *   label tracks it (root/, custom/), and only when running elevated; home/ paths
+ *   are always the current user's
+ * - a directory's existence: the sheet's (kind=directory) — the one claim a tree
+ *   cannot hold, since Git trees have no empty directories
+ * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
  *
- * Symlink metadata:
- * - mode is always 0 (symlink permissions are OS-dependent and not settable)
- * - Only ownership is tracked (lchown changes the link itself, not its target)
- * - Only created for symlinks whose label tracks ownership, when running as root
- * - home/ prefix symlinks: no metadata entry needed (always current user)
+ * The sheet is sparse and the view completes it: manifest_build resolves an
+ * unclaimed mode into an answer at build (the filemode floor for blob rows,
+ * DIR_MODE_DEFAULT for directory claims), so no consumer downstream of the view
+ * ever meets a hole.
  *
- * JSON Schema (Version 4):
+ * Symlinks claim no mode: symlink(2) takes none, and though lchmod(2) exists on
+ * macOS/BSD, the bits it sets govern nothing — non-portable and functionally
+ * inert. A link's entry exists to carry ownership (lchown is real), so it is a
+ * "file" item without a mode; a link with no ownership to track has no entry at
+ * all.
+ *
+ * Out of scope, deliberately: timestamps (cross-machine noise by design);
+ * xattrs, ACLs, SELinux contexts, capabilities, chflags; hardlinks, devices,
+ * FIFOs; symlink mode; umask-relative mode classes. Each would need its own
+ * capture/deploy/divergence story; none is blocked by this schema.
+ *
+ * JSON Schema (Version 5) — items sorted by key, fields present iff claimed:
  * {
- *   "version": 4,
+ *   "version": 5,
  *   "items": [
+ *     {
+ *       "kind": "directory",
+ *       "key": "home/.config/nvim",
+ *       "mode": "0700"
+ *     },
  *     {
  *       "kind": "file",
  *       "key": "home/.bashrc",
@@ -37,27 +57,14 @@
  *     },
  *     {
  *       "kind": "file",
+ *       "key": "root/etc/alternatives/python",
+ *       "owner": "root",
+ *       "group": "wheel"
+ *     },
+ *     {
+ *       "kind": "file",
  *       "key": "root/etc/nginx.conf",
  *       "mode": "0644",
- *       "owner": "root",
- *       "group": "wheel"
- *     },
- *     {
- *       "kind": "directory",
- *       "key": "home/.config/nvim",
- *       "mode": "0700"
- *     },
- *     {
- *       "kind": "directory",
- *       "key": "root/etc/nginx",
- *       "mode": "0755",
- *       "owner": "root",
- *       "group": "wheel"
- *     },
- *     {
- *       "kind": "symlink",
- *       "key": "root/etc/alternatives/python",
- *       "mode": "0000",
  *       "owner": "root",
  *       "group": "wheel"
  *     }
@@ -72,9 +79,9 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#define METADATA_VERSION 5
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
-#define METADATA_VERSION 4
 
 /**
  * Default mode for tracked directories without an explicit override.
@@ -92,57 +99,37 @@
 #define DIR_MODE_DEFAULT 0755
 
 /**
- * Metadata item kind discriminator
+ * The mode a claim does not make
+ *
+ * Permission bits run 0000–0777 and 0000 is one of them: `chmod 000` is a real
+ * mode a user can mean. Absence therefore needs a value outside the domain, not
+ * the domain's floor. Private to the claim sheet: the view resolves absence into
+ * an answer at build (the filemode floor for blob rows, DIR_MODE_DEFAULT for
+ * directory claims), so no row, record or verdict ever carries it.
  */
-typedef enum {
-    METADATA_ITEM_FILE      = 0,
-    METADATA_ITEM_DIRECTORY = 1,
-    METADATA_ITEM_SYMLINK   = 2
-} metadata_item_kind_t;
+#define MODE_UNCLAIMED ((mode_t) -1)
 
 /**
- * Unified metadata item (files, directories, and symlinks)
+ * A claim
  *
- * This structure uses a discriminated union to store file, directory, and symlink
- * metadata efficiently. Common fields (mode, owner, group) are shared, while
- * kind-specific fields are stored in the union.
+ * One row of the sheet. The key is the storage path (e.g., "home/.bashrc") —
+ * portable across machines, the join key every consumer looks up by; filesystem
+ * paths are derived on demand via mount_resolve(). kind is the shared path_kind_t
+ * (types.h): FILE claims about a path the tree names — any blob type, a symlink's
+ * entry being a FILE item without a mode — while DIRECTORY is itself the claim,
+ * the one path a tree cannot hold.
  *
- * Key interpretation (unified for all kinds):
- * - ALL ITEMS: key = storage_path (e.g., "home/.bashrc", "home/.config/nvim")
- *
- * This ensures metadata portability across machines. Filesystem paths are derived
- * on-demand via mount_resolve() when needed for deployment or stat operations.
- *
- * Symlink semantics:
- * - mode is always 0 (symlink permissions are not settable via symlink())
- * - owner/group are tracked for ownership-tracking labels (applied via lchown)
- * - No encrypted flag (symlinks are never encrypted)
+ * Absence is a value: mode MODE_UNCLAIMED, owner/group NULL. encrypted is not a
+ * claim but the cache of the blob's own bytes, false for DIRECTORY by construction
+ * at both boundaries (the factories and the parser).
  */
 typedef struct {
-    metadata_item_kind_t kind;       /* Discriminator: FILE, DIRECTORY, or SYMLINK */
-
-    /* Lookup key */
-    char *key;                       /* storage_path for all kinds */
-
-    /* Common metadata fields */
-    mode_t mode;                     /* Permission mode (0 for symlinks) */
-    char *owner;                     /* Owner username (optional, ownership-tracking labels only) */
-    char *group;                     /* Group name (optional, ownership-tracking labels only) */
-
-    /* Kind-specific data (discriminated union) */
-    union {
-        struct {
-            bool encrypted;          /* Encryption flag (files only) */
-        } file;
-
-        struct {
-            char _reserved;          /* Reserved for C11 compliance */
-        } directory;
-
-        struct {
-            char _reserved;          /* Reserved for C11 compliance */
-        } symlink;
-    };
+    path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
+    char *key;          /* Storage path — the join key for every consumer */
+    mode_t mode;        /* Claimed permission bits, or MODE_UNCLAIMED */
+    char *owner;        /* Claimed owner, or NULL */
+    char *group;        /* Claimed group, or NULL */
+    bool encrypted;     /* The blob's ciphertext stamp (false for DIRECTORY) */
 } metadata_item_t;
 
 /**
@@ -177,7 +164,7 @@ void metadata_free(metadata_t *metadata);
  * Create file metadata item
  *
  * @param storage_path Path in profile (must not be NULL)
- * @param mode Permission mode (e.g., 0600, 0644, 0755)
+ * @param mode Claimed permission bits (e.g., 0600, 0644), or MODE_UNCLAIMED
  * @param encrypted Encryption flag
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
@@ -192,9 +179,12 @@ error_t *metadata_item_create_file(
 /**
  * Create directory metadata item
  *
+ * Accepts MODE_UNCLAIMED for the parse path (a hand-sparse document may omit
+ * the mode); the capture path always claims one from its stat.
+ *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
- * @param mode Permission mode (e.g., 0700, 0755)
+ * @param mode Claimed permission bits (e.g., 0700, 0755), or MODE_UNCLAIMED
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
@@ -205,29 +195,7 @@ error_t *metadata_item_create_directory(
 );
 
 /**
- * Create symlink metadata item
- *
- * Creates a metadata item for a symbolic link. Mode is always 0 because symlink
- * permissions are not settable (symlink() has no mode parameter, and chmod() on
- * a symlink changes the target or fails, OS-dependent).
- *
- * Only ownership (owner/group) is meaningful for symlinks, applied via lchown()
- * during deployment.
- *
- * @param storage_path Path in profile (must not be NULL)
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
- * @return Error or NULL on success
- */
-error_t *metadata_item_create_symlink(
-    const char *storage_path,
-    metadata_item_t **out
-);
-
-/**
  * Free metadata item
- *
- * Handles both file and directory items correctly. Frees kind-specific union
- * fields based on kind.
  *
  * @param item Item to free (can be NULL)
  */
@@ -236,9 +204,8 @@ void metadata_item_free(metadata_item_t *item);
 /**
  * Clone metadata item (deep copy)
  *
- * Creates a deep copy of a metadata item, duplicating all strings and union fields
- * based on the item's kind. Useful when preserving an item while modifying the
- * original collection.
+ * Creates a deep copy of a metadata item, duplicating all strings. Useful when
+ * preserving an item while modifying the original collection.
  *
  * @param source Source item to clone (must not be NULL)
  * @param out Cloned item (must not be NULL, caller must free with
@@ -310,7 +277,7 @@ bool metadata_remove_item(
  *   - No index entry lives under it (no anchoring descendants in the tree the
  *     impending commit will record).
  *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the filesystem's
- *     umask default).
+ *     umask default), or MODE_UNCLAIMED (a hand-sparse entry claiming even less).
  *   - owner == NULL AND group == NULL (no ownership override to preserve).
  *
  * Anchoring is judged against the post-edit index (the tree the impending commit
@@ -358,9 +325,7 @@ error_t *metadata_prune_directories(
 /**
  * Encrypted flag for a file entry
  *
- * Type-safe accessor: it reads the file union member from behind its discriminator,
- * so a key that is absent, or held as a directory or a symlink, answers false
- * rather than misreading a union.
+ * A key that is absent, held as a directory, or held unstamped answers false.
  *
  * Common usage pattern for historical operations:
  *   bool encrypted = metadata_file_encrypted(metadata, storage_path);
@@ -399,23 +364,29 @@ const metadata_item_t *const *metadata_items(
 );
 
 /**
- * Capture metadata from filesystem file
+ * Capture a path's claim from stat data (regular file or symlink)
  *
- * Creates a file metadata item from stat data. For symlinks, delegates to
- * metadata_capture_from_symlink().
+ * One existence rule: an item exists iff it claims something. A regular file
+ * always claims its mode (0000 included); a symlink claims none — symlink(2)
+ * takes none — so its item carries ownership alone, and when there is no ownership
+ * to claim either, no item is authored and *out is NULL. A NULL answer is therefore
+ * a links-only answer, and the producers read it as "the capture claims nothing":
+ * retire whatever stale item stands at the key.
  *
  * Ownership capture (user/group):
- * - ONLY captured for files whose label tracks ownership (root/, custom/), and
+ * - ONLY captured for paths whose label tracks ownership (root/, custom/), and
  *   only when running as root (UID 0)
- * - home/ prefix files: ownership never captured (always current user)
+ * - home/ prefix paths: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
+ *
+ * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
  *
  * @param filesystem_path Path to file on disk (must not be NULL, for error
  *                        messages)
  * @param storage_path Path in profile (must not be NULL)
  * @param st File stat data (must not be NULL)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
- *            Set to NULL if symlink with no ownership to track (not an error)
+ *            Set to NULL if the capture claims nothing (not an error)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_file(
@@ -426,37 +397,13 @@ error_t *metadata_capture_from_file(
 );
 
 /**
- * Capture metadata from filesystem symlink
- *
- * Creates a symlink metadata item with ownership data only. Mode is always 0
- * (symlink permissions are not settable).
- *
- * Symlinks only need metadata for ownership tracking on paths whose label tracks
- * it. For home/ prefix or non-root users, returns *out = NULL (no metadata needed).
- *
- * Ownership capture (user/group):
- * - ONLY captured for symlinks whose label tracks ownership (root/, custom/),
- *   and only when running as root (UID 0)
- * - home/ prefix symlinks: always owned by current user, no metadata needed
- * - Regular users: can't lchown anyway, no metadata needed
- *
- * @param storage_path Path in profile (must not be NULL)
- * @param st Symlink stat data from lstat (must not be NULL, must be S_ISLNK)
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
- *            Set to NULL if no ownership to track (not an error)
- * @return Error or NULL on success
- */
-error_t *metadata_capture_from_symlink(
-    const char *storage_path,
-    const struct stat *st,
-    metadata_item_t **out
-);
-
-/**
  * Capture metadata from filesystem directory
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
- * rules as file capture.
+ * rules as file capture; the mode is always claimed from the stat. Callers treat
+ * a directory-capture failure as a warning where a file-capture failure is fatal:
+ * a directory item is an attributes overlay, never content, so a missed capture
+ * loses a claim and nothing else.
  *
  * Ownership capture (user/group):
  * - ONLY captured for directories whose label tracks ownership (root/, custom/),
@@ -516,7 +463,10 @@ error_t *metadata_load_from_tree(
 /**
  * Convert metadata to JSON string
  *
- * Serializes metadata to JSON format
+ * Serializes metadata to JSON: items in key order (a write-side norm buying
+ * byte-determinism across machines; the parser accepts any order), fields present
+ * iff claimed — an unclaimed mode, a NULL owner/group and a false encrypted have
+ * no line to print.
  *
  * @param metadata Metadata to serialize (must not be NULL)
  * @param out JSON buffer (must not be NULL, caller must free with buffer_free)

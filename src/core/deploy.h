@@ -33,10 +33,10 @@
  *   profile. A tracked directory therefore never refuses a tracked path beneath
  *   it, and preflight predicts no modes
  * - Silent: outcomes travel in the result, verdicts and findings in the preflight
- *   result — with the anomalies met while deciding (a corrupt row, an identity
- *   that could not be resolved), which are the caller's to print — and failures
- *   in the error chain. This module emits no prose of its own; verbosity and
- *   tense are the caller's, the same convention as every other core module
+ *   result — with the anomalies met while deciding (an identity that could not
+ *   be resolved), which are the caller's to print — and failures in the error
+ *   chain. This module emits no prose of its own; verbosity and tense are the
+ *   caller's, the same convention as every other core module
  */
 
 #ifndef DOTTA_DEPLOY_H
@@ -74,12 +74,10 @@ typedef struct {
  * The occupant is also the receipt's verb for a directory: NONE → created,
  * DIRECTORY → fixed, anything else → replaced.
  *
- * The mode is the row's, or the kind's default where the row carries none — a
- * "0000" claim in the profile's metadata.json, which the workspace reads as no
- * claim (check_item_metadata_divergence) and preflight reads the same way, with
- * a warning. A symlink row carries mode 0 by design (symlink(2) takes none) and
- * is never asked. Ownership is resolved (resolve_deployment_ownership); (uid_t)
- * -1 / (gid_t) -1 is no change.
+ * The mode is the row's — total for every kind that carries one (the claim, or
+ * the floor manifest_build resolved absence into); a symlink row carries mode 0
+ * by design (symlink(2) takes none) and is never asked. Ownership is resolved
+ * (resolve_deployment_ownership); (uid_t) -1 / (gid_t) -1 is no change.
  */
 typedef struct {
     const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
@@ -121,8 +119,8 @@ typedef struct {
  *                      path and the reason
  *
  * Any one non-empty blocks the run. The warnings do not: they are the anomalies
- * preflight met while deciding — a mode it substituted, an ownership it could
- * not resolve — each one formatted and ready to print.
+ * preflight met while deciding — an ownership it could not resolve — each one
+ * formatted and ready to print.
  *
  * The verdicts are the *how*, one per pending row, in plan order — directories
  * parents-first, the order deploy_execute converges them in — and then the
@@ -334,13 +332,12 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   fresh probe preflight takes; the mechanism (ensure_parents) asks the same
  *   questions of the same ancestor, so this predicts the run rather than modelling
  *   it.
- * - Metadata — the mode the write applies (the row's, or the kind's default for
- *   a row that carries none, with a warning) and the ownership
- *   (resolve_deployment_ownership: the invoking user's for a path under their
- *   home when running as root, the row's owner and group resolved where the label
- *   tracks ownership, no change otherwise). Under strict_ownership an owner or
- *   group this system does not know is an error, returned here — before the prompt,
- *   never mid-run; otherwise it is a warning and no change.
+ * - Metadata — the mode the write applies (the row's, total by build) and the
+ *   ownership (resolve_deployment_ownership: the invoking user's for a path under
+ *   their home when running as root, the row's owner and group resolved where
+ *   the label tracks ownership, no change otherwise). Under strict_ownership an
+ *   owner or group this system does not know is an error, returned here — before
+ *   the prompt, never mid-run; otherwise it is a warning and no change.
  *
  * Then the ancestors: every tracked directory row the plan does not act on, absent
  * as the plan reads it — the workspace's occupant, or beneath a squatter this

@@ -169,7 +169,7 @@ static error_t *resolve_removal_claims(
     if (metadata) {
         items = metadata_items(metadata, &item_count);
         for (size_t i = 0; i < item_count; i++) {
-            if (items[i]->kind == METADATA_ITEM_DIRECTORY) dir_count++;
+            if (items[i]->kind == PATH_KIND_DIRECTORY) dir_count++;
         }
     }
 
@@ -202,7 +202,7 @@ static error_t *resolve_removal_claims(
     }
 
     for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
         const char *key = items[i]->key;
 
         /* Same-profile rule as the view's claim routine (manifest.c): a key the
@@ -1380,7 +1380,7 @@ static error_t *delete_profile_branch(
             const metadata_item_t *const *items =
                 metadata_items(branch_metadata, &item_count);
             for (size_t i = 0; i < item_count; i++) {
-                if (items[i]->kind != METADATA_ITEM_DIRECTORY) continue;
+                if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
                 bool held_as_blob = false;
                 for (size_t j = 0; j < files->count && !held_as_blob; j++) {
                     held_as_blob = strcmp(files->items[j], items[i]->key) == 0;

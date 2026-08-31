@@ -29,58 +29,145 @@
 #include "utils/privilege.h"
 
 /**
- * Print deploy pre-flight results: the warnings, then the findings
+ * Print deploy pre-flight results: the warnings, then the skips
  *
  * A warning is an anomaly preflight met while deciding — an ownership it could
- * not resolve — and the run goes on; it prints first, so that when a finding
- * follows, the remedy is the last thing on the screen. The findings block the
- * run, and the caller tests their counts after this prints.
+ * not resolve — and only a row the run will deploy contributes one. The skips
+ * are reported and the run goes on: the verdicts already exclude them, so nothing
+ * downstream re-checks. One section for every skip, both kinds, in decision order
+ * — a skipped squatter precedes the rows it holds back, which is the reading
+ * order — capped like every preview list (one squatter can hold a subtree, so
+ * this one has a multiplier cleanup's uncapped block does not).
+ *
+ * Two line families. The landing and occupancy reasons keep their exact
+ * parentheticals — facts about the path's surroundings, no profile. The row-fact
+ * reasons read the way cleanup's skip block three lines away reads: a short label,
+ * then the profile whose claim goes undelivered — red where content or type moved
+ * away from the row, yellow where dotta cannot vouch for what stands there.
+ *
+ * The remedies come last, each gated by the class actually present
+ * (deploy_skip_needs_force) — a conflict-only run is not told to fix paths by
+ * hand, and an unreadable-only run is not offered a flag that will not lift it.
+ * The block sits between the deploy preview and cleanup's, so each engine tells
+ * its story the same way — what it will do, then what it will not and why, remedies
+ * nearest the prompt (the rule cleanup's printer states). No total-count line:
+ * the exit error's message is the count's one home.
  */
 static void print_deploy_preflight_results(
     const output_t *out,
     const deploy_preflight_result_t *result
 ) {
+    const size_t limit = 20;   /* Don't flood the terminal */
+
     for (size_t i = 0; i < result->warnings->count; i++) {
         output_warning(out, OUTPUT_NORMAL, "%s", result->warnings->items[i]);
     }
 
-    /* Print conflicts */
-    if (result->conflicts->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Conflicts (modified locally or wrong type)");
-        for (size_t i = 0; i < result->conflicts->count; i++) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                result->conflicts->items[i]
-            );
-        }
-        output_newline(out, OUTPUT_NORMAL);
-        output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
+    if (result->skipped.count == 0) {
+        return;
     }
 
-    /* Print blocked paths (an ancestry that refuses the planned path) */
-    if (result->blocked->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Blocked (resolve these by hand)");
-        for (size_t i = 0; i < result->blocked->count; i++) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                result->blocked->items[i]
-            );
+    output_section(out, OUTPUT_NORMAL, "Skipped paths");
+    output_warning(out, OUTPUT_NORMAL, "The following were not deployed:");
+
+    for (size_t i = 0; i < result->skipped.count && i < limit; i++) {
+        const deploy_skip_t *s = &result->skipped.entries[i];
+        const char *path = s->row->filesystem_path;
+
+        switch (s->reason) {
+            case DEPLOY_SKIP_PERMISSION:
+                if (s->detail) {
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s is not writable)\n",
+                        path, s->detail
+                    );
+                } else {
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
+                        path
+                    );
+                }
+                break;
+
+            case DEPLOY_SKIP_ANCESTOR:
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s is not a directory)\n",
+                    path, s->detail
+                );
+                break;
+
+            case DEPLOY_SKIP_OCCUPIED:
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {red}✗{reset} %s (a non-empty directory is in the way)\n",
+                    path
+                );
+                break;
+
+            case DEPLOY_SKIP_TYPE:
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ⚠");
+                output_print(out, OUTPUT_NORMAL, " %s ", path);
+                if (s->detail) {
+                    output_colored(
+                        out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type at %s from ",
+                        s->detail
+                    );
+                } else {
+                    output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type from ");
+                }
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
+                break;
+
+            case DEPLOY_SKIP_CONTENT:
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ✗");
+                output_print(out, OUTPUT_NORMAL, " %s ", path);
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(modified locally from ");
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
+                break;
+
+            case DEPLOY_SKIP_UNREADABLE:
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
+                output_print(out, OUTPUT_NORMAL, " %s ", path);
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(cannot verify from ");
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
+                break;
+
+            case DEPLOY_SKIP_NONE:
+                /* Unreachable: a row is in skipped because a reason names it */
+                break;
         }
-        output_newline(out, OUTPUT_NORMAL);
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Fix the path by hand, or widen the scope so a tracked ancestor is planned"
+    }
+
+    if (result->skipped.count > limit) {
+        output_print(
+            out, OUTPUT_NORMAL, "  ... and %zu more\n", result->skipped.count - limit
         );
     }
 
-    /* Print permission errors */
-    if (result->permission_errors->count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Permission errors");
-        for (size_t i = 0; i < result->permission_errors->count; i++) {
-            output_styled(
-                out, OUTPUT_NORMAL, "  {red}✗{reset} %s\n",
-                result->permission_errors->items[i]
+    /* Each remedy prints iff its class is present, off the same predicate the
+     * exit contract reads (deploy_skip_needs_force) — asked here, where the answer
+     * is used, first match wins. */
+    output_newline(out, OUTPUT_NORMAL);
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
+            output_info(out, OUTPUT_NORMAL, "Use --force to overwrite or replace them");
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (!deploy_skip_needs_force(result->skipped.entries[i].reason)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Fix the path by hand, or widen the scope so a tracked ancestor is planned"
             );
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'dotta apply -e <pattern>' leaves a path out of the run"
+            );
+            break;
         }
     }
 }
@@ -785,9 +872,8 @@ static void print_path_list(
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
     workspace_items_t items = workspace_items_view(bucket);
-    size_t shown = items.count < limit ? items.count : limit;
 
-    for (size_t i = 0; i < shown; i++) {
+    for (size_t i = 0; i < items.count && i < limit; i++) {
         output_colored(out, OUTPUT_VERBOSE, color, "    %s", glyph);
         output_print(out, OUTPUT_VERBOSE, " %s\n", items.entries[i]->filesystem_path);
     }
@@ -1671,13 +1757,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Everything the plans skipped, said once — above the exit below, so a run
-     * whose only work was skipped still reports it, and above the prompt, so
+    /* Everything the plans withheld, said once — above the exit below, so a run
+     * whose only work was withheld still reports it, and above the prompt, so
      * consent is given with the full picture. The count below is the same four
      * buckets: the nothing-to-do line must not call a workspace clean when its
-     * only work was skipped. */
+     * only work was withheld. ("Withheld" is the plan-time word — the user's
+     * own flags, -e and --skip-existing; "skipped" is preflight's, a fate the
+     * run decided.) */
     print_skipped(out, deploy_plan, cleanup_plan);
-    size_t skipped = deploy_plan->files.excluded.count +
+    size_t withheld = deploy_plan->files.excluded.count +
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
         deploy_plan->files.skipped_existing.count;
 
@@ -1724,7 +1812,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     acknowledged_count, acknowledged_count == 1 ? "" : "s"
                 );
             }
-        } else if (skipped > 0) {
+        } else if (withheld > 0) {
             /* The report above named what and why; this only has to avoid claiming
              * the work was never there. */
             output_info(out, OUTPUT_NORMAL, "Nothing left to deploy");
@@ -1749,13 +1837,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Decide deploy's verdicts from the plan, and the findings that block the run
+    /* Decide deploy's verdicts from the plan, and the skips the run reports
      *
      * Divergence verdicts and occupants come from workspace_load's analysis (O(1)
      * index probes); the landing check is filesystem-level. The mode and ownership
-     * every write applies are decided here too, so a strict-mode ownership failure
-     * ends the run before the prompt, and the anomalies met on the way — an owner
-     * this system does not know — print as warnings ahead of the preview.
+     * every write applies are decided here too — deployable rows alone — so a
+     * strict-mode ownership failure ends the run before the prompt (the wrap
+     * below is for such real errors; a skip is not one), and the anomalies met
+     * on the way — an owner this system does not know — print as warnings with
+     * the skip block, after the preview.
      */
     output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n");
 
@@ -1770,22 +1860,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    print_deploy_preflight_results(out, deploy_verdicts);
-
-    /* Check for blocking findings (conflicts, blocked paths, permissions). A
-     * blocked run previews nothing: the findings and their remedy are the whole
-     * of what it has to say, and the remedy stays the last line before the
-     * error. */
-    if (deploy_verdicts->conflicts->count > 0 || deploy_verdicts->blocked->count > 0 ||
-        deploy_verdicts->permission_errors->count > 0) {
-        err = ERROR(ERR_CONFLICT, "Pre-flight checks failed");
-        goto cleanup;
-    }
-
-    /* The previews: the reassignments the run acknowledges, then the verdicts —
-     * what the run does — read the same way in a real run and a dry run. */
+    /* The previews: the reassignments the run acknowledges, then each engine's
+     * story told the same way — what it will do (the preview), then what it will
+     * not and why (the skip block), remedies last, nearest the prompt — read
+     * the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, deploy_verdicts);
+    print_deploy_preflight_results(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
@@ -1798,11 +1879,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     print_cleanup_preflight_results(out, cleanup_verdicts);
 
-    /* Skipped orphans do not abort: prunable ones are still pruned and skipped
-     * ones left alone, which is better than doing nothing. The preview above
-     * counted the skipped files and printed the remedies for them, and
-     * cleanup_execute acts on these same verdicts — so there is nothing to add
-     * here. */
+    /* Neither engine's skips abort: what can be deployed is deployed, what can
+     * be pruned is pruned, and what cannot is named with its remedy — better
+     * than doing nothing. Both previews above counted the skips and printed their
+     * remedies, and both executors act on these same verdicts, so there is nothing
+     * to add here. What the run planned and could not deliver reaches the exit
+     * code at the run's tail. */
 
     /* Build hook invocation with all active profiles */
     profiles_str = string_array_join(scope_active(scope), " ");
@@ -1902,8 +1984,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
-         * call). Reporting reads the result: outcomes, never plan counts. */
-        if (!deploy_plan_is_empty(deploy_plan)) {
+         * call). Reporting reads the result: outcomes, never plan counts. The
+         * gate is verdict truth, not plan truth — a plan whose every row was
+         * skipped carries no work — and a run the skips emptied stays silent:
+         * the skip block was its whole story, and "no work in scope" would misname
+         * it. */
+        if (deploy_verdicts->files.count + deploy_verdicts->directories.count > 0) {
             output_print(out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n");
 
             /* The content cache was populated with decrypted content during
@@ -1918,7 +2004,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
 
             print_deploy_results(out, ws, deploy_result);
-        } else {
+        } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
         }
 
@@ -2281,8 +2367,28 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Execute post-apply hook */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
-    /* Success - fall through to cleanup */
-    err = NULL;
+    /* The receipt is printed; what remains is the return value. The plan is the
+     * run's promise: a row the user's own flags withheld (-e, --skip-existing)
+     * or that dotta held for want of consent (--force) was never promised, and
+     * the receipt is the whole of its report; a row the run planned and could
+     * not deliver was promised, and the exit code says so. Every skip was already
+     * rendered where it happened, so the error carries the one fact the receipt
+     * does not — that the run did not keep its promise. Dry runs reach this too,
+     * so `apply -n` predicts the real run's exit. ERR_FS, not ERR_CONFLICT: the
+     * class is filesystem incapacity, and a conflict no longer ends the run. */
+    size_t undelivered = 0;
+
+    for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
+        if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
+            undelivered++;
+        }
+    }
+    if (undelivered > 0) {
+        err = ERROR(
+            ERR_FS, "%zu path%s could not be deployed",
+            undelivered, undelivered == 1 ? "" : "s"
+        );
+    }
 
 cleanup:
     /* Result and plan buckets borrow rows from the workspace arena — free them
@@ -2350,12 +2456,12 @@ static const args_opt_t apply_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",        "<name>",
-        cmd_apply_options_t,profiles,         profile_count,
+        cmd_apply_options_t,profiles,           profile_count,
         "Filter deployment to profile(s) (repeatable)"
     ),
     ARGS_APPEND(
         "e exclude",        "<pattern>",
-        cmd_apply_options_t,exclude_patterns, exclude_count,
+        cmd_apply_options_t,exclude_patterns,   exclude_count,
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
@@ -2389,11 +2495,11 @@ static const args_opt_t apply_opts[] = {
      * order. */
     ARGS_POSITIONAL(
         APPLY_CLASS_FILE,
-        cmd_apply_options_t,files,            file_count
+        cmd_apply_options_t,files,              file_count
     ),
     ARGS_POSITIONAL(
         APPLY_CLASS_PROFILE,
-        cmd_apply_options_t,profiles,         profile_count
+        cmd_apply_options_t,profiles,           profile_count
     ),
     ARGS_END,
 };

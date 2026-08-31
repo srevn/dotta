@@ -4,9 +4,9 @@
  * Plan / preflight / execute, in that order:
  *
  *   deploy_plan_build   — decide *what* from (workspace, scope), once
- *   deploy_preflight    — decide *how* for every planned row, from the
- *                         workspace's observation and the row: the verdicts,
- *                         and the findings that block the run
+ *   deploy_preflight    — decide the fate of every planned row, from the
+ *                         workspace's observation and the row: a verdict (how
+ *                         it is materialized) or a skip (why it is not)
  *   deploy_execute      — carry the verdicts out; decides nothing
  *
  * Preview, privilege check, prompt, reporting and apply's record step all read
@@ -15,7 +15,7 @@
  *
  * Design principles:
  * - Pre-flight checks before any changes
- * - Explicit conflict detection
+ * - Explicit, per-row skip verdicts
  * - Permission preservation
  * - Fail-stop on error (not transactional, but clear reporting)
  * - Every decision is taken at preflight, from the occupant the workspace observed
@@ -32,7 +32,7 @@
  *   exact recorded mode, deepest-first — the same way cmd_export materializes a
  *   profile. A tracked directory therefore never refuses a tracked path beneath
  *   it, and preflight predicts no modes
- * - Silent: outcomes travel in the result, verdicts and findings in the preflight
+ * - Silent: outcomes travel in the result, verdicts and skips in the preflight
  *   result — with the anomalies met while deciding (an identity that could not
  *   be resolved), which are the caller's to print — and failures in the error
  *   chain. This module emits no prose of its own; verbosity and tense are the
@@ -97,50 +97,111 @@ typedef struct {
 } deploy_verdicts_t;
 
 /**
- * Pre-flight results: the findings, the anomalies, and the verdicts
+ * Why a planned row is not deployed this run
  *
- * Three findings, three remedies:
- *   conflicts          modified locally, or wrong type at the path — --force
- *   blocked            a planned path this run cannot land, and neither
- *                      --force nor privileges change that: an untracked
- *                      non-directory — a file, a dangling symlink — squats an
- *                      ancestor (remove it, or widen the scope so a tracked
- *                      ancestor is planned and --force can replace it), or a
- *                      directory holding untracked paths stands at the planned
- *                      path itself (remove it). Each entry carries its own reason
- *   permission_errors  a directory that is not dotta's refuses the write —
- *                      the nearest present ancestor is untracked (or tracked
- *                      but not ours) and not writable, or the ancestry cannot
- *                      be reached — privileges, or the directory's owner; or
- *                      the planned path itself could not be examined (the
- *                      workspace's lstat failed for a reason other than absence),
- *                      so no verdict can describe what stands there and nothing
- *                      is written on a guess — --force does not lift it; make
- *                      the path readable and run again. Each entry names the
- *                      path and the reason
+ * The counterpart of cleanup_skip_reason_t, and the same contract: values are
+ * listed in precedence order, and the reason is the first that applies, so a
+ * row several reasons claim is reported under the one that outranks the rest.
  *
- * Any one non-empty blocks the run. The warnings do not: they are the anomalies
- * preflight met while deciding — an ownership it could not resolve — each one
- * formatted and ready to print.
+ * Two classes, and the class is the whole of what a consumer needs beyond the
+ * label (deploy_skip_needs_force):
  *
- * The verdicts are the *how*, one per pending row, in plan order — directories
- * parents-first, the order deploy_execute converges them in — and then the
- * ancestors: the tracked directories outside the plan that the run may make on
- * the way to a planned path (see deploy_preflight). Every array is always
+ *   consent      dotta could act and did not, because nothing said to —
+ *                TYPE, CONTENT. --force lifts them; the run kept its promise,
+ *                so they do not reach the exit code.
+ *   incapacity   dotta could not act — PERMISSION, ANCESTOR, OCCUPIED,
+ *                UNREADABLE. No flag lifts them (the posture cleanup takes towards
+ *                a released file and a directory's UNVERIFIED); the run planned
+ *                the row and did not deliver it, so the exit code says so.
+ *
+ * Precedence, and why UNREADABLE ranks last where its siblings
+ * (cleanup_skip_reason, workspace_item_route) rank the same fact first: the landing
+ * check, when it has something to say, names the ancestry that refused the look
+ * — the actionable half of the very same fact. UNREADABLE is what is left when
+ * the landing had nothing to say.
+ *
+ * Symlink rows need no arm of their own: a foreign kind at a link row's path is
+ * TYPE (file_row_occupant), a retargeted link is CONTENT (the target compare),
+ * and the undecryptable arm of UNREADABLE cannot fire for one (a link's blob is
+ * read raw, never through the content layer).
+ */
+typedef enum {
+    DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
+    DEPLOY_SKIP_PERMISSION,   /* The landing refuses: an ancestor not ours, or none reachable */
+    DEPLOY_SKIP_ANCESTOR,     /* An untracked non-directory squats an ancestor */
+    DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
+    DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
+    DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
+    DEPLOY_SKIP_UNREADABLE    /* The path could not be read: no verdict, no guess */
+} deploy_skip_reason_t;
+
+/**
+ * Is --force the remedy for this skip?
+ *
+ * The consent/incapacity split, as a value. "Needs force" is the module's own
+ * word (CLEARANCE_NEEDS_FORCE) and the screen's ("Use --force to overwrite or
+ * replace them"). Two consumers in different places — apply's closing hints and
+ * apply's exit contract — so one producer.
+ */
+static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
+    return reason == DEPLOY_SKIP_TYPE || reason == DEPLOY_SKIP_CONTENT;
+}
+
+/**
+ * One planned row the run does not deploy
+ *
+ * The shape deploy_verdict_t gives a row the run does deploy: the row, and the
+ * facts decided about it. `detail` is the path the reason names — the ancestor
+ * that refused, the non-directory in the way, the squatted tracked directory
+ * above an inheriting row — or NULL where the reason has no path to name: it is
+ * about the planned path itself, or (PERMISSION alone) the ancestry could not
+ * even be reached to name its refusing node. Owned; deploy_preflight_result_free
+ * releases it. The row is borrowed (workspace lifetime), as every row in this
+ * module is.
+ */
+typedef struct {
+    const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
+    deploy_skip_reason_t reason;
+    char *detail;                 /* Owned; NULL when the reason needs no path */
+} deploy_skip_t;
+
+/**
+ * A skip array with its count — the shape deploy_verdicts_t gives verdicts
+ */
+typedef struct {
+    deploy_skip_t *entries;
+    size_t count;
+} deploy_skips_t;
+
+/**
+ * Pre-flight results: the skips, the anomalies, and the verdicts
+ *
+ * The verdicts are the *how*, one per row the run WILL deploy, in plan order —
+ * directories parents-first, the order deploy_execute converges them in — and
+ * then the ancestors: the tracked directories outside the plan that the run may
+ * make on the way to a planned path (see deploy_preflight). Every array is always
  * allocated, so a consumer reads counts and needs no NULL guard.
  */
 typedef struct {
-    /* Findings — any one blocks the run */
-    string_array_t *conflicts;           /* Paths modified locally / wrong type */
-    string_array_t *blocked;             /* "<path> (<reason>)" */
-    string_array_t *permission_errors;   /* "<path> (<reason>)" */
+    /* The rows the run does not deploy, both kinds, in decision order — directories
+     * parents-first, then files. A squatted directory therefore precedes the
+     * rows it holds back. With the verdicts below this is a partition of the
+     * plan's pending rows:
+     *
+     *   files.pending ∪ directories.pending = verdicts(files ∪ directories) ∪
+     *       skipped
+     *
+     * — deploy's own totality equation, the counterpart of cleanup.h's. */
+    deploy_skips_t skipped;
 
-    /* Anomalies met while deciding — the run goes on; the caller prints them */
+    /* Anomalies met while deciding — the run goes on; the caller prints them.
+     * Only rows the run will touch contribute: a skipped row's ownership is not
+     * resolved, so it can neither warn nor fail strict mode. */
     string_array_t *warnings;
 
-    /* The how */
-    deploy_verdicts_t directories;       /* One per pending directory row, parents first */
-    deploy_verdicts_t files;             /* One per pending file row */
+    /* The how — one per row the run WILL deploy */
+    deploy_verdicts_t directories;       /* Pending directory rows, parents first */
+    deploy_verdicts_t files;             /* Pending file rows */
     deploy_verdicts_t ancestors;         /* Tracked directories the run may make on the way */
 } deploy_preflight_result_t;
 
@@ -337,59 +398,76 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
 }
 
 /**
- * Decide the verdicts, and the findings that block the run
+ * Decide the fate of every planned row: a verdict, or a skip
  *
  * Decided in the order the run acts — the directory rows parents-first, then
- * the files, then the ancestors — so every verdict is taken after the verdicts
- * for whatever the run reaches before it: a file's tracked ancestors are directory
- * rows, converged before anything is written beneath them. The findings and the
+ * the files, then the ancestors — so every fate is decided after the fates of
+ * whatever the run reaches before it: a file's tracked ancestors are directory
+ * rows, converged before anything is written beneath them. The skips and the
  * warnings come out in that order too.
  *
- * One verdict per pending row, each question asked of its one authority:
- * - Type — the occupant the workspace observed at the planned path, both kinds
- *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces
- *   is absent, and asked nothing). A non-directory where a directory belongs
- *   (or the reverse) blocks unless --force; a directory holding untracked paths
- *   blocks either way, because deploy removes single nodes and never a tree. An
- *   occupant the workspace could not examine is a permission error: no verdict
- *   can say what the run will find there.
- * - Content — the workspace's divergence verdict, the only authority for a fact
- *   no lstat can settle. Blocks unless --force (STALE without CONTENT never blocks:
- *   disk still holds the blob dotta deployed, so the overwrite loses nothing);
- *   mode, ownership and encryption divergence never block.
+ * One fate per pending row (the totality equation, deploy_preflight_result_t),
+ * each question asked of its one authority, the first skip reason that applies
+ * winning (deploy_skip_reason_t):
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file renamed over the target, a symlink unlinked
  *   and re-made, a mkdir — so the path's own permissions are never the question,
  *   and a directory being converged in place asks nothing at all. The question
  *   goes to the nearest present ancestor alone: everything absent beneath it is
- *   created by this run at a working mode and cannot refuse. A pending or tracked
- *   directory there is dotta's to hold and never refuses; any other directory
- *   must accept a new entry now (access(2)) or it is a permission error; a
- *   non-directory squatter blocks. Ancestors are not items, so this is the one
- *   fresh probe preflight takes; the mechanism (ensure_parents) asks the same
- *   questions of the same ancestor, so this predicts the run rather than modelling
- *   it.
- * - Metadata — the mode the write applies (the row's, total by build) and the
- *   ownership (resolve_deployment_ownership: the invoking user's for a path under
- *   their home when running as root, the row's owner and group resolved where
- *   the label tracks ownership, no change otherwise). Under strict_ownership an
- *   owner or group this system does not know is an error, returned here — before
- *   the prompt, never mid-run; otherwise it is a warning and no change.
+ *   created by this run at a working mode and cannot refuse. A deployable or
+ *   holdable tracked directory there is dotta's and never refuses; any other
+ *   directory must accept a new entry now (access(2)) or the row is skipped
+ *   (PERMISSION); a non-directory squatter skips it too (ANCESTOR). Ancestors
+ *   are not items, so this is the one fresh probe preflight takes; the mechanism
+ *   (ensure_parents) asks the same questions of the same ancestor, so this predicts
+ *   the run rather than modelling it.
+ * - Type — the occupant the workspace observed at the planned path, both kinds
+ *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces
+ *   is absent, and asked nothing). A non-directory where a directory belongs
+ *   (or the reverse) is skipped unless --force (TYPE); a directory holding
+ *   untracked paths is skipped either way (OCCUPIED), because deploy removes
+ *   single nodes and never a tree. An occupant the workspace could not examine
+ *   is skipped as UNREADABLE when the landing had nothing to say: no verdict
+ *   can say what the run will find there.
+ * - Content — the workspace's divergence verdict, the only authority for a fact
+ *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
+ *   never skips: disk still holds the blob dotta deployed, so the overwrite loses
+ *   nothing); mode, ownership and encryption divergence never skip.
+ * - Metadata — deployable rows only: the mode the write applies (the row's, total
+ *   by build) and the ownership (resolve_deployment_ownership: the invoking user's
+ *   for a path under their home when running as root, the row's owner and group
+ *   resolved where the label tracks ownership, no change otherwise). Under
+ *   strict_ownership an owner or group this system does not know is an error,
+ *   returned here — before the prompt, never mid-run; otherwise it is a warning
+ *   and no change. A skipped row is not consulted, so it can neither warn nor
+ *   fail strict mode.
  *
  * Then the ancestors: every tracked directory row the plan does not act on, absent
  * as the plan reads it — the workspace's occupant, or beneath a squatter this
- * run replaces — that stands above a pending row. ensure_parents creates exactly
- * these on the way to the planned path (the untracked parents beside them carry
- * no metadata to decide), so their metadata is decided here like any other row's,
- * and a warning or a strict-mode error about one is met before the prompt like
- * any other.
+ * run replaces — that stands above a *deployable* row. ensure_parents creates
+ * exactly these on the way to a planned path (the untracked parents beside them
+ * carry no metadata to decide), so their metadata is decided here like any other
+ * row's, and a warning or a strict-mode error about one is met before the prompt
+ * like any other.
  *
- * Only rows the run will touch are consulted — the planned ones, and the ancestors
- * it will make; a directory the run leaves alone cannot block. A planned row
- * beneath a squatted pending directory (deploy_plan_build) is asked nothing:
- * the path is empty once the directory pass has replaced the squatter, and its
- * landing is the pending ancestor's — whose own row carries the conflict --force
- * resolves, and the landing question. Its verdict carries that absence.
+ * The deployable gate rests on an invariant the ladders establish rather than
+ * check: beneath a skipped pending directory, every planned row is also skipped.
+ * A TYPE skip propagates by inheritance (the squatter stays, so nothing beneath
+ * it can land or be trusted); a landing-skipped directory stops nothing itself,
+ * but presence is monotone up a path, so every planned row beneath one meets
+ * the same refusing ancestor at its own landing check; an unreadable one leaves
+ * its descendants' probes to fail on the way up. So the ancestors loop can never
+ * plan a parent for a subtree the run holds.
+ *
+ * Only rows the run will touch are consulted — the deployable ones, and the
+ * ancestors it will make; a directory the run leaves alone cannot skip anything.
+ * A planned row beneath a squatted pending directory (deploy_plan_build) is asked
+ * nothing: the path is empty once the directory pass has replaced the squatter,
+ * and its landing is the pending ancestor's — whose own row carries the conflict
+ * --force resolves, and the landing question. Its verdict carries that absence
+ * when the squatter is replaced; when the squatter's row is skipped instead,
+ * the row inherits that skip, ancestor named (the plan's premise — "the squatter
+ * is gone first" — holds row by row, never on average).
  *
  * Runs under the identity the run will act under: apply's privilege check precedes
  * it, so ownership resolves as the executors will apply it.
@@ -402,8 +480,8 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * @param out Pre-flight results (must not be NULL; caller frees with
  *        deploy_preflight_result_free, after deploy_execute and before
  *        workspace_free)
- * @return Error or NULL on success (a finding is not an error; a strict-mode
- *         ownership failure is)
+ * @return Error or NULL on success (a skip is not an error; a strict-mode ownership
+ *         failure is)
  */
 error_t *deploy_preflight(
     const workspace_t *ws,
@@ -455,7 +533,8 @@ error_t *deploy_preflight(
  * @param repo Repository (must not be NULL)
  * @param ws Workspace the plan was built from (must not be NULL; the
  *        tracked-ancestor lookup for a landing directory the run may hold)
- * @param verdicts Pre-flight results with no blocking finding (must not be NULL)
+ * @param verdicts The verdicts to carry out — deployable rows only, by
+ *        construction: the skips never enter these arrays (must not be NULL)
  * @param cache Content cache for batch operations (must not be NULL)
  * @param out Deployment results (must not be NULL, caller must free)
  * @return Error or NULL on success

@@ -217,9 +217,9 @@ typedef enum {
  *                            user can act on while the path cannot be read.
  *   STALE ∧ CONTENT          CONFLICT — both sides moved since dotta last
  *                            deployed: the edit is real, but update will not
- *                            commit bytes Git has moved past, and apply refuses
- *                            to overwrite the edit without --force. Neither verb's
- *                            by default; the user decides.
+ *                            commit bytes Git has moved past, and apply skips
+ *                            the row rather than overwrite the edit without
+ *                            --force. Neither verb's by default; the user decides.
  *   STALE alone              STALE — Git advanced past the deployed blob and
  *                            disk did not move: overwriting loses nothing, so
  *                            the bytes are apply's to bring whether or not a

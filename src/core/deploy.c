@@ -904,24 +904,25 @@ static error_t *resolve_deployment_ownership(
  *
  * The mode is the row's, verbatim — total for every kind that carries one (the
  * claim, or the floor manifest_build resolved absence into); a symlink row is
- * never asked (symlink(2) takes no mode). Ownership is resolved ahead of the
- * write so the write applies it atomically through the descriptor (fchown on
- * the file or directory fd, lchown on a link): there is never a moment when the
- * path exists with the wrong owner.
+ * never asked (symlink(2) takes no mode). The write reads it off the row, and
+ * the verdict does not carry it: the decided facts are exactly the ones not on
+ * the row. Ownership is one, resolved ahead of the write so the write applies
+ * it atomically through the descriptor (fchown on the file or directory fd,
+ * lchown on a link): there is never a moment when the path exists with the
+ * wrong owner.
  *
- * @param row View row (must not be NULL; borrowed, read-only)
  * @param opts Deployment options (must not be NULL)
  * @param warnings Preflight warnings (must not be NULL)
- * @param v Verdict whose mode, uid and gid are decided (must not be NULL)
+ * @param v Verdict whose uid and gid are decided, its row assigned (must not
+ *        be NULL)
  * @return Error or NULL on success (a strict-mode ownership failure is one)
  */
 static error_t *resolve_metadata(
-    const manifest_row_t *row,
     const deploy_options_t *opts,
     string_array_t *warnings,
     deploy_verdict_t *v
 ) {
-    v->mode = row->mode;
+    const manifest_row_t *row = v->row;
 
     error_t *err = resolve_deployment_ownership(
         row->storage_path,
@@ -1075,7 +1076,7 @@ error_t *deploy_preflight(
 
             v->row = row;
             v->occupant = FS_OCCUPANT_NONE;
-            err = resolve_metadata(row, opts, result->warnings, v);
+            err = resolve_metadata(opts, result->warnings, v);
             if (err) goto cleanup;
             continue;
         }
@@ -1128,7 +1129,7 @@ error_t *deploy_preflight(
 
         v->row = row;
         v->occupant = occupant;
-        err = resolve_metadata(row, opts, result->warnings, v);
+        err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;
     }
 
@@ -1158,7 +1159,7 @@ error_t *deploy_preflight(
 
             v->row = row;
             v->occupant = FS_OCCUPANT_NONE;
-            err = resolve_metadata(row, opts, result->warnings, v);
+            err = resolve_metadata(opts, result->warnings, v);
             if (err) goto cleanup;
             continue;
         }
@@ -1231,7 +1232,7 @@ error_t *deploy_preflight(
 
         v->row = row;
         v->occupant = occupant;
-        err = resolve_metadata(row, opts, result->warnings, v);
+        err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;
     }
 
@@ -1271,7 +1272,7 @@ error_t *deploy_preflight(
 
         v->row = row;
         v->occupant = FS_OCCUPANT_NONE;
-        err = resolve_metadata(row, opts, result->warnings, v);
+        err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;
     }
 
@@ -1403,29 +1404,27 @@ static error_t *release_directories(deploy_run_t *run) {
  *
  * Ownership applies atomically through the descriptor
  * (fs_create_dir_with_ownership); idempotent, so a directory already there is
- * converged in place. The row is held for release when its recorded mode is
- * narrower than the working mode (hold_directory).
+ * converged in place. The mode is the row's, the ownership the verdict's, and
+ * the row is held for release when its recorded mode is narrower than the
+ * working mode (hold_directory).
  *
  * @param run Run context (must not be NULL)
- * @param dir Tracked row (must not be NULL; borrowed, read-only)
- * @param mode Resolved target mode (the verdict's)
- * @param uid Resolved UID or -1 for no change
- * @param gid Resolved GID or -1 for no change
+ * @param v Verdict for the tracked row (must not be NULL; borrowed, read-only)
  * @return Error or NULL on success
  */
 static error_t *materialize_tracked_directory(
-    deploy_run_t *run,
-    const manifest_row_t *dir,
-    mode_t mode, uid_t uid, gid_t gid
+    deploy_run_t *run, const deploy_verdict_t *v
 ) {
+    const manifest_row_t *dir = v->row;
+
     error_t *err = fs_create_dir_with_ownership(
-        dir->filesystem_path, working_mode(mode), uid, gid
+        dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
     );
     if (err) {
         return err;
     }
 
-    return hold_directory(run, dir->filesystem_path, mode);
+    return hold_directory(run, dir->filesystem_path, dir->mode);
 }
 
 /**
@@ -1461,9 +1460,7 @@ static error_t *create_ancestor(
             continue;
         }
 
-        RETURN_IF_ERROR(
-            materialize_tracked_directory(run, v->row, v->mode, v->uid, v->gid)
-        );
+        RETURN_IF_ERROR(materialize_tracked_directory(run, v));
         return ptr_array_push(&run->result->ancestors, v->row);
     }
 
@@ -1733,7 +1730,7 @@ static error_t *deploy_file(
      * only resolves. */
     struct stat written;
     err = fs_write_file_raw(
-        file->filesystem_path, content, size, v->mode, v->uid, v->gid, &written
+        file->filesystem_path, content, size, file->mode, v->uid, v->gid, &written
     );
 
     if (err) {
@@ -1772,8 +1769,7 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
-    const manifest_row_t *dir = v->row;
-    const char *path = dir->filesystem_path;
+    const char *path = v->row->filesystem_path;
     error_t *err = NULL;
 
     switch (v->occupant) {
@@ -1806,7 +1802,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    err = materialize_tracked_directory(run, dir, v->mode, v->uid, v->gid);
+    err = materialize_tracked_directory(run, v);
     if (err) {
         return error_wrap(err, "Failed to create tracked directory: %s", path);
     }

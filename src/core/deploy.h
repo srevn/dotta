@@ -46,6 +46,7 @@
 #include <git2.h>
 #include <types.h>
 
+#include "core/scope.h"
 #include "core/state.h"
 #include "sys/filesystem.h"
 
@@ -55,7 +56,6 @@
 typedef struct content_cache content_cache_t;
 typedef struct manifest_row manifest_row_t;
 typedef struct workspace workspace_t;
-typedef struct scope scope_t;
 
 /**
  * Deployment options — read by deploy_preflight alone, as cleanup's are
@@ -76,15 +76,14 @@ typedef struct {
  * The occupant is also the receipt's verb for a directory: NONE → created,
  * DIRECTORY → fixed, anything else → replaced.
  *
- * The mode is the row's — total for every kind that carries one (the claim, or
- * the floor manifest_build resolved absence into); a symlink row carries mode 0
- * by design (symlink(2) takes none) and is never asked. Ownership is resolved
- * (resolve_deployment_ownership); (uid_t) -1 / (gid_t) -1 is no change.
+ * The decided facts are exactly the ones not on the row: the occupant, and the
+ * resolved ownership (resolve_deployment_ownership; (uid_t) -1 / (gid_t) -1 is
+ * no change). The mode the write applies is the row's, read there — total for
+ * every kind that carries one (resolve_metadata carries the rationale).
  */
 typedef struct {
     const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
     fs_occupant_t occupant;       /* What the run will find at the path */
-    mode_t mode;                  /* The mode the write applies */
     uid_t uid;                    /* Ownership the write applies; -1 = no change */
     gid_t gid;
 } deploy_verdict_t;
@@ -345,7 +344,8 @@ typedef struct {
  * the row's verdict (deploy_preflight).
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
- * @param scope Operation scope (must not be NULL)
+ * @param scope Operation scope (must not be NULL; read at plan time alone —
+ *        everything else a fate carries is workspace vocabulary)
  * @param skip_existing --skip-existing: a file row whose path is already occupied
  *        is not work. A plan fact, not an execution one — the occupancy comes
  *        from the workspace's own lstat, so preflight, the privilege scan, the

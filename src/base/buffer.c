@@ -18,12 +18,14 @@
 #define MIN_CAPACITY 64
 
 /**
- * Ensure buffer can hold at least alloc content bytes. Allocates alloc+1 internally
- * (for null terminator).
+ * Make room for at least alloc content bytes, geometrically.
+ *
+ * The append path's allocator, and only that: an append does not know the final
+ * size, so each growth has to buy headroom or N appends cost N reallocations. A
+ * caller who does know the size wants buffer_reserve — no null check here because
+ * both callers are append paths that have already made it.
  */
-error_t *buffer_grow(buffer_t *buf, size_t alloc) {
-    CHECK_NULL(buf);
-
+static error_t *buffer_grow(buffer_t *buf, size_t alloc) {
     /* Account for null terminator */
     size_t needed = alloc + 1;
     if (needed == 0) {
@@ -37,7 +39,10 @@ error_t *buffer_grow(buffer_t *buf, size_t alloc) {
         return NULL;
     }
 
-    /* Growth strategy: double from current or MIN_CAPACITY, whichever is larger */
+    /* Growth strategy: double from current or MIN_CAPACITY, whichever is larger.
+     * A reserve leaves behind an exact capacity that is no power of anything;
+     * doubling from there is still amortised, so the append path never has to
+     * ask which policy sized the buffer it was handed. */
     size_t cap = buf->capacity ? buf->capacity : MIN_CAPACITY;
     while (cap < needed) {
         if (cap > SIZE_MAX / 2) {
@@ -64,6 +69,59 @@ error_t *buffer_grow(buffer_t *buf, size_t alloc) {
     return NULL;
 }
 
+error_t *buffer_reserve(buffer_t *buf, size_t alloc) {
+    CHECK_NULL(buf);
+
+    /* Account for null terminator. This byte is the whole cost of the invariant
+     * when the allocation is exact; rounded up to the next power of two it is
+     * the cost of a second buffer. */
+    size_t needed = alloc + 1;
+    if (needed == 0) {
+        return ERROR(
+            ERR_MEMORY,
+            "Buffer capacity overflow"
+        );
+    }
+
+    if (needed <= buf->capacity) {
+        return NULL;
+    }
+
+    char *new_data = realloc(buf->data, needed);
+    if (!new_data) {
+        return ERROR(
+            ERR_MEMORY,
+            "Failed to reserve %zu bytes for buffer", needed
+        );
+    }
+
+    buf->data = new_data;
+    buf->capacity = needed;
+
+    /* Restore the invariant at the new address. In bounds either way: a buffer
+     * that held nothing has size 0 and at least one byte now, and one that held
+     * something had size < old capacity < needed. */
+    buf->data[buf->size] = '\0';
+
+    return NULL;
+}
+
+error_t *buffer_resize(buffer_t *buf, size_t size) {
+    CHECK_NULL(buf);
+
+    /* Reserve first: a refusal must leave the buffer holding exactly what it
+     * held, not a size pointing past its allocation. */
+    error_t *err = buffer_reserve(buf, size);
+    if (err) {
+        return err;
+    }
+
+    buf->size = size;
+    buf->data[size] = '\0';
+
+    return NULL;
+}
+
 void buffer_free(buffer_t *buf) {
     if (!buf) {
         return;
@@ -79,7 +137,7 @@ buffer_t *buffer_new(size_t capacity) {
     }
 
     if (capacity > 0) {
-        error_t *err = buffer_grow(buf, capacity);
+        error_t *err = buffer_reserve(buf, capacity);
         if (err) {
             error_free(err);
             free(buf);

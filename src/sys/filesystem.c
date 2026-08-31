@@ -121,8 +121,13 @@ error_t *fs_read_fd(int fd, buffer_t *out) {
         );
     }
 
-    /* Pre-allocate */
-    error_t *err = buffer_grow(
+    /* Pre-size to the extent fstat reported, exactly: the chunked appends below
+     * then land on the last byte of the reservation and never reallocate. A file
+     * that grew between the stat and the read overruns it and falls back to the
+     * append path's geometric growth, which is the case the reserve cannot answer.
+     * st_size of 0 is a regular file that will not say how long it is; one chunk
+     * is the guess, and the appends take it from there. */
+    error_t *err = buffer_reserve(
         out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE
     );
     if (err) {

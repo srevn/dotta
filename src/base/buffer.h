@@ -6,6 +6,19 @@
  *   - When data is NULL: size == 0 && capacity == 0 (zero-initialized state)
  *   - buffer_free() resets to zero state; safe to call multiple times
  *
+ * Sizing — a buffer is made room for in one of two ways, and they are not the
+ * same operation:
+ *   append / appendf          the size is discovered as you go, so room is found
+ *                             geometrically; N appends cost O(N)
+ *   buffer_reserve(&buf, n)   the size is known, so room for n bytes is
+ *                             allocated exactly
+ *   buffer_resize(&buf, n)    the size is known and the bytes are the caller's
+ *                             to write: n bytes of content, uninitialised
+ *
+ * Reserving is not a growth step and does not round up: doubling a number the
+ * caller already knows is waste, and for a payload that is itself a power of
+ * two — a 4 KiB, 1 MiB or 64 MiB file — it is a doubling of the whole allocation.
+ *
  * Stack usage (common):
  *   buffer_t buf = BUFFER_INIT;
  *   buffer_append_string(&buf, "hello");
@@ -39,7 +52,8 @@ void buffer_free(buffer_t *buf);
 /**
  * Heap-allocate a buffer (for caches and collections)
  *
- * @param capacity Initial capacity in content bytes (0 for empty)
+ * @param capacity Content bytes to reserve, read as buffer_reserve reads it (0
+ *                 allocates nothing)
  * @return Heap-allocated buffer, or NULL on failure
  */
 buffer_t *buffer_new(size_t capacity);
@@ -54,16 +68,49 @@ buffer_t *buffer_new(size_t capacity);
 void buffer_destroy(void *ptr);
 
 /**
- * Ensure buffer can hold at least alloc content bytes
+ * Reserve room for alloc content bytes, allocated exactly
  *
- * Allocates alloc+1 bytes internally (for null terminator). No-op if capacity
- * is already sufficient.
+ * For a caller that already knows the final size. Allocates exactly alloc+1 bytes
+ * — the content plus the terminator the invariant costs — and no more: the
+ * geometric growth the append path needs exists to amortise a size nobody knew,
+ * and applying it to a size somebody did know only doubles the bill.
+ *
+ * A no-op when the capacity already suffices, so it never shrinks a buffer. The
+ * content is untouched: size stays where it was and the terminator moves with
+ * the allocation.
+ *
+ * A buffer left at an exact capacity still appends correctly — the append path
+ * grows geometrically from wherever it finds itself, so the two policies compose.
  *
  * @param buf Buffer (must not be NULL)
- * @param alloc Minimum content bytes the buffer must accommodate
+ * @param alloc Content bytes the buffer must accommodate
  * @return Error or NULL on success
  */
-error_t *buffer_grow(buffer_t *buf, size_t alloc);
+error_t *buffer_reserve(buffer_t *buf, size_t alloc);
+
+/**
+ * Claim size content bytes for the caller to write
+ *
+ * Reserves exactly that much, declares it the buffer's content, and restores
+ * the terminator at the new end. For a caller that computes its output's layout
+ * up front and writes into the slots directly — the alternative is setting `size`
+ * by hand and re-terminating at the call site, which is this type's invariant
+ * maintained outside the only file that owns it.
+ *
+ * The claimed bytes are UNINITIALISED. Everything from the old size to the new
+ * one holds whatever the allocator last left there, and the caller is expected
+ * to write all of it.
+ *
+ * Shrinking is truncation: the content past the new size is dropped but not
+ * cleared, exactly as buffer_clear drops all of it without clearing. A buffer
+ * that held secrets is wiped by its owner (see buffer_secure_free), never by
+ * this call.
+ *
+ * @param buf Buffer (must not be NULL)
+ * @param size Content bytes the buffer is to hold
+ * @return Error or NULL on success
+ */
+error_t *buffer_resize(buffer_t *buf, size_t size);
 
 /**
  * Append raw bytes to buffer

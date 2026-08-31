@@ -267,7 +267,7 @@ static error_t *build_credential_request(
         + (username ? strlen(username) : 0)
         + (password ? strlen(password) : 0);
 
-    error_t *err = buffer_grow(out, upper);
+    error_t *err = buffer_reserve(out, upper);
     if (err) return err;
 
     if ((err = buffer_appendf(out, "protocol=%s\n", protocol))) return err;

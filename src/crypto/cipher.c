@@ -278,14 +278,12 @@ error_t *cipher_encrypt(
     header[CIPHER_OFFSET_PASSES] = argon2_passes;
     memcpy(&header[CIPHER_OFFSET_SALT_FP], salt_fp, KDF_SALT_FP_SIZE);
 
-    /* Allocate at final size; SIV and ciphertext write into their slots in-place
-     * so peak memory stays at `total_len`. buffer_grow over-allocates by 1 for
-     * the NUL invariant. */
-    err = buffer_grow(&output, total_len);
+    /* Claim the final size outright; the SIV and the ciphertext are written into
+     * their slots in place, so peak memory stays at `total_len` plus the one
+     * byte the NUL invariant costs. Every claimed byte is written below — the
+     * header by memcpy, the SIV by compute_siv, the body by the keystream XOR. */
+    err = buffer_resize(&output, total_len);
     if (err) goto cleanup;
-
-    output.size = total_len;
-    output.data[output.size] = '\0';
 
     /* Layout: [header(17) | siv(32) | ciphertext(N)] */
     memcpy(output.data, header, CIPHER_HEADER_SIZE);
@@ -397,14 +395,11 @@ error_t *cipher_decrypt(
     const uint8_t *ct_body = ciphertext + CIPHER_OVERHEAD;
     const size_t plaintext_len = ciphertext_len - CIPHER_OVERHEAD;
 
-    /* Allocate the candidate plaintext buffer at its final size; the keystream
-     * XOR writes into it in-place, after which we recompute SIV over the
+    /* Claim the candidate plaintext at its final size; the keystream XOR writes
+     * every byte of it in place, after which we recompute SIV over the
      * candidate. */
-    err = buffer_grow(&output, plaintext_len);
+    err = buffer_resize(&output, plaintext_len);
     if (err) goto cleanup;
-
-    output.size = plaintext_len;
-    output.data[output.size] = '\0';
 
     /* Step 3: keystream seed from received SIV under prf_key. In SIV the IV
      * authenticates the plaintext — we must decrypt the candidate before we can

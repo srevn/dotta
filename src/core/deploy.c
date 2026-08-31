@@ -968,6 +968,79 @@ error_t *deploy_preflight(
 
     error_t *err = NULL;
 
+    /* Directories decide first, then files, then the ancestors — the order the
+     * run acts in (deploy_execute), and the order deploy_plan_build classified
+     * them in. A verdict is a prediction of what the run will find when it reaches
+     * the row, so it is taken after the verdicts for everything the run reaches
+     * first: a file's tracked ancestors are directory rows, converged and held
+     * open before anything is written beneath them, and inside the directory
+     * pass the plan's prefix order puts every row after its own ancestors.
+     * core/cleanup's preflight decides in its own run's order for the same reason
+     * — there, children before parents, so a directory reads the fates of
+     * everything it holds. The findings and the warnings come out in that order
+     * too: the order the run would have met them.
+     *
+     * The ancestors come last though the run creates them first: which tracked
+     * directories it may make on the way is derived from the planned rows as a
+     * whole, not decided row by row. */
+    for (size_t i = 0; i < dirs.count; i++) {
+        const manifest_row_t *row = dirs.entries[i];
+        const char *path = row->filesystem_path;
+        deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
+
+        v->row = row;
+
+        /* Planned as absent: every probe of this path would reach the squatter's
+         * target and answer for the wrong tree, and the path is empty once the
+         * directory pass has replaced the squatter — no type, no content, nothing
+         * in the way. Its landing is the pending ancestor's, whose own row this
+         * loop has already decided — the plan's prefix order puts every directory
+         * row after its own ancestors. */
+        if (beneath_squatted_directory(ws, plan, path)) {
+            v->occupant = FS_OCCUPANT_NONE;
+            err = resolve_metadata(row, opts, result->warnings, v);
+            if (err) goto cleanup;
+            continue;
+        }
+
+        const workspace_item_t *item = workspace_get_item(ws, path);
+        v->occupant = item->occupant;
+
+        /* A planned directory squatted by a non-directory (the link itself, so
+         * a symlink to a directory counts) is replaced under --force, one node
+         * at a time. The squatter can never be a directory — that is the row
+         * converging in place — so path_clearance cannot refuse here and "use
+         * --force" is always the true remedy. */
+        if (occupant_conflicts(v->occupant, FS_OCCUPANT_DIRECTORY) &&
+            path_clearance(path, v->occupant, opts->force) != CLEARANCE_OK) {
+            err = string_array_push(result->conflicts, path);
+            if (err) goto cleanup;
+        }
+
+        /* A directory already there is converged in place: fchmod and fchown
+         * ask for ownership, not for a writable parent. Only a create or a replace
+         * lands a new entry. An unexaminable occupant is asked too, and named
+         * on its own when the landing had nothing to say — as for a file. */
+        size_t findings = result->permission_errors->count + result->blocked->count;
+
+        if (v->occupant != FS_OCCUPANT_DIRECTORY) {
+            err = check_landing(ws, plan, path, result);
+            if (err) goto cleanup;
+        }
+
+        if (v->occupant == FS_OCCUPANT_UNKNOWN &&
+            result->permission_errors->count + result->blocked->count == findings) {
+            err = push_entry(
+                result->permission_errors,
+                str_format("%s (cannot be verified)", path)
+            );
+            if (err) goto cleanup;
+        }
+
+        err = resolve_metadata(row, opts, result->warnings, v);
+        if (err) goto cleanup;
+    }
+
     for (size_t i = 0; i < files.count; i++) {
         const manifest_row_t *row = files.entries[i];
         const char *path = row->filesystem_path;
@@ -975,11 +1048,9 @@ error_t *deploy_preflight(
 
         v->row = row;
 
-        /* Planned as absent: every probe of this path would reach the squatter's
-         * target and answer for the wrong tree, and the path is empty once the
-         * directory pass has replaced the squatter — no type, no content, nothing
-         * in the way. Its landing is the pending ancestor's, whose own row is
-         * asked below. */
+        /* Planned as absent (see the directory loop): written beneath a directory
+         * this run replaces first, so neither a conflict nor a landing question
+         * is its own — the pending ancestor's row, decided above, carries both. */
         if (beneath_squatted_directory(ws, plan, path)) {
             v->occupant = FS_OCCUPANT_NONE;
             err = resolve_metadata(row, opts, result->warnings, v);
@@ -1033,61 +1104,6 @@ error_t *deploy_preflight(
          * landing has just named it when it could (EACCES on the way up); the
          * path is named on its own only when the landing had nothing to say —
          * an errno the write would otherwise have surfaced mid-run. */
-        if (v->occupant == FS_OCCUPANT_UNKNOWN &&
-            result->permission_errors->count + result->blocked->count == findings) {
-            err = push_entry(
-                result->permission_errors,
-                str_format("%s (cannot be verified)", path)
-            );
-            if (err) goto cleanup;
-        }
-
-        err = resolve_metadata(row, opts, result->warnings, v);
-        if (err) goto cleanup;
-    }
-
-    for (size_t i = 0; i < dirs.count; i++) {
-        const manifest_row_t *row = dirs.entries[i];
-        const char *path = row->filesystem_path;
-        deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
-
-        v->row = row;
-
-        /* Planned as absent (see the file loop): created beneath a directory
-         * this run replaces first, so neither a conflict nor a landing question
-         * is its own. */
-        if (beneath_squatted_directory(ws, plan, path)) {
-            v->occupant = FS_OCCUPANT_NONE;
-            err = resolve_metadata(row, opts, result->warnings, v);
-            if (err) goto cleanup;
-            continue;
-        }
-
-        const workspace_item_t *item = workspace_get_item(ws, path);
-        v->occupant = item->occupant;
-
-        /* A planned directory squatted by a non-directory (the link itself, so
-         * a symlink to a directory counts) is replaced under --force, one node
-         * at a time. The squatter can never be a directory — that is the row
-         * converging in place — so path_clearance cannot refuse here and "use
-         * --force" is always the true remedy. */
-        if (occupant_conflicts(v->occupant, FS_OCCUPANT_DIRECTORY) &&
-            path_clearance(path, v->occupant, opts->force) != CLEARANCE_OK) {
-            err = string_array_push(result->conflicts, path);
-            if (err) goto cleanup;
-        }
-
-        /* A directory already there is converged in place: fchmod and fchown
-         * ask for ownership, not for a writable parent. Only a create or a replace
-         * lands a new entry. An unexaminable occupant is asked too, and named
-         * on its own when the landing had nothing to say — as for a file. */
-        size_t findings = result->permission_errors->count + result->blocked->count;
-
-        if (v->occupant != FS_OCCUPANT_DIRECTORY) {
-            err = check_landing(ws, plan, path, result);
-            if (err) goto cleanup;
-        }
-
         if (v->occupant == FS_OCCUPANT_UNKNOWN &&
             result->permission_errors->count + result->blocked->count == findings) {
             err = push_entry(

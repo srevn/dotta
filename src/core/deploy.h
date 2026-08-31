@@ -339,6 +339,12 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
 /**
  * Decide the verdicts, and the findings that block the run
  *
+ * Decided in the order the run acts — the directory rows parents-first, then
+ * the files, then the ancestors — so every verdict is taken after the verdicts
+ * for whatever the run reaches before it: a file's tracked ancestors are directory
+ * rows, converged before anything is written beneath them. The findings and the
+ * warnings come out in that order too.
+ *
  * One verdict per pending row, each question asked of its one authority:
  * - Type — the occupant the workspace observed at the planned path, both kinds
  *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces

@@ -48,14 +48,13 @@
 
 #include "core/scope.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "sys/filesystem.h"
 
-/* Forward declarations. Plan buckets hold manifest rows (manifest_row_t,
- * core/manifest.h) — consumers project them with manifest_rows_view; the
- * verdicts and the receipt author their own entries and are read directly. */
+/* Forward declaration — the content cache is deploy_execute's input alone
+ * (infra/content.h); everything else this header names is workspace
+ * vocabulary, included above. */
 typedef struct content_cache content_cache_t;
-typedef struct manifest_row manifest_row_t;
-typedef struct workspace workspace_t;
 
 /**
  * Deployment options — read by deploy_preflight alone, as cleanup's are
@@ -68,13 +67,22 @@ typedef struct {
 /**
  * How one planned row is materialized — decided once, at preflight
  *
- * Everything an executor needs and nothing it has to go and get: the row, what
- * stands at its path, and the metadata the write applies. The occupant is the
- * workspace's lstat, never a fresh one — or FS_OCCUPANT_NONE for a row planned
- * beneath a squatter this run replaces first (deploy_plan_build), whose own
- * observation went through the squatter and describes a tree the run dismantles.
- * The occupant is also the receipt's verb for a directory: NONE → created,
- * DIRECTORY → fixed, anything else → replaced.
+ * Everything a consumer needs and nothing it has to go and get: the row, its
+ * analysis, what stands at its path, and the metadata the write applies. The
+ * occupant is the workspace's lstat, never a fresh one — or FS_OCCUPANT_NONE
+ * for a row planned beneath a squatter this run replaces first
+ * (deploy_plan_build), whose own observation went through the squatter and
+ * describes a tree the run dismantles. The occupant is also the receipt's verb
+ * for a directory: NONE → created, DIRECTORY → fixed, anything else → replaced.
+ *
+ * The item is the index's answer, looked up once where the fate is decided and
+ * filled verbatim on every arm — the planned-absent arms included. An item's
+ * join facts (row, anchor, profile) are sound on every verdict; its observation
+ * may speak for the squatter's target, which is why the fate's own occupant
+ * says what the run will find. What a fate declines to consult it declines at
+ * the reader, never by blanking the pointer. NULL only where the index holds
+ * nothing — a clean row planned beneath a replaced squatter has no divergence
+ * to index.
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * resolved ownership (resolve_deployment_ownership; (uid_t) -1 / (gid_t) -1 is
@@ -82,9 +90,10 @@ typedef struct {
  * every kind that carries one (resolve_metadata carries the rationale).
  */
 typedef struct {
-    const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
-    fs_occupant_t occupant;       /* What the run will find at the path */
-    uid_t uid;                    /* Ownership the write applies; -1 = no change */
+    const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
+    const workspace_item_t *item;    /* The analysis object, or NULL — looked up once */
+    fs_occupant_t occupant;          /* What the run will find at the path */
+    uid_t uid;                       /* Ownership the write applies; -1 = no change */
     gid_t gid;
 } deploy_verdict_t;
 
@@ -150,21 +159,32 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
 /**
  * One planned row the run does not deploy
  *
- * The shape deploy_verdict_t gives a row the run does deploy: the row, and the
- * facts decided about it. `ancestor` is the path the reason names — the ancestor
- * that refused, the non-directory in the way, the squatted tracked directory
- * above an inheriting row. Every such path is an ancestor of the row's own, and
- * so a prefix of filesystem_path by construction (check_landing truncates the
- * planned path; an inheriting row's squatter stands strictly above it) — carried
- * as the byte length of that prefix, not a copy. 0 where the reason has no ancestor
- * to name: it is about the planned path itself, or (PERMISSION alone) the ancestry
- * could not even be reached to name its refusing node. Nothing here is owned:
- * the row is borrowed (workspace lifetime), as every row in this module is.
+ * The shape deploy_verdict_t gives a row the run does deploy: the row, its
+ * analysis, and the facts decided about it. `ancestor` is the path the reason
+ * names — the ancestor that refused, the non-directory in the way, the squatted
+ * tracked directory above an inheriting row. Every such path is an ancestor of
+ * the row's own, and so a prefix of filesystem_path by construction
+ * (check_landing truncates the planned path; an inheriting row's squatter stands
+ * strictly above it) — carried as the byte length of that prefix, not a copy. 0
+ * where the reason has no ancestor to name: it is about the planned path itself,
+ * or (PERMISSION alone) the ancestry could not even be reached to name its
+ * refusing node.
+ *
+ * The item is the verdict's rule with the one inversion a skip forces: a
+ * self-judged skip carries its analysis object (a CONTENT skip carries one by
+ * construction — content_conflicts(NULL) is false), while a row judged by its
+ * ancestry carries NULL. Its own item describes the squatter's target, and a
+ * walker must not mistake an inheriting row for the squatter itself; a skip has
+ * no occupant field to express that refusal, so here NULL is the override.
+ *
+ * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
+ * in this module is.
  */
 typedef struct {
-    const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
+    const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
+    const workspace_item_t *item;    /* As the verdict's; NULL for a row judged by its ancestry */
     deploy_skip_reason_t reason;
-    size_t ancestor;              /* Prefix length of the named ancestor; 0 = none */
+    size_t ancestor;                 /* Prefix length of the named ancestor; 0 = none */
 } deploy_skip_t;
 
 /**

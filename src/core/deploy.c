@@ -1060,6 +1060,7 @@ error_t *deploy_preflight(
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
+            s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
             s->reason = above->reason;
             s->ancestor = strlen(above->row->filesystem_path);
             continue;
@@ -1075,6 +1076,7 @@ error_t *deploy_preflight(
             deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
             v->row = row;
+            v->item = workspace_get_item(ws, path);   /* verbatim; the occupant below overrides it */
             v->occupant = FS_OCCUPANT_NONE;
             err = resolve_metadata(opts, result->warnings, v);
             if (err) goto cleanup;
@@ -1120,6 +1122,7 @@ error_t *deploy_preflight(
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
+            s->item = item;
             s->reason = reason;
             s->ancestor = ancestor;
             continue;
@@ -1128,6 +1131,7 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
         v->row = row;
+        v->item = item;
         v->occupant = occupant;
         err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;
@@ -1145,6 +1149,7 @@ error_t *deploy_preflight(
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
+            s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
             s->reason = above->reason;
             s->ancestor = strlen(above->row->filesystem_path);
             continue;
@@ -1158,6 +1163,7 @@ error_t *deploy_preflight(
             deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
             v->row = row;
+            v->item = workspace_get_item(ws, path);   /* verbatim; the occupant below overrides it */
             v->occupant = FS_OCCUPANT_NONE;
             err = resolve_metadata(opts, result->warnings, v);
             if (err) goto cleanup;
@@ -1223,6 +1229,7 @@ error_t *deploy_preflight(
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
+            s->item = item;
             s->reason = reason;
             s->ancestor = ancestor;
             continue;
@@ -1231,6 +1238,7 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
         v->row = row;
+        v->item = item;
         v->occupant = occupant;
         err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;
@@ -1271,6 +1279,7 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->ancestors.entries[result->ancestors.count++];
 
         v->row = row;
+        v->item = item;
         v->occupant = FS_OCCUPANT_NONE;
         err = resolve_metadata(opts, result->warnings, v);
         if (err) goto cleanup;

@@ -50,9 +50,9 @@
  * away from the row, yellow where dotta cannot vouch for what stands there. A
  * CONTENT label reads the row's route (workspace_item_route — one producer for
  * the characterization; deploy keeps its decision): modified locally where only
- * disk moved, changed in Git and on disk where both sides did. A CONTENT skip's
- * item exists by construction — content_conflicts(NULL) is false — and is DEPLOYED
- * (no path bit survives absence), so the route read is total here.
+ * disk moved, changed in Git and on disk where both sides did. A CONTENT skip
+ * carries its item by construction — content_conflicts(NULL) is false — and it
+ * is DEPLOYED (no path bit survives absence), so the route read is total here.
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by the class actually present (deploy_skip_needs_force) — a
@@ -68,7 +68,7 @@
  * No total-count line: the exit error's message is the count's one home.
  */
 static void print_deploy_preflight_results(
-    const output_t *out, const workspace_t *ws, const deploy_preflight_result_t *result
+    const output_t *out, const deploy_preflight_result_t *result
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
 
@@ -135,8 +135,7 @@ static void print_deploy_preflight_results(
             }
 
             case DEPLOY_SKIP_CONTENT: {
-                bool conflict = workspace_item_route(workspace_get_item(ws, path))
-                    == WORKSPACE_ROUTE_CONFLICT;
+                bool conflict = workspace_item_route(s->item) == WORKSPACE_ROUTE_CONFLICT;
 
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "  ✗");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
@@ -221,8 +220,8 @@ static void print_deploy_preflight_results(
  * counted the same way: a file verdict overwrites local content iff its item
  * carries the content_conflicts bits (CONTENT | TYPE) — reachable in a verdict
  * only under --force, so the yellow line is the forced run's counterweight to
- * the confirmation prompt --force skips; the workspace is read for exactly that
- * characterization. At verbose the paths are listed under their count, capped
+ * the confirmation prompt --force skips; the item the fate carries is read for
+ * exactly that characterization. At verbose the paths are listed under their count, capped
  * the way every preview list is. The ancestors the run may make on the way are
  * not here: they are the mechanics of landing a planned path, and the receipt
  * names the ones it made.
@@ -231,7 +230,6 @@ static void print_deploy_preflight_results(
  */
 static void print_deploy_preview(
     const output_t *out,
-    const workspace_t *ws,
     const deploy_preflight_result_t *verdicts
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
@@ -264,8 +262,7 @@ static void print_deploy_preview(
 
         size_t overwrites = 0;
         for (size_t i = 0; i < files->count; i++) {
-            const workspace_item_t *item =
-                workspace_get_item(ws, files->entries[i].row->filesystem_path);
+            const workspace_item_t *item = files->entries[i].item;
 
             if (item && (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))) {
                 overwrites++;
@@ -515,9 +512,9 @@ static void print_skipped(
  *   owned record the run wrote
  *
  * The verb is the verdict's; the tags are plan truth. A fixed row is tagged [mode]
- * / [ownership] from the workspace's divergence index — why the planner chose
- * it — never from a fresh stat: the run has just converged the directory, so
- * disk would say nothing. A pending row the planner chose on its own verdict
+ * / [ownership] from its fate's item — why the planner chose it — never from a
+ * fresh stat: the run has just converged the directory, so disk would say
+ * nothing. A pending row the planner chose on its own verdict
  * has an indexed item (deploy_needs_work(NULL) is false); one planned as absent
  * beneath a squatted directory may have none, and is created rather than fixed.
  * A fixed row whose item carries neither bit, or no item, prints no tag, and
@@ -540,7 +537,6 @@ static void print_skipped(
  */
 static void print_deploy_results(
     const output_t *out,
-    const workspace_t *ws,
     const deploy_result_t *result
 ) {
     if (!result) return;
@@ -638,7 +634,7 @@ static void print_deploy_results(
             output_print(out, OUTPUT_VERBOSE, ")");
 
             /* What was fixed: the divergence the planner saw */
-            const workspace_item_t *item = workspace_get_item(ws, dir->filesystem_path);
+            const workspace_item_t *item = converged.entries[i].verdict->item;
             bool mode_differs = item && (item->divergence & DIVERGENCE_MODE);
             bool ownership_differs = item && (item->divergence & DIVERGENCE_OWNERSHIP);
 
@@ -1963,8 +1959,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * not and why (the skip block), each block closing with its own remedies —
      * read the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
-    print_deploy_preview(out, ws, deploy_verdicts);
-    print_deploy_preflight_results(out, ws, deploy_verdicts);
+    print_deploy_preview(out, deploy_verdicts);
+    print_deploy_preflight_results(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
@@ -2095,13 +2091,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
             if (err) {
                 if (deploy_result) {
-                    print_deploy_results(out, ws, deploy_result);
+                    print_deploy_results(out, deploy_result);
                 }
                 err = error_wrap(err, "Deployment failed");
                 goto cleanup;
             }
 
-            print_deploy_results(out, ws, deploy_result);
+            print_deploy_results(out, deploy_result);
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
         }
@@ -2272,7 +2268,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
-                const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
+                const workspace_item_t *item = o->verdict->item;
                 bool acknowledges = item && workspace_item_reassigned(item);
 
                 err = workspace_anchor(ws, file, &o->stat, now);
@@ -2299,8 +2295,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 const manifest_row_t *dir = o->verdict->row;
                 bool made = o->verdict->occupant != FS_OCCUPANT_DIRECTORY;
 
-                const workspace_item_t *item =
-                    workspace_get_item(ws, dir->filesystem_path);
+                const workspace_item_t *item = o->verdict->item;
                 bool acknowledges = item && workspace_item_reassigned(item);
 
                 if (!made && !acknowledges) continue;

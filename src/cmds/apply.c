@@ -217,11 +217,13 @@ static void print_deploy_preflight_results(
  * nothing stood, fixed where a directory did, replaced where a squatter did —
  * the replace is the one destructive deploy verb, counted on its own line and
  * coloured the way cleanup colours a removal. The files' destructive half is
- * counted the same way: a file verdict overwrites local content iff its item
- * carries the content_conflicts bits (CONTENT | TYPE) — reachable in a verdict
- * only under --force, so the yellow line is the forced run's counterweight to
- * the confirmation prompt --force skips; the item the fate carries is read for
- * exactly that characterization. At verbose the paths are listed under their
+ * counted the same way: a file verdict overwrites local content iff something
+ * stands at its path (deploy_occupant_present — a row planned absent beneath a
+ * replaced squatter is a write into an empty tree, whatever its item read through
+ * the link) and its item carries the conflict bits (deploy_content_conflicts,
+ * CONTENT | TYPE) — reachable in a verdict only under --force, so the yellow
+ * line is the forced run's counterweight to the confirmation prompt --force
+ * skips. At verbose the paths are listed under their
  * count, capped the way every preview list is. The ancestors the run may make
  * on the way are not here: they are the mechanics of landing a planned path,
  * and the receipt names the ones it made.
@@ -262,9 +264,9 @@ static void print_deploy_preview(
 
         size_t overwrites = 0;
         for (size_t i = 0; i < files->count; i++) {
-            const workspace_item_t *item = files->entries[i].item;
+            const deploy_verdict_t *v = &files->entries[i];
 
-            if (item && (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))) {
+            if (deploy_occupant_present(v->occupant) && deploy_content_conflicts(v->item)) {
                 overwrites++;
             }
         }

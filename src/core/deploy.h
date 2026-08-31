@@ -110,6 +110,46 @@ typedef struct {
 } deploy_verdicts_t;
 
 /**
+ * Is something known to be standing at the path?
+ *
+ * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could
+ * not see: an occupant it failed to stat conflicts with nothing, and the row is
+ * skipped as unreadable rather than judged on a guess (the ladders' leftover
+ * rung). The workspace's own presence rule (occupant != FS_OCCUPANT_NONE,
+ * workspace.h) assumes an unstattable path present; this is deploy's stricter
+ * reading, for judgments — one producer, read by the ladders and the preview.
+ */
+static inline bool deploy_occupant_present(fs_occupant_t occ) {
+    return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
+}
+
+/**
+ * Is this row's content not dotta's to overwrite unasked?
+ *
+ * The counterpart of occupant_conflicts (deploy.c), answered from the workspace's
+ * divergence verdict: content is compared against a blob that is not on disk,
+ * so the load-time verdict is the only authority there is — no lstat can improve
+ * on it.
+ *
+ * A TYPE verdict counts, because it means the compare never produced a content
+ * verdict at all: whatever stood at the path was never measured against the row.
+ * DIVERGENCE_STALE without CONTENT never conflicts: the bytes on disk are the
+ * ones dotta itself deployed, so the overwrite loses nothing. Mode, ownership
+ * and encryption divergence never conflict.
+ *
+ * Two readers, two files: the file ladder's consent rung, and the forced
+ * preview's counterweight — a verdict overwrites local content iff something
+ * stands at its path AND this answers yes, so the preview reads it beside
+ * deploy_occupant_present.
+ *
+ * @param item Workspace verdict for the row (NULL = not in the index)
+ */
+static inline bool deploy_content_conflicts(const workspace_item_t *item) {
+    return item != NULL &&
+           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE));
+}
+
+/**
  * Why a planned row is not deployed this run
  *
  * The counterpart of cleanup_skip_reason_t, and the same contract: values are

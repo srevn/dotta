@@ -86,7 +86,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * policy claims the path — a fact about the profile's tree, not about
              * what stands at the path. No write deploy makes can change how a
              * blob is stored; update is the verb that re-stores it, and
-             * content_conflicts below states the same rule for overwrites. A
+             * deploy_content_conflicts states the same rule for overwrites. A
              * deny-mask rather than an allow-list, so a bit added later inherits
              * the arm's default: any divergence of the path is work. */
             return (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
@@ -350,21 +350,10 @@ static fs_occupant_t file_row_occupant(const manifest_row_t *file) {
 }
 
 /**
- * Is something known to be standing at the path?
- *
- * FS_OCCUPANT_UNKNOWN deliberately answers no. Deploy judges nothing it could
- * not see: an occupant it failed to stat conflicts with nothing, and the row is
- * skipped as unreadable rather than judged on a guess (the ladders' leftover rung).
- */
-static bool occupant_present(fs_occupant_t occ) {
-    return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
-}
-
-/**
  * Does what stands at the path disagree with what the row materializes?
  */
 static bool occupant_conflicts(fs_occupant_t occ, fs_occupant_t want) {
-    return occupant_present(occ) && occ != want;
+    return deploy_occupant_present(occ) && occ != want;
 }
 
 /**
@@ -595,7 +584,7 @@ static bool beneath_replaced_directory(
         if (!str_path_beneath(path, dir, strlen(dir))) {
             continue;
         }
-        if (occupant_present(v->occupant) && v->occupant != FS_OCCUPANT_DIRECTORY) {
+        if (deploy_occupant_present(v->occupant) && v->occupant != FS_OCCUPANT_DIRECTORY) {
             return true;
         }
     }
@@ -647,26 +636,6 @@ static const deploy_skip_t *skipped_squatter_above(
     }
 
     return NULL;
-}
-
-/**
- * Is this row's content not dotta's to overwrite unasked?
- *
- * The counterpart of occupant_conflicts, answered from the workspace's divergence
- * verdict: content is compared against a blob that is not on disk, so the load-time
- * verdict is the only authority there is — no lstat can improve on it.
- *
- * A TYPE verdict counts, because it means the compare never produced a content
- * verdict at all: whatever stood at the path was never measured against the row.
- * DIVERGENCE_STALE without CONTENT never conflicts: the bytes on disk are the
- * ones dotta itself deployed, so the overwrite loses nothing. Mode, ownership
- * and encryption divergence never conflict.
- *
- * @param item Workspace verdict for the row (NULL = not in the index)
- */
-static bool content_conflicts(const workspace_item_t *item) {
-    return item != NULL &&
-           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE));
 }
 
 /**
@@ -1199,9 +1168,12 @@ error_t *deploy_preflight(
                         reason = DEPLOY_SKIP_OCCUPIED;
                         break;
                 }
-            } else if (!opts->force && content_conflicts(item)) {
+            } else if (!opts->force && deploy_content_conflicts(item)) {
                 /* Content, asked only when the occupant is the row's own type:
-                 * a path holding something else has no content to compare. */
+                 * a path holding something else has no content to compare — the
+                 * mask's TYPE arm cannot fire here, a conflicting occupant took
+                 * the TYPE rung above; it is load-bearing at the preview's other
+                 * read. */
                 reason = DEPLOY_SKIP_CONTENT;
             }
         }
@@ -1660,7 +1632,7 @@ static error_t *deploy_file(
      * arm clears whatever is there — including an occupant of its own type, which
      * is no conflict and needed no --force. */
     fs_occupant_t want = file_row_occupant(file);
-    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? occupant_present(v->occupant)
+    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? deploy_occupant_present(v->occupant)
                                                     : (v->occupant == FS_OCCUPANT_DIRECTORY);
 
     /* Land the path: parents first, whichever arm writes it */

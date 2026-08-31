@@ -50,9 +50,9 @@
 #include "core/state.h"
 #include "sys/filesystem.h"
 
-/* Forward declarations. Plan, verdict and result buckets hold manifest rows
- * (manifest_row_t, core/manifest.h) — consumers project the buckets with
- * manifest_rows_view. */
+/* Forward declarations. Plan buckets hold manifest rows (manifest_row_t,
+ * core/manifest.h) — consumers project them with manifest_rows_view; the
+ * verdicts and the receipt author their own entries and are read directly. */
 typedef struct content_cache content_cache_t;
 typedef struct manifest_row manifest_row_t;
 typedef struct workspace workspace_t;
@@ -257,7 +257,7 @@ typedef struct {
 } deploy_plan_t;
 
 /**
- * One written file — the row, and the proof the write authored
+ * One carried-out verdict — and the proof, where the act authored one
  *
  * The stat is the record's own triple (stat_cache_from_write), distilled by the
  * executor from the fstat of the descriptor it wrote — taken after the last byte
@@ -266,56 +266,63 @@ typedef struct {
  * apply's record step anchor a deployment with the write's own proof instead of
  * leaving the record blob-only.
  *
- * UNSET for a symlink row — the executor's fact, not a consumer's re-derivation:
- * a link is made by path (symlink(2) opens no descriptor to describe), and readlink
- * is its whole re-verification. UNSET and NULL say the same thing to state_anchor,
- * so the record step passes the triple blind.
+ * UNSET where the act authored no proof — the executor's fact, not a consumer's
+ * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
+ * describe, and readlink is its whole re-verification), and a directory's write
+ * is fchmod/fchown through its own descriptor, whose record carries no triple at
+ * all. UNSET and NULL say the same thing to state_anchor, so the record step
+ * passes the triple blind.
+ *
+ * The verdict is borrowed from the preflight result, whose arrays are sized once
+ * and never reallocated, so every address is stable for the receipt's life. Free
+ * the result before the preflight result.
  */
 typedef struct {
-    const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
-    stat_cache_t stat;            /* The write's proof; UNSET for a symlink */
-} deploy_written_t;
+    const deploy_verdict_t *verdict;    /* Borrowed (preflight-result lifetime) */
+    stat_cache_t stat;                  /* The act's proof; UNSET where it authored none */
+} deploy_outcome_t;
 
 /**
- * The written files with their count — the shape deploy_verdicts_t gives verdicts
+ * An outcome array with its count — the shape deploy_verdicts_t gives verdicts
  */
 typedef struct {
-    deploy_written_t *entries;
+    deploy_outcome_t *entries;
     size_t count;
-} deploy_writes_t;
+} deploy_outcomes_t;
 
 /**
- * Deployment result — the run's receipt, by outcome
+ * Deployment result — the run's receipt: the verdicts carried out, in act order
  *
- * Plan buckets by kind, result buckets by outcome verb: every bucket names
- * something that happened, and a directory lands in the one for what its verdict
- * said stood at its path and the run did about it — so the caller can say
- * "replaced" where a squatter went and "fixed" where nothing was created. Work
- * the run deliberately did not do is the plan's to report, never the result's —
- * the plan decided it, so only the plan can report it before a run that ends up
- * executing nothing. A failure is the returned error's to name: fail-stop wraps
- * it with the path, and the partial receipt travels in *out beside it.
+ * One outcome per carried-out verdict, in three arrays mirroring the preflight's
+ * split; the receipt re-decides nothing, and the verb inside an array is derived,
+ * never stored twice — a directory's is its verdict's occupant (the mapping is
+ * deploy_verdict_t's), so the caller can still say "replaced" where a squatter
+ * went and "fixed" where nothing was created. Work the run deliberately did not
+ * do is the plan's to report, never the result's — the plan decided it, so only
+ * the plan can report it before a run that ends up executing nothing. A failure
+ * is the returned error's to name: fail-stop wraps it with the path, and the
+ * partial receipt travels in *out beside it.
  *
- * One bucket is outside the plan: the tracked directories the run made as parents
- * of a planned path (create_ancestor). They carry their recorded mode and ownership
- * like any other tracked directory, and dotta made them — so the record step
- * anchors them as owned, the same event as a created directory — but the plan
- * never named them and the preview never counted them, so the caller's summary
- * keeps them apart from `created`. Untracked parents have no row, and so no bucket
- * and no record.
+ * Each array is sized to its verdict array at entry (calloc, count + 1) and
+ * filled in verdict order; count gates every read, so a stopped run's untouched
+ * slots are invisible and the partial receipt holds exactly what happened, by
+ * construction.
  *
- * The directory buckets carry borrowed row pointers (workspace-arena lifetime,
- * outlives the deploy_result_t); project with manifest_rows_view. The deployed
- * bucket carries deploy_written_t — the same borrowed row beside the write's
- * own proof — and is read directly. Free with deploy_result_free before
- * workspace_free.
+ * `ancestors` is outside the plan: the tracked directories the run made as parents
+ * of a planned path (create_ancestor), each once. They carry their recorded mode
+ * and ownership like any other tracked directory, and dotta made them — so the
+ * record step anchors them as owned, the same event as a created directory — but
+ * the plan never named them and the preview never counted them, so the caller's
+ * summary keeps them apart from the created count. Untracked parents have no row,
+ * and so no receipt and no record.
+ *
+ * Free with deploy_result_free, before deploy_preflight_result_free and before
+ * workspace_free — the outcomes borrow the verdicts, the verdicts the rows.
  */
 typedef struct {
-    deploy_writes_t deployed;      /* Files written or linked, each with its write's proof */
-    ptr_array_t created;           /* Directories made where nothing stood (manifest_row_t *) */
-    ptr_array_t fixed;             /* Directories converged in place — mode, ownership */
-    ptr_array_t replaced;          /* Directories that displaced a single-node squatter (--force) */
-    ptr_array_t ancestors;         /* Tracked directories made on the way to a planned path */
+    deploy_outcomes_t deployed;      /* Files written or linked, each with its write's proof */
+    deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
+    deploy_outcomes_t ancestors;     /* Tracked directories made on the way, each once */
 } deploy_result_t;
 
 /**
@@ -483,8 +490,8 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * @param plan Deployment plan (must not be NULL)
  * @param opts Deployment options (must not be NULL)
  * @param out Pre-flight results (must not be NULL; caller frees with
- *        deploy_preflight_result_free, after deploy_execute and before
- *        workspace_free)
+ *        deploy_preflight_result_free, after deploy_result_free — the receipt
+ *        borrows the verdicts — and before workspace_free)
  * @return Error or NULL on success (a skip is not an error; a strict-mode ownership
  *         failure is)
  */
@@ -510,7 +517,7 @@ error_t *deploy_preflight(
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a tracked directory (any profile, in scope or not) with
  * the mode and ownership its ancestor verdict carries, anything else 0755 owned
- * like the planned path. The tracked ones land in the receipt's ancestors bucket;
+ * like the planned path. The tracked ones land in the receipt's ancestors;
  * the untracked ones have no row and are never reported. A tracked parent the
  * verdicts did not foresee — present at preflight, gone by the time the run reaches
  * it — is made like an untracked one, and the next load reads whatever it has

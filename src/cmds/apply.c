@@ -497,10 +497,11 @@ static void print_skipped(
  * Print deployment results
  *
  * Handles all output for deployment results. The deploy layer only collects
- * results; this function handles all presentation — the run's receipt, per-item
- * sections at verbose and summary counts at normal. Every number is a bucket
- * size: deploy bucketed the plan by outcome and this reads that partition, adding
- * nothing of its own.
+ * outcomes; this function handles all presentation — the run's receipt, per-item
+ * sections at verbose and summary counts at normal. Every number is the same
+ * fold the preview takes over the verdicts (print_deploy_preview), taken here
+ * over the verdicts the run carried out — so the receipt restates the preview
+ * by construction, adding nothing of its own.
  *
  * Categories (each semantically distinct):
  * - deployed: Files written to disk (green)
@@ -520,7 +521,7 @@ static void print_skipped(
  * has an indexed item (deploy_needs_work(NULL) is false); one planned as absent
  * beneath a squatted directory may have none, and is created rather than fixed.
  * A fixed row whose item carries neither bit, or no item, prints no tag, and
- * the other buckets never carry one, since the verb already says what the path
+ * the other sections never carry one, since the verb already says what the path
  * held.
  *
  * Mode and ownership print as the row carries them — total by build, a 0000 claim
@@ -544,17 +545,30 @@ static void print_deploy_results(
 ) {
     if (!result) return;
 
-    deploy_writes_t deployed = result->deployed;
-    manifest_rows_t created = manifest_rows_view(&result->created);
-    manifest_rows_t fixed = manifest_rows_view(&result->fixed);
-    manifest_rows_t replaced = manifest_rows_view(&result->replaced);
-    manifest_rows_t ancestors = manifest_rows_view(&result->ancestors);
+    deploy_outcomes_t deployed = result->deployed;
+    deploy_outcomes_t converged = result->converged;
+    deploy_outcomes_t ancestors = result->ancestors;
+
+    /* The verbs, folded off the carried-out fates exactly as the preview folds
+     * them off the verdicts (print_deploy_preview) — the receipt restates the
+     * preview by construction. */
+    size_t created = 0;
+    size_t fixed = 0;
+    size_t replaced = 0;
+
+    for (size_t i = 0; i < converged.count; i++) {
+        switch (converged.entries[i].verdict->occupant) {
+            case FS_OCCUPANT_NONE:      created++; break;
+            case FS_OCCUPANT_DIRECTORY: fixed++; break;
+            default:                    replaced++; break;
+        }
+    }
 
     /* Verbose mode: show individual items per outcome */
     if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
         for (size_t i = 0; i < deployed.count; i++) {
-            const manifest_row_t *file = deployed.entries[i].row;
+            const manifest_row_t *file = deployed.entries[i].verdict->row;
 
             if (file->type == PATH_TYPE_SYMLINK) {
                 output_styled(
@@ -585,10 +599,11 @@ static void print_deploy_results(
         }
     }
 
-    if (created.count > 0) {
+    if (created > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created tracked directories");
-        for (size_t i = 0; i < created.count; i++) {
-            const manifest_row_t *dir = created.entries[i];
+        for (size_t i = 0; i < converged.count; i++) {
+            if (converged.entries[i].verdict->occupant != FS_OCCUPANT_NONE) continue;
+            const manifest_row_t *dir = converged.entries[i].verdict->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -604,10 +619,11 @@ static void print_deploy_results(
         }
     }
 
-    if (fixed.count > 0) {
+    if (fixed > 0) {
         output_section(out, OUTPUT_VERBOSE, "Fixed tracked directories");
-        for (size_t i = 0; i < fixed.count; i++) {
-            const manifest_row_t *dir = fixed.entries[i];
+        for (size_t i = 0; i < converged.count; i++) {
+            if (converged.entries[i].verdict->occupant != FS_OCCUPANT_DIRECTORY) continue;
+            const manifest_row_t *dir = converged.entries[i].verdict->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -637,10 +653,13 @@ static void print_deploy_results(
         }
     }
 
-    if (replaced.count > 0) {
+    if (replaced > 0) {
         output_section(out, OUTPUT_VERBOSE, "Replaced tracked directories");
-        for (size_t i = 0; i < replaced.count; i++) {
-            const manifest_row_t *dir = replaced.entries[i];
+        for (size_t i = 0; i < converged.count; i++) {
+            fs_occupant_t occ = converged.entries[i].verdict->occupant;
+
+            if (occ == FS_OCCUPANT_NONE || occ == FS_OCCUPANT_DIRECTORY) continue;
+            const manifest_row_t *dir = converged.entries[i].verdict->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -659,7 +678,7 @@ static void print_deploy_results(
     if (ancestors.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created tracked ancestors (outside the plan)");
         for (size_t i = 0; i < ancestors.count; i++) {
-            const manifest_row_t *dir = ancestors.entries[i];
+            const manifest_row_t *dir = ancestors.entries[i].verdict->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -684,24 +703,24 @@ static void print_deploy_results(
             );
         }
 
-        if (created.count > 0) {
+        if (created > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Created {green}%zu{reset} tracked director%s\n",
-                created.count, created.count == 1 ? "y" : "ies"
+                created, created == 1 ? "y" : "ies"
             );
         }
 
-        if (fixed.count > 0) {
+        if (fixed > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Fixed {green}%zu{reset} tracked director%s\n",
-                fixed.count, fixed.count == 1 ? "y" : "ies"
+                fixed, fixed == 1 ? "y" : "ies"
             );
         }
 
-        if (replaced.count > 0) {
+        if (replaced > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} tracked director%s\n",
-                replaced.count, replaced.count == 1 ? "y" : "ies"
+                replaced, replaced == 1 ? "y" : "ies"
             );
         }
     }
@@ -2205,56 +2224,58 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * Non-critical operation: deployment already succeeded physically, so
          * record-write failures are non-fatal warnings (preserve consistency).
          *
-         * The receipt's buckets split by what dotta did, and the record follows
-         * the split — the receipt is the whole of it:
-         *   deployed              files written or linked — an owned anchor
-         *                         carrying the write's own proof: the receipt's
-         *                         triple, distilled by the executor from the
-         *                         fstat of the bytes it put there
-         *                         (stat_cache_from_write — authorship needs no
-         *                         closed second). A symlink's is UNSET, the same
-         *                         statement as NULL to state_anchor: a link is
-         *                         made by path, no descriptor exists to describe
-         *                         it, and readlink is its whole re-verification
-         *   created ∪ replaced    directories dotta made (where nothing stood,
-         *   ∪ ancestors           or in a squatter's place, or as the parent of
-         *                         a planned path) — an owned anchor; a directory
-         *                         has no blob and no stat
-         *   fixed                 directories converged in place — dotta did not
-         *                         make them, and they were present at load, so
-         *                         the flush has already observed any that had
-         *                         no record: nothing to write, with one exception
-         *                         — a pending handover must not outlive the run
-         *                         that converged the directory, so a reassigned
-         *                         fixed row takes the one anchor that acknowledges
-         *                         it
+         * The receipt is the whole of it, and the ownership rule is read off each
+         * carried-out fate, never off a bucket topology:
+         *   deployed                  files written or linked — an owned anchor
+         *                             carrying the write's own proof: the receipt's
+         *                             triple, distilled by the executor from the
+         *                             fstat of the bytes it put there
+         *                             (stat_cache_from_write — authorship needs no
+         *                             closed second). A symlink's is UNSET, the same
+         *                             statement as NULL to state_anchor: a link is
+         *                             made by path, no descriptor exists to describe
+         *                             it, and readlink is its whole re-verification
+         *   converged, made           a directory whose verdict's occupant was not
+         *   (occupant ≠ DIRECTORY)    DIRECTORY — dotta made it, where nothing stood
+         *                             or in a squatter's place — an owned anchor; a
+         *                             directory has no blob and no stat
+         *   converged in place        dotta did not make it, and it was present at
+         *   (occupant = DIRECTORY)    load, so the flush has already observed any
+         *                             that had no record: nothing to write, with one
+         *                             exception — a pending handover must not outlive
+         *                             the run that converged the directory, so a
+         *                             reassigned row takes the one anchor that
+         *                             acknowledges it. Anchoring it as owned would
+         *                             set deployed_at on a directory the user made
+         *                             and hand it to the prune on the next scope exit
+         *   ancestors                 tracked parents made on the way — dotta made
+         *                             them too, an owned anchor
          * Every other active directory present on disk was present at load too,
          * and has its record from the flush by the same argument; the load
          * established presence at the boundary, and nothing here walks the disk
          * to establish it again.
          *
-         * A deployed file — or a created, replaced or fixed directory — whose
-         * item read [reassigned] had its record rewritten under the row's profile
-         * by the write just made; each is derived before its anchor (the write
-         * rewrites the record the fact is read against) and counted with the
-         * clean ones the adoption and acknowledgement loops re-stamped. Ancestors'
-         * anchors stay uncounted: they are outside the plan, so the collection
-         * never previewed them, and an acknowledgement that rides one heals the
-         * record silently.
+         * A deployed file — or a converged directory — whose item read [reassigned]
+         * had its record rewritten under the row's profile by the write just made;
+         * each is derived before its anchor (the write rewrites the record the
+         * fact is read against) and counted with the clean ones the adoption and
+         * acknowledgement loops re-stamped. Ancestors' anchors stay uncounted:
+         * they are outside the plan, so the collection never previewed them, and
+         * an acknowledgement that rides one heals the record silently.
          */
         if (deploy_result) {
-            deploy_writes_t deployed = deploy_result->deployed;
+            deploy_outcomes_t deployed = deploy_result->deployed;
 
             for (size_t i = 0; i < deployed.count; i++) {
-                const deploy_written_t *w = &deployed.entries[i];
-                const manifest_row_t *file = w->row;
+                const deploy_outcome_t *o = &deployed.entries[i];
+                const manifest_row_t *file = o->verdict->row;
 
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
                 const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
                 bool acknowledges = item && workspace_item_reassigned(item);
 
-                err = workspace_anchor(ws, file, &w->stat, now);
+                err = workspace_anchor(ws, file, &o->stat, now);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update
                      * failed. The file is already on the filesystem with correct
@@ -2272,57 +2293,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 if (acknowledges) acknowledged_count++;
             }
 
-            const manifest_rows_t made[] = {
-                manifest_rows_view(&deploy_result->created),
-                manifest_rows_view(&deploy_result->replaced),
-            };
-            for (size_t b = 0; b < sizeof(made) / sizeof(made[0]); b++) {
-                for (size_t i = 0; i < made[b].count; i++) {
-                    const manifest_row_t *dir = made[b].entries[i];
-
-                    const workspace_item_t *item =
-                        workspace_get_item(ws, dir->filesystem_path);
-                    bool acknowledges = item && workspace_item_reassigned(item);
-
-                    err = workspace_anchor(ws, dir, NULL, now);
-                    if (err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                            dir->filesystem_path, error_message(err)
-                        );
-                        error_free(err);
-                        err = NULL;
-                        continue;
-                    }
-
-                    if (acknowledges) acknowledged_count++;
-                }
-            }
-
-            manifest_rows_t grown = manifest_rows_view(&deploy_result->ancestors);
-            for (size_t i = 0; i < grown.count; i++) {
-                const manifest_row_t *dir = grown.entries[i];
-
-                err = workspace_anchor(ws, dir, NULL, now);
-                if (err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        dir->filesystem_path, error_message(err)
-                    );
-                    error_free(err);
-                    err = NULL;
-                }
-            }
-
-            /* The fixed bucket's one write (see the table above): anchor only
-             * where the item read a pending handover. */
-            manifest_rows_t converged = manifest_rows_view(&deploy_result->fixed);
+            deploy_outcomes_t converged = deploy_result->converged;
             for (size_t i = 0; i < converged.count; i++) {
-                const manifest_row_t *dir = converged.entries[i];
+                const deploy_outcome_t *o = &converged.entries[i];
+                const manifest_row_t *dir = o->verdict->row;
+                bool made = o->verdict->occupant != FS_OCCUPANT_DIRECTORY;
 
                 const workspace_item_t *item =
                     workspace_get_item(ws, dir->filesystem_path);
-                if (!(item && workspace_item_reassigned(item))) continue;
+                bool acknowledges = item && workspace_item_reassigned(item);
+
+                if (!made && !acknowledges) continue;
 
                 err = workspace_anchor(ws, dir, NULL, now);
                 if (err) {
@@ -2335,7 +2316,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     continue;
                 }
 
-                acknowledged_count++;
+                if (acknowledges) acknowledged_count++;
+            }
+
+            deploy_outcomes_t ancestors = deploy_result->ancestors;
+            for (size_t i = 0; i < ancestors.count; i++) {
+                const manifest_row_t *dir = ancestors.entries[i].verdict->row;
+
+                err = workspace_anchor(ws, dir, NULL, now);
+                if (err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
+                        dir->filesystem_path, error_message(err)
+                    );
+                    error_free(err);
+                    err = NULL;
+                }
             }
         }
 
@@ -2391,9 +2387,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The reassignments this run acknowledged, both kinds: the clean ones the
      * adoption and acknowledgement loops re-stamped, the pending ones the record
-     * step rewrote behind the run's own writes (deployed files; created, replaced
-     * and fixed directories). Dry-run previews the in-scope set the preview
-     * named. */
+     * step rewrote behind the run's own writes (deployed files; converged
+     * directories). Dry-run previews the in-scope set the preview named. */
     if (opts->dry_run) {
         if (reassigned_count > 0) {
             output_info(

@@ -1461,7 +1461,18 @@ static error_t *create_ancestor(
         }
 
         RETURN_IF_ERROR(materialize_tracked_directory(run, v));
-        return ptr_array_push(&run->result->ancestors, v->row);
+
+        /* On the receipt once — and bounds the sized array: a parent present at
+         * an earlier row's write and removed since is re-made here, and without
+         * this scan the second re-make would write past entries[count]. */
+        deploy_outcomes_t *receipt = &run->result->ancestors;
+        for (size_t j = 0; j < receipt->count; j++) {
+            if (receipt->entries[j].verdict == v) {
+                return NULL;
+            }
+        }
+        receipt->entries[receipt->count++].verdict = v;
+        return NULL;
     }
 
     return fs_create_dir_with_ownership(path, 0755, uid, gid);
@@ -1833,11 +1844,31 @@ error_t *deploy_execute(
 
     error_t *err = NULL;
 
-    /* calloc zeroes every bucket — that IS their empty state, ptr_array_t and
-     * deploy_writes_t alike */
     deploy_result_t *result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
+    }
+
+    /* The receipt is sized to the verdicts up front — one slot per verdict,
+     * zeroed, filled in verdict order as each act lands (a zero count allocates
+     * one slot rather than nothing, so every array is an array; a zeroed slot's
+     * stat IS the UNSET triple). count gates what a consumer reads, so a
+     * fail-stop's untouched slots are invisible and the partial receipt holds
+     * exactly what happened — for a file, with its own write's proof. */
+    result->deployed.entries = calloc(
+        verdicts->files.count + 1, sizeof(*result->deployed.entries)
+    );
+    result->converged.entries = calloc(
+        verdicts->directories.count + 1, sizeof(*result->converged.entries)
+    );
+    result->ancestors.entries = calloc(
+        verdicts->ancestors.count + 1, sizeof(*result->ancestors.entries)
+    );
+
+    if (!result->deployed.entries || !result->converged.entries ||
+        !result->ancestors.entries) {
+        deploy_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
     }
 
     deploy_run_t run = {
@@ -1868,50 +1899,19 @@ error_t *deploy_execute(
             goto done;
         }
 
-        /* Record success in the bucket for what the verdict said stood there */
-        switch (v->occupant) {
-            case FS_OCCUPANT_NONE:
-                err = ptr_array_push(&result->created, v->row);
-                break;
-
-            case FS_OCCUPANT_DIRECTORY:
-                err = ptr_array_push(&result->fixed, v->row);
-                break;
-
-            default:
-                err = ptr_array_push(&result->replaced, v->row);
-                break;
-        }
-        if (err) {
-            err = error_wrap(err, "Failed to record converged directory");
-            goto done;
-        }
+        /* Record success; the verb is the verdict's occupant */
+        result->converged.entries[result->converged.count++].verdict = v;
     }
 
     /* Every verdict is work the plan chose, by construction: the planner routed
      * the row through deploy_needs_work and past every reason to skip it, so
      * this loop applies no filter of its own. Clean in-scope rows with deployed_at
-     * == 0 are apply's adoption step, which stamps the anchor without deploy_file.
-     *
-     * The receipt is sized to the verdicts up front — one slot per pending file,
-     * zeroed, filled in verdict order as each write lands (a zero count allocates
-     * one slot rather than nothing, so every array is an array). count gates
-     * what a consumer reads, so a fail-stop's half-written slot is invisible
-     * and the partial receipt holds exactly the writes that happened, each with
-     * its own write's proof. */
-    result->deployed.entries = calloc(
-        verdicts->files.count + 1, sizeof(*result->deployed.entries)
-    );
-    if (!result->deployed.entries) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
-        goto done;
-    }
-
+     * == 0 are apply's adoption step, which stamps the anchor without deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
-        deploy_written_t *w = &result->deployed.entries[result->deployed.count];
+        deploy_outcome_t *o = &result->deployed.entries[result->deployed.count];
 
-        err = deploy_file(&run, v, &w->stat);
+        err = deploy_file(&run, v, &o->stat);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
@@ -1922,7 +1922,7 @@ error_t *deploy_execute(
         }
 
         /* Record success */
-        w->row = v->row;
+        o->verdict = v;
         result->deployed.count++;
     }
 
@@ -1969,10 +1969,8 @@ void deploy_preflight_result_free(deploy_preflight_result_t *result) {
 }
 
 /**
- * Free deployment result
- *
- * Every bucket holds borrowed row pointers (workspace-arena lifetime), so only
- * the bucket buffers are released — the rows themselves outlive us.
+ * Free a deployment receipt — the three outcome arrays. The verdicts they point
+ * at belong to the preflight result.
  */
 void deploy_result_free(deploy_result_t *result) {
     if (!result) {
@@ -1980,9 +1978,7 @@ void deploy_result_free(deploy_result_t *result) {
     }
 
     free(result->deployed.entries);
-    ptr_array_deinit(&result->created);
-    ptr_array_deinit(&result->fixed);
-    ptr_array_deinit(&result->replaced);
-    ptr_array_deinit(&result->ancestors);
+    free(result->converged.entries);
+    free(result->ancestors.entries);
     free(result);
 }

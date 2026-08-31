@@ -761,6 +761,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     bool to_stdout = strcmp(opts->output, "-") == 0;
     bool verbose = opts->verbose || output_is_verbose(out);
 
+    /* '-' dedicates stdout to the payload. Errors already live there. */
+    if (to_stdout) output_set_stream(out, stderr);
+
     error_t *err = NULL;
     git_commit *commit = NULL;
     git_tree *tree = NULL;

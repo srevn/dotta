@@ -93,6 +93,17 @@ void output_free(output_t *ctx);
 void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity);
 
 /**
+ * Move all subsequent output to another stream
+ *
+ * For a command that dedicates stdout to a byte payload (export -o -): every
+ * line dotta itself says — a warning, a dry-run preview, verbose chatter — moves
+ * to the given stream so the payload arrives alone. Color capability is recomputed
+ * for the new stream: under AUTO, the payload's pipe and the chatter's tty are
+ * different answers. Errors and prompts already live on stderr and are unaffected.
+ */
+void output_set_stream(output_t *ctx, FILE *stream);
+
+/**
  * Check if verbose output is enabled
  *
  * NULL-safe: returns false if ctx is NULL.

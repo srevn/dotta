@@ -184,10 +184,10 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
 /**
  * Helper: Apply metadata, write data, sync, and close a file descriptor
  *
- * Core write sequence shared by both the atomic (temp file) and direct (O_TRUNC
- * fallback) paths. Ownership and permissions are set via fd-based operations
- * (fchown/fchmod) BEFORE any data is written, preserving the security invariant
- * that sensitive content is never exposed with wrong metadata.
+ * The core write sequence of fs_write_file_raw's temp file. Ownership and
+ * permissions are set via fd-based operations (fchown/fchmod) BEFORE any data
+ * is written, preserving the security invariant that sensitive content is never
+ * exposed with wrong metadata.
  *
  * The fd is always closed on return (both success and error).
  *
@@ -198,6 +198,7 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
  * @param mode Permission mode
  * @param uid Target UID (-1 to skip)
  * @param gid Target GID (-1 to skip)
+ * @param out_st Optional: the descriptor's fstat after the last mutation
  * @return Error or NULL on success
  */
 static error_t *write_and_close_fd(
@@ -207,7 +208,8 @@ static error_t *write_and_close_fd(
     size_t size,
     mode_t mode,
     uid_t uid,
-    gid_t gid
+    gid_t gid,
+    struct stat *out_st
 ) {
     /* SECURITY CRITICAL: Apply ownership BEFORE writing data
      *
@@ -285,6 +287,18 @@ static error_t *write_and_close_fd(
         );
     }
 
+    /* The descriptor's own stat, after the last mutation that shapes it: the
+     * caller reads the truth of what THIS write produced, not of whatever a later
+     * look at the path would find. */
+    if (out_st && fstat(fd, out_st) < 0) {
+        int saved_errno = errno;
+        close(fd);
+        return ERROR(
+            ERR_FS, "Failed to stat written '%s': %s",
+            path, strerror(saved_errno)
+        );
+    }
+
     close(fd);
     return NULL;
 }
@@ -295,7 +309,8 @@ error_t *fs_write_file_raw(
     size_t size,
     mode_t mode,
     uid_t uid,
-    gid_t gid
+    gid_t gid,
+    struct stat *out_st
 ) {
     RETURN_IF_ERROR(validate_path(path));
     if (size > 0 && !data) {
@@ -355,7 +370,7 @@ error_t *fs_write_file_raw(
     /* Write data to temp file with correct ownership and permissions.
      * SECURITY: All metadata is applied via fd operations before data is written.
      * If anything fails, the original file is untouched. */
-    err = write_and_close_fd(fd, path, data, size, mode, uid, gid);
+    err = write_and_close_fd(fd, path, data, size, mode, uid, gid, out_st);
     if (err) {
         unlink(tmp_path);
         return err;
@@ -387,7 +402,8 @@ error_t *fs_write_file(const char *path, const buffer_t *content) {
         content->size,
         0644,
         -1,
-        -1
+        -1,
+        NULL
     );
 }
 
@@ -419,7 +435,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
      * eliminating the security window where sensitive files (e.g., SSH keys)
      * would have incorrect permissions (0644 instead of 0600). */
     err = fs_write_file_raw(
-        dst, (const unsigned char *) content.data, content.size, mode, -1, -1
+        dst, (const unsigned char *) content.data, content.size, mode, -1, -1, NULL
     );
     buffer_free(&content);
     if (err) {

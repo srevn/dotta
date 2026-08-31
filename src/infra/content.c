@@ -627,7 +627,8 @@ error_t *content_store_file_to_worktree(
         data_to_write->size,
         mode,  /* Preserve source mode */
         -1,    /* Don't change ownership */
-        -1     /* Don't change ownership */
+        -1,    /* Don't change ownership */
+        NULL
     );
 
     /* Cleanup (secure: plaintext may contain sensitive data) */

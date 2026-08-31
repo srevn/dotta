@@ -402,7 +402,7 @@ static void print_deploy_results(
 ) {
     if (!result) return;
 
-    manifest_rows_t deployed = manifest_rows_view(&result->deployed);
+    deploy_writes_t deployed = result->deployed;
     manifest_rows_t created = manifest_rows_view(&result->created);
     manifest_rows_t fixed = manifest_rows_view(&result->fixed);
     manifest_rows_t replaced = manifest_rows_view(&result->replaced);
@@ -412,7 +412,7 @@ static void print_deploy_results(
     if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
         for (size_t i = 0; i < deployed.count; i++) {
-            const manifest_row_t *file = deployed.entries[i];
+            const manifest_row_t *file = deployed.entries[i].row;
 
             if (file->type == PATH_TYPE_SYMLINK) {
                 output_styled(
@@ -2047,11 +2047,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *
          * The receipt's buckets split by what dotta did, and the record follows
          * the split — the receipt is the whole of it:
-         *   deployed              files written or linked — an owned anchor,
-         *                         blob only: the write's own mtime second is
-         *                         still open, so no stat taken now can prove
-         *                         anything about what stands there; the next
-         *                         load's look confirms one, in a closed second
+         *   deployed              files written or linked — an owned anchor
+         *                         carrying the write's own proof: the receipt's
+         *                         triple, distilled by the executor from the
+         *                         fstat of the bytes it put there
+         *                         (stat_cache_from_write — authorship needs no
+         *                         closed second). A symlink's is UNSET, the same
+         *                         statement as NULL to state_anchor: a link is
+         *                         made by path, no descriptor exists to describe
+         *                         it, and readlink is its whole re-verification
          *   created ∪ replaced    directories dotta made (where nothing stood,
          *   ∪ ancestors           or in a squatter's place, or as the parent of
          *                         a planned path) — an owned anchor; a directory
@@ -2079,21 +2083,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * record silently.
          */
         if (deploy_result) {
-            manifest_rows_t deployed = manifest_rows_view(&deploy_result->deployed);
+            deploy_writes_t deployed = deploy_result->deployed;
 
             if (deployed.count > 0) {
                 output_print(out, OUTPUT_VERBOSE, "\nUpdating deployment anchors...\n");
             }
 
             for (size_t i = 0; i < deployed.count; i++) {
-                const manifest_row_t *file = deployed.entries[i];
+                const deploy_written_t *w = &deployed.entries[i];
+                const manifest_row_t *file = w->row;
 
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
                 const workspace_item_t *item = workspace_get_item(ws, file->filesystem_path);
                 bool acknowledges = item && workspace_item_reassigned(item);
 
-                err = workspace_anchor(ws, file, NULL, now);
+                err = workspace_anchor(ws, file, &w->stat, now);
                 if (err) {
                     /* Non-fatal warning - deployment succeeded, just anchor update
                      * failed. The file is already on the filesystem with correct

@@ -1472,11 +1472,25 @@ cleanup:
  * @param run Run context (must not be NULL)
  * @param v Verdict for the row (must not be NULL; the row is borrowed from the
  *          workspace's view, read-only for deploy)
+ * @param out_stat The proof the write authored, in the record's vocabulary (must
+ *          not be NULL): the regular arm distills the written descriptor's fstat
+ *          (stat_cache_from_write — taken before the rename that publishes it,
+ *          so it describes exactly the bytes this run wrote); the symlink arm
+ *          leaves the entry default standing. UNSET on every error return
  * @return Error or NULL on success
  */
-static error_t *deploy_file(deploy_run_t *run, const deploy_verdict_t *v) {
+static error_t *deploy_file(
+    deploy_run_t *run, const deploy_verdict_t *v, stat_cache_t *out_stat
+) {
     CHECK_NULL(run);
     CHECK_NULL(v);
+    CHECK_NULL(out_stat);
+
+    /* The proof's resting state: UNSET unless the regular arm's write lands and
+     * binds its own fstat below. The symlink arm never does — a link is made by
+     * path (symlink(2) opens no descriptor to describe), and readlink is its
+     * whole re-verification. */
+    *out_stat = STAT_CACHE_UNSET;
 
     const manifest_row_t *file = v->row;
 
@@ -1582,8 +1596,9 @@ static error_t *deploy_file(deploy_run_t *run, const deploy_verdict_t *v) {
      * via fchown() and fchmod() on the file descriptor, eliminating any security
      * window. This is the ONLY place where ownership is applied - the verdict
      * only resolves. */
+    struct stat written;
     err = fs_write_file_raw(
-        file->filesystem_path, content, size, v->mode, v->uid, v->gid
+        file->filesystem_path, content, size, v->mode, v->uid, v->gid, &written
     );
 
     if (err) {
@@ -1593,6 +1608,11 @@ static error_t *deploy_file(deploy_run_t *run, const deploy_verdict_t *v) {
         );
         goto cleanup;
     }
+
+    /* The write's own proof, distilled where the write authority is in scope:
+     * authorship, not a read, vouches for the triple, so its own open second
+     * needs no smudge (stat_cache_from_write). */
+    *out_stat = stat_cache_from_write(&written);
 
     /* Success */
     err = NULL;
@@ -1688,7 +1708,8 @@ error_t *deploy_execute(
 
     error_t *err = NULL;
 
-    /* calloc zeroes the ptr_array_t buckets — that IS their empty state */
+    /* calloc zeroes every bucket — that IS their empty state, ptr_array_t and
+     * deploy_writes_t alike */
     deploy_result_t *result = calloc(1, sizeof(deploy_result_t));
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
@@ -1745,12 +1766,29 @@ error_t *deploy_execute(
     /* Every verdict is work the plan chose, by construction: the planner routed
      * the row through deploy_needs_work and past every reason to skip it, so
      * this loop applies no filter of its own. Clean in-scope rows with deployed_at
-     * == 0 are apply's adoption step, which stamps the anchor without
-     * deploy_file. */
+     * == 0 are apply's adoption step, which stamps the anchor without deploy_file.
+     *
+     * The receipt is sized to the verdicts up front — one slot per pending file,
+     * zeroed, filled in verdict order as each write lands. count gates what a
+     * consumer reads, so a fail-stop's half-written slot is invisible and the
+     * partial receipt holds exactly the writes that happened, each with its own
+     * write's proof. */
+    if (verdicts->files.count > 0) {
+        result->deployed.entries = calloc(
+            verdicts->files.count,
+            sizeof(*result->deployed.entries)
+        );
+        if (!result->deployed.entries) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
+            goto done;
+        }
+    }
+
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
+        deploy_written_t *w = &result->deployed.entries[result->deployed.count];
 
-        err = deploy_file(&run, v);
+        err = deploy_file(&run, v, &w->stat);
         if (err) {
             /* Fail-stop with the partial result; the error names the path */
             err = error_wrap(
@@ -1761,11 +1799,8 @@ error_t *deploy_execute(
         }
 
         /* Record success */
-        err = ptr_array_push(&result->deployed, v->row);
-        if (err) {
-            err = error_wrap(err, "Failed to record deployed file");
-            goto done;
-        }
+        w->row = v->row;
+        result->deployed.count++;
     }
 
 done:
@@ -1815,15 +1850,15 @@ void deploy_preflight_result_free(deploy_preflight_result_t *result) {
 /**
  * Free deployment result
  *
- * Each ptr_array_t holds borrowed row pointers (workspace-arena lifetime), so
- * deinit only releases the bucket buffers — the rows themselves outlive us.
+ * Every bucket holds borrowed row pointers (workspace-arena lifetime), so only
+ * the bucket buffers are released — the rows themselves outlive us.
  */
 void deploy_result_free(deploy_result_t *result) {
     if (!result) {
         return;
     }
 
-    ptr_array_deinit(&result->deployed);
+    free(result->deployed.entries);
     ptr_array_deinit(&result->created);
     ptr_array_deinit(&result->fixed);
     ptr_array_deinit(&result->replaced);

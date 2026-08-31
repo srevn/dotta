@@ -595,7 +595,7 @@ static error_t *materialize_entries(
 
                 err = fs_write_file_raw(
                     e->dest_path, (const unsigned char *) bytes->data,
-                    bytes->size, e->mode, (uid_t) -1, (gid_t) -1
+                    bytes->size, e->mode, (uid_t) -1, (gid_t) -1, NULL
                 );
                 buffer_free(&local);
                 if (err) {

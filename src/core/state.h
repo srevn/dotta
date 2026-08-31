@@ -66,12 +66,12 @@ typedef struct manifest_row manifest_row_t;
  * Lineage: this is Git's cache_entry stat data serving ce_match_stat, with the
  * same blind spot and the same cure. A triple whose mtime second had not closed
  * when the stat was taken cannot distinguish the bytes the caller verified from
- * a same-second, same-size, in-place rewrite — so the constructor refuses to
- * build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge, write-side).
- * The record then advances blob-only and the next load's slow path confirms once,
- * in a closed second. Consequence, deliberate: a deploy can never bind a usable
- * triple (its file's second is its own), and a capture of a file edited this
- * second defers its fast path one load.
+ * a same-second, same-size, in-place rewrite — so the read-derived constructor
+ * refuses to build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
+ * write-side); the record then advances blob-only and the next load's slow path
+ * confirms once, in a closed second. A capture of a file edited this second
+ * therefore defers its fast path one load. A triple born from the write itself
+ * (stat_cache_from_write) is exempt: authorship, not a read, is its proof.
  */
 typedef struct {
     int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
@@ -82,27 +82,53 @@ typedef struct {
 #define STAT_CACHE_UNSET ((stat_cache_t){0})
 
 /**
- * Populate stat cache from a struct stat
+ * Populate stat cache from a struct stat the caller read
  *
- * The one constructor: a triple is born only from a struct stat the caller already
- * holds at the moment of its look — a post-commit capture's fstat, or the slow-path
- * CMP_EQUAL confirmation's lstat — so the triple and the bytes the caller verified
- * describe the same moment. There is deliberately no from-path variant: a fresh
- * look taken at record-write time would bind whatever stands at the path then
- * to a verdict from earlier.
+ * The read-derived constructor: a triple is born only from a struct stat the
+ * caller already holds at the moment of its look — a post-commit capture's fstat,
+ * or the slow-path CMP_EQUAL confirmation's lstat — so the triple and the bytes
+ * the caller verified describe the same moment. There is deliberately no from-path
+ * variant: a fresh look taken at record-write time would bind whatever stands
+ * at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
- * or carrying a future mtime) demotes to UNSET — no proof is built where a
- * same-second, same-size, in-place rewrite could stand behind it (the Lineage
- * note above). Residue, accepted: a rewrite landing between the caller's look
- * and this call, with the call crossing the second boundary in that sub-millisecond
- * gap — the same order of window Git accepts between hashing a file and writing
- * its index entry.
+ * or carrying a future mtime) demotes to UNSET — a read can only infer the bytes
+ * behind a stat, and no proof is built where a same-second, same-size, in-place
+ * rewrite could stand behind it (the Lineage note above). Residue, accepted: a
+ * rewrite landing between the caller's look and this call, with the call crossing
+ * the second boundary in that sub-millisecond gap — the same order of window
+ * Git accepts between hashing a file and writing its index entry.
  */
 static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
     if ((int64_t) st->st_mtime >= (int64_t) time(NULL)) {
         return STAT_CACHE_UNSET;
     }
+    return (stat_cache_t){
+        .mtime = (int64_t) st->st_mtime,
+        .size = (int64_t) st->st_size,
+        .ino = (uint64_t) st->st_ino,
+    };
+}
+
+/**
+ * Populate stat cache from the write that authored the bytes
+ *
+ * The write-derived constructor: the caller holds the fstat of a descriptor it
+ * wrote itself — deploy's executor, taken after the last byte and before the
+ * rename that publishes the file — so the triple describes dotta's own bytes by
+ * authorship, not by a read's inference. There is no open second to smudge, because
+ * there is nothing to mis-infer: the record says "dotta put (mtime, size, ino)
+ * there", true the instant the write lands.
+ *
+ * What the smudge would have bought is narrower here and waived deliberately: a
+ * foreign same-second, same-size, in-place rewrite of the just-deployed file
+ * reads clean until its stat moves — the race Git accepts for every file checkout
+ * writes into its index. The alternative was worse than the race: a deploy could
+ * never arm a proof, every deployed path paid one redundant content read on its
+ * next load, and a deployed 0000 claim — whose read the mode itself forbids —
+ * stood [unverified] forever.
+ */
+static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
     return (stat_cache_t){
         .mtime = (int64_t) st->st_mtime,
         .size = (int64_t) st->st_size,

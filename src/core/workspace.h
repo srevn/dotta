@@ -578,11 +578,14 @@ error_t *workspace_observe(
  * @param stat The stat of the moment this row's content was established on disk,
  *             taken by the code that established it: the analysis's own triple
  *             for an adoption or acknowledgement (the snapshot pair, when its
- *             blob is this row's), NULL for a deployment (a freshly written file's
- *             mtime second is still open — no stat taken now can prove anything
- *             about it; the next load's look confirms) and for a directory. Never
- *             a fresh lstat: a look taken here binds whatever stands at the path
- *             now to a verdict from earlier.
+ *             blob is this row's); the deploy receipt's triple for a file
+ *             deployment — the executor's fstat of the bytes it wrote, distilled
+ *             at the write (stat_cache_from_write: proof by authorship, no closed
+ *             second needed), UNSET for a symlink (made by path, no descriptor
+ *             exists to describe it), and UNSET and NULL say the same thing to
+ *             state_anchor; NULL for a directory. Never a fresh lstat: a look
+ *             taken here binds whatever stands at the path now to a verdict from
+ *             earlier.
  * @param now Timestamp of the write (must be > 0)
  * @return Error from state_anchor, or NULL on success
  */

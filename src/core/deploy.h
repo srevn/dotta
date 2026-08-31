@@ -45,6 +45,7 @@
 #include <git2.h>
 #include <types.h>
 
+#include "core/state.h"
 #include "sys/filesystem.h"
 
 /* Forward declarations. Plan, verdict and result buckets hold manifest rows
@@ -192,6 +193,34 @@ typedef struct {
 } deploy_plan_t;
 
 /**
+ * One written file — the row, and the proof the write authored
+ *
+ * The stat is the record's own triple (stat_cache_from_write), distilled by the
+ * executor from the fstat of the descriptor it wrote — taken after the last byte
+ * and before the rename that publishes it, so it describes exactly what this
+ * run wrote, never what a later look at the path would find. It is what lets
+ * apply's record step anchor a deployment with the write's own proof instead of
+ * leaving the record blob-only.
+ *
+ * UNSET for a symlink row — the executor's fact, not a consumer's re-derivation:
+ * a link is made by path (symlink(2) opens no descriptor to describe), and readlink
+ * is its whole re-verification. UNSET and NULL say the same thing to state_anchor,
+ * so the record step passes the triple blind.
+ */
+typedef struct {
+    const manifest_row_t *row;    /* Borrowed (workspace lifetime) */
+    stat_cache_t stat;            /* The write's proof; UNSET for a symlink */
+} deploy_written_t;
+
+/**
+ * The written files with their count — the shape deploy_verdicts_t gives verdicts
+ */
+typedef struct {
+    deploy_written_t *entries;
+    size_t count;
+} deploy_writes_t;
+
+/**
  * Deployment result — the run's receipt, by outcome
  *
  * Plan buckets by kind, result buckets by outcome verb: every bucket names
@@ -211,12 +240,14 @@ typedef struct {
  * keeps them apart from `created`. Untracked parents have no row, and so no bucket
  * and no record.
  *
- * Each bucket carries borrowed row pointers (workspace-arena lifetime, outlives
- * the deploy_result_t); project with manifest_rows_view. Free with
- * deploy_result_free before workspace_free.
+ * The directory buckets carry borrowed row pointers (workspace-arena lifetime,
+ * outlives the deploy_result_t); project with manifest_rows_view. The deployed
+ * bucket carries deploy_written_t — the same borrowed row beside the write's
+ * own proof — and is read directly. Free with deploy_result_free before
+ * workspace_free.
  */
 typedef struct {
-    ptr_array_t deployed;          /* Files written or linked (manifest_row_t *) */
+    deploy_writes_t deployed;      /* Files written or linked, each with its write's proof */
     ptr_array_t created;           /* Directories made where nothing stood (manifest_row_t *) */
     ptr_array_t fixed;             /* Directories converged in place — mode, ownership */
     ptr_array_t replaced;          /* Directories that displaced a single-node squatter (--force) */

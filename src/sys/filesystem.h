@@ -83,6 +83,12 @@ error_t *fs_read_fd(int fd, buffer_t *out);
  * @param mode Permission mode (e.g., 0600, 0644, 0755)
  * @param uid Target UID for file ownership (use -1 to preserve current)
  * @param gid Target GID for file ownership (use -1 to preserve current)
+ * @param out_st Optional (may be NULL): receives the fstat of the written
+ *        descriptor, taken after the last mutation and before the rename that
+ *        publishes it — it describes exactly the bytes and metadata this call
+ *        wrote, never what a later look at the path would find (rename preserves
+ *        inode, size and mtime). What a caller recording the write as its own
+ *        act reads (core/deploy)
  * @return Error or NULL on success
  */
 error_t *fs_write_file_raw(
@@ -91,7 +97,8 @@ error_t *fs_write_file_raw(
     size_t size,
     mode_t mode,
     uid_t uid,
-    gid_t gid
+    gid_t gid,
+    struct stat *out_st
 );
 
 /**

@@ -565,8 +565,9 @@ static error_t *analyze_file_divergence(
          *
          * DEPLOYED is the load-bearing half — absence must never be inferred
          * from a failure to look, or update commits a deletion that never happened.
-         * UNVERIFIED keeps consumers conservative: apply retries the write and
-         * surfaces the real errno, cleanup's UNVERIFIED skip blocks removal.
+         * UNVERIFIED keeps consumers conservative: apply plans the row and skips
+         * it rather than write on a guess — the exit code says so — and cleanup's
+         * UNVERIFIED skip blocks removal.
          *
          * Returns here because every phase below needs a valid stat. */
         return workspace_add_diverged(

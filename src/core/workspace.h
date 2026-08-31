@@ -210,11 +210,11 @@ typedef enum {
  *                            cleanup_skip_reason gives orphans): the path could
  *                            not be read (EACCES, ELOOP, EIO — both kinds), or
  *                            its content could not be loaded, decrypted, or
- *                            compared. Known-unactionable: update's copy would
- *                            fail on the same errno and apply refuses to write
- *                            what it cannot read, so no verb is promised — and
- *                            an ENCRYPTION bit beside it changes nothing the
- *                            user can act on while the path cannot be read.
+ *                            compared. update's copy would fail on the same errno;
+ *                            apply plans the row and skips it rather than write
+ *                            what it cannot read, and says so through the exit
+ *                            code — and an ENCRYPTION bit beside it changes nothing
+ *                            the user can act on while the path cannot be read.
  *   STALE ∧ CONTENT          CONFLICT — both sides moved since dotta last
  *                            deployed: the edit is real, but update will not
  *                            commit bytes Git has moved past, and apply skips

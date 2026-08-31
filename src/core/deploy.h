@@ -428,9 +428,10 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   is absent, and asked nothing). A non-directory where a directory belongs
  *   (or the reverse) is skipped unless --force (TYPE); a directory holding
  *   untracked paths is skipped either way (OCCUPIED), because deploy removes
- *   single nodes and never a tree. An occupant the workspace could not examine
- *   is skipped as UNREADABLE when the landing had nothing to say: no verdict
- *   can say what the run will find there.
+ *   single nodes and never a tree. A row the workspace could not settle
+ *   (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its content
+ *   that failed) is skipped as UNREADABLE when the landing had nothing to say:
+ *   no verdict can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses

@@ -1099,8 +1099,8 @@ error_t *deploy_preflight(
         /* The rungs, first match wins — the enum's own order. A directory already
          * there is converged in place: fchmod and fchown ask for ownership, not
          * for a writable parent. Only a create or a replace lands a new entry.
-         * An unexaminable occupant is asked too, and skipped on its own account
-         * only when the landing had nothing to say — as for a file. */
+         * A row the workspace could not settle is asked too, and skipped on its
+         * own account only when the landing had nothing to say — as for a file. */
         if (occupant != FS_OCCUPANT_DIRECTORY) {
             err = check_landing(ws, result, path, &reason, &ancestor);
             if (err) goto cleanup;
@@ -1117,7 +1117,12 @@ error_t *deploy_preflight(
             reason = DEPLOY_SKIP_TYPE;
         }
 
-        if (reason == DEPLOY_SKIP_NONE && occupant == FS_OCCUPANT_UNKNOWN) {
+        /* The leftover, as for a file (the file ladder carries the rationale):
+         * the fact is the UNVERIFIED bit; for an active directory row its one
+         * producer today is the unstattable path (occupant UNKNOWN), but the
+         * rung reads the fact, not its one current encoding, so the two ladders
+         * keep one rule. */
+        if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
             reason = DEPLOY_SKIP_UNREADABLE;
         }
 
@@ -1205,14 +1210,22 @@ error_t *deploy_preflight(
             }
         }
 
-        /* An occupant the workspace could not examine is no verdict: nothing
-         * can say what the run will find there, and nothing is written on a guess
-         * (no rung above judged it — UNKNOWN is not present). The ancestry that
-         * refused the lstat is what refuses the write, and the landing has just
-         * named it when it could (EACCES on the way up); the row is skipped on
-         * its own account only when the landing had nothing to say — an errno
-         * the write would otherwise have surfaced mid-run. */
-        if (reason == DEPLOY_SKIP_NONE && occupant == FS_OCCUPANT_UNKNOWN) {
+        /* A row the workspace could not settle is no verdict — the UNVERIFIED
+         * bit, not its unstattable symptom. The bit has two producers: the path
+         * could not be lstat'd (occupant UNKNOWN, which no rung above judges —
+         * UNKNOWN is not present), or the look at its content failed with the
+         * occupant known — a blob that could not be loaded, decrypted or compared,
+         * an open the file refused — which the content rung cannot catch either:
+         * a failed look accumulates no content verdict. (A kind mismatch lstat
+         * did settle still skips TYPE first, rightly — that fact depends on no
+         * failed look.) Nothing can say what the run will find there, or that
+         * the write's own read will fare better, and nothing is written on a
+         * guess. The ancestry that refused an lstat is what refuses the write,
+         * and the landing has just named it when it could (EACCES on the way
+         * up); the row is skipped on its own account only when the landing had
+         * nothing to say — a failure the run would otherwise have met mid-run,
+         * after siblings already wrote. */
+        if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
             reason = DEPLOY_SKIP_UNREADABLE;
         }
 

@@ -21,6 +21,11 @@
  *   nothing pretends to: the mechanisms refuse what a verdict no longer describes
  *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops with the partial
  *   receipt. The same stance as core/cleanup
+ * - One element type per phase: the plan buckets borrowed rows and authors nothing;
+ *   preflight authors the fates — a verdict or a skip, carrying everything decided
+ *   about the row; execute authors the outcomes, one per carried-out verdict,
+ *   bucketed by the split preflight took. A verb inside a bucket is derived from
+ *   the fate, never stored twice
  * - Fail-stop on error (not transactional, but clear reporting)
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
@@ -52,8 +57,8 @@
 #include "sys/filesystem.h"
 
 /* Forward declaration — the content cache is deploy_execute's input alone
- * (infra/content.h); everything else this header names is workspace
- * vocabulary, included above. */
+ * (infra/content.h); everything else this header names is workspace vocabulary,
+ * included above. */
 typedef struct content_cache content_cache_t;
 
 /**
@@ -70,19 +75,18 @@ typedef struct {
  * Everything a consumer needs and nothing it has to go and get: the row, its
  * analysis, what stands at its path, and the metadata the write applies. The
  * occupant is the workspace's lstat, never a fresh one — or FS_OCCUPANT_NONE
- * for a row planned beneath a squatter this run replaces first
- * (deploy_plan_build), whose own observation went through the squatter and
- * describes a tree the run dismantles. The occupant is also the receipt's verb
- * for a directory: NONE → created, DIRECTORY → fixed, anything else → replaced.
+ * for a row planned beneath a squatter this run replaces first (deploy_plan_build),
+ * whose own observation went through the squatter and describes a tree the run
+ * dismantles. The occupant is also the receipt's verb for a directory: NONE →
+ * created, DIRECTORY → fixed, anything else → replaced.
  *
  * The item is the index's answer, looked up once where the fate is decided and
  * filled verbatim on every arm — the planned-absent arms included. An item's
  * join facts (row, anchor, profile) are sound on every verdict; its observation
- * may speak for the squatter's target, which is why the fate's own occupant
- * says what the run will find. What a fate declines to consult it declines at
- * the reader, never by blanking the pointer. NULL only where the index holds
- * nothing — a clean row planned beneath a replaced squatter has no divergence
- * to index.
+ * may speak for the squatter's target, which is why the fate's own occupant says
+ * what the run will find. What a fate declines to consult it declines at the
+ * reader, never by blanking the pointer. NULL only where the index holds nothing
+ * — a clean row planned beneath a replaced squatter has no divergence to index.
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * resolved ownership (resolve_deployment_ownership; (uid_t) -1 / (gid_t) -1 is
@@ -122,6 +126,10 @@ typedef struct {
  *                UNREADABLE. No flag lifts them (the posture cleanup takes towards
  *                a released file and a directory's UNVERIFIED); the run planned
  *                the row and did not deliver it, so the exit code says so.
+ *
+ * The split is deploy's exit contract, and workspace_item_route's UNVERIFIABLE
+ * arm (workspace.h) restates its incapacity half from the route side — a change
+ * here keeps that description true.
  *
  * Precedence, and why UNREADABLE ranks last where its siblings
  * (cleanup_skip_reason, workspace_item_route) rank the same fact first: the landing
@@ -163,12 +171,11 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * analysis, and the facts decided about it. `ancestor` is the path the reason
  * names — the ancestor that refused, the non-directory in the way, the squatted
  * tracked directory above an inheriting row. Every such path is an ancestor of
- * the row's own, and so a prefix of filesystem_path by construction
- * (check_landing truncates the planned path; an inheriting row's squatter stands
- * strictly above it) — carried as the byte length of that prefix, not a copy. 0
- * where the reason has no ancestor to name: it is about the planned path itself,
- * or (PERMISSION alone) the ancestry could not even be reached to name its
- * refusing node.
+ * the row's own, and so a prefix of filesystem_path by construction (check_landing
+ * truncates the planned path; an inheriting row's squatter stands strictly above
+ * it) — carried as the byte length of that prefix, not a copy. 0 where the reason
+ * has no ancestor to name: it is about the planned path itself, or (PERMISSION
+ * alone) the ancestry could not even be reached to name its refusing node.
  *
  * The item is the verdict's rule with the one inversion a skip forces: a
  * self-judged skip carries its analysis object (a CONTENT skip carries one by
@@ -289,8 +296,8 @@ typedef struct {
  * UNSET where the act authored no proof — the executor's fact, not a consumer's
  * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
  * describe, and readlink is its whole re-verification), and a directory's write
- * is fchmod/fchown through its own descriptor, whose record carries no triple at
- * all. UNSET and NULL say the same thing to state_anchor, so the record step
+ * is fchmod/fchown through its own descriptor, whose record carries no triple
+ * at all. UNSET and NULL say the same thing to state_anchor, so the record step
  * passes the triple blind.
  *
  * The verdict is borrowed from the preflight result, whose arrays are sized once
@@ -323,18 +330,24 @@ typedef struct {
  * is the returned error's to name: fail-stop wraps it with the path, and the
  * partial receipt travels in *out beside it.
  *
- * Each array is sized to its verdict array at entry (calloc, count + 1) and
- * filled in verdict order; count gates every read, so a stopped run's untouched
- * slots are invisible and the partial receipt holds exactly what happened, by
+ * Each array is sized to its verdict array at entry (calloc, count + 1) and filled
+ * in verdict order; count gates every read, so a stopped run's untouched slots
+ * are invisible and the partial receipt holds exactly what happened, by
  * construction.
+ *
+ * The derived verb is also the ownership gate apply's record step reads: a
+ * converged directory whose verdict's occupant was not DIRECTORY was made by
+ * dotta and anchors as owned; one converged in place was not — anchoring it would
+ * set deployed_at on a directory the user made, and hand it to the prune on the
+ * next scope exit.
  *
  * `ancestors` is outside the plan: the tracked directories the run made as parents
  * of a planned path (create_ancestor), each once. They carry their recorded mode
  * and ownership like any other tracked directory, and dotta made them — so the
- * record step anchors them as owned, the same event as a created directory — but
- * the plan never named them and the preview never counted them, so the caller's
- * summary keeps them apart from the created count. Untracked parents have no row,
- * and so no receipt and no record.
+ * record step anchors them as owned, the same event as a created directory —
+ * but the plan never named them and the preview never counted them, so the caller's
+ * summary keeps them apart from the created count. Untracked parents have no
+ * row, and so no receipt and no record.
  *
  * Free with deploy_result_free, before deploy_preflight_result_free and before
  * workspace_free — the outcomes borrow the verdicts, the verdicts the rows.
@@ -537,11 +550,11 @@ error_t *deploy_preflight(
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a tracked directory (any profile, in scope or not) with
  * the mode and ownership its ancestor verdict carries, anything else 0755 owned
- * like the planned path. The tracked ones land in the receipt's ancestors;
- * the untracked ones have no row and are never reported. A tracked parent the
- * verdicts did not foresee — present at preflight, gone by the time the run reaches
- * it — is made like an untracked one, and the next load reads whatever it has
- * to say about its mode.
+ * like the planned path. The tracked ones land in the receipt's ancestors; the
+ * untracked ones have no row and are never reported. A tracked parent the verdicts
+ * did not foresee — present at preflight, gone by the time the run reaches it —
+ * is made like an untracked one, and the next load reads whatever it has to say
+ * about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while

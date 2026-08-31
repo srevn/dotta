@@ -221,10 +221,10 @@ static void print_deploy_preflight_results(
  * carries the content_conflicts bits (CONTENT | TYPE) — reachable in a verdict
  * only under --force, so the yellow line is the forced run's counterweight to
  * the confirmation prompt --force skips; the item the fate carries is read for
- * exactly that characterization. At verbose the paths are listed under their count, capped
- * the way every preview list is. The ancestors the run may make on the way are
- * not here: they are the mechanics of landing a planned path, and the receipt
- * names the ones it made.
+ * exactly that characterization. At verbose the paths are listed under their
+ * count, capped the way every preview list is. The ancestors the run may make
+ * on the way are not here: they are the mechanics of landing a planned path,
+ * and the receipt names the ones it made.
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
@@ -513,13 +513,12 @@ static void print_skipped(
  *
  * The verb is the verdict's; the tags are plan truth. A fixed row is tagged [mode]
  * / [ownership] from its fate's item — why the planner chose it — never from a
- * fresh stat: the run has just converged the directory, so disk would say
- * nothing. A pending row the planner chose on its own verdict
- * has an indexed item (deploy_needs_work(NULL) is false); one planned as absent
- * beneath a squatted directory may have none, and is created rather than fixed.
- * A fixed row whose item carries neither bit, or no item, prints no tag, and
- * the other sections never carry one, since the verb already says what the path
- * held.
+ * fresh stat: the run has just converged the directory, so disk would say nothing.
+ * A pending row the planner chose on its own verdict has an indexed item
+ * (deploy_needs_work(NULL) is false); one planned as absent beneath a squatted
+ * directory may have none, and is created rather than fixed. A fixed row whose
+ * item carries neither bit, or no item, prints no tag, and the other sections
+ * never carry one, since the verb already says what the path held.
  *
  * Mode and ownership print as the row carries them — total by build, a 0000 claim
  * included: the receipt reports the row, and (mode: 0000) is the claim honoured,
@@ -1335,10 +1334,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    deploy_preflight_result_t *deploy_verdicts = NULL; /* Verdicts borrow rows from ws; free before ws */
+    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result, before ws */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
-    deploy_result_t *deploy_result = NULL;
+    deploy_result_t *deploy_result = NULL;             /* Outcomes borrow the fates; free first */
     size_t failed_prunes = 0;                          /* Cleanup's undelivered half, for the exit fold */
 
     /* CLI flags override config */
@@ -2220,30 +2219,32 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * Non-critical operation: deployment already succeeded physically, so
          * record-write failures are non-fatal warnings (preserve consistency).
          *
-         * The receipt is the whole of it, and the ownership rule is read off each
-         * carried-out fate, never off a bucket topology:
+         * The receipt is the whole of it, and the ownership rule is read off
+         * each carried-out fate, never off a bucket topology:
          *   deployed                  files written or linked — an owned anchor
          *                             carrying the write's own proof: the receipt's
-         *                             triple, distilled by the executor from the
-         *                             fstat of the bytes it put there
-         *                             (stat_cache_from_write — authorship needs no
-         *                             closed second). A symlink's is UNSET, the same
-         *                             statement as NULL to state_anchor: a link is
-         *                             made by path, no descriptor exists to describe
-         *                             it, and readlink is its whole re-verification
+         *                             triple, distilled by the executor from
+         *                             the fstat of the bytes it put there
+         *                             (stat_cache_from_write — authorship needs
+         *                             no closed second). A symlink's is UNSET,
+         *                             the same statement as NULL to state_anchor:
+         *                             a link is made by path, no descriptor exists
+         *                             to describe it, and readlink is its whole
+         *                             re-verification
          *   converged, made           a directory whose verdict's occupant was not
          *   (occupant ≠ DIRECTORY)    DIRECTORY — dotta made it, where nothing stood
-         *                             or in a squatter's place — an owned anchor; a
-         *                             directory has no blob and no stat
+         *                             or in a squatter's place — an owned anchor;
+         *                             a directory has no blob and no stat
          *   converged in place        dotta did not make it, and it was present at
          *   (occupant = DIRECTORY)    load, so the flush has already observed any
-         *                             that had no record: nothing to write, with one
-         *                             exception — a pending handover must not outlive
-         *                             the run that converged the directory, so a
-         *                             reassigned row takes the one anchor that
-         *                             acknowledges it. Anchoring it as owned would
-         *                             set deployed_at on a directory the user made
-         *                             and hand it to the prune on the next scope exit
+         *                             that had no record: nothing to write, with
+         *                             one exception — a pending handover must
+         *                             not outlive the run that converged the
+         *                             directory, so a reassigned row takes the
+         *                             one anchor that acknowledges it. Anchoring
+         *                             it as owned would set deployed_at on a
+         *                             directory the user made and hand it to
+         *                             the prune on the next scope exit
          *   ancestors                 tracked parents made on the way — dotta made
          *                             them too, an owned anchor
          * Every other active directory present on disk was present at load too,
@@ -2252,12 +2253,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * to establish it again.
          *
          * A deployed file — or a converged directory — whose item read [reassigned]
-         * had its record rewritten under the row's profile by the write just made;
-         * each is derived before its anchor (the write rewrites the record the
-         * fact is read against) and counted with the clean ones the adoption and
-         * acknowledgement loops re-stamped. Ancestors' anchors stay uncounted:
-         * they are outside the plan, so the collection never previewed them, and
-         * an acknowledgement that rides one heals the record silently.
+         * had its record rewritten under the row's profile by the write just
+         * made; each is derived before its anchor (the write rewrites the record
+         * the fact is read against) and counted with the clean ones the adoption
+         * and acknowledgement loops re-stamped. Ancestors' anchors stay uncounted:
+         * they are outside the plan, so the collection never previewed them,
+         * and an acknowledgement that rides one heals the record silently.
          */
         if (deploy_result) {
             deploy_outcomes_t deployed = deploy_result->deployed;
@@ -2449,8 +2450,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* Result and plan buckets borrow rows from the workspace arena — free them
-     * before workspace_free. */
+    /* The receipt borrows the fates, and every fate and plan bucket borrows rows
+     * from the workspace arena — receipt before fates, everything before
+     * workspace_free. */
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_plan) deploy_plan_free(deploy_plan);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);

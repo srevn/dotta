@@ -185,15 +185,21 @@ static void print_deploy_preflight_results(
  * A directory's verb is its verdict's occupant (deploy_verdict_t): created where
  * nothing stood, fixed where a directory did, replaced where a squatter did —
  * the replace is the one destructive deploy verb, counted on its own line and
- * coloured the way cleanup colours a removal. At verbose the paths are listed
- * under their count, capped the way every preview list is. The ancestors the
- * run may make on the way are not here: they are the mechanics of landing a planned
- * path, and the receipt names the ones it made.
+ * coloured the way cleanup colours a removal. The files' destructive half is
+ * counted the same way: a file verdict overwrites local content iff its item
+ * carries the content_conflicts bits (CONTENT | TYPE) — reachable in a verdict
+ * only under --force, so the yellow line is the forced run's counterweight to
+ * the confirmation prompt --force skips; the workspace is read for exactly that
+ * characterization. At verbose the paths are listed under their count, capped
+ * the way every preview list is. The ancestors the run may make on the way are
+ * not here: they are the mechanics of landing a planned path, and the receipt
+ * names the ones it made.
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
 static void print_deploy_preview(
     const output_t *out,
+    const workspace_t *ws,
     const deploy_preflight_result_t *verdicts
 ) {
     const size_t limit = 20;   /* Don't flood the terminal */
@@ -223,6 +229,23 @@ static void print_deploy_preview(
             out, OUTPUT_NORMAL, "  {green}%zu{reset} file%s will be deployed\n",
             files->count, files->count == 1 ? "" : "s"
         );
+
+        size_t overwrites = 0;
+        for (size_t i = 0; i < files->count; i++) {
+            const workspace_item_t *item =
+                workspace_get_item(ws, files->entries[i].row->filesystem_path);
+
+            if (item && (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE))) {
+                overwrites++;
+            }
+        }
+        if (overwrites > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}%zu{reset} of them overwrite%s local changes\n",
+                overwrites, overwrites == 1 ? "s" : ""
+            );
+        }
 
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < files->count; i++) {
@@ -1865,7 +1888,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * not and why (the skip block), remedies last, nearest the prompt — read
      * the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
-    print_deploy_preview(out, deploy_verdicts);
+    print_deploy_preview(out, ws, deploy_verdicts);
     print_deploy_preflight_results(out, deploy_verdicts);
 
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
@@ -2467,7 +2490,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_apply_options_t,force,
-        "Override conflicts and prune modified orphans"
+        "Overwrite local changes, prune modified orphans"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -2526,7 +2549,7 @@ const args_command_t spec_apply = {
         "  a trailing slash restricts a pattern to directories. Repeatable.\n",
     .examples     =
         "  %s apply                            # Deploy all enabled profiles\n"
-        "  %s apply --force                    # Force overwrite of modifications\n"
+        "  %s apply --force                    # Lift the consent skips (overwrite, prune)\n"
         "  %s apply -p work                    # Filter to 'work' profile\n"
         "  %s apply -p work ~/.bashrc          # Profile + file filter\n"
         "  %s apply ~/.bashrc ~/.zshrc         # Deploy specific files only\n"

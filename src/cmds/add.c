@@ -567,19 +567,29 @@ static error_t *add_file_to_worktree(
 
     /* Add metadata item to collection (NULL for home/ prefix symlinks) */
     if (item) {
-        /* Verbose output for metadata capture */
-        if (item->owner || item->group) {
+        /* Say what the capture claimed — the claim decides the shape. The fourth
+         * combination (no mode, no ownership) has no line to print: such an item
+         * does not exist, the capture returned NULL instead. */
+        if (item->mode != MODE_UNCLAIMED && (item->owner || item->group)) {
             output_info(
                 out, OUTPUT_VERBOSE,
                 "Captured metadata: %s (mode: %04o, owner: %s:%s)",
                 filesystem_path, item->mode, item->owner ? item->owner : "?",
                 item->group ? item->group : "?"
             );
-        } else {
+        } else if (item->mode != MODE_UNCLAIMED) {
             output_info(
                 out, OUTPUT_VERBOSE,
                 "Captured metadata: %s (mode: %04o)",
                 filesystem_path, item->mode
+            );
+        } else {
+            /* A link's entry: ownership is the whole claim. */
+            output_info(
+                out, OUTPUT_VERBOSE,
+                "Captured metadata: %s (owner: %s:%s)",
+                filesystem_path, item->owner ? item->owner : "?",
+                item->group ? item->group : "?"
             );
         }
 

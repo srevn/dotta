@@ -87,8 +87,11 @@ static error_t *write_stdout(const buffer_t *content) {
  * Uses content layer for transparent decryption. Password prompt only happens
  * if file is encrypted and key is not cached.
  *
- * Handles symlinks (shows target), binary files (shows size without dumping
- * content), and encrypted files (indicates decryption occurred).
+ * The header is the path's claims read the way the view projects them: the type
+ * is the tree's word, the mode prints only where the type can carry one and the
+ * entry claims one, and ownership prints for every kind that holds it — a link's
+ * entry exists to carry exactly that. Symlinks show their target, binary files
+ * their size without dumping content, encrypted files that decryption occurred.
  */
 static error_t *print_blob_content(
     const dotta_ctx_t *ctx,
@@ -125,8 +128,15 @@ static error_t *print_blob_content(
         return error_wrap(err, "Failed to get file content");
     }
 
-    /* Symlinks: content is the target path */
-    if (filemode == GIT_FILEMODE_LINK) {
+    bool is_link = (filemode == GIT_FILEMODE_LINK);
+
+    /* Binary detection (on plaintext, after decryption; a link's content is its
+     * target path, text by nature) */
+    bool is_binary = !is_link && content.size > 0 &&
+        content_is_binary((const unsigned char *) content.data, content.size);
+
+    /* Type — the tree's word — and, for a link, the target it stores */
+    if (is_link) {
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Type:{reset}    symlink\n"
         );
@@ -134,67 +144,53 @@ static error_t *print_blob_content(
             out, OUTPUT_NORMAL, "{dim}# Target:{reset}  %.*s\n",
             (int) content.size, (const char *) content.data
         );
-        buffer_free(&content);
-        return NULL;
-    }
-
-    /* Binary detection (on plaintext, after decryption) */
-    if (content.size > 0 &&
-        content_is_binary((const unsigned char *) content.data, content.size)) {
-        char size_buf[32];
-        output_format_size(content.size, size_buf, sizeof(size_buf));
-
+    } else {
         output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Type:{reset}    binary file"
+            out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
+            is_binary ? "binary file" : filemode_type_str(filemode)
         );
         if (encrypted) {
-            output_print(
-                out, OUTPUT_NORMAL, " (encrypted)"
-            );
+            output_print(out, OUTPUT_NORMAL, " (encrypted)");
         }
         output_newline(out, OUTPUT_NORMAL);
+    }
+
+    /* The entry's claims, by the projection's own rule: mode only where the type
+     * can carry one and the entry claims one; ownership for every kind that holds
+     * it. */
+    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
+    if (item) {
+        if (!is_link && item->mode != MODE_UNCLAIMED) {
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
+                (unsigned) item->mode
+            );
+        }
+        if (item->owner || item->group) {
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
+                item->owner ? item->owner : "?",
+                item->group ? item->group : "?"
+            );
+        }
+    }
+
+    /* Size — for the kinds whose content is bytes, not a target */
+    if (!is_link) {
+        char size_buf[32];
+        output_format_size(content.size, size_buf, sizeof(size_buf));
         output_styled(
             out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
             size_buf
         );
+    }
 
-        /* Don't dump binary content to terminal */
+    /* The target line said everything a link has to say; binary content is not
+     * dumped to the terminal. */
+    if (is_link || is_binary) {
         buffer_free(&content);
         return NULL;
     }
-
-    /* File type */
-    output_styled(
-        out, OUTPUT_NORMAL, "{dim}# Type:{reset}    %s",
-        filemode_type_str(filemode)
-    );
-    if (encrypted) {
-        output_print(out, OUTPUT_NORMAL, " (encrypted)");
-    }
-    output_newline(out, OUTPUT_NORMAL);
-
-    /* Mode and ownership from metadata */
-    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-    if (item) {
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Mode:{reset}    %04o\n",
-            (unsigned) item->mode
-        );
-        if (item->owner) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
-                item->owner, item->group ? item->group : ""
-            );
-        }
-    }
-
-    /* Size */
-    char size_buf[32];
-    output_format_size(content.size, size_buf, sizeof(size_buf));
-    output_styled(
-        out, OUTPUT_NORMAL, "{dim}# Size:{reset}    %s\n",
-        size_buf
-    );
 
     output_styled(
         out, OUTPUT_NORMAL, "{dim}---{reset}\n"

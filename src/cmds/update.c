@@ -595,8 +595,13 @@ static error_t *update_profile(
                     meta_item->encrypted = copy_encrypted;
 
                     /* Say what the capture took before metadata_add_item takes
-                     * it */
-                    if (meta_item->owner || meta_item->group) {
+                     * it — the claim decides the shape. The fourth combination
+                     * (no mode, no ownership) has no line: such an item does
+                     * not exist. The ownership-only shape carries no encrypted
+                     * suffix by construction: it is a link's entry, and the copy
+                     * never encrypts one. */
+                    if (meta_item->mode != MODE_UNCLAIMED &&
+                        (meta_item->owner || meta_item->group)) {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
@@ -605,12 +610,20 @@ static error_t *update_profile(
                             meta_item->group ? meta_item->group : "?",
                             meta_item->encrypted ? ", encrypted" : ""
                         );
-                    } else {
+                    } else if (meta_item->mode != MODE_UNCLAIMED) {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "  Captured metadata: %s (mode: %04o%s)",
                             item->filesystem_path, meta_item->mode,
                             meta_item->encrypted ? ", encrypted" : ""
+                        );
+                    } else {
+                        output_info(
+                            out, OUTPUT_VERBOSE,
+                            "  Captured metadata: %s (owner: %s:%s)",
+                            item->filesystem_path,
+                            meta_item->owner ? meta_item->owner : "?",
+                            meta_item->group ? meta_item->group : "?"
                         );
                     }
 

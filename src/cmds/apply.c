@@ -383,7 +383,9 @@ static void print_skipped(
  *
  * Mode and ownership print as the row carries them — total by build, a 0000 claim
  * included: the receipt reports the row, and (mode: 0000) is the claim honoured,
- * not an anomaly. A symlink row records no mode by design and says so instead.
+ * not an anomaly. A symlink row records no mode by design and says so instead,
+ * carrying its ownership when the row holds one — a link's entry exists to carry
+ * exactly that, so the receipt is where the claim becomes visible.
  *
  * Work the run skipped is not here: the plan decided it, print_skipped reports
  * it, and it must be said even on runs that never execute. Nor is a failure:
@@ -414,9 +416,16 @@ static void print_deploy_results(
 
             if (file->type == PATH_TYPE_SYMLINK) {
                 output_styled(
-                    out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink)\n",
+                    out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (symlink",
                     file->filesystem_path
                 );
+                if (file->owner || file->group) {
+                    output_print(
+                        out, OUTPUT_VERBOSE, ", owner: %s:%s",
+                        file->owner ? file->owner : "?", file->group ? file->group : "?"
+                    );
+                }
+                output_print(out, OUTPUT_VERBOSE, ")\n");
                 continue;
             }
 

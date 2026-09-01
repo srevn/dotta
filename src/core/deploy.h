@@ -282,7 +282,7 @@ typedef struct {
     /* The how — one per row the run WILL deploy */
     deploy_verdicts_t directories;       /* Pending directory rows, parents first */
     deploy_verdicts_t files;             /* Pending file rows */
-    deploy_verdicts_t ancestors;         /* Tracked directories the run may make on the way */
+    deploy_verdicts_t ancestors;         /* Directory rows the run may make on the way */
 } deploy_preflight_result_t;
 
 /**
@@ -425,7 +425,7 @@ typedef struct {
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's proof */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
-    deploy_outcomes_t ancestors;     /* Tracked directories made on the way, each once */
+    deploy_outcomes_t ancestors;     /* Claimed directories made on the way, each once */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
 } deploy_result_t;
 

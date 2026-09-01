@@ -386,8 +386,11 @@ static error_t *list_files(
     }
 
     if (files->count == 0) {
-        /* Directory claims are not listed — no size, no history — but their count
-         * keeps "nothing" honest for a branch that tracks only them. */
+        /* Directory claims are not listed — no size, no history — but the count
+         * of the tracked ones keeps "nothing" honest for a branch that tracks
+         * only them. An ancestor claim is not the branch's to count: the profile
+         * passes through the directory on the way to something beneath it and
+         * manages nothing there. */
         size_t dir_count = 0;
         metadata_t *empty_meta = NULL;
         error_t *meta_err = metadata_load_from_tree(
@@ -399,7 +402,7 @@ static error_t *list_files(
             size_t item_count = 0;
             const metadata_item_t *const *items = metadata_items(empty_meta, &item_count);
             for (size_t i = 0; i < item_count; i++) {
-                if (items[i]->kind == PATH_KIND_DIRECTORY) {
+                if (items[i]->kind == PATH_KIND_DIRECTORY && items[i]->tracked) {
                     dir_count++;
                 }
             }

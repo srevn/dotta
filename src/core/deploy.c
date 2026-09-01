@@ -1247,8 +1247,9 @@ error_t *deploy_preflight(
      * the run converges first — or the workspace's own occupant (a row without
      * an item is present and converged). ensure_parents creates exactly these
      * on the way down to a deployed path, with the metadata decided here; a
-     * candidate the world makes present before then is simply not created, and
-     * costs nothing.
+     * candidate the world makes present before then is simply not created and
+     * costs nothing, and one made present past the probe meets the create's
+     * refusal, never a convergence (fs_create_dir_exclusive).
      *
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
@@ -1416,9 +1417,11 @@ static error_t *release_directories(deploy_run_t *run) {
  *
  * Ownership applies atomically through the descriptor
  * (fs_create_dir_with_ownership); idempotent, so a directory already there is
- * converged in place. The mode is the row's, the ownership the verdict's, and
- * the row is held for release when its recorded mode is narrower than the working
- * mode (hold_directory).
+ * converged in place. The idempotence is the planned row's privilege — a row in
+ * the plan is the run's to converge; the ancestors pass, which may only create,
+ * goes through fs_create_dir_exclusive instead (create_ancestor). The mode is
+ * the row's, the ownership the verdict's, and the row is held for release when
+ * its recorded mode is narrower than the working mode (hold_directory).
  *
  * @param run Run context (must not be NULL)
  * @param v Verdict for the directory row (must not be NULL; borrowed, read-only)
@@ -1457,6 +1460,12 @@ static error_t *materialize_directory(
  * for the next load to read — which sees its record and its row, and, where the
  * row is tracked, says [mode] if the two disagree.
  *
+ * Creation only, either class (fs_create_dir_exclusive): every path this pass
+ * makes was absent when the run probed it, and one the world made present in
+ * between meets ERR_EXISTS as the row's outcome — not this run's to converge,
+ * the way a planned row would be (materialize_directory). The header's stance
+ * on every mid-run surprise, applied to the make itself.
+ *
  * @param run Run context (must not be NULL)
  * @param path Absent ancestor to create (must not be NULL)
  * @return Error or NULL on success
@@ -1471,7 +1480,15 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
             continue;
         }
 
-        RETURN_IF_ERROR(materialize_directory(run, v));
+        const manifest_row_t *dir = v->row;
+
+        error_t *err = fs_create_dir_exclusive(
+            dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
+        );
+        if (err) {
+            return err;
+        }
+        RETURN_IF_ERROR(hold_directory(run, dir->filesystem_path, dir->mode));
 
         /* On the receipt once — and bounds the sized array: a parent present at
          * an earlier row's write and removed since is re-made here, and without
@@ -1486,7 +1503,7 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
         return NULL;
     }
 
-    return fs_create_dir_with_ownership(path, DIR_MODE_DEFAULT, (uid_t) -1, (gid_t) -1);
+    return fs_create_dir_exclusive(path, DIR_MODE_DEFAULT, (uid_t) -1, (gid_t) -1);
 }
 
 /**

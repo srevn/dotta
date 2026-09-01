@@ -700,6 +700,76 @@ apply_metadata:
     return NULL;
 }
 
+error_t *fs_create_dir_exclusive(
+    const char *path,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+) {
+    RETURN_IF_ERROR(validate_path(path));
+
+    /* Validate mode */
+    if (mode > 0777) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
+            mode
+        );
+    }
+
+    /* mkdir(2) is the exclusivity: it creates or it refuses, atomically — there
+     * is no open-existing arm, which is the whole difference from
+     * fs_create_dir_with_ownership. The restrictive initial mode closes the setup
+     * window; the final attributes apply through the descriptor below. */
+    if (mkdir(path, 0700) < 0) {
+        if (errno == EEXIST) {
+            return ERROR(
+                ERR_EXISTS, "Path '%s' already exists",
+                path
+            );
+        }
+        return ERROR(
+            ERR_FS, "Failed to create directory '%s': %s",
+            path, strerror(errno)
+        );
+    }
+
+    /* SECURITY: O_NOFOLLOW closes the TOCTOU window — if an attacker replaced
+     * the directory with a symlink between mkdir() and open(), this fails safely
+     * with ELOOP instead of applying attributes to the symlink target. */
+    int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    if (dirfd < 0) {
+        return ERROR(
+            ERR_FS, "Failed to open newly created directory '%s': %s",
+            path, strerror(errno)
+        );
+    }
+
+    /* Apply ownership atomically via file descriptor */
+    if (uid != (uid_t) -1 || gid != (gid_t) -1) {
+        if (fchown(dirfd, uid, gid) < 0) {
+            int saved_errno = errno;
+            close(dirfd);
+            return ERROR(
+                ERR_FS, "Failed to set ownership on '%s': %s",
+                path, strerror(saved_errno)
+            );
+        }
+    }
+
+    /* Apply final mode atomically via file descriptor */
+    if (fchmod(dirfd, mode) < 0) {
+        int saved_errno = errno;
+        close(dirfd);
+        return ERROR(
+            ERR_FS, "Failed to set mode on '%s': %s",
+            path, strerror(saved_errno)
+        );
+    }
+
+    close(dirfd);
+    return NULL;
+}
+
 error_t *fs_remove_dir(const char *path, bool recursive) {
     RETURN_IF_ERROR(validate_path(path));
 

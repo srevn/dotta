@@ -242,6 +242,48 @@ error_t *fs_create_dir_with_ownership(
 );
 
 /**
+ * Create a directory that must not already exist (atomic, create-only)
+ *
+ * The create-only sibling of fs_create_dir_with_ownership: the same atomic
+ * ownership + mode application through the directory's own descriptor, but an
+ * existing path is ERR_EXISTS, never opened and converged. mkdir(2) itself is
+ * the exclusivity — O_EXCL semantics, with no window in which whatever now stands
+ * at the path could be re-attributed.
+ *
+ * For the caller whose authority is creation alone: core/deploy's ancestors pass
+ * creates the absent chain above a planned path, and a path the world made present
+ * between its probe and the mkdir is not that run's to converge — the refusal
+ * is the row's outcome (deploy.h), where the idempotent sibling would have silently
+ * chmod'd and chown'd what it met.
+ *
+ * Atomic sequence:
+ * 1. mkdir() with restrictive mode (0700) — EEXIST is the refusal
+ * 2. Open the new directory (O_NOFOLLOW) to obtain the descriptor
+ * 3. fchown(fd, uid, gid) - atomic ownership change
+ * 4. fchmod(fd, mode) - atomic permission change
+ * 5. Close file descriptor
+ *
+ * The parent must exist, as for the sibling.
+ *
+ * @param path Directory path (must not be NULL)
+ * @param mode Permission mode for the directory (e.g., 0700, 0755)
+ * @param uid Target UID for directory ownership (use -1 to leave as created)
+ * @param gid Target GID for directory ownership (use -1 to leave as created)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_INVALID_ARG: Invalid mode (> 0777)
+ * - ERR_EXISTS: Something already stands at the path
+ * - ERR_FS: Failed to create, open or attribute the directory
+ */
+error_t *fs_create_dir_exclusive(
+    const char *path,
+    mode_t mode,
+    uid_t uid,
+    gid_t gid
+);
+
+/**
  * Remove directory
  *
  * With `recursive`, this deletes the whole subtree — every path beneath `path`,

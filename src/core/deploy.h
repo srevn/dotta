@@ -639,10 +639,13 @@ error_t *deploy_preflight(
  * not, either class) with the mode and ownership its ancestor verdict carries,
  * anything else DIR_MODE_DEFAULT as the running identity — a claim is the only
  * voice for an ancestor's attributes, and where none speaks dotta invents none.
- * The claimed ones land in the receipt's ancestors; the ones no row names are
- * never reported. A claimed parent the verdicts did not foresee — present at
- * preflight, gone by the time the run reaches it — is made like an unclaimed
- * one, and the next load reads whatever it has to say about its mode.
+ * Creation is all this pass may do: a parent the world made present after the
+ * probe meets ERR_EXISTS rather than a convergence (fs_create_dir_exclusive),
+ * since whatever now stands there is not this run's to fix. The claimed ones
+ * land in the receipt's ancestors; the ones no row names are never reported. A
+ * claimed parent the verdicts did not foresee — present at preflight, gone by
+ * the time the run reaches it — is made like an unclaimed one, and the next load
+ * reads whatever it has to say about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while

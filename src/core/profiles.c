@@ -829,7 +829,10 @@ error_t *profile_get_stats(
     size_t item_count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &item_count);
     for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+        /* The managed set alone: an ancestor claim is the way to content, not
+         * content the profile tracks, and counting the spine would inflate the
+         * number the screens call "directories" past anything the user named. */
+        if (items[i]->kind != PATH_KIND_DIRECTORY || !items[i]->tracked) continue;
 
         /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
          * blob is stale metadata, and the tree is the content authority — the

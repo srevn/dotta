@@ -704,10 +704,11 @@ static error_t *create_commit(
  *   1. Scope. A new profile is enabled here with its deployment target — creating
  *      a profile via add enables it, in the same transaction as the record. An
  *      existing profile has rows in the view only if it is already enabled: not
- *      enabled is success with nothing to do; when a target was given it is
- *      re-bound (UPSERT)
+ *      enabled skips the anchor pass (nothing to win) and the target UPSERT
+ *      (enable's business), never the settle
  *   2. Build the mount table from the post-mutation row cache
- *   3. Build the view and anchor the rows this profile won
+ *   3. Build the view; anchor the rows this profile won; settle what the commit
+ *      let go
  *   4. Commit transaction (state_save)
  *
  * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1 is
@@ -739,7 +740,8 @@ static error_t *create_commit(
  *   the user's own add made).
  *
  * Error Handling:
- *   - Profile not enabled → rollback transaction, return NULL (success, no update)
+ *   - Profile not enabled, nothing let go → rollback transaction, return NULL
+ *     (success, no update)
  *   - The view fails to build → rollback, return error
  *
  * Non-Fatal Integration:
@@ -799,97 +801,110 @@ static error_t *update_manifest_after_add(
      *
      * Transaction Safety: If the record write below fails, the dispatcher's
      * state_free automatically rolls back this change. */
+    bool enabled = true;
     if (profile_was_new) {
         err = state_enable_profile(state, opts->profile, opts->target);
         if (err) {
             return error_wrap(err, "Failed to enable profile in state");
         }
-    } else {
-        /* Only an enabled profile has rows in the view. Not enabled is success
-         * with nothing to do; the dispatcher's state_free rolls back the untouched
+    } else if (!state_has_profile(state, opts->profile)) {
+        /* Only an enabled profile has rows in the view, so the anchor pass has
+         * no subject and a given target stays unbound (enable's business, when
+         * the user gets there). The settle is not gated with them: the commit
+         * just dropped whatever `retired` names, whatever the enabled set says,
+         * and a path the commit let go settles by its record, enabled set or
+         * no. With nothing let go there is nothing to write at all — success,
+         * and the dispatcher's state_free rolls back the untouched
          * transaction. */
-        if (!state_has_profile(state, opts->profile)) {
+        if (retired->count == 0) {
             return NULL;
         }
-        if (opts->target) {
-            err = state_enable_profile(state, opts->profile, opts->target);
-            if (err) {
-                return error_wrap(err, "Failed to update deployment target for profile");
-            }
+        enabled = false;
+    } else if (opts->target) {
+        err = state_enable_profile(state, opts->profile, opts->target);
+        if (err) {
+            return error_wrap(err, "Failed to update deployment target for profile");
         }
     }
 
-    /* STEP 2: Build the view and anchor the rows this profile won.
+    /* STEP 2: Build the view; anchor the rows this profile won; settle what the
+     * commit let go.
      *
      * The builder reads the rows as STEP 1 left them — a new row, or a target
      * re-bound — so a path under the just-bound target is a custom/ row here.
-     *
-     * Anchor only the rows this profile won: if this profile has lower precedence
-     * than existing enabled profiles, some files are another profile's rows
-     * (synced_count < added_files). Those correctly receive no anchor — the row
-     * is the winner's and so is its record, and the capture's stat would
-     * misattribute to the winner's blob_oid. Write failures are non-fatal: disk
-     * is the just-committed blob, and the next status's slow path confirms it. */
+     * A disabled profile contributes no rows, and that is the build the settle
+     * wants: its guard asks what the view still claims without this profile. */
     manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) return err;
 
-    /* The record as it stands, indexed by path, so a takeover is known before
-     * the write that rewrites it. */
-    anchor_t *anchors = NULL;
-    size_t anchor_count = 0;
-    err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
-    if (err) {
-        manifest_free(manifest);
-        return error_wrap(err, "Failed to read anchors");
-    }
-
-    hashmap_t *anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
-    if (!anchor_index) {
-        manifest_free(manifest);
-        return ERROR(ERR_MEMORY, "Failed to create anchors index");
-    }
-    for (size_t i = 0; i < anchor_count; i++) {
-        err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
+    hashmap_t *anchor_index = NULL;   /* Built with the anchor pass it serves */
+    if (enabled) {
+        /* Anchor only the rows this profile won: if this profile has lower
+         * precedence than existing enabled profiles, some files are another
+         * profile's rows (receipt->synced < added_files). Those correctly receive
+         * no anchor — the row is the winner's and so is its record, and the
+         * capture's stat would misattribute to the winner's blob_oid. Write
+         * failures are non-fatal: disk is the just-committed blob, and the next
+         * status's slow path confirms it.
+         *
+         * The record as it stands first, indexed by path, so a takeover is known
+         * before the write that rewrites it. */
+        anchor_t *anchors = NULL;
+        size_t anchor_count = 0;
+        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
         if (err) {
-            hashmap_free(anchor_index, NULL);
             manifest_free(manifest);
-            return error_wrap(err, "Failed to index anchors");
+            return error_wrap(err, "Failed to read anchors");
         }
-    }
 
-    time_t now = time(NULL);
-    for (size_t i = 0; i < added_files->count; i++) {
-        const add_path_t *path = added_files->items[i];
-        const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-        if (!row || strcmp(row->profile, opts->profile) != 0) continue;
-
-        error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
-        if (anchor_err) {
-            error_free(anchor_err);
-            continue;
+        anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
+        if (!anchor_index) {
+            manifest_free(manifest);
+            return ERROR(ERR_MEMORY, "Failed to create anchors index");
         }
-        receipt->synced++;
-
-        const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
-        if (was && was->deployed_at > 0 && strcmp(was->profile, opts->profile) != 0) {
-            receipt->taken_over++;
+        for (size_t i = 0; i < anchor_count; i++) {
+            err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
+            if (err) {
+                hashmap_free(anchor_index, NULL);
+                manifest_free(manifest);
+                return error_wrap(err, "Failed to index anchors");
+            }
         }
-    }
 
-    /* The directories this add tracked, by the same rule: captured from disk,
-     * so dotta's to prune on scope exit — the ownership the gate asks for, which
-     * nothing later grants a directory that was already there (apply observes
-     * those; it anchors only the ones it makes). Cleanup's emptiness rule guards
-     * their contents. No stat triple: a directory has no content confirmation,
-     * as apply records them. */
-    for (size_t i = 0; i < added_dirs->count; i++) {
-        const add_path_t *path = added_dirs->items[i];
-        const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-        if (!row || strcmp(row->profile, opts->profile) != 0) continue;
+        time_t now = time(NULL);
+        for (size_t i = 0; i < added_files->count; i++) {
+            const add_path_t *path = added_files->items[i];
+            const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
+            if (!row || strcmp(row->profile, opts->profile) != 0) continue;
 
-        error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
-        if (anchor_err) error_free(anchor_err);
+            error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
+            if (anchor_err) {
+                error_free(anchor_err);
+                continue;
+            }
+            receipt->synced++;
+
+            const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
+            if (was && was->deployed_at > 0 && strcmp(was->profile, opts->profile) != 0) {
+                receipt->taken_over++;
+            }
+        }
+
+        /* The directories this add tracked, by the same rule: captured from disk,
+         * so dotta's to prune on scope exit — the ownership the gate asks for,
+         * which nothing later grants a directory that was already there (apply
+         * observes those; it anchors only the ones it makes). Cleanup's emptiness
+         * rule guards their contents. No stat triple: a directory has no content
+         * confirmation, as apply records them. */
+        for (size_t i = 0; i < added_dirs->count; i++) {
+            const add_path_t *path = added_dirs->items[i];
+            const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
+            if (!row || strcmp(row->profile, opts->profile) != 0) continue;
+
+            error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
+            if (anchor_err) error_free(anchor_err);
+        }
     }
 
     /* What the commit let go: an ancestor claim the derivation retired leaves
@@ -899,10 +914,13 @@ static error_t *update_manifest_after_add(
      * collect_displaced reads an orphaned directory record with no item off the
      * disk), so a record left standing at a path that is no longer a directory
      * goes on refusing every write beneath it: exactly the write the dropped
-     * claim was meant to release. A rung some other profile still claims keeps
-     * its row and its record — the retire is this profile's word about its own
-     * claim, never about the path — and an unbound claim names nothing on this
-     * machine to retire. */
+     * claim was meant to release. Enablement was not consulted on the way here:
+     * the derivation saw the disk contradict the claim whatever the enabled set
+     * says, and the record its drop strands would refuse those writes under a
+     * disabled profile exactly as under an enabled one. A rung some other
+     * profile still claims keeps its row and its record — the retire is this
+     * profile's word about its own claim, never about the path — and an unbound
+     * claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
         mount_resolve_outcome_t outcome;
         const char *fs_path = NULL;
@@ -937,8 +955,9 @@ static error_t *update_manifest_after_add(
         return error_wrap(err, "Failed to save record updates");
     }
 
-    /* Success */
-    receipt->updated = true;
+    /* Success. A settle committed for a disabled profile is not the anchor
+     * pass having run: the receipt still reads "profile not enabled". */
+    receipt->updated = enabled;
 
     return NULL;
 }

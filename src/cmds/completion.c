@@ -128,6 +128,10 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
 /**
  * The view's files, narrowed to the winners named — and, when asked, its directory
  * claims, slash-marked
+ *
+ * Directory claims are offered whichever class they are: an ancestor claim is a
+ * managed path, and the update remedy ('dotta update <dir>') names exactly such
+ * a path — a completer that hid the spine would hide the cure.
  */
 void completion_files(
     const dotta_ctx_t *ctx, FILE *out,
@@ -174,6 +178,8 @@ void completion_files(
 
 /**
  * A branch's directory claims, read from its metadata rather than the view
+ *
+ * Either class, deliberately — see completion_files.
  */
 void completion_directories(
     const dotta_ctx_t *ctx, FILE *out, const char *branch

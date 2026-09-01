@@ -47,6 +47,16 @@ custom/etc/nginx.conf         → deploys to <custom_prefix>/etc/nginx.conf
 
 Each profile also maintains a `.dotta/metadata.json` file that tracks file permissions (mode) and ownership (user/group for `root/` files). Metadata is captured during `add`/`update` and restored during `apply`.
 
+## Directory Claims
+
+The metadata sheet holds a claim for every directory on the way to a managed path, and one field says which kind of claim it is.
+
+A directory you **named** — `dotta add p ~/.config/nvim` — is **tracked**: the profile manages the directory itself. It is created even when empty, its mode (and ownership, for `root/` paths) is converged on apply, its drift is reported by status, and `update --include-new` scans it for new files.
+
+A directory dotta only **passes through** — every ancestor of a captured path that was a real directory at capture time — carries an **ancestor claim**: a creation template, nothing more. When dotta has to create the path on the way to content, it creates it with the captured attributes; one that already stands is never touched, never converged, never scanned. A component that was a symlink at capture time authors no claim at all — a symlinked configuration directory stays your own arrangement, and dotta writes through it.
+
+Claims are re-derived only with consent: the chain above a leaf rides that leaf's own capture (`add`, `update`), and naming a path — `dotta update ~/.config` — re-derives every in-scope chain beneath it. The named form is also the remedy when the world moves under a claim: replace a passed-through directory with a symlink and apply refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the contradicted claim, and the next apply trusts your arrangement.
+
 ## Repository Structure
 
 ```

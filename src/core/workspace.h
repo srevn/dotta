@@ -421,9 +421,11 @@ manifest_rows_t workspace_files(const workspace_t *ws);
 /**
  * Get the active directory slice
  *
- * Mirror of workspace_files(ws) for tracked directories: a borrowed view over
- * the view's directory rows, in filesystem_path order. Pure value return — no
- * allocation, no error path. Same lifetime as workspace_files.
+ * Mirror of workspace_files(ws) for directories: a borrowed view over the view's
+ * directory rows, in filesystem_path order — both classes, since both name a
+ * path that must exist. A consumer whose question is about managing the directory
+ * rather than about it existing tests row->tracked (core/manifest.h). Pure value
+ * return — no allocation, no error path. Same lifetime as workspace_files.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the active directory rows

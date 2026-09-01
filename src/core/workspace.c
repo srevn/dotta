@@ -1976,6 +1976,16 @@ static error_t *analyze_untracked_files(
              * depends on holds within each profile slice. */
             if (strcmp(row->profile, profile) != 0) continue;
 
+            /* An ancestor claim is not a scan root. The profile passes through
+             * the directory on the way to something beneath it; its contents
+             * are not the profile's to offer, and the nested-scan suppression
+             * below would make the claim *replace* its own tracked descendants
+             * as the root — so ~/.local/share, derived from one file under it,
+             * would be walked whole and the walk would offer dotta's own repository
+             * for adding. What the profile does manage inside such a directory
+             * has its own tracked row, and this loop reaches that row directly. */
+            if (!row->tracked) continue;
+
             /* Directory rows carry:
              * - filesystem_path: Already resolved with target (mount table)
              * - storage_path: Portable path for storage

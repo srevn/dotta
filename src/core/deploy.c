@@ -1442,10 +1442,14 @@ static error_t *materialize_directory(
 /**
  * Materialize one absent ancestor whose own parent exists: a directory the view
  * claims (any profile, in scope or not, either class) with the metadata its
- * ancestor verdict carries, anything else 0755 owned like the planned path beneath
- * it. The 0755 is exact (fchmod), not umask-masked — dotta reproduces modes, it
- * does not negotiate them — and already carries the owner triad, so a parent no
- * row claims is never held.
+ * ancestor verdict carries, anything else DIR_MODE_DEFAULT as the running identity.
+ * A claim is the only voice a directory's attributes have: a parent no row claims
+ * is never chowned — an owner borrowed from the leaf beneath it would hand a
+ * service user the system directories above its files — and an identity that
+ * cannot create it meets the refusal an invention would have papered over. The
+ * default is exact (fchmod), not umask-masked — dotta reproduces modes, it does
+ * not negotiate them — and already carries the owner triad, so a parent no row
+ * claims is never held.
  *
  * The verdicts are the authority for what is claimed here, not the view: a
  * directory row preflight did not foresee as absent (present then, gone since)
@@ -1455,15 +1459,9 @@ static error_t *materialize_directory(
  *
  * @param run Run context (must not be NULL)
  * @param path Absent ancestor to create (must not be NULL)
- * @param uid UID of the planned path beneath it (-1 for no change)
- * @param gid GID of the planned path beneath it (-1 for no change)
  * @return Error or NULL on success
  */
-static error_t *create_ancestor(
-    deploy_run_t *run,
-    const char *path,
-    uid_t uid, gid_t gid
-) {
+static error_t *create_ancestor(deploy_run_t *run, const char *path) {
     const deploy_verdicts_t *ancestors = &run->verdicts->ancestors;
 
     for (size_t i = 0; i < ancestors->count; i++) {
@@ -1488,7 +1486,7 @@ static error_t *create_ancestor(
         return NULL;
     }
 
-    return fs_create_dir_with_ownership(path, 0755, uid, gid);
+    return fs_create_dir_with_ownership(path, DIR_MODE_DEFAULT, (uid_t) -1, (gid_t) -1);
 }
 
 /**
@@ -1555,15 +1553,9 @@ static error_t *open_landing_directory(
  *
  * @param run Run context (must not be NULL)
  * @param path Planned path whose parents must exist (must not be NULL)
- * @param uid Resolved UID of the planned path (-1 for no change)
- * @param gid Resolved GID of the planned path (-1 for no change)
  * @return Error or NULL on success
  */
-static error_t *ensure_parents(
-    deploy_run_t *run,
-    const char *path,
-    uid_t uid, gid_t gid
-) {
+static error_t *ensure_parents(deploy_run_t *run, const char *path) {
     char *scratch = strdup(path);
     if (!scratch) {
         return ERROR(ERR_MEMORY, "Failed to copy path for parent creation");
@@ -1600,7 +1592,7 @@ static error_t *ensure_parents(
     char *tail = scratch + ancestor_slash + 1;
     for (char *slash = strchr(tail, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = '\0';
-        err = create_ancestor(run, scratch, uid, gid);
+        err = create_ancestor(run, scratch);
         *slash = '/';
         if (err) {
             err = error_wrap(
@@ -1668,7 +1660,7 @@ static error_t *deploy_file(
                                                     : (v->occupant == FS_OCCUPANT_DIRECTORY);
 
     /* Land the path: parents first, whichever arm writes it */
-    err = ensure_parents(run, file->filesystem_path, v->uid, v->gid);
+    err = ensure_parents(run, file->filesystem_path);
     if (err) {
         return err;
     }
@@ -1805,7 +1797,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
             /* Absent — or beneath a non-directory, which preflight blocked when
              * unplanned and the directory pass replaces when planned (prefix
              * order); one still there is ensure_parents' named error. */
-            err = ensure_parents(run, path, v->uid, v->gid);
+            err = ensure_parents(run, path);
             if (err) {
                 return err;
             }

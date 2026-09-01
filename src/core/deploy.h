@@ -637,11 +637,12 @@ error_t *deploy_preflight(
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a directory the view claims (any profile, in scope or
  * not, either class) with the mode and ownership its ancestor verdict carries,
- * anything else 0755 owned like the planned path. The claimed ones land in the
- * receipt's ancestors; the ones no row names are never reported. A claimed parent
- * the verdicts did not foresee — present at preflight, gone by the time the run
- * reaches it — is made like an unclaimed one, and the next load reads whatever
- * it has to say about its mode.
+ * anything else DIR_MODE_DEFAULT as the running identity — a claim is the only
+ * voice for an ancestor's attributes, and where none speaks dotta invents none.
+ * The claimed ones land in the receipt's ancestors; the ones no row names are
+ * never reported. A claimed parent the verdicts did not foresee — present at
+ * preflight, gone by the time the run reaches it — is made like an unclaimed
+ * one, and the next load reads whatever it has to say about its mode.
  *
  * Directories are materialized in two phases. Every directory the run creates
  * or converges carries its recorded mode with the owner triad forced on while

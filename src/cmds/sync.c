@@ -119,11 +119,11 @@ static const struct {
     sync_strategy_t strategy;
     const char *summary;
 } sync_strategies[] = {
-    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
-    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
-    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
-    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
-    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
+    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand"   },
+    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"     },
+    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch"   },
+    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote"   },
+    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"      },
 };
 
 #define SYNC_STRATEGY_COUNT (sizeof(sync_strategies) / sizeof(*sync_strategies))
@@ -1648,40 +1648,69 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             error_free(flush_err);
         }
 
-        /* Count all types of divergence */
+        /* Count what stands between this workspace and a clean sync. The deployed
+         * partition is read off the one route table (workspace_item_route — the
+         * same table status's sections and update's filter read, so sync cannot
+         * route an item a third way), the other states by the state switch beside
+         * it. One item, one count. */
         workspace_items_t all_diverged = workspace_get_all_diverged(ws);
 
-        size_t modified_count = 0;    /* DEPLOYED with CONTENT divergence, git unmoved */
-        size_t conflict_count = 0;    /* DEPLOYED with CONTENT and STALE — both sides moved */
-        size_t deleted_count = 0;     /* DELETED state */
-        size_t mode_diff_count = 0;   /* DEPLOYED with MODE divergence */
-        size_t type_diff_count = 0;   /* DEPLOYED with TYPE divergence */
-        size_t untracked_count = 0;   /* UNTRACKED state */
+        size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
+        size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
+        size_t deleted_count = 0;     /* DELETED state — update's to commit */
+        size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
+        size_t unverified_count = 0;  /* UNVERIFIABLE — dotta could not look; blocks nothing */
 
         for (size_t i = 0; i < all_diverged.count; i++) {
             const workspace_item_t *item = all_diverged.entries[i];
 
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
-                    if (item->divergence & DIVERGENCE_STALE) {
-                        /* Git moved past the deployed blob. Alone — with or without
-                         * a mode bit — that is apply's work, not an uncommitted
-                         * change. Beside CONTENT both sides moved: the edit is
-                         * real, but update will not commit it, so it is counted
-                         * apart and the hints below must not send it to update. */
-                        if (item->divergence & DIVERGENCE_CONTENT) conflict_count++;
-                        break;
+                    switch (workspace_item_route(item)) {
+                        case WORKSPACE_ROUTE_UNVERIFIABLE:
+                            /* No committable work by definition — the guard is
+                             * about local edits a pull would turn into conflicts,
+                             * and a path dotta could not read has none to commit.
+                             * Counted to be reported, never to block. */
+                            unverified_count++;
+                            break;
+
+                        case WORKSPACE_ROUTE_CONFLICT:
+                        case WORKSPACE_ROUTE_KIND:
+                            /* Neither verb's by default (status's Conflicts):
+                             * both sides moved, or a kind the copy cannot commit.
+                             * update refuses these, so the hints below must not
+                             * send them there. */
+                            conflict_count++;
+                            break;
+
+                        case WORKSPACE_ROUTE_CAPTURE:
+                            /* update's work — every capturable divergence family,
+                             * ownership and encryption included: a policy-violating
+                             * blob is uncommitted work exactly here, where a
+                             * push would publish it. */
+                            uncommitted_count++;
+                            break;
+
+                        case WORKSPACE_ROUTE_STALE:
+                        case WORKSPACE_ROUTE_REASSIGNED:
+                        case WORKSPACE_ROUTE_CLEAN:
+                            /* Apply's side or nothing: Git moved past the deployed
+                             * blob and disk did not — a mode rider included —
+                             * or a pending handover. No local work a pull puts
+                             * at risk. */
+                            break;
                     }
-                    if (item->divergence & DIVERGENCE_CONTENT) modified_count++;
-                    if (item->divergence & DIVERGENCE_MODE) mode_diff_count++;
-                    if (item->divergence & DIVERGENCE_TYPE) type_diff_count++;
                     break;
+
                 case WORKSPACE_STATE_DELETED:
                     deleted_count++;
                     break;
+
                 case WORKSPACE_STATE_UNTRACKED:
                     untracked_count++;
                     break;
+
                 case WORKSPACE_STATE_UNDEPLOYED:
                 case WORKSPACE_STATE_ORPHANED:
                 case WORKSPACE_STATE_RELEASED:
@@ -1692,25 +1721,27 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
         }
 
-        size_t uncommitted_count = modified_count + conflict_count + deleted_count +
-            mode_diff_count + type_diff_count + untracked_count;
+        size_t blocking_count = uncommitted_count + conflict_count +
+            deleted_count + untracked_count;
 
-        if (uncommitted_count > 0) {
+        if (blocking_count > 0) {
             if (config->strict_mode) {
-                /* Strict mode: Block with full diagnostic output */
+                /* Strict mode: Block with full diagnostic output. The lines carry
+                 * status's section vocabulary — one item, one line — and the
+                 * unverifiable count rides along as an advisory so the paths
+                 * the analysis could not settle are never silent. */
                 output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
                 output_newline(out, OUTPUT_NORMAL);
 
-                /* Show what's uncommitted */
-                if (modified_count > 0) {
+                if (uncommitted_count > 0) {
                     output_info(
-                        out, OUTPUT_NORMAL, "  %zu modified file%s",
-                        modified_count, modified_count == 1 ? "" : "s"
+                        out, OUTPUT_NORMAL, "  %zu uncommitted change%s",
+                        uncommitted_count, uncommitted_count == 1 ? "" : "s"
                     );
                 }
                 if (conflict_count > 0) {
                     output_info(
-                        out, OUTPUT_NORMAL, "  %zu file%s changed in Git and disk",
+                        out, OUTPUT_NORMAL, "  %zu conflict%s",
                         conflict_count, conflict_count == 1 ? "" : "s"
                     );
                 }
@@ -1720,22 +1751,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         deleted_count, deleted_count == 1 ? "" : "s"
                     );
                 }
-                if (mode_diff_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu file%s with permission changes",
-                        mode_diff_count, mode_diff_count == 1 ? "" : "s"
-                    );
-                }
-                if (type_diff_count > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL, "  %zu file%s with type changes",
-                        type_diff_count, type_diff_count == 1 ? "" : "s"
-                    );
-                }
                 if (untracked_count > 0) {
                     output_info(
                         out, OUTPUT_NORMAL, "  %zu new untracked file%s",
                         untracked_count, untracked_count == 1 ? "" : "s"
+                    );
+                }
+                if (unverified_count > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL, "  %zu unverifiable path%s",
+                        unverified_count, unverified_count == 1 ? "" : "s"
                     );
                 }
 
@@ -1746,17 +1771,25 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 if (conflict_count > 0) {
                     output_hintline(
                         out, OUTPUT_NORMAL,
-                        "  Conflicts:      dotta diff or dotta apply --force"
+                        "  Conflicts:      dotta diff, apply --force, add --force, or remove"
                     );
                 }
-                output_hintline(out, OUTPUT_NORMAL, "  Commit changes: dotta update");
+                if (uncommitted_count + deleted_count > 0) {
+                    output_hintline(out, OUTPUT_NORMAL, "  Commit changes: dotta update");
+                }
+                if (untracked_count > 0) {
+                    output_hintline(
+                        out, OUTPUT_NORMAL,
+                        "  New files:      dotta update --include-new"
+                    );
+                }
                 output_hintline(out, OUTPUT_NORMAL, "  Synchronize:    dotta sync");
                 output_hintline(out, OUTPUT_NORMAL, "  Or bypass with: dotta sync --force");
 
                 err = ERROR(
                     ERR_VALIDATION,
-                    "Cannot sync with uncommitted changes (found %zu uncommitted file%s)",
-                    uncommitted_count, uncommitted_count == 1 ? "" : "s"
+                    "Cannot sync with uncommitted changes (found %zu uncommitted item%s)",
+                    blocking_count, blocking_count == 1 ? "" : "s"
                 );
                 goto cleanup;
             }
@@ -1773,27 +1806,27 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              */
             output_warning(
                 out, OUTPUT_NORMAL, "Workspace has %zu uncommitted change%s",
-                uncommitted_count, uncommitted_count == 1 ? "" : "s"
+                blocking_count, blocking_count == 1 ? "" : "s"
             );
 
             /* Show breakdown in verbose mode */
-            if (modified_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu modified", modified_count);
+            if (uncommitted_count > 0) {
+                output_info(out, OUTPUT_VERBOSE, "  %zu uncommitted", uncommitted_count);
             }
             if (conflict_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu changed in Git and disk", conflict_count);
+                output_info(
+                    out, OUTPUT_VERBOSE, "  %zu conflict%s",
+                    conflict_count, conflict_count == 1 ? "" : "s"
+                );
             }
             if (deleted_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu deleted", deleted_count);
             }
-            if (mode_diff_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu permission changes", mode_diff_count);
-            }
-            if (type_diff_count > 0) {
-                output_info(out, OUTPUT_VERBOSE, "  %zu type changes", type_diff_count);
-            }
             if (untracked_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu untracked", untracked_count);
+            }
+            if (unverified_count > 0) {
+                output_info(out, OUTPUT_VERBOSE, "  %zu unverifiable", unverified_count);
             }
 
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
@@ -1808,8 +1841,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 if (conflict_count > 0) {
                     output_hint(
                         out, OUTPUT_NORMAL,
-                        "Resolve conflicts first: 'dotta diff' shows Git's version against "
-                        "disk, 'dotta apply --force' keeps Git's; run 'dotta update' for the rest"
+                        "Resolve conflicts first: 'dotta diff' shows both sides; "
+                        "'dotta apply --force' keeps Git's, 'dotta add --force' keeps "
+                        "disk's, 'dotta remove' untracks; 'dotta update' commits the rest"
                     );
                 } else {
                     output_hint(
@@ -1824,6 +1858,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             /* User confirmed - proceed with sync */
             output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
             output_newline(out, OUTPUT_NORMAL);
+        } else if (unverified_count > 0) {
+            /* Nothing blocks, but the analysis could not settle every path: say
+             * so and proceed. Silence here once hid real divergence — the one
+             * route the old fold never counted — and no verb resolves it; the
+             * user must look (status's Unverifiable section carries the way
+             * out). */
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Note: %zu path%s could not be verified ('dotta status' lists %s)",
+                unverified_count, unverified_count == 1 ? "" : "s",
+                unverified_count == 1 ? "it" : "them"
+            );
         }
     }
 
@@ -2177,7 +2223,7 @@ static const args_opt_t sync_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",       "<name>",
-        cmd_sync_options_t,profiles,     profile_count,
+        cmd_sync_options_t,profiles,            profile_count,
         "Filter sync to profile(s) (repeatable)"
     ),
     ARGS_FLAG(
@@ -2212,7 +2258,7 @@ static const args_opt_t sync_opts[] = {
     ),
     /* Bare profile positionals funnel into the same APPEND field. */
     ARGS_POSITIONAL_ANY(
-        cmd_sync_options_t,profiles,     profile_count
+        cmd_sync_options_t,profiles,            profile_count
     ),
     ARGS_END,
 };

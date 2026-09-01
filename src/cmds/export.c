@@ -9,6 +9,15 @@
  * directory — its whole Git footprint is its metadata item) is content too:
  * materialized with its stored mode, beside what the walk collects.
  *
+ * Directory modes come off the claim sheet without asking which kind of claim
+ * stands there, and that is right rather than incidental: every directory an
+ * export produces is one the export itself creates, and creation is precisely
+ * what both kinds of claim bind. A rung the profile only passes through, claimed
+ * at 0700 by the chain above a captured leaf, exports at 0700 — the same fidelity
+ * a deployment gives it, reached with no class test anywhere in this file. The
+ * distinction core/deploy must draw — converge what the profile manages, only
+ * create what it passes through — has no counterpart where nothing pre-exists.
+ *
  * Two-phase execution model:
  *
  *   Phase 1 (read-only): walk the tree collecting entries, resolve every final

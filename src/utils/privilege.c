@@ -263,7 +263,7 @@ static void display_privilege_requirement(
     );
 
     output_print(out, OUTPUT_NORMAL, "\nOperation: %s\n", operation);
-    output_print(out, OUTPUT_NORMAL, "\nFiles requiring root privileges:\n");
+    output_print(out, OUTPUT_NORMAL, "\nPaths requiring root privileges:\n");
 
     size_t display_count = count > 10 ? 10 : count;
     for (size_t i = 0; i < display_count; i++) {
@@ -278,7 +278,7 @@ static void display_privilege_requirement(
 
     output_print(
         out, OUTPUT_NORMAL,
-        "\nReason: These files require ownership metadata capture,\n"
+        "\nReason: These paths require ownership metadata capture,\n"
         "          which requires root privileges to access.\n"
     );
 }

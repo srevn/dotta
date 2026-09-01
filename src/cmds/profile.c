@@ -111,7 +111,7 @@ static void print_manifest_disable_stats(
         if (stats->reassigned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {green}%zu{reset} file%s with fallback (will reassign)\n",
+                "    - {green}%zu{reset} path%s with fallback (will reassign)\n",
                 stats->reassigned,
                 stats->reassigned == 1 ? "" : "s"
             );
@@ -120,7 +120,7 @@ static void print_manifest_disable_stats(
         if (stats->orphans.owned > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {red}%zu{reset} file%s without fallback (will be pruned)\n",
+                "    - {red}%zu{reset} path%s without fallback (will be pruned)\n",
                 stats->orphans.owned,
                 stats->orphans.owned == 1 ? "" : "s"
             );
@@ -129,7 +129,7 @@ static void print_manifest_disable_stats(
         if (stats->orphans.observed > 0) {
             output_styled(
                 out, OUTPUT_VERBOSE,
-                "    - {cyan}%zu{reset} file%s never deployed here (left alone)\n",
+                "    - {cyan}%zu{reset} path%s never deployed here (left alone)\n",
                 stats->orphans.observed,
                 stats->orphans.observed == 1 ? "" : "s"
             );
@@ -140,14 +140,14 @@ static void print_manifest_disable_stats(
         /* Compact summary */
         if (stats->orphans.owned > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  Staged %zu file%s for removal\n",
+                out, OUTPUT_NORMAL, "  Staged %zu path%s for removal\n",
                 stats->orphans.owned, stats->orphans.owned == 1 ? "" : "s"
             );
         }
 
         if (stats->reassigned > 0) {
             output_print(
-                out, OUTPUT_NORMAL, "  Reassigned %zu file%s to lower precedence\n",
+                out, OUTPUT_NORMAL, "  Reassigned %zu path%s to lower precedence\n",
                 stats->reassigned,
                 stats->reassigned == 1 ? "" : "s"
             );

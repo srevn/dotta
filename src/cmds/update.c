@@ -1414,7 +1414,7 @@ static error_t *update_display_preview(
     if (opts->file_count > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "Filter: Limiting to %zu specified file%s",
+            "Filter: Limiting to %zu specified path%s",
             opts->file_count, opts->file_count == 1 ? "" : "s"
         );
         has_filters = true;

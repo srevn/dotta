@@ -460,9 +460,9 @@ static void display_multi_profile_warnings(
 ) {
     if (!out || multi_profile_count == 0) return;
 
-    output_section(out, OUTPUT_NORMAL, "Multi-profile file warning");
+    output_section(out, OUTPUT_NORMAL, "Multi-profile path warning");
     output_warning(
-        out, OUTPUT_NORMAL, "Found %zu file%s in multiple profiles:",
+        out, OUTPUT_NORMAL, "Found %zu path%s in multiple profiles:",
         multi_profile_count, multi_profile_count == 1 ? "" : "s"
     );
 
@@ -493,7 +493,7 @@ static void display_multi_profile_warnings(
     output_newline(out, OUTPUT_NORMAL);
     output_info(
         out, OUTPUT_NORMAL,
-        "These files will be removed only from profile '%s'.",
+        "These paths will be removed only from profile '%s'.",
         current_profile
     );
 

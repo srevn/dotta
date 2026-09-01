@@ -1480,7 +1480,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (scope_has_paths(scope)) {
         size_t filter_count = pathspec_count(scope_paths(scope));
         output_print(
-            out, OUTPUT_VERBOSE, "\nFile filter: %zu file%s specified\n",
+            out, OUTPUT_VERBOSE, "\nPath filter: %zu path%s specified\n",
             filter_count, filter_count == 1 ? "" : "s"
         );
     }
@@ -1694,10 +1694,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (scope_has_paths(scope) && deploy_plan_row_count(deploy_plan) == 0 &&
         cleanup_plan_item_count(cleanup_plan) == 0) {
         output_warning(
-            out, OUTPUT_NORMAL, "No matching files found in enabled profiles"
+            out, OUTPUT_NORMAL, "No matching paths found in enabled profiles"
         );
         output_hint(
-            out, OUTPUT_NORMAL, "Check if the file path is correct and profile is enabled"
+            out, OUTPUT_NORMAL, "Check if the path is correct and profile is enabled"
         );
     }
 

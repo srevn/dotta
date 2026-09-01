@@ -99,7 +99,7 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
     }
 
     if (!opts->files || opts->file_count == 0) {
-        return ERROR(ERR_INVALID_ARG, "At least one file is required");
+        return ERROR(ERR_INVALID_ARG, "At least one path is required");
     }
 
     return NULL;
@@ -1944,7 +1944,7 @@ static error_t *add_post_parse(
 
     if (o->file_count == 0) {
         return ERROR(
-            ERR_INVALID_ARG, "at least one file is required"
+            ERR_INVALID_ARG, "at least one path is required"
         );
     }
     return NULL;

@@ -1558,10 +1558,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         metadata_item_t *dir_item = NULL;
         err = metadata_capture_from_directory(storage_path, &dir_stat, &dir_item);
         if (err) {
-            /* Non-fatal: log warning and continue */
+            /* Non-fatal, and said at the verbosity its sibling above is said
+             * at: the walk's files are added either way, but the directory itself
+             * takes no claim from this run and so is not tracked at all — a loss
+             * the user only weighs if they are told about it. */
             output_warning(
-                out, OUTPUT_VERBOSE,
-                "Failed to capture metadata for directory '%s': %s",
+                out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
                 filesystem_path, error_message(err)
             );
             error_free(err);

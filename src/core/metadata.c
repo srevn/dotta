@@ -552,36 +552,58 @@ const metadata_item_t *const *metadata_items(
 /**
  * Capture ownership from stat data into metadata item
  *
- * Resolves UID to username and GID to groupname, storing as strings. Gracefully
- * handles unresolvable UIDs/GIDs (leaves field NULL).
+ * Names the stat's UID and GID, both or neither. A capture states what it saw,
+ * and half of what it saw is a different statement: the read boundary takes a
+ * lone "group" as a deliberate chgrp-only intent (metadata_resolve_ownership
+ * leaves the UID at -1) and a lone "owner" as "and the user's primary group",
+ * so a name that merely failed to resolve becomes indistinguishable from a claim
+ * the profile meant to make narrow. The claim this host cannot spell is an error
+ * here, where the user is at the terminal and the path is still theirs to fix,
+ * rather than a silence for deploy to act on a year later on another machine.
  *
- * On failure (memory allocation), item fields may be partially set. Caller is
- * responsible for freeing the item on error.
+ * On failure item fields may be partially set — the caller frees the item on
+ * error either way, and the sheet only ever sees an item this function returned
+ * success for.
  *
  * @param item Item to set ownership on (must not be NULL)
  * @param st Stat data with uid/gid (must not be NULL)
  * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_NOT_FOUND: the UID or the GID has no name on this system
  */
 static error_t *capture_ownership(
     metadata_item_t *item,
     const struct stat *st
 ) {
-    /* Resolve UID to username */
+    /* Resolve UID to username. "Cannot resolve" rather than "does not exist": a
+     * NULL answer is an absent entry or a lookup that failed (a directory service
+     * down), and the claim is equally unmakeable either way. */
     struct passwd *pwd = getpwuid(st->st_uid);
-    if (pwd && pwd->pw_name) {
-        item->owner = strdup(pwd->pw_name);
-        if (!item->owner) {
-            return ERROR(ERR_MEMORY, "Failed to allocate owner string");
-        }
+    if (!pwd || !pwd->pw_name) {
+        return ERROR(
+            ERR_NOT_FOUND, "Cannot resolve UID %u to a user name on this system",
+            (unsigned) st->st_uid
+        );
+    }
+
+    item->owner = strdup(pwd->pw_name);
+    if (!item->owner) {
+        return ERROR(ERR_MEMORY, "Failed to allocate owner string");
     }
 
     /* Resolve GID to groupname */
     struct group *grp = getgrgid(st->st_gid);
-    if (grp && grp->gr_name) {
-        item->group = strdup(grp->gr_name);
-        if (!item->group) {
-            return ERROR(ERR_MEMORY, "Failed to allocate group string");
-        }
+    if (!grp || !grp->gr_name) {
+        return ERROR(
+            ERR_NOT_FOUND, "Cannot resolve GID %u to a group name on this system",
+            (unsigned) st->st_gid
+        );
+    }
+
+    item->group = strdup(grp->gr_name);
+    if (!item->group) {
+        return ERROR(ERR_MEMORY, "Failed to allocate group string");
     }
 
     return NULL;
@@ -636,9 +658,12 @@ error_t *metadata_capture_from_file(
     }
     /* For home/ prefix or when not running as root: owner/group remain NULL */
 
-    /* An item exists iff it claims something. Asked after ownership resolution,
-     * so an elevated link whose UID/GID resolve to no name falls out of the same
-     * rule — no empty entry is ever authored. */
+    /* An item exists iff it claims something. Only a link reaches the branch —
+     * a regular file always claims its mode — and only one kind of link: asked
+     * after ownership resolution, which by now has either named both halves or
+     * failed, what falls out here is a link the capture had no ownership to take
+     * (a label that does not track it, or an unelevated run), never one whose
+     * owner this host could not spell. No empty entry is ever authored. */
     if (item->mode == MODE_UNCLAIMED && !item->owner && !item->group) {
         metadata_item_free(item);
         *out = NULL;

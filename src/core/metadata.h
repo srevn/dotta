@@ -14,7 +14,9 @@
  *   (owner-execute), the sheet holds them all
  * - ownership: the sheet's ("owner"/"group") — captured only for paths whose
  *   label tracks it (root/, custom/), and only when running elevated; home/ paths
- *   are always the current user's
+ *   are always the current user's. A capture names both halves or neither: the
+ *   read side reads a lone half as a narrow claim deliberately made, so a name
+ *   the host cannot spell fails the capture rather than authoring one
  * - a directory's existence: the sheet's (kind=directory) — the one claim a tree
  *   cannot hold, since Git trees have no empty directories
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
@@ -382,6 +384,10 @@ const metadata_item_t *const *metadata_items(
  *   only when running as root (UID 0)
  * - home/ prefix paths: ownership never captured (always current user)
  * - Regular users: ownership never captured (can't chown anyway)
+ * - Both names or neither: where ownership is captured at all, a UID or GID this
+ *   host cannot name fails the capture (ERR_NOT_FOUND). Half a claim would read
+ *   downstream as a claim deliberately made narrow, and the path would land owned
+ *   by whoever deploy created it as
  *
  * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
  *
@@ -404,10 +410,13 @@ error_t *metadata_capture_from_file(
  * Capture metadata from filesystem directory
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
- * rules as file capture; the mode is always claimed from the stat. Callers treat
- * a directory-capture failure as a warning where a file-capture failure is fatal:
- * a directory item is an attributes overlay, never content, so a missed capture
- * loses a claim and nothing else.
+ * rules as file capture — the unnameable UID among them — while the mode is always
+ * claimed from the stat. Callers treat a directory-capture failure as a warning
+ * where a file-capture failure is fatal: a directory item is an attributes overlay,
+ * never content, so a missed capture loses a claim and nothing else. It loses
+ * the mode with the ownership, though, and with it the directory's own row — an
+ * add does not track it, an update leaves the standing claim alone — so the
+ * callers' warning is one the user reads at any verbosity.
  *
  * Ownership capture (user/group):
  * - ONLY captured for directories whose label tracks ownership (root/, custom/),

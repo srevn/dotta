@@ -718,9 +718,13 @@ static error_t *update_profile(
                 );
 
                 if (err) {
+                    /* Non-fatal, and said at the verbosity its sibling above is
+                     * said at: the claim standing on the directory is left exactly
+                     * as it is — absence of a capture is not knowledge that the
+                     * claim is wrong — so the sheet quietly keeps saying something
+                     * this run could not confirm. */
                     output_warning(
-                        out, OUTPUT_VERBOSE,
-                        "Failed to capture metadata for directory '%s': %s",
+                        out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
                         item->filesystem_path, error_message(err)
                     );
                     error_free(err);

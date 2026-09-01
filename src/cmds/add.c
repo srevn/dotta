@@ -736,12 +736,16 @@ static error_t *create_commit(
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the state
  *            and the command arena)
+ * @param mounts The command's table, which binds this profile's target whether
+ *               the run brought one or state already held it (must not be NULL)
  * @param profile Profile that files were added to (must not be NULL)
  * @param target Deployment target for custom/ files (can be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
  * @param added_files The files the walk listed, each with the capture's stat
  *                    (must not be NULL)
  * @param added_dirs The directories the walk passed through (must not be NULL)
+ * @param retired The ancestor claims the ancestry pass dropped, by key (must
+ *                not be NULL)
  * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @param out_synced Output: count of files anchored (can be NULL)
  * @param out_taken_over Output: count of those taken over from another profile's
@@ -750,19 +754,23 @@ static error_t *create_commit(
  */
 static error_t *update_manifest_after_add(
     const dotta_ctx_t *ctx,
+    const mount_table_t *mounts,
     const char *profile,
     const char *target,
     bool profile_was_new,
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
+    const string_array_t *retired,
     bool *out_updated,
     size_t *out_synced,
     size_t *out_taken_over
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(mounts);
     CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(added_dirs);
+    CHECK_NULL(retired);
     CHECK_NULL(out_updated);
 
     git_repository *repo = ctx->run.repo;
@@ -878,6 +886,41 @@ static error_t *update_manifest_after_add(
         error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
         if (anchor_err) error_free(anchor_err);
     }
+
+    /* What the commit let go: an ancestor claim the derivation retired leaves
+     * the view by this very commit, so its record settles here rather than
+     * orphaning until an apply gets around to it. Not tidiness — the record is
+     * the other half of the displaced-directory question (core/workspace's
+     * collect_displaced reads an orphaned directory record with no item off the
+     * disk), so a record left standing at a path that is no longer a directory
+     * goes on refusing every write beneath it: exactly the write the dropped
+     * claim was meant to release. A rung some other profile still claims keeps
+     * its row and its record — the retire is this profile's word about its own
+     * claim, never about the path — and an unbound claim names nothing on this
+     * machine to retire. */
+    for (size_t i = 0; i < retired->count; i++) {
+        mount_resolve_outcome_t outcome;
+        const char *fs_path = NULL;
+
+        err = mount_resolve(
+            mounts, profile, retired->items[i], ctx->arena, &outcome, &fs_path
+        );
+        if (err) {
+            hashmap_free(anchor_index, NULL);
+            manifest_free(manifest);
+            return error_wrap(
+                err, "Failed to derive filesystem path from storage path: %s",
+                retired->items[i]
+            );
+        }
+        if (outcome == MOUNT_RESOLVE_UNBOUND || manifest_lookup(manifest, fs_path)) {
+            continue;
+        }
+
+        error_t *retire_err = state_retire_anchor(state, fs_path);
+        if (retire_err) error_free(retire_err);
+    }
+
     hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
@@ -928,6 +971,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * at scope exit; the privilege call window closes inside this function (or
      * the process re-execs), so the array's lifetime is contained here. */
     string_array_t preflight_labels STRING_ARRAY_AUTO = { 0 };
+
+    /* The ancestry pass's other half: the keys it retired, read by the record
+     * write once the commit that drops them has landed. */
+    string_array_t ancestry_retired STRING_ARRAY_AUTO = { 0 };
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1610,6 +1657,35 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
+    /* The ancestry: the chain above every path this add captured, claimed as
+     * the derivation it is — the attributes to give a rung if dotta ever has to
+     * create it, and nothing more. It runs after the walk's own claims so that
+     * a rung the walk entered is left exactly as the loop above wrote it, and
+     * over both lists: a directory the walk listed has a chain of its own, and
+     * an empty one has no file beneath it to carry that chain. Scope-blind by
+     * design, as the pass that reads it is — an exclusion names a path, never
+     * the way to it.
+     */
+    size_t ancestors_captured = 0;
+    const ptr_array_t *chains[] = { &walk.files, &walk.directories };
+    for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
+        for (size_t i = 0; i < chains[b]->count; i++) {
+            const add_path_t *path = chains[b]->items[i];
+
+            err = metadata_capture_ancestors(
+                metadata, path->storage_path, path->fs_path,
+                &ancestors_captured, &ancestry_retired
+            );
+            if (err) goto cleanup;
+        }
+    }
+    if (ancestors_captured > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Captured %zu ancestor director%s",
+            ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
+        );
+    }
+
     /* Save metadata to worktree */
     err = metadata_save_to_worktree(worktree_path, metadata);
     if (err) {
@@ -1663,8 +1739,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     size_t manifest_taken_over = 0;
 
     error_t *manifest_err = update_manifest_after_add(
-        ctx, opts->profile, opts->target, profile_was_new,
-        &walk.files, &walk.directories,
+        ctx, mounts, opts->profile, opts->target, profile_was_new,
+        &walk.files, &walk.directories, &ancestry_retired,
         &manifest_updated, &manifest_synced_count, &manifest_taken_over
     );
     if (manifest_err) {

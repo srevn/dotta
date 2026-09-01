@@ -481,6 +481,65 @@ error_t *metadata_capture_from_directory(
 );
 
 /**
+ * Author the claims for every directory on the way to a path
+ *
+ * The sheet's completeness rule for the chain. Every component between the mount
+ * root and `storage_path` that is a real directory right now claims the attributes
+ * it has, as an ancestor claim: the profile does not manage the directory, it
+ * passes through it, so `tracked` is absent and the claim binds only dotta's
+ * own creation of that path (core/deploy's ancestors pass). The mount root itself
+ * is never a key — a target is not a path any profile claims — and neither is
+ * the leaf, which is its own capture's business.
+ *
+ * The two spellings of the one path are the whole input. A storage path is its
+ * label plus the mount-relative tail; the filesystem path is its mount target
+ * plus that same tail, the very bytes, whichever direction the pair was derived
+ * in (mount_classify hands the tail out of the filesystem path, mount_resolve
+ * joins a target to it). So the tail's own separators name every ancestor twice,
+ * once in each namespace, at the same offset from each end — no mount table, no
+ * arena, no allocation beyond one scratch copy of each name. A pair that does
+ * not hold that is not two names for one path, and is refused.
+ *
+ * Per rung, root-first:
+ *   - a tracked claim standing at the key is the walk's own word and is left
+ *     exactly as it is; the climb continues past it, since a tracked claim says
+ *     nothing about the rungs above it
+ *   - a FILE item standing at the key is the tree's business, not this rule's
+ *   - a directory on disk  -> captured and upserted; counted only when the claim
+ *     it makes differs from the one standing, so a re-derivation that found nothing
+ *     new rewrites nothing and drives no commit
+ *   - anything else on disk -> the derivation claims no directory here, so a
+ *     standing ancestor claim is retired (the sheet's own producer rule) and
+ *     its key appended to `retired`
+ *   - nothing there, or nothing this host could see or name -> the rung has no
+ *     answer, and no answer is not an answer of "no": nothing authored, nothing
+ *     retired
+ *
+ * The two outs are shaped by what a caller can do with them, not by symmetry: a
+ * claim authored has no consequence beyond the sheet, so its count is the whole
+ * report, while a claim retired leaves the view by the caller's commit and its
+ * record behind — and only the key names that.
+ *
+ * Idempotent, and total over the chain: no rung stops the climb. O(depth) lstats
+ * per call; the callers pay it once per captured leaf.
+ *
+ * @param metadata Collection to author into (must not be NULL; mutated)
+ * @param storage_path Leaf's storage path, label-first (must not be NULL)
+ * @param filesystem_path The same leaf under its other name (must not be NULL)
+ * @param captured Count of rungs whose claim this call authored or changed, added
+ *                 to (must not be NULL)
+ * @param retired Keys this call retired, appended (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *metadata_capture_ancestors(
+    metadata_t *metadata,
+    const char *storage_path,
+    const char *filesystem_path,
+    size_t *captured,
+    string_array_t *retired
+);
+
+/**
  * Load metadata from profile branch
  *
  * Reads .dotta/metadata.json from the specified branch. If the file doesn't exist,

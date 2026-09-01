@@ -770,6 +770,183 @@ error_t *metadata_capture_from_directory(
 }
 
 /**
+ * Author, refresh or retire the derived claim at one rung of a chain
+ *
+ * One component, under both its names, already truncated by the climb below.
+ * The rule is metadata.h's own, read one level up: an item exists iff it claims
+ * something, so a rung the disk answers "directory" for claims its attributes,
+ * a rung it answers anything else for retires the claim that said otherwise,
+ * and a rung it does not answer at all leaves the sheet exactly as it found it.
+ *
+ * `tracked` is false throughout: this rule authors derivations, never intent.
+ *
+ * @param metadata Collection to author into (must not be NULL; mutated)
+ * @param storage_path The rung's key (must not be NULL)
+ * @param filesystem_path The rung on disk (must not be NULL)
+ * @param captured Incremented when the rung's claim moved (must not be NULL)
+ * @param retired Receives the key when the rung's claim goes (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *capture_ancestor(
+    metadata_t *metadata,
+    const char *storage_path,
+    const char *filesystem_path,
+    size_t *captured,
+    string_array_t *retired
+) {
+    /* Two standing items are not a derivation's to touch. A tracked claim is
+     * the walk's own word about a directory the profile manages, and nothing
+     * derived refreshes or retires it. A FILE item is the tree's business: a
+     * path is a blob or a tree, so an item of that kind at a directory's key is
+     * stale metadata, and the tree and metadata_prune_directories are its
+     * authorities. */
+    const metadata_item_t *held = metadata_lookup(metadata, storage_path);
+    if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
+        return NULL;
+    }
+
+    struct stat st;
+    fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
+
+    /* Nothing there, or nothing this host could see: the rung has no answer,
+     * and no answer is not an answer of "no". A chain the world moved under between
+     * the leaf's capture and this climb keeps the claims it already had. */
+    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
+        return NULL;
+    }
+
+    /* Something stands here that is not a directory, so the profile passes through
+     * no directory at this rung and a claim that says it does has just been
+     * contradicted by the disk. The case that matters is a symlink the user put
+     * there after the first capture: writing through it is what they asked for,
+     * and dropping the claim is what lets dotta — the row leaves the view with
+     * the claim, and the caller retires the record that named the path (the two
+     * halves core/workspace reads to call a directory displaced). A symlink that
+     * was there at capture time never authored a claim to drop; this is the same
+     * consent, one command later. */
+    if (occupant != FS_OCCUPANT_DIRECTORY) {
+        return metadata_remove_item(metadata, storage_path)
+                   ? string_array_push(retired, storage_path)
+                   : NULL;
+    }
+
+    metadata_item_t *item = NULL;
+    error_t *err = metadata_capture_from_directory(storage_path, &st, false, &item);
+    if (err) {
+        /* A name this host cannot spell is the same silence as a path it cannot
+         * see: a directory capture that fails loses a claim and nothing else,
+         * so the rung keeps what it had and dotta creates it as it would have
+         * before. Anything else is the process failing, not the rung. */
+        if (err->code != ERR_NOT_FOUND) {
+            return err;
+        }
+        error_free(err);
+        return NULL;
+    }
+
+    /* A re-derivation that found nothing new authors nothing: the standing claim
+     * keeps its place, so nothing is counted and the caller's commit gate never
+     * fires on a chain that has not moved. Ownership is both names or neither
+     * (capture_ownership), so the pair is one question. */
+    if (held && held->mode == item->mode &&
+        (held->owner == NULL) == (item->owner == NULL) &&
+        (item->owner == NULL || (strcmp(held->owner, item->owner) == 0 &&
+        strcmp(held->group, item->group) == 0))) {
+        metadata_item_free(item);
+        return NULL;
+    }
+
+    err = metadata_add_item(metadata, &item);
+    if (err) {
+        metadata_item_free(item);
+        return err;
+    }
+
+    (*captured)++;
+
+    return NULL;
+}
+
+/**
+ * Author the claims for every directory on the way to a path
+ *
+ * The climb: this names every rung, capture_ancestor decides each one.
+ */
+error_t *metadata_capture_ancestors(
+    metadata_t *metadata,
+    const char *storage_path,
+    const char *filesystem_path,
+    size_t *captured,
+    string_array_t *retired
+) {
+    CHECK_NULL(metadata);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(captured);
+    CHECK_NULL(retired);
+
+    const char *tail = mount_strip_label(storage_path);
+    size_t tail_len = strlen(tail);
+    size_t fs_len = strlen(filesystem_path);
+
+    /* The one fact the climb rests on: both names end in the same bytes. A storage
+     * path is its label plus the mount-relative tail, a filesystem path its mount
+     * target plus that same tail, so truncating each at a matching offset names
+     * one ancestor twice. Checked once, here, where the pair enters the module
+     * — every rung below trusts it. */
+    if (tail == storage_path || fs_len <= tail_len ||
+        strcmp(filesystem_path + (fs_len - tail_len), tail) != 0) {
+        return ERROR(
+            ERR_INTERNAL,
+            "Storage path '%s' and filesystem path '%s' are not one path under "
+            "two names", storage_path, filesystem_path
+        );
+    }
+
+    /* One rung per separator in the tail. The mount root is excluded by where
+     * the scan starts and the leaf by where it ends — arithmetic, not a special
+     * case — so a path directly beneath a mount root climbs nowhere. */
+    const char *first = strchr(tail, '/');
+    if (!first) {
+        return NULL;
+    }
+
+    char *sp = strdup(storage_path);
+    char *fp = strdup(filesystem_path);
+    if (!sp || !fp) {
+        free(sp);
+        free(fp);
+        return ERROR(ERR_MEMORY, "Failed to copy path for the ancestry climb");
+    }
+
+    /* Where the shared tail begins in each name. The scan itself reads `tail`,
+     * which is the caller's and never written; the copies carry the truncation,
+     * undone before the next rung extends past it. */
+    size_t sp_root = (size_t) (tail - storage_path);
+    size_t fp_root = fs_len - tail_len;
+
+    error_t *err = NULL;
+    for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
+        size_t cut = (size_t) (sep - tail);
+
+        sp[sp_root + cut] = '\0';
+        fp[fp_root + cut] = '\0';
+
+        err = capture_ancestor(metadata, sp, fp, captured, retired);
+
+        sp[sp_root + cut] = '/';
+        fp[fp_root + cut] = '/';
+
+        if (err) break;
+    }
+
+    free(sp);
+    free(fp);
+
+    return err;
+}
+
+/**
  * Sort helper for the serializer: byte order on the item key
  */
 static int item_key_cmp(const void *a, const void *b) {

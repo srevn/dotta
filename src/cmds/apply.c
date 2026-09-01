@@ -536,10 +536,11 @@ static void print_skipped(
  *   stood at the path — one line each, so the squatter --force displaced is named
  *   at every verbosity (green; the replaced count yellow, as cleanup colours a
  *   removal)
- * - ancestors: Tracked directories the run made on the way to a planned path,
- *   outside the plan. Verbose only — the preview never counted them, and the
- *   summary says what the preview said; the verbose listing accounts for every
- *   owned record the run wrote
+ * - ancestors: Directories the run made on the way to a planned path, outside
+ *   the plan — either class, since a claimed rung is created at its claim whether
+ *   the profile manages it or only passes through it. Verbose only — the preview
+ *   never counted them, and the summary says what the preview said; the verbose
+ *   listing accounts for every owned record the run wrote
  *
  * The verb is the verdict's; the tags are plan truth. A fixed row is tagged [mode]
  * / [ownership] from its fate's item — why the planner chose it — never from a
@@ -704,7 +705,7 @@ static void print_deploy_results(
     }
 
     if (ancestors.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Created tracked ancestors (outside the plan)");
+        output_section(out, OUTPUT_VERBOSE, "Created ancestors (outside the plan)");
         for (size_t i = 0; i < ancestors.count; i++) {
             const manifest_row_t *dir = ancestors.entries[i].verdict->row;
 

@@ -315,36 +315,38 @@ bool metadata_remove_item(
 /**
  * Prune redundant directory entries
  *
- * Removes kind=directory items that carry no actionable information beyond what
- * an unwritten entry would. An entry is "redundant" when ALL of these hold:
+ * Removes kind=directory items whose reason to exist is gone. Every such item
+ * is asked two questions, and one that answers no to both is removed:
  *
- *   - No index entry lives under it (no anchoring descendants in the tree the
- *     impending commit will record).
- *   - mode == DIR_MODE_DEFAULT (no mode override to preserve over the filesystem's
- *     umask default), or MODE_UNCLAIMED (a hand-sparse entry claiming even less).
- *   - owner == NULL AND group == NULL (no ownership override to preserve).
+ *   - Does it claim anything of its own? A tracked claim at a mode the umask
+ *     would not have produced, or carrying any ownership overlay, is the walk's
+ *     word about a directory the profile manages, and it is kept with nothing
+ *     beneath it: that is exactly the legitimate "track this empty directory
+ *     with these attributes" intent. A tracked claim at DIR_MODE_DEFAULT — or
+ *     at no mode at all, a hand-sparse entry claiming even less — says nothing
+ *     a plain mkdir would not. An ancestor claim claims nothing of its own by
+ *     construction: it is derived from the chain above a managed path, so no
+ *     attribute it carries can make it mean anything else.
+ *
+ *   - Is anything managed beneath it? The profile's managed set is the index's
+ *     paths and the sheet's own directory claims together. The index names every
+ *     path a tree can hold and is the sole authority for those — deliberately
+ *     not the metadata items, which are sparse by design (a symlink carries an
+ *     item only when captured with ownership, i.e. elevated), so a directory
+ *     whose only tracked content is an item-less symlink is anchored by the index
+ *     and survives. What no index can name is an empty directory, and only a
+ *     claim names one — a claim that answered yes to the first question, since
+ *     one that did not survives solely by being anchored itself and would otherwise
+ *     hold a doomed chain alive one command per rung.
  *
  * Anchoring is judged against the post-edit index (the tree the impending commit
- * will record) — the sole authority for which paths the profile tracks. Metadata
- * items are deliberately NOT the universe: the collection is sparse by design
- * (a symlink carries an item only when captured with ownership, i.e. elevated),
- * so "no item descendants" does not imply "no tracked descendants". A directory
- * whose only tracked content is an item-less symlink is anchored by the index
- * and survives.
- *
- * Such an entry has no role in any downstream pipeline: file deploy already mkdirs
- * ancestors at the same default mode, the view would only claim it as a
- * default-mode scan anchor for an emptied subtree, and divergence detection has
- * nothing to compare against. Typically it's walker residue from a path the user
- * no longer tracks (e.g., `dotta add ~/dir/` followed by `dotta remove` of every
- * file underneath). Without this prune, the view would keep claiming the entry
- * indefinitely.
- *
- * Custom-attribute entries (mode != default, or non-NULL owner/group) are preserved
- * even when unanchored: they may represent legitimate "track this empty directory
- * with these attributes" intent. Today the schema cannot distinguish that from
- * leftover residue, so we err on the side of preservation for entries that carry
- * distinguishing information.
+ * will record). An entry that answers no twice has no role in any downstream
+ * pipeline: the view would only claim it as a default-mode scan anchor for an
+ * emptied subtree, and divergence detection has nothing to compare against.
+ * Typically it's walker residue from a path the user no longer tracks (e.g.,
+ * `dotta add ~/dir/` followed by `dotta remove` of every file underneath), or
+ * the tail of an ancestry whose leaf has just gone. Without this prune, the view
+ * would keep claiming the entry indefinitely.
  *
  * Caller pattern: invoke after every index edit for the impending commit (additions
  * staged, deletions removed) and before the metadata blob is serialized for the

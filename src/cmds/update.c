@@ -792,13 +792,15 @@ static error_t *update_profile(
      *
      * Catches the implicit-orphaning case (the DELETED branch above handles
      * explicit removals): file removals can leave a parent directory's metadata
-     * entry with no anchoring descendants. Anchoring is judged against the
-     * post-edit index (deletions removed, updates staged by the walk) — never
-     * against metadata items, which omit unelevated symlinks. Only entries that
-     * carry no actionable information are pruned — custom-attribute entries survive
-     * as potential empty-dir intent. Without this, the view would keep claiming
-     * the orphaned entry indefinitely. The keys go on the commit's bookkeeping:
-     * the entry leaves the view by this commit, so its record is this verb's to
+     * entry with nothing managed beneath it. That set is judged against the
+     * post-edit index (deletions removed, updates staged by the walk) for every
+     * path a tree can hold — never against metadata items, which omit unelevated
+     * symlinks — and against the sheet's own standing claims for the one path
+     * it cannot, an empty directory. Only entries that claim nothing of their
+     * own are pruned; a tracked claim carrying real attributes survives as the
+     * empty-dir intent it is. Without this, the view would keep claiming the
+     * orphaned entry indefinitely. The keys go on the commit's bookkeeping: the
+     * entry leaves the view by this commit, so its record is this verb's to
      * retire. */
     err = metadata_prune_directories(metadata, index, &commit->pruned);
     if (err) {

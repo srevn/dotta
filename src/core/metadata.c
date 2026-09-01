@@ -431,6 +431,35 @@ bool metadata_remove_item(
 }
 
 /**
+ * Does this directory claim anything of its own?
+ *
+ * The one predicate two questions read: whether an item is residue-eligible at
+ * all, and whether it can anchor a claim above it. They are the same question —
+ * an item that claims nothing of its own survives solely by being anchored, so
+ * it is never the reason another item survives, and letting the two drift would
+ * hold a doomed chain alive one command per rung.
+ *
+ * A tracked claim is the walk's word about a directory the profile manages: a
+ * mode the umask would not have produced, or any ownership overlay, is intent
+ * the sheet keeps with nothing beneath it. An ancestor claim is derived from
+ * the chain above a managed path — it exists because something beneath it does,
+ * and no attribute it carries can make it say anything else.
+ *
+ * @param dir Directory item (must not be NULL; asked of no other kind)
+ * @return true if the claim stands without anything beneath it
+ */
+static bool claims_intent(const metadata_item_t *dir) {
+    if (!dir->tracked) {
+        return false;
+    }
+    if (dir->mode != DIR_MODE_DEFAULT && dir->mode != MODE_UNCLAIMED) {
+        return true;
+    }
+
+    return dir->owner != NULL || dir->group != NULL;
+}
+
+/**
  * Prune redundant directory entries
  *
  * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
@@ -458,19 +487,15 @@ error_t *metadata_prune_directories(
         const metadata_item_t *dir = items[d];
         if (dir->kind != PATH_KIND_DIRECTORY) continue;
 
-        /* Preserve any entry that carries distinguishing information: a real
-         * mode override, or any owner/group overlay. Today this is the only signal
-         * that separates legitimate empty-dir intent from walker-captured residue.
-         * An unclaimed mode claims even less than the default, so a hand-sparse
-         * entry is residue-eligible the same way. */
-        if (dir->mode != DIR_MODE_DEFAULT && dir->mode != MODE_UNCLAIMED) continue;
-        if (dir->owner != NULL || dir->group != NULL) continue;
+        /* The first question: an entry that claims something of its own is kept
+         * whatever stands beneath it. */
+        if (claims_intent(dir)) continue;
 
-        /* Anchor against the index: any tracked path under the directory blocks
-         * the prune. Metadata items are not the universe — a symlink tracked
-         * without elevation carries no item, yet still anchors its parent. The
-         * index is sorted, so one prefix probe answers; a failed look must not
-         * prune. */
+        /* The second, half of it: any path under the directory that a tree can
+         * hold. Metadata items are not the universe there — a symlink tracked
+         * without elevation carries no item, yet still anchors its parent — so
+         * the index is the authority. It is sorted, so one prefix probe answers;
+         * a failed look must not prune. */
         char *prefix = str_format("%s/", dir->key);
         if (!prefix) {
             return ERROR(ERR_MEMORY, "Failed to build directory prefix");
@@ -480,6 +505,19 @@ error_t *metadata_prune_directories(
         free(prefix);
         if (rc == 0) continue;
         if (rc != GIT_ENOTFOUND) return error_from_git(rc);
+
+        /* And the other half: the paths a tree cannot hold. An empty directory
+         * is named by its own claim and by nothing else, so a claim that stands
+         * on its own anchors everything above it — and one that does not is passed
+         * over, since it survives only by being anchored itself. */
+        const size_t key_len = strlen(dir->key);
+        bool anchored = false;
+        for (size_t a = 0; !anchored && a < item_count; a++) {
+            anchored = items[a]->kind == PATH_KIND_DIRECTORY &&
+                claims_intent(items[a]) &&
+                str_path_beneath(items[a]->key, dir->key, key_len);
+        }
+        if (anchored) continue;
 
         error_t *err = string_array_push(pruned, dir->key);
         if (err) {

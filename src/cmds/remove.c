@@ -842,11 +842,12 @@ static error_t *remove_files_from_profile(
     /* Prune redundant directory entries against the post-edit index — the branch
      * tree minus the removed file claims, the tree the impending commit will
      * record (the judge's own contract, metadata.h). Removing a file may leave
-     * its parent directory metadata entry with no anchoring descendants. Anchoring
-     * is judged against the index — never against metadata items, which omit
-     * unelevated symlinks. Only entries that carry no actionable information
-     * are dropped (default mode, no ownership, no tracked descendants);
-     * custom-attribute entries are preserved as potential empty-dir intent. */
+     * its parent directory metadata entry with nothing managed beneath it. The
+     * index answers that for every path a tree can hold — never the metadata
+     * items, which omit unelevated symlinks — and the sheet's own standing claims
+     * answer it for the one path it cannot, an empty directory. Only entries
+     * that claim nothing of their own are dropped; a tracked claim carrying real
+     * attributes is preserved as the empty-dir intent it is. */
     if (metadata) {
         git_tree *branch_tree = NULL;
         git_index *judge = NULL;

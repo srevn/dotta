@@ -55,10 +55,12 @@
  * is DEPLOYED (no path bit survives absence), so the route read is total here.
  *
  * The remedies close the block, indented under the rows the way every block closes,
- * each gated by the class actually present (deploy_skip_needs_force) — a
- * conflict-only run is not told to fix paths by hand, and an unreadable-only
- * run is not offered a flag that will not lift it. The consent remedy teaches
- * both directions: --force keeps Git's, and a CONTENT skip adds the disk-wins
+ * each gated by the reasons actually present — a conflict-only run is not told
+ * to fix paths by hand, and an unreadable-only run is offered neither a flag
+ * that will not lift it nor a by-hand fix for a path dotta could not even read:
+ * it closes with its own line, because dotta never writes on a guess. The consent
+ * remedy teaches both directions and names its cost the way cleanup's does: --force
+ * keeps Git's and discards what stands there, and a CONTENT skip adds the disk-wins
  * verb, 'dotta update' — gated on CONTENT and not on the class, because update
  * refuses a retyped row (update.c's retyped_skipped). It stops there: the 'dotta
  * add --force' a Git-moved row needs is what update's own refusal says at the
@@ -172,14 +174,18 @@ static void print_deploy_preflight_results(
 
     /* The remedies, one line per family, each printed once: the consent line
      * when any skip is --force's to lift (the class the exit contract reads,
-     * deploy_skip_needs_force), the disk-wins direction only when a CONTENT skip
-     * is present — 'dotta update' refuses a retyped row (update.c's
-     * retyped_skipped), so a TYPE-only block must not be told to use it — and
-     * the incapacity line when any skip is not --force's to lift. */
+     * deploy_skip_needs_force), naming its cost; the disk-wins direction only
+     * when a CONTENT skip is present — 'dotta update' refuses a retyped row
+     * (update.c's retyped_skipped), so a TYPE-only block must not be told to
+     * use it; the by-hand line for the incapacities a hand can fix (PERMISSION,
+     * ANCESTOR, OCCUPIED); and UNREADABLE's own closing — an unreadable path is
+     * not "in the way", and a fix-or-widen instruction would misname a refusal
+     * to judge what could not be seen. */
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(
-                out, OUTPUT_NORMAL, "  Use --force to overwrite or replace them"
+                out, OUTPUT_NORMAL,
+                "  Use --force to overwrite or replace them (discards what stands there)"
             );
             break;
         }
@@ -187,16 +193,29 @@ static void print_deploy_preflight_results(
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (result->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
             output_info(
-                out, OUTPUT_NORMAL, "  To keep what is on disk instead: 'dotta update <path>'"
+                out, OUTPUT_NORMAL,
+                "  To keep what is on disk instead: 'dotta update <path>'"
             );
             break;
         }
     }
     for (size_t i = 0; i < result->skipped.count; i++) {
-        if (!deploy_skip_needs_force(result->skipped.entries[i].reason)) {
+        deploy_skip_reason_t reason = result->skipped.entries[i].reason;
+
+        if (reason == DEPLOY_SKIP_PERMISSION || reason == DEPLOY_SKIP_ANCESTOR ||
+            reason == DEPLOY_SKIP_OCCUPIED) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (result->skipped.entries[i].reason == DEPLOY_SKIP_UNREADABLE) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  These paths could not be read; dotta never writes on a guess"
             );
             break;
         }
@@ -224,8 +243,11 @@ static void print_deploy_preflight_results(
  * CONTENT | TYPE) — reachable in a verdict only under --force, so the yellow
  * line is the forced run's counterweight to the confirmation prompt --force skips.
  * At verbose the paths are listed under their count, capped the way every preview
- * list is. The ancestors the run may make on the way are not here: they are the
- * mechanics of landing a planned path, and the receipt names the ones it made.
+ * list is — one list, the glyph carrying the overwrite split: a yellow bullet
+ * on exactly the rows the yellow line counted, cyan on the rest (print_path_list's
+ * idiom — the glyph says which count the path belongs to). The ancestors the
+ * run may make on the way are not here: they are the mechanics of landing a planned
+ * path, and the receipt names the ones it made.
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
@@ -280,8 +302,15 @@ static void print_deploy_preview(
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < files->count; i++) {
             if (matched++ < limit) {
+                /* The glyph carries the overwrite split: yellow on exactly the
+                 * rows the yellow line counted, cyan on the rest. */
+                bool overwrite =
+                    deploy_occupant_present(files->entries[i].occupant) &&
+                    deploy_content_conflicts(files->entries[i].item);
+
                 output_styled(
-                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                    out, OUTPUT_VERBOSE,
+                    overwrite ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
                     files->entries[i].row->filesystem_path
                 );
             }
@@ -2634,7 +2663,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_apply_options_t,force,
-        "Overwrite local changes, prune modified orphans"
+        "Overwrite local changes, prune modified orphans, skip the confirmation prompt"
     ),
     ARGS_FLAG(
         "n dry-run",

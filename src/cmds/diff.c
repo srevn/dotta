@@ -117,7 +117,7 @@ static const char *get_status_message_from_item(
      * filters every STALE item out). */
     if (item->divergence & DIVERGENCE_STALE) {
         return (item->divergence & DIVERGENCE_CONTENT)
-                ? "changed in Git and on disk (apply --force keeps Git's)"
+                ? "changed in Git and on disk (apply --force <path> keeps Git's)"
                 : "updated in Git (would be deployed by apply)";
     }
 

@@ -91,6 +91,24 @@ typedef struct {
 } removal_claim_t;
 
 /**
+ * One path the removal's commit let go, and whose word decides its fate
+ *
+ * Two things leave the view by that one commit: the claims the arguments named,
+ * and the directory entries the metadata step reaped once nothing managed stood
+ * beneath them. Both are settled in the same loop against the same record, and
+ * they part on one question — whether the user was asked. Only a named path hears
+ * --delete-files; a reaped entry lost its reason rather than being asked for,
+ * and the record answers for it.
+ *
+ * The path is the filesystem one, as this profile deploys it; arena-backed, command
+ * lifetime.
+ */
+typedef struct {
+    const char *path;      /* Filesystem path, as this profile deploys it */
+    bool named;            /* The removal named it, so the flag speaks to it */
+} removal_candidate_t;
+
+/**
  * Resolve the arguments to the claims they remove
  *
  * Accepts both filesystem paths and storage paths as input. Each argument matches
@@ -951,6 +969,19 @@ static error_t *remove_files_from_profile(
      * user chose — --delete-files orders the deployed copy pruned at the next
      * apply, the default releases (the record retires, its content-proof kept
      * as the released copy — the write is blind, the read self-verifies).
+     *
+     * The flag is the user's word about the paths the removal NAMED, and only
+     * those. A directory entry the metadata step reaped lost its reason rather
+     * than being asked for — an ancestor claim above the named path is the common
+     * case — so the flag alone cannot make dotta delete a directory it never
+     * made: cleanup reads the order ahead of the ownership gate, by design, since
+     * a named path the user wants gone must go whether dotta deployed it or only
+     * ever found it. For a path the user did not name there is nothing to read
+     * ahead of, so the gate answers, and it is read here because the record that
+     * carries it is about to retire: dotta takes back what it created on the
+     * way in and leaves what it merely found. The flag stays a ceiling over both
+     * — a plain remove promises release and deletes nothing, whoever made the path.
+     *
      * Enablement is not consulted: a record dotta holds under a disabled profile
      * is still dotta's record — the rule delete_profile_branch runs over every
      * record naming the profile, run here over the candidates.
@@ -959,16 +990,21 @@ static error_t *remove_files_from_profile(
      * to write is an orphan the next apply reads, asks Git about, finds let go,
      * and releases — the default outcome, minus the prune order under
      * --delete-files. */
-    size_t settled_count = 0, fallback_count = 0;
+    /* The two fates, counted apart: under --delete-files both can occur in one
+     * removal — the named paths staged for the next apply, a rung it only emptied
+     * and dotta never made released here and now — and a receipt that folded
+     * them would name work apply is not going to do. */
+    size_t ordered_count = 0, released_count = 0, fallback_count = 0;
     error_t *record_err = NULL;
 
-    /* The candidates, as this profile deploys them. UNBOUND (custom/ under a
-     * profile with no target here) names nothing on this machine: nothing to
-     * settle. A genuine resolve error (malformed storage, OOM) skips the path
-     * the same way — the compaction's fallback stance above, spelled here. */
-    const char **candidates = arena_alloc(
+    /* The candidates, as this profile deploys them, each carrying the bucket it
+     * came from. UNBOUND (custom/ under a profile with no target here) names
+     * nothing on this machine: nothing to settle. A genuine resolve error
+     * (malformed storage, OOM) skips the path the same way — the compaction's
+     * fallback stance above, spelled here. */
+    removal_candidate_t *candidates = arena_alloc(
         ctx->arena,
-        (removed_paths->count + pruned_dirs.count) * sizeof(const char *)
+        (removed_paths->count + pruned_dirs.count) * sizeof(*candidates)
     );
     size_t candidate_count = 0;
     if (!candidates) {
@@ -988,7 +1024,10 @@ static error_t *remove_files_from_profile(
                 continue;
             }
             if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
-            candidates[candidate_count++] = fs_path;
+            candidates[candidate_count++] = (removal_candidate_t){
+                .path = fs_path,
+                .named = (let_go[b] == removed_paths),
+            };
         }
     }
 
@@ -1013,7 +1052,7 @@ static error_t *remove_files_from_profile(
             );
         }
         for (size_t i = 0; !record_err && !any_ours && i < candidate_count; i++) {
-            const anchor_t *anchor = hashmap_get(anchor_index, candidates[i]);
+            const anchor_t *anchor = hashmap_get(anchor_index, candidates[i].path);
             any_ours = anchor != NULL &&
                 strcmp(anchor->profile, opts->profile) == 0;
         }
@@ -1038,18 +1077,25 @@ static error_t *remove_files_from_profile(
             record_err = manifest_build(repo, state, ctx->arena, &after);
 
             for (size_t i = 0; !record_err && i < candidate_count; i++) {
-                const anchor_t *anchor = hashmap_get(anchor_index, candidates[i]);
+                const char *path = candidates[i].path;
+                const anchor_t *anchor = hashmap_get(anchor_index, path);
                 if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
 
-                if (manifest_lookup(after, candidates[i])) {
+                if (manifest_lookup(after, path)) {
                     fallback_count++;
                     continue;
                 }
 
-                record_err = opts->delete_files
-                    ? state_order_prune(state, candidates[i])
-                    : state_release(state, candidates[i]);
-                if (!record_err) settled_count++;
+                bool prune = opts->delete_files &&
+                    (candidates[i].named || anchor->deployed_at > 0);
+
+                if (prune) {
+                    record_err = state_order_prune(state, path);
+                    if (!record_err) ordered_count++;
+                } else {
+                    record_err = state_release(state, path);
+                    if (!record_err) released_count++;
+                }
             }
 
             if (record_err) {
@@ -1059,7 +1105,7 @@ static error_t *remove_files_from_profile(
                 );
                 error_free(record_err);
                 state_rollback(state);
-                settled_count = 0;   /* the rollback took the writes with it */
+                ordered_count = released_count = 0;   /* the rollback took the writes with it */
             } else {
                 /* Commit transaction */
                 error_t *commit_err = state_commit(state);
@@ -1070,20 +1116,20 @@ static error_t *remove_files_from_profile(
                     );
                     error_free(commit_err);
                     state_rollback(state);
-                    settled_count = 0;   /* the rollback took the writes with it */
-                } else if (settled_count > 0 || fallback_count > 0) {
+                    ordered_count = released_count = 0;   /* the rollback took the writes with it */
+                } else if (ordered_count > 0 || released_count > 0 || fallback_count > 0) {
                     if (opts->delete_files) {
                         output_info(
                             out, OUTPUT_VERBOSE,
-                            "Manifest: %zu staged for removal, %zu fallback%s",
-                            settled_count, fallback_count,
+                            "Manifest: %zu staged for removal, %zu released, %zu fallback%s",
+                            ordered_count, released_count, fallback_count,
                             fallback_count == 1 ? "" : "s"
                         );
                     } else {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "Manifest: %zu released, %zu fallback%s",
-                            settled_count, fallback_count,
+                            released_count, fallback_count,
                             fallback_count == 1 ? "" : "s"
                         );
                     }
@@ -1103,21 +1149,21 @@ static error_t *remove_files_from_profile(
             out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
             counts, opts->profile
         );
-        /* The hint speaks only for records actually settled: nothing recorded —
-         * or a record phase that failed with its warning — leaves the success
-         * line to stand alone. */
-        if (settled_count > 0) {
-            if (opts->delete_files) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Run 'dotta apply' to remove files from filesystem"
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Files released from management (no apply needed)"
-                );
-            }
+        /* The hint speaks only for records actually settled, and for the fate
+         * they took rather than the flag that was typed: an order is work waiting
+         * for apply, a release is already done. Nothing recorded — or a record
+         * phase that failed with its warning — leaves the success line to stand
+         * alone. */
+        if (ordered_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta apply' to remove files from filesystem"
+            );
+        } else if (released_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Files released from management (no apply needed)"
+            );
         }
         output_newline(out, OUTPUT_NORMAL);
     }

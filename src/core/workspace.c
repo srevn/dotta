@@ -468,16 +468,40 @@ static void workspace_record_observation(
 }
 
 /**
- * Record-gated absence classification — the single decision for every absent
- * managed path, file or directory.
+ * Absence classification — the single decision for every absent managed path,
+ * file or directory.
  *
- * A record exists iff dotta has lstat-confirmed the path on disk in scope
- * (observed_at is never zero on one). No record means there is no filesystem
- * obligation, so absence is UNDEPLOYED (apply's job: create it) — never DELETED
- * (update's job: commit the deletion and propagate it to every machine). A path
- * once observed that is now missing was deleted.
+ * DELETED is a statement of intent: the user removed something a profile says
+ * stands here, and update's job is to commit that removal and propagate it to
+ * every machine. Two facts have to hold before absence can be read that way,
+ * and each answers half of it.
+ *
+ * The claim has to assert the path. Every kind does but one: an ancestor claim
+ * says what to make the rung if dotta has to make it, never that the rung
+ * stands, so its absence is the condition the claim exists to serve rather than
+ * a contradiction of it. Reading that as a deletion would let a machine which
+ * never deployed the profile commit the claim's removal for every machine that
+ * will — and the sheet has an authority for when a derived claim's reason is
+ * gone (metadata.h's residue rule: when the last managed path beneath it goes),
+ * which this would answer over the top of.
+ *
+ * And dotta has to have seen the path there. A record exists iff dotta has
+ * lstat-confirmed the path on disk in scope (observed_at is never zero on one),
+ * so no record means there was no filesystem obligation to break: absence is
+ * UNDEPLOYED, apply's to create.
+ *
+ * The record still answers "has dotta seen this path" for an ancestor claim —
+ * the ownership gate and collect_displaced both read it. Only a claim that
+ * asserts the path may read that answer as intent.
  */
-static workspace_state_t classify_absent(const anchor_t *anchor) {
+static workspace_state_t classify_absent(
+    const manifest_row_t *row,
+    const anchor_t *anchor
+) {
+    if (row->type == PATH_TYPE_DIRECTORY && !row->tracked) {
+        return WORKSPACE_STATE_UNDEPLOYED;
+    }
+
     return anchor ? WORKSPACE_STATE_DELETED
                   : WORKSPACE_STATE_UNDEPLOYED;
 }
@@ -991,8 +1015,9 @@ static error_t *analyze_file_divergence(
      */
     if (occupant == FS_OCCUPANT_NONE) {
         /* Row claims this path but the filesystem doesn't have it. classify_absent
-         * gates on the record (see the classification table above). */
-        state = classify_absent(anchor);
+         * decides (see the classification table above; its claim gate is inert
+         * here — a file row asserts its path by holding a blob for it). */
+        state = classify_absent(row, anchor);
 
         /* Absence clears the path-family bits — properties of what is not there
          * cannot be compared. The blob-family verdict stands: the blob and the
@@ -2116,15 +2141,19 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &dir_stat);
 
         if (occupant == FS_OCCUPANT_NONE) {
-            /* Absent path: record-gated classification. An observed directory
-             * was deleted by the user (update propagates the removal); a
-             * never-observed one was never there — apply's job is to create it,
-             * never to commit a phantom deletion. */
+            /* Absent path: classify_absent decides, and this is where its claim
+             * gate earns its keep. An observed tracked directory was deleted by
+             * the user (update propagates the removal); a never-observed one was
+             * never there, and an ancestor claim asserts nothing to have been
+             * deleted whatever its record says — apply's job is to create it,
+             * never to commit a phantom deletion. The item is emitted either way:
+             * deploy's ancestors pass reads absence off its occupant, not its
+             * state. */
             err = workspace_add_diverged(
                 ws,
                 row,
                 anchor,
-                classify_absent(anchor),
+                classify_absent(row, anchor),
                 DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
                 occupant
             );
@@ -2200,12 +2229,16 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         }
 
         /* An ancestor claim is a creation template, not a convergence target,
-         * and this is the line the two classes part at. Everything above is asked
-         * of both: absence is what deploy's ancestors pass reads off the item,
-         * an unreadable path is a fact about the path, and the type question is
-         * the shadow guard's whole input — a squatter above a managed path voids
-         * every observation beneath it whether or not dotta manages the squatted
-         * path itself (collect_displaced, core/deploy's ancestry rung).
+         * and this is the line the profile's word about the path begins at. Every
+         * question above is asked of both classes: an unreadable path is a fact
+         * about the path, the type question is the shadow guard's whole input —
+         * a squatter above a managed path voids every observation beneath it
+         * whether or not dotta manages the squatted path itself
+         * (collect_displaced, core/deploy's ancestry rung) — and absence is what
+         * deploy's ancestors pass reads off the item. Absence is the one whose
+         * ANSWER differs by class, and it is not split here: classify_absent
+         * carries that gate, so the two analyzers cannot read an absent path two
+         * ways.
          *
          * Everything below is the profile's word about a directory it manages,
          * and a derived claim has none to give. Its mode and ownership are a

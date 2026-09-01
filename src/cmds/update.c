@@ -1799,11 +1799,17 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * and would misname the remedy — then the skip lines name the routes the
      * filter refused (workspace_item_route — the same table), in the route order,
      * each naming its route's way out; a multi-bit divergence counts under the
-     * route that refused it. */
+     * route that refused it. The displaced and retyped families split by the
+     * claim that holds the offender (workspace_lookup — the same split apply
+     * prints from the fate-borne ancestor_class): a planned squatter is --force's
+     * to replace, a derived rung is the named re-derivation's to drop, and a
+     * stale record is apply's own release — after which the arrangement is the
+     * user's own and update trusts it. */
     workspace_items_t all = workspace_get_all_diverged(ws);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
     size_t stale_skipped = 0; size_t conflict_skipped = 0;
-    size_t displaced_skipped = 0;
+    size_t displaced_tracked = 0; size_t displaced_derived = 0;
+    size_t displaced_record = 0; size_t retyped_derived = 0;
 
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
@@ -1812,10 +1818,19 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
             continue;
         }
-        if (item->occupant != FS_OCCUPANT_NONE &&
-            workspace_displaced_ancestor(ws, item->filesystem_path)) {
-            displaced_skipped++;
-            continue;
+        if (item->occupant != FS_OCCUPANT_NONE) {
+            const char *dir = workspace_displaced_ancestor(ws, item->filesystem_path);
+
+            if (dir) {
+                /* The displaced set holds directory claims and directory records
+                 * alone, so the lookup is a directory row or nothing. */
+                const manifest_row_t *row = workspace_lookup(ws, dir);
+
+                if (row == NULL) displaced_record++;
+                else if (row->tracked) displaced_tracked++;
+                else displaced_derived++;
+                continue;
+            }
         }
         switch (workspace_item_route(item)) {
             case WORKSPACE_ROUTE_UNVERIFIABLE:
@@ -1830,9 +1845,19 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 stale_skipped++;
                 break;
 
-            case WORKSPACE_ROUTE_KIND:
-                retyped_skipped++;
+            case WORKSPACE_ROUTE_KIND: {
+                /* A deployed item is a view row's (the join), so the lookup holds;
+                 * a file row's tracked field is a don't-care, so the kind gates
+                 * the read. */
+                const manifest_row_t *row = workspace_lookup(ws, item->filesystem_path);
+
+                if (item->item_kind == PATH_KIND_DIRECTORY && !row->tracked) {
+                    retyped_derived++;
+                } else {
+                    retyped_skipped++;
+                }
                 break;
+            }
 
             case WORKSPACE_ROUTE_CLEAN:
             case WORKSPACE_ROUTE_CAPTURE:
@@ -1841,16 +1866,28 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
-    /* The remedy names the view-side cure; for a record-only displaced ancestor
-     * apply RELEASES the claim rather than replacing the squatter, after which
-     * the arrangement is the user's own and update trusts it — the documented
-     * residue family (workspace_displaced_ancestor). */
-    if (displaced_skipped > 0) {
+    if (displaced_tracked > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: observed through a displaced directory — "
             "'dotta apply --force' replaces the squatter first",
-            displaced_skipped, displaced_skipped == 1 ? "" : "s"
+            displaced_tracked, displaced_tracked == 1 ? "" : "s"
+        );
+    }
+    if (displaced_derived > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: observed through a displaced directory — "
+            "'dotta update <dir>' re-derives the way there",
+            displaced_derived, displaced_derived == 1 ? "" : "s"
+        );
+    }
+    if (displaced_record > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: observed through a displaced directory — "
+            "'dotta apply' releases its stale record first",
+            displaced_record, displaced_record == 1 ? "" : "s"
         );
     }
     if (unverified_skipped > 0) {
@@ -1867,6 +1904,15 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
             retyped_skipped, retyped_skipped == 1 ? "" : "s",
             retyped_skipped == 1 ? "it" : "them", retyped_skipped == 1 ? "it" : "them"
+        );
+    }
+    if (retyped_derived > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: a different kind stands at a directory dotta "
+            "only passes through — 'dotta update <dir>' re-derives %s",
+            retyped_derived, retyped_derived == 1 ? "" : "s",
+            retyped_derived == 1 ? "it" : "them"
         );
     }
     if (stale_skipped > 0) {

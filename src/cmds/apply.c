@@ -55,19 +55,22 @@
  * is DEPLOYED (no path bit survives absence), so the route read is total here.
  *
  * The remedies close the block, indented under the rows the way every block closes,
- * each gated by the reasons actually present — a conflict-only run is not told
- * to fix paths by hand, and an unreadable-only run is offered neither a flag
- * that will not lift it nor a by-hand fix for a path dotta could not even read:
- * it closes with its own line, because dotta never writes on a guess. The consent
- * remedy teaches both directions and names its cost the way cleanup's does: --force
- * keeps Git's and discards what stands there, and a CONTENT skip adds the disk-wins
- * verb, 'dotta update' — gated on CONTENT and not on the class, because update
- * refuses a retyped row (update.c's retyped_skipped). It stops there: the 'dotta
- * add --force' a Git-moved row needs is what update's own refusal says at the
- * moment the user meets it, and '-e' is how to ignore a skip, not how to remedy
- * one. The block sits between the deploy preview and cleanup's, so each engine
- * tells its story the same way — what it will do, then what it will not and why.
- * No total-count line: the exit error's message is the count's one home.
+ * each gated by what is actually present — the reasons, and for a named squatter
+ * the claim that holds it (the fate-borne ancestor_class): a conflict-only run
+ * is not told to fix paths by hand, a squatted ancestor claim is not told to
+ * widen a scope that can never plan it, and an unreadable-only run is offered
+ * neither a flag that will not lift it nor a by-hand fix for a path dotta could
+ * not even read: it closes with its own line, because dotta never writes on a
+ * guess. The consent remedy teaches both directions and names its cost the way
+ * cleanup's does: --force keeps Git's and discards what stands there, and a CONTENT
+ * skip adds the disk-wins verb, 'dotta update' — gated on CONTENT and not on
+ * the class, because update refuses a retyped row (update.c's retyped_skipped).
+ * It stops there: the 'dotta add --force' a Git-moved row needs is what update's
+ * own refusal says at the moment the user meets it, and '-e' is how to ignore a
+ * skip, not how to remedy one. The block sits between the deploy preview and
+ * cleanup's, so each engine tells its story the same way — what it will do, then
+ * what it will not and why. No total-count line: the exit error's message is
+ * the count's one home.
  */
 static void print_deploy_preflight_results(
     const output_t *out, const deploy_preflight_result_t *result
@@ -177,10 +180,15 @@ static void print_deploy_preflight_results(
      * deploy_skip_needs_force), naming its cost; the disk-wins direction only
      * when a CONTENT skip is present — 'dotta update' refuses a retyped row
      * (update.c's retyped_skipped), so a TYPE-only block must not be told to
-     * use it; the by-hand line for the incapacities a hand can fix (PERMISSION,
-     * ANCESTOR, OCCUPIED); and UNREADABLE's own closing — an unreadable path is
-     * not "in the way", and a fix-or-widen instruction would misname a refusal
-     * to judge what could not be seen. */
+     * use it; the incapacities a hand can fix split by the claim the skip carries
+     * (ancestor_class) — widening the scope plans a tracked ancestor, and
+     * PERMISSION, OCCUPIED and a squatter nothing claims read the same line; a
+     * derived claim is never planned, so its second way out is the named
+     * re-derivation, whose own preview names what the re-capture would commit;
+     * a record-only claim needs no hand at all — apply's cleanup releases the
+     * stale record, and the arrangement is then the user's own. Last, UNREADABLE's
+     * closing — an unreadable path is not "in the way", and a fix-or-widen
+     * instruction would misname a refusal to judge what could not be seen. */
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(
@@ -200,13 +208,33 @@ static void print_deploy_preflight_results(
         }
     }
     for (size_t i = 0; i < result->skipped.count; i++) {
-        deploy_skip_reason_t reason = result->skipped.entries[i].reason;
+        const deploy_skip_t *s = &result->skipped.entries[i];
 
-        if (reason == DEPLOY_SKIP_PERMISSION || reason == DEPLOY_SKIP_ANCESTOR ||
-            reason == DEPLOY_SKIP_OCCUPIED) {
+        if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OCCUPIED ||
+            (s->reason == DEPLOY_SKIP_ANCESTOR &&
+            (s->ancestor_class == DEPLOY_ANCESTOR_TRACKED ||
+            s->ancestor_class == DEPLOY_ANCESTOR_UNCLAIMED))) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or widen the scope so a tracked ancestor is planned"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (result->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_DERIVED) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
+            );
+            break;
+        }
+    }
+    for (size_t i = 0; i < result->skipped.count; i++) {
+        if (result->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_RECORD) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Only a stale record claims the squatter; apply releases it — re-run to write through"
             );
             break;
         }

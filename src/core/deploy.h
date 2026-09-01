@@ -179,12 +179,14 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * squatter at a path no row claims is the landing check's find, one at a directory
  * row's is the rung's — and, since the rung's reach is the view's directory rows
  * rather than the walk's, whether it is the rung that answers no longer depends
- * on how the user spelled the add. No consumer tells the two producers apart:
- * same class, same remedy line, same exit contribution. And why UNREADABLE ranks
- * last where its siblings (cleanup_skip_reason, workspace_item_route) rank the
- * same fact first: the landing check, when it has something to say, names the
- * ancestry that refused the look — the actionable half of the very same fact.
- * UNREADABLE is what is left when the landing had nothing to say.
+ * on how the user spelled the add. The two producers stay one reason and one
+ * exit contribution; what a consumer may tell apart is the claim that holds the
+ * squatter, which the skip carries (deploy_ancestor_class_t) — the remedy differs
+ * by claimant where the refusal does not. And why UNREADABLE ranks last where
+ * its siblings (cleanup_skip_reason, workspace_item_route) rank the same fact
+ * first: the landing check, when it has something to say, names the ancestry
+ * that refused the look — the actionable half of the very same fact. UNREADABLE
+ * is what is left when the landing had nothing to say.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (file_row_occupant), a retargeted link is CONTENT (the target compare),
@@ -214,6 +216,30 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
 }
 
 /**
+ * The claim standing at the squatted ancestor an ANCESTOR skip names
+ *
+ * One reason, one exit — but the remedy is the claimant's. A tracked row out of
+ * the run's reach is planned by a wider scope, and the squatter is then that
+ * row's own TYPE skip to lift (--force). An ancestor claim is never planned, so
+ * no scope and no flag helps: the consent-preserving cure is the named
+ * re-derivation ('dotta update <dir>'), which drops a claim the disk contradicts
+ * and leaves the arrangement the user's. A record-only claim needs no hand at
+ * all — apply's own cleanup releases the stale record, and the next run trusts
+ * what stands there. A squatter nothing claims is the landing check's find past
+ * the rung: by hand is all there is.
+ *
+ * NONE on every skip whose reason names no squatted ancestor — the class answers
+ * for ANCESTOR alone, where the reason is one and the cure is not.
+ */
+typedef enum {
+    DEPLOY_ANCESTOR_NONE = 0,  /* The reason names no squatted ancestor */
+    DEPLOY_ANCESTOR_TRACKED,   /* A tracked row holds the squatted path */
+    DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim holds it */
+    DEPLOY_ANCESTOR_RECORD,    /* No row — an orphaned record still names it */
+    DEPLOY_ANCESTOR_UNCLAIMED  /* Nothing claims it — the landing check's find */
+} deploy_ancestor_class_t;
+
+/**
  * One planned row the run does not deploy
  *
  * The shape deploy_verdict_t gives a row the run does deploy: the row, its
@@ -225,6 +251,8 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * it) — carried as the byte length of that prefix, not a copy. 0 where the reason
  * has no ancestor to name: it is about the planned path itself, or (PERMISSION
  * alone) the ancestry could not even be reached to name its refusing node.
+ * `ancestor_class` says which claim holds the named path — ANCESTOR's alone
+ * (deploy_ancestor_class_t), NONE wherever the reason is another.
  *
  * The item is the verdict's rule with the one inversion a skip forces: a
  * self-judged skip carries its analysis object (a CONTENT skip carries one by
@@ -237,10 +265,11 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * in this module is.
  */
 typedef struct {
-    const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;    /* As the verdict's; NULL for a row judged by its ancestry */
+    const manifest_row_t *row;              /* Borrowed (workspace lifetime) */
+    const workspace_item_t *item;           /* As the verdict's; NULL for a row judged by its ancestry */
     deploy_skip_reason_t reason;
-    size_t ancestor;                 /* Prefix length of the named ancestor; 0 = none */
+    size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
+    deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at the named path */
 } deploy_skip_t;
 
 /**

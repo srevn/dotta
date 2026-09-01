@@ -50,27 +50,33 @@ static bool should_show_item_for_direction(
     diff_direction_t direction
 ) {
     if (direction == DIFF_UPSTREAM) {
-        /* Upstream: What would apply do? */
-        /* Show: undeployed, deleted (apply would restore), content/mode differs,
-         * stale (Git moved past the deployed blob; apply would deploy), or profile
-         * reassignment (apply acknowledges reassignment) */
+        /* Upstream: What differs that apply could act on? A comparison question,
+         * not a verb route, so the bits are read directly. Show: undeployed,
+         * deleted (apply would restore), content/mode/type differs, stale (Git
+         * moved past the deployed blob; apply would deploy), or profile
+         * reassignment (apply acknowledges reassignment). TYPE rides along —
+         * replacing the occupant is apply's (--force for the kinds the copy cannot
+         * commit), and status's Conflicts remedy sends the user here to compare,
+         * so hiding it answered that remedy with silence. ENCRYPTION alone stays
+         * out: how Git stores the blob is no difference between Git and disk,
+         * and apply deploying it changes nothing. */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
-               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) ||
+               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE)) ||
                workspace_item_reassigned(item)));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
-        /* Downstream: What would update do? */
-        /* Show: deleted, content/mode differs (filesystem → Git). Never a STALE
-         * item — update skips every one of them. */
+        /* Downstream: What would update do? The route answers verbatim
+         * (workspace_item_route — the same table update's filter reads), so this
+         * cannot promise a commit update refuses (STALE, CONFLICT, KIND,
+         * UNVERIFIABLE) or hide one it would take (a TYPE the copy can commit,
+         * ENCRYPTION, OWNERSHIP). */
         return (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-               !(item->divergence & DIVERGENCE_STALE) &&
-               (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_MODE |
-               DIVERGENCE_OWNERSHIP)));
+               workspace_item_route(item) == WORKSPACE_ROUTE_CAPTURE);
     }
 
     /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
@@ -131,6 +137,15 @@ static const char *get_status_message_from_item(
         return direction == DIFF_UPSTREAM
                 ? "mode would change on apply"
                 : "mode changed locally";
+    }
+
+    /* A policy-violating blob: how Git stores the content, not a difference between
+     * Git and disk. Downstream-only in practice — the upstream filter leaves
+     * the lone bit out. */
+    if (item->divergence & DIVERGENCE_ENCRYPTION) {
+        return direction == DIFF_UPSTREAM
+                ? "stored plaintext where policy asks encryption"
+                : "stored plaintext (would be encrypted by update)";
     }
 
     /* Profile reassignment with no content/metadata divergence. Only reachable
@@ -214,9 +229,10 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* For mode-only changes (content matches), no content diff. A STALE item's
-     * content does differ — disk holds the blob Git moved past. */
-    if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) &&
+    /* For mode-only or policy-only changes (content matches), no content diff.
+     * A STALE item's content does differ — disk holds the blob Git moved past. */
+    if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
+        DIVERGENCE_ENCRYPTION)) &&
         !(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
     }

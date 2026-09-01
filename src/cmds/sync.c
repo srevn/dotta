@@ -119,11 +119,11 @@ static const struct {
     sync_strategy_t strategy;
     const char *summary;
 } sync_strategies[] = {
-    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand"   },
-    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"     },
-    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch"   },
-    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote"   },
-    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"      },
+    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
+    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
+    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
+    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
+    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
 };
 
 #define SYNC_STRATEGY_COUNT (sizeof(sync_strategies) / sizeof(*sync_strategies))
@@ -2223,7 +2223,7 @@ static const args_opt_t sync_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",       "<name>",
-        cmd_sync_options_t,profiles,            profile_count,
+        cmd_sync_options_t,profiles,     profile_count,
         "Filter sync to profile(s) (repeatable)"
     ),
     ARGS_FLAG(
@@ -2258,7 +2258,7 @@ static const args_opt_t sync_opts[] = {
     ),
     /* Bare profile positionals funnel into the same APPEND field. */
     ARGS_POSITIONAL_ANY(
-        cmd_sync_options_t,profiles,            profile_count
+        cmd_sync_options_t,profiles,     profile_count
     ),
     ARGS_END,
 };

@@ -17,9 +17,28 @@
  *   are always the current user's. A capture names both halves or neither: the
  *   read side reads a lone half as a narrow claim deliberately made, so a name
  *   the host cannot spell fails the capture rather than authoring one
- * - a directory's existence: the sheet's (kind=directory) — the one claim a tree
- *   cannot hold, since Git trees have no empty directories
+ * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
+ *   hold, since Git trees have no empty directories
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
+ *
+ * Two kinds of directory claim, one field between them. "tracked" says the profile
+ * manages the directory itself: a walk went into it, so the directory exists
+ * because the profile says so, its attributes are the profile's to enforce and
+ * its contents the profile's to scan. Without the field the item is only the
+ * attributes to give the path if dotta has to create it — an ancestor claim,
+ * derived from the chain above a managed path, binding dotta's own creation of
+ * that path and nothing else.
+ *
+ * The polarity is the fail-safe one and the sparse one at once: an item that
+ * loses the field — a hand edit, a tool that drops what it does not know — degrades
+ * to the class dotta does less with, and the derived claims, one per rung of
+ * every chain and so the numerous kind, carry no field at all.
+ *
+ * An ancestor claim exists because something beneath it does, so its mode is
+ * all it has left to say. One that claims no mode says nothing at all — the view
+ * answers an unclaimed directory mode with DIR_MODE_DEFAULT, which is what an
+ * unclaimed path would have got anyway — and metadata_prune_directories reaps
+ * it as the residue it is.
  *
  * The sheet is sparse and the view completes it: manifest_build resolves an
  * unclaimed mode into an answer at build (the filemode floor for blob rows,
@@ -37,14 +56,20 @@
  * FIFOs; symlink mode; umask-relative mode classes. Each would need its own
  * capture/deploy/divergence story; none is blocked by this schema.
  *
- * JSON Schema (Version 5) — items sorted by key, fields present iff claimed:
+ * JSON Schema (Version 6) — items sorted by key, fields present iff claimed:
  * {
- *   "version": 5,
+ *   "version": 6,
  *   "items": [
  *     {
  *       "kind": "directory",
- *       "key": "home/.config/nvim",
+ *       "key": "home/.config",
  *       "mode": "0700"
+ *     },
+ *     {
+ *       "kind": "directory",
+ *       "key": "home/.config/nvim",
+ *       "mode": "0755",
+ *       "tracked": true
  *     },
  *     {
  *       "kind": "file",
@@ -72,6 +97,10 @@
  *     }
  *   ]
  * }
+ *
+ * home/.config is an ancestor claim: dotta creates it 0700 if it has to create
+ * it at all, and leaves it exactly as it finds it otherwise. home/.config/nvim
+ * was walked into, so the profile manages it.
  */
 
 #ifndef DOTTA_METADATA_H
@@ -81,7 +110,7 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#define METADATA_VERSION 5
+#define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
 
@@ -89,14 +118,14 @@
  * Default mode for tracked directories without an explicit override.
  *
  * Mirrors the umask default any newly-mkdir'd directory gets on Linux/ macOS/BSD
- * (0755 = rwxr-xr-x) — the same mode file deploy's fs_create_dir(parents=true)
- * produces when materialising an ancestor that no metadata.json entry claims.
+ * (0755 = rwxr-xr-x) — the mode a chain of parents gets when nothing claims them.
  *
- * Used by metadata_prune_directories as the residue discriminator: a kind=directory
- * entry with this mode and no ownership carries no preservation intent over what
- * the filesystem already does by default, so when it has no anchoring descendants
- * either, the entry is walker residue from a path the user no longer tracks and
- * can be dropped without information loss.
+ * Used by metadata_prune_directories as half the residue discriminator: a tracked
+ * claim at this mode and with no ownership carries no preservation intent over
+ * what the filesystem already does by default, so with nothing anchoring it either,
+ * the entry is walker residue from a path the user no longer tracks and can be
+ * dropped without information loss. An ancestor claim needs no such reading of
+ * its attributes — it is a derivation, so the anchor question is the whole of it.
  */
 #define DIR_MODE_DEFAULT 0755
 
@@ -121,9 +150,11 @@
  * entry being a FILE item without a mode — while DIRECTORY is itself the claim,
  * the one path a tree cannot hold.
  *
- * Absence is a value: mode MODE_UNCLAIMED, owner/group NULL. encrypted is not a
- * claim but the cache of the blob's own bytes, false for DIRECTORY by construction
- * at both boundaries (the factories and the parser).
+ * Absence is a value: mode MODE_UNCLAIMED, owner/group NULL, and a tracked that
+ * is false — an ancestor claim's whole spelling. The two flags are one kind's
+ * each, encrypted the cache of a blob's own bytes and tracked the claim that
+ * the profile manages a directory, and each is false for the other kind by
+ * construction at both boundaries (the factories and the parser).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -132,6 +163,7 @@ typedef struct {
     char *owner;        /* Claimed owner, or NULL */
     char *group;        /* Claimed group, or NULL */
     bool encrypted;     /* The blob's ciphertext stamp (false for DIRECTORY) */
+    bool tracked;       /* The profile manages the directory (false for FILE) */
 } metadata_item_t;
 
 /**
@@ -181,18 +213,24 @@ error_t *metadata_item_create_file(
 /**
  * Create directory metadata item
  *
+ * The class is the author's to answer, which is why it is a parameter and not a
+ * default: a walk that entered the directory says true, a derivation of the chain
+ * above a managed path says false, and nothing else authors a directory claim.
+ *
  * Accepts MODE_UNCLAIMED for the parse path (a hand-sparse document may omit
  * the mode); the capture path always claims one from its stat.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
  * @param mode Claimed permission bits (e.g., 0700, 0755), or MODE_UNCLAIMED
+ * @param tracked The profile manages the directory itself
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_item_create_directory(
     const char *storage_path,
     mode_t mode,
+    bool tracked,
     metadata_item_t **out
 );
 
@@ -411,12 +449,14 @@ error_t *metadata_capture_from_file(
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
  * rules as file capture — the unnameable UID among them — while the mode is always
- * claimed from the stat. Callers treat a directory-capture failure as a warning
- * where a file-capture failure is fatal: a directory item is an attributes overlay,
- * never content, so a missed capture loses a claim and nothing else. It loses
- * the mode with the ownership, though, and with it the directory's own row — an
- * add does not track it, an update leaves the standing claim alone — so the
- * callers' warning is one the user reads at any verbosity.
+ * claimed from the stat. The class is the caller's: a stat cannot say whether a
+ * walk entered the directory or only passed above it, so `tracked` is carried
+ * through to the factory unread. Callers treat a directory-capture failure as a
+ * warning where a file-capture failure is fatal: a directory item is an attributes
+ * overlay, never content, so a missed capture loses a claim and nothing else.
+ * It loses the mode with the ownership, though, and with it the directory's own
+ * row — an add does not track it, an update leaves the standing claim alone —
+ * so the callers' warning is one the user reads at any verbosity.
  *
  * Ownership capture (user/group):
  * - ONLY captured for directories whose label tracks ownership (root/, custom/),
@@ -427,12 +467,14 @@ error_t *metadata_capture_from_file(
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
  * @param st Directory stat data (must not be NULL)
+ * @param tracked The profile manages the directory itself
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_directory(
     const char *storage_path,
     const struct stat *st,
+    bool tracked,
     metadata_item_t **out
 );
 

@@ -711,10 +711,18 @@ static error_t *update_profile(
                     continue;
                 }
 
-                /* Capture directory metadata */
+                /* Capture directory metadata. A re-derivation replaces the
+                 * attributes and never the class: whether the profile manages
+                 * this directory or only passes through it was decided by the
+                 * walk that authored the claim, and an update is not that walk.
+                 * The standing item is the authority for it — this is the profile's
+                 * own sheet, not the resolved view, so precedence has nothing
+                 * to say here — and a key it does not hold answers with the class
+                 * dotta does less with. */
+                const metadata_item_t *held = metadata_lookup(metadata, item->storage_path);
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_directory(
-                    item->storage_path, &dir_stat, &meta_item
+                    item->storage_path, &dir_stat, held && held->tracked, &meta_item
                 );
 
                 if (err) {

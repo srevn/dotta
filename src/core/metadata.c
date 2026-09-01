@@ -152,9 +152,10 @@ error_t *metadata_item_create_file(
     }
 
     item->mode = mode;
-    item->owner = NULL;  /* Optional, set by caller if needed */
-    item->group = NULL;  /* Optional, set by caller if needed */
+    item->owner = NULL;    /* Optional, set by caller if needed */
+    item->group = NULL;    /* Optional, set by caller if needed */
     item->encrypted = encrypted;
+    item->tracked = false; /* A file is no directory to manage */
 
     *out = item;
     return NULL;
@@ -166,6 +167,7 @@ error_t *metadata_item_create_file(
 error_t *metadata_item_create_directory(
     const char *storage_path,
     mode_t mode,
+    bool tracked,
     metadata_item_t **out
 ) {
     CHECK_NULL(storage_path);
@@ -196,6 +198,7 @@ error_t *metadata_item_create_directory(
     item->owner = NULL;      /* Optional, set by caller if needed */
     item->group = NULL;      /* Optional, set by caller if needed */
     item->encrypted = false; /* A directory has no blob to stamp */
+    item->tracked = tracked;
 
     *out = item;
     return NULL;
@@ -313,9 +316,9 @@ error_t *metadata_add_item(
          * pointer, so it must outlive the overwrite — and the incoming key, equal
          * to it by construction, is dropped and its place taken before the copy,
          * so nothing reads a pointer that has been freed. Everything else the
-         * slot held is freed and replaced wholesale, the kind and its union
-         * included, so a kind change leaves no residue of the old one. Nothing
-         * here can fail. */
+         * slot held is freed and replaced wholesale, the kind and every field
+         * only one kind reads included, so a kind change leaves no residue of
+         * the old one. Nothing here can fail. */
         free(incoming->key);
         incoming->key = existing->key;
 
@@ -678,7 +681,7 @@ error_t *metadata_capture_from_file(
  * Capture metadata from filesystem directory
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
- * rules as file capture.
+ * rules as file capture; the class is the caller's, carried through unread.
  *
  * Ownership capture (user/group):
  * - ONLY captured for root/ and custom/ prefix directories when running as root
@@ -691,6 +694,7 @@ error_t *metadata_capture_from_file(
 error_t *metadata_capture_from_directory(
     const char *storage_path,
     const struct stat *st,
+    bool tracked,
     metadata_item_t **out
 ) {
     CHECK_NULL(storage_path);
@@ -706,7 +710,7 @@ error_t *metadata_capture_from_directory(
      * mode validation) */
     mode_t mode = st->st_mode & 0777;
     metadata_item_t *item = NULL;
-    error_t *err = metadata_item_create_directory(storage_path, mode, &item);
+    error_t *err = metadata_item_create_directory(storage_path, mode, tracked, &item);
     if (err) {
         return err;
     }
@@ -855,6 +859,18 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             }
         }
 
+        /* And tracked, the other flag one kind carries: false for FILE by the
+         * same construction, and absent on a directory that says the profile
+         * only passes through it. The two are mutually exclusive, so they print
+         * in one place. */
+        if (item->tracked) {
+            if (!cJSON_AddBoolToObject(item_obj, "tracked", true)) {
+                cJSON_Delete(item_obj);
+                err = ERROR(ERR_MEMORY, "Failed to add tracked flag to item object");
+                goto cleanup;
+            }
+        }
+
         /* Add item object to items array (ownership transferred to array). A
          * NULL array or item is cJSON's only refusal here, and neither can stand,
          * so there is nothing to check. */
@@ -934,8 +950,9 @@ static error_t *parse_mode(const char *mode_str, mode_t *out) {
  * Parses unified JSON with single "items" array. REJECTS other versions with a
  * clear error message (NO migration code), and refuses a duplicated key — ambiguity
  * is not noise. Absence parses as itself: a missing mode is MODE_UNCLAIMED, missing
- * owner/group NULL, and an item that claims nothing is accepted and inert —
- * strictness lives where the fact is authored, not here.
+ * owner/group NULL, a missing "tracked" an ancestor claim, and an item that claims
+ * nothing is accepted and inert — strictness lives where the fact is authored,
+ * not here.
  */
 error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
@@ -1082,9 +1099,14 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         }
 
         /* Build the item through the factory its kind names, the way every other
-         * producer does. Each owns its kind's invariants: encrypted is consulted
-         * for a file and never handed to the directory factory, so a hand-written
-         * flag on a directory item is waved through inert, not refused. */
+         * producer does. Each owns its kind's invariants: each of the two flags
+         * is consulted for its own kind and never handed to the other's factory,
+         * so one hand-written onto the kind that cannot carry it is waved through
+         * inert, not refused — and the next rewrite drops it.
+         *
+         * A directory item with no "tracked" is an ancestor claim, never a walked
+         * one read leniently: the field's absence is its meaning, which is what
+         * makes losing it fail safe. */
         switch (kind) {
             case PATH_KIND_FILE: {
                 cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
@@ -1094,11 +1116,14 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 );
                 break;
             }
-            case PATH_KIND_DIRECTORY:
+            case PATH_KIND_DIRECTORY: {
+                cJSON *tracked_obj = cJSON_GetObjectItem(item_obj, "tracked");
                 err = metadata_item_create_directory(
-                    key_obj->valuestring, mode, &item
+                    key_obj->valuestring, mode,
+                    tracked_obj && cJSON_IsTrue(tracked_obj), &item
                 );
                 break;
+            }
         }
         if (err) {
             err = error_wrap(

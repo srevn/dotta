@@ -477,13 +477,13 @@ static void workspace_record_observation(
  * and each answers half of it.
  *
  * The claim has to assert the path. Every kind does but one: an ancestor claim
- * says what to make the rung if dotta has to make it, never that the rung
- * stands, so its absence is the condition the claim exists to serve rather than
- * a contradiction of it. Reading that as a deletion would let a machine which
- * never deployed the profile commit the claim's removal for every machine that
- * will — and the sheet has an authority for when a derived claim's reason is
- * gone (metadata.h's residue rule: when the last managed path beneath it goes),
- * which this would answer over the top of.
+ * says what to make the rung if dotta has to make it, never that the rung stands,
+ * so its absence is the condition the claim exists to serve rather than a
+ * contradiction of it. Reading that as a deletion would let a machine which never
+ * deployed the profile commit the claim's removal for every machine that will —
+ * and the sheet has an authority for when a derived claim's reason is gone
+ * (metadata.h's residue rule: when the last managed path beneath it goes), which
+ * this would answer over the top of.
  *
  * And dotta has to have seen the path there. A record exists iff dotta has
  * lstat-confirmed the path on disk in scope (observed_at is never zero on one),
@@ -491,8 +491,8 @@ static void workspace_record_observation(
  * UNDEPLOYED, apply's to create.
  *
  * The record still answers "has dotta seen this path" for an ancestor claim —
- * the ownership gate and collect_displaced both read it. Only a claim that
- * asserts the path may read that answer as intent.
+ * the ownership gate and collect_displaced both read it. Only a claim that asserts
+ * the path may read that answer as intent.
  */
 static workspace_state_t classify_absent(
     const manifest_row_t *row,
@@ -1582,9 +1582,12 @@ static error_t *analyze_orphans(workspace_t *ws) {
             divergence = DIVERGENCE_TYPE;
 
         } else if (hashmap_has(ws->order_index, fs_path) && measurable) {
-            /* The user ordered the deployed copy pruned (remove --delete-files);
-             * Git is not asked. Divergence still protects an edited copy —
-             * cleanup's skip reasons read the same bits. */
+            /* The user ordered the copy pruned — remove --delete-files over a
+             * path the removal named or a copy dotta deployed, the only births
+             * an order has (state_order_prune); Git is not asked. Read ahead of
+             * the ownership gate below by design: a named path must go whether
+             * dotta deployed it or only ever found it. Divergence still protects
+             * an edited copy — cleanup's skip reasons read the same bits. */
             measure = true;
 
         } else if (anchor->deployed_at == 0) {
@@ -2143,12 +2146,12 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent path: classify_absent decides, and this is where its claim
              * gate earns its keep. An observed tracked directory was deleted by
-             * the user (update propagates the removal); a never-observed one was
-             * never there, and an ancestor claim asserts nothing to have been
-             * deleted whatever its record says — apply's job is to create it,
-             * never to commit a phantom deletion. The item is emitted either way:
-             * deploy's ancestors pass reads absence off its occupant, not its
-             * state. */
+             * the user (update propagates the removal); a never-observed one
+             * was never there, and an ancestor claim asserts nothing to have
+             * been deleted whatever its record says — apply's job is to create
+             * it, never to commit a phantom deletion. The item is emitted either
+             * way: deploy's ancestors pass reads absence off its occupant, not
+             * its state. */
             err = workspace_add_diverged(
                 ws,
                 row,
@@ -2233,12 +2236,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * question above is asked of both classes: an unreadable path is a fact
          * about the path, the type question is the shadow guard's whole input —
          * a squatter above a managed path voids every observation beneath it
-         * whether or not dotta manages the squatted path itself
-         * (collect_displaced, core/deploy's ancestry rung) — and absence is what
-         * deploy's ancestors pass reads off the item. Absence is the one whose
-         * ANSWER differs by class, and it is not split here: classify_absent
-         * carries that gate, so the two analyzers cannot read an absent path two
-         * ways.
+         * whether or not dotta manages the squatted path itself (collect_displaced,
+         * core/deploy's ancestry rung) — and absence is what deploy's ancestors
+         * pass reads off the item. Absence is the one whose ANSWER differs by
+         * class, and it is not split here: classify_absent carries that gate,
+         * so the two analyzers cannot read an absent path two ways.
          *
          * Everything below is the profile's word about a directory it manages,
          * and a derived claim has none to give. Its mode and ownership are a

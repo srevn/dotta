@@ -679,12 +679,15 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path);
  * Order a managed path's deployed copy pruned
  *
  * Inserts the path into prune_orders: remove --delete-files chose the fate of a
- * deployed copy nothing backs any more, and apply is to prune it — a clean copy;
- * cleanup's skip reasons still protect a modified one. The insert is guarded by
- * the record's existence (an order cannot exist without a record), so a missing
+ * copy nothing backs any more — one the removal named, or one dotta deployed;
+ * never a copy dotta merely found under an unnamed path (the gate the one settle
+ * loop enforces, cmds/remove settle_let_go) — and apply is to prune it — a clean
+ * copy; cleanup's skip reasons still protect a modified one. The insert is guarded
+ * by the record's existence (an order cannot exist without a record), so a missing
  * record is a no-op success: nothing was ever observed at the path, so there is
  * nothing to prune. At birth an ordered path is out of the view by construction
- * — both writers settle only paths the post-commit view lacks.
+ * — the settle loop runs only over paths the post-commit view lacks, whichever
+ * remove route called it.
  *
  * An order lives only while its path is out of the view. Read in exactly one
  * place — the workspace's orphan analysis — and voided by the flush's join when

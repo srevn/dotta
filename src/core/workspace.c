@@ -2461,21 +2461,21 @@ error_t *workspace_load(
         }
     }
 
-    /* Analyze tracked directories for untracked files */
-    if (options->analyze_untracked) {
-        err = analyze_untracked_files(ws, config);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze untracked files");
-        }
-    }
-
     /* Analyze directory metadata divergence */
     if (options->analyze_directories) {
         err = analyze_directory_metadata_divergence(ws);
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze directory metadata");
+        }
+    }
+
+    /* Analyze tracked directories for untracked files */
+    if (options->analyze_untracked) {
+        err = analyze_untracked_files(ws, config);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze untracked files");
         }
     }
 

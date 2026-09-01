@@ -1750,7 +1750,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             if (item->divergence & DIVERGENCE_STALE) stale_count++;
 
-            /* A clean row observed through a displaced tracked directory is not
+            /* A clean row observed through a displaced managed directory is not
              * acknowledged this run (the adoption and acknowledgement loops take
              * the same gate), so the preview must not promise it. A pending row
              * stays collected: its handover rides its deployment, and whether
@@ -1829,7 +1829,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < adoptable.count; i++) {
         const manifest_row_t *file = adoptable.entries[i];
 
-        /* Observed through a displaced tracked directory: what read clean was
+        /* Observed through a displaced managed directory: what read clean was
          * the squatter's target, not this path. Adopting it would set deployed_at
          * on a path dotta never put there and hand a stranger's file to the prune
          * at the next scope exit; an acknowledgement would re-stamp an owned
@@ -2264,7 +2264,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * stands on disk, so its record's content-proof is kept through
              * state_release — except where the copy provably is not, or may not
              * be, dotta's: a TYPE-displaced item's path holds another kind of
-             * node, and a path beneath a displaced tracked directory was only
+             * node, and a path beneath a displaced managed directory was only
              * ever observed through the squatter, so what stands there is the
              * link target's, whatever the bytes said. Either way the released
              * fact would be false at birth, and the item takes the plain retire
@@ -2377,8 +2377,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *                             it as owned would set deployed_at on a
          *                             directory the user made and hand it to
          *                             the prune on the next scope exit
-         *   ancestors                 tracked parents made on the way — dotta made
-         *                             them too, an owned anchor
+         *   ancestors                 claimed parents made on the way, either
+         *                             class — dotta made them too, an owned anchor
          * Every other active directory present on disk was present at load too,
          * and has its record from the flush by the same argument; the load
          * established presence at the boundary, and nothing here walks the disk

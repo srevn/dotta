@@ -78,9 +78,9 @@ typedef struct {
  * `updated` is the phase's word that the anchor pass ran and its transaction
  * committed — the receipt's "Manifest updated" line and its counts speak only
  * then; false reads "profile not enabled". The counts qualify it: how many of
- * the captured files this profile's rows actually took (a higher-precedence
- * profile keeps its own), and how many of those took over a record another
- * profile's deployment had written.
+ * the captured files this profile's rows actually took (a higher-precedence profile
+ * keeps its own), and how many of those took over a record another profile's
+ * deployment had written.
  */
 typedef struct {
     bool updated;          /* The anchor pass ran and the transaction committed */
@@ -324,6 +324,50 @@ static error_t *collect_tree(
 
     closedir(dir);
     return NULL;
+}
+
+/**
+ * Say what a capture claimed — the claim decides the shape
+ *
+ * Three claim shapes exist, by the sheet's own existence rule (an item exists
+ * iff it claims something): mode and ownership, mode alone, ownership alone — a
+ * home/ symlink's entry, which a directory capture never produces since a directory
+ * always claims its mode. The fourth combination has no line to print: such an
+ * item does not exist, the capture returned NULL instead. Ownership is all-or-none
+ * at the capture boundary (core/metadata's capture_ownership), so a present owner
+ * implies a present group.
+ *
+ * The one voice for the file capture and the directory capture, which had drifted
+ * apart; update's sibling line is not this one — it speaks at the receipt's indent
+ * and carries the copy's encrypted suffix.
+ *
+ * @param out Output context (must not be NULL)
+ * @param what The claim's noun: "metadata" or "directory metadata"
+ * @param filesystem_path The captured path (must not be NULL)
+ * @param item The capture's claim (must not be NULL)
+ */
+static void report_capture(
+    output_t *out,
+    const char *what,
+    const char *filesystem_path,
+    const metadata_item_t *item
+) {
+    if (item->mode != MODE_UNCLAIMED && item->owner) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Captured %s: %s (mode: %04o, owner: %s:%s)",
+            what, filesystem_path, item->mode, item->owner, item->group
+        );
+    } else if (item->mode != MODE_UNCLAIMED) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Captured %s: %s (mode: %04o)",
+            what, filesystem_path, item->mode
+        );
+    } else {
+        output_info(
+            out, OUTPUT_VERBOSE, "Captured %s: %s (owner: %s:%s)",
+            what, filesystem_path, item->owner, item->group
+        );
+    }
 }
 
 /**
@@ -583,31 +627,7 @@ static error_t *add_file_to_worktree(
 
     /* Add metadata item to collection (NULL for home/ prefix symlinks) */
     if (item) {
-        /* Say what the capture claimed — the claim decides the shape. The fourth
-         * combination (no mode, no ownership) has no line to print: such an item
-         * does not exist, the capture returned NULL instead. */
-        if (item->mode != MODE_UNCLAIMED && (item->owner || item->group)) {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Captured metadata: %s (mode: %04o, owner: %s:%s)",
-                filesystem_path, item->mode, item->owner ? item->owner : "?",
-                item->group ? item->group : "?"
-            );
-        } else if (item->mode != MODE_UNCLAIMED) {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Captured metadata: %s (mode: %04o)",
-                filesystem_path, item->mode
-            );
-        } else {
-            /* A link's entry: ownership is the whole claim. */
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Captured metadata: %s (owner: %s:%s)",
-                filesystem_path, item->owner ? item->owner : "?",
-                item->group ? item->group : "?"
-            );
-        }
+        report_capture(out, "metadata", filesystem_path, item);
 
         err = metadata_add_item(metadata, &item);
         if (err) {
@@ -814,8 +834,7 @@ static error_t *update_manifest_after_add(
          * just dropped whatever `retired` names, whatever the enabled set says,
          * and a path the commit let go settles by its record, enabled set or
          * no. With nothing let go there is nothing to write at all — success,
-         * and the dispatcher's state_free rolls back the untouched
-         * transaction. */
+         * and the dispatcher's state_free rolls back the untouched transaction. */
         if (retired->count == 0) {
             return NULL;
         }
@@ -831,8 +850,8 @@ static error_t *update_manifest_after_add(
      * commit let go.
      *
      * The builder reads the rows as STEP 1 left them — a new row, or a target
-     * re-bound — so a path under the just-bound target is a custom/ row here.
-     * A disabled profile contributes no rows, and that is the build the settle
+     * re-bound — so a path under the just-bound target is a custom/ row here. A
+     * disabled profile contributes no rows, and that is the build the settle
      * wants: its guard asks what the view still claims without this profile. */
     manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
@@ -917,10 +936,10 @@ static error_t *update_manifest_after_add(
      * claim was meant to release. Enablement was not consulted on the way here:
      * the derivation saw the disk contradict the claim whatever the enabled set
      * says, and the record its drop strands would refuse those writes under a
-     * disabled profile exactly as under an enabled one. A rung some other
-     * profile still claims keeps its row and its record — the retire is this
-     * profile's word about its own claim, never about the path — and an unbound
-     * claim names nothing on this machine to retire. */
+     * disabled profile exactly as under an enabled one. A rung some other profile
+     * still claims keeps its row and its record — the retire is this profile's
+     * word about its own claim, never about the path — and an unbound claim names
+     * nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
         mount_resolve_outcome_t outcome;
         const char *fs_path = NULL;
@@ -955,8 +974,8 @@ static error_t *update_manifest_after_add(
         return error_wrap(err, "Failed to save record updates");
     }
 
-    /* Success. A settle committed for a disabled profile is not the anchor
-     * pass having run: the receipt still reads "profile not enabled". */
+    /* Success. A settle committed for a disabled profile is not the anchor pass
+     * having run: the receipt still reads "profile not enabled". */
     receipt->updated = enabled;
 
     return NULL;
@@ -1643,21 +1662,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Verbose output before consuming the item */
-        if (dir_item->owner || dir_item->group) {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Captured directory metadata: %s (mode: %04o, owner: %s:%s)",
-                filesystem_path, dir_item->mode,
-                dir_item->owner ? dir_item->owner : "?",
-                dir_item->group ? dir_item->group : "?"
-            );
-        } else {
-            output_info(
-                out, OUTPUT_VERBOSE,
-                "Captured directory metadata: %s (mode: %04o)",
-                filesystem_path, dir_item->mode
-            );
-        }
+        report_capture(out, "directory metadata", filesystem_path, dir_item);
 
         /* Add directory to metadata */
         err = metadata_add_item(metadata, &dir_item);

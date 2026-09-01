@@ -238,15 +238,14 @@ cleanup_verdict_t cleanup_verdict(
     }
 
     if (workspace_displaced_ancestor(ws, item->filesystem_path)) {
-        /* Observed through a displaced tracked directory: dotta's copy went with
-         * the real directory, and what the lstat reached is the squatter's target
-         * — not dotta's to remove, --force included, and a prune order on the
-         * path does not outrank it (deferred intent never destroys what dotta
-         * cannot vouch is its copy). The path stays, the record retires: the
-         * same letting-go as a kind-displaced path, one level up. Terminal on
-         * purpose — a skip would prune on the NEXT run, once the displaced
-         * directory's own released record has retired and no witness of the squat
-         * remains. */
+        /* Observed through a displaced directory: dotta's copy went with the
+         * real directory, and what the lstat reached is the squatter's target —
+         * not dotta's to remove, --force included, and a prune order on the path
+         * does not outrank it (deferred intent never destroys what dotta cannot
+         * vouch is its copy). The path stays, the record retires: the same
+         * letting-go as a kind-displaced path, one level up. Terminal on purpose
+         * — a skip would prune on the NEXT run, once the displaced directory's
+         * own released record has retired and no witness of the squat remains. */
         return CLEANUP_RELEASED;
     }
 

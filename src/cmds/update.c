@@ -385,12 +385,12 @@ static error_t *filter_items_for_update(
             continue;
         }
 
-        /* Content observed through a displaced tracked directory carries the
-         * squatter's target's bytes, not the path's: committing it would write
-         * a stranger's file into the profile as the dotfile's new content. Presence
-         * is the whole of the condition — an absent reading beneath a squatter
-         * is true (the lstat reached nothing, and there is no directory for the
-         * path to exist in), so a deletion stays real work to commit. */
+        /* Content observed through a displaced directory carries the squatter's
+         * target's bytes, not the path's: committing it would write a stranger's
+         * file into the profile as the dotfile's new content. Presence is the
+         * whole of the condition — an absent reading beneath a squatter is true
+         * (the lstat reached nothing, and there is no directory for the path to
+         * exist in), so a deletion stays real work to commit. */
         if (item->occupant != FS_OCCUPANT_NONE &&
             workspace_displaced_ancestor(ws, item->filesystem_path)) {
             continue;
@@ -1724,7 +1724,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (displaced_skipped > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu path%s skipped: observed through a displaced tracked directory — "
+            "%zu path%s skipped: observed through a displaced directory — "
             "'dotta apply --force' replaces the squatter first",
             displaced_skipped, displaced_skipped == 1 ? "" : "s"
         );

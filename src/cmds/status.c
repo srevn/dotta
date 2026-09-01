@@ -782,9 +782,8 @@ static void display_workspace_status(
                                 hint = workspace_displaced_ancestor(
                                     ws, orphaned[i]->filesystem_path
                                 )
-                                    ? "observed through a displaced tracked "
-                                    "directory; apply releases its entry, the "
-                                    "path stays"
+                                    ? "observed through a displaced directory; "
+                                    "apply releases its entry, the path stays"
                                     : (orphaned[i]->divergence & DIVERGENCE_TYPE)
                                     ? "what dotta put there is gone, another kind of "
                                     "path stands in its place; apply releases its "

@@ -226,7 +226,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
- *   a displaced tracked ancestor above    RELEASED   both kinds. The occupant
+ *   a displaced ancestor above            RELEASED   both kinds. The occupant
  *   (workspace_displaced_ancestor)                   was observed through the
  *                                                    squatter and speaks for
  *                                                    the wrong tree — not dotta's

@@ -385,6 +385,17 @@ static error_t *filter_items_for_update(
             continue;
         }
 
+        /* Content observed through a displaced tracked directory carries the
+         * squatter's target's bytes, not the path's: committing it would write
+         * a stranger's file into the profile as the dotfile's new content. Presence
+         * is the whole of the condition — an absent reading beneath a squatter
+         * is true (the lstat reached nothing, and there is no directory for the
+         * path to exist in), so a deletion stays real work to commit. */
+        if (item->occupant != FS_OCCUPANT_NONE &&
+            workspace_displaced_ancestor(ws, item->filesystem_path)) {
+            continue;
+        }
+
         /* Apply CLI file filter (using storage_path for canonical matching) */
         if (!scope_accepts_path(scope, item->storage_path, item->item_kind)) {
             continue;
@@ -1645,19 +1656,27 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* What the filter left out on purpose, said once — above the exit below, so
      * a workspace whose only divergence is stale explains itself, and above the
-     * prompt. Same scope triplet as the filter. The skip lines name the routes
-     * the filter refused (workspace_item_route — the same table), in the route
-     * order, each naming its route's way out; a multi-bit divergence counts under
-     * the route that refused it. */
+     * prompt. Same scope triplet as the filter. The displaced guard comes first,
+     * as it does in the filter — an item's route was computed through the squatter
+     * and would misname the remedy — then the skip lines name the routes the
+     * filter refused (workspace_item_route — the same table), in the route order,
+     * each naming its route's way out; a multi-bit divergence counts under the
+     * route that refused it. */
     workspace_items_t all = workspace_get_all_diverged(ws);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
     size_t stale_skipped = 0; size_t conflict_skipped = 0;
+    size_t displaced_skipped = 0;
 
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
 
         if (item->state != WORKSPACE_STATE_DEPLOYED ||
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
+            continue;
+        }
+        if (item->occupant != FS_OCCUPANT_NONE &&
+            workspace_displaced_ancestor(ws, item->filesystem_path)) {
+            displaced_skipped++;
             continue;
         }
         switch (workspace_item_route(item)) {
@@ -1684,6 +1703,18 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         }
     }
 
+    /* The remedy names the view-side cure; for a record-only displaced ancestor
+     * apply RELEASES the claim rather than replacing the squatter, after which
+     * the arrangement is the user's own and update trusts it — the documented
+     * residue family (workspace_displaced_ancestor). */
+    if (displaced_skipped > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: observed through a displaced tracked directory — "
+            "'dotta apply --force' replaces the squatter first",
+            displaced_skipped, displaced_skipped == 1 ? "" : "s"
+        );
+    }
     if (unverified_skipped > 0) {
         output_info(
             out, OUTPUT_NORMAL,

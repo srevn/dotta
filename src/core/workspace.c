@@ -1984,8 +1984,16 @@ static error_t *analyze_untracked_files(
             /* Use filesystem path directly from the row (already resolved) */
             const char *filesystem_path = row->filesystem_path;
 
-            /* Check if directory still exists */
-            if (!fs_exists(filesystem_path)) continue;
+            /* The tracked directory must BE a directory, and must not stand beneath
+             * a displaced one: anything else and every entry the readdir returns
+             * comes from a tree that is not this path's, offered as new files
+             * of this profile — opendir follows a symlinked root that lstat would
+             * not, and beneath a displaced ancestor the whole path resolves through
+             * the squatter. The lstat replaces the old existence probe (absence
+             * still reads NONE) and closes the direct case whatever the command's
+             * analyses; the displaced probe closes the nested one. */
+            if (fs_lstat_occupant(filesystem_path, NULL) != FS_OCCUPANT_DIRECTORY) continue;
+            if (workspace_displaced_ancestor(ws, filesystem_path)) continue;
 
             /* Nested-scan suppression: if the previously-scanned directory is a
              * strict directory-prefix ancestor, this subtree was already walked.

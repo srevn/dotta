@@ -756,13 +756,24 @@ static void display_workspace_status(
                         const char *hint = NULL;
                         bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
 
-                        switch (cleanup_verdict(orphaned[i], false)) {
+                        switch (cleanup_verdict(ws, orphaned[i], false)) {
                             case CLEANUP_ABSENT:
                                 hint = "already gone from disk; apply reclaims its entry";
                                 break;
 
                             case CLEANUP_RELEASED:
-                                hint = (orphaned[i]->divergence & DIVERGENCE_TYPE)
+                                /* The displaced-ancestor read comes first: such
+                                 * an item's own bits were computed through the
+                                 * squatter, so neither sibling sentence is true
+                                 * of it — the same precedence the verdict's own
+                                 * arms take. */
+                                hint = workspace_displaced_ancestor(
+                                    ws, orphaned[i]->filesystem_path
+                                )
+                                    ? "observed through a displaced tracked "
+                                    "directory; apply releases its entry, the "
+                                    "path stays"
+                                    : (orphaned[i]->divergence & DIVERGENCE_TYPE)
                                     ? "what dotta put there is gone, another kind of "
                                     "path stands in its place; apply releases its "
                                     "entry, the path stays"

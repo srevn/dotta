@@ -222,11 +222,10 @@ static void print_deploy_preflight_results(
  * replaced squatter is a write into an empty tree, whatever its item read through
  * the link) and its item carries the conflict bits (deploy_content_conflicts,
  * CONTENT | TYPE) — reachable in a verdict only under --force, so the yellow
- * line is the forced run's counterweight to the confirmation prompt --force
- * skips. At verbose the paths are listed under their
- * count, capped the way every preview list is. The ancestors the run may make
- * on the way are not here: they are the mechanics of landing a planned path,
- * and the receipt names the ones it made.
+ * line is the forced run's counterweight to the confirmation prompt --force skips.
+ * At verbose the paths are listed under their count, capped the way every preview
+ * list is. The ancestors the run may make on the way are not here: they are the
+ * mechanics of landing a planned path, and the receipt names the ones it made.
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
@@ -1666,16 +1665,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t stale_count = 0;
     size_t reassigned_count = 0;
     reassignment_t *reassigned = NULL;
-    const manifest_rows_t claimed[] = {
-        manifest_rows_view(&deploy_plan->files.clean),
-        manifest_rows_view(&deploy_plan->files.pending),
-        manifest_rows_view(&deploy_plan->directories.clean),
-        manifest_rows_view(&deploy_plan->directories.pending),
+    const struct { manifest_rows_t rows; bool clean; } claimed[] = {
+        { manifest_rows_view(&deploy_plan->files.clean),         true  },
+        { manifest_rows_view(&deploy_plan->files.pending),       false },
+        { manifest_rows_view(&deploy_plan->directories.clean),   true  },
+        { manifest_rows_view(&deploy_plan->directories.pending), false },
     };
 
     size_t claimed_total = 0;
     for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        claimed_total += claimed[b].count;
+        claimed_total += claimed[b].rows.count;
     }
     if (claimed_total > 0) {
         reassigned = arena_alloc(ctx->arena, claimed_total * sizeof(*reassigned));
@@ -1686,13 +1685,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        for (size_t i = 0; i < claimed[b].count; i++) {
+        for (size_t i = 0; i < claimed[b].rows.count; i++) {
             const workspace_item_t *item = workspace_get_item(
-                ws, claimed[b].entries[i]->filesystem_path
+                ws, claimed[b].rows.entries[i]->filesystem_path
             );
             if (!item) continue;   /* no item: nothing stale, no reassignment */
 
             if (item->divergence & DIVERGENCE_STALE) stale_count++;
+
+            /* A clean row observed through a displaced tracked directory is not
+             * acknowledged this run (the adoption and acknowledgement loops take
+             * the same gate), so the preview must not promise it. A pending row
+             * stays collected: its handover rides its deployment, and whether
+             * that happens is preflight's to say. The stale count above stands
+             * either way — STALE is the record against Git, no observation
+             * involved. */
+            if (claimed[b].clean &&
+                workspace_displaced_ancestor(ws, item->filesystem_path)) {
+                continue;
+            }
+
             if (workspace_item_reassigned(item)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
@@ -1760,6 +1772,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < adoptable.count; i++) {
         const manifest_row_t *file = adoptable.entries[i];
 
+        /* Observed through a displaced tracked directory: what read clean was
+         * the squatter's target, not this path. Adopting it would set deployed_at
+         * on a path dotta never put there and hand a stranger's file to the prune
+         * at the next scope exit; an acknowledgement would re-stamp an owned
+         * record with a proof the observation cannot give. The handover stays
+         * pending until a run converges the ancestor. */
+        if (workspace_displaced_ancestor(ws, file->filesystem_path)) continue;
+
         const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
         bool adopt = !anchor || anchor->deployed_at == 0;
         bool acknowledge = !adopt && strcmp(anchor->profile, file->profile) != 0;
@@ -1815,6 +1835,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     for (size_t i = 0; i < ackable.count; i++) {
         const manifest_row_t *dir = ackable.entries[i];
+
+        /* The file loop's displaced gate, same rationale. */
+        if (workspace_displaced_ancestor(ws, dir->filesystem_path)) continue;
 
         const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
@@ -2137,13 +2160,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * — reason decides the verb: a gone copy (pruned, reclaimed) plainly
              * retires, there is no fact to keep; a let-go copy (released) still
              * stands on disk, so its record's content-proof is kept through
-             * state_release — except a TYPE-displaced item, whose path holds
-             * something that is not dotta's copy: the released fact would be
-             * false at birth, so it takes the plain retire (a released directory
-             * needs no carve-out — the release verb's blob guard makes it a plain
-             * retire on its own). Non-fatal per row: the filesystem effect, if
-             * any, already happened, and a record that fails to settle is reported
-             * and read as an orphan again by the next apply. */
+             * state_release — except where the copy provably is not, or may not
+             * be, dotta's: a TYPE-displaced item's path holds another kind of
+             * node, and a path beneath a displaced tracked directory was only
+             * ever observed through the squatter, so what stands there is the
+             * link target's, whatever the bytes said. Either way the released
+             * fact would be false at birth, and the item takes the plain retire
+             * (a released directory needs no carve-out — the release verb's blob
+             * guard makes it a plain retire on its own). Non-fatal per row: the
+             * filesystem effect, if any, already happened, and a record that
+             * fails to settle is reported and read as an orphan again by the
+             * next apply. */
             const ptr_array_t *gone[] = {
                 &cleanup_res->pruned_files,
                 &cleanup_res->reclaimed_files,
@@ -2179,7 +2206,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 for (size_t i = 0; i < items.count; i++) {
                     const workspace_item_t *item = items.entries[i];
 
-                    err = (item->divergence & DIVERGENCE_TYPE)
+                    err = ((item->divergence & DIVERGENCE_TYPE) ||
+                        workspace_displaced_ancestor(ws, item->filesystem_path))
                         ? state_retire_anchor(state, item->filesystem_path)
                         : state_release(state, item->filesystem_path);
                     if (err) {

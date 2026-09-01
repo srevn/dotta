@@ -34,9 +34,9 @@
  *   lets go of what Git lost, of what it never deployed, and of a path another
  *   kind of node stands at); a relocated home/ claim ⇒ skipped unless --force,
  *   either kind (the copy is the claim's old home — see the verdict table);
- *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory
- *   the workspace could not verify ⇒ skipped, --force included; else prunable,
- *   a directory's remainder permitting
+ *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory the
+ *   workspace could not verify ⇒ skipped, --force included; else prunable, a
+ *   directory's remainder permitting
  * - what is left in a directory after this run: fs_directory_emptiness,
  *   vouching for what this run prunes and for what it merely holds (preflight;
  *   cleanup_preflight_result_t has the classes), and fs_remove_empty_dir, which
@@ -180,15 +180,14 @@ typedef enum {
  *                                  same way, so one item has one name in both
  *                                  places.
  *   a held relocation              RELOCATED    — the item carries the claim's
- *                                  row (item->row, the relocation) under a
- *                                  label whose projection is not the user's to
- *                                  move (home/ — !per_profile): the copy here
- *                                  is the claim's old home, held even when
- *                                  byte-clean, so the hold outranks the
- *                                  user-change reasons below it. Guarded by
- *                                  the label, so a re-targeted custom/ copy
- *                                  never trips it and keeps the prune (or its
- *                                  own divergence reason)
+ *                                  row (item->row, the relocation) under a label
+ *                                  whose projection is not the user's to move
+ *                                  (home/ — !per_profile): the copy here is the
+ *                                  claim's old home, held even when byte-clean,
+ *                                  so the hold outranks the user-change reasons
+ *                                  below it. Guarded by the label, so a re-targeted
+ *                                  custom/ copy never trips it and keeps the
+ *                                  prune (or its own divergence reason)
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
@@ -227,6 +226,18 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
+ *   a displaced tracked ancestor above    RELEASED   both kinds. The occupant
+ *   (workspace_displaced_ancestor)                   was observed through the
+ *                                                    squatter and speaks for
+ *                                                    the wrong tree — not dotta's
+ *                                                    to remove, --force and a
+ *                                                    prune order included. Terminal
+ *                                                    on purpose: a skip would
+ *                                                    prune on the NEXT run, once
+ *                                                    the displaced directory's
+ *                                                    own released record has
+ *                                                    retired and no witness of
+ *                                                    the squat remains
  *   a relocated home/ claim, unforced     SKIPPED    both kinds. The claim's row
  *                                                    (item->row — the relocation)
  *                                                    projects at a different
@@ -237,21 +248,19 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    projection is fixed), which
  *                                                    means $HOME itself differs
  *                                                    — and fs_get_home is
- *                                                    sudo-aware (SUDO_UID
- *                                                    bypasses `sudo -H`'s
- *                                                    rewrite), so that is a test
- *                                                    HOME, a second account, a
- *                                                    migrated home directory,
- *                                                    and the copy here is real
- *                                                    dotfiles under the real
- *                                                    home. --force lifts the
- *                                                    hold — the designed escape
- *                                                    for a deliberate home
- *                                                    migration. A re-targeted
+ *                                                    sudo-aware (SUDO_UID bypasses
+ *                                                    `sudo -H`'s rewrite), so
+ *                                                    that is a test HOME, a second
+ *                                                    account, a migrated home
+ *                                                    directory, and the copy
+ *                                                    here is real dotfiles under
+ *                                                    the real home. --force lifts
+ *                                                    the hold — the designed
+ *                                                    escape for a deliberate
+ *                                                    home migration. A re-targeted
  *                                                    custom/ claim is the user's
- *                                                    own move and prunes as
- *                                                    before, its preview naming
- *                                                    the move
+ *                                                    own move and prunes as before,
+ *                                                    its preview naming the move
  *   a file with a cleanup_skip_reason     SKIPPED    unless --force
  *   a directory with DIVERGENCE_UNVERIFIED
  *                                         SKIPPED    --force included: no flag
@@ -281,14 +290,18 @@ typedef enum {
 } cleanup_verdict_t;
 
 /**
- * Decide a planned orphan's verdict from the item
+ * Decide a planned orphan's verdict from the workspace's load-time facts
  *
+ * @param ws Workspace the item belongs to, for the displaced-ancestor fact (must
+ *        not be NULL)
  * @param item Orphaned or released item, either kind (must not be NULL)
- * @param force --force: lifts a file's skip reasons and the relocation hold
- *        (either kind), never a release and never a directory's UNVERIFIED
+ * @param force --force: lifts a file's skip reasons and the relocation hold (either
+ *        kind), never a release and never a directory's UNVERIFIED
  * @return The verdict (see cleanup_verdict_t)
  */
-cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
+cleanup_verdict_t cleanup_verdict(
+    const workspace_t *ws, const workspace_item_t *item, bool force
+);
 
 /**
  * Cleanup verdicts — what cleanup_execute will do, decided once

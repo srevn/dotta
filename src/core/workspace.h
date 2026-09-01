@@ -642,7 +642,12 @@ error_t *workspace_anchor(
  *   confirmation rewrites only what it confirmed (type, blob, stat); the record's
  *   claim — profile, storage path, mode, owner, group — is an ownership event's
  *   to change, so a clean reassignment keeps reading as one until apply
- *   acknowledges it. The snapshot's record is patched on the same columns.
+ *   acknowledges it. The snapshot's record is patched on the same columns. One
+ *   taken through a symlinked ancestor binds the target file's triple — harmless
+ *   whether the ancestor is the user's own arrangement or a displaced tracked
+ *   directory: the engines judge the latter by workspace_displaced_ancestor,
+ *   never by the confirmation, and the fast path simply misses until the path
+ *   heals and the slow path re-confirms.
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the

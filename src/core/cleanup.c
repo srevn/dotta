@@ -206,15 +206,20 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 }
 
 /**
- * What becomes of a planned orphan, read off the item alone
+ * What becomes of a planned orphan, read off the workspace's load-time facts
  *
- * The table and its rationale are in cleanup.h. Every input is a field the
- * workspace observed once at load: no syscall, no query.
+ * The table and its rationale are in cleanup.h. Every input is a fact the workspace
+ * established once at load — the item's fields, and the displaced list behind
+ * workspace_displaced_ancestor: no syscall.
  */
-cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
+cleanup_verdict_t cleanup_verdict(
+    const workspace_t *ws, const workspace_item_t *item, bool force
+) {
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Already gone: nothing to protect, nothing to remove — a pure state
-         * reclaim whatever Git or the divergence bits say. */
+         * reclaim whatever Git or the divergence bits say. True through a squatting
+         * ancestor too: a path the lstat could not reach holds no copy for the
+         * prune to miss. */
         return CLEANUP_ABSENT;
     }
 
@@ -229,6 +234,19 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
          *
          * Decided before --force is consulted: --force prunes what would be
          * skipped, never what is released. */
+        return CLEANUP_RELEASED;
+    }
+
+    if (workspace_displaced_ancestor(ws, item->filesystem_path)) {
+        /* Observed through a displaced tracked directory: dotta's copy went with
+         * the real directory, and what the lstat reached is the squatter's target
+         * — not dotta's to remove, --force included, and a prune order on the
+         * path does not outrank it (deferred intent never destroys what dotta
+         * cannot vouch is its copy). The path stays, the record retires: the
+         * same letting-go as a kind-displaced path, one level up. Terminal on
+         * purpose — a skip would prune on the NEXT run, once the displaced
+         * directory's own released record has retired and no witness of the squat
+         * remains. */
         return CLEANUP_RELEASED;
     }
 
@@ -392,7 +410,7 @@ error_t *cleanup_preflight(
         const workspace_item_t *item = files.entries[i];
         fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(item, force)) {
+        switch (cleanup_verdict(ws, item, force)) {
             case CLEANUP_ABSENT:
                 err = ptr_array_push(&verdicts->absent_files, item);
                 break;
@@ -435,7 +453,7 @@ error_t *cleanup_preflight(
         const char *path = item->filesystem_path;
         fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(item, force)) {
+        switch (cleanup_verdict(ws, item, force)) {
             case CLEANUP_ABSENT:
                 /* A pure state reclaim: no filesystem effect to preview, and no
                  * walk meets it. */

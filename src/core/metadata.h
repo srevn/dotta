@@ -35,10 +35,11 @@
  * every chain and so the numerous kind, carry no field at all.
  *
  * An ancestor claim exists because something beneath it does, so its mode is
- * all it has left to say. One that claims no mode says nothing at all — the view
- * answers an unclaimed directory mode with DIR_MODE_DEFAULT, which is what an
- * unclaimed path would have got anyway — and metadata_prune_directories reaps
- * it as the residue it is.
+ * all it has left to say. One that claims no mode says nothing the view could
+ * not say alone — an unclaimed directory mode projects as DIR_MODE_DEFAULT, which
+ * is what an unclaimed path would have got anyway. The prune weighs no attribute
+ * of a derived claim either way: it survives by what stands beneath it and by
+ * nothing else (metadata_prune_directories).
  *
  * The sheet is sparse and the view completes it: manifest_build resolves an
  * unclaimed mode into an answer at build (the filemode floor for blob rows,

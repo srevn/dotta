@@ -500,11 +500,11 @@ static void display_multi_profile_warnings(
     if (has_deployed_from_other) {
         output_warning(
             out, OUTPUT_NORMAL,
-            "Some files are currently deployed from other profiles."
+            "Some paths are currently deployed from other profiles."
         );
         output_info(
             out, OUTPUT_NORMAL,
-            "Those files will remain on the filesystem."
+            "Those paths will remain on the filesystem."
         );
     } else if (delete_files) {
         /* The record rule in one clause: the fate applies only where nothing
@@ -512,14 +512,14 @@ static void display_multi_profile_warnings(
          * handed over on apply, not pruned. */
         output_info(
             out, OUTPUT_NORMAL,
-            "Files deployed from '%s' will be pruned on the next 'dotta apply' "
+            "Paths deployed from '%s' will be pruned on the next 'dotta apply' "
             "unless another enabled profile still provides them.",
             current_profile
         );
     } else {
         output_info(
             out, OUTPUT_NORMAL,
-            "Files deployed from '%s' stay on the filesystem.",
+            "Paths deployed from '%s' stay on the filesystem.",
             current_profile
         );
     }
@@ -640,12 +640,12 @@ static bool confirm_profile_deletion(
     if (opts->delete_files) {
         output_info(
             out, OUTPUT_NORMAL,
-            "         Deployed files will be pruned when you run 'dotta apply'."
+            "         Deployed paths will be pruned when you run 'dotta apply'."
         );
     } else {
         output_info(
             out, OUTPUT_NORMAL,
-            "         Deployed files will be released from management."
+            "         Deployed paths will be released from management."
         );
     }
     output_newline(out, OUTPUT_NORMAL);
@@ -746,12 +746,12 @@ static error_t *remove_files_from_profile(
         if (opts->delete_files) {
             output_print(
                 out, OUTPUT_NORMAL,
-                "(Deployed files would be removed on 'dotta apply')\n"
+                "(Deployed paths would be removed on 'dotta apply')\n"
             );
         } else {
             output_print(
                 out, OUTPUT_NORMAL,
-                "(Deployed files would be released from management)\n"
+                "(Deployed paths would be released from management)\n"
             );
         }
 
@@ -1157,12 +1157,12 @@ static error_t *remove_files_from_profile(
         if (ordered_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta apply' to remove files from filesystem"
+                "Run 'dotta apply' to remove paths from filesystem"
             );
         } else if (released_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Files released from management (no apply needed)"
+                "Paths released from management (no apply needed)"
             );
         }
         output_newline(out, OUTPUT_NORMAL);
@@ -1390,7 +1390,7 @@ static error_t *delete_profile_branch(
         } else {
             output_info(
                 out, OUTPUT_VERBOSE,
-                "      These files will be released from management."
+                "      These will be released from management."
             );
         }
         output_newline(out, OUTPUT_VERBOSE);
@@ -1668,12 +1668,12 @@ static error_t *delete_profile_branch(
             if (opts->delete_files) {
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Run 'dotta apply' to remove deployed files from filesystem"
+                    "Run 'dotta apply' to remove deployed paths from filesystem"
                 );
             } else {
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Files released from management (no apply needed)"
+                    "Paths released from management (no apply needed)"
                 );
             }
         }

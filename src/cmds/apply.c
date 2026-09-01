@@ -2211,7 +2211,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * dry run nothing it does not already know. Everything below is for the run
      * that writes — the two engines, then the record of what they did. */
     if (opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no files will be modified\n");
+        output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no paths will be modified\n");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The

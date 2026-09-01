@@ -1785,7 +1785,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 error_message(manifest_err)
             );
             output_info(
-                out, OUTPUT_NORMAL, "Files committed to Git successfully"
+                out, OUTPUT_NORMAL, "Paths committed to Git successfully"
             );
         }
         error_free(manifest_err);
@@ -1870,7 +1870,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     /* Existing enabled profile */
                     output_hint(
                         out, OUTPUT_NORMAL,
-                        "Files captured from filesystem (already deployed)"
+                        "Paths captured from filesystem (already deployed)"
                     );
                 }
             } else {

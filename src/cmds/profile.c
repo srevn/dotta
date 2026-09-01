@@ -926,7 +926,7 @@ static error_t *profile_enable(
         if (to_enable_validated->count > 0) {
             output_newline(out, OUTPUT_NORMAL);
             output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
             );
         }
         if (already_enabled > 0) {
@@ -1045,7 +1045,7 @@ static error_t *profile_enable(
         }
         if (to_enable_validated->count > 0) {
             output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy files"
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
             );
         }
     }
@@ -1244,7 +1244,7 @@ static error_t *profile_disable(
             }
             output_newline(out, OUTPUT_NORMAL);
             output_info(
-                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files"
+                out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
             );
         }
         if (not_enabled > 0) {
@@ -1361,7 +1361,7 @@ static error_t *profile_disable(
             to_disable_validated->count == 1 ? "" : "s"
         );
         output_info(
-            out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed files"
+            out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
         );
     }
 

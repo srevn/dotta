@@ -226,12 +226,16 @@ typedef enum {
  *                            mode bit rides along (update stores bytes; the bytes
  *                            on disk are old either way).
  *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit: a
- *                            tracked directory's type change (the walk's race
- *                            guard refuses it — a symlink would stat as its target
+ *                            directory row's type change (the walk's race guard
+ *                            refuses it — a symlink would stat as its target
  *                            and launder the target's attributes into metadata),
  *                            or a file row occupied by a directory, FIFO, socket,
- *                            or device. Resolution is explicit: apply --force
- *                            replaces it, remove untracks it.
+ *                            or device. Resolution is explicit, and which verb
+ *                            depends on what claims the path: apply --force
+ *                            replaces what the run converges and remove untracks
+ *                            it, while a squatted ancestor claim is neither planned
+ *                            nor named — update re-derives the chain and the
+ *                            claim goes with it (core/manifest.h).
  *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
  *                            file row stays here: the copy commits it as the
  *                            new kind.
@@ -450,17 +454,24 @@ const manifest_row_t *workspace_lookup(
 );
 
 /**
- * The displaced tracked directory above `path`, or NULL
+ * The displaced managed directory above `path`, or NULL
  *
- * A tracked directory is *displaced* when the view or the record claims the path
- * as a directory and something else stands there. Every lstat taken beneath such
- * a path resolved through the occupant — a symlink to a directory answers for
- * the link's target — so a child read clean, present, modified or new about a
- * tree that is not this path's. An observation taken there is not an observation
- * of that path at all. Untracked ancestors are invisible here by design: a
- * symlinked configuration directory of the user's own arrangement is the user's,
- * and deploy writes through it, cleanup prunes through it, and update captures
- * through it — all correctly.
+ * A directory is *displaced* when the view or the record claims the path as a
+ * directory and something else stands there. Every lstat taken beneath such a
+ * path resolved through the occupant — a symlink to a directory answers for the
+ * link's target — so a child read clean, present, modified or new about a tree
+ * that is not this path's. An observation taken there is not an observation of
+ * that path at all.
+ *
+ * Both classes of directory row qualify: what matters is that some claim says a
+ * directory belongs at the path, not whether the profile manages the directory
+ * itself (core/manifest.h). A path no claim names at all stays invisible here
+ * by design — a symlinked configuration directory of the user's own arrangement
+ * is the user's, and deploy writes through it, cleanup prunes through it, and
+ * update captures through it, all correctly. That case survives the ancestry
+ * being claimed because the capture rule authors nothing for a component that
+ * is not a real directory when the chain is walked: a directory the user had
+ * already symlinked never becomes a claim in the first place.
  *
  * The answer is derived from the load's own observations (collect_displaced):
  * the record's claims are covered on every load, the view's exactly when the
@@ -646,7 +657,7 @@ error_t *workspace_anchor(
  *   to change, so a clean reassignment keeps reading as one until apply
  *   acknowledges it. The snapshot's record is patched on the same columns. One
  *   taken through a symlinked ancestor binds the target file's triple — harmless
- *   whether the ancestor is the user's own arrangement or a displaced tracked
+ *   whether the ancestor is the user's own arrangement or a displaced managed
  *   directory: the engines judge the latter by workspace_displaced_ancestor,
  *   never by the confirmation, and the fast path simply misses until the path
  *   heals and the slow path re-confirms.

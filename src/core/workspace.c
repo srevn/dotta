@@ -151,11 +151,11 @@ struct workspace {
     ptr_array_t diverged;                        /* workspace_item_t * (files + directories) */
     hashmap_t *diverged_index;                   /* filesystem_path → workspace_item_t * */
 
-    /* The displaced tracked directories: every path the view or the record claims
-     * as a directory that the load observed occupied by anything else. Derived
-     * by collect_displaced once the directory-bearing analyses have run;
-     * arena-backed, paths borrowed from the items and the record. Almost always
-     * empty, which is what makes the probe free (workspace_displaced_ancestor). */
+    /* The displaced directories: every path the view or the record claims as a
+     * directory that the load observed occupied by anything else. Derived by
+     * collect_displaced once the directory-bearing analyses have run; arena-backed,
+     * paths borrowed from the items and the record. Almost always empty, which
+     * is what makes the probe free (workspace_displaced_ancestor). */
     const char **displaced;                      /* filesystem_path of each displaced directory */
     size_t displaced_count;
 
@@ -1825,7 +1825,7 @@ static error_t *scan_directory_for_untracked(
              *
              * Two checks needed:
              * 1. The view: the path is managed by an enabled profile — as a file,
-             *    or as a tracked directory a file now sits in
+             *    or as a directory a file now sits in
              *    place of (the directory analysis reports that as [type];
              *    it is not a new file)
              * 2. Diverged index: file already classified (e.g., as released or
@@ -2053,11 +2053,15 @@ static error_t *analyze_untracked_files(
 /**
  * Analyze directory metadata for divergence
  *
- * Detects:
+ * Detects, for every directory row:
  * - DELETED state: Directory removed from filesystem
+ * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
+ * - DIVERGENCE_TYPE: Something other than a directory stands at the path
+ *
+ * and for a tracked row alone — the profile's word about a directory it manages,
+ * where an ancestor claim has none to give (the split is at the line itself):
  * - DIVERGENCE_MODE: Directory permissions changed
  * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
- * - DIVERGENCE_UNVERIFIED: Directory could not be stat'd (inaccessible)
  * - A pending handover on a clean row: an item with no divergence, emitted so
  *   the reassignment is visible (the tail analyze_file_divergence has)
  *
@@ -2066,7 +2070,8 @@ static error_t *analyze_untracked_files(
  * divergence detection for custom/ prefix directories.
  *
  * Consumes ws->active_dirs from workspace_partition — every input is by
- * construction a directory row of the view. No skip checks.
+ * construction a directory row of the view. No scope checks: the class is the
+ * only thing this loop asks of a row beyond its path.
  */
 static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -2093,7 +2098,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * under a profile other than the row's — the same expression as
          * workspace_item_reassigned, its inputs in hand, the derivation the file
          * analyzer makes at its own pairing. One rule, both kinds: a pending
-         * handover is apply's to acknowledge whatever the row's kind. */
+         * handover is apply's to acknowledge whatever the row's kind — of the
+         * two directory classes, only the tracked one gets this far (below). */
         bool profile_changed = anchor && anchor->deployed_at > 0 &&
             strcmp(anchor->profile, row->profile) != 0;
 
@@ -2193,6 +2199,25 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
             continue;  /* Recorded, move to next directory */
         }
 
+        /* An ancestor claim is a creation template, not a convergence target,
+         * and this is the line the two classes part at. Everything above is asked
+         * of both: absence is what deploy's ancestors pass reads off the item,
+         * an unreadable path is a fact about the path, and the type question is
+         * the shadow guard's whole input — a squatter above a managed path voids
+         * every observation beneath it whether or not dotta manages the squatted
+         * path itself (collect_displaced, core/deploy's ancestry rung).
+         *
+         * Everything below is the profile's word about a directory it manages,
+         * and a derived claim has none to give. Its mode and ownership are a
+         * snapshot of the machine the chain was captured on: they say what to
+         * create the path as, never what to make of the one this machine already
+         * has — asserting them here would let a ~/.ssh captured at a careless
+         * 0755 loosen a correct 0700 elsewhere, a regression caused by the fix.
+         * The handover tail goes with them: a claim nobody made carries no intent
+         * to acknowledge, and the record keeps the profile dotta actually deployed
+         * under, which is what a record is for. */
+        if (!row->tracked) continue;
+
         /* One rule, three analyzers: the row's mode is total (claim or floor)
          * and a directory row is never a link, so the compare needs no gate. */
         bool mode_differs = (dir_stat.st_mode & 0777) != row->mode;
@@ -2231,20 +2256,23 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 }
 
 /**
- * Collect the displaced tracked directories from the load's own observations
+ * Collect the displaced directories from the load's own observations
  *
- * A tracked directory is displaced when the view or the record claims the path
- * as a directory and the load observed something else standing there. The set
- * is read off the items first — a DIRECTORY-kind item carrying DIVERGENCE_TYPE
- * is exactly that observation, and the bit's two producers (the directory
- * analyzer's type arm, the orphan analyzer's displaced arm) each stamp it only
- * after ruling out absence and an unstattable path — so for every analyzed path
- * the derivation costs no syscall. An orphaned directory record with no item
- * was never observed this load (orphan analysis did not run; an analysis that
- * ran leaves an item for every orphan), so the collect takes the load's one look
- * at it here, under the orphan analyzer's own displaced rule: present, stattable,
- * and not a directory. One observation per path either way — the one-producer
- * rule cleanup.h states for the occupant holds for this fact too.
+ * A directory is displaced when the view or the record claims the path as a
+ * directory and the load observed something else standing there. Both classes
+ * of directory row qualify — the claim only has to say the path is a directory,
+ * not that the profile manages it, since what an observation resolved through
+ * is the whole question here. The set is read off the items first — a
+ * DIRECTORY-kind item carrying DIVERGENCE_TYPE is exactly that observation, and
+ * the bit's two producers (the directory analyzer's type arm, the orphan analyzer's
+ * displaced arm) each stamp it only after ruling out absence and an unstattable
+ * path — so for every analyzed path the derivation costs no syscall. An orphaned
+ * directory record with no item was never observed this load (orphan analysis
+ * did not run; an analysis that ran leaves an item for every orphan), so the
+ * collect takes the load's one look at it here, under the orphan analyzer's own
+ * displaced rule: present, stattable, and not a directory. One observation per
+ * path either way — the one-producer rule cleanup.h states for the occupant holds
+ * for this fact too.
  *
  * Runs after the analyses that observe directories and before the untracked scan,
  * which must not open a directory whose path resolves through a squatter
@@ -2576,10 +2604,10 @@ error_t *workspace_load(
         }
     }
 
-    /* The displaced tracked directories, derived from the observations above:
-     * the fact every consumer that judges a path beneath one must ask, established
-     * here once and trusted downstream. Unconditional — the record side must
-     * hold whatever analyses the command chose. */
+    /* The displaced directories, derived from the observations above: the fact
+     * every consumer that judges a path beneath one must ask, established here
+     * once and trusted downstream. Unconditional — the record side must hold
+     * whatever analyses the command chose. */
     err = collect_displaced(ws);
     if (err) {
         workspace_free(ws);
@@ -2679,7 +2707,7 @@ const manifest_row_t *workspace_lookup(
 }
 
 /**
- * The displaced tracked directory above `path`, or NULL
+ * The displaced managed directory above `path`, or NULL
  */
 const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path) {
     if (!ws || !path) {

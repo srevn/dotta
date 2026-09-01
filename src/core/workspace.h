@@ -186,8 +186,11 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  *
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
- * ORPHANED / RELEASED → cleanup_verdict's) and is not drift-prone; callers keep
- * their state switch and read this table for the DEPLOYED arm alone.
+ * ORPHANED / RELEASED → cleanup_verdict's) and is not drift-prone. DELETED earns
+ * that triviality upstream: classify_absent reads absence as a deletion only
+ * for a claim that asserts its path, so an ancestor claim never arrives here
+ * and every DELETED item can bear update's verb. Callers keep their state switch
+ * and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,        /* No divergence, no reassignment */
@@ -234,8 +237,9 @@ typedef enum {
  *                            depends on what claims the path: apply --force
  *                            replaces what the run converges and remove untracks
  *                            it, while a squatted ancestor claim is neither planned
- *                            nor named — update re-derives the chain and the
- *                            claim goes with it (core/manifest.h).
+ *                            nor named — the next capture whose chain meets the
+ *                            squatter re-derives it, and the claim goes with it
+ *                            (metadata_capture_ancestors).
  *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
  *                            file row stays here: the copy commits it as the
  *                            new kind.

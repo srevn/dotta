@@ -239,14 +239,19 @@ typedef struct {
  *
  * Filled by the walk that does the work — one writer per item: the copy + capture
  * for a file, the claim capture for a directory, the entry removal for a deletion,
- * the prune for the directory entries dropped as redundant — and read back by
- * the commit message and by the record loop (update_write_record), so both follow
- * the commit and nothing else: an item the walk skipped (a directory the race
- * guard refused) lands in no list, is not named, and gets no record write.
+ * the ancestry derivation for the chains it climbed, the prune for the directory
+ * entries dropped as redundant — and read back by the commit message and by the
+ * record loop (update_write_record), so both follow the commit and nothing else:
+ * an item the walk skipped (a directory the race guard refused) lands in no list,
+ * is not named, and gets no record write.
  *
- * Items are borrowed (workspace lifetime); the pruned keys are storage paths
- * the prune copies out, resolved through the mount table by the record loop —
- * the same route remove's record loop takes.
+ * Items are borrowed (workspace lifetime); the pruned and retired keys are
+ * storage paths their writers copy out, resolved through the mount table by the
+ * record loop — the same route remove's record loop takes. The derivation's two
+ * outs are shaped by what a reader can do with them (metadata.h): an authored
+ * claim has no consequence beyond the sheet, so `claimed` is the count the commit
+ * gate and the receipt read, while a dropped claim leaves the view by this commit
+ * and only its key can settle the record it strands.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
  * (sized to its item count, an upper bound); release with update_commits_free.
@@ -257,6 +262,8 @@ typedef struct {
     size_t captured_count;
     ptr_array_t deleted;            /* Items whose deletion the commit recorded (const workspace_item_t *) */
     string_array_t pruned;          /* Directory entries dropped as redundant (storage paths) */
+    size_t claimed;                 /* Ancestor claims the derivation authored or refreshed */
+    string_array_t retired;         /* Ancestor claims the derivation dropped (storage paths) */
 } update_commit_t;
 
 /**
@@ -268,6 +275,7 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
         free(commits[i].captured);
         ptr_array_deinit(&commits[i].deleted);
         string_array_deinit(&commits[i].pruned);
+        string_array_deinit(&commits[i].retired);
     }
     free(commits);
 }
@@ -428,7 +436,10 @@ static error_t *filter_items_for_update(
  * checkout materialized — the branch's own bytes). Each arm does its item's work
  * and fills the commit's bookkeeping beside it: copy + capture + stage for a
  * file, the claim capture for a directory, the entry removal for a deletion.
- * The walk ends with the redundancy prune, one metadata save, and the commit.
+ * The chain rides the capture: after the walk, every captured leaf's ancestry
+ * is re-derived into the same sheet — the content now comes from this machine,
+ * and so does its way. The walk ends with the redundancy prune, one metadata
+ * save, and the commit.
  *
  * Success means committed or untouched: a walk that captured nothing and deleted
  * nothing saves nothing, stages nothing, commits nothing — the worktree stays
@@ -447,7 +458,9 @@ static error_t *filter_items_for_update(
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
- * @param out_processed Output: number of items committed (must not be NULL)
+ * @param out_processed Output: number of user items committed — captured plus
+ *                      deleted; the derivation's motions are the bookkeeping's,
+ *                      never this count's (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_profile(
@@ -778,12 +791,50 @@ static error_t *update_profile(
         }
     }
 
-    /* A profile whose walk captured nothing and deleted nothing has nothing to
-     * commit, and a no-commit profile leaves the worktree exactly as checked
-     * out: nothing saved, nothing staged. The prune is skipped with the save —
-     * imported redundancy rides whatever commit triggers the metadata rewrite,
-     * never drives one. */
-    size_t path_count = commit->captured_count + commit->deleted.count;
+    /* The chain rides the capture: every leaf the walk took has its ancestry
+     * re-derived — the content now comes from this machine, and so does its way
+     * (add's own rule, applied to the re-capture an update is). After the walk,
+     * so a rung the walk itself claimed stands as the walk's word; over both
+     * kinds, a captured tracked directory having a chain of its own; and never
+     * over a deleted item — the absence of a leaf says nothing about the chain
+     * that led to it. This trigger authors and refreshes but structurally never
+     * retires: a leaf read through a squatted rung was refused at the filter
+     * (the displaced guard), whichever profile's claim the squatter displaced,
+     * so a chain that reaches here holds directories at every claimed rung. */
+    for (size_t i = 0; i < commit->captured_count; i++) {
+        const workspace_item_t *item = commit->captured[i].item;
+
+        err = metadata_capture_ancestors(
+            metadata, item->storage_path, item->filesystem_path,
+            &commit->claimed, &commit->retired
+        );
+        if (err) goto cleanup;
+    }
+
+    if (commit->claimed > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "  Captured %zu ancestor director%s",
+            commit->claimed, commit->claimed == 1 ? "y" : "ies"
+        );
+    }
+    if (commit->retired.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "  Dropped %zu ancestor claim%s",
+            commit->retired.count, commit->retired.count == 1 ? "" : "s"
+        );
+    }
+
+    /* A profile whose walk captured nothing and deleted nothing, and whose
+     * derivation moved nothing, has nothing to commit, and a no-commit profile
+     * leaves the worktree exactly as checked out: nothing saved, nothing staged.
+     * The prune is skipped with the save — imported redundancy rides whatever
+     * commit triggers the metadata rewrite, never drives one. The derivation is
+     * not redundancy: a chain re-derived under a captured leaf or a named path
+     * is the user's own word about the disk, and it drives the commit it needs
+     * — which is how the remedy for a rung the world moved under works at
+     * all. */
+    size_t path_count = commit->captured_count + commit->deleted.count +
+                        commit->claimed + commit->retired.count;
     if (path_count == 0) {
         goto cleanup;
     }
@@ -839,20 +890,30 @@ static error_t *update_profile(
 
     /* Build array of storage paths for commit message: what the commit captured
      * and what it let go — the bookkeeping, so an item the walk skipped is not
-     * named. */
-    storage_paths = malloc(path_count * sizeof(char *));
-    if (!storage_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-        goto cleanup;
-    }
+     * named. A retired claim is named with them (it leaves the view by this
+     * commit); an authored one only rides, the pruned-keys precedent, so a
+     * derivation that only refreshed names nothing and the message's file list
+     * says so. */
+    size_t named_count = commit->captured_count + commit->deleted.count +
+                         commit->retired.count;
+    if (named_count > 0) {
+        storage_paths = malloc(named_count * sizeof(char *));
+        if (!storage_paths) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+            goto cleanup;
+        }
 
-    size_t named = 0;
-    for (size_t i = 0; i < commit->captured_count; i++) {
-        storage_paths[named++] = commit->captured[i].item->storage_path;
-    }
-    for (size_t i = 0; i < commit->deleted.count; i++) {
-        const workspace_item_t *item = commit->deleted.items[i];
-        storage_paths[named++] = item->storage_path;
+        size_t named = 0;
+        for (size_t i = 0; i < commit->captured_count; i++) {
+            storage_paths[named++] = commit->captured[i].item->storage_path;
+        }
+        for (size_t i = 0; i < commit->deleted.count; i++) {
+            const workspace_item_t *item = commit->deleted.items[i];
+            storage_paths[named++] = item->storage_path;
+        }
+        for (size_t i = 0; i < commit->retired.count; i++) {
+            storage_paths[named++] = commit->retired.items[i];
+        }
     }
 
     /* Build commit message context */
@@ -860,7 +921,7 @@ static error_t *update_profile(
         .action        = COMMIT_ACTION_UPDATE,
         .profile       = profile,
         .files         = storage_paths,
-        .file_count    = path_count,
+        .file_count    = named_count,
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
@@ -878,7 +939,7 @@ static error_t *update_profile(
         goto cleanup;
     }
 
-    *out_processed = path_count;
+    *out_processed = commit->captured_count + commit->deleted.count;
 
 cleanup:
     /* Free resources in reverse order */
@@ -901,11 +962,11 @@ cleanup:
  * no record write. A modified or new file was captured FROM disk, so for the
  * row its profile won in the post-commit view the record advances to the
  * just-committed blob with the stat the copy took (the next status takes the
- * fast path). A path the commit let go — a deleted item, or a directory entry
- * the walk's prune dropped as redundant — left Git by this commit: with no row
- * left at the path its record retires (nothing backs it now); with a lower
- * profile's row at the path it is a fallback — the record stays and reads
- * [reassigned] until apply deploys it. The rule "anchor only the rows this profile
+ * fast path). A path the commit let go — a deleted item, a directory entry the
+ * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
+ * — left Git by this commit: with no row left at the path its record retires
+ * (nothing backs it now); with a lower profile's row at the path it is a
+ * fallback — the record stays and reads [reassigned] until apply deploys it. The rule "anchor only the rows this profile
  * won" is the same one add applies: a higher profile's row is its own, and its
  * record is its own. Both kinds: a directory's claim (mode, ownership) is captured
  * from disk exactly as add captures it, so the capture owns the directory the
@@ -1008,9 +1069,10 @@ static error_t *update_write_record(
             synced++;
         }
 
-        /* What the commit let go: the deleted items by their own path, the pruned
-         * entries by the path this profile deploys them at (UNBOUND names nothing
-         * on this machine: nothing to release). */
+        /* What the commit let go: the deleted items by their own path, the keys
+         * — the pruned entries and the dropped ancestor claims — by the path
+         * this profile deploys them at (UNBOUND names nothing on this machine:
+         * nothing to release). */
         for (size_t i = 0; i < commit->deleted.count; i++) {
             const workspace_item_t *item = commit->deleted.items[i];
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
@@ -1026,27 +1088,30 @@ static error_t *update_write_record(
              * not ours to count. */
         }
 
-        for (size_t i = 0; i < commit->pruned.count; i++) {
-            mount_resolve_outcome_t outcome;
-            const char *fs_path = NULL;
-            err = mount_resolve(
-                mounts, commit->profile, commit->pruned.items[i], ctx->arena,
-                &outcome, &fs_path
-            );
-            if (err) goto cleanup;
-            /* An unbound claim resolves nowhere on this machine: no filesystem
-             * path, so nothing to look up and no record of this run's to retire.
-             * Whatever record a once-bound era may have left is an orphan the
-             * next load's analysis settles. */
-            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
-
-            const manifest_row_t *row = manifest_lookup(manifest, fs_path);
-            if (!row) {
-                err = state_retire_anchor(state, fs_path);
+        const string_array_t *let_go[] = { &commit->pruned, &commit->retired };
+        for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+            for (size_t i = 0; i < let_go[b]->count; i++) {
+                mount_resolve_outcome_t outcome;
+                const char *fs_path = NULL;
+                err = mount_resolve(
+                    mounts, commit->profile, let_go[b]->items[i], ctx->arena,
+                    &outcome, &fs_path
+                );
                 if (err) goto cleanup;
-                removed++;
-            } else if (strcmp(row->profile, commit->profile) != 0) {
-                fallbacks++;
+                /* An unbound claim resolves nowhere on this machine: no filesystem
+                 * path, so nothing to look up and no record of this run's to
+                 * retire. Whatever record a once-bound era may have left is an
+                 * orphan the next load's analysis settles. */
+                if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+
+                const manifest_row_t *row = manifest_lookup(manifest, fs_path);
+                if (!row) {
+                    err = state_retire_anchor(state, fs_path);
+                    if (err) goto cleanup;
+                    removed++;
+                } else if (strcmp(row->profile, commit->profile) != 0) {
+                    fallbacks++;
+                }
             }
         }
     }
@@ -1205,7 +1270,14 @@ static error_t *update_execute_for_all_profiles(
             group.count, opts, &bookkeeping, &processed
         );
 
-        if (!err && processed > 0) {
+        /* The commit gate's own sum, read back off the bookkeeping the walk
+         * filled: on a clean return, zero means the gate closed without a commit
+         * and anything else means one landed — a derivation-only commit carries
+         * no user item, so `processed` alone cannot say. Any error means no
+         * commit landed, whatever the bookkeeping holds. */
+        size_t landed = bookkeeping.captured_count + bookkeeping.deleted.count +
+                        bookkeeping.claimed + bookkeeping.retired.count;
+        if (!err && landed > 0) {
             /* The commit landed: its bookkeeping is the record write's now */
             commits[commit_count++] = bookkeeping;
             *total_updated += processed;
@@ -1222,6 +1294,7 @@ static error_t *update_execute_for_all_profiles(
             free(bookkeeping.captured);
             ptr_array_deinit(&bookkeeping.deleted);
             string_array_deinit(&bookkeeping.pruned);
+            string_array_deinit(&bookkeeping.retired);
         }
 
         if (err) {

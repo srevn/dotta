@@ -73,6 +73,22 @@ typedef struct {
 } add_walk_t;
 
 /**
+ * What the record phase did, for the receipt
+ *
+ * `updated` is the phase's word that the anchor pass ran and its transaction
+ * committed — the receipt's "Manifest updated" line and its counts speak only
+ * then; false reads "profile not enabled". The counts qualify it: how many of
+ * the captured files this profile's rows actually took (a higher-precedence
+ * profile keeps its own), and how many of those took over a record another
+ * profile's deployment had written.
+ */
+typedef struct {
+    bool updated;          /* The anchor pass ran and the transaction committed */
+    size_t synced;         /* Files anchored under this profile's rows */
+    size_t taken_over;     /* Of those, records taken over from another profile */
+} record_receipt_t;
+
+/**
  * Validate command options
  */
 static error_t *validate_options(const cmd_add_options_t *opts) {
@@ -738,50 +754,41 @@ static error_t *create_commit(
  *            and the command arena)
  * @param mounts The command's table, which binds this profile's target whether
  *               the run brought one or state already held it (must not be NULL)
- * @param profile Profile that files were added to (must not be NULL)
- * @param target Deployment target for custom/ files (can be NULL)
+ * @param opts Command options — the profile added to and the deployment target
+ *             for custom/ files, as create_commit reads them (must not be NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
  * @param added_files The files the walk listed, each with the capture's stat
  *                    (must not be NULL)
  * @param added_dirs The directories the walk passed through (must not be NULL)
  * @param retired The ancestor claims the ancestry pass dropped, by key (must
  *                not be NULL)
- * @param out_updated Output flag: true if the record was written (must not be NULL)
- * @param out_synced Output: count of files anchored (can be NULL)
- * @param out_taken_over Output: count of those taken over from another profile's
- *                       deployment (can be NULL)
+ * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
 static error_t *update_manifest_after_add(
     const dotta_ctx_t *ctx,
     const mount_table_t *mounts,
-    const char *profile,
-    const char *target,
+    const cmd_add_options_t *opts,
     bool profile_was_new,
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
     const string_array_t *retired,
-    bool *out_updated,
-    size_t *out_synced,
-    size_t *out_taken_over
+    record_receipt_t *receipt
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(mounts);
-    CHECK_NULL(profile);
+    CHECK_NULL(opts);
     CHECK_NULL(added_files);
     CHECK_NULL(added_dirs);
     CHECK_NULL(retired);
-    CHECK_NULL(out_updated);
+    CHECK_NULL(receipt);
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
     error_t *err = NULL;
 
-    /* Initialize output */
-    *out_updated = false;
-    if (out_synced) *out_synced = 0;
-    if (out_taken_over) *out_taken_over = 0;
+    *receipt = (record_receipt_t){ 0 };
 
     /* STEP 1: Scope.
      *
@@ -793,7 +800,7 @@ static error_t *update_manifest_after_add(
      * Transaction Safety: If the record write below fails, the dispatcher's
      * state_free automatically rolls back this change. */
     if (profile_was_new) {
-        err = state_enable_profile(state, profile, target);
+        err = state_enable_profile(state, opts->profile, opts->target);
         if (err) {
             return error_wrap(err, "Failed to enable profile in state");
         }
@@ -801,11 +808,11 @@ static error_t *update_manifest_after_add(
         /* Only an enabled profile has rows in the view. Not enabled is success
          * with nothing to do; the dispatcher's state_free rolls back the untouched
          * transaction. */
-        if (!state_has_profile(state, profile)) {
+        if (!state_has_profile(state, opts->profile)) {
             return NULL;
         }
-        if (target) {
-            err = state_enable_profile(state, profile, target);
+        if (opts->target) {
+            err = state_enable_profile(state, opts->profile, opts->target);
             if (err) {
                 return error_wrap(err, "Failed to update deployment target for profile");
             }
@@ -852,23 +859,21 @@ static error_t *update_manifest_after_add(
     }
 
     time_t now = time(NULL);
-    size_t synced_count = 0;
-    size_t taken_over = 0;
     for (size_t i = 0; i < added_files->count; i++) {
         const add_path_t *path = added_files->items[i];
         const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-        if (!row || strcmp(row->profile, profile) != 0) continue;
+        if (!row || strcmp(row->profile, opts->profile) != 0) continue;
 
         error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
         if (anchor_err) {
             error_free(anchor_err);
             continue;
         }
-        synced_count++;
+        receipt->synced++;
 
         const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
-        if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
-            taken_over++;
+        if (was && was->deployed_at > 0 && strcmp(was->profile, opts->profile) != 0) {
+            receipt->taken_over++;
         }
     }
 
@@ -881,7 +886,7 @@ static error_t *update_manifest_after_add(
     for (size_t i = 0; i < added_dirs->count; i++) {
         const add_path_t *path = added_dirs->items[i];
         const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-        if (!row || strcmp(row->profile, profile) != 0) continue;
+        if (!row || strcmp(row->profile, opts->profile) != 0) continue;
 
         error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
         if (anchor_err) error_free(anchor_err);
@@ -903,7 +908,7 @@ static error_t *update_manifest_after_add(
         const char *fs_path = NULL;
 
         err = mount_resolve(
-            mounts, profile, retired->items[i], ctx->arena, &outcome, &fs_path
+            mounts, opts->profile, retired->items[i], ctx->arena, &outcome, &fs_path
         );
         if (err) {
             hashmap_free(anchor_index, NULL);
@@ -933,9 +938,7 @@ static error_t *update_manifest_after_add(
     }
 
     /* Success */
-    *out_updated = true;
-    if (out_synced) *out_synced = synced_count;
-    if (out_taken_over) *out_taken_over = taken_over;
+    receipt->updated = true;
 
     return NULL;
 }
@@ -1734,14 +1737,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * profile that failed to enable is enabled by hand; the next status confirms
      * the committed files on its slow path.
      */
-    bool manifest_updated = false;
-    size_t manifest_synced_count = 0;
-    size_t manifest_taken_over = 0;
+    record_receipt_t record = { 0 };
 
     error_t *manifest_err = update_manifest_after_add(
-        ctx, mounts, opts->profile, opts->target, profile_was_new,
-        &walk.files, &walk.directories, &ancestry_retired,
-        &manifest_updated, &manifest_synced_count, &manifest_taken_over
+        ctx, mounts, opts, profile_was_new,
+        &walk.files, &walk.directories, &ancestry_retired, &record
     );
     if (manifest_err) {
         if (profile_was_new) {
@@ -1765,9 +1765,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
         }
         error_free(manifest_err);
-        manifest_updated = false;
-        manifest_synced_count = 0;
-        manifest_taken_over = 0;
+        record = (record_receipt_t){ 0 };
     }
 
     /* Cleanup worktree before post-processing */
@@ -1812,36 +1810,36 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_newline(out, OUTPUT_NORMAL);
 
         /* Manifest status feedback */
-        if (manifest_updated) {
+        if (record.updated) {
             if (added_count > 0) {
                 /* Files were added - show sync results with precedence awareness:
                  * the rows a higher profile owns got no anchor; the ones another
                  * profile's deployment had written were taken over. */
-                if (manifest_synced_count == added_count) {
+                if (record.synced == added_count) {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "Manifest updated (%zu file%s marked as deployed)",
-                        manifest_synced_count, manifest_synced_count == 1 ? "" : "s"
+                        record.synced, record.synced == 1 ? "" : "s"
                     );
                 } else {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "Manifest updated (%zu/%zu file%s marked as deployed)",
-                        manifest_synced_count, added_count, added_count == 1 ? "" : "s"
+                        record.synced, added_count, added_count == 1 ? "" : "s"
                     );
 
-                    size_t skipped = added_count - manifest_synced_count;
+                    size_t skipped = added_count - record.synced;
                     output_info(
                         out, OUTPUT_NORMAL,
                         "Note: %zu file%s overridden by higher-precedence profiles",
                         skipped, skipped == 1 ? "" : "s"
                     );
                 }
-                if (manifest_taken_over > 0) {
+                if (record.taken_over > 0) {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "Note: %zu file%s taken over from other profiles",
-                        manifest_taken_over, manifest_taken_over == 1 ? "" : "s"
+                        record.taken_over, record.taken_over == 1 ? "" : "s"
                     );
                 }
                 if (!profile_was_new) {

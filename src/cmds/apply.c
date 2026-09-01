@@ -528,9 +528,12 @@ static void print_skipped(
  * exactly that, so the receipt is where the claim becomes visible.
  *
  * Work the run skipped is not here: the plan decided it, print_skipped reports
- * it, and it must be said even on runs that never execute. Nor is a failure:
- * fail-stop returns the error naming the path, and cmd_apply prints the partial
- * receipt ahead of it.
+ * it, and it must be said even on runs that never execute. A failure IS here —
+ * one line per row that did not land, its cause beside it (the receipt's failed
+ * bucket), at every verbosity and last, after what did land: a receipt that omits
+ * what went wrong is not a receipt, and no run-level error will name it (cleanup's
+ * receipt ends on its failures the same way). No total-count line: the exit error's
+ * message is the count's one home, as for the skip block.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
  * concern and its summary is printed by cmd_apply directly.
@@ -717,6 +720,31 @@ static void print_deploy_results(
             output_styled(
                 out, OUTPUT_NORMAL, "Replaced {yellow}%zu{reset} tracked director%s\n",
                 replaced, replaced == 1 ? "y" : "ies"
+            );
+        }
+    }
+
+    /* The rows that did not land — both kinds, verdict order, each with its cause.
+     * At every verbosity, and after what landed (the header carries the rationale);
+     * capped the way the skip block is. The cause is the chain's root, where
+     * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
+     * the wraps above it restate the row the line already names. */
+    if (result->failed.count > 0) {
+        const size_t limit = 20;   /* Don't flood the terminal */
+
+        output_section(out, OUTPUT_NORMAL, "Failed deployments");
+        for (size_t i = 0; i < result->failed.count && i < limit; i++) {
+            const deploy_outcome_t *o = &result->failed.entries[i];
+
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
+                o->verdict->row->filesystem_path,
+                error_message(error_root(o->error))
+            );
+        }
+        if (result->failed.count > limit) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - limit
             );
         }
     }
@@ -1978,6 +2006,32 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
+    /* A collected reassignment whose row preflight skipped is not acknowledged
+     * this run — its handover rides a deployment that will not happen — so it
+     * leaves the preview and the dry-run count before either prints. The
+     * clean-bucket half of the same honesty was taken at collection (the displaced
+     * gate); this is the pending half, against the fates. */
+    {
+        size_t kept = 0;
+
+        for (size_t i = 0; i < reassigned_count; i++) {
+            bool skipped = false;
+
+            for (size_t s = 0; s < deploy_verdicts->skipped.count; s++) {
+                const deploy_skip_t *skip = &deploy_verdicts->skipped.entries[s];
+
+                if (strcmp(skip->row->filesystem_path, reassigned[i].path) == 0) {
+                    skipped = true;
+                    break;
+                }
+            }
+            if (!skipped) {
+                reassigned[kept++] = reassigned[i];
+            }
+        }
+        reassigned_count = kept;
+    }
+
     /* The previews: the reassignments the run acknowledges, then each engine's
      * story told the same way — what it will do (the preview), then what it will
      * not and why (the skip block), each block closing with its own remedies —
@@ -2113,15 +2167,34 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
             err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
-            if (err) {
-                if (deploy_result) {
-                    print_deploy_results(out, deploy_result);
-                }
-                err = error_wrap(err, "Deployment failed");
-                goto cleanup;
-            }
 
-            print_deploy_results(out, deploy_result);
+            if (deploy_result) {
+                print_deploy_results(out, deploy_result);
+            }
+            if (err) {
+                /* Infrastructure, never a row — a row's own failure is in the
+                 * receipt's failed bucket, and the run goes on to record what
+                 * landed. Which infrastructure, the receipt's presence tells:
+                 * without one its allocation failed and nothing ran — nothing
+                 * to record, the run ends. With one every row ran and only the
+                 * release of held modes failed: the directory stands at its working
+                 * mode, wider by the owner's own bits alone, and the next load
+                 * reads the mode divergence and converges it — while the writes
+                 * that landed must still be recorded, or the record loses them
+                 * and a later scope exit releases what it should prune. Warned
+                 * like the cleanup failure below: the exit fold reads receipts,
+                 * never errors. */
+                if (!deploy_result) {
+                    err = error_wrap(err, "Deployment failed");
+                    goto cleanup;
+                }
+                output_warning(
+                    out, OUTPUT_NORMAL, "%s; the next apply converges it",
+                    error_message(err)
+                );
+                error_free(err);
+                err = NULL;
+            }
         } else if (deploy_verdicts->skipped.count == 0) {
             output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
         }
@@ -2136,7 +2209,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * the cycle. Without it, orphaned records accumulate forever in the
          * path_anchors table.
          *
-         * Non-fatal: deployment already succeeded and its state must be saved
+         * Non-fatal: the deployment's landed writes must be recorded and saved
          * regardless, or the database would show deployed files as undeployed
          * and the user would see [undeployed] on working files. Partial success
          * is recorded — the partial result names what did happen — and the next
@@ -2145,7 +2218,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         error_t *cleanup_err = cleanup_execute(cleanup_verdicts, &cleanup_res);
         if (cleanup_err) {
             output_warning(
-                out, OUTPUT_NORMAL, "Deployment successful, but orphan cleanup failed: %s",
+                out, OUTPUT_NORMAL, "Orphan cleanup failed: %s",
                 error_message(cleanup_err)
             );
             error_free(cleanup_err);
@@ -2240,14 +2313,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * account.
          *
          * IMPORTANT: This operation runs REGARDLESS of cleanup success/failure.
-         * - Deployment succeeded (files are physically on filesystem)
-         * - State must reflect deployment success
-         * - Cleanup failure does NOT invalidate deployment success
+         * - The landed writes are physically on the filesystem
+         * - State must reflect what landed
+         * - Cleanup failure does NOT invalidate what landed
          * - This prevents state desynchronization (deployed files marked as
          *   undeployed)
          *
-         * Non-critical operation: deployment already succeeded physically, so
-         * record-write failures are non-fatal warnings (preserve consistency).
+         * Non-critical operation: the landed writes already happened physically,
+         * so record-write failures are non-fatal warnings (preserve consistency).
          *
          * The receipt is the whole of it, and the ownership rule is read off
          * each carried-out fate, never off a bucket topology:
@@ -2304,7 +2377,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 err = workspace_anchor(ws, file, &o->stat, now);
                 if (err) {
-                    /* Non-fatal warning - deployment succeeded, just anchor update
+                    /* Non-fatal warning - the write landed, just anchor update
                      * failed. The file is already on the filesystem with correct
                      * content. Failure here should not abort the entire
                      * operation. */
@@ -2446,20 +2519,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * run's promise: a row the user's own flags withheld (-e, --skip-existing)
      * or that dotta held for want of consent (--force) was never promised, and
      * the receipt is the whole of its report; a row the run planned and could
-     * not deliver was promised, and the exit code says so — as does an orphan
-     * the run tried to prune and could not (failed_prunes, off cleanup's receipt;
-     * an execution fact, so a dry run predicts the preflight half alone). Every
-     * skip and failure was already rendered where it happened, so the error carries
-     * the one fact the receipt does not — that the run did not keep its promise.
-     * Dry runs reach this too, so `apply -n` predicts the real run's exit. ERR_FS,
-     * not ERR_CONFLICT: the class is filesystem incapacity, and a conflict no
-     * longer ends the run. */
+     * not deliver was promised, and the exit code says so — the incapacity skips,
+     * and the rows the run could not land (the receipt's failed bucket) — as
+     * does an orphan the run tried to prune and could not (failed_prunes, off
+     * cleanup's receipt). The execution halves are facts a dry run does not have,
+     * so `apply -n` predicts the preflight half alone. Every skip and failure
+     * was already rendered where it happened, so the error carries the one fact
+     * the receipt does not — that the run did not keep its promise. ERR_FS, not
+     * ERR_CONFLICT: the class is filesystem incapacity, and a conflict no longer
+     * ends the run. */
     size_t undelivered = 0;
 
     for (size_t i = 0; i < deploy_verdicts->skipped.count; i++) {
         if (!deploy_skip_needs_force(deploy_verdicts->skipped.entries[i].reason)) {
             undelivered++;
         }
+    }
+    if (deploy_result) {
+        undelivered += deploy_result->failed.count;
     }
     if (undelivered > 0 && failed_prunes > 0) {
         err = ERROR(

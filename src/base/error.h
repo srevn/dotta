@@ -105,6 +105,21 @@ const char *error_message(const error_t *err);
 error_code_t error_code(const error_t *err);
 
 /**
+ * Get the root cause — the deepest error in the chain
+ *
+ * The error that started it: the mechanism's own refusal, verbatim, beneath
+ * whatever context the layers above wrapped around it. A consumer that already
+ * names its subject (a receipt line built around the path) renders the root's
+ * message, where the refusal speaks for itself; error_print renders the whole
+ * chain instead.
+ *
+ * @param err Error
+ * @return The deepest cause — err itself when nothing is wrapped (valid until
+ *         the error is freed)
+ */
+const error_t *error_root(const error_t *err);
+
+/**
  * Print error to stream
  *
  * Prints error message and all causes in chain.

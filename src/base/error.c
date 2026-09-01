@@ -148,6 +148,16 @@ error_code_t error_code(const error_t *err) {
     return err->code;
 }
 
+const error_t *error_root(const error_t *err) {
+    if (!err) {
+        return NULL;
+    }
+    while (err->cause) {
+        err = err->cause;
+    }
+    return err;
+}
+
 void error_print(const error_t *err, FILE *stream) {
     if (!err) {
         return;

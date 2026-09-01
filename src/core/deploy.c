@@ -6,7 +6,6 @@
 
 #include <errno.h>
 #include <git2.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -1359,13 +1358,12 @@ static error_t *hold_directory(deploy_run_t *run, const char *path, mode_t mode)
  * order releases a child before its parent, and a parent released to a mode without
  * owner-search never stands between us and a child still to be released.
  *
- * Runs on every exit from deploy_execute, fail-stop included: after a failure
- * the tree is incomplete, but every directory carries its recorded mode, and
- * the next run holds what it needs again. Applied through
- * fs_create_dir_with_ownership — the same fd-based fchmod the converge arm uses,
- * never a chmod(2) on a path that may have become a symlink meanwhile. Every
- * entry is attempted; the first failure is the one reported. Frees the holds
- * either way.
+ * Runs at the end of every deploy_execute: however the rows fared, every held
+ * directory carries its recorded mode again, and the next run holds what it needs
+ * afresh. Applied through fs_create_dir_with_ownership — the same fd-based fchmod
+ * the converge arm uses, never a chmod(2) on a path that may have become a symlink
+ * meanwhile. Every entry is attempted; the first failure is the one reported.
+ * Frees the holds either way.
  */
 static error_t *release_directories(deploy_run_t *run) {
     error_t *err = NULL;
@@ -1605,7 +1603,7 @@ cleanup:
  * type calls for. Nothing here looks at the disk to decide anything; a path the
  * world has moved under since preflight meets the mechanism's refusal (rename
  * over a directory is EISDIR, symlink over anything is EEXIST, rmdir of a directory
- * that filled up is ENOTEMPTY) and the run fail-stops there.
+ * that filled up is ENOTEMPTY) and the refusal is the row's outcome.
  *
  * The row:
  * - file->type: which arm — a symlink is re-linked from its blob, anything else
@@ -1816,12 +1814,46 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 }
 
 /**
+ * The failed directory whose absence poisons this path, or NULL
+ *
+ * Deploy's order is parents-first and its mechanism creates on the way down, so
+ * per-row failure needs the preflight invariant's execution mirror: a directory
+ * verdict that failed with an occupant other than DIRECTORY left no directory
+ * standing at its path — the create never happened, or the squatter survived
+ * its replace — and a write beneath it would land through whatever stands there
+ * (ensure_parents would fabricate the failed tracked directory as an untracked
+ * 0755, or write through the surviving squatter: the hazard the ancestry rung
+ * refuses at preflight, met again at execution time). A failed converge-in-place
+ * poisons nothing: the directory stands, and children land in it or fail on their
+ * own merits. Scanned in verdict order, so the first match is the outermost failed
+ * ancestor — the offender every deeper row is named against. The failed bucket
+ * is empty on every healthy run, which is what makes the scan free.
+ */
+static const char *poisoned_above(const deploy_result_t *result, const char *path) {
+    for (size_t i = 0; i < result->failed.count; i++) {
+        const deploy_verdict_t *v = result->failed.entries[i].verdict;
+        const char *dir = v->row->filesystem_path;
+
+        if (v->row->type != PATH_TYPE_DIRECTORY ||
+            v->occupant == FS_OCCUPANT_DIRECTORY) {
+            continue;
+        }
+        if (str_path_beneath(path, dir, strlen(dir))) {
+            return dir;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Carry the verdicts out
  *
  * Every exit passes through release_directories: a held directory takes its exact
- * recorded mode whether the run completed or fail-stopped, so the tree a failure
- * leaves behind is incomplete but never wider than recorded. The partial result
- * travels with the error either way.
+ * recorded mode however the rows fared, so the tree a failure leaves behind is
+ * incomplete but never wider than recorded. Row failures land in the receipt
+ * (deploy_result_t's contract); the receipt travels in *out beside a release
+ * error too, complete.
  */
 error_t *deploy_execute(
     git_repository *repo,
@@ -1846,9 +1878,10 @@ error_t *deploy_execute(
     /* The receipt is sized to the verdicts up front — one slot per verdict, zeroed,
      * filled in verdict order as each act lands (a zero count allocates one slot
      * rather than nothing, so every array is an array; a zeroed slot's stat IS
-     * the UNSET triple). count gates what a consumer reads, so a fail-stop's
-     * untouched slots are invisible and the partial receipt holds exactly what
-     * happened — for a file, with its own write's proof. */
+     * the UNSET triple), the failed bucket to both kinds together — every promised
+     * row could fail. count gates what a consumer reads, so an untaken slot is
+     * invisible and the receipt holds exactly what happened — for a landed file,
+     * with its own write's proof. */
     result->deployed.entries = calloc(
         verdicts->files.count + 1, sizeof(*result->deployed.entries)
     );
@@ -1858,9 +1891,13 @@ error_t *deploy_execute(
     result->ancestors.entries = calloc(
         verdicts->ancestors.count + 1, sizeof(*result->ancestors.entries)
     );
+    result->failed.entries = calloc(
+        verdicts->directories.count + verdicts->files.count + 1,
+        sizeof(*result->failed.entries)
+    );
 
     if (!result->deployed.entries || !result->converged.entries ||
-        !result->ancestors.entries) {
+        !result->ancestors.entries || !result->failed.entries) {
         deploy_result_free(result);
         return ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
     }
@@ -1882,15 +1919,18 @@ error_t *deploy_execute(
      * the replace has made that true. */
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
+        const char *above = poisoned_above(result, v->row->filesystem_path);
 
-        err = deploy_directory(&run, v);
+        err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+                    : deploy_directory(&run, v);
         if (err) {
-            /* Fail-stop with the partial result; the error names the path */
-            err = error_wrap(
-                err, "Failed to converge directory '%s'",
-                v->row->filesystem_path
-            );
-            goto done;
+            /* The row's own outcome; the cause already names its subject */
+            deploy_outcome_t *o = &result->failed.entries[result->failed.count++];
+
+            o->verdict = v;
+            o->error = err;
+            err = NULL;
+            continue;
         }
 
         /* Record success; the verb is the verdict's occupant */
@@ -1905,15 +1945,20 @@ error_t *deploy_execute(
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
         deploy_outcome_t *o = &result->deployed.entries[result->deployed.count];
+        const char *above = poisoned_above(result, v->row->filesystem_path);
 
-        err = deploy_file(&run, v, &o->stat);
+        err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
+                    : deploy_file(&run, v, &o->stat);
         if (err) {
-            /* Fail-stop with the partial result; the error names the path */
-            err = error_wrap(
-                err, "Deployment failed at '%s'",
-                v->row->filesystem_path
-            );
-            goto done;
+            /* The row's own outcome, as above. The deployed slot stays untaken:
+             * count never covers it, and its stat is UNSET on every deploy_file
+             * error return. */
+            deploy_outcome_t *f = &result->failed.entries[result->failed.count++];
+
+            f->verdict = v;
+            f->error = err;
+            err = NULL;
+            continue;
         }
 
         /* Record success */
@@ -1921,22 +1966,10 @@ error_t *deploy_execute(
         result->deployed.count++;
     }
 
-done:
-    /* The subtree is as complete as it is going to get: exact modes now. A release
-     * failure after a run that otherwise succeeded is the run's error; after a
-     * fail-stop it is secondary to the cause and is only reported, so the cause
-     * is what the caller sees. */
-    {
-        error_t *release_err = release_directories(&run);
-        if (release_err) {
-            if (err) {
-                fprintf(stderr, "Warning: %s\n", error_message(release_err));
-                error_free(release_err);
-            } else {
-                err = release_err;
-            }
-        }
-    }
+    /* The subtree is as complete as it is going to get: exact modes now. The
+     * rows' failures are in the receipt; what the release returns is the run's
+     * one non-row error, and the receipt travels beside it either way. */
+    err = release_directories(&run);
 
     *out = result;
     return err;
@@ -1964,16 +1997,21 @@ void deploy_preflight_result_free(deploy_preflight_result_t *result) {
 }
 
 /**
- * Free a deployment receipt — the three outcome arrays. The verdicts they point
- * at belong to the preflight result.
+ * Free a deployment receipt — the four outcome arrays, and the failed bucket's
+ * owned causes. The verdicts they all point at belong to the preflight result.
  */
 void deploy_result_free(deploy_result_t *result) {
     if (!result) {
         return;
     }
 
+    for (size_t i = 0; i < result->failed.count; i++) {
+        error_free(result->failed.entries[i].error);
+    }
+
     free(result->deployed.entries);
     free(result->converged.entries);
     free(result->ancestors.entries);
+    free(result->failed.entries);
     free(result);
 }

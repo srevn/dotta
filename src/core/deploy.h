@@ -19,14 +19,13 @@
  *   one fate per planned row, a verdict or an explicit skip. A confirmation prompt
  *   may sit between preflight and execute; nothing re-observes across it, and
  *   nothing pretends to: the mechanisms refuse what a verdict no longer describes
- *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the run fail-stops with the partial
- *   receipt. The same stance as core/cleanup
+ *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the refusal is that row's outcome,
+ *   not the run's end. The same stance as core/cleanup
  * - One element type per phase: the plan buckets borrowed rows and authors nothing;
  *   preflight authors the fates — a verdict or a skip, carrying everything decided
- *   about the row; execute authors the outcomes, one per carried-out verdict,
- *   bucketed by the split preflight took. A verb inside a bucket is derived from
- *   the fate, never stored twice
- * - Fail-stop on error (not transactional, but clear reporting)
+ *   about the row; execute authors the outcomes — one per verdict, landed or
+ *   failed, the one split execute itself takes. A verb inside a landed bucket
+ *   is derived from the fate, never stored twice
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
  * - Removals are single-node: what stands at a planned path, never a tree
@@ -38,10 +37,11 @@
  * - Metadata is reproduced, not negotiated: every write applies the row's mode
  *   and resolved ownership atomically through its own descriptor, so there is
  *   never a moment when a path stands with the wrong owner
- * - Silent: outcomes travel in the result, verdicts and skips in the preflight
- *   result — with the anomalies met while deciding (an identity that could not
- *   be resolved), which are the caller's to print — and failures in the error
- *   chain. This module emits no prose of its own; verbosity and tense are the
+ * - Silent: outcomes travel in the result — a row's failure among them, its cause
+ *   on the outcome — verdicts and skips in the preflight result, with the anomalies
+ *   met while deciding (an identity that could not be resolved), which are the
+ *   caller's to print; only the run's infrastructure travels in the returned
+ *   error. This module emits no prose of its own; verbosity and tense are the
  *   caller's, the same convention as every other core module
  */
 
@@ -330,7 +330,8 @@ typedef struct {
 } deploy_plan_t;
 
 /**
- * One carried-out verdict — and the proof, where the act authored one
+ * One verdict's outcome — the act's proof where it landed, the cause where it
+ * did not
  *
  * The stat is the record's own triple (stat_cache_from_write), distilled by the
  * executor from the fstat of the descriptor it wrote — taken after the last byte
@@ -346,6 +347,13 @@ typedef struct {
  * at all. UNSET and NULL say the same thing to state_anchor, so the record step
  * passes the triple blind.
  *
+ * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
+ * a blob that would not load, an ancestor this run did not converge) — and NULL
+ * in every landed bucket: the bucket is the tag, as UNSET already is for the
+ * stat. A deploy failure has a dozen causes where a prune failure is self-naming
+ * (cleanup's failed buckets carry none), so the receipt keeps each cause for
+ * the caller to render. Owned by the receipt; deploy_result_free frees it.
+ *
  * The verdict is borrowed from the preflight result, whose arrays are sized once
  * and never reallocated, so every address is stable for the receipt's life. Free
  * the result before the preflight result.
@@ -353,6 +361,7 @@ typedef struct {
 typedef struct {
     const deploy_verdict_t *verdict;    /* Borrowed (preflight-result lifetime) */
     stat_cache_t stat;                  /* The act's proof; UNSET where it authored none */
+    error_t *error;                     /* The failed bucket's cause; NULL elsewhere (owned) */
 } deploy_outcome_t;
 
 /**
@@ -364,22 +373,33 @@ typedef struct {
 } deploy_outcomes_t;
 
 /**
- * Deployment result — the run's receipt: the verdicts carried out, in act order
+ * Deployment result — the run's receipt: one outcome per verdict, in act order
  *
- * One outcome per carried-out verdict, in three arrays mirroring the preflight's
- * split; the receipt re-decides nothing, and the verb inside an array is derived,
- * never stored twice — a directory's is its verdict's occupant (the mapping is
+ * Four arrays: three mirroring the preflight's split for the rows that landed,
+ * and `failed` for the rows that did not — landed or failed is the one split
+ * execute itself takes, so execute buckets it; everything else the receipt restates
+ * rather than re-decides. The verb inside a landed array is derived, never stored
+ * twice — a directory's is its verdict's occupant (the mapping is
  * deploy_verdict_t's), so the caller can still say "replaced" where a squatter
  * went and "fixed" where nothing was created. Work the run deliberately did not
  * do is the plan's to report, never the result's — the plan decided it, so only
  * the plan can report it before a run that ends up executing nothing. A failure
- * is the returned error's to name: fail-stop wraps it with the path, and the
- * partial receipt travels in *out beside it.
+ * is a row's own outcome: it lands in `failed` with its cause, the run goes on,
+ * and the caller's exit contract reads the count; the returned error is reserved
+ * for the run's infrastructure (deploy_execute).
  *
- * Each array is sized to its verdict array at entry (calloc, count + 1) and filled
- * in verdict order; count gates every read, so a stopped run's untouched slots
- * are invisible and the partial receipt holds exactly what happened, by
- * construction.
+ * With `failed` the receipt partitions the promise — execute's totality equation,
+ * the mirror of preflight's:
+ *
+ *   verdicts(directories ∪ files) = converged ∪ deployed ∪ failed
+ *
+ * — every promised row accounted for, however the rows fared. The ancestors stay
+ * outside it, as they stand outside the plan.
+ *
+ * Each landed array is sized to its verdict array at entry (calloc, count + 1),
+ * `failed` to both kinds together (every promised row could fail), and all fill
+ * in verdict order; count gates every read, so an untaken slot is invisible and
+ * the receipt holds exactly what happened, by construction.
  *
  * The derived verb is also the ownership gate apply's record step reads: a
  * converged directory whose verdict's occupant was not DIRECTORY was made by
@@ -402,6 +422,7 @@ typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's proof */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Tracked directories made on the way, each once */
+    deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
 } deploy_result_t;
 
 /**
@@ -618,16 +639,27 @@ error_t *deploy_preflight(
  * or converges carries its recorded mode with the owner triad forced on while
  * the run writes beneath it; a tracked, owned directory that already stands where
  * a planned path must land and refuses it is opened the same way. When the run
- * is over — completed or fail-stopped — each such directory is released to its
- * exact mode, deepest-first: recorded for the ones the plan materialized, the
- * mode it had for the ones merely opened. Group and other bits are never widened.
- * This is the one transient the run leaves during its life and none afterwards;
- * it is what lets a 0555 directory captured with children be redeployed with
- * them, and what makes the landing check a question about untracked directories
- * only.
+ * is over — however the rows fared — each such directory is released to its exact
+ * mode, deepest-first: recorded for the ones the plan materialized, the mode it
+ * had for the ones merely opened. Group and other bits are never widened. This
+ * is the one transient the run leaves during its life and none afterwards; it
+ * is what lets a 0555 directory captured with children be redeployed with them,
+ * and what makes the landing check a question about untracked directories only.
  *
- * Fail-stop: on the first error the partial result is returned in *out alongside
- * the wrapped error, after the held directories are released.
+ * Individual row failures are non-fatal: the row lands in the receipt's failed
+ * bucket with its cause and the run goes on — except that a failed directory
+ * left without a standing directory poisons its subtree (poisoned_above, the
+ * preflight invariant's execution mirror): every later verdict beneath it fails
+ * against the ancestor without being attempted, since a write there would land
+ * through whatever still squats the path. A failed converge-in-place poisons
+ * nothing — the directory stands, and children land in it or fail on their own
+ * merits.
+ *
+ * The returned error is the run's infrastructure alone, and the receipt tells
+ * the caller which: the receipt's own allocation failed (*out unset — nothing
+ * ran, nothing to record), or the release of held modes failed (*out holds the
+ * complete receipt beside the error — every row ran, and what landed is the
+ * record's to keep). The held directories are released on every exit.
  *
  * View rows are self-contained (blob_oid, type, storage path); the content cache
  * handles encryption transparently. The record (path_anchors, observations) is

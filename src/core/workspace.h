@@ -448,6 +448,35 @@ const manifest_row_t *workspace_lookup(
 );
 
 /**
+ * The displaced tracked directory above `path`, or NULL
+ *
+ * A tracked directory is *displaced* when the view or the record claims the path
+ * as a directory and something else stands there. Every lstat taken beneath such
+ * a path resolved through the occupant — a symlink to a directory answers for
+ * the link's target — so a child read clean, present, modified or new about a
+ * tree that is not this path's. An observation taken there is not an observation
+ * of that path at all. Untracked ancestors are invisible here by design: a
+ * symlinked configuration directory of the user's own arrangement is the user's,
+ * and deploy writes through it, cleanup prunes through it, and update captures
+ * through it — all correctly.
+ *
+ * The answer is derived from the load's own observations (collect_displaced):
+ * the record's claims are covered on every load, the view's exactly when the
+ * directory analysis ran — a load with analyze_directories off (sync, diff) reads
+ * NULL over a displaced view claim, which is the reporting gap those commands
+ * already accept. The outermost such ancestor is returned: the true offender,
+ * whose occupant every deeper observation went through. Fate-blind by construction
+ * — whether *this run* converges the displacement is deploy's question, asked
+ * of its own fates against this answer (check_ancestry).
+ *
+ * @param ws Workspace (NULL returns NULL)
+ * @param path Path to test (NULL returns NULL); proper ancestors only, so a
+ *        displaced directory is never its own answer
+ * @return Borrowed path (workspace lifetime), or NULL
+ */
+const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path);
+
+/**
  * Look up the record dotta keeps of a path
  *
  * O(1) probe over the anchors snapshot, active and orphan paths alike. Returns

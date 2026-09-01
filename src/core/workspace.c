@@ -151,6 +151,14 @@ struct workspace {
     ptr_array_t diverged;                        /* workspace_item_t * (files + directories) */
     hashmap_t *diverged_index;                   /* filesystem_path → workspace_item_t * */
 
+    /* The displaced tracked directories: every path the view or the record claims
+     * as a directory that the load observed occupied by anything else. Derived
+     * by collect_displaced once the directory-bearing analyses have run;
+     * arena-backed, paths borrowed from the items and the record. Almost always
+     * empty, which is what makes the probe free (workspace_displaced_ancestor). */
+    const char **displaced;                      /* filesystem_path of each displaced directory */
+    size_t displaced_count;
+
     /* Confirmations accumulated during divergence analysis */
     confirmation_t *confirmations;               /* Pending slow-path confirmations (owned) */
     size_t confirmation_count;                   /* Number of pending confirmations */
@@ -2205,6 +2213,86 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 }
 
 /**
+ * Collect the displaced tracked directories from the load's own observations
+ *
+ * A tracked directory is displaced when the view or the record claims the path
+ * as a directory and the load observed something else standing there. The set
+ * is read off the items first — a DIRECTORY-kind item carrying DIVERGENCE_TYPE
+ * is exactly that observation, and the bit's two producers (the directory
+ * analyzer's type arm, the orphan analyzer's displaced arm) each stamp it only
+ * after ruling out absence and an unstattable path — so for every analyzed path
+ * the derivation costs no syscall. An orphaned directory record with no item
+ * was never observed this load (orphan analysis did not run; an analysis that
+ * ran leaves an item for every orphan), so the collect takes the load's one look
+ * at it here, under the orphan analyzer's own displaced rule: present, stattable,
+ * and not a directory. One observation per path either way — the one-producer
+ * rule cleanup.h states for the occupant holds for this fact too.
+ *
+ * Runs after the analyses that observe directories and before the untracked scan,
+ * which must not open a directory whose path resolves through a squatter
+ * (analyze_untracked_files). The record side is why the list is trustworthy on
+ * every load, whatever the command's analysis options; the view side is as complete
+ * as the analyses that ran (workspace_displaced_ancestor documents the reach).
+ * The bound counts every no-item orphaned directory record, not just the displaced
+ * ones — a true bound, loose only while such a record's path stands honestly,
+ * and the list is empty on every healthy load.
+ */
+static error_t *collect_displaced(workspace_t *ws) {
+    size_t bound = 0;
+
+    for (size_t i = 0; i < ws->diverged.count; i++) {
+        const workspace_item_t *item = ws->diverged.items[i];
+
+        if (item->item_kind == PATH_KIND_DIRECTORY &&
+            (item->divergence & DIVERGENCE_TYPE)) {
+            bound++;
+        }
+    }
+    for (size_t i = 0; i < ws->orphan_count; i++) {
+        const anchor_t *anchor = ws->orphans[i];
+
+        if (path_type_kind(anchor->type) == PATH_KIND_DIRECTORY &&
+            !hashmap_has(ws->diverged_index, anchor->filesystem_path)) {
+            bound++;
+        }
+    }
+    if (bound == 0) {
+        return NULL;
+    }
+
+    ws->displaced = arena_alloc(ws->arena, bound * sizeof(*ws->displaced));
+    if (!ws->displaced) {
+        return ERROR(ERR_MEMORY, "Failed to allocate displaced directory list");
+    }
+
+    for (size_t i = 0; i < ws->diverged.count; i++) {
+        const workspace_item_t *item = ws->diverged.items[i];
+
+        if (item->item_kind == PATH_KIND_DIRECTORY &&
+            (item->divergence & DIVERGENCE_TYPE)) {
+            ws->displaced[ws->displaced_count++] = item->filesystem_path;
+        }
+    }
+    for (size_t i = 0; i < ws->orphan_count; i++) {
+        const anchor_t *anchor = ws->orphans[i];
+
+        if (path_type_kind(anchor->type) != PATH_KIND_DIRECTORY ||
+            hashmap_has(ws->diverged_index, anchor->filesystem_path)) {
+            continue;
+        }
+
+        fs_occupant_t occupant = fs_lstat_occupant(anchor->filesystem_path, NULL);
+
+        if (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN &&
+            occupant != FS_OCCUPANT_NONE) {
+            ws->displaced[ws->displaced_count++] = anchor->filesystem_path;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Order two rows by filesystem path (qsort callback)
  *
  * strcmp order is SQLite's BINARY order, which the slices carried when they were
@@ -2470,6 +2558,16 @@ error_t *workspace_load(
         }
     }
 
+    /* The displaced tracked directories, derived from the observations above:
+     * the fact every consumer that judges a path beneath one must ask, established
+     * here once and trusted downstream. Unconditional — the record side must
+     * hold whatever analyses the command chose. */
+    err = collect_displaced(ws);
+    if (err) {
+        workspace_free(ws);
+        return err;
+    }
+
     /* Analyze tracked directories for untracked files */
     if (options->analyze_untracked) {
         err = analyze_untracked_files(ws, config);
@@ -2560,6 +2658,34 @@ const manifest_row_t *workspace_lookup(
 ) {
     if (!ws) return NULL;
     return manifest_lookup(ws->manifest, filesystem_path);
+}
+
+/**
+ * The displaced tracked directory above `path`, or NULL
+ */
+const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path) {
+    if (!ws || !path) {
+        return NULL;
+    }
+
+    const char *outermost = NULL;
+    size_t shortest = 0;
+
+    /* The shortest match is the outermost ancestor: a deeper displaced directory
+     * was itself observed through the outer one, so the outer occupant's fate
+     * settles both. The list is unordered — two analyses and the record walk
+     * fill it — so the scan asks for the minimum rather than the first hit. */
+    for (size_t i = 0; i < ws->displaced_count; i++) {
+        const char *dir = ws->displaced[i];
+        size_t len = strlen(dir);
+
+        if (str_path_beneath(path, dir, len) && (!outermost || len < shortest)) {
+            outermost = dir;
+            shortest = len;
+        }
+    }
+
+    return outermost;
 }
 
 /**

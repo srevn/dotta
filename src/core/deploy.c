@@ -180,7 +180,7 @@ static error_t *partition_push(
 }
 
 /**
- * Is `path` beneath a pending directory row observed squatted?
+ * Is `path` beneath a displaced tracked directory this scope converges?
  *
  * A non-directory at a tracked directory's path is what every probe of the paths
  * beneath it went through — the workspace's lstat, and so its verdicts and the
@@ -194,38 +194,36 @@ static error_t *partition_push(
  * the index says. A file or dangling-link squatter changes nothing: beneath it
  * every probe already failed (ENOTDIR), and absent was the verdict anyway.
  *
- * Squatted is the workspace's TYPE verdict on the row, and only a *pending* row
- * counts: one -e skips is not replaced this run, so what was observed through
- * it stands. Walks directories.pending, which is in prefix order, so the planner
- * can ask this of a directory row while the bucket is still filling and find
- * the row's ancestors already there. Preflight splits the same premise by the
- * ancestor's fate — beneath_replaced_directory and skipped_squatter_above, asked
- * of the verdicts — and writes the answer into the verdict's occupant, which is
+ * Displaced is the workspace's fact (workspace_displaced_ancestor — the outermost
+ * decides: a deeper displaced directory was itself observed through it, and
+ * replacing the outer one empties every path beneath), and only a squatter this
+ * scope reaches counts: a squatted row in scope always has work (the TYPE
+ * divergence), so "converged this run" is exactly "a view row this scope accepts
+ * and does not exclude" — one -e skips is not replaced this run, and a record-only
+ * claim has no row to converge (cleanup's business, not the plan's). The plan
+ * approximates with scope; preflight exacts the same premise against the fates
+ * (check_ancestry) and writes the answer into the verdict's occupant, which is
  * where the executors read it.
  *
- * @param ws Workspace, for the ancestor's verdict (must not be NULL)
- * @param plan Plan whose pending directories are the candidates (must not be NULL)
+ * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
+ * @param scope Operation scope, for the ancestor's reach (must not be NULL)
  * @param path Planned path (must not be NULL)
  */
 static bool beneath_squatted_directory(
-    const workspace_t *ws, const deploy_plan_t *plan, const char *path
+    const workspace_t *ws, const scope_t *scope, const char *path
 ) {
-    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
+    const char *dir = workspace_displaced_ancestor(ws, path);
 
-    for (size_t i = 0; i < dirs.count; i++) {
-        const char *dir = dirs.entries[i]->filesystem_path;
-
-        if (!str_path_beneath(path, dir, strlen(dir))) {
-            continue;
-        }
-
-        const workspace_item_t *item = workspace_get_item(ws, dir);
-        if (item && (item->divergence & DIVERGENCE_TYPE)) {
-            return true;
-        }
+    if (!dir) {
+        return false;
     }
 
-    return false;
+    const manifest_row_t *row = workspace_lookup(ws, dir);
+
+    return row &&
+           scope_accepts_profile(scope, row->profile) &&
+           scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY) &&
+           !scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY);
 }
 
 /**
@@ -247,11 +245,9 @@ error_t *deploy_plan_build(
 
     error_t *err = NULL;
 
-    /* Directories before files: a pending directory row observed squatted plans
-     * every path beneath it as absent (beneath_squatted_directory), and those
-     * paths are of either kind — so the pending directory bucket must be complete,
-     * in prefix order, before a file is classified, and each directory row must
-     * find its own ancestors already classified. */
+    /* Directories then files — the order preflight decides and the run acts in.
+     * Convention alone: each row's classification reads the workspace and the
+     * scope, never the buckets, so neither loop depends on the other having run. */
     manifest_rows_t dirs = workspace_directories(ws);
     for (size_t i = 0; i < dirs.count; i++) {
         const manifest_row_t *row = dirs.entries[i];
@@ -261,7 +257,7 @@ error_t *deploy_plan_build(
             continue;                        /* out of scope: invisible */
         }
 
-        bool absent = beneath_squatted_directory(ws, plan, row->filesystem_path);
+        bool absent = beneath_squatted_directory(ws, scope, row->filesystem_path);
 
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
@@ -284,7 +280,7 @@ error_t *deploy_plan_build(
         }
 
         const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
-        bool absent = beneath_squatted_directory(ws, plan, row->filesystem_path);
+        bool absent = beneath_squatted_directory(ws, scope, row->filesystem_path);
 
         /* Occupancy is the workspace's own lstat, not a fresh probe: a row with
          * work always has an item (deploy_needs_work(NULL) is false), and lstat
@@ -445,6 +441,12 @@ static size_t ancestor_len(size_t slash) {
  * to a directory: a symlinked configuration directory is a directory for the
  * purpose of writing beneath it. *out_is_dir is that second answer; *out_st is
  * the lstat of a present ancestor. errno is lstat's on FS_OCCUPANT_UNKNOWN.
+ *
+ * The stat-through-the-link is exactly where a symlink squatting a TRACKED
+ * directory would read as a directory and wave the write through — which is why
+ * the ancestry rung (check_ancestry) guards tracked ancestors before any ladder
+ * reaches a probe; this probe's answer stands for untracked ones, the user's
+ * own arrangement.
  */
 static fs_occupant_t probe_ancestor(
     char *scratch, size_t slash, bool *out_is_dir, struct stat *out_st
@@ -566,76 +568,77 @@ static bool directory_is_deployable(
 }
 
 /**
- * Beneath a squatted tracked directory this run replaces?
+ * The fate a displaced ancestor imposes on a planned row
  *
- * The premise beneath_squatted_directory carries at plan time — "the squatter
- * is gone before anything beneath it is written" — asked of the verdicts rather
- * than the plan, so it is exactly true. A squatted directory row is replaced
- * iff --force (path_clearance cannot refuse one: the squatter is never itself a
- * directory), so this is force-aware by construction and reads no flag.
+ * The one question the ladders ask before any probe of their own, because a
+ * displaced tracked directory above the path invalidates every probe beneath it
+ * — the landing check's included: a symlink squatting a tracked directory points
+ * somewhere real and writable, so access(2) would wave the write through and
+ * the run would deploy INTO the link's target, over whatever the user keeps there.
+ * The workspace names the offender (workspace_displaced_ancestor — the outermost,
+ * fate-blind); this splits the answer by what the run itself decided about that
+ * ancestor, the premise the plan carried by scope now asked of the verdicts, so
+ * it is exactly true. In decision order:
+ *
+ *   deployable    the directory pass converges the ancestor before this row is
+ *                 reached — created, fixed or replaced — so from here down the
+ *                 path is empty at write time. *out_absent; the row is asked
+ *                 nothing else
+ *   skipped       the squatter stays: nothing beneath it can land, and no
+ *                 probe of the path can be trusted about it. The row inherits
+ *                 the ancestor's own reason, ancestor named — the fate is the
+ *                 ancestor's, so the class (--force or not) and the exit code
+ *                 must be the ancestor's too: TYPE keeps the consent class and
+ *                 --force lifts parent and child together, PERMISSION keeps the
+ *                 incapacity no flag lifts
+ *   no fate       this run never reaches the ancestor (out of scope, -p'd
+ *                 away, -e'd, or a record-only claim no view row names): ANCESTOR
+ *                 — the same fate an untracked squatter earns at check_landing,
+ *                 an incapacity, and the remedy is a run whose scope covers the
+ *                 ancestor
+ *
+ * Written default-then-override: ANCESTOR is what an unreached ancestor earns,
+ * and the skip scan replaces it with the ancestor's own reason when this run
+ * took one. Called before check_landing in both ladders and once more per ancestor
+ * candidate; directories are decided parents-first, so a displaced ancestor's
+ * own fate is always already taken when a row beneath it is reached. The outs
+ * are written only when an ancestor decides — the caller's initialization (NONE,
+ * 0, false) stands otherwise, and the row judges itself.
+ *
+ * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
+ * @param result Preflight result, for the fates decided so far (must not be NULL)
+ * @param path Planned path (must not be NULL)
+ * @param out_reason NONE / ANCESTOR / the ancestor's own (must not be NULL)
+ * @param out_ancestor Prefix length of the named ancestor, or 0 (must not be NULL)
+ * @param out_absent Whether the run empties the path before writing it (must
+ *        not be NULL)
  */
-static bool beneath_replaced_directory(
-    const deploy_preflight_result_t *result, const char *path
+static void check_ancestry(
+    const workspace_t *ws, const deploy_preflight_result_t *result, const char *path,
+    deploy_skip_reason_t *out_reason, size_t *out_ancestor, bool *out_absent
 ) {
-    for (size_t i = 0; i < result->directories.count; i++) {
-        const deploy_verdict_t *v = &result->directories.entries[i];
-        const char *dir = v->row->filesystem_path;
+    const char *dir = workspace_displaced_ancestor(ws, path);
 
-        if (!str_path_beneath(path, dir, strlen(dir))) {
-            continue;
-        }
-        if (deploy_occupant_present(v->occupant) && v->occupant != FS_OCCUPANT_DIRECTORY) {
-            return true;
-        }
+    if (!dir) {
+        return;
     }
 
-    return false;
-}
+    if (directory_is_deployable(result, dir)) {
+        *out_absent = true;
+        return;
+    }
 
-/**
- * The skip of a squatted tracked directory above this path, or NULL
- *
- * The other half of the same premise. When the directory pass skips the squatted
- * row instead of replacing it, the squatter stays: nothing beneath it can land,
- * and no probe of the path can be trusted about it — which is exactly why the
- * landing check cannot be left to catch this: a symlink squatting a tracked
- * directory points somewhere real and writable, so check_landing would wave the
- * write through and the run would deploy INTO the link's target, over whatever
- * the user keeps there.
- *
- * The row takes its ancestor's own reason, with the ancestor named: the fate is
- * the ancestor's, so the class (--force or not) and the exit code must be the
- * ancestor's too.
- *
- * The test is the skip's REASON (TYPE), not the item's TYPE bit: an inheriting
- * child directory carries the reason without ever having carried the bit, and
- * must block its own descendants exactly as its ancestor blocks it. Squatters
- * only — a directory skipped for a landing or readability reason blocks nothing
- * on its own account: its descendants meet the same refusal at their own landing
- * check and are named against the real offender.
- *
- * FIRST MATCH WINS, in decision order — directories are decided parents-first,
- * so the first skip above the path is the outermost, the true squatter, never
- * one of its inheriting children. That keeps the named ancestor the node actually
- * in the way.
- */
-static const deploy_skip_t *skipped_squatter_above(
-    const deploy_preflight_result_t *result, const char *path
-) {
+    *out_reason = DEPLOY_SKIP_ANCESTOR;
+    *out_ancestor = strlen(dir);
+
     for (size_t i = 0; i < result->skipped.count; i++) {
         const deploy_skip_t *s = &result->skipped.entries[i];
-        const char *dir = s->row->filesystem_path;
 
-        if (s->reason != DEPLOY_SKIP_TYPE || s->row->type != PATH_TYPE_DIRECTORY) {
-            continue;
-        }
-
-        if (str_path_beneath(path, dir, strlen(dir))) {
-            return s;
+        if (strcmp(s->row->filesystem_path, dir) == 0) {
+            *out_reason = s->reason;
+            break;
         }
     }
-
-    return NULL;
 }
 
 /**
@@ -876,14 +879,13 @@ static error_t *resolve_deployment_ownership(
  * never asked (symlink(2) takes no mode). The write reads it off the row, and
  * the verdict does not carry it: the decided facts are exactly the ones not on
  * the row. Ownership is one, resolved ahead of the write so the write applies
- * it atomically through the descriptor (fchown on the file or directory fd,
- * lchown on a link): there is never a moment when the path exists with the
- * wrong owner.
+ * it atomically through the descriptor (fchown on the file or directory fd, lchown
+ * on a link): there is never a moment when the path exists with the wrong owner.
  *
  * @param opts Deployment options (must not be NULL)
  * @param warnings Preflight warnings (must not be NULL)
- * @param v Verdict whose uid and gid are decided, its row assigned (must not
- *        be NULL)
+ * @param v Verdict whose uid and gid are decided, its row assigned (must not be
+ *        NULL)
  * @return Error or NULL on success (a strict-mode ownership failure is one)
  */
 static error_t *resolve_metadata(
@@ -955,7 +957,8 @@ static bool above_deployable_row(
  * read them without a gate. A row planned beneath a squatter this run replaces
  * gets its verdict too — absent, nothing asked — so the executors read one shape
  * for every row; beneath a squatter this run skips, it inherits that skip instead,
- * ancestor named.
+ * and beneath one the run never reaches it is skipped ANCESTOR — the ancestry
+ * rung (check_ancestry), asked before any probe of the row's own.
  */
 error_t *deploy_preflight(
     const workspace_t *ws,
@@ -1020,28 +1023,30 @@ error_t *deploy_preflight(
         const manifest_row_t *row = dirs.entries[i];
         const char *path = row->filesystem_path;
 
-        /* Its ancestor's fate first, before any probe: directories decide
-         * parents-first, so every directory above this path already has one.
-         * Beneath a squatter the pass skips, nothing can land and nothing observed
-         * can be trusted — the row inherits that skip, ancestor named. */
-        const deploy_skip_t *above = skipped_squatter_above(result, path);
-        if (above) {
+        /* Its ancestry first, before any probe: a displaced tracked directory
+         * above this path invalidates every look taken beneath it, the landing
+         * check's included. Directories decide parents-first, so such an ancestor's
+         * own fate is already taken. */
+        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
+        size_t ancestor = 0;
+        bool absent = false;
+
+        check_ancestry(ws, result, path, &reason, &ancestor, &absent);
+
+        if (reason != DEPLOY_SKIP_NONE) {
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
             s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
-            s->reason = above->reason;
-            s->ancestor = strlen(above->row->filesystem_path);
+            s->reason = reason;
+            s->ancestor = ancestor;
             continue;
         }
 
-        /* Planned as absent: every probe of this path would reach the squatter's
-         * target and answer for the wrong tree, and the path is empty once the
-         * directory pass has replaced the squatter — no type, no content, nothing
-         * in the way. Its landing is the replaced ancestor's, whose own verdict
-         * this loop has already decided — the plan's prefix order puts every
-         * directory row after its own ancestors. */
-        if (beneath_replaced_directory(result, path)) {
+        /* Planned as absent: the path is empty once the directory pass has
+         * converged the ancestor — no type, no content, nothing in the way, and
+         * the landing is that ancestor's. */
+        if (absent) {
             deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
             v->row = row;
@@ -1054,8 +1059,6 @@ error_t *deploy_preflight(
 
         const workspace_item_t *item = workspace_get_item(ws, path);
         fs_occupant_t occupant = item->occupant;
-        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        size_t ancestor = 0;
 
         /* The rungs, first match wins — the enum's own order. A directory already
          * there is converged in place: fchmod and fchown ask for ownership, not
@@ -1110,25 +1113,29 @@ error_t *deploy_preflight(
         const manifest_row_t *row = files.entries[i];
         const char *path = row->filesystem_path;
 
-        /* Its ancestor's fate first (see the directory loop): the directory pass
-         * is decided in full, so a squatter above is either replaced or skipped
-         * by now. */
-        const deploy_skip_t *above = skipped_squatter_above(result, path);
-        if (above) {
+        /* Its ancestry first (see the directory loop): the directory pass is
+         * decided in full, so a displaced ancestor is converged, skipped, or
+         * out of this run's reach by now. */
+        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
+        size_t ancestor = 0;
+        bool absent = false;
+
+        check_ancestry(ws, result, path, &reason, &ancestor, &absent);
+
+        if (reason != DEPLOY_SKIP_NONE) {
             deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
 
             s->row = row;
             s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
-            s->reason = above->reason;
-            s->ancestor = strlen(above->row->filesystem_path);
+            s->reason = reason;
+            s->ancestor = ancestor;
             continue;
         }
 
         /* Planned as absent (see the directory loop): written beneath a directory
-         * this run replaces first, so neither a conflict nor a landing question
-         * is its own — the replaced ancestor's verdict, decided above, carries
-         * both. */
-        if (beneath_replaced_directory(result, path)) {
+         * this run converges first, so neither a conflict nor a landing question
+         * is its own. */
+        if (absent) {
             deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
             v->row = row;
@@ -1139,12 +1146,11 @@ error_t *deploy_preflight(
             continue;
         }
 
-        /* A pending row not beneath a squatter has an item: the planner routed
-         * it through deploy_needs_work, and deploy_needs_work(NULL) is false. */
+        /* Self-judged: no displaced ancestor stands above the path, so the row
+         * is pending only because deploy_needs_work said so — and
+         * deploy_needs_work(NULL) is false, so the item is there. */
         const workspace_item_t *item = workspace_get_item(ws, path);
         fs_occupant_t occupant = item->occupant;
-        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        size_t ancestor = 0;
 
         /* The rungs, first match wins — the enum's own order. Every file row
          * lands through its parent, whichever arm writes it and whether or not
@@ -1217,21 +1223,20 @@ error_t *deploy_preflight(
     }
 
     /* The ancestors: every directory row the run does not act on, absent as the
-     * plan reads it, that stands above a deployable row. Absent as the plan reads
-     * it is the planner's own reading — beneath a squatter this run replaces,
-     * or the workspace's occupant (a row without an item is present and converged).
-     * ensure_parents creates exactly these on the way down to a deployed path,
-     * with the metadata decided here; a candidate the world makes present before
-     * then is simply not created, and costs nothing.
+     * run will find it, that stands above a deployable row. Absent has two
+     * readings, both fate-aware now: the rung's — beneath a displaced ancestor
+     * the run converges first — or the workspace's own occupant (a row without
+     * an item is present and converged). ensure_parents creates exactly these
+     * on the way down to a deployed path, with the metadata decided here; a
+     * candidate the world makes present before then is simply not created, and
+     * costs nothing.
      *
-     * The first and last gates read the verdicts, not the plan: a skipped directory
-     * row flows past the first into the candidate pool, and the other two keep
-     * it out — a TYPE-, inherited- or UNREADABLE-skipped row is not absent as
-     * the plan reads it (present, or held beneath a squatter that stays), and a
-     * landing-skipped one has no deployable row beneath it (the invariant,
-     * deploy_preflight's doc). The absent-through-a-squatter reading stays
-     * plan-based: whether the candidate reads absent through one is a fact about
-     * observation, not about this run's choices. */
+     * Every gate reads the verdicts, not the plan: a skipped directory row flows
+     * past the first into the candidate pool, and the later gates keep it out —
+     * one held beneath a displaced ancestor that stays is not a parent this run
+     * can make (the rung's reason), a TYPE- or UNREADABLE-skipped row is not
+     * absent (present, as its item read), and a landing-skipped one has no
+     * deployable row beneath it (the invariant, deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const manifest_row_t *row = all_dirs.entries[i];
         const char *path = row->filesystem_path;
@@ -1240,11 +1245,19 @@ error_t *deploy_preflight(
             continue;
         }
 
-        const workspace_item_t *item = workspace_get_item(ws, path);
-        bool absent = beneath_squatted_directory(ws, plan, path) ||
-            (item && item->occupant == FS_OCCUPANT_NONE);
+        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
+        size_t ancestor = 0;
+        bool absent = false;
 
-        if (!absent || !above_deployable_row(result, path)) {
+        check_ancestry(ws, result, path, &reason, &ancestor, &absent);
+        if (reason != DEPLOY_SKIP_NONE) {
+            continue;   /* held beneath a displaced ancestor that stays */
+        }
+
+        const workspace_item_t *item = workspace_get_item(ws, path);
+
+        if (!(absent || (item && item->occupant == FS_OCCUPANT_NONE)) ||
+            !above_deployable_row(result, path)) {
             continue;
         }
 
@@ -1386,8 +1399,8 @@ static error_t *release_directories(deploy_run_t *run) {
  * Ownership applies atomically through the descriptor
  * (fs_create_dir_with_ownership); idempotent, so a directory already there is
  * converged in place. The mode is the row's, the ownership the verdict's, and
- * the row is held for release when its recorded mode is narrower than the
- * working mode (hold_directory).
+ * the row is held for release when its recorded mode is narrower than the working
+ * mode (hold_directory).
  *
  * @param run Run context (must not be NULL)
  * @param v Verdict for the tracked row (must not be NULL; borrowed, read-only)
@@ -1830,12 +1843,12 @@ error_t *deploy_execute(
         return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
     }
 
-    /* The receipt is sized to the verdicts up front — one slot per verdict,
-     * zeroed, filled in verdict order as each act lands (a zero count allocates
-     * one slot rather than nothing, so every array is an array; a zeroed slot's
-     * stat IS the UNSET triple). count gates what a consumer reads, so a
-     * fail-stop's untouched slots are invisible and the partial receipt holds
-     * exactly what happened — for a file, with its own write's proof. */
+    /* The receipt is sized to the verdicts up front — one slot per verdict, zeroed,
+     * filled in verdict order as each act lands (a zero count allocates one slot
+     * rather than nothing, so every array is an array; a zeroed slot's stat IS
+     * the UNSET triple). count gates what a consumer reads, so a fail-stop's
+     * untouched slots are invisible and the partial receipt holds exactly what
+     * happened — for a file, with its own write's proof. */
     result->deployed.entries = calloc(
         verdicts->files.count + 1, sizeof(*result->deployed.entries)
     );
@@ -1887,7 +1900,8 @@ error_t *deploy_execute(
     /* Every verdict is work the plan chose, by construction: the planner routed
      * the row through deploy_needs_work and past every reason to skip it, so
      * this loop applies no filter of its own. Clean in-scope rows with deployed_at
-     * == 0 are apply's adoption step, which stamps the anchor without deploy_file. */
+     * == 0 are apply's adoption step, which stamps the anchor without
+     * deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
         deploy_outcome_t *o = &result->deployed.entries[result->deployed.count];

@@ -245,12 +245,12 @@ typedef struct {
  * an item the walk skipped (a directory the race guard refused) lands in no list,
  * is not named, and gets no record write.
  *
- * Items are borrowed (workspace lifetime); the pruned and retired keys are
- * storage paths their writers copy out, resolved through the mount table by the
- * record loop — the same route remove's record loop takes. The derivation's two
- * outs are shaped by what a reader can do with them (metadata.h): an authored
- * claim has no consequence beyond the sheet, so `claimed` is the count the commit
- * gate and the receipt read, while a dropped claim leaves the view by this commit
+ * Items are borrowed (workspace lifetime); the pruned and retired keys are storage
+ * paths their writers copy out, resolved through the mount table by the record
+ * loop — the same route remove's record loop takes. The derivation's two outs
+ * are shaped by what a reader can do with them (metadata.h): an authored claim
+ * has no consequence beyond the sheet, so `claimed` is the count the commit gate
+ * and the receipt read, while a dropped claim leaves the view by this commit
  * and only its key can settle the record it strands.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
@@ -438,8 +438,9 @@ static error_t *filter_items_for_update(
  * file, the claim capture for a directory, the entry removal for a deletion.
  * The chain rides the capture: after the walk, every captured leaf's ancestry
  * is re-derived into the same sheet — the content now comes from this machine,
- * and so does its way. The walk ends with the redundancy prune, one metadata
- * save, and the commit.
+ * and so does its way — and a named run hands in the profile's in-scope rows,
+ * each a leaf whose chain is climbed whether or not anything about it diverged.
+ * The walk ends with the redundancy prune, one metadata save, and the commit.
  *
  * Success means committed or untouched: a walk that captured nothing and deleted
  * nothing saves nothing, stages nothing, commits nothing — the worktree stays
@@ -453,8 +454,13 @@ static error_t *filter_items_for_update(
  * @param wt Worktree handle (must not be NULL, already checked out to profile
  *           branch)
  * @param profile Profile to update (must not be NULL)
- * @param items Array of workspace items to update (must not be NULL)
+ * @param items Array of workspace items to update (may be NULL when item_count
+ *              is 0)
  * @param item_count Number of items
+ * @param rows The named run's in-scope view rows for this profile, each the leaf
+ *             of a chain to re-derive (may be NULL when row_count is 0; a bare
+ *             run names no paths and hands none)
+ * @param row_count Number of rows
  * @param opts Update options (must not be NULL)
  * @param commit The commit's bookkeeping, zero-filled by the caller; the walk
  *               fills it (must not be NULL)
@@ -469,6 +475,8 @@ static error_t *update_profile(
     const char *profile,
     const workspace_item_t **items,
     size_t item_count,
+    const manifest_row_t **rows,
+    size_t row_count,
     const cmd_update_options_t *opts,
     update_commit_t *commit,
     size_t *out_processed
@@ -476,7 +484,6 @@ static error_t *update_profile(
     CHECK_NULL(ctx);
     CHECK_NULL(wt);
     CHECK_NULL(profile);
-    CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(commit);
     CHECK_NULL(out_processed);
@@ -486,7 +493,7 @@ static error_t *update_profile(
     *out_processed = 0;
     commit->profile = profile;
 
-    if (item_count == 0) {
+    if (item_count == 0 && row_count == 0) {
         return NULL;
     }
 
@@ -524,11 +531,13 @@ static error_t *update_profile(
     }
 
     /* The capture list can hold every item; the walk fills it with the ones that
-     * landed. */
-    commit->captured = calloc(item_count, sizeof(update_capture_t));
-    if (!commit->captured) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
-        goto cleanup;
+     * landed. A rows-only call has nothing to capture and no list to size. */
+    if (item_count > 0) {
+        commit->captured = calloc(item_count, sizeof(update_capture_t));
+        if (!commit->captured) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
+            goto cleanup;
+        }
     }
 
     /* Get worktree index for staging */
@@ -811,6 +820,20 @@ static error_t *update_profile(
         if (err) goto cleanup;
     }
 
+    /* A named path re-derives its subtree's chains: the rows the caller gathered
+     * are the leaves the run's paths named, each climbed whether or not anything
+     * about it diverged — naming is consent, and this is the derivation's one
+     * route to a retire (a captured leaf's chain cannot hold a squatted rung; a
+     * named one can, and naming it is the remedy). A row the walk also captured
+     * climbs twice for free: the derivation counts only differences. */
+    for (size_t i = 0; i < row_count; i++) {
+        err = metadata_capture_ancestors(
+            metadata, rows[i]->storage_path, rows[i]->filesystem_path,
+            &commit->claimed, &commit->retired
+        );
+        if (err) goto cleanup;
+    }
+
     if (commit->claimed > 0) {
         output_info(
             out, OUTPUT_VERBOSE, "  Captured %zu ancestor director%s",
@@ -831,10 +854,9 @@ static error_t *update_profile(
      * commit triggers the metadata rewrite, never drives one. The derivation is
      * not redundancy: a chain re-derived under a captured leaf or a named path
      * is the user's own word about the disk, and it drives the commit it needs
-     * — which is how the remedy for a rung the world moved under works at
-     * all. */
+     * — which is how the remedy for a rung the world moved under works at all. */
     size_t path_count = commit->captured_count + commit->deleted.count +
-                        commit->claimed + commit->retired.count;
+        commit->claimed + commit->retired.count;
     if (path_count == 0) {
         goto cleanup;
     }
@@ -895,7 +917,7 @@ static error_t *update_profile(
      * derivation that only refreshed names nothing and the message's file list
      * says so. */
     size_t named_count = commit->captured_count + commit->deleted.count +
-                         commit->retired.count;
+        commit->retired.count;
     if (named_count > 0) {
         storage_paths = malloc(named_count * sizeof(char *));
         if (!storage_paths) {
@@ -965,13 +987,14 @@ cleanup:
  * fast path). A path the commit let go — a deleted item, a directory entry the
  * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
  * — left Git by this commit: with no row left at the path its record retires
- * (nothing backs it now); with a lower profile's row at the path it is a
- * fallback — the record stays and reads [reassigned] until apply deploys it. The rule "anchor only the rows this profile
- * won" is the same one add applies: a higher profile's row is its own, and its
- * record is its own. Both kinds: a directory's claim (mode, ownership) is captured
- * from disk exactly as add captures it, so the capture owns the directory the
- * same way — the ownership the orphan gate asks for on scope exit — with no stat
- * triple, a directory having no content to confirm.
+ * (nothing backs it now); with a lower profile's row at the path it is a fallback
+ * — the record stays and reads [reassigned] until apply deploys it. The rule
+ * "anchor only the rows this profile won" is the same one add applies: a higher
+ * profile's row is its own, and its record is its own. Both kinds: a directory's
+ * claim (mode, ownership) is captured from disk exactly as add captures it, so
+ * the capture owns the directory the same way — the ownership the orphan gate
+ * asks for on scope exit — with no stat triple, a directory having no content
+ * to confirm.
  *
  * Algorithm:
  *   1. Begin write transaction on caller's handle
@@ -1156,8 +1179,12 @@ cleanup:
  * Profiles are walked in enabled-set order — the model's one canonical profile
  * order — so multi-profile runs commit, report, and (on a stop) strand in one
  * predictable sequence; within a profile, items keep filter order. Every item's
- * profile is in the enabled set by construction (the view is built from it), so
- * the per-profile gather drops nothing.
+ * and every row's profile is in the enabled set by construction (the view is
+ * built from it), so the per-profile gathers drop nothing. A profile is visited
+ * when it has items to commit or chains to re-derive: a named run's row slice
+ * reaches profiles whose items all held still, which is what makes the derivation's
+ * consent trigger — and the remedy it carries — work on a quiet tree at all. A
+ * bare run hands no rows and visits exactly the profiles it always did.
  *
  * The commits that landed cross the error boundary: out_commits receives one
  * bookkeeping entry per landed commit, handed to the caller even when a later
@@ -1169,8 +1196,12 @@ cleanup:
  *            the shared worktree, the copy step reads the key and the encryption
  *            policy)
  * @param enabled The enabled set, in order (must not be NULL)
- * @param update_items Pre-filtered items to update (must not be NULL)
+ * @param update_items Pre-filtered items to update (may be NULL when update_count
+ *                     is 0)
  * @param update_count Number of items
+ * @param derive_rows The named run's in-scope view rows, the chains to re-derive
+ *                    (may be NULL when derive_count is 0)
+ * @param derive_count Number of rows
  * @param opts Update options (must not be NULL)
  * @param total_updated Output: total items committed across all profiles (must
  *                      not be NULL)
@@ -1186,6 +1217,8 @@ static error_t *update_execute_for_all_profiles(
     const string_array_t *enabled,
     const workspace_item_t **update_items,
     size_t update_count,
+    const manifest_row_t **derive_rows,
+    size_t derive_count,
     const cmd_update_options_t *opts,
     size_t *total_updated,
     update_commit_t **out_commits,
@@ -1193,7 +1226,6 @@ static error_t *update_execute_for_all_profiles(
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(enabled);
-    CHECK_NULL(update_items);
     CHECK_NULL(opts);
     CHECK_NULL(total_updated);
     CHECK_NULL(out_commits);
@@ -1206,7 +1238,7 @@ static error_t *update_execute_for_all_profiles(
     *out_commits = NULL;
     *out_commit_count = 0;
 
-    if (update_count == 0) {
+    if (update_count == 0 && derive_count == 0) {
         return NULL;
     }
 
@@ -1242,7 +1274,19 @@ static error_t *update_execute_for_all_profiles(
                 }
             }
         }
-        if (group.count == 0) {
+
+        /* This profile's chains to re-derive, when the run named paths */
+        ptr_array_t rows PTR_ARRAY_AUTO = { 0 };
+        for (size_t i = 0; i < derive_count; i++) {
+            if (strcmp(derive_rows[i]->profile, profile) == 0) {
+                err = ptr_array_push(&rows, derive_rows[i]);
+                if (err) {
+                    goto cleanup;
+                }
+            }
+        }
+
+        if (group.count == 0 && rows.count == 0) {
             continue;
         }
 
@@ -1267,26 +1311,35 @@ static error_t *update_execute_for_all_profiles(
         size_t processed = 0;
         err = update_profile(
             ctx, wt, profile, (const workspace_item_t **) group.items,
-            group.count, opts, &bookkeeping, &processed
+            group.count, (const manifest_row_t **) rows.items, rows.count,
+            opts, &bookkeeping, &processed
         );
 
-        /* The commit gate's own sum, read back off the bookkeeping the walk
-         * filled: on a clean return, zero means the gate closed without a commit
-         * and anything else means one landed — a derivation-only commit carries
-         * no user item, so `processed` alone cannot say. Any error means no
-         * commit landed, whatever the bookkeeping holds. */
+        /* The commit gate's own sum, read back off the bookkeeping the walk filled:
+         * on a clean return, zero means the gate closed without a commit and
+         * anything else means one landed — a derivation-only commit carries no
+         * user item, so `processed` alone cannot say. Any error means no commit
+         * landed, whatever the bookkeeping holds. */
         size_t landed = bookkeeping.captured_count + bookkeeping.deleted.count +
-                        bookkeeping.claimed + bookkeeping.retired.count;
+            bookkeeping.claimed + bookkeeping.retired.count;
         if (!err && landed > 0) {
             /* The commit landed: its bookkeeping is the record write's now */
             commits[commit_count++] = bookkeeping;
             *total_updated += processed;
 
             if (!output_is_verbose(out)) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
-                    processed, processed == 1 ? "" : "s"
-                );
+                if (processed > 0) {
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} Updated %zu item%s\n",
+                        processed, processed == 1 ? "" : "s"
+                    );
+                } else {
+                    /* A derivation-only commit: no user item moved, the chains
+                     * did */
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {green}✓{reset} Re-derived the ancestry\n"
+                    );
+                }
             }
         } else {
             /* No commit landed — a walk that touched nothing, or a failure before
@@ -1298,10 +1351,7 @@ static error_t *update_execute_for_all_profiles(
         }
 
         if (err) {
-            err = error_wrap(
-                err, "Failed to update profile '%s'",
-                profile
-            );
+            err = error_wrap(err, "Failed to update profile '%s'", profile);
             goto cleanup;
         }
     }
@@ -1326,7 +1376,8 @@ cleanup:
  * preview's.
  *
  * @param out Output context (must not be NULL)
- * @param items Filtered candidates (must not be NULL)
+ * @param items Filtered candidates (may be NULL when item_count is 0: a named
+ *              run whose candidates all held still previews only its filters)
  * @param item_count Number of items
  * @param opts Update options (must not be NULL)
  * @param counts The candidates counted by fate (must not be NULL)
@@ -1340,7 +1391,6 @@ static error_t *update_display_preview(
     const update_counts_t *counts
 ) {
     CHECK_NULL(out);
-    CHECK_NULL(items);
     CHECK_NULL(opts);
     CHECK_NULL(counts);
 
@@ -1649,6 +1699,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     scope_t *scope = NULL;
     char *profiles_str = NULL;
     workspace_items_t update_items = { 0 };
+    ptr_array_t derive_rows = { 0 };
     size_t total_updated = 0;
 
     /* CLI flags override config */
@@ -1835,8 +1886,39 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         );
     }
 
-    /* Check if we have anything to update */
-    if (update_items.count == 0) {
+    /* A named path re-derives its subtree's chains. Naming is consent, so a run
+     * given paths climbs the chain of every in-scope row under them, captured
+     * or not — the explicit backfill, and the remedy for a rung the world moved
+     * under. The slice is the leaves: blob rows and tracked directory rows, each
+     * the root of its own chain; an ancestor claim is never a leaf — its own
+     * re-derivation is carried by the leaves beneath it, which the residue rule
+     * guarantees exist. The exclude gate binds here (the user excluded the path
+     * from this operation), where the chain riding a captured leaf stays
+     * scope-blind like add's — an exclusion names a path, never the way to it.
+     * A bare run names nothing and derives nothing. */
+    if (opts->file_count > 0) {
+        manifest_rows_t all_rows = manifest_rows(manifest);
+        for (size_t i = 0; i < all_rows.count; i++) {
+            const manifest_row_t *row = all_rows.entries[i];
+
+            if (row->type == PATH_TYPE_DIRECTORY && !row->tracked) {
+                continue;
+            }
+            if (!scope_accepts_entry(
+                scope, row->profile, row->storage_path,
+                path_type_kind(row->type)
+                )) {
+                continue;
+            }
+            err = ptr_array_push(&derive_rows, row);
+            if (err) goto cleanup;
+        }
+    }
+
+    /* Check if we have anything to update — or, on a named run, any chains to
+     * re-derive: whether a chain moved is the walk's to discover, so the named
+     * run proceeds on the slice alone and the summary says what came of it */
+    if (update_items.count == 0 && derive_rows.count == 0) {
         if (opts->only_new) {
             output_info(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
@@ -2006,8 +2088,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         err = update_execute_for_all_profiles(
             ctx, scope_enabled(scope),
             (const workspace_item_t **) update_items.entries,
-            update_items.count, opts,
-            &total_updated, &commits, &commit_count
+            update_items.count,
+            (const manifest_row_t **) derive_rows.items, derive_rows.count,
+            opts, &total_updated, &commits, &commit_count
         );
 
         /* Write the record — for the commits that landed, error or no
@@ -2070,11 +2153,20 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * the plan admitted): say so instead of counting zero */
         output_info(out, OUTPUT_NORMAL, "Nothing was committed");
     } else {
-        output_success(
-            out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
-            total_updated, total_updated == 1 ? "" : "s",
-            commit_count, commit_count == 1 ? "" : "s"
-        );
+        if (total_updated > 0) {
+            output_success(
+                out, OUTPUT_NORMAL, "Updated %zu item%s across %zu profile%s",
+                total_updated, total_updated == 1 ? "" : "s",
+                commit_count, commit_count == 1 ? "" : "s"
+            );
+        } else {
+            /* Every landed commit was derivation-only: say what moved instead
+             * of counting zero items */
+            output_success(
+                out, OUTPUT_NORMAL, "Re-derived the ancestry across %zu profile%s",
+                commit_count, commit_count == 1 ? "" : "s"
+            );
+        }
 
         /* Record feedback, plain: the per-path split is the verbose "Manifest
          * synced" line, and the failure case already said what happened (warning
@@ -2089,6 +2181,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
 cleanup:
     free((void *) update_items.entries);  /* Free array, items are borrowed */
+    ptr_array_deinit(&derive_rows);       /* Rows are the view's */
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (scope) scope_free(scope);

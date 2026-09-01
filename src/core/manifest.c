@@ -9,8 +9,10 @@
  *
  * Key patterns:
  *   - Precedence by claim: manifest_claim is the one find-or-append-and-reset
- *     primitive. A later (higher) claim on a path replaces the slot whatever
- *     its kind; the view holds one row per path.
+ *     primitive. A later (higher) explicit claim on a path replaces the slot
+ *     whatever its kind; a derived one — an ancestor claim, the directory item
+ *     a traversal authored — fills an empty slot and never takes a held one.
+ *     The view holds one row per path.
  *   - Blob OID Extraction: the tree walker reads blob_oid, type and the Git-derived
  *     mode from each borrowed tree entry for O(1) content identity.
  *   - Metadata Integration: the walker attributes per-profile metadata onto each
@@ -478,12 +480,13 @@ static int manifest_claim_blob(
  * The per-profile step both builders run. The tree walk claims every blob
  * (manifest_claim_blob); then every DIRECTORY item of the profile's metadata
  * claims its path — resolved against the mount table, the same way files are —
- * unless this profile already holds the path with a blob: a path is a tree or a
- * blob, so a DIRECTORY item at a blob's storage_path is stale metadata, and the
- * tree is the content authority. A DIRECTORY item under a profile lacking a target
- * binding on this host degrades exactly as the file side does — no row, recorded
- * on the view (manifest_note_unbound) — so both kinds hold under one UNBOUND
- * policy.
+ * subject to the one rule below: a tracked claim yields to this profile's own
+ * blob (a path is a tree or a blob, so a DIRECTORY item at a blob's storage_path
+ * is stale metadata, and the tree is the content authority), and an ancestor
+ * claim yields to whatever already holds the path. A DIRECTORY item under a profile
+ * lacking a target binding on this host degrades exactly as the file side does
+ * — no row, recorded on the view (manifest_note_unbound) — so both kinds hold
+ * under one UNBOUND policy.
  *
  * `profile` is the arena-backed name every row borrows; `metadata` may be NULL
  * (no metadata.json: Git-derived defaults stand, no directories).
@@ -567,20 +570,35 @@ static error_t *manifest_claim_tree(
             continue;
         }
 
-        /* Same-profile rule: the tree's blob outranks the stale item. */
+        /* Same-profile rule for a tracked claim: the tree's blob outranks the
+         * stale item. For an ancestor claim it is the whole rule — a derived
+         * claim fills a slot, it never takes one.
+         *
+         * Ancestors are structurally shared where claims are per-profile and
+         * precedence-resolved, and two profiles that traverse the same directory
+         * derive it identically: their claims carry no intent to conflict, so
+         * they do not compete. The first profile to name the path holds it, and
+         * the row's owner therefore does not move when a profile above it is
+         * enabled — no reassignment churn in the receipts over a directory nobody
+         * named. Every explicit claim outranks every derived one whatever the
+         * precedence order, which is what keeps a walk's tracked claim a scan
+         * root when a higher profile merely passes through the directory, and
+         * what keeps a genuine blob-versus-directory conflict visible instead
+         * of silently taking one of the two rows. */
         const manifest_row_t *held = hashmap_get(manifest->index, filesystem_path);
-        if (held && strcmp(held->profile, profile) == 0) continue;
+        if (held && (!item->tracked || strcmp(held->profile, profile) == 0)) continue;
 
         manifest_row_t *row = NULL;
         err = manifest_claim(manifest, filesystem_path, arena, &row);
         if (err) break;
 
         /* A directory row is claimed from metadata alone: blob_oid stays zero
-         * and encrypted false; owner and group are the item's, and the mode is
-         * the claim or the floor — the row leaves the build total. */
+         * and encrypted false; owner, group and the class are the item's, and
+         * the mode is the claim or the floor — the row leaves the build total. */
         row->storage_path = arena_strdup(arena, item->key);
         row->profile = (char *) profile;
         row->type = PATH_TYPE_DIRECTORY;
+        row->tracked = item->tracked;
         row->mode = item->mode != MODE_UNCLAIMED ? item->mode : DIR_MODE_DEFAULT;
         row->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
         row->group = item->group ? arena_strdup(arena, item->group) : NULL;
@@ -983,11 +1001,17 @@ error_t *manifest_diff(
 
         slot->claimed++;
 
+        /* `tracked` sits beside the mode for the same reason the mode is here:
+         * a directory that stops being a scan root and a convergence target —
+         * or becomes one — is a different promise at the path, and a class flip
+         * usually carries the same mode across, so without this term the receipt
+         * would call it unchanged. */
         const manifest_row_t *old = manifest_lookup(before, row->filesystem_path);
         if (!old) {
             slot->added++;
         } else if (!git_oid_equal(&old->blob_oid, &row->blob_oid) ||
-            old->type != row->type || old->mode != row->mode) {
+            old->type != row->type || old->mode != row->mode ||
+            old->tracked != row->tracked) {
             slot->updated++;
         }
     }

@@ -29,7 +29,9 @@
  *     inputs give the same rows on every machine
  *   - Computed, never stored: every load builds it; nothing invalidates it because
  *     nothing is held past its lifetime
- *   - Precedence-aware: one row per path, the winner's kind
+ *   - Precedence-aware: one row per path, the winner's kind — later profiles
+ *     override earlier, except that a derived directory claim only ever fills
+ *     an empty slot (manifest_row_t's `tracked`)
  *
  * Workflow:
  *   Commands → manifest_build → rows → workspace / deploy / cleanup
@@ -67,7 +69,20 @@ typedef struct anchor anchor_t;
  *                 bytes (docs/encryption-spec.md)
  *   DIRECTORY   — claimed from metadata alone: blob_oid is zero, encrypted is
  *                 false, owner/group are the item's, mode is the claim or
- *                 DIR_MODE_DEFAULT
+ *                 DIR_MODE_DEFAULT, and tracked is the item's class
+ *
+ * Two kinds of directory row, and `tracked` is the whole difference between them.
+ * Every directory row asserts that a path must exist and says what it looks like
+ * where dotta has to make it; `tracked` asserts on top of that which paths the
+ * profile manages itself — its attributes the profile's to enforce, its contents
+ * the profile's to scan. That is the decision procedure every consumer follows:
+ * a question about the path existing is asked of both classes (deploy's ancestors
+ * pass, the displacement probe, cleanup's permanence rule), a question about
+ * managing it of the tracked ones alone (the untracked scan, the directory
+ * divergence, the deploy plan). The second kind is an ancestor claim — derived
+ * from the chain above a managed path, so what it carries binds dotta's own
+ * creation of that path and nothing else (core/metadata.h). It is false on every
+ * other kind, where nothing reads it.
  *
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
  * never a hole; consumers compare and apply it without a fallback. A link row's
@@ -95,6 +110,7 @@ typedef struct manifest_row {
     char *owner;                /* Owner username (root/ paths only, can be NULL) */
     char *group;                /* Group name (root/ paths only, can be NULL) */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */
+    bool tracked;               /* DIRECTORY rows: the profile manages the directory itself */
 } manifest_row_t;
 
 /**

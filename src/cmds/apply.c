@@ -309,8 +309,7 @@ static void print_deploy_preview(
         }
         if (overwrites > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                "  {yellow}%zu{reset} of them overwrite%s local changes\n",
+                out, OUTPUT_NORMAL, "  {yellow}%zu{reset} of them overwrite%s local changes\n",
                 overwrites, overwrites == 1 ? "s" : ""
             );
         }
@@ -343,7 +342,11 @@ static void print_deploy_preview(
 
         size_t shown = 0;
         for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
-            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) continue;
+
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) {
+                continue;
+            }
+            
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
@@ -363,7 +366,11 @@ static void print_deploy_preview(
 
         size_t shown = 0;
         for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
-            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_FIX) continue;
+
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_FIX) {
+                continue;
+            }
+
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
@@ -383,7 +390,11 @@ static void print_deploy_preview(
 
         size_t shown = 0;
         for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
-            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_REPLACE) continue;
+
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_REPLACE) {
+                continue;
+            }
+
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
@@ -436,7 +447,8 @@ static void print_reassignments(
     output_section(out, OUTPUT_NORMAL, "Profile reassignments");
     for (size_t i = 0; i < count; i++) {
         output_styled(
-            out, OUTPUT_NORMAL, "  {yellow}→{reset} %s%s: {cyan}%s{reset} → {cyan}%s{reset}\n",
+            out, OUTPUT_NORMAL,
+            "  {yellow}→{reset} %s%s: {cyan}%s{reset} → {cyan}%s{reset}\n",
             reassigned[i].path, path_kind_suffix(reassigned[i].kind),
             reassigned[i].from, reassigned[i].to
         );
@@ -473,8 +485,7 @@ static void print_withheld(
     /* -e reaches all three kinds, so its summary counts "paths"; the verbose
      * breakdown names each kind and what it was spared. */
     workspace_items_t excluded_orphans = workspace_items_view(&cleanup_plan->excluded);
-    size_t excluded_orphan_files = 0;
-    size_t excluded_orphan_dirs = 0;
+    size_t excluded_orphan_files = 0; size_t excluded_orphan_dirs = 0;
 
     for (size_t i = 0; i < excluded_orphans.count; i++) {
         if (excluded_orphans.entries[i]->item_kind == PATH_KIND_DIRECTORY) {
@@ -510,13 +521,15 @@ static void print_withheld(
             if (excluded_orphan_files > 0) {
                 output_print(
                     out, OUTPUT_VERBOSE, "  • %zu orphaned file%s not pruned\n",
-                    excluded_orphan_files, excluded_orphan_files == 1 ? "" : "s"
+                    excluded_orphan_files,
+                    excluded_orphan_files == 1 ? "" : "s"
                 );
             }
             if (excluded_orphan_dirs > 0) {
                 output_print(
                     out, OUTPUT_VERBOSE, "  • %zu orphaned director%s not pruned\n",
-                    excluded_orphan_dirs, excluded_orphan_dirs == 1 ? "y" : "ies"
+                    excluded_orphan_dirs,
+                    excluded_orphan_dirs == 1 ? "y" : "ies"
                 );
             }
         } else {
@@ -943,14 +956,16 @@ static void print_cleanup_results(
         if (result->pruned_files.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
-                result->pruned_files.count, result->pruned_files.count == 1 ? "" : "s"
+                result->pruned_files.count,
+                result->pruned_files.count == 1 ? "" : "s"
             );
         }
 
         if (result->pruned_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
-                result->pruned_dirs.count, result->pruned_dirs.count == 1 ? "y" : "ies"
+                result->pruned_dirs.count,
+                result->pruned_dirs.count == 1 ? "y" : "ies"
             );
         }
 
@@ -1073,7 +1088,10 @@ static void print_path_list(
  * preview, the prompt below it and the outcome after it are three sentences about
  * the same work — in the same words, because a preview line and its outcome line
  * name one verdict with one verb ("will be pruned" / "Pruned"), differing only
- * in tense.
+ * in tense. Equal counts for a run the world did not move under: a path gone,
+ * or a directory refilled, between the prompt and the removal moves one item
+ * from the promise here to the receipt's own buckets (reclaimed, skipped), and
+ * the receipt says so from its side (print_cleanup_results).
  *
  * The summaries only count the files the run will not prune; two blocks name
  * them, with different messaging. The released ones close this preview: a release
@@ -1460,7 +1478,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result, before ws */
+    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_result = NULL;             /* Outcomes borrow the fates; free first */
@@ -1651,27 +1669,38 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    output_print(
-        out, OUTPUT_VERBOSE, "  %zu %s deployment (missing or divergent)\n",
-        deploy_plan->files.pending.count,
-        deploy_plan->files.pending.count == 1 ? "file needs" : "files need"
-    );
-    output_print(
-        out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
-        deploy_plan->files.clean.count,
-        deploy_plan->files.clean.count == 1 ? "" : "s"
-    );
-    output_print(
-        out, OUTPUT_VERBOSE, "  %zu %s convergence\n",
-        deploy_plan->directories.pending.count,
-        deploy_plan->directories.pending.count == 1 ? "tracked directory needs"
-                                                    : "tracked directories need"
-    );
-    output_print(
-        out, OUTPUT_VERBOSE, "  %zu tracked director%s already converged\n",
-        deploy_plan->directories.clean.count,
-        deploy_plan->directories.clean.count == 1 ? "y" : "ies"
-    );
+    /* The plan's four counts, each only when it is non-zero — gated the way
+     * cleanup's two lines below are, and by the preview's own rule: an empty
+     * bucket has nothing to say, and says nothing (print_deploy_preview). */
+    if (deploy_plan->files.pending.count > 0) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  %zu %s deployment (missing or divergent)\n",
+            deploy_plan->files.pending.count,
+            deploy_plan->files.pending.count == 1 ? "file needs" : "files need"
+        );
+    }
+    if (deploy_plan->files.clean.count > 0) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  %zu file%s already up-to-date (skipped)\n",
+            deploy_plan->files.clean.count,
+            deploy_plan->files.clean.count == 1 ? "" : "s"
+        );
+    }
+    if (deploy_plan->directories.pending.count > 0) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  %zu %s convergence\n",
+            deploy_plan->directories.pending.count,
+            deploy_plan->directories.pending.count == 1 ? "tracked directory needs"
+                                                        : "tracked directories need"
+        );
+    }
+    if (deploy_plan->directories.clean.count > 0) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  %zu tracked director%s already converged\n",
+            deploy_plan->directories.clean.count,
+            deploy_plan->directories.clean.count == 1 ? "y" : "ies"
+        );
+    }
 
     /* PLAN: decide once which orphans cleanup may touch, from (workspace, scope).
      *
@@ -2665,7 +2694,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
-     * is permission, not obligation. */
+     * is permission, not obligation (cleanup_result_t's exit contract, the table
+     * both engines draw). */
     size_t failed_prunes = 0;
 
     if (cleanup_result) {
@@ -2769,7 +2799,7 @@ static const args_opt_t apply_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_apply_options_t,force,
-        "Overwrite local changes, prune modified orphans, skip the confirmation prompt"
+        "Overwrite local changes, prune modified orphans, skip confirmation"
     ),
     ARGS_FLAG(
         "n dry-run",

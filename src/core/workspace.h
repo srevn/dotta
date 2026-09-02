@@ -126,7 +126,10 @@ typedef enum {
  * is absence; FS_OCCUPANT_UNKNOWN is a path the analyzer could not stat and assumes
  * present (absence is never inferred from a failure to look; the item carries
  * DIVERGENCE_UNVERIFIED beside it). Presence is therefore `occupant !=
- * FS_OCCUPANT_NONE`. The divergence bits are the verdict over that observation
+ * FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's; deploy judges by the
+ * stricter one (deploy_occupant_present: UNKNOWN is not present, since deploy
+ * judges nothing it could not see), and a new consumer picks one of the two and
+ * says which. The divergence bits are the verdict over that observation
  * (DIVERGENCE_TYPE: the occupant is not the row's or the record's kind); every
  * consumer that once re-probed the path to learn its type reads this field instead,
  * so status, deploy and cleanup cannot see three different occupants at one path.

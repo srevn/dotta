@@ -206,7 +206,11 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *
  * The split is deploy's exit contract, and workspace_item_route's UNVERIFIABLE
  * arm (workspace.h) restates its incapacity half from the route side — a change
- * here keeps that description true.
+ * here keeps that description true. cleanup_result_t draws the same table from
+ * its side, with a third column between these two — attempted, and the world
+ * moved — where the engines part: deploy's execute-time refusal (EEXIST, EISDIR,
+ * ENOTEMPTY) is a failed row, cleanup's a skipped directory, and both headers
+ * say why.
  *
  * Precedence. ANCESTOR ranks first: an observation taken through a displaced
  * claimed ancestor is void, so no judgment made through it can outrank the fact

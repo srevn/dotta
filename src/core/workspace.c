@@ -2807,12 +2807,18 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
     }
 
     /* A kind mismatch is a capture only through the one pair the copy can commit:
-     * file ↔ symlink on a file row. Every other occupant is no verb's default. */
+     * file ↔ symlink on a file row. Every other occupant is no verb's default,
+     * and a directory row's splits by the claim that holds the path: a tracked
+     * row is the plan's (--force replaces the squatter), a derived rung is never
+     * planned (the named re-derivation drops the claim). A deployed item is a
+     * view row's (the join), so the row holds; a file row's tracked field is a
+     * don't-care, so the kind gates the read. */
     if ((divergence & DIVERGENCE_TYPE) &&
         (item->item_kind == PATH_KIND_DIRECTORY ||
         (item->occupant != FS_OCCUPANT_REGULAR &&
         item->occupant != FS_OCCUPANT_SYMLINK))) {
-        return WORKSPACE_ROUTE_KIND;
+        return (item->item_kind == PATH_KIND_DIRECTORY && !item->row->tracked)
+               ? WORKSPACE_ROUTE_KIND_DERIVED : WORKSPACE_ROUTE_KIND;
     }
 
     if (divergence != DIVERGENCE_NONE) {

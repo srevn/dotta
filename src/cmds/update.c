@@ -1799,12 +1799,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * and would misname the remedy — then the skip lines name the routes the
      * filter refused (workspace_item_route — the same table), in the route order,
      * each naming its route's way out; a multi-bit divergence counts under the
-     * route that refused it. The displaced and retyped families split by the
-     * claim that holds the offender (workspace_lookup — the same split apply
-     * prints from the fate-borne ancestor_class): a planned squatter is --force's
-     * to replace, a derived rung is the named re-derivation's to drop, and a
-     * stale record is apply's own release — after which the arrangement is the
-     * user's own and update trusts it. */
+     * route that refused it. The displaced family splits by the claim that holds
+     * the offender (workspace_lookup — the same split apply prints from the
+     * fate-borne ancestor_class): a planned squatter is --force's to replace, a
+     * derived rung is the named re-derivation's to drop, and a stale record is
+     * apply's own release — after which the arrangement is the user's own and
+     * update trusts it. The retyped family arrives split from the route (KIND
+     * on a row a plan can hold, KIND_DERIVED on a rung dotta only passes
+     * through). */
     workspace_items_t all = workspace_get_all_diverged(ws);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
     size_t stale_skipped = 0; size_t conflict_skipped = 0;
@@ -1845,19 +1847,13 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 stale_skipped++;
                 break;
 
-            case WORKSPACE_ROUTE_KIND: {
-                /* A deployed item is a view row's (the join), so the lookup holds;
-                 * a file row's tracked field is a don't-care, so the kind gates
-                 * the read. */
-                const manifest_row_t *row = workspace_lookup(ws, item->filesystem_path);
-
-                if (item->item_kind == PATH_KIND_DIRECTORY && !row->tracked) {
-                    retyped_derived++;
-                } else {
-                    retyped_skipped++;
-                }
+            case WORKSPACE_ROUTE_KIND:
+                retyped_skipped++;
                 break;
-            }
+
+            case WORKSPACE_ROUTE_KIND_DERIVED:
+                retyped_derived++;
+                break;
 
             case WORKSPACE_ROUTE_CLEAN:
             case WORKSPACE_ROUTE_CAPTURE:

@@ -1665,11 +1665,19 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * beside it. One item, one count. */
         workspace_items_t all_diverged = workspace_get_all_diverged(ws);
 
+        /* The rule the arms below follow: sync blocks on update's work and on
+         * the conflicts update refuses and the user must decide; it reports,
+         * and never blocks on, what no verb takes by default and what one named
+         * verb resolves. A squatted tracked directory is a decision (--force,
+         * add --force, remove) and blocks; a squatted rung dotta only passes
+         * through has one verb and no decision — the same fact that gives it
+         * its own status section — and blocks nothing. */
         size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
         size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
         size_t deleted_count = 0;     /* DELETED state — update's to commit */
         size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
         size_t unverified_count = 0;  /* UNVERIFIABLE — dotta could not look; blocks nothing */
+        size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
 
         for (size_t i = 0; i < all_diverged.count; i++) {
             const workspace_item_t *item = all_diverged.entries[i];
@@ -1696,6 +1704,15 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                              * update refuses these, so the hints below must not
                              * send them there. */
                             conflict_count++;
+                            break;
+
+                        case WORKSPACE_ROUTE_KIND_DERIVED:
+                            /* A different kind stands at a directory dotta only
+                             * passes through: never planned, so nothing beneath
+                             * it is dotta's to lose to a pull, and one named
+                             * verb resolves it ('dotta update <dir>'). Counted
+                             * to be reported, never to block. */
+                            squatted_count++;
                             break;
 
                         case WORKSPACE_ROUTE_CAPTURE:
@@ -1777,6 +1794,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         unverified_count, unverified_count == 1 ? "" : "s"
                     );
                 }
+                if (squatted_count > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL, "  %zu squatted ancestor%s",
+                        squatted_count, squatted_count == 1 ? "" : "s"
+                    );
+                }
 
                 output_newline(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Sync requires a clean workspace.");
@@ -1842,6 +1865,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             if (unverified_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu unverifiable", unverified_count);
             }
+            if (squatted_count > 0) {
+                output_info(out, OUTPUT_VERBOSE, "  %zu squatted", squatted_count);
+            }
 
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
             output_newline(out, OUTPUT_NORMAL);
@@ -1872,18 +1898,30 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             /* User confirmed - proceed with sync */
             output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
             output_newline(out, OUTPUT_NORMAL);
-        } else if (unverified_count > 0) {
-            /* Nothing blocks, but the analysis could not settle every path: say
-             * so and proceed. Silence here once hid real divergence — the one
-             * route the old fold never counted — and no verb resolves it; the
-             * user must look (status's Unverifiable section carries the way
-             * out). */
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Note: %zu path%s could not be verified ('dotta status' lists %s)",
-                unverified_count, unverified_count == 1 ? "" : "s",
-                unverified_count == 1 ? "it" : "them"
-            );
+        } else {
+            /* Nothing blocks, but not every path is settled: say so and proceed.
+             * Silence here once hid real divergence — the one route the old fold
+             * never counted. A path the analysis could not read no verb resolves;
+             * the user must look (status's Unverifiable section carries the way
+             * out). A squatted rung dotta only passes through has its one verb,
+             * and status's own section names it. */
+            if (unverified_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Note: %zu path%s could not be verified ('dotta status' lists %s)",
+                    unverified_count, unverified_count == 1 ? "" : "s",
+                    unverified_count == 1 ? "it" : "them"
+                );
+            }
+            if (squatted_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Note: %zu squatted ancestor%s — a different kind stands at a "
+                    "directory dotta only passes through ('dotta status' lists %s)",
+                    squatted_count, squatted_count == 1 ? "" : "s",
+                    squatted_count == 1 ? "it" : "them"
+                );
+            }
         }
     }
 

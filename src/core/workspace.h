@@ -179,12 +179,23 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
 /**
  * Which verb resolves a deployed item — the one route table
  *
- * The partition of WORKSPACE_STATE_DEPLOYED items that status's sections, update's
- * filter and update's skip counter all read. One producer (workspace_item_route)
- * so the three surfaces cannot route one item two ways — the shape cleanup_verdict
- * gives the orphan side. Values are listed in precedence order: the route is
- * the first that applies, so a multi-bit divergence routes under the reason that
- * outranks the rest.
+ * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
+ * deployed item reads, so no two surfaces can route one item two ways — the shape
+ * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
+ * and six readers, each named with the arm it reads; a reader not on this list
+ * is a bug:
+ *
+ *   status's section partition     every arm, one bucket each
+ *   update's candidate predicate   CAPTURE — the one arm update commits
+ *   update's refusal census        every refusing arm, one line each
+ *   sync's guard                   CAPTURE blocks (update's work); CONFLICT ∪
+ *                                  KIND block (the conflicts update refuses);
+ *                                  UNVERIFIABLE and KIND_DERIVED are advisory
+ *   apply's CONTENT skip label     CONFLICT
+ *   diff's downstream direction    CAPTURE
+ *
+ * Values are listed in precedence order: the route is the first that applies,
+ * so a multi-bit divergence routes under the reason that outranks the rest.
  *
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
@@ -199,7 +210,8 @@ typedef enum {
     WORKSPACE_ROUTE_UNVERIFIABLE, /* DIVERGENCE_UNVERIFIED — dotta could not look */
     WORKSPACE_ROUTE_CONFLICT,     /* STALE ∧ CONTENT — both sides moved  */
     WORKSPACE_ROUTE_STALE,        /* STALE alone — Git moved, disk did not */
-    WORKSPACE_ROUTE_KIND,         /* TYPE the copy cannot commit */
+    WORKSPACE_ROUTE_KIND,         /* TYPE the copy cannot commit, on a row a plan can hold */
+    WORKSPACE_ROUTE_KIND_DERIVED, /* … on a rung dotta only passes through — never planned */
     WORKSPACE_ROUTE_CAPTURE,      /* Any other divergence — update's to commit */
     WORKSPACE_ROUTE_REASSIGNED    /* No divergence; the record names another profile */
 } workspace_route_t;
@@ -230,18 +242,24 @@ typedef enum {
  *                            the bytes are apply's to bring whether or not a
  *                            mode bit rides along (update stores bytes; the bytes
  *                            on disk are old either way).
- *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit: a
- *                            directory row's type change (the walk's race guard
- *                            refuses it — a symlink would stat as its target
- *                            and launder the target's attributes into metadata),
- *                            or a file row occupied by a directory, FIFO, socket,
- *                            or device. Resolution is explicit, and which verb
- *                            depends on what claims the path: apply --force
- *                            replaces what the run converges and remove untracks
- *                            it, while a squatted ancestor claim is neither planned
- *                            nor named — the next capture whose chain meets the
- *                            squatter re-derives it, and the claim goes with it
- *                            (metadata_capture_ancestors).
+ *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit, on
+ *                            a row a plan can hold: a tracked directory row's
+ *                            type change (the walk's race guard refuses it — a
+ *                            symlink would stat as its target and launder the
+ *                            target's attributes into metadata), or a file row
+ *                            occupied by a directory, FIFO, socket, or device.
+ *                            Resolution is explicit and the user's: apply --force
+ *                            replaces what the run converges, remove untracks it.
+ *   TYPE on a derived rung   KIND_DERIVED — the same mismatch on a directory
+ *                            dotta only passes through: neither planned nor named,
+ *                            so no flag lifts it and no decision pends. One verb
+ *                            — the named re-derivation whose chain meets the
+ *                            squatter drops the claim ('dotta update <dir>',
+ *                            metadata_capture_ancestors). The two arms partition
+ *                            what was one by the row's tracked field: a deployed
+ *                            item is a view row's (the join), so the row holds,
+ *                            and a file row's tracked field is a don't-care, so
+ *                            the kind gates the read.
  *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
  *                            file row stays here: the copy commits it as the
  *                            new kind.

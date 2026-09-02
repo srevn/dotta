@@ -23,30 +23,11 @@
 #include "base/output.h"
 
 /**
- * Check if running with elevated privileges (effective UID is 0)
- *
- * @return true if running as root, false otherwise
- */
-bool privilege_is_elevated(void);
-
-/**
- * Check if running under sudo (original user context preserved)
- *
- * Detects sudo by checking for SUDO_UID/SUDO_GID environment variables. This
- * allows code to distinguish between:
- * - Real root user (logged in as root)
- * - Sudo user (elevated via sudo, original user known)
- *
- * @return true if running under sudo, false otherwise
- */
-bool privilege_is_sudo(void);
-
-/**
  * Check if a filesystem path is under the invoking user's home directory.
  *
  * Single boundary predicate replacing the prior pair
  * (privilege_target_needs_elevation, privilege_path_is_under_home): one polarity,
- * one implementation, one source of HOME truth via fs_get_home (sudo-aware).
+ * one implementation, one source of HOME truth — the identity's (sys/identity).
  *
  * Symlink-aware: cross-checks raw and realpath-canonical forms of
  * both sides, so /tmp -> /private/tmp on macOS and similar bind/loop
@@ -55,13 +36,11 @@ bool privilege_is_sudo(void);
  *
  * Returns false when:
  *   - filesystem_path is NULL
- *   - HOME cannot be resolved (no $HOME, no passwd entry)
  *   - filesystem_path is genuinely outside HOME
  *
- * The "false on lookup failure" bias keeps callers conservative: a caller asking
- * "should I de-escalate ownership?" gets "no" when in doubt; a caller asking
- * "no elevation needed?" gets "elevation needed" when in doubt (via the natural
- * negation).
+ * The "false when NULL" bias keeps callers conservative: a caller asking "should
+ * I de-escalate ownership?" gets "no" when in doubt; a caller asking "no elevation
+ * needed?" gets "elevation needed" when in doubt (via the natural negation).
  *
  * @param filesystem_path Absolute filesystem path to check (may be NULL)
  * @return true iff filesystem_path is under the user's HOME
@@ -92,31 +71,6 @@ bool privilege_path_is_user_home(const char *filesystem_path);
 bool privilege_needs_elevation(const char *storage_path, const char *filesystem_path);
 
 /**
- * Get actual user UID/GID (handling sudo context)
- *
- * When running under sudo, returns the original user's UID/GID from
- * SUDO_UID/SUDO_GID environment variables. When not under sudo, returns effective
- * UID/GID.
- *
- * Use Cases:
- * - Deployment: home/ prefix files under sudo should be owned by actual user,
- *   not root
- * - Repository: Fix repository ownership after sudo operations
- *
- * This is the single source of truth for "who is the real user" semantics. All
- * sudo context detection is centralized in the privilege module.
- *
- * @param uid Output for user ID (must not be NULL)
- * @param gid Output for group ID (must not be NULL)
- * @return Error or NULL on success
- *
- * Errors:
- * - ERR_INVALID_ARG: Invalid SUDO_UID/SUDO_GID format
- * - ERR_NOT_FOUND: UID from SUDO_UID does not exist in system
- */
-error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
-
-/**
  * Append `storage_path` to `labels` iff this entry needs elevation.
  *
  * Wraps the predicate-and-push idiom that the manifest- and workspace-driven
@@ -130,9 +84,8 @@ error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid);
  *
  * Callers that have only a kind on hand (e.g., add.c's storage-path inputs and
  * classification-root case) compute the predicate locally — they have no
- * filesystem_path and use a precomputed "target outside HOME" bool (one fs_get_home
- * / is_under per command) instead of consulting privilege_path_is_user_home per
- * file.
+ * filesystem_path and use a precomputed "target outside HOME" bool (one is_under
+ * per command) instead of consulting privilege_path_is_user_home per file.
  *
  * Lifetime: storage_path is copied into `labels` (string_array_push strdups),
  * so the array is independent of the entry's lifetime.

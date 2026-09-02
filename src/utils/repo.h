@@ -129,9 +129,10 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
  * - Safe to call always - it's a no-op when not under sudo
  *
  * BEHAVIOR:
- * 1. Checks if running under sudo (via privilege_is_sudo())
- * 2. If not sudo: returns immediately (no-op)
- * 3. If sudo: gets original user's UID/GID from SUDO_UID/SUDO_GID
+ * 1. Checks if root was obtained for a user (sys/identity: privileged, and the
+ *    invoker is not root)
+ * 2. If not: returns immediately (no-op)
+ * 3. If so: the invoker's UID/GID are the identity's
  * 4. Fixes ownership of the repository directory itself
  * 5. Recursively fixes ownership of .git/ directory
  * 6. Logs statistics (files fixed/failed) to stderr

@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "sys/identity.h"
 #include "sys/process.h"
 #include "cmds/add.h"
 #include "cmds/apply.h"
@@ -45,7 +46,6 @@
 #include "infra/content.h"
 #include "infra/salt.h"
 #include "utils/config.h"
-#include "utils/privilege.h"
 #include "utils/repo.h"
 #include "utils/version.h"
 
@@ -416,6 +416,40 @@ int main(int argc, char **argv) {
      */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
+    const char *prog = program_name(argc > 0 ? argv[0] : NULL);
+
+    /* Root-level dispatch resolution — pure data projection of the registry. No
+     * identity, libgit2, config or output is needed for help/version/usage, so
+     * resolve first and let those branches exit before anything is established. */
+    const args_command_t *spec = NULL;
+    switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
+        case ARGS_ROOT_NONE:
+            args_render_root_usage(stderr, dotta_commands, prog);
+            return 1;
+        case ARGS_ROOT_HELP:
+            args_render_root_usage(stdout, dotta_commands, prog);
+            return 0;
+        case ARGS_ROOT_VERSION:
+            version_print(stdout);
+            return 0;
+        case ARGS_ROOT_UNKNOWN:
+            fprintf(stderr, "Error: Unknown command '%s'\n", argv[1]);
+            args_render_root_usage(stderr, dotta_commands, prog);
+            return 1;
+        case ARGS_ROOT_COMMAND:
+            break;
+    }
+
+    /* The identity of the run, before anything reads HOME: libgit2 guesses its
+     * global config path from $HOME at init, and the config path below is resolved
+     * from the same fact (sys/identity.h). */
+    error_t *id_err = identity_init();
+    if (id_err) {
+        error_print(id_err, stderr);
+        error_free(id_err);
+        return 1;
+    }
+
     /* Initialize libgit2 */
     if (git_libgit2_init() < 0) {
         fprintf(stderr, "Failed to initialize libgit2\n");
@@ -434,34 +468,6 @@ int main(int argc, char **argv) {
      * fd (e.g., bootstrap scripts whose stdout the user may pipe to a head/grep
      * that closes early). */
     signal(SIGPIPE, SIG_IGN);
-
-    const char *prog = program_name(argc > 0 ? argv[0] : NULL);
-
-    /* Root-level dispatch resolution — pure data projection of the registry. No
-     * config/output needed for help/version/usage, so resolve first and let those
-     * branches exit early without paying for config loading. */
-    const args_command_t *spec = NULL;
-    switch (args_resolve_root(dotta_commands, argc, argv, &spec)) {
-        case ARGS_ROOT_NONE:
-            args_render_root_usage(stderr, dotta_commands, prog);
-            git_libgit2_shutdown();
-            return 1;
-        case ARGS_ROOT_HELP:
-            args_render_root_usage(stdout, dotta_commands, prog);
-            git_libgit2_shutdown();
-            return 0;
-        case ARGS_ROOT_VERSION:
-            version_print(stdout);
-            git_libgit2_shutdown();
-            return 0;
-        case ARGS_ROOT_UNKNOWN:
-            fprintf(stderr, "Error: Unknown command '%s'\n", argv[1]);
-            args_render_root_usage(stderr, dotta_commands, prog);
-            git_libgit2_shutdown();
-            return 1;
-        case ARGS_ROOT_COMMAND:
-            break;
-    }
 
     /* Load configuration once for entire process.
      *
@@ -505,11 +511,12 @@ int main(int argc, char **argv) {
      * when trying to access root-owned files.
      *
      * When: After all Git operations complete, before shutdown Why: Catches all
-     * root-owned files created during this run Where: Only when running under
-     * sudo (automatic detection) Error handling: Log warning but don't change
-     * exit code (non-fatal)
+     * root-owned files created during this run Where: Only when root was obtained
+     * for a user (the identity's invoker is not root) Error handling: Log warning
+     * but don't change exit code (non-fatal)
      */
-    if (privilege_is_sudo()) {
+    const identity_t *id = identity();
+    if (id->privileged && id->uid != 0) {
         char *repo_path = NULL;
         error_t *err = resolve_repo_path(config, &repo_path);
 

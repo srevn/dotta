@@ -12,8 +12,8 @@
 #include "base/error.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "utils/config.h"
-#include "utils/privilege.h"
 
 /**
  * Resolve repository path
@@ -370,28 +370,21 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
 error_t *repo_fix_ownership_if_needed(const char *repo_path) {
     CHECK_NULL(repo_path);
 
-    /* Early exit: only fix ownership when running under sudo This is the common
-     * case - most operations don't need sudo */
-    if (!privilege_is_sudo()) {
-        return NULL;  /* No-op: not running under sudo */
+    /* Early exit: only fix ownership when root was obtained for a user — the
+     * identity's invoker is not root. This is the common case - most operations
+     * don't need sudo */
+    const identity_t *id = identity();
+    if (!id->privileged || id->uid == 0) {
+        return NULL;  /* No-op: the run is the invoker's own */
     }
 
-    /* We're running under sudo - need to fix ownership */
-
-    /* Get the actual user's credentials (from SUDO_UID/SUDO_GID) Delegates to
-     * privilege module for consistent sudo handling. */
-    uid_t actual_uid = 0;
-    gid_t actual_gid = 0;
-    error_t *err = privilege_get_actual_user(&actual_uid, &actual_gid);
-    if (err) {
-        return error_wrap(
-            err, "Failed to determine actual user for ownership fix"
-        );
-    }
+    /* Root obtained for a user - need to fix ownership to the invoker's pair */
+    uid_t actual_uid = id->uid;
+    gid_t actual_gid = id->gid;
 
     /* Build path to .git directory */
     char *git_dir = NULL;
-    err = fs_path_join(repo_path, ".git", &git_dir);
+    error_t *err = fs_path_join(repo_path, ".git", &git_dir);
     if (err) {
         return error_wrap(err, "Failed to construct .git path");
     }

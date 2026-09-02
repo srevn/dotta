@@ -16,6 +16,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
+#include "sys/identity.h"
 #include "sys/transfer.h"
 
 error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
@@ -23,8 +24,8 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
         return NULL;
     }
 
-    const char *user = getenv("USER");
-    if (!user || !*user) user = "dotta";
+    const char *user = identity()->name;
+    if (!user) user = "dotta";
 
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) != 0) {

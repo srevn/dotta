@@ -22,7 +22,7 @@
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "utils/privilege.h"
+#include "sys/identity.h"
 
 #define INITIAL_CAPACITY 16
 
@@ -690,7 +690,7 @@ error_t *metadata_capture_from_file(
      * The vocabulary lives in the mount spec; the elevation gate stays here because
      * ownership capture needs root either way. */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && privilege_is_elevated()) {
+    if (spec && spec->tracks_ownership && identity()->privileged) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -756,7 +756,7 @@ error_t *metadata_capture_from_directory(
     /* Capture ownership for paths whose label tracks it (root/ and custom/).
      * Mirrors the file-capture branch above. */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && privilege_is_elevated()) {
+    if (spec && spec->tracks_ownership && identity()->privileged) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);

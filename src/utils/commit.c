@@ -13,6 +13,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "sys/identity.h"
 
 /* Maximum length for hostname and username */
 #define MAX_HOSTNAME 256
@@ -40,21 +41,13 @@ static char *get_hostname(void) {
 
 /**
  * Get current username Returns allocated string or NULL on error
+ *
+ * The invoker's (sys/identity): under sudo the user who typed the command, not
+ * the root that $USER names there. "unknown" for a uid with no passwd entry.
  */
 static char *get_username(void) {
-    /* Prefer USER env var (reliable in non-TTY contexts) */
-    const char *user = getenv("USER");
-    if (user && user[0] != '\0') {
-        return strdup(user);
-    }
-
-    /* Fallback to getlogin (TTY-dependent) */
-    char *login = getlogin();
-    if (login && login[0] != '\0') {
-        return strdup(login);
-    }
-
-    return strdup("unknown");
+    const char *name = identity()->name;
+    return strdup(name ? name : "unknown");
 }
 
 /**

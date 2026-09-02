@@ -27,6 +27,7 @@
 #include "base/string.h"
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 #include "sys/process.h"
 
 /* Per-script timeout. Bootstrap scripts may install packages, compile software,
@@ -157,7 +158,6 @@ static error_t *run_live(
     const char *all_profiles
 ) {
     char *temp_path = NULL;
-    char *work_home = NULL;
     char **env = NULL;
     size_t env_count = 0;
     process_result_t result = { 0 };
@@ -177,16 +177,10 @@ static error_t *run_live(
         goto cleanup;
     }
 
-    /* Run the script from the invoking user's HOME so it behaves like a normal
-     * interactive shell session (relative paths in the script resolve under $HOME).
-     * fs_get_home is sudo-aware: under sudo we land in the user's home, not /root.
-     * A failure here is non-fatal — the spec carries `repo_dir` as the fallback. */
-    error_t *home_err = fs_get_home(&work_home);
-    if (home_err) {
-        error_free(home_err);
-        work_home = NULL;
-    }
-
+    /* Run the script from the invoker's HOME (sys/identity — under sudo the user's,
+     * not /root) so it behaves like a normal interactive shell session: relative
+     * paths in the script resolve under $HOME. The spec carries `repo_dir` as
+     * the fallback for a home the child cannot enter. */
     char *argv[] = { temp_path, NULL };
     process_spec_t spec = {
         .argv              = argv,
@@ -194,7 +188,7 @@ static error_t *run_live(
         .stdin_policy      = PROCESS_STDIN_INHERIT,
         .capture           = false,
         .stream_fd         = STDOUT_FILENO,
-        .work_dir          = work_home,
+        .work_dir          = identity()->home,
         .work_dir_fallback = repo_dir,
         .timeout_seconds   = BOOTSTRAP_TIMEOUT_SECONDS,
         .pgrp_policy       = PROCESS_PGRP_SHARED,
@@ -208,7 +202,6 @@ static error_t *run_live(
 cleanup:
     process_result_dispose(&result);
     env_free(env, env_count);
-    free(work_home);
     if (temp_path) {
         unlink(temp_path);
         free(temp_path);

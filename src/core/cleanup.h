@@ -249,17 +249,17 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    home/, since root/'s
  *                                                    projection is fixed), which
  *                                                    means $HOME itself differs
- *                                                    — and fs_get_home is
- *                                                    sudo-aware (SUDO_UID bypasses
- *                                                    `sudo -H`'s rewrite), so
- *                                                    that is a test HOME, a second
- *                                                    account, a migrated home
- *                                                    directory, and the copy
- *                                                    here is real dotfiles under
- *                                                    the real home. --force lifts
- *                                                    the hold — the designed
- *                                                    escape for a deliberate
- *                                                    home migration. A re-targeted
+ *                                                    — and the identity's HOME
+ *                                                    is the invoker's under sudo
+ *                                                    (sys/identity), so that is
+ *                                                    a test HOME, a second account,
+ *                                                    a migrated home directory,
+ *                                                    and the copy here is real
+ *                                                    dotfiles under the real
+ *                                                    home. --force lifts the
+ *                                                    hold — the designed escape
+ *                                                    for a deliberate home
+ *                                                    migration. A re-targeted
  *                                                    custom/ claim is the user's
  *                                                    own move and prunes as before,
  *                                                    its preview naming the move

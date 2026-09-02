@@ -43,7 +43,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <monocypher.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +57,7 @@
 #include "crypto/mac.h"
 #include "sys/entropy.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 
 /* Magic prefix: "DOTTASES" — Dotta SESsion. 8 bytes; the cache is fixed-size
  * and never sniffed, so no length-byte header. */
@@ -163,41 +163,31 @@ _Static_assert(
  * Resolve the cache file path (~/.cache/dotta/session) and its parent directory.
  * Caller frees both pointers.
  *
- * Routes through fs_get_home so the cache lives under the invoking user's home
- * regardless of sudo: a master key set without sudo lands at
- * /home/user/.cache/dotta/session, and a later `sudo dotta apply` finds it there
- * rather than under /root.
+ * Under the invoker's home (sys/identity) whatever the run's identity: a master
+ * key set without sudo lands at /home/user/.cache/dotta/session, and a later
+ * `sudo dotta apply` finds it there rather than under /root.
  *
  * @param out_file Cache file path (caller frees)
  * @param out_dir  Parent directory path (caller frees)
- * @return ERR_FS if HOME cannot be resolved; ERR_MEMORY on allocation failure
+ * @return ERR_MEMORY on allocation failure
  */
 static error_t *resolve_cache_paths(char **out_file, char **out_dir) {
     *out_file = NULL;
     *out_dir = NULL;
 
-    char *home = NULL;
-    error_t *err = fs_get_home(&home);
-    if (err) {
-        return error_wrap(err, "Cannot resolve session cache directory");
-    }
-
     char *file = NULL;
     char *dir = NULL;
-    if (asprintf(&dir, "%s/.cache/dotta", home) < 0 || !dir) {
-        free(home);
+    if (asprintf(&dir, "%s/.cache/dotta", identity()->home) < 0 || !dir) {
         return ERROR(
             ERR_MEMORY, "Failed to allocate session cache dir path"
         );
     }
     if (asprintf(&file, "%s/session", dir) < 0 || !file) {
-        free(home);
         free(dir);
         return ERROR(
             ERR_MEMORY, "Failed to allocate session cache file path"
         );
     }
-    free(home);
 
     *out_file = file;
     *out_dir = dir;
@@ -220,14 +210,15 @@ static error_t *resolve_cache_paths(char **out_file, char **out_dir) {
  * construct two distinct (host, user) tuples whose absorbed bytes coincide. Same
  * fixed-width carve-out that `crypto_mac_init` uses for its 8-byte tag.
  *
- * Why `getpwuid(getuid())` over `getlogin` / `getenv("USER")`:
- *   getlogin reads utmp (unreliable in containers, under sudo, with no controlling
- *   TTY); getenv is user-spoofable. getpwuid is a kernel-anchored lookup.
- *   Single-threaded, so the `_r` variant is unnecessary.
+ * The user is the identity's name (sys/identity) — the invoker's, so a cache
+ * written by the user is the one a `sudo dotta` reads — and that name is the
+ * passwd entry's, a kernel-anchored lookup taken once: getlogin reads utmp
+ * (unreliable in containers, under sudo, with no controlling TTY) and getenv is
+ * user-spoofable.
  *
  * @param salt    Per-file random salt (16 bytes)
  * @param out_key 32-byte output buffer (cache_key)
- * @return ERR_FS if hostname or username cannot be read
+ * @return ERR_FS if the hostname cannot be read or the invoker has no name
  */
 static error_t *derive_cache_key(
     const uint8_t salt[16],
@@ -244,19 +235,15 @@ static error_t *derive_cache_key(
     hostname[sizeof(hostname) - 1] = '\0';
     const size_t host_len = strnlen(hostname, sizeof(hostname));
 
-    /* getpwuid returns a pointer into static libc memory — never free or wipe.
-     * errno=0 before the call distinguishes "no entry" from "transient lookup
-     * failure". */
-    errno = 0;
-    struct passwd *pw = getpwuid(getuid());
-    if (!pw || !pw->pw_name) {
+    const identity_t *id = identity();
+    if (!id->name) {
         err = ERROR(
-            ERR_FS, "Failed to read username for uid %u: %s", (unsigned) getuid(),
-            errno != 0 ? strerror(errno) : "no entry in password database"
+            ERR_FS, "No user name for uid %u in the password database",
+            (unsigned) id->uid
         );
         goto cleanup;
     }
-    const size_t user_len = strnlen(pw->pw_name, SESSION_USERNAME_MAX);
+    const size_t user_len = strnlen(id->name, SESSION_USERNAME_MAX);
 
     /* LE64-prefixed BLAKE2b absorb mirroring crypto/mac.c's framing, run on the
      * unkeyed primitive (cache_key is the OUTPUT of derivation, not a key into
@@ -270,7 +257,7 @@ static error_t *derive_cache_key(
 
     store_le64(len_le, (uint64_t) user_len);
     crypto_blake2b_update(&ctx, len_le, sizeof(len_le));
-    crypto_blake2b_update(&ctx, (const uint8_t *) pw->pw_name, user_len);
+    crypto_blake2b_update(&ctx, (const uint8_t *) id->name, user_len);
 
     crypto_blake2b_update(&ctx, salt, 16);
     crypto_blake2b_final(&ctx, out_key);
@@ -282,8 +269,8 @@ cleanup:
      * chokepoint legible.
      *
      * `hostname` is wiped as defense in depth — non-secret content, but stack
-     * hygiene matches the rest of the crypto stack. We do not touch `pw->pw_name`
-     * (libc-owned memory, untouchable). */
+     * hygiene matches the rest of the crypto stack. The identity's name is the
+     * process's, borrowed, and not touched. */
     crypto_wipe(&ctx, sizeof(ctx));
     crypto_wipe(hostname, sizeof(hostname));
     return err;
@@ -530,11 +517,11 @@ error_t *session_load(
         unlink_on_fail = true;
         goto cleanup;
     }
-    if (st.st_uid != getuid()) {
+    if (st.st_uid != identity()->uid) {
         err = ERROR(
             ERR_CRYPTO,
             "Session cache has wrong ownership (uid %u, expected %u)",
-            (unsigned) st.st_uid, (unsigned) getuid()
+            (unsigned) st.st_uid, (unsigned) identity()->uid
         );
         unlink_on_fail = true;
         goto cleanup;

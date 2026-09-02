@@ -21,6 +21,7 @@
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "utils/privilege.h"
 
 /* ══════════════════════════════════════════════════════════════════
@@ -549,7 +550,7 @@ static const manifest_row_t *holdable_directory(
     const manifest_row_t *dir = workspace_lookup(ws, path);
 
     if (dir && dir->type == PATH_TYPE_DIRECTORY
-        && (st->st_uid == geteuid() || privilege_is_elevated())) {
+        && (st->st_uid == identity()->uid || identity()->privileged)) {
         return dir;
     }
     return NULL;
@@ -841,32 +842,26 @@ static error_t *resolve_deployment_ownership(
 
     /* Case 1: file lands in the invoking user's HOME when running as root.
      *
-     * fs_get_home is the single source of truth for "the user's home" (sudo-aware
-     * via SUDO_UID's pw_dir); privilege_path_is_user_home trusts it. No label
-     * dispatch needed:
+     * The identity's HOME (sys/identity) is the single source of truth for "the
+     * user's home" — the invoker's under sudo; privilege_path_is_user_home trusts
+     * it. No label dispatch needed:
      *   home/X    → resolves under HOME → de-escalate
      *   root/X    → /X, never under HOME → fall through
      *   custom/X with --target $HOME/jail → under HOME → de-escalate
      *   custom/X with --target /jail      → outside HOME → fall through
      *
-     * The fs path tells us directly. The kind dispatch this replaces was a
-     * workaround for HOME-truth divergence between fs_get_home and the inlined
-     * SUDO_UID lookup; once both share fs_get_home, the dispatch collapses. */
-    if (privilege_is_elevated()
+     * The fs path tells us directly, and the pair applied is the invoker's own. */
+    const identity_t *id = identity();
+    if (id->privileged
         && filesystem_path && privilege_path_is_user_home(filesystem_path)) {
-        error_t *err = privilege_get_actual_user(out_uid, out_gid);
-        if (err) {
-            return error_wrap(
-                err, "Failed to determine actual user for home path: %s",
-                storage_path
-            );
-        }
+        *out_uid = id->uid;
+        *out_gid = id->gid;
         return NULL;
     }
 
     /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
     if (requires_root_privileges && (owner || group)) {
-        if (!privilege_is_elevated()) {
+        if (!id->privileged) {
             /* An unelevated run cannot chown; reachable only in a dry one — a
              * real run's privilege check re-exec'd under sudo before preflight.
              * The claim stays unresolved (-1/-1, set above). */
@@ -881,9 +876,9 @@ static error_t *resolve_deployment_ownership(
              * ownership. */
             if (strict_ownership) {
                 return error_wrap(
-                    err, "Ownership resolution failed for '%s' (strict_ownership enabled)\n"
-                    "Hint: Create the user/group on this system, or disable strict_ownership",
-                    storage_path
+                    err, "Ownership resolution failed for '%s' "
+                    "(strict_ownership enabled)\nHint: Create the user/group "
+                    "on this system, or disable strict_ownership", storage_path
                 );
             }
 

@@ -14,6 +14,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 
 /**
  * Per-kind behavioral attributes — the single source of truth.
@@ -351,27 +352,6 @@ static error_t *resolve_path_pair(
 }
 
 /**
- * HOME-specific wrapper around resolve_path_pair: fetches $HOME via fs_get_home
- * and delegates the dual-form materialization. Catches the canonical HOME at
- * build time so symlinked HOMEs (macOS's
- * /tmp -> /private/tmp, NFS bind mounts, etc.) classify correctly.
- */
-static error_t *resolve_home_pair(
-    arena_t *arena,
-    const char **out_home,
-    const char **out_canonical
-) {
-    char *raw_home = NULL;
-    error_t *err = fs_get_home(&raw_home);
-    if (err) return err;
-
-    err = resolve_path_pair(arena, raw_home, out_home, out_canonical);
-    free(raw_home);
-
-    return err;
-}
-
-/**
  * Return the relative part of `absolute` after stripping `target`, with
  * path-component boundary verification.
  *
@@ -413,9 +393,12 @@ error_t *mount_table_build(
 
     *out = NULL;
 
+    /* The invoker's HOME (sys/identity) in both surface forms: the canonical
+     * one is caught at build time so a symlinked HOME (macOS's /tmp ->
+     * /private/tmp, an NFS bind mount) classifies correctly. */
     const char *home = NULL;
     const char *home_canonical = NULL;
-    error_t *err = resolve_home_pair(arena, &home, &home_canonical);
+    error_t *err = resolve_path_pair(arena, identity()->home, &home, &home_canonical);
     if (err) return err;
 
     /* Count CUSTOM mounts: input mounts with a non-empty target. Drop those with

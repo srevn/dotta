@@ -16,8 +16,6 @@
 #include "utils/privilege.h"
 
 #include <errno.h>
-#include <grp.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +26,7 @@
 #include "base/terminal.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 
 /**
  * Boundary-aware ancestor check with symlink awareness.
@@ -76,10 +75,10 @@ static bool is_under(
         for (int r = 0; r < 2 && !under; r++) {
             if (!refs[r]) continue;
 
-            /* Trim trailing slashes from the reference for boundary parity.
-             * fs_get_home, pw_dir, and user-supplied targets may carry a stray
-             * trailing slash; "/home/user/" and "/home/user" must classify the
-             * same path identically. */
+            /* Trim trailing slashes from the reference for boundary parity. A
+             * user-supplied target may carry a stray trailing slash (the identity's
+             * HOME is normalised); "/home/user/" and "/home/user" must classify
+             * the same path identically. */
             size_t ref_len = strlen(refs[r]);
             while (ref_len > 1 && refs[r][ref_len - 1] == '/') {
                 ref_len--;
@@ -99,52 +98,20 @@ static bool is_under(
 }
 
 /**
- * Check if running with elevated privileges
- */
-bool privilege_is_elevated(void) {
-    /* Check effective UID (not real UID) to handle sudo correctly */
-    return geteuid() == 0;
-}
-
-/**
- * Check if running under sudo
- */
-bool privilege_is_sudo(void) {
-    /* Sudo sets SUDO_UID and SUDO_GID to the original user's IDs If both are
-     * present, we're running under sudo */
-    const char *sudo_uid = getenv("SUDO_UID");
-    const char *sudo_gid = getenv("SUDO_GID");
-
-    return (sudo_uid != NULL && sudo_gid != NULL);
-}
-
-/**
  * Check if a filesystem path is under the invoking user's HOME.
  *
- * Single boundary predicate. fs_get_home is the chokepoint that reconciles env,
- * sudo, and passwd inputs into one HOME answer; we trust it here. The
- * boundary-aware comparison cross-checks raw and canonical forms to avoid symlink
- * false negatives.
+ * Single boundary predicate. The identity's HOME (sys/identity) is the one
+ * reconciliation of env, sudo and passwd into a HOME answer; it is trusted here.
+ * The boundary-aware comparison cross-checks raw and canonical forms to avoid
+ * symlink false negatives.
  *
- * Returns false when:
- *   - filesystem_path is NULL
- *   - fs_get_home fails (no env, no passwd) — caller's natural negation then
- *     yields "needs elevation" / "do not de-escalate", both conservative.
+ * Returns false when filesystem_path is NULL — the caller's natural negation
+ * then yields "needs elevation" / "do not de-escalate", both conservative.
  */
 bool privilege_path_is_user_home(const char *filesystem_path) {
     if (!filesystem_path) return false;
 
-    char *home = NULL;
-    error_t *err = fs_get_home(&home);
-    if (err) {
-        error_free(err);
-        return false;
-    }
-
-    bool under = is_under(filesystem_path, home);
-    free(home);
-
-    return under;
+    return is_under(filesystem_path, identity()->home);
 }
 
 /**
@@ -174,69 +141,6 @@ bool privilege_needs_elevation(
     if (!filesystem_path) return true;
 
     return !privilege_path_is_user_home(filesystem_path);
-}
-
-/**
- * Get actual user UID/GID (handling sudo context)
- *
- * When running under sudo, returns the original user's UID/GID from
- * SUDO_UID/SUDO_GID environment variables. When not under sudo, returns effective
- * UID/GID.
- *
- * This is the single source of truth for sudo context detection and actual user
- * resolution.
- */
-error_t *privilege_get_actual_user(uid_t *uid, gid_t *gid) {
-    CHECK_NULL(uid);
-    CHECK_NULL(gid);
-
-    /* Check if running under sudo by examining SUDO_UID environment variable */
-    const char *sudo_uid_str = getenv("SUDO_UID");
-    const char *sudo_gid_str = getenv("SUDO_GID");
-
-    if (sudo_uid_str && sudo_gid_str) {
-        /* Running under sudo - parse the environment variables */
-        char *endptr;
-
-        /* Parse UID */
-        errno = 0;
-        long parsed_uid = strtol(sudo_uid_str, &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || parsed_uid < 0) {
-            return ERROR(
-                ERR_INVALID_ARG, "Invalid SUDO_UID environment variable: %s",
-                sudo_uid_str
-            );
-        }
-
-        /* Parse GID */
-        errno = 0;
-        long parsed_gid = strtol(sudo_gid_str, &endptr, 10);
-        if (errno != 0 || *endptr != '\0' || parsed_gid < 0) {
-            return ERROR(
-                ERR_INVALID_ARG, "Invalid SUDO_GID environment variable: %s",
-                sudo_gid_str
-            );
-        }
-
-        /* Validate that the UID actually exists in the system */
-        struct passwd *pw = getpwuid((uid_t) parsed_uid);
-        if (!pw) {
-            return ERROR(
-                ERR_NOT_FOUND, "User with UID %ld not found in system",
-                parsed_uid
-            );
-        }
-
-        *uid = (uid_t) parsed_uid;
-        *gid = (gid_t) parsed_gid;
-        return NULL;
-    }
-
-    /* Not running under sudo - return current effective UID/GID */
-    *uid = geteuid();
-    *gid = getegid();
-
-    return NULL;
 }
 
 /**
@@ -420,7 +324,7 @@ error_t *privilege_ensure_for_operation(
     CHECK_NULL(labels);
 
     /* Already elevated — we have what we need. */
-    if (privilege_is_elevated()) return NULL;
+    if (identity()->privileged) return NULL;
 
     /* Display requirement (always shown, even in non-interactive mode) */
     display_privilege_requirement(operation_name, labels, count, out);

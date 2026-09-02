@@ -27,29 +27,83 @@ const char *compare_result_string(compare_result_t result) {
 }
 
 /**
- * Compare buffer content to disk file with stat propagation
+ * The reference a disk copy is judged against
+ *
+ * The plaintext bytes, or the blob's id — exactly one. compare_buffer_to_disk
+ * and compare_oid_to_disk ask one question with the reference in two encodings,
+ * and the encoding matters at two points only: the size fast path (a buffer knows
+ * its size; an id does not) and the judgment (memcmp, or hash and compare). Every
+ * other step — the stat, the type against the expected mode, the read of a link's
+ * target or a file's bytes — is one look, spelled once below.
+ */
+typedef struct {
+    const buffer_t *content;    /* The plaintext bytes, or NULL */
+    const git_oid *oid;         /* The blob's id, or NULL */
+} reference_t;
+
+/**
+ * Judge the bytes the look found against the reference
+ *
+ * A symlink's target and a regular file's content arrive the same way: the bytes
+ * Git would hash for this path, which is Git's own model of a link (a blob holding
+ * the target as raw bytes). A buffer is judged by comparing them; an id by hashing
+ * them as Git does — SHA-1("blob <size>\0" + bytes) — and comparing the ids.
+ */
+static error_t *judge(
+    const reference_t *ref, const void *bytes, size_t size,
+    const char *disk_path, compare_result_t *result
+) {
+    if (ref->content) {
+        /* Re-check size: file may have changed between stat and read */
+        bool equal = (size == ref->content->size) &&
+            (memcmp(ref->content->data, bytes, size) == 0);
+        *result = equal ? CMP_EQUAL : CMP_DIFFERENT;
+        return NULL;
+    }
+
+    git_oid computed;
+    if (git_odb_hash(&computed, bytes, size, GIT_OBJECT_BLOB) != 0) {
+        const git_error *git_err = git_error_last();
+        return ERROR(
+            ERR_GIT, "Failed to hash '%s': %s", disk_path,
+            git_err ? git_err->message : "unknown error"
+        );
+    }
+
+    *result = git_oid_equal(ref->oid, &computed) ? CMP_EQUAL : CMP_DIFFERENT;
+
+    return NULL;
+}
+
+/**
+ * One look at the disk copy, judged against the reference
  *
  * Optimized to minimize filesystem syscalls by:
  * 1. Accepting pre-captured stat (in_stat parameter)
  * 2. Returning stat for caller reuse (out_stat parameter)
  * 3. Using single lstat/fstat for all type/size/mode checks
+ *
+ * NOTE: We do NOT check permissions here. Permission validation is a core-layer
+ * concern handled by workspace.c, which checks:
+ * 1. Git filemode (executable bit from tree)
+ * 2. Full metadata (all permission bits + ownership from .dotta/metadata.json)
+ *
+ * This separation keeps the infrastructure layer pure and focused on content
+ * comparison only.
  */
-error_t *compare_buffer_to_disk(
-    const buffer_t *content,
-    const char *disk_path,
-    git_filemode_t expected_mode,
-    const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
+static error_t *compare_reference_to_disk(
+    const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
+    const struct stat *in_stat, compare_result_t *result, struct stat *out_stat
 ) {
-    CHECK_NULL(content);
-    CHECK_NULL(disk_path);
-    CHECK_NULL(result);
-
     struct stat st;
     const struct stat *stat_ptr;
 
-    /* Stat handling: use provided stat or capture new one */
+    /* Stat handling: use provided stat or capture new one
+     *
+     * Single-stat-per-file principle: When caller has already stat'd the file
+     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
+     * This is critical for performance in hot paths like workspace analysis.
+     */
     if (in_stat) {
         /* Caller provided stat - use it (zero syscalls) */
         stat_ptr = in_stat;
@@ -81,134 +135,97 @@ error_t *compare_buffer_to_disk(
             return NULL;
         }
 
-        /* Compare symlink targets */
-        char *disk_target = NULL;
-        error_t *err = fs_read_symlink(disk_path, &disk_target);
+        /* The target is the bytes. A link that vanished mid-look (ERR_NOT_FOUND
+         * — the errno's code, the caller's own absence rule) is CMP_MISSING;
+         * anything else is the read's error, which names the link itself. */
+        char *target = NULL;
+        error_t *err = fs_read_symlink(disk_path, &target);
         if (err) {
-            /* readlink's errno is folded into the error's prose. One classifying
-             * lstat re-derives the verdict-grade cause — the link vanished mid-look
-             * (ENOENT/ENOTDIR, the caller's own absence rule) is CMP_MISSING;
-             * anything else keeps the original error. It classifies a failure;
-             * it binds nothing. */
-            struct stat gone;
-            if (fs_lstat(disk_path, &gone) != 0
-                && (errno == ENOENT || errno == ENOTDIR)) {
+            if (error_code(err) == ERR_NOT_FOUND) {
                 error_free(err);
                 *result = CMP_MISSING;
                 return NULL;
             }
-            return error_wrap(
-                err, "Failed to read symlink '%s'", disk_path
-            );
+            return err;
         }
 
-        size_t expected_len = content->size;
-        bool targets_equal = (strlen(disk_target) == expected_len) &&
-            (memcmp(content->data, disk_target, expected_len) == 0);
+        err = judge(ref, target, strlen(target), disk_path, result);
+        free(target);
+        return err;
+    }
 
-        free(disk_target);
-        *result = targets_equal ? CMP_EQUAL : CMP_DIFFERENT;
+    /* Handle regular files using captured stat — no other mode is supported */
+    if (expected_mode != GIT_FILEMODE_BLOB &&
+        expected_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
+        return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
+    }
+
+    /* Check disk is also regular file (using captured stat - no syscall): not a
+     * symlink, and not a directory, device, FIFO, socket, etc. */
+    if (fs_stat_is_symlink(stat_ptr) || !fs_stat_is_regular(stat_ptr)) {
+        *result = CMP_TYPE_DIFF;
         return NULL;
     }
 
-    /* Handle regular files using captured stat */
-    if (expected_mode == GIT_FILEMODE_BLOB ||
-        expected_mode == GIT_FILEMODE_BLOB_EXECUTABLE) {
-
-        /* Check disk is also regular file (using captured stat - no syscall) */
-        if (fs_stat_is_symlink(stat_ptr)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        if (!fs_stat_is_regular(stat_ptr)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        /* Fast path: compare sizes using captured stat (no open needed yet) */
-        if (content->size != (size_t) stat_ptr->st_size) {
-            *result = CMP_DIFFERENT;
-            return NULL;
-        }
-
-        /* Sizes match - need content comparison for non-empty files */
-        if (stat_ptr->st_size > 0) {
-            /* One look: open a descriptor and read it to EOF — the bytes compared
-             * are one inode's. O_NOFOLLOW refuses a symlink swapped in since
-             * the caller's lstat (ELOOP); O_NONBLOCK keeps a swapped-in FIFO
-             * from wedging the open (fs_read_fd then refuses it as not a regular
-             * file). read(2) cannot fault on a concurrent truncation the way a
-             * stat-sized mmap could — it returns short, and short-or-different
-             * is CMP_DIFFERENT below. */
-            int fd = fs_open(
-                disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
-            );
-            if (fd < 0) {
-                if (errno == ENOENT || errno == ENOTDIR) {
-                    /* The look itself found nothing standing: the file vanished
-                     * between the caller's stat and this open. A verdict, not a
-                     * failed look. */
-                    *result = CMP_MISSING;
-                    return NULL;
-                }
-                return error_from_errno(
-                    errno, "Failed to open '%s'", disk_path
-                );
-            }
-
-            buffer_t disk_content = BUFFER_INIT;
-            error_t *err = fs_read_fd(fd, &disk_content);
-            close(fd);
-            if (err) {
-                return error_wrap(err, "Failed to read '%s'", disk_path);
-            }
-
-            /* Re-check size: file may have changed between stat and read */
-            bool equal = (disk_content.size == content->size) &&
-                (memcmp(
-                content->data, disk_content.data, content->size
-                ) == 0);
-            buffer_free(&disk_content);
-
-            if (!equal) {
-                *result = CMP_DIFFERENT;
-                return NULL;
-            }
-        }
-
-        /* Content and type match - files are equal
-         *
-         * NOTE: We do NOT check permissions here. Permission validation is a
-         * core-layer concern handled by workspace.c, which checks:
-         * 1. Git filemode (executable bit from tree)
-         * 2. Full metadata (all permission bits + ownership from
-         *    .dotta/metadata.json)
-         *
-         * This separation keeps the infrastructure layer pure and focused on
-         * content comparison only. */
-        *result = CMP_EQUAL;
+    /* Fast path: a buffer knows its size, so a size that differs is a verdict
+     * with no open needed; an id knows nothing of the size and reads regardless. */
+    if (ref->content && ref->content->size != (size_t) stat_ptr->st_size) {
+        *result = CMP_DIFFERENT;
         return NULL;
     }
 
-    /* Unsupported mode */
-    return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
+    /* One look: open a descriptor and read it to EOF — the bytes judged are one
+     * inode's. O_NOFOLLOW refuses a symlink swapped in since the caller's lstat
+     * (ELOOP); O_NONBLOCK keeps a swapped-in FIFO from wedging the open (fs_read_fd
+     * then refuses it as not a regular file). read(2) cannot fault on a concurrent
+     * truncation the way a stat-sized mmap could — it returns short, and
+     * short-or-different is CMP_DIFFERENT in the judgment. libgit2's
+     * git_odb_hashfile would open the path itself — a look sys/filesystem does
+     * not make (filesystem.h's funnel), and with it the errno the absence rule
+     * needs. The whole file is in memory for the length of the judgment, bounded
+     * by fs_read_fd's cap; above it the look fails and the caller reads a failed
+     * look, never a verdict. */
+    int fd = fs_open(disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0);
+    if (fd < 0) {
+        if (errno == ENOENT || errno == ENOTDIR) {
+            /* The look itself found nothing standing: the file vanished between
+             * the caller's stat and this open. A verdict, not a failed look. */
+            *result = CMP_MISSING;
+            return NULL;
+        }
+        return error_from_errno(errno, "Failed to open '%s'", disk_path);
+    }
+
+    buffer_t disk_content = BUFFER_INIT;
+    error_t *err = fs_read_fd(fd, &disk_content);
+    close(fd);
+    if (err) {
+        return error_wrap(err, "Failed to read '%s'", disk_path);
+    }
+
+    err = judge(ref, disk_content.data, disk_content.size, disk_path, result);
+    buffer_free(&disk_content);
+    return err;
 }
 
-/**
- * Compare git blob OID to disk file with stat propagation
- *
- * OID-based counterpart to compare_buffer_to_disk. Hashes the filesystem file
- * using git's blob hash algorithm (SHA-1("blob <size>\0" + content)) and compares
- * to the expected OID.
- *
- * For symlinks, reads the target string and hashes it identically to how Git
- * stores symlinks (blob containing the target path as raw bytes).
- *
- * For regular files, reads the disk copy through one descriptor — the look
- * compare_buffer_to_disk takes — and hashes the bytes: the file is in memory
- * for the length of the hash, bounded by fs_read_fd's cap.
- */
+error_t *compare_buffer_to_disk(
+    const buffer_t *content,
+    const char *disk_path,
+    git_filemode_t expected_mode,
+    const struct stat *in_stat,
+    compare_result_t *result,
+    struct stat *out_stat
+) {
+    CHECK_NULL(content);
+    CHECK_NULL(disk_path);
+    CHECK_NULL(result);
+
+    reference_t ref = { .content = content };
+    return compare_reference_to_disk(
+        &ref, disk_path, expected_mode, in_stat, result, out_stat
+    );
+}
+
 error_t *compare_oid_to_disk(
     const git_oid *blob_oid,
     const char *disk_path,
@@ -221,140 +238,10 @@ error_t *compare_oid_to_disk(
     CHECK_NULL(disk_path);
     CHECK_NULL(result);
 
-    /* Step 1: Stat handling - use provided stat or capture new one
-     *
-     * Single-stat-per-file principle: When caller has already stat'd the file
-     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
-     * This is critical for performance in hot paths like workspace analysis.
-     */
-    struct stat st;
-    const struct stat *stat_ptr;
-
-    if (in_stat) {
-        /* Caller provided stat - use it (zero syscalls) */
-        stat_ptr = in_stat;
-        if (out_stat) memcpy(out_stat, in_stat, sizeof(struct stat));
-    } else {
-        /* No pre-captured stat - perform lstat internally Using lstat() to not
-         * follow symlinks.
-         */
-        if (fs_lstat(disk_path, &st) != 0) {
-            if (errno == ENOENT || errno == ENOTDIR) {
-                /* File doesn't exist (ENOTDIR: a component above is no longer a
-                 * directory — same absence) */
-                *result = CMP_MISSING;
-                if (out_stat) {
-                    memset(out_stat, 0, sizeof(*out_stat));
-                }
-                return NULL;
-            }
-            return error_from_errno(errno, "Failed to stat '%s'", disk_path);
-        }
-        stat_ptr = &st;
-        if (out_stat) {
-            memcpy(out_stat, &st, sizeof(struct stat));
-        }
-    }
-
-    /* Step 2: Type verification and hash computation */
-    git_oid computed;
-
-    if (expected_mode == GIT_FILEMODE_LINK) {
-        /* Expected symlink - verify type matches */
-        if (!fs_stat_is_symlink(stat_ptr)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        /* Hash symlink target string
-         *
-         * Git stores symlinks as blobs containing the target path as raw bytes.
-         * We read the target and hash it identically to how Git would.
-         */
-        char *target = NULL;
-        error_t *err = fs_read_symlink(disk_path, &target);
-        if (err) {
-            /* readlink's errno is folded into the error's prose. One classifying
-             * lstat re-derives the verdict-grade cause — the link vanished mid-look
-             * (ENOENT/ENOTDIR, the caller's own absence rule) is CMP_MISSING;
-             * anything else keeps the original error. It classifies a failure;
-             * it binds nothing. */
-            struct stat gone;
-            if (fs_lstat(disk_path, &gone) != 0
-                && (errno == ENOENT || errno == ENOTDIR)) {
-                error_free(err);
-                *result = CMP_MISSING;
-                return NULL;
-            }
-            return error_wrap(err, "Failed to read symlink '%s'", disk_path);
-        }
-
-        int ret = git_odb_hash(&computed, target, strlen(target), GIT_OBJECT_BLOB);
-        free(target);
-
-        if (ret != 0) {
-            const git_error *git_err = git_error_last();
-            return ERROR(
-                ERR_GIT, "Failed to hash symlink target: %s",
-                git_err ? git_err->message : "unknown error"
-            );
-        }
-    } else {
-        /* Expected regular file (BLOB or BLOB_EXECUTABLE) */
-        if (fs_stat_is_symlink(stat_ptr)) {
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        if (!fs_stat_is_regular(stat_ptr)) {
-            /* Not a regular file (directory, device, FIFO, socket, etc.) */
-            *result = CMP_TYPE_DIFF;
-            return NULL;
-        }
-
-        /* One look, the same one compare_buffer_to_disk takes and for the same
-         * reasons (the flags are explained there): the bytes hashed are the
-         * descriptor's, one inode with the fstat fs_read_fd makes. libgit2's
-         * git_odb_hashfile would open the path itself — a look sys/filesystem
-         * does not make (filesystem.h's funnel), and with it the errno the absence
-         * rule needs. The whole file is in memory for the length of the hash,
-         * bounded by fs_read_fd's cap; above it the look fails and the caller
-         * reads a failed look, never a verdict. */
-        int fd = fs_open(
-            disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
-        );
-        if (fd < 0) {
-            if (errno == ENOENT || errno == ENOTDIR) {
-                *result = CMP_MISSING;
-                return NULL;
-            }
-            return error_from_errno(errno, "Failed to open '%s'", disk_path);
-        }
-
-        buffer_t disk_content = BUFFER_INIT;
-        error_t *err = fs_read_fd(fd, &disk_content);
-        close(fd);
-        if (err) {
-            return error_wrap(err, "Failed to read '%s'", disk_path);
-        }
-
-        /* The standard Git blob hash: SHA-1("blob <size>\0" + content). */
-        int ret = git_odb_hash(
-            &computed, disk_content.data, disk_content.size, GIT_OBJECT_BLOB
-        );
-        buffer_free(&disk_content);
-        if (ret != 0) {
-            const git_error *git_err = git_error_last();
-            return ERROR(
-                ERR_GIT, "Failed to hash file '%s': %s", disk_path,
-                git_err ? git_err->message : "unknown error"
-            );
-        }
-    }
-
-    /* Step 3: Compare computed hash to expected blob OID */
-    *result = git_oid_equal(blob_oid, &computed) ? CMP_EQUAL : CMP_DIFFERENT;
-    return NULL;
+    reference_t ref = { .oid = blob_oid };
+    return compare_reference_to_disk(
+        &ref, disk_path, expected_mode, in_stat, result, out_stat
+    );
 }
 
 /**

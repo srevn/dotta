@@ -57,15 +57,22 @@ typedef struct {
 } file_diff_t;
 
 /**
- * Compare buffer content to disk file (with stat propagation)
+ * Does the disk copy match the reference? — the pair
  *
- * Pure function with zero git/encryption knowledge. Compares plaintext buffer
- * to file on disk.
+ * One look at the disk copy, judged against a reference in one of two encodings:
+ * the plaintext bytes (compare_buffer_to_disk) or the blob's id
+ * (compare_oid_to_disk). The look is the same for both — the stat, the type against
+ * the expected mode, a link's target or a file's bytes through one descriptor —
+ * and the encoding matters at two points only: a buffer knows its size, so a
+ * size that differs is a verdict with no open needed; and the judgment is memcmp
+ * for a buffer, hash-and-compare for an id (SHA-1("blob <size>\0" + bytes), Git's
+ * own — a symlink is a blob holding its target). Pure with respect to git and
+ * encryption otherwise: zero blob loading, zero decryption.
  *
  * Tests:
  * 1. File exists on disk
  * 2. File type matches (regular/symlink)
- * 3. Content matches (byte-for-byte)
+ * 3. Content matches (byte-for-byte, or by id)
  *
  * Stat propagation optimization:
  * - If in_stat != NULL: Uses provided stat data (zero syscalls)
@@ -76,9 +83,24 @@ typedef struct {
  * This eliminates redundant stat calls when integrated with metadata checking,
  * reducing filesystem syscalls by ~5x in hot paths.
  *
- * CMP_MISSING means the look itself met ENOENT/ENOTDIR — the path was absent at
- * the look's own moment. Returned with or without in_stat; a caller that supplied
- * a stat learns its stat is one moment stale.
+ * CMP_MISSING means the look itself met the absence — ENOENT/ENOTDIR at the stat
+ * or the open, ERR_NOT_FOUND from the link's read — the path was absent at the
+ * look's own moment. Returned with or without in_stat; a caller that supplied a
+ * stat learns its stat is one moment stale.
+ *
+ * The id form is for plaintext blobs only: an encrypted blob's id is the hash
+ * of ciphertext, while the filesystem holds plaintext, so the comparison would
+ * never match. Two safe paths:
+ *   - The kind-routing primitive `content_compare_blob_to_disk` decides internally
+ *     and is always safe.
+ *   - Direct callers must gate on a byte-truth flag (e.g.,
+ *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
+ *     invariant in `content_store_file_to_worktree`); a stale or wrong-blob flag
+ *     silently misroutes.
+ */
+
+/**
+ * The buffer form of the pair above
  *
  * @param content Buffer containing expected content (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
@@ -98,31 +120,7 @@ error_t *compare_buffer_to_disk(
 );
 
 /**
- * Compare git blob OID to disk file (with stat propagation)
- *
- * OID-based comparison for non-encrypted files. Hashes the filesystem file using
- * the standard git blob hash algorithm and compares to the expected blob OID.
- * This avoids expensive blob loading from pack files.
- *
- * IMPORTANT: Only call for plaintext blobs. For encrypted blobs the blob_oid is
- * the hash of ciphertext, while the filesystem contains plaintext, so OID
- * comparison would never match. Two safe paths:
- *   - The kind-routing primitive `content_compare_blob_to_disk` decides internally
- *     and is always safe.
- *   - Direct callers must gate on a byte-truth flag (e.g.,
- *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
- *     invariant in `content_store_file_to_worktree`); a stale or wrong-blob flag
- *     silently misroutes.
- *
- * Stat propagation optimization:
- * - If in_stat != NULL: Uses provided stat data (zero syscalls)
- * - If in_stat == NULL: Performs lstat() internally
- * - If out_stat != NULL: Returns stat data for caller reuse
- * - Single stat used for all checks (type, size, mode)
- *
- * CMP_MISSING means the look itself met ENOENT/ENOTDIR — the path was absent at
- * the look's own moment. Returned with or without in_stat; a caller that supplied
- * a stat learns its stat is one moment stale.
+ * The id form of the pair above — plaintext blobs only
  *
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)

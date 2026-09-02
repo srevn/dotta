@@ -75,20 +75,20 @@
  * the count's one home.
  */
 static void print_deploy_preflight_results(
-    const output_t *out, const deploy_preflight_result_t *result
+    const output_t *out, const deploy_preflight_result_t *verdicts
 ) {
-    for (size_t i = 0; i < result->warnings->count; i++) {
-        output_warning(out, OUTPUT_NORMAL, "%s", result->warnings->items[i]);
+    for (size_t i = 0; i < verdicts->warnings->count; i++) {
+        output_warning(out, OUTPUT_NORMAL, "%s", verdicts->warnings->items[i]);
     }
 
-    if (result->skipped.count == 0) {
+    if (verdicts->skipped.count == 0) {
         return;
     }
 
     output_section(out, OUTPUT_NORMAL, "Skipped paths");
 
-    for (size_t i = 0; i < result->skipped.count && i < LIST_LIMIT; i++) {
-        const deploy_skip_t *s = &result->skipped.entries[i];
+    for (size_t i = 0; i < verdicts->skipped.count && i < LIST_LIMIT; i++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
         const char *path = s->row->filesystem_path;
 
         switch (s->reason) {
@@ -169,9 +169,9 @@ static void print_deploy_preflight_results(
         }
     }
 
-    if (result->skipped.count > LIST_LIMIT) {
+    if (verdicts->skipped.count > LIST_LIMIT) {
         output_print(
-            out, OUTPUT_NORMAL, "  ... and %zu more\n", result->skipped.count - LIST_LIMIT
+            out, OUTPUT_NORMAL, "  ... and %zu more\n", verdicts->skipped.count - LIST_LIMIT
         );
     }
 
@@ -188,8 +188,8 @@ static void print_deploy_preflight_results(
      * Last, UNREADABLE's closing — an unreadable path is not "in the way", and
      * a fix-or-widen instruction would misname a refusal to judge what could
      * not be seen. */
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (deploy_skip_needs_force(verdicts->skipped.entries[i].reason)) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Use --force to overwrite or replace them (discards what stands there)"
@@ -197,8 +197,8 @@ static void print_deploy_preflight_results(
             break;
         }
     }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        if (result->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (verdicts->skipped.entries[i].reason == DEPLOY_SKIP_CONTENT) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  To keep what is on disk instead: 'dotta update <path>'"
@@ -206,8 +206,8 @@ static void print_deploy_preflight_results(
             break;
         }
     }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        const deploy_skip_t *s = &result->skipped.entries[i];
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
         if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OCCUPIED ||
             (s->reason == DEPLOY_SKIP_ANCESTOR &&
@@ -220,8 +220,8 @@ static void print_deploy_preflight_results(
             break;
         }
     }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        if (result->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_DERIVED) {
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (verdicts->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_DERIVED) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
@@ -229,8 +229,8 @@ static void print_deploy_preflight_results(
             break;
         }
     }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        if (result->skipped.entries[i].reason == DEPLOY_SKIP_UNREADABLE) {
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        if (verdicts->skipped.entries[i].reason == DEPLOY_SKIP_UNREADABLE) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "  These paths could not be read; dotta never writes on a guess"

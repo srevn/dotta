@@ -765,9 +765,9 @@ error_t *deploy_execute(
 /**
  * Free pre-flight results
  *
- * @param result Results to free (can be NULL)
+ * @param verdicts Verdicts to free (can be NULL)
  */
-void deploy_preflight_result_free(deploy_preflight_result_t *result);
+void deploy_preflight_result_free(deploy_preflight_result_t *verdicts);
 
 /**
  * Free deployment results

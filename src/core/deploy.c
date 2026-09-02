@@ -573,10 +573,10 @@ static const manifest_row_t *holdable_directory(
  * ancestors' (parents-first); everywhere else the directory pass is complete.
  */
 static bool directory_is_deployable(
-    const deploy_preflight_result_t *result, const char *path
+    const deploy_preflight_result_t *verdicts, const char *path
 ) {
-    for (size_t i = 0; i < result->directories.count; i++) {
-        if (strcmp(result->directories.entries[i].row->filesystem_path, path) == 0) {
+    for (size_t i = 0; i < verdicts->directories.count; i++) {
+        if (strcmp(verdicts->directories.entries[i].row->filesystem_path, path) == 0) {
             return true;
         }
     }
@@ -627,7 +627,7 @@ static bool directory_is_deployable(
  * false) stands otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
- * @param result Preflight result, for the fates decided so far (must not be NULL)
+ * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
  * @param out_reason NONE / ANCESTOR / the ancestor's own (must not be NULL)
  * @param out_ancestor Prefix length of the named ancestor, or 0 (must not be NULL)
@@ -637,7 +637,7 @@ static bool directory_is_deployable(
  *        not be NULL)
  */
 static void check_ancestry(
-    const workspace_t *ws, const deploy_preflight_result_t *result, const char *path,
+    const workspace_t *ws, const deploy_preflight_result_t *verdicts, const char *path,
     deploy_skip_reason_t *out_reason, size_t *out_ancestor,
     deploy_ancestor_class_t *out_class, bool *out_absent
 ) {
@@ -647,7 +647,7 @@ static void check_ancestry(
         return;
     }
 
-    if (directory_is_deployable(result, dir)) {
+    if (directory_is_deployable(verdicts, dir)) {
         *out_absent = true;
         return;
     }
@@ -655,8 +655,8 @@ static void check_ancestry(
     *out_reason = DEPLOY_SKIP_ANCESTOR;
     *out_ancestor = strlen(dir);
 
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        const deploy_skip_t *s = &result->skipped.entries[i];
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
         if (strcmp(s->row->filesystem_path, dir) == 0) {
             *out_reason = s->reason;
@@ -727,8 +727,8 @@ static void check_ancestry(
  * is itself the honest fact (the offender could not be named).
  *
  * @param ws Workspace, for the claimed-ancestor lookup (must not be NULL)
- * @param result Preflight result, for the deployable-directory test (must not
- *        be NULL)
+ * @param verdicts The fates decided so far, for the deployable-directory test
+ *        (must not be NULL)
  * @param path Planned path (must not be NULL)
  * @param out_reason NONE / PERMISSION / ANCESTOR (must not be NULL)
  * @param out_ancestor Prefix length of the refusing ancestor, or 0 (must not be
@@ -737,7 +737,7 @@ static void check_ancestry(
  * @return Error or NULL on success (a skip is not an error)
  */
 static error_t *check_landing(
-    const workspace_t *ws, const deploy_preflight_result_t *result,
+    const workspace_t *ws, const deploy_preflight_result_t *verdicts,
     const char *path, deploy_skip_reason_t *out_reason, size_t *out_ancestor,
     deploy_ancestor_class_t *out_class
 ) {
@@ -760,7 +760,7 @@ static error_t *check_landing(
 
     scratch[ancestor_len(slash)] = '\0';  /* the ancestor, on its own */
 
-    if (directory_is_deployable(result, scratch)) {
+    if (directory_is_deployable(verdicts, scratch)) {
         goto cleanup;
     }
     if (is_dir && access(scratch, W_OK | X_OK) == 0) {
@@ -967,13 +967,13 @@ static error_t *resolve_metadata(
  * descendants this run skips is never planned, never created, and can neither
  * warn nor fail strict mode (see deploy_preflight's invariant).
  *
- * @param result Preflight result, both verdict kinds decided (must not be NULL)
+ * @param verdicts Both verdict kinds decided (must not be NULL)
  * @param dir Directory path (must not be NULL)
  */
 static bool above_deployable_row(
-    const deploy_preflight_result_t *result, const char *dir
+    const deploy_preflight_result_t *verdicts, const char *dir
 ) {
-    const deploy_verdicts_t *kinds[] = { &result->directories, &result->files };
+    const deploy_verdicts_t *kinds[] = { &verdicts->directories, &verdicts->files };
     size_t len = strlen(dir);
 
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
@@ -2043,17 +2043,17 @@ error_t *deploy_execute(
  * Free preflight result — the warnings, the skip array and the verdict arrays.
  * The rows they all point at belong to the workspace.
  */
-void deploy_preflight_result_free(deploy_preflight_result_t *result) {
-    if (!result) {
+void deploy_preflight_result_free(deploy_preflight_result_t *verdicts) {
+    if (!verdicts) {
         return;
     }
 
-    string_array_free(result->warnings);
-    free(result->directories.entries);
-    free(result->files.entries);
-    free(result->ancestors.entries);
-    free(result->skipped.entries);
-    free(result);
+    string_array_free(verdicts->warnings);
+    free(verdicts->directories.entries);
+    free(verdicts->files.entries);
+    free(verdicts->ancestors.entries);
+    free(verdicts->skipped.entries);
+    free(verdicts);
 }
 
 /**

@@ -1655,11 +1655,14 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             error_free(flush_err);
         }
 
-        /* Count what stands between this workspace and a clean sync. The deployed
-         * partition is read off the one route table (workspace_item_route — the
-         * same table status's sections and update's filter read, so sync cannot
-         * route an item a third way), the other states by the state switch beside
-         * it. One item, one count. */
+        /* Count what stands between this workspace and a clean sync, in the scope
+         * the run names: a pull of the named profiles moves nothing of the others',
+         * so their divergence is neither at risk nor this run's to send to update
+         * (scope_accepts_profile — the filter status's sections apply). The
+         * deployed partition is read off the one route table (workspace_item_route
+         * — the same table status's sections and update's filter read, so sync
+         * cannot route an item a third way), the other states by the state switch
+         * beside it. One item, one count. */
         workspace_items_t all_diverged = workspace_get_all_diverged(ws);
 
         size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
@@ -1670,6 +1673,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         for (size_t i = 0; i < all_diverged.count; i++) {
             const workspace_item_t *item = all_diverged.entries[i];
+
+            if (!scope_accepts_profile(scope, item->profile)) {
+                continue;
+            }
 
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
@@ -1754,7 +1761,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 }
                 if (deleted_count > 0) {
                     output_info(
-                        out, OUTPUT_NORMAL, "  %zu deleted file%s",
+                        out, OUTPUT_NORMAL, "  %zu deleted path%s",
                         deleted_count, deleted_count == 1 ? "" : "s"
                     );
                 }
@@ -1805,9 +1812,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              *
              * The risk: syncing before committing local changes can turn them
              * into conflicts. If the pull moves a file the user edited, the edit
-             * becomes [modified] [stale] — update will not commit over git's
-             * newer content, and no dotta verb commits ours over theirs; the
-             * user resolves it by hand.
+             * becomes [modified] [stale] — update will not commit over Git's
+             * newer content, and no verb takes it by default: the user decides
+             * (the cancel hint below names the two flags that do).
              *
              * Safe workflow: update → sync → resolve any divergence explicitly
              */

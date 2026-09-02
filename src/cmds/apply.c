@@ -31,19 +31,17 @@
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
 
 /**
- * Print deploy pre-flight results: the warnings, then the skips
+ * Print the deploy skips: what the run will not do, and why
  *
- * A warning is an anomaly preflight met while deciding — an ownership it could
- * not resolve — and only a row the run will deploy contributes one. The skips
- * are reported and the run goes on: the verdicts already exclude them, so nothing
- * downstream re-checks. One section for every skip, both kinds, in decision order
- * — a skipped squatter precedes the rows it holds back, which is the reading
- * order — capped like every preview list (one squatter can hold a subtree, so
- * this one has a multiplier cleanup's uncapped block does not). The header is
- * the block's only prose, as it is in every block on both sides: no one sentence
- * covers both families here — the consent holds --force lifts and the hard blocks
- * it does not — and "not deployed" would say the header again. Each row names
- * its own reason, and the remedies close.
+ * The skips are reported and the run goes on: the verdicts already exclude them,
+ * so nothing downstream re-checks. One section for every skip, both kinds, in
+ * decision order — a skipped squatter precedes the rows it holds back, which is
+ * the reading order — capped like every preview list (one squatter can hold a
+ * subtree, so this one has a multiplier cleanup's uncapped block does not). The
+ * header is the block's only prose, as it is in every block on both sides: no
+ * one sentence covers both families here — the consent holds --force lifts and
+ * the hard blocks it does not — and "not deployed" would say the header again.
+ * Each row names its own reason, and the remedies close.
  *
  * Two line families. The landing and occupancy reasons keep their exact
  * parentheticals — facts about the path's surroundings, no profile. The row-fact
@@ -74,13 +72,9 @@
  * what it will not and why. No total-count line: the exit error's message is
  * the count's one home.
  */
-static void print_deploy_preflight_results(
+static void print_deploy_skips(
     const output_t *out, const deploy_preflight_result_t *verdicts
 ) {
-    for (size_t i = 0; i < verdicts->warnings->count; i++) {
-        output_warning(out, OUTPUT_NORMAL, "%s", verdicts->warnings->items[i]);
-    }
-
     if (verdicts->skipped.count == 0) {
         return;
     }
@@ -267,6 +261,13 @@ static void print_deploy_preflight_results(
  * run may make on the way are not here: they are the mechanics of landing a planned
  * path, and the receipt names the ones it made.
  *
+ * The warnings close the preview. A warning is an anomaly preflight met while
+ * deciding — an ownership it could not resolve — on a row the run will deploy:
+ * a caveat on the promise, not a hold, so it prints under the promise and ahead
+ * of the skips. Only a row the run touches contributes one (deploy.h's warnings),
+ * and an ancestor is decided only above a deployable row, so the loop sits past
+ * the early return and an empty preview never has a warning to lose.
+ *
  * Empty verdicts have nothing to say, and say nothing.
  */
 static void print_deploy_preview(
@@ -397,6 +398,13 @@ static void print_deploy_preview(
             output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
         }
     }
+
+    /* The caveats on the promise. Past the early return by the invariant above:
+     * only a row the run touches contributes one, and an ancestor is decided
+     * only above a deployable row. */
+    for (size_t i = 0; i < verdicts->warnings->count; i++) {
+        output_warning(out, OUTPUT_NORMAL, "%s", verdicts->warnings->items[i]);
+    }
 }
 
 /**
@@ -444,14 +452,15 @@ static void print_reassignments(
 }
 
 /**
- * Report the work the plans skipped, by reason
+ * Report the work the plans withheld, by flag
  *
  * -e (files, tracked directories, orphans) and --skip-existing (files) both mean
- * "in scope, needed work, deliberately not done". The two reasons take two lines,
- * and -e's line splits its count by kind at verbose.
+ * "in scope, needed work, deliberately not done" — the user's own flags, decided
+ * at plan time, which is what "withheld" names against preflight's "skipped".
+ * The two flags take two lines, and -e's line splits its count by kind at verbose.
  *
  * Printed once, above the nothing-to-do exit — so a run that does nothing else
- * still says what it skipped — and therefore also above the confirmation prompt,
+ * still says what it withheld — and therefore also above the confirmation prompt,
  * where a user weighing the rest of the run should already know what is missing
  * from it. Per-item traces stay at plan time, beside the decision that produced
  * them.
@@ -460,7 +469,7 @@ static void print_reassignments(
  * @param cleanup_plan Cleanup plan, whose `excluded` bucket carries the orphans
  *        an -e pattern spared (must not be NULL)
  */
-static void print_skipped(
+static void print_withheld(
     const output_t *out,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
@@ -571,7 +580,7 @@ static void print_skipped(
  * carrying its ownership when the row holds one — a link's entry exists to carry
  * exactly that, so the receipt is where the claim becomes visible.
  *
- * Work the run skipped is not here: the plan decided it, print_skipped reports
+ * Work the run skipped is not here: the plan decided it, print_withheld reports
  * it, and it must be said even on runs that never execute. A failure IS here —
  * one line per row that did not land, its cause beside it (the receipt's failed
  * bucket), at every verbosity and last, after what did land: a receipt that omits
@@ -1024,7 +1033,7 @@ static void print_path_list(
 }
 
 /**
- * Print cleanup preflight results
+ * Print the cleanup preview
  *
  * Shows what cleanup will do BEFORE user confirmation. Every number here is one
  * cleanup decided; this function reads them and adds nothing of its own, so the
@@ -1033,14 +1042,15 @@ static void print_path_list(
  * name one verdict with one verb ("will be pruned" / "Pruned"), differing only
  * in tense.
  *
- * The summaries only count the files the run will not prune; the two blocks at
- * the end name them, with different messaging: the skipped ones with their reason
- * and the one lever that overrides it, and the released ones, where nothing is
- * asked. Cleanup took that split when it bucketed each file; this is display,
- * so it counts nothing and only routes per item. They come last, so that guidance
- * is what the user is looking at when the confirmation prompt arrives.
+ * The summaries only count the files the run will not prune; two blocks name
+ * them, with different messaging. The released ones close this preview: a release
+ * is a promise of an effect — the record retires — and nothing is asked about
+ * it, so the block is the preview's to make. The skipped ones, with their reason
+ * and the one lever that overrides it, are the skips' (print_cleanup_skips).
+ * Cleanup took that split when it bucketed each file; this is display, so it
+ * counts nothing and only routes per item.
  */
-static void print_cleanup_preflight_results(
+static void print_cleanup_preview(
     const output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
@@ -1054,7 +1064,9 @@ static void print_cleanup_preflight_results(
         verdicts->released_dirs.count;
 
     /* An empty plan — no orphans in scope, --keep-orphans — has nothing to say,
-     * and says nothing. */
+     * and says nothing. The sum is the plan's size, by the partition above
+     * (cleanup_preflight_result_t's two equations), so only an empty plan returns
+     * here — the closer in cmd_apply counts on it. */
     if (present_files + present_dirs + verdicts->absent_files.count +
         verdicts->absent_dirs.count == 0) {
         return;
@@ -1095,8 +1107,10 @@ static void print_cleanup_preflight_results(
 
         /* Every list follows the count that promises it, so a name is never read
          * against the wrong fate. One list here, under the two prune lines it
-         * spans: the skipped and released files are named, with their reasons,
-         * in blocks of their own below, so their counts stand alone. */
+         * spans: the released and skipped files are named in blocks of their
+         * own below — the released ones closing this preview, the skipped ones
+         * with their reasons in the block after it — so their counts stand
+         * alone. */
         print_path_list(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
 
         if (released.count > 0) {
@@ -1185,73 +1199,6 @@ static void print_cleanup_preflight_results(
         }
     }
 
-    /* Skipped orphaned files: each is named with its reason, then the one line
-     * the deploy-side conflict block also ends with — --force overrides the hold.
-     * The header names the fate in the receipt's own words for this bucket —
-     * the two blocks that map one-to-one onto a receipt section, this and "Released
-     * files", name it identically there and here — which also keeps it clear of
-     * the deploy block's "Skipped paths" a few lines up, whose rows carry the
-     * same shape. The labels name the reasons, because no one reason covers the
-     * block — a held relocation is byte-clean and an unverifiable copy may be —
-     * and the closing line names the cost the same way: what stands there, whatever
-     * its state. The ways to keep a held file are the inverse of the command
-     * that orphaned it (profile enable, add) or a move aside, and every line
-     * names the profile; they are not spelled out. */
-    if (skipped.count > 0) {
-        output_section(out, OUTPUT_NORMAL, "Skipped orphaned files");
-
-        for (size_t i = 0; i < skipped.count; i++) {
-            const workspace_item_t *item = skipped.entries[i];
-
-            /* How the reason reads on screen. The reason itself is cleanup's
-             * (cleanup_skip_reason); this only names it — red where the file's
-             * own content or type has moved away from what dotta deployed, yellow
-             * where dotta simply cannot vouch for it or deliberately holds it. */
-            const char *glyph = "•";
-            const char *label = "skipped";
-            output_color_t color = OUTPUT_COLOR_YELLOW;
-
-            switch (cleanup_skip_reason(item)) {
-                case CLEANUP_SKIP_MODIFIED:
-                    glyph = "✗";
-                    label = "modified";
-                    color = OUTPUT_COLOR_RED;
-                    break;
-                case CLEANUP_SKIP_TYPE_CHANGED:
-                    glyph = "⚠";
-                    label = "type changed";
-                    color = OUTPUT_COLOR_RED;
-                    break;
-                case CLEANUP_SKIP_RELOCATED:
-                    glyph = "⚠";
-                    label = "home changed";
-                    break;
-                case CLEANUP_SKIP_MODE_CHANGED:
-                    glyph = "⚠";
-                    label = "permissions changed";
-                    break;
-                case CLEANUP_SKIP_UNVERIFIED:
-                    glyph = "?";
-                    label = "cannot verify";
-                    break;
-                case CLEANUP_SKIP_NONE:
-                    /* Unreachable: a file is in skipped_files because a reason names it */
-                    break;
-            }
-
-            output_colored(out, OUTPUT_NORMAL, color, "  %s", glyph);
-            output_print(out, OUTPUT_NORMAL, " %s ", item->filesystem_path);
-            output_colored(out, OUTPUT_NORMAL, color, "(%s from ", label);
-            output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
-            output_colored(out, OUTPUT_NORMAL, color, ")\n");
-        }
-
-        output_info(
-            out, OUTPUT_NORMAL,
-            "  Use --force to prune them anyway (discards what stands there)"
-        );
-    }
-
     /* Released files are informational: nothing is asked of the user, and --force
      * does not change their fate (see cleanup.h). So the block closes with the
      * consequence, indented under the rows the way "Profile reassignments" closes
@@ -1276,8 +1223,88 @@ static void print_cleanup_preflight_results(
             "  These paths are left on disk, no longer managed by dotta."
         );
     }
+}
 
-    output_newline(out, OUTPUT_NORMAL);
+/**
+ * Print the cleanup skips: the orphaned files the run will not prune, and why
+ *
+ * Each is named with its reason, then the one line the deploy-side conflict block
+ * also ends with — --force overrides the hold. The header names the fate in the
+ * receipt's own words for this bucket — the two blocks that map one-to-one onto
+ * a receipt section, this and "Released files", name it identically there and
+ * here — which also keeps it clear of the deploy block's "Skipped paths" above,
+ * whose rows carry the same shape. The labels name the reasons, because no one
+ * reason covers the block — a held relocation is byte-clean and an unverifiable
+ * copy may be — and the closing line names the cost the same way: what stands
+ * there, whatever its state. The ways to keep a held file are the inverse of
+ * the command that orphaned it (profile enable, add) or a move aside, and every
+ * line names the profile; they are not spelled out.
+ *
+ * It comes last of the previews, so that guidance is what the user is looking
+ * at when the confirmation prompt arrives.
+ */
+static void print_cleanup_skips(
+    const output_t *out,
+    const cleanup_preflight_result_t *verdicts
+) {
+    workspace_items_t skipped = workspace_items_view(&verdicts->skipped_files);
+
+    if (skipped.count == 0) {
+        return;
+    }
+
+    output_section(out, OUTPUT_NORMAL, "Skipped orphaned files");
+
+    for (size_t i = 0; i < skipped.count; i++) {
+        const workspace_item_t *item = skipped.entries[i];
+
+        /* How the reason reads on screen. The reason itself is cleanup's
+         * (cleanup_skip_reason); this only names it — red where the file's own
+         * content or type has moved away from what dotta deployed, yellow where
+         * dotta simply cannot vouch for it or deliberately holds it. */
+        const char *glyph = "•";
+        const char *label = "skipped";
+        output_color_t color = OUTPUT_COLOR_YELLOW;
+
+        switch (cleanup_skip_reason(item)) {
+            case CLEANUP_SKIP_MODIFIED:
+                glyph = "✗";
+                label = "modified";
+                color = OUTPUT_COLOR_RED;
+                break;
+            case CLEANUP_SKIP_TYPE_CHANGED:
+                glyph = "⚠";
+                label = "type changed";
+                color = OUTPUT_COLOR_RED;
+                break;
+            case CLEANUP_SKIP_RELOCATED:
+                glyph = "⚠";
+                label = "home changed";
+                break;
+            case CLEANUP_SKIP_MODE_CHANGED:
+                glyph = "⚠";
+                label = "permissions changed";
+                break;
+            case CLEANUP_SKIP_UNVERIFIED:
+                glyph = "?";
+                label = "cannot verify";
+                break;
+            case CLEANUP_SKIP_NONE:
+                /* Unreachable: a file is in skipped_files because a reason names it */
+                break;
+        }
+
+        output_colored(out, OUTPUT_NORMAL, color, "  %s", glyph);
+        output_print(out, OUTPUT_NORMAL, " %s ", item->filesystem_path);
+        output_colored(out, OUTPUT_NORMAL, color, "(%s from ", label);
+        output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", item->profile);
+        output_colored(out, OUTPUT_NORMAL, color, ")\n");
+    }
+
+    output_info(
+        out, OUTPUT_NORMAL,
+        "  Use --force to prune them anyway (discards what stands there)"
+    );
 }
 
 /**
@@ -1963,7 +1990,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * only work was withheld. ("Withheld" is the plan-time word — the user's
      * own flags, -e and --skip-existing; "skipped" is preflight's, a fate the
      * run decided.) */
-    print_skipped(out, deploy_plan, cleanup_plan);
+    print_withheld(out, deploy_plan, cleanup_plan);
     size_t withheld = deploy_plan->files.excluded.count +
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
         deploy_plan->files.skipped_existing.count;
@@ -2042,8 +2069,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * every write applies are decided here too — deployable rows alone — so a
      * strict-mode ownership failure ends the run before the prompt (the wrap
      * below is for such real errors; a skip is not one), and the anomalies met
-     * on the way — an owner this system does not know — print as warnings with
-     * the skip block, after the preview.
+     * on the way — an owner this system does not know — print as warnings closing
+     * the preview.
      */
     /* The trailing blank is this heading's own: the first preview section after
      * it is the run's first section, so output_section has no separator to emit
@@ -2059,6 +2086,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = deploy_preflight(ws, deploy_plan, &deploy_opts, &deploy_verdicts);
     if (err) {
         err = error_wrap(err, "Pre-flight checks failed");
+        goto cleanup;
+    }
+
+    /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
+     * no orphans in scope) yields empty verdicts and a silent preview — no gate
+     * needed anywhere. */
+    err = cleanup_preflight(ws, cleanup_plan, opts->force, &cleanup_verdicts);
+    if (err) {
+        err = error_wrap(err, "Cleanup preflight checks failed");
         goto cleanup;
     }
 
@@ -2090,23 +2126,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* The previews: the reassignments the run acknowledges, then each engine's
-     * story told the same way — what it will do (the preview), then what it will
-     * not and why (the skip block), each block closing with its own remedies —
-     * read the same way in a real run and a dry run. */
+     * story told the same way — what it will do (the preview, every caveat on
+     * the promise with it), then what it will not and why (the skips, closing
+     * with their remedies) — read the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, deploy_verdicts);
-    print_deploy_preflight_results(out, deploy_verdicts);
+    print_deploy_skips(out, deploy_verdicts);
+    print_cleanup_preview(out, cleanup_verdicts);
+    print_cleanup_skips(out, cleanup_verdicts);
 
-    /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
-     * no orphans in scope) yields empty verdicts and a silent preview — no gate
-     * needed anywhere. */
-    err = cleanup_preflight(ws, cleanup_plan, opts->force, &cleanup_verdicts);
-    if (err) {
-        err = error_wrap(err, "Cleanup preflight checks failed");
-        goto cleanup;
-    }
-
-    print_cleanup_preflight_results(out, cleanup_verdicts);
+    /* The previews are over: one blank before whatever follows — the prompt, a
+     * dry run's tail, the run's trace. Unconditional, because past the
+     * nothing-to-do exit some plan is non-empty, a non-empty plan yields a
+     * non-empty fate set on its side (the two totality equations), and a non-empty
+     * fate set prints a section. */
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Neither engine's skips abort: what can be deployed is deployed, what can
      * be pruned is pruned, and what cannot is named with its remedy — better
@@ -2205,7 +2239,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * dry run nothing it does not already know. Everything below is for the run
      * that writes — the two engines, then the record of what they did. */
     if (opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "\nDry-run mode - no paths will be modified\n");
+        output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no paths will be modified\n");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
          * call). Reporting reads the result: outcomes, never plan counts. The
@@ -2214,7 +2248,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * the skip block was its whole story, and "no work in scope" would misname
          * it. */
         if (deploy_verdicts->files.count + deploy_verdicts->directories.count > 0) {
-            output_print(out, OUTPUT_VERBOSE, "\nExecuting deployment plan...\n");
+            output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
 
             /* The content cache was populated with decrypted content during
              * workspace divergence analysis; deploy's fetches hit it. */
@@ -2248,7 +2282,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 err = NULL;
             }
         } else if (deploy_verdicts->skipped.count == 0) {
-            output_print(out, OUTPUT_VERBOSE, "\nNo deployment work in scope\n");
+            output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
 
         /* Prune the orphans the verdicts cleared and retire their records.

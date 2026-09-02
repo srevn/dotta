@@ -46,6 +46,7 @@
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "sys/source.h"
 
 /**
@@ -234,19 +235,30 @@ static error_t *workspace_create_empty(
  * Does disk ownership diverge from the claim?
  *
  * The ownership half of every divergence check — one rule for the file, orphan
- * and directory analyzers. Only the names actually claimed are compared (NULL
- * skips that half); whether this run could chown does not enter — the lstat needs
- * no privilege, and a claim the disk contradicts is a fact about the path whoever
- * reads it. A UID/GID the system cannot resolve to a name reads as divergence:
- * unknown ≠ expected (security-first).
+ * and directory analyzers. A present claim is the sheet's word wherever it stands,
+ * whatever the label: only the names actually claimed are compared (NULL skips
+ * that half), and a UID/GID the system cannot resolve to a name reads as divergence
+ * — unknown ≠ expected (security-first). An absent claim's meaning is the label's
+ * (metadata.h): on a label that tracks ownership it is the invoker's own, so
+ * the owner is compared to the invoker; on one that does not, the path carries
+ * no ownership and nothing is compared. Whether this run could chown does not
+ * enter — the lstat needs no privilege, and a claim the disk contradicts is a
+ * fact about the path whoever reads it.
+ *
+ * @param storage_path The claim's key, for its label (must not be NULL)
+ * @param owner The claimed owner, or NULL
+ * @param group The claimed group, or NULL
+ * @param st The path's lstat (must not be NULL)
  */
 static bool ownership_diverges(
+    const char *storage_path,
     const char *owner,
     const char *group,
     const struct stat *st
 ) {
     if (!owner && !group) {
-        return false;
+        const mount_spec_t *spec = mount_spec_for_path(storage_path);
+        return spec && spec->tracks_ownership && st->st_uid != identity()->uid;
     }
 
     if (owner) {
@@ -992,11 +1004,10 @@ static error_t *analyze_file_divergence(
          */
         if (occupant != FS_OCCUPANT_NONE &&
             cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-            if (row->type != PATH_TYPE_SYMLINK
-                && (file_stat.st_mode & 0777) != row->mode) {
+            if (row->type != PATH_TYPE_SYMLINK && (file_stat.st_mode & 0777) != row->mode) {
                 divergence |= DIVERGENCE_MODE;
             }
-            if (ownership_diverges(row->owner, row->group, &file_stat)) {
+            if (ownership_diverges(row->storage_path, row->owner, row->group, &file_stat)) {
                 divergence |= DIVERGENCE_OWNERSHIP;
             }
         }
@@ -1247,7 +1258,9 @@ static divergence_type_t compute_orphan_divergence(
             && (fresh_stat.st_mode & 0777) != anchor->mode) {
             divergence |= DIVERGENCE_MODE;
         }
-        if (ownership_diverges(anchor->owner, anchor->group, &fresh_stat)) {
+        if (ownership_diverges(
+            anchor->storage_path, anchor->owner, anchor->group, &fresh_stat
+            )) {
             divergence |= DIVERGENCE_OWNERSHIP;
         }
     }
@@ -2275,7 +2288,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         /* One rule, three analyzers: the row's mode is total (claim or floor)
          * and a directory row is never a link, so the compare needs no gate. */
         bool mode_differs = (dir_stat.st_mode & 0777) != row->mode;
-        bool ownership_differs = ownership_diverges(row->owner, row->group, &dir_stat);
+        bool ownership_differs = ownership_diverges(
+            row->storage_path, row->owner, row->group, &dir_stat
+        );
 
         /* Record divergence if any metadata differs, or a pending handover stands
          * (derived at the top, beside the record pairing) — the tail the file

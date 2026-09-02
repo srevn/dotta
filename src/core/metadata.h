@@ -12,11 +12,16 @@
  *   here, and the tree's word wins over a stale item's kind
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
- * - ownership: the sheet's ("owner"/"group") — captured only for paths whose
- *   label tracks it (root/, custom/), and only when running elevated; home/ paths
- *   are always the current user's. A capture names both halves or neither: the
- *   read side reads a lone half as a narrow claim deliberately made, so a name
- *   the host cannot spell fails the capture rather than authoring one
+ * - ownership: the sheet's ("owner"/"group"). A claim names a system identity,
+ *   never the invoker's own: the invoker's own is what every machine supplies
+ *   by default, so it is the absence of a claim, which every machine reads as
+ *   itself — the compare asks whether the owner is the invoker (core/workspace),
+ *   and a privileged deploy applies the invoker's pair (core/deploy). Captured
+ *   only for paths whose label tracks it (root/, custom/): a home/ path carries
+ *   none, and a claim standing on one by hand is honoured as written. A capture
+ *   names both halves or neither: the read side reads a lone half as a narrow
+ *   claim deliberately made, so a name the host cannot spell fails the capture
+ *   rather than authoring one
  * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
  *   hold, since Git trees have no empty directories
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
@@ -420,15 +425,15 @@ const metadata_item_t *const *metadata_items(
  * a links-only answer, and the producers read it as "the capture claims nothing":
  * retire whatever stale item stands at the key.
  *
- * Ownership capture (user/group):
- * - ONLY captured for paths whose label tracks ownership (root/, custom/), and
- *   only when running as root (UID 0)
- * - home/ prefix paths: ownership never captured (always current user)
- * - Regular users: ownership never captured (can't chown anyway)
- * - Both names or neither: where ownership is captured at all, a UID or GID this
- *   host cannot name fails the capture (ERR_NOT_FOUND). Half a claim would read
- *   downstream as a claim deliberately made narrow, and the path would land owned
- *   by whoever deploy created it as
+ * Ownership capture (user/group), for a label that tracks it (root/, custom/):
+ * the ownership half is authored iff the owner is not the capturing invoker, or
+ * the invoker is root — a claim names a system identity, and the invoker's own
+ * is the absence of one (the module header). No privilege enters: an lstat needs
+ * none, so a user captures root's file as root's, and root captures its own.
+ * Both names or neither: where ownership is captured at all, a UID or GID this
+ * host cannot name fails the capture (ERR_NOT_FOUND). Half a claim would read
+ * downstream as a claim deliberately made narrow, and the path would land owned
+ * by whoever deploy created it as.
  *
  * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
  *
@@ -461,11 +466,7 @@ error_t *metadata_capture_from_file(
  * row — an add does not track it, an update leaves the standing claim alone —
  * so the callers' warning is one the user reads at any verbosity.
  *
- * Ownership capture (user/group):
- * - ONLY captured for directories whose label tracks ownership (root/, custom/),
- *   and only when running as root (UID 0)
- * - home/ prefix directories: ownership never captured (always current user)
- * - Regular users: ownership never captured (can't chown anyway)
+ * Ownership capture (user/group): the file capture's rule, above.
  *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")

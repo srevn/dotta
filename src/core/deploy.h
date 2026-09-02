@@ -89,9 +89,11 @@ typedef struct {
  * — a clean row planned beneath a replaced squatter has no divergence to index.
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
- * resolved ownership (resolve_deployment_ownership; (uid_t) -1 / (gid_t) -1 is
- * no change). The mode the write applies is the row's, read there — total for
- * every kind that carries one (resolve_metadata carries the rationale).
+ * ownership the write applies (resolve_deployment_ownership: the claim resolved
+ * on this host, or the invoker's pair where there is none and the run holds root;
+ * (uid_t) -1 / (gid_t) -1 is no change). The mode the write applies is the row's,
+ * read there — total for every kind that carries one (resolve_metadata carries
+ * the rationale).
  */
 typedef struct {
     const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
@@ -632,13 +634,13 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses
  *   nothing); mode, ownership and encryption divergence never skip.
  * - Metadata — deployable rows only: the mode the write applies (the row's, total
- *   by build) and the ownership (resolve_deployment_ownership: the invoking user's
- *   for a path under their home when running as root, the row's owner and group
- *   resolved where the label tracks ownership, no change otherwise). Under
- *   strict_ownership an owner or group this system does not know is an error,
- *   returned here — before the prompt, never mid-run; otherwise it is a warning
- *   and no change. A skipped row is not consulted, so it can neither warn nor
- *   fail strict_ownership.
+ *   by build) and the ownership (resolve_deployment_ownership: the row's claim
+ *   resolved on this host; where there is none, the invoker's own pair when the
+ *   run holds root and no change otherwise — the absent claim's meaning,
+ *   metadata.h). Under strict_ownership an owner or group this system does not
+ *   know is an error, returned here — before the prompt, never mid-run; otherwise
+ *   it is a warning and no change. A skipped row is not consulted, so it can
+ *   neither warn nor fail strict_ownership.
  *
  * Then the ancestors: every directory row the plan does not act on — an ancestor
  * claim, which the plan never holds, or a tracked row out of scope or skipped —

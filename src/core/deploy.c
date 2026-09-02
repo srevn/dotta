@@ -22,7 +22,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
-#include "utils/privilege.h"
 
 /* ══════════════════════════════════════════════════════════════════
  * Plan
@@ -784,25 +783,18 @@ cleanup:
 }
 
 /**
- * Resolve deployment ownership for a path
+ * The ownership a row's write applies
  *
- * Unified ownership resolution logic for both files and directories. Handles
- * home/ vs root/custom/ prefix logic and sudo detection.
- *
- * Resolution rules:
- * - Files deploying to user's home under sudo: Use actual user's UID/GID
- * - root/ or custom/ prefix with owner/group metadata: Resolve names to UID/GID
- * - All other cases: Return -1 (no ownership change)
- *
- * Home detection for sudo de-escalation:
- * - Primary: storage_path starts with "home/" (always deploys to $HOME)
- * - Fallback: filesystem_path is under actual user's home (catches custom/ prefix
- *   files reclassified by --target that still land under $HOME)
+ * No claim: the invoker's own — on a label that tracks ownership by the capture's
+ * rule, on one that does not by the label's silence (metadata.h). The pair is
+ * applied by a privileged run alone: the invoker's own creation needs no
+ * correction, and root's — a refused syscall's second try (sys/filesystem) — is
+ * handed to the invoker here. A claim: the sheet's word wherever it stands,
+ * resolved on this host (metadata_resolve_ownership); whether this run may set
+ * the pair is the ownership rung's question, not this one's.
  *
  * Strict ownership mode (strict_ownership=true): an unknown user/group is a fatal
- * error, aborting deployment. An unelevated run never asks the resolver: it cannot
- * chown, so the claim stays unresolved (-1/-1) — reachable only in a dry run, a
- * real run's privilege check having re-exec'd under sudo before preflight.
+ * error, aborting deployment. Otherwise it is a warning, and no change.
  *
  * Pure decision, taken at preflight — no filesystem mutation — so the
  * strict_ownership abort is met before the prompt and never mid-run. A warning
@@ -810,26 +802,22 @@ cleanup:
  * print; nothing here reads a verbosity flag, because the warning's visibility
  * is not this module's output policy to set.
  *
- * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
- * @param filesystem_path Resolved deployment path for home detection
- * @param owner Owner username from metadata (can be NULL)
- * @param group Group name from metadata (can be NULL)
- * @param out_uid Resolved UID or -1 for no change (must not be NULL)
- * @param out_gid Resolved GID or -1 for no change (must not be NULL)
+ * @param row The row, for its claim and its name in a message (must not be NULL)
  * @param strict_ownership Fail deployment if ownership cannot be resolved
  * @param warnings Preflight warnings, for a non-fatal failure (must not be NULL)
+ * @param out_uid Resolved UID or -1 for no change (must not be NULL)
+ * @param out_gid Resolved GID or -1 for no change (must not be NULL)
  * @return Error on fatal failures, NULL on success (non-fatal errors recorded
  *         as warnings and suppressed)
  */
 static error_t *resolve_deployment_ownership(
-    const char *storage_path,
-    const char *filesystem_path,
-    const char *owner, const char *group,
-    uid_t *out_uid, gid_t *out_gid,
+    const manifest_row_t *row,
     bool strict_ownership,
-    string_array_t *warnings
+    string_array_t *warnings,
+    uid_t *out_uid, gid_t *out_gid
 ) {
-    CHECK_NULL(storage_path);
+    CHECK_NULL(row);
+    CHECK_NULL(warnings);
     CHECK_NULL(out_uid);
     CHECK_NULL(out_gid);
 
@@ -837,76 +825,51 @@ static error_t *resolve_deployment_ownership(
     *out_uid = (uid_t) -1;
     *out_gid = (gid_t) -1;
 
-    const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    bool requires_root_privileges = spec && spec->tracks_ownership;
-
-    /* Case 1: file lands in the invoking user's HOME when running as root.
-     *
-     * The identity's HOME (sys/identity) is the single source of truth for "the
-     * user's home" — the invoker's under sudo; privilege_path_is_user_home trusts
-     * it. No label dispatch needed:
-     *   home/X    → resolves under HOME → de-escalate
-     *   root/X    → /X, never under HOME → fall through
-     *   custom/X with --target $HOME/jail → under HOME → de-escalate
-     *   custom/X with --target /jail      → outside HOME → fall through
-     *
-     * The fs path tells us directly, and the pair applied is the invoker's own. */
-    const identity_t *id = identity();
-    if (id->privileged
-        && filesystem_path && privilege_path_is_user_home(filesystem_path)) {
-        *out_uid = id->uid;
-        *out_gid = id->gid;
+    if (!row->owner && !row->group) {
+        const identity_t *id = identity();
+        if (id->privileged) {
+            *out_uid = id->uid;
+            *out_gid = id->gid;
+        }
         return NULL;
     }
 
-    /* Case 2: root/ or custom/ prefix with ownership metadata -> resolve to UID/GID */
-    if (requires_root_privileges && (owner || group)) {
-        if (!id->privileged) {
-            /* An unelevated run cannot chown; reachable only in a dry one — a
-             * real run's privilege check re-exec'd under sudo before preflight.
-             * The claim stays unresolved (-1/-1, set above). */
-            return NULL;
-        }
-
-        error_t *err = metadata_resolve_ownership(owner, group, out_uid, out_gid);
-        if (err) {
-            /* ERR_NOT_FOUND only: the user/group does not exist on this system.
-             * Fatal under strict_ownership (configuration/environment mismatch);
-             * otherwise a warning, and the deployment continues with default
-             * ownership. */
-            if (strict_ownership) {
-                return error_wrap(
-                    err, "Ownership resolution failed for '%s' "
-                    "(strict_ownership enabled)\nHint: Create the user/group "
-                    "on this system, or disable strict_ownership", storage_path
-                );
-            }
-
-            char *warning = str_format(
-                "Could not resolve ownership for %s: %s",
-                storage_path, error_message(err)
+    error_t *err = metadata_resolve_ownership(row->owner, row->group, out_uid, out_gid);
+    if (err) {
+        /* ERR_NOT_FOUND only: the user/group does not exist on this system.
+         * Fatal under strict_ownership (configuration/environment mismatch);
+         * otherwise a warning, and the deployment continues with default
+         * ownership. */
+        if (strict_ownership) {
+            return error_wrap(
+                err, "Ownership resolution failed for '%s' "
+                "(strict_ownership enabled)\nHint: Create the user/group "
+                "on this system, or disable strict_ownership", row->storage_path
             );
-            error_free(err);    /* its message just moved into the warning */
-
-            if (!warning) {
-                return ERROR(ERR_MEMORY, "Failed to format ownership warning");
-            }
-
-            err = string_array_push_owned(warnings, warning);
-            if (err) {
-                free(warning);
-                return err;
-            }
-
-            /* Reset to "no change": a resolved owner must not survive its group's
-             * failure. */
-            *out_uid = (uid_t) -1;
-            *out_gid = (gid_t) -1;
         }
-        return NULL;
+
+        char *warning = str_format(
+            "Could not resolve ownership for %s: %s",
+            row->storage_path, error_message(err)
+        );
+        error_free(err);    /* its message just moved into the warning */
+
+        if (!warning) {
+            return ERROR(ERR_MEMORY, "Failed to format ownership warning");
+        }
+
+        err = string_array_push_owned(warnings, warning);
+        if (err) {
+            free(warning);
+            return err;
+        }
+
+        /* Reset to "no change": a resolved owner must not survive its group's
+         * failure. */
+        *out_uid = (uid_t) -1;
+        *out_gid = (gid_t) -1;
     }
 
-    /* Case 3: All other cases -> no ownership change */
     return NULL;
 }
 
@@ -932,24 +895,9 @@ static error_t *resolve_metadata(
     string_array_t *warnings,
     deploy_verdict_t *v
 ) {
-    const manifest_row_t *row = v->row;
-
-    error_t *err = resolve_deployment_ownership(
-        row->storage_path,
-        row->filesystem_path,
-        row->owner, row->group,
-        &v->uid, &v->gid,
-        opts->strict_ownership,
-        warnings
+    return resolve_deployment_ownership(
+        v->row, opts->strict_ownership, warnings, &v->uid, &v->gid
     );
-    if (err) {
-        return error_wrap(
-            err, "Failed to resolve ownership for '%s'",
-            row->filesystem_path
-        );
-    }
-
-    return NULL;
 }
 
 /**

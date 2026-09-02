@@ -591,6 +591,27 @@ const metadata_item_t *const *metadata_items(
 }
 
 /**
+ * Is this owner a system identity, or the invoker's own?
+ *
+ * A claim names a system identity, never the invoker's own: the invoker's own
+ * is what every machine supplies by default, so it is the absence of a claim
+ * (metadata.h). Root's own is a system fact wherever it is observed — a real
+ * root run, whose invoker is root, records everything. The group rides with the
+ * owner: a file the invoker owns under a system group (a web root's www-data)
+ * is the invoker's to the capture, since a group is as often the directory's
+ * inheritance (macOS's /tmp is wheel's) as an intent; a lone group claim written
+ * by hand is honoured by the read side (metadata_resolve_ownership).
+ *
+ * @param st The stat whose owner is asked (must not be NULL)
+ * @return true iff a capture authors the ownership half for it
+ */
+static bool claims_ownership(const struct stat *st) {
+    const identity_t *id = identity();
+
+    return st->st_uid != id->uid || id->uid == 0;
+}
+
+/**
  * Capture ownership from stat data into metadata item
  *
  * Names the stat's UID and GID, both or neither. A capture states what it saw,
@@ -686,25 +707,24 @@ error_t *metadata_capture_from_file(
         return err;
     }
 
-    /* Capture ownership for paths whose label tracks it (root/ and custom/).
-     * The vocabulary lives in the mount spec; the elevation gate stays here because
-     * ownership capture needs root either way. */
+    /* Ownership, for a label that tracks it and an owner that is not the invoker's
+     * own (claims_ownership). The lstat needs no privilege, so the claim is
+     * authored by whoever can read the path. */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && identity()->privileged) {
+    if (spec && spec->tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
             return err;
         }
     }
-    /* For home/ prefix or when not running as root: owner/group remain NULL */
 
     /* An item exists iff it claims something. Only a link reaches the branch —
      * a regular file always claims its mode — and only one kind of link: asked
      * after ownership resolution, which by now has either named both halves or
      * failed, what falls out here is a link the capture had no ownership to take
-     * (a label that does not track it, or an unelevated run), never one whose
-     * owner this host could not spell. No empty entry is ever authored. */
+     * (a label that does not track it, or the invoker's own link), never one
+     * whose owner this host could not spell. No empty entry is ever authored. */
     if (item->mode == MODE_UNCLAIMED && !item->owner && !item->group) {
         metadata_item_free(item);
         *out = NULL;
@@ -719,13 +739,8 @@ error_t *metadata_capture_from_file(
  * Capture metadata from filesystem directory
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
- * rules as file capture; the class is the caller's, carried through unread.
- *
- * Ownership capture (user/group):
- * - ONLY captured for root/ and custom/ prefix directories when running as root
- *   (UID 0)
- * - home/ prefix directories: ownership never captured (always current user)
- * - Regular users: ownership never captured (can't chown anyway)
+ * rule as file capture (claims_ownership); the class is the caller's, carried
+ * through unread.
  *
  * This function creates a metadata_item_t with kind=DIRECTORY.
  */
@@ -753,17 +768,15 @@ error_t *metadata_capture_from_directory(
         return err;
     }
 
-    /* Capture ownership for paths whose label tracks it (root/ and custom/).
-     * Mirrors the file-capture branch above. */
+    /* Ownership, by the file capture's rule (claims_ownership). */
     const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && identity()->privileged) {
+    if (spec && spec->tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
             return err;
         }
     }
-    /* For home/ prefix or when not running as root: owner/group remain NULL */
 
     *out = item;
     return NULL;

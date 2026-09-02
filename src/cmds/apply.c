@@ -250,11 +250,11 @@ static void print_deploy_preflight_results(
  * whole of deploy's output: the verdicts are the run's decisions, and nothing
  * else is asked or done.
  *
- * A directory's verb is its verdict's occupant (deploy_verdict_t): created where
- * nothing stood, fixed where a directory did, replaced where a squatter did —
- * the replace is the one destructive deploy verb, counted on its own line and
- * coloured the way cleanup colours a removal. The files' destructive half is
- * counted the same way: a file verdict overwrites local content iff something
+ * A directory's verb is its verdict's occupant (deploy_convergence): created
+ * where nothing stood, fixed where a directory did, replaced where a squatter
+ * did — the replace is the one destructive deploy verb, counted on its own line
+ * and coloured the way cleanup colours a removal. The files' destructive half
+ * is counted the same way: a file verdict overwrites local content iff something
  * stands at its path (deploy_occupant_present — a row planned absent beneath a
  * replaced squatter is a write into an empty tree, whatever its item read through
  * the link) and its item carries the conflict bits (deploy_content_conflicts,
@@ -277,15 +277,13 @@ static void print_deploy_preview(
     const deploy_verdicts_t *files = &verdicts->files;
     const deploy_verdicts_t *dirs = &verdicts->directories;
 
-    size_t created = 0;
-    size_t fixed = 0;
-    size_t replaced = 0;
+    size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
     for (size_t i = 0; i < dirs->count; i++) {
-        switch (dirs->entries[i].occupant) {
-            case FS_OCCUPANT_NONE:      created++; break;
-            case FS_OCCUPANT_DIRECTORY: fixed++; break;
-            default:                    replaced++; break;
+        switch (deploy_convergence(dirs->entries[i].occupant)) {
+            case DEPLOY_CONVERGE_CREATE:  created++; break;
+            case DEPLOY_CONVERGE_FIX:     fixed++; break;
+            case DEPLOY_CONVERGE_REPLACE: replaced++; break;
         }
     }
 
@@ -346,7 +344,7 @@ static void print_deploy_preview(
 
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
-            if (dirs->entries[i].occupant != FS_OCCUPANT_NONE) continue;
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) continue;
             if (matched++ < limit) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
@@ -367,7 +365,7 @@ static void print_deploy_preview(
 
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
-            if (dirs->entries[i].occupant != FS_OCCUPANT_DIRECTORY) continue;
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_FIX) continue;
             if (matched++ < limit) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
@@ -388,9 +386,7 @@ static void print_deploy_preview(
 
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
-            fs_occupant_t occ = dirs->entries[i].occupant;
-
-            if (occ == FS_OCCUPANT_NONE || occ == FS_OCCUPANT_DIRECTORY) continue;
+            if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_REPLACE) continue;
             if (matched++ < limit) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
@@ -598,16 +594,14 @@ static void print_deploy_results(
 
     /* The verbs, folded off the carried-out fates exactly as the preview folds
      * them off the verdicts (print_deploy_preview) — the receipt restates the
-     * preview by construction. */
-    size_t created = 0;
-    size_t fixed = 0;
-    size_t replaced = 0;
+     * preview by construction: one producer, so they cannot drift. */
+    size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
     for (size_t i = 0; i < converged.count; i++) {
-        switch (converged.entries[i].verdict->occupant) {
-            case FS_OCCUPANT_NONE:      created++; break;
-            case FS_OCCUPANT_DIRECTORY: fixed++; break;
-            default:                    replaced++; break;
+        switch (deploy_convergence(converged.entries[i].verdict->occupant)) {
+            case DEPLOY_CONVERGE_CREATE:  created++; break;
+            case DEPLOY_CONVERGE_FIX:     fixed++; break;
+            case DEPLOY_CONVERGE_REPLACE: replaced++; break;
         }
     }
 
@@ -649,8 +643,10 @@ static void print_deploy_results(
     if (created > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created tracked directories");
         for (size_t i = 0; i < converged.count; i++) {
-            if (converged.entries[i].verdict->occupant != FS_OCCUPANT_NONE) continue;
-            const manifest_row_t *dir = converged.entries[i].verdict->row;
+            const deploy_verdict_t *v = converged.entries[i].verdict;
+
+            if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_CREATE) continue;
+            const manifest_row_t *dir = v->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -669,8 +665,10 @@ static void print_deploy_results(
     if (fixed > 0) {
         output_section(out, OUTPUT_VERBOSE, "Fixed tracked directories");
         for (size_t i = 0; i < converged.count; i++) {
-            if (converged.entries[i].verdict->occupant != FS_OCCUPANT_DIRECTORY) continue;
-            const manifest_row_t *dir = converged.entries[i].verdict->row;
+            const deploy_verdict_t *v = converged.entries[i].verdict;
+
+            if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_FIX) continue;
+            const manifest_row_t *dir = v->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -685,7 +683,7 @@ static void print_deploy_results(
             output_print(out, OUTPUT_VERBOSE, ")");
 
             /* What was fixed: the divergence the planner saw */
-            const workspace_item_t *item = converged.entries[i].verdict->item;
+            const workspace_item_t *item = v->item;
             bool mode_differs = item && (item->divergence & DIVERGENCE_MODE);
             bool ownership_differs = item && (item->divergence & DIVERGENCE_OWNERSHIP);
 
@@ -703,10 +701,10 @@ static void print_deploy_results(
     if (replaced > 0) {
         output_section(out, OUTPUT_VERBOSE, "Replaced tracked directories");
         for (size_t i = 0; i < converged.count; i++) {
-            fs_occupant_t occ = converged.entries[i].verdict->occupant;
+            const deploy_verdict_t *v = converged.entries[i].verdict;
 
-            if (occ == FS_OCCUPANT_NONE || occ == FS_OCCUPANT_DIRECTORY) continue;
-            const manifest_row_t *dir = converged.entries[i].verdict->row;
+            if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_REPLACE) continue;
+            const manifest_row_t *dir = v->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -2385,12 +2383,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *                             a link is made by path, no descriptor exists
          *                             to describe it, and readlink is its whole
          *                             re-verification
-         *   converged, made           a directory whose verdict's occupant was not
-         *   (occupant ≠ DIRECTORY)    DIRECTORY — dotta made it, where nothing stood
-         *                             or in a squatter's place — an owned anchor;
-         *                             a directory has no blob and no stat
+         *   converged, made           a directory whose convergence is not a fix
+         *   (a create or a replace)   (deploy_convergence) — dotta made it, where
+         *                             nothing stood or in a squatter's place —
+         *                             an owned anchor; a directory has no blob
+         *                             and no stat
          *   converged in place        dotta did not make it, and it was present at
-         *   (occupant = DIRECTORY)    load, so the flush has already observed any
+         *   (a fix)                   load, so the flush has already observed any
          *                             that had no record: nothing to write, with
          *                             one exception — a pending handover must
          *                             not outlive the run that converged the
@@ -2448,7 +2447,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < converged.count; i++) {
                 const deploy_outcome_t *o = &converged.entries[i];
                 const manifest_row_t *dir = o->verdict->row;
-                bool made = o->verdict->occupant != FS_OCCUPANT_DIRECTORY;
+                bool made = deploy_convergence(o->verdict->occupant) != DEPLOY_CONVERGE_FIX;
 
                 const workspace_item_t *item = o->verdict->item;
                 bool acknowledges = item && workspace_item_reassigned(item);

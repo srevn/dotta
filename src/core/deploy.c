@@ -1112,7 +1112,7 @@ error_t *deploy_preflight(
          * for a writable parent. Only a create or a replace lands a new entry.
          * A row the workspace could not settle is asked too, and skipped on its
          * own account only when the landing had nothing to say — as for a file. */
-        if (occupant != FS_OCCUPANT_DIRECTORY) {
+        if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
             err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
             if (err) goto cleanup;
         }
@@ -1880,17 +1880,17 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
  * The failed directory whose absence poisons this path, or NULL
  *
  * Deploy's order is parents-first and its mechanism creates on the way down, so
- * per-row failure needs the preflight invariant's execution mirror: a directory
- * verdict that failed with an occupant other than DIRECTORY left no directory
- * standing at its path — the create never happened, or the squatter survived
- * its replace — and a write beneath it would land through whatever stands there
- * (ensure_parents would fabricate the failed directory as an unclaimed 0755, or
- * write through the surviving squatter: the hazard the ancestry rung refuses at
- * preflight, met again at execution time). A failed converge-in-place poisons
- * nothing: the directory stands, and children land in it or fail on their own
- * merits. Scanned in verdict order, so the first match is the outermost failed
- * ancestor — the offender every deeper row is named against. The failed bucket
- * is empty on every healthy run, which is what makes the scan free.
+ * per-row failure needs the preflight invariant's execution mirror: a failed
+ * directory verdict whose convergence was not a fix left no directory standing
+ * at its path — the create never happened, or the squatter survived its replace
+ * — and a write beneath it would land through whatever stands there (ensure_parents
+ * would fabricate the failed directory as an unclaimed 0755, or write through
+ * the surviving squatter: the hazard the ancestry rung refuses at preflight,
+ * met again at execution time). A failed converge-in-place poisons nothing: the
+ * directory stands, and children land in it or fail on their own merits. Scanned
+ * in verdict order, so the first match is the outermost failed ancestor — the
+ * offender every deeper row is named against. The failed bucket is empty on every
+ * healthy run, which is what makes the scan free.
  */
 static const char *poisoned_above(const deploy_result_t *result, const char *path) {
     for (size_t i = 0; i < result->failed.count; i++) {
@@ -1898,7 +1898,7 @@ static const char *poisoned_above(const deploy_result_t *result, const char *pat
         const char *dir = v->row->filesystem_path;
 
         if (v->row->type != PATH_TYPE_DIRECTORY ||
-            v->occupant == FS_OCCUPANT_DIRECTORY) {
+            deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX) {
             continue;
         }
         if (str_path_beneath(path, dir, strlen(dir))) {

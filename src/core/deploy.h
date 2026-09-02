@@ -78,7 +78,7 @@ typedef struct {
  * for a row planned beneath a squatter this run replaces first (deploy_plan_build),
  * whose own observation went through the squatter and describes a tree the run
  * dismantles. The occupant is also the receipt's verb for a directory: NONE →
- * created, DIRECTORY → fixed, anything else → replaced.
+ * created, DIRECTORY → fixed, anything else → replaced (deploy_convergence).
  *
  * The item is the index's answer, looked up once where the fate is decided and
  * filled verbatim on every arm — the planned-absent arms included. An item's
@@ -121,6 +121,43 @@ typedef struct {
  */
 static inline bool deploy_occupant_present(fs_occupant_t occ) {
     return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
+}
+
+/**
+ * How a directory verdict converges its row — and the receipt's word for it
+ *
+ * The verdict's occupant decides the whole of it: nothing stood → created; a
+ * directory did → fixed, converged in place, no new entry lands; anything else
+ * → replaced, one node cleared and then created. One producer for the mapping
+ * deploy_verdict_t documents and deploy_result_t's verbs derive from, so the
+ * preview, the receipt, apply's record step and the executor's own poison rule
+ * read one answer and cannot drift. Two facts ride on it and are read as it: a
+ * new entry lands iff the convergence is not a fix (preflight's landing question,
+ * and poisoned_above's "no directory stands"), and dotta made the directory iff
+ * the convergence is not a fix (the record step's ownership gate).
+ *
+ * Total over fs_occupant_t, so a new occupant is a build error here and not a
+ * silent REPLACE. UNKNOWN is answered — preflight asks before it skips such a
+ * row (UNREADABLE) — and never reaches a verdict, so no receipt folds it.
+ */
+typedef enum {
+    DEPLOY_CONVERGE_CREATE,   /* Nothing stood at the path */
+    DEPLOY_CONVERGE_FIX,      /* A directory stood there — converged in place */
+    DEPLOY_CONVERGE_REPLACE   /* A squatter stood there — cleared, then created */
+} deploy_convergence_t;
+
+static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
+    switch (occ) {
+        case FS_OCCUPANT_NONE:      return DEPLOY_CONVERGE_CREATE;
+        case FS_OCCUPANT_DIRECTORY: return DEPLOY_CONVERGE_FIX;
+        case FS_OCCUPANT_REGULAR:
+        case FS_OCCUPANT_SYMLINK:
+        case FS_OCCUPANT_OTHER:
+        case FS_OCCUPANT_UNKNOWN:   return DEPLOY_CONVERGE_REPLACE;
+    }
+
+    /* Unreachable once every enum value is handled */
+    return DEPLOY_CONVERGE_REPLACE;
 }
 
 /**
@@ -414,7 +451,7 @@ typedef struct {
  * execute itself takes, so execute buckets it; everything else the receipt restates
  * rather than re-decides. The verb inside a landed array is derived, never stored
  * twice — a directory's is its verdict's occupant (the mapping is
- * deploy_verdict_t's), so the caller can still say "replaced" where a squatter
+ * deploy_convergence's), so the caller can still say "replaced" where a squatter
  * went and "fixed" where nothing was created. Work the run deliberately did not
  * do is the plan's to report, never the result's — the plan decided it, so only
  * the plan can report it before a run that ends up executing nothing. A failure
@@ -436,10 +473,9 @@ typedef struct {
  * the receipt holds exactly what happened, by construction.
  *
  * The derived verb is also the ownership gate apply's record step reads: a
- * converged directory whose verdict's occupant was not DIRECTORY was made by
- * dotta and anchors as owned; one converged in place was not — anchoring it would
- * set deployed_at on a directory the user made, and hand it to the prune on the
- * next scope exit.
+ * converged directory whose convergence is not a fix was made by dotta and anchors
+ * as owned; one converged in place was not — anchoring it would set deployed_at
+ * on a directory the user made, and hand it to the prune on the next scope exit.
  *
  * `ancestors` is outside the plan: the claimed directories the run made as parents
  * of a planned path (create_ancestor), each once, either class. They carry their

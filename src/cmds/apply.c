@@ -315,24 +315,23 @@ static void print_deploy_preview(
             );
         }
 
-        size_t matched = 0;   /* printed up to the cap, counted past it */
-        for (size_t i = 0; i < files->count; i++) {
-            if (matched++ < LIST_LIMIT) {
-                /* The glyph carries the overwrite split: yellow on exactly the
-                 * rows the yellow line counted, cyan on the rest. */
-                bool overwrite =
-                    deploy_occupant_present(files->entries[i].occupant) &&
-                    deploy_content_conflicts(files->entries[i].item);
+        for (size_t i = 0; i < files->count && i < LIST_LIMIT; i++) {
+            /* The glyph carries the overwrite split: yellow on exactly the rows
+             * the yellow line counted, cyan on the rest. */
+            bool overwrite =
+                deploy_occupant_present(files->entries[i].occupant) &&
+                deploy_content_conflicts(files->entries[i].item);
 
-                output_styled(
-                    out, OUTPUT_VERBOSE,
-                    overwrite ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
-                    files->entries[i].row->filesystem_path
-                );
-            }
+            output_styled(
+                out, OUTPUT_VERBOSE,
+                overwrite ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
+                files->entries[i].row->filesystem_path
+            );
         }
-        if (matched > LIST_LIMIT) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
+        if (files->count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_VERBOSE, "    ... and %zu more\n", files->count - LIST_LIMIT
+            );
         }
     }
 
@@ -342,18 +341,17 @@ static void print_deploy_preview(
             created, created == 1 ? "y" : "ies"
         );
 
-        size_t matched = 0;   /* printed up to the cap, counted past it */
-        for (size_t i = 0; i < dirs->count; i++) {
+        size_t shown = 0;
+        for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) continue;
-            if (matched++ < LIST_LIMIT) {
-                output_styled(
-                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                    dirs->entries[i].row->filesystem_path
-                );
-            }
+            shown++;
+            output_styled(
+                out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                dirs->entries[i].row->filesystem_path
+            );
         }
-        if (matched > LIST_LIMIT) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
+        if (created > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", created - LIST_LIMIT);
         }
     }
 
@@ -363,18 +361,17 @@ static void print_deploy_preview(
             fixed, fixed == 1 ? "y" : "ies"
         );
 
-        size_t matched = 0;   /* printed up to the cap, counted past it */
-        for (size_t i = 0; i < dirs->count; i++) {
+        size_t shown = 0;
+        for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_FIX) continue;
-            if (matched++ < LIST_LIMIT) {
-                output_styled(
-                    out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                    dirs->entries[i].row->filesystem_path
-                );
-            }
+            shown++;
+            output_styled(
+                out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
+                dirs->entries[i].row->filesystem_path
+            );
         }
-        if (matched > LIST_LIMIT) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
+        if (fixed > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", fixed - LIST_LIMIT);
         }
     }
 
@@ -384,18 +381,17 @@ static void print_deploy_preview(
             replaced, replaced == 1 ? "y" : "ies"
         );
 
-        size_t matched = 0;   /* printed up to the cap, counted past it */
-        for (size_t i = 0; i < dirs->count; i++) {
+        size_t shown = 0;
+        for (size_t i = 0; i < dirs->count && shown < LIST_LIMIT; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_REPLACE) continue;
-            if (matched++ < LIST_LIMIT) {
-                output_styled(
-                    out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
-                    dirs->entries[i].row->filesystem_path
-                );
-            }
+            shown++;
+            output_styled(
+                out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
+                dirs->entries[i].row->filesystem_path
+            );
         }
-        if (matched > LIST_LIMIT) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
+        if (replaced > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", replaced - LIST_LIMIT);
         }
     }
 

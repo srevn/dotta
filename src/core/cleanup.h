@@ -227,7 +227,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
  *   a displaced ancestor above            RELEASED   both kinds. The occupant
- *   (workspace_displaced_ancestor)                   was observed through the
+ *   (the item's displaced class)                     was observed through the
  *                                                    squatter and speaks for
  *                                                    the wrong tree — not dotta's
  *                                                    to remove, --force and a
@@ -290,18 +290,14 @@ typedef enum {
 } cleanup_verdict_t;
 
 /**
- * Decide a planned orphan's verdict from the workspace's load-time facts
+ * Decide a planned orphan's verdict from the item alone
  *
- * @param ws Workspace the item belongs to, for the displaced-ancestor fact (must
- *        not be NULL)
  * @param item Orphaned or released item, either kind (must not be NULL)
  * @param force --force: lifts a file's skip reasons and the relocation hold (either
  *        kind), never a release and never a directory's UNVERIFIED
  * @return The verdict (see cleanup_verdict_t)
  */
-cleanup_verdict_t cleanup_verdict(
-    const workspace_t *ws, const workspace_item_t *item, bool force
-);
+cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
 
 /**
  * Cleanup verdicts — what cleanup_execute will do, decided once

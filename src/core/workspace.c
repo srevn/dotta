@@ -74,6 +74,23 @@ typedef struct {
 } confirmation_t;
 
 /**
+ * A displaced directory: a DIRECTORY-kind item carrying DIVERGENCE_TYPE, with
+ * the claim that holds the path
+ *
+ * The bit's two producers are the two authorities of the reach rule
+ * (workspace_displaced_t): the directory analyzer's type arm emits a DEPLOYED
+ * item over the view's row, the orphan analyzer's displaced arm a RELEASED item
+ * over the record — so the item's state names the authority and, for the view's,
+ * its row's class names the claim. The path is the item's own (borrowed), its
+ * length hoisted for the two outermost-match scans (the stamp, the probe).
+ */
+typedef struct {
+    const char *path;             /* The item's filesystem_path (borrowed) */
+    size_t len;                   /* strlen(path), hoisted for str_path_beneath */
+    workspace_displaced_t claim;  /* TRACKED / DERIVED (a view row's item), RECORD (an orphan's) */
+} displaced_dir_t;
+
+/**
  * Workspace structure
  *
  * Holds the view, the record and the divergence analysis over both. Uses hashmaps
@@ -151,12 +168,13 @@ struct workspace {
     ptr_array_t diverged;                        /* workspace_item_t * (files + directories) */
     hashmap_t *diverged_index;                   /* filesystem_path → workspace_item_t * */
 
-    /* The displaced directories: every path the view or the record claims as a
-     * directory that the load observed occupied by anything else. Derived by
-     * collect_displaced once the directory-bearing analyses have run; arena-backed,
-     * paths borrowed from the items and the record. Almost always empty, which
-     * is what makes the probe free (workspace_displaced_ancestor). */
-    const char **displaced;                      /* filesystem_path of each displaced directory */
+    /* The displaced directories: every path a claim names as a directory that
+     * the load observed occupied by anything else, with the claim. Derived by
+     * collect_displaced once every analysis has observed its slice, and the stamp
+     * on the items (workspace_item_t.displaced) with it; arena-backed, paths
+     * borrowed from the items. Almost always empty, which is what makes the stamp
+     * and the probe (workspace_displaced_ancestor) free. */
+    displaced_dir_t *displaced;                  /* One entry per displaced directory */
     size_t displaced_count;
 
     /* Confirmations accumulated during divergence analysis */
@@ -491,8 +509,8 @@ static void workspace_record_observation(
  * UNDEPLOYED, apply's to create.
  *
  * The record still answers "has dotta seen this path" for an ancestor claim —
- * the ownership gate and collect_displaced both read it. Only a claim that asserts
- * the path may read that answer as intent.
+ * the ownership gate reads it. Only a claim that asserts the path may read that
+ * answer as intent.
  */
 static workspace_state_t classify_absent(
     const manifest_row_t *row,
@@ -1562,8 +1580,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         /* Whether another kind of path stands where dotta's copy was (see the
          * doc above): a directory at a file record's path, anything but a directory
          * at a directory record's. An occupant that could not be stat'd is not
-         * judged. */
-        bool displaced = (kind == PATH_KIND_FILE)
+         * judged. The record's own kind, not the ancestry's: whether the copy
+         * was observed through a squatter above it is the stamp's
+         * (collect_displaced). */
+        bool retyped = (kind == PATH_KIND_FILE)
             ? (occupant == FS_OCCUPANT_DIRECTORY)
             : (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN);
 
@@ -1575,7 +1595,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
 
-        } else if (displaced) {
+        } else if (retyped) {
             /* What dotta put there is gone, and what stands there is not dotta's
              * to remove. Released, [type]: the record retires, the path stays. */
             item_state = WORKSPACE_STATE_RELEASED;
@@ -2291,58 +2311,55 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
 }
 
 /**
- * Collect the displaced directories from the load's own observations
+ * Collect the displaced directories from the load's own observations, and stamp
+ * every item they reach
  *
- * A directory is displaced when the view or the record claims the path as a
- * directory and the load observed something else standing there. Both classes
- * of directory row qualify — the claim only has to say the path is a directory,
- * not that the profile manages it, since what an observation resolved through
- * is the whole question here. The set is read off the items first — a
- * DIRECTORY-kind item carrying DIVERGENCE_TYPE is exactly that observation, and
- * the bit's two producers (the directory analyzer's type arm, the orphan analyzer's
- * displaced arm) each stamp it only after ruling out absence and an unstattable
- * path — so for every analyzed path the derivation costs no syscall. An orphaned
- * directory record with no item was never observed this load (orphan analysis
- * did not run; an analysis that ran leaves an item for every orphan), so the
- * collect takes the load's one look at it here, under the orphan analyzer's own
- * displaced rule: present, stattable, and not a directory. One observation per
- * path either way — the one-producer rule cleanup.h states for the occupant holds
- * for this fact too.
+ * A directory is displaced when a claim says a directory belongs at the path
+ * and the load observed something else standing there. Both classes of directory
+ * row qualify — the claim only has to say the path is a directory, not that the
+ * profile manages it, since what an observation resolved through is the whole
+ * question here — and so does a record the view lacks. The set is read off the
+ * items: a DIRECTORY-kind item carrying DIVERGENCE_TYPE is exactly that
+ * observation, and the bit's two producers (the directory analyzer's type arm,
+ * the orphan analyzer's displaced arm) each stamp it only after ruling out absence
+ * and an unstattable path — so the derivation costs no syscall, and the
+ * one-producer rule cleanup.h states for the occupant holds for this fact too.
+ * The two producers are the two authorities of the reach rule, and the item's
+ * state says which: a DEPLOYED item is the directory analyzer's, over a view
+ * row whose class names the claim; a RELEASED one is the orphan analyzer's, over
+ * a record. An orphaned directory record with no item is not read off the disk
+ * here: it exists only on a load that skipped the orphan analysis, and by the
+ * reach rule a record's memory reaches nothing but the orphan items that same
+ * analysis would have produced.
  *
- * Runs after the analyses that observe directories and before the untracked scan,
- * which must not open a directory whose path resolves through a squatter
- * (analyze_untracked_files). The record side is why the list is trustworthy on
- * every load, whatever the command's analysis options; the view side is as complete
- * as the directory analysis, which every command's load runs (workspace_load_t
- * — a load that routes items must never read NULL over a squatter). The bound
- * counts every no-item orphaned directory record, not just the displaced ones —
- * a true bound, loose only while such a record's path stands honestly, and the
- * list is empty on every healthy load.
+ * Then the stamp: every present item takes the outermost displaced directory
+ * that reaches it (workspace_item_t.displaced). Runs after every analysis has
+ * observed its slice — the file analyzer runs before the directory analyzer
+ * produces the squatter's item, so the fact cannot be stamped at emission — and
+ * before the untracked scan, which must not open a directory whose path resolves
+ * through a squatter (analyze_untracked_files) and whose items are therefore
+ * never stamped. The view side is as complete as the directory analysis, which
+ * every command's load runs (workspace_load_t — a load that routes items must
+ * never read NULL over a squatter); the record side is complete exactly when
+ * the orphan analysis ran, which is exactly when it has a reader. The list is
+ * empty on every healthy load, and both passes are then one early return.
  */
 static error_t *collect_displaced(workspace_t *ws) {
-    size_t bound = 0;
+    size_t count = 0;
 
     for (size_t i = 0; i < ws->diverged.count; i++) {
         const workspace_item_t *item = ws->diverged.items[i];
 
         if (item->item_kind == PATH_KIND_DIRECTORY &&
             (item->divergence & DIVERGENCE_TYPE)) {
-            bound++;
+            count++;
         }
     }
-    for (size_t i = 0; i < ws->orphan_count; i++) {
-        const anchor_t *anchor = ws->orphans[i];
-
-        if (path_type_kind(anchor->type) == PATH_KIND_DIRECTORY &&
-            !hashmap_has(ws->diverged_index, anchor->filesystem_path)) {
-            bound++;
-        }
-    }
-    if (bound == 0) {
+    if (count == 0) {
         return NULL;
     }
 
-    ws->displaced = arena_alloc(ws->arena, bound * sizeof(*ws->displaced));
+    ws->displaced = arena_alloc(ws->arena, count * sizeof(*ws->displaced));
     if (!ws->displaced) {
         return ERROR(ERR_MEMORY, "Failed to allocate displaced directory list");
     }
@@ -2350,25 +2367,52 @@ static error_t *collect_displaced(workspace_t *ws) {
     for (size_t i = 0; i < ws->diverged.count; i++) {
         const workspace_item_t *item = ws->diverged.items[i];
 
-        if (item->item_kind == PATH_KIND_DIRECTORY &&
-            (item->divergence & DIVERGENCE_TYPE)) {
-            ws->displaced[ws->displaced_count++] = item->filesystem_path;
-        }
-    }
-    for (size_t i = 0; i < ws->orphan_count; i++) {
-        const anchor_t *anchor = ws->orphans[i];
-
-        if (path_type_kind(anchor->type) != PATH_KIND_DIRECTORY ||
-            hashmap_has(ws->diverged_index, anchor->filesystem_path)) {
+        if (item->item_kind != PATH_KIND_DIRECTORY ||
+            !(item->divergence & DIVERGENCE_TYPE)) {
             continue;
         }
 
-        fs_occupant_t occupant = fs_lstat_occupant(anchor->filesystem_path, NULL);
+        /* The state names the authority: a DEPLOYED item is a view row's (the
+         * join), so the row holds and its class is the claim's; anything else
+         * here is the orphan analyzer's, over a record the view lacks. */
+        ws->displaced[ws->displaced_count++] = (displaced_dir_t){
+            .path = item->filesystem_path,
+            .len = strlen(item->filesystem_path),
+            .claim = item->state != WORKSPACE_STATE_DEPLOYED
+                ? WORKSPACE_DISPLACED_RECORD
+                : item->row->tracked
+                ? WORKSPACE_DISPLACED_TRACKED
+                : WORKSPACE_DISPLACED_DERIVED,
+        };
+    }
 
-        if (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN &&
-            occupant != FS_OCCUPANT_NONE) {
-            ws->displaced[ws->displaced_count++] = anchor->filesystem_path;
+    /* The stamp: every present item takes the outermost displaced directory that
+     * reaches it — the reach rule (workspace_displaced_t). Outermost among those
+     * that reach, not outermost then tested: a DEPLOYED item beneath a
+     * record-remembered rung and, deeper, a tracked squatter is displaced by
+     * the tracked one. Absent items are never stamped — an absent reading beneath
+     * a squatter is true: the lstat reached nothing, and there is no directory
+     * for the path to exist in, so a deletion stays real work to commit and an
+     * absent orphan a reclaim. Presence is the whole of the condition. */
+    for (size_t i = 0; i < ws->diverged.count; i++) {
+        workspace_item_t *item = ws->diverged.items[i];
+
+        if (item->occupant == FS_OCCUPANT_NONE) continue;
+
+        bool record_family = item->state == WORKSPACE_STATE_ORPHANED ||
+            item->state == WORKSPACE_STATE_RELEASED;
+        const displaced_dir_t *outer = NULL;
+
+        for (size_t j = 0; j < ws->displaced_count; j++) {
+            const displaced_dir_t *dir = &ws->displaced[j];
+
+            if (dir->claim == WORKSPACE_DISPLACED_RECORD && !record_family) continue;
+            if (str_path_beneath(item->filesystem_path, dir->path, dir->len) &&
+                (!outer || dir->len < outer->len)) {
+                outer = dir;
+            }
         }
+        item->displaced = outer ? outer->claim : WORKSPACE_DISPLACED_NONE;
     }
 
     return NULL;
@@ -2640,10 +2684,11 @@ error_t *workspace_load(
         }
     }
 
-    /* The displaced directories, derived from the observations above: the fact
-     * every consumer that judges a path beneath one must ask, established here
-     * once and trusted downstream. Unconditional — the record side must hold
-     * whatever analyses the command chose. */
+    /* The displaced directories, derived from the observations above, and the
+     * stamp on every item they reach: the fact every consumer that judges a path
+     * beneath one must ask, established here once and trusted downstream.
+     * Unconditional — the view side must hold on every load that routes items,
+     * and the record side on every load that produced orphan items. */
     err = collect_displaced(ws);
     if (err) {
         workspace_free(ws);
@@ -2743,31 +2788,32 @@ const manifest_row_t *workspace_lookup(
 }
 
 /**
- * The displaced managed directory above `path`, or NULL
+ * The displaced managed directory above `path`, or NULL — the view's claims
  */
 const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path) {
     if (!ws || !path) {
         return NULL;
     }
 
-    const char *outermost = NULL;
-    size_t shortest = 0;
+    const displaced_dir_t *outermost = NULL;
 
     /* The shortest match is the outermost ancestor: a deeper displaced directory
      * was itself observed through the outer one, so the outer occupant's fate
-     * settles both. The list is unordered — two analyses and the record walk
-     * fill it — so the scan asks for the minimum rather than the first hit. */
+     * settles both. The list is unordered — two analyses fill it — so the scan
+     * asks for the minimum rather than the first hit. A record's memory is skipped:
+     * it reaches only the record family, whose items carry the fact themselves
+     * (the reach rule, workspace_displaced_t). */
     for (size_t i = 0; i < ws->displaced_count; i++) {
-        const char *dir = ws->displaced[i];
-        size_t len = strlen(dir);
+        const displaced_dir_t *dir = &ws->displaced[i];
 
-        if (str_path_beneath(path, dir, len) && (!outermost || len < shortest)) {
+        if (dir->claim == WORKSPACE_DISPLACED_RECORD) continue;
+        if (str_path_beneath(path, dir->path, dir->len) &&
+            (!outermost || dir->len < outermost->len)) {
             outermost = dir;
-            shortest = len;
         }
     }
 
-    return outermost;
+    return outermost ? outermost->path : NULL;
 }
 
 /**
@@ -2793,6 +2839,19 @@ const anchor_t *workspace_get_anchor(
  */
 workspace_route_t workspace_item_route(const workspace_item_t *item) {
     divergence_type_t divergence = item->divergence;
+
+    /* An observation taken through a squatter the view claims is void: no bit
+     * below was read off this path's tree — deploy's ANCESTOR rung and
+     * cleanup_verdict's displaced arm rank the same fact the same way. RECORD
+     * never stands on a deployed item (the reach rule), so the two view classes
+     * are the whole test and falling through is what a record's memory says of
+     * a view row. */
+    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) {
+        return WORKSPACE_ROUTE_DISPLACED_TRACKED;
+    }
+    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
+        return WORKSPACE_ROUTE_DISPLACED_DERIVED;
+    }
 
     /* A bit the analysis could not settle outranks the ones it could */
     if (divergence & DIVERGENCE_UNVERIFIED) {
@@ -2913,85 +2972,101 @@ bool workspace_item_extract_display_info(
             break;
 
         case WORKSPACE_STATE_DEPLOYED: {
-            /* Primary tag based on most severe divergence
-             *
-             * Priority order (by severity):
-             *   TYPE > CONTENT > STALE > MODE/OWNERSHIP/ENCRYPTION
-             */
-            if (item->divergence & DIVERGENCE_TYPE) {
+            if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+                /* Observed through a squatter (workspace_displaced_t): every
+                 * divergence bit was read off the squatter's target, so none of
+                 * the tags below is true of this path — [modified] on a stranger's
+                 * bytes would name work no verb takes. The one tag, at the default
+                 * colour: the squatter's own row carries the severity, and the
+                 * route lists this item under it. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "type";
+                    tags_out[tag_count++] = "displaced";
                 }
-                *color_out = OUTPUT_COLOR_RED;
-            } else if (item->divergence & DIVERGENCE_CONTENT) {
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "modified";
+            } else {
+                /* Primary tag based on most severe divergence
+                 *
+                 * Priority order (by severity):
+                 *   TYPE > CONTENT > STALE > MODE/OWNERSHIP/ENCRYPTION
+                 */
+                if (item->divergence & DIVERGENCE_TYPE) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "type";
+                    }
+                    *color_out = OUTPUT_COLOR_RED;
+                } else if (item->divergence & DIVERGENCE_CONTENT) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "modified";
+                    }
+                    /* Keep default YELLOW color */
                 }
-                /* Keep default YELLOW color */
+
+                if (item->divergence & DIVERGENCE_STALE) {
+                    /* Git moved past the deployed blob. Alone it is apply-side
+                     * work — the same CYAN as [undeployed], nothing of the user's
+                     * is overwritten; next to [modified] it names a conflict
+                     * and the primary tag's colour stands. */
+                    if (tag_count == 0) {
+                        *color_out = OUTPUT_COLOR_CYAN;
+                    }
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "stale";
+                    }
+                }
+
+                /* Secondary tags for other divergence
+                 *
+                 * MODE: Skip if TYPE divergence present (type change makes mode
+                 *       irrelevant) The condition !((item->divergence &
+                 *       DIVERGENCE_TYPE) && tag_count > 0) prevents MODE from
+                 *       showing when TYPE is the primary tag
+                 * OWNERSHIP: Always show if present
+                 * ENCRYPTION: Always show if present
+                 * UNVERIFIED: Always show if present (file too large to verify)
+                 */
+                if ((item->divergence & DIVERGENCE_MODE) &&
+                    !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "mode";
+                    }
+                }
+
+                if (item->divergence & DIVERGENCE_OWNERSHIP) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "ownership";
+                    }
+                }
+
+                if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "unencrypted";
+                    }
+                    /* Upgrade color to MAGENTA if still default (not TYPE
+                     * divergence) This gives encryption issues special visual
+                     * treatment */
+                    if (*color_out == OUTPUT_COLOR_YELLOW) {
+                        *color_out = OUTPUT_COLOR_MAGENTA;
+                    }
+                }
+
+                if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                    /* The failed look: an unstattable path, or content that could
+                     * not be loaded, decrypted, or compared. Conservative handling
+                     * downstream (update refuses it, apply surfaces the real
+                     * error, cleanup skips the orphan). */
+                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                        tags_out[tag_count++] = "unverified";
+                    }
+                    /* Upgrade color to MAGENTA (special visual treatment for
+                     * unverifiable state) */
+                    if (*color_out == OUTPUT_COLOR_YELLOW) {
+                        *color_out = OUTPUT_COLOR_MAGENTA;
+                    }
+                }
             }
 
-            if (item->divergence & DIVERGENCE_STALE) {
-                /* Git moved past the deployed blob. Alone it is apply-side work
-                 * — the same CYAN as [undeployed], nothing of the user's is
-                 * overwritten; next to [modified] it names a conflict and the
-                 * primary tag's colour stands. */
-                if (tag_count == 0) {
-                    *color_out = OUTPUT_COLOR_CYAN;
-                }
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "stale";
-                }
-            }
-
-            /* Secondary tags for other divergence
-             *
-             * MODE: Skip if TYPE divergence present (type change makes mode
-             *       irrelevant) The condition !((item->divergence &
-             *       DIVERGENCE_TYPE) && tag_count > 0) prevents MODE from showing
-             *       when TYPE is the primary tag
-             * OWNERSHIP: Always show if present
-             * ENCRYPTION: Always show if present
-             * UNVERIFIED: Always show if present (file too large to verify)
-             */
-            if ((item->divergence & DIVERGENCE_MODE) &&
-                !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "mode";
-                }
-            }
-
-            if (item->divergence & DIVERGENCE_OWNERSHIP) {
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "ownership";
-                }
-            }
-
-            if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "unencrypted";
-                }
-                /* Upgrade color to MAGENTA if still default (not TYPE divergence)
-                 * This gives encryption issues special visual treatment */
-                if (*color_out == OUTPUT_COLOR_YELLOW) {
-                    *color_out = OUTPUT_COLOR_MAGENTA;
-                }
-            }
-
-            if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                /* The failed look: an unstattable path, or content that could
-                 * not be loaded, decrypted, or compared. Conservative handling
-                 * downstream (update refuses it, apply surfaces the real error,
-                 * cleanup skips the orphan). */
-                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "unverified";
-                }
-                /* Upgrade color to MAGENTA (special visual treatment for unverifiable state) */
-                if (*color_out == OUTPUT_COLOR_YELLOW) {
-                    *color_out = OUTPUT_COLOR_MAGENTA;
-                }
-            }
-
-            /* Profile reassignment tag (can coexist with divergence tags)
+            /* Profile reassignment tag (can coexist with divergence tags, and
+             * with [displaced]: the record against the row, no observation
+             * involved)
              *
              * Added after divergence tags as secondary information. Color only
              * set for pure reassignment (sole tag) to avoid overriding

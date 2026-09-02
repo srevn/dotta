@@ -184,11 +184,10 @@ static void print_deploy_preflight_results(
      * (ancestor_class) — widening the scope plans a tracked ancestor, and
      * PERMISSION, OCCUPIED and a squatter nothing claims read the same line; a
      * derived claim is never planned, so its second way out is the named
-     * re-derivation, whose own preview names what the re-capture would commit;
-     * a record-only claim needs no hand at all — apply's cleanup releases the
-     * stale record, and the arrangement is then the user's own. Last, UNREADABLE's
-     * closing — an unreadable path is not "in the way", and a fix-or-widen
-     * instruction would misname a refusal to judge what could not be seen. */
+     * re-derivation, whose own preview names what the re-capture would commit.
+     * Last, UNREADABLE's closing — an unreadable path is not "in the way", and
+     * a fix-or-widen instruction would misname a refusal to judge what could
+     * not be seen. */
     for (size_t i = 0; i < result->skipped.count; i++) {
         if (deploy_skip_needs_force(result->skipped.entries[i].reason)) {
             output_info(
@@ -226,15 +225,6 @@ static void print_deploy_preflight_results(
             output_info(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
-            );
-            break;
-        }
-    }
-    for (size_t i = 0; i < result->skipped.count; i++) {
-        if (result->skipped.entries[i].ancestor_class == DEPLOY_ANCESTOR_RECORD) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "  Only a stale record claims the squatter; apply releases it — re-run to write through"
             );
             break;
         }
@@ -1781,13 +1771,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             /* A clean row observed through a displaced managed directory is not
              * acknowledged this run (the adoption and acknowledgement loops take
-             * the same gate), so the preview must not promise it. A pending row
-             * stays collected: its handover rides its deployment, and whether
+             * the same gate, row-keyed; the field on this item is that gate's
+             * answer at its path), so the preview must not promise it. A pending
+             * row stays collected: its handover rides its deployment, and whether
              * that happens is preflight's to say. The stale count above stands
              * either way — STALE is the record against Git, no observation
              * involved. */
-            if (claimed[b].clean &&
-                workspace_displaced_ancestor(ws, item->filesystem_path)) {
+            if (claimed[b].clean && item->displaced != WORKSPACE_DISPLACED_NONE) {
                 continue;
             }
 
@@ -1863,7 +1853,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * on a path dotta never put there and hand a stranger's file to the prune
          * at the next scope exit; an acknowledgement would re-stamp an owned
          * record with a proof the observation cannot give. The handover stays
-         * pending until a run converges the ancestor. */
+         * pending until a run converges the ancestor. Row-keyed: a clean row
+         * has no item to carry the fact, and the probe answers view-side, which
+         * is what the field on an item would say (workspace_displaced_t). */
         if (workspace_displaced_ancestor(ws, file->filesystem_path)) continue;
 
         const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
@@ -1922,7 +1914,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < ackable.count; i++) {
         const manifest_row_t *dir = ackable.entries[i];
 
-        /* The file loop's displaced gate, same rationale. */
+        /* The file loop's displaced gate, same rationale — and row-keyed for
+         * the same reason. */
         if (workspace_displaced_ancestor(ws, dir->filesystem_path)) continue;
 
         const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
@@ -2338,7 +2331,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     const workspace_item_t *item = items.entries[i];
 
                     err = ((item->divergence & DIVERGENCE_TYPE) ||
-                        workspace_displaced_ancestor(ws, item->filesystem_path))
+                        item->displaced != WORKSPACE_DISPLACED_NONE)
                         ? state_retire_anchor(state, item->filesystem_path)
                         : state_release(state, item->filesystem_path);
                     if (err) {

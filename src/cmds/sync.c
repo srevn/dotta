@@ -1671,13 +1671,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * verb resolves. A squatted tracked directory is a decision (--force,
          * add --force, remove) and blocks; a squatted rung dotta only passes
          * through has one verb and no decision — the same fact that gives it
-         * its own status section — and blocks nothing. */
+         * its own status section — and blocks nothing; and a child observed through
+         * either is not an edit a pull can conflict with, so it blocks nothing
+         * either. */
         size_t uncommitted_count = 0; /* CAPTURE — update's to commit */
         size_t conflict_count = 0;    /* CONFLICT ∪ KIND — status's Conflicts: no default verb */
         size_t deleted_count = 0;     /* DELETED state — update's to commit */
         size_t untracked_count = 0;   /* UNTRACKED state — update --include-new's */
         size_t unverified_count = 0;  /* UNVERIFIABLE — dotta could not look; blocks nothing */
         size_t squatted_count = 0;    /* KIND_DERIVED — a rung dotta only passes through; blocks nothing */
+        size_t displaced_count = 0;   /* DISPLACED_* — seen through a squatter; blocks nothing */
 
         for (size_t i = 0; i < all_diverged.count; i++) {
             const workspace_item_t *item = all_diverged.entries[i];
@@ -1689,6 +1692,17 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             switch (item->state) {
                 case WORKSPACE_STATE_DEPLOYED:
                     switch (workspace_item_route(item)) {
+                        case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                        case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                            /* Observed through a squatter: the bits were read
+                             * off the squatter's target, so there is no local
+                             * edit here for a pull to conflict with — the
+                             * squatter's own row is the work, and it is counted
+                             * under its own arm. Counted to be reported, never
+                             * to block. */
+                            displaced_count++;
+                            break;
+
                         case WORKSPACE_ROUTE_UNVERIFIABLE:
                             /* No committable work by definition — the guard is
                              * about local edits a pull would turn into conflicts,
@@ -1800,6 +1814,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         squatted_count, squatted_count == 1 ? "" : "s"
                     );
                 }
+                if (displaced_count > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL, "  %zu displaced path%s",
+                        displaced_count, displaced_count == 1 ? "" : "s"
+                    );
+                }
 
                 output_newline(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Sync requires a clean workspace.");
@@ -1868,6 +1888,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             if (squatted_count > 0) {
                 output_info(out, OUTPUT_VERBOSE, "  %zu squatted", squatted_count);
             }
+            if (displaced_count > 0) {
+                output_info(out, OUTPUT_VERBOSE, "  %zu displaced", displaced_count);
+            }
 
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
             output_newline(out, OUTPUT_NORMAL);
@@ -1904,7 +1927,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
              * never counted. A path the analysis could not read no verb resolves;
              * the user must look (status's Unverifiable section carries the way
              * out). A squatted rung dotta only passes through has its one verb,
-             * and status's own section names it. */
+             * and status's own section names it; a path observed through a squatter
+             * waits on the squatter, and status lists both. */
             if (unverified_count > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
@@ -1920,6 +1944,15 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     "directory dotta only passes through ('dotta status' lists %s)",
                     squatted_count, squatted_count == 1 ? "" : "s",
                     squatted_count == 1 ? "it" : "them"
+                );
+            }
+            if (displaced_count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Note: %zu path%s observed through a squatted directory "
+                    "('dotta status' lists %s)",
+                    displaced_count, displaced_count == 1 ? "" : "s",
+                    displaced_count == 1 ? "it" : "them"
                 );
             }
         }

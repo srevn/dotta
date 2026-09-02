@@ -223,10 +223,12 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * row's own TYPE skip to lift (--force). An ancestor claim is never planned, so
  * no scope and no flag helps: the consent-preserving cure is the named
  * re-derivation ('dotta update <dir>'), which drops a claim the disk contradicts
- * and leaves the arrangement the user's. A record-only claim needs no hand at
- * all — apply's own cleanup releases the stale record, and the next run trusts
- * what stands there. A squatter nothing claims is the landing check's find past
- * the rung: by hand is all there is.
+ * and leaves the arrangement the user's. A squatter nothing claims is the landing
+ * check's find past the rung: by hand is all there is. A record that alone
+ * remembers a directory there is no claim on a planned row at all (the reach
+ * rule, core/workspace.h): the rung never names it, the landing check meets what
+ * stands there on its own terms, and apply's own cleanup releases the record in
+ * the same run — so there is no fourth class.
  *
  * NONE on every skip whose reason names no squatted ancestor — the class answers
  * for ANCESTOR alone, where the reason is one and the cure is not.
@@ -235,7 +237,6 @@ typedef enum {
     DEPLOY_ANCESTOR_NONE = 0,  /* The reason names no squatted ancestor */
     DEPLOY_ANCESTOR_TRACKED,   /* A tracked row holds the squatted path */
     DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim holds it */
-    DEPLOY_ANCESTOR_RECORD,    /* No row — an orphaned record still names it */
     DEPLOY_ANCESTOR_UNCLAIMED  /* Nothing claims it — the landing check's find */
 } deploy_ancestor_class_t;
 
@@ -561,9 +562,9 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   own fates (check_ancestry): an ancestor the directory pass converges first
  *   means the row is planned absent and asked nothing else; one the pass skips
  *   means the row inherits that skip, ancestor named; one the run never acts on
- *   (scope, -p, -e, an ancestor claim, a record-only claim) is ANCESTOR — an
- *   incapacity, and the remedy is a run that reaches it, or, for a claim the
- *   run cannot reach at all because nothing plans it, a re-derivation of the chain.
+ *   (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and the remedy
+ *   is a run that reaches it, or, for a claim the run cannot reach at all because
+ *   nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file renamed over the target, a symlink unlinked
  *   and re-made, a mkdir — so the path's own permissions are never the question,

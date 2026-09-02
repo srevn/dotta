@@ -59,6 +59,55 @@
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
 
 /**
+ * Whose claim holds the squatted directory an observation resolved through —
+ * the displaced fact, with its reach
+ *
+ * A directory is squatted when a claim says a directory belongs at the path and
+ * the load observed something else standing there. Every lstat taken beneath it
+ * resolved through the occupant: a symlink to a directory answers for the link's
+ * target, so a child reads clean, present, modified or new about a tree that is
+ * not this path's; a file answers ENOTDIR — absence. Two authorities can make
+ * the claim, and they reach differently — the reach rule:
+ *
+ *   TRACKED / DERIVED   the view claims the path — a directory row of either
+ *                       class (core/manifest.h): every present item beneath it,
+ *                       whatever its state, was observed through the squatter.
+ *                       A view claim displaces everything beneath it.
+ *   RECORD              only a record remembers a directory there — the view
+ *                       lacks the path: the record's own family beneath it, the
+ *                       ORPHANED and RELEASED items, was observed through the
+ *                       squatter, and nothing else was. A view row beneath such
+ *                       a path is a deliberate through-capture: its profile's
+ *                       derivation met the non-directory and claimed no rung
+ *                       there (core/metadata.h), so the arrangement predates
+ *                       the row and the observation is the row's own. A record's
+ *                       memory displaces only what the record family remembers
+ *                       beneath it — never a view row, so RECORD stands on no
+ *                       DEPLOYED item.
+ *
+ * NONE on every item observed at its own path, and on every absent one: an absent
+ * reading beneath a squatter is true — the lstat reached nothing, and there is
+ * no directory for the path to exist in — so a DELETED item stays update's to
+ * commit and an absent orphan a reclaim. Presence is the whole of the condition.
+ * A clean row beneath a squatter has no item and so no field: the squatter's
+ * own row is the work, and the two loops that touch clean rows (apply's adoption
+ * and acknowledgement) ask the row-keyed probe (workspace_displaced_ancestor),
+ * which answers view-side and so agrees with the field on a DEPLOYED item by
+ * construction.
+ *
+ * Established once at load, after every analysis has observed its slice
+ * (collect_displaced), and trusted downstream: the route reads it first
+ * (workspace_item_route), cleanup_verdict's displaced arm reads it, and the
+ * displays name it ([displaced]).
+ */
+typedef enum {
+    WORKSPACE_DISPLACED_NONE = 0,  /* Observed at its own path, or absent */
+    WORKSPACE_DISPLACED_TRACKED,   /* Through a squatter a tracked row claims */
+    WORKSPACE_DISPLACED_DERIVED,   /* Through a squatter an ancestor claim holds */
+    WORKSPACE_DISPLACED_RECORD     /* Through a squatter only a record remembers — orphans alone */
+} workspace_displaced_t;
+
+/**
  * Diverged item entry
  *
  * Represents a single item (file or directory) with divergence between states.
@@ -81,6 +130,10 @@
  * (DIVERGENCE_TYPE: the occupant is not the row's or the record's kind); every
  * consumer that once re-probed the path to learn its type reads this field instead,
  * so status, deploy and cleanup cannot see three different occupants at one path.
+ * Beside it, whether the lstat reached this path at all: the displaced class
+ * (workspace_displaced_t) names the claim whose squatter the look resolved through,
+ * and every bit the divergence carries was read off that squatter's target when
+ * it is not NONE.
  *
  * Lifetime — every borrowed pointer on the item is arena-backed and valid for
  * the workspace's lifetime (the arena outlives it): the view's rows, the anchors
@@ -122,7 +175,8 @@ typedef struct {
     path_kind_t item_kind;        /* The identity source's kind (scan: FILE) */
 
     /* The observation */
-    fs_occupant_t occupant;     /* What the analysis's lstat found at the path (see above) */
+    fs_occupant_t occupant;           /* What the analysis's lstat found at the path (see above) */
+    workspace_displaced_t displaced;  /* Whose squatter the lstat resolved through, or NONE */
 } workspace_item_t;
 
 /**
@@ -190,7 +244,8 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  *   update's refusal census        every refusing arm, one line each
  *   sync's guard                   CAPTURE blocks (update's work); CONFLICT ∪
  *                                  KIND block (the conflicts update refuses);
- *                                  UNVERIFIABLE and KIND_DERIVED are advisory
+ *                                  UNVERIFIABLE, DISPLACED_* and KIND_DERIVED
+ *                                  are advisory
  *   apply's CONTENT skip label     CONFLICT
  *   diff's downstream direction    CAPTURE
  *
@@ -206,22 +261,39 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  * and read this table for the DEPLOYED arm alone.
  */
 typedef enum {
-    WORKSPACE_ROUTE_CLEAN,        /* No divergence, no reassignment */
-    WORKSPACE_ROUTE_UNVERIFIABLE, /* DIVERGENCE_UNVERIFIED — dotta could not look */
-    WORKSPACE_ROUTE_CONFLICT,     /* STALE ∧ CONTENT — both sides moved  */
-    WORKSPACE_ROUTE_STALE,        /* STALE alone — Git moved, disk did not */
-    WORKSPACE_ROUTE_KIND,         /* TYPE the copy cannot commit, on a row a plan can hold */
-    WORKSPACE_ROUTE_KIND_DERIVED, /* … on a rung dotta only passes through — never planned */
-    WORKSPACE_ROUTE_CAPTURE,      /* Any other divergence — update's to commit */
-    WORKSPACE_ROUTE_REASSIGNED    /* No divergence; the record names another profile */
+    WORKSPACE_ROUTE_CLEAN,             /* No divergence, no reassignment */
+    WORKSPACE_ROUTE_DISPLACED_TRACKED, /* Through a squatter a tracked row claims (apply --force) */
+    WORKSPACE_ROUTE_DISPLACED_DERIVED, /* … an ancestor claim holds ('dotta update <dir>') */
+    WORKSPACE_ROUTE_UNVERIFIABLE,      /* DIVERGENCE_UNVERIFIED — dotta could not look */
+    WORKSPACE_ROUTE_CONFLICT,          /* STALE ∧ CONTENT — both sides moved  */
+    WORKSPACE_ROUTE_STALE,             /* STALE alone — Git moved, disk did not */
+    WORKSPACE_ROUTE_KIND,              /* TYPE the copy cannot commit, on a row a plan can hold */
+    WORKSPACE_ROUTE_KIND_DERIVED,      /* … on a rung dotta only passes through — never planned */
+    WORKSPACE_ROUTE_CAPTURE,           /* Any other divergence — update's to commit */
+    WORKSPACE_ROUTE_REASSIGNED         /* No divergence; the record names another profile */
 } workspace_route_t;
 
 /**
  * Decide which verb's work a deployed item is, from the item alone
  *
- * Pure in the fields the analysis observed once at load — divergence, kind,
- * occupant, reassignment. No syscall, no options; first match wins:
+ * Pure in the fields the analysis observed once at load — the displaced class,
+ * divergence, kind, occupant, reassignment. No syscall, no options; first match
+ * wins:
  *
+ *   displaced, TRACKED       DISPLACED_TRACKED — the observation resolved
+ *                            through a squatter a tracked row claims, so every
+ *                            bit below was read off the squatter's target and
+ *                            not this path: no judgment made through it can outrank
+ *                            the fact (deploy's ANCESTOR rung and cleanup_verdict's
+ *                            displaced arm rank it the same way). apply --force
+ *                            replaces the squatter and writes the row fresh beneath
+ *                            it.
+ *   displaced, DERIVED       DISPLACED_DERIVED — the same, through a rung
+ *                            dotta only passes through, which no plan holds:
+ *                            'dotta update <dir>' re-derives the way there. RECORD
+ *                            stands on no deployed item (the reach rule,
+ *                            workspace_displaced_t), so the two view classes
+ *                            are the whole test.
  *   DIVERGENCE_UNVERIFIED    UNVERIFIABLE — a bit the analysis could not
  *                            settle outranks the ones it could (the precedence
  *                            cleanup_skip_reason gives orphans): the path could
@@ -418,7 +490,9 @@ workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
  * state other than DEPLOYED, a divergence bit, or a reassignment (a clean row
  * whose owned record names another profile has an item whose sources derive it
  * — workspace_item_reassigned); a row with none of the three has no item, and
- * this returns NULL.
+ * this returns NULL — a clean row beneath a squatter included, since what read
+ * clean was the squatter's target and the squatter's own row is the work
+ * (workspace_displaced_t).
  *
  * This function enables preflight to efficiently query workspace data instead
  * of re-analyzing files, eliminating redundant comparisons.
@@ -487,14 +561,14 @@ const manifest_row_t *workspace_lookup(
 );
 
 /**
- * The displaced managed directory above `path`, or NULL
+ * The displaced managed directory above `path`, or NULL — the view's claims
  *
- * A directory is *displaced* when the view or the record claims the path as a
- * directory and something else stands there. Every lstat taken beneath such a
- * path resolved through the occupant — a symlink to a directory answers for the
- * link's target — so a child read clean, present, modified or new about a tree
- * that is not this path's. An observation taken there is not an observation of
- * that path at all.
+ * A directory is *displaced* when a claim says a directory belongs at the path
+ * and something else stands there. Every lstat taken beneath such a path resolved
+ * through the occupant — a symlink to a directory answers for the link's target
+ * — so a child read clean, present, modified or new about a tree that is not
+ * this path's. An observation taken there is not an observation of that path at
+ * all.
  *
  * Both classes of directory row qualify: what matters is that some claim says a
  * directory belongs at the path, not whether the profile manages the directory
@@ -506,14 +580,22 @@ const manifest_row_t *workspace_lookup(
  * is not a real directory when the chain is walked: a directory the user had
  * already symlinked never becomes a claim in the first place.
  *
- * The answer is derived from the load's own observations (collect_displaced):
- * the record's claims are covered on every load, the view's exactly when the
- * directory analysis ran — which every command's load runs (workspace_load_t: a
- * load that routes items must never read NULL over a squatter). The outermost
- * such ancestor is returned: the true offender, whose occupant every deeper
- * observation went through. Fate-blind by construction — whether *this run*
- * converges the displacement is deploy's question, asked of its own fates against
- * this answer (check_ancestry).
+ * The record's claims do not qualify here: a directory only a record remembers
+ * displaces the record's own family alone (the reach rule, workspace_displaced_t),
+ * and every item of that family carries the fact on itself. This probe is for a
+ * row or a path that may have no item — a clean row apply adopts or acknowledges,
+ * a planned row deploy judges, a scan root — and a view row beneath a
+ * record-remembered squatter is the through-capture the rule leaves to its own
+ * occupant. So the answer is the view's claims alone, and on a DEPLOYED item it
+ * is exactly the item's own displaced field.
+ *
+ * The answer is derived from the load's own observations (collect_displaced),
+ * and every command's load observes every directory row (workspace_load_t: a
+ * load that routes items must never read NULL over a squatter), so it is complete
+ * on every load. The outermost such ancestor is returned: the true offender,
+ * whose occupant every deeper observation went through. Fate-blind by construction
+ * — whether *this run* converges the displacement is deploy's question, asked
+ * of its own fates against this answer (check_ancestry).
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a
@@ -547,6 +629,12 @@ const anchor_t *workspace_get_anchor(
  * consistent item visualization across all commands.
  *
  * Tag Priority (for DEPLOYED state with divergence):
+ *   0. "displaced" (YELLOW) - The one tag when the observation resolved through
+ *      a squatter (workspace_displaced_t): every divergence bit was read off
+ *      the squatter's target, so none of the tags below is shown beside it —
+ *      "modified" on a stranger's bytes would name work no verb takes. The
+ *      reassignment tag still rides: it is the record against the row, no
+ *      observation involved
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
  *   2. "modified" (YELLOW) - Disk content moved away from what dotta deployed
  *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git moved
@@ -691,9 +779,10 @@ error_t *workspace_anchor(
  *   acknowledges it. The snapshot's record is patched on the same columns. One
  *   taken through a symlinked ancestor binds the target file's triple — harmless
  *   whether the ancestor is the user's own arrangement or a displaced managed
- *   directory: the engines judge the latter by workspace_displaced_ancestor,
- *   never by the confirmation, and the fast path simply misses until the path
- *   heals and the slow path re-confirms.
+ *   directory: the engines judge the latter by the item's displaced class, and
+ *   by the row-keyed probe (workspace_displaced_ancestor) where a row has no
+ *   item, never by the confirmation, and the fast path simply misses until the
+ *   path heals and the slow path re-confirms.
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the

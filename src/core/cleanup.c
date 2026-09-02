@@ -206,15 +206,13 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 }
 
 /**
- * What becomes of a planned orphan, read off the workspace's load-time facts
+ * What becomes of a planned orphan, read off the item alone
  *
  * The table and its rationale are in cleanup.h. Every input is a fact the workspace
- * established once at load — the item's fields, and the displaced list behind
- * workspace_displaced_ancestor: no syscall.
+ * established once at load and left on the item — its occupant, state, displaced
+ * class and divergence bits: no syscall.
  */
-cleanup_verdict_t cleanup_verdict(
-    const workspace_t *ws, const workspace_item_t *item, bool force
-) {
+cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Already gone: nothing to protect, nothing to remove — a pure state
          * reclaim whatever Git or the divergence bits say. True through a squatting
@@ -237,7 +235,7 @@ cleanup_verdict_t cleanup_verdict(
         return CLEANUP_RELEASED;
     }
 
-    if (workspace_displaced_ancestor(ws, item->filesystem_path)) {
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         /* Observed through a displaced directory: dotta's copy went with the
          * real directory, and what the lstat reached is the squatter's target —
          * not dotta's to remove, --force included, and a prune order on the path
@@ -409,7 +407,7 @@ error_t *cleanup_preflight(
         const workspace_item_t *item = files.entries[i];
         fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(ws, item, force)) {
+        switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
                 err = ptr_array_push(&verdicts->absent_files, item);
                 break;
@@ -452,7 +450,7 @@ error_t *cleanup_preflight(
         const char *path = item->filesystem_path;
         fate_t fate = FATE_UNPLANNED;
 
-        switch (cleanup_verdict(ws, item, force)) {
+        switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
                 /* A pure state reclaim: no filesystem effect to preview, and no
                  * walk meets it. */

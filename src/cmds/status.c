@@ -398,13 +398,13 @@ static void display_workspace_status(
         /* When filter active and filtered profile is clean, skip detailed sections */
         if ((!scope_has_filter(scope) || filtered_diverged > 0) && all_items.count > 0) {
 
-            /* Single allocation for all category pointers (8 categories ×
+            /* Single allocation for all category pointers (9 categories ×
              * all_items.count slots) Memory layout:
              * [conflicts][unverifiable][uncommitted][undeployed][new_files]
-             * [orphaned][reassigned][squatted] This provides cache-friendly
-             * contiguous memory with single malloc/free. */
+             * [orphaned][reassigned][squatted][displaced] This provides
+             * cache-friendly contiguous memory with single malloc/free. */
             const workspace_item_t **categorized =
-                malloc(all_items.count * 8 * sizeof(workspace_item_t *));
+                malloc(all_items.count * 9 * sizeof(workspace_item_t *));
             if (!categorized) {
                 output_error(
                     out, "Failed to allocate memory for status display (%zu items)",
@@ -422,6 +422,7 @@ static void display_workspace_status(
             const workspace_item_t **orphaned = categorized + all_items.count * 5;
             const workspace_item_t **reassigned = categorized + all_items.count * 6;
             const workspace_item_t **squatted = categorized + all_items.count * 7;
+            const workspace_item_t **displaced = categorized + all_items.count * 8;
 
             size_t conflict_count = 0;
             size_t unverifiable_count = 0;
@@ -431,6 +432,7 @@ static void display_workspace_status(
             size_t orphaned_count = 0;
             size_t reassigned_count = 0;
             size_t squatted_count = 0;
+            size_t displaced_count = 0;
             for (size_t i = 0; i < all_items.count; i++) {
                 const workspace_item_t *item = all_items.entries[i];
 
@@ -449,6 +451,13 @@ static void display_workspace_status(
                          * and skip counter read (workspace_item_route), so no
                          * section promises a verb the verb refuses */
                         switch (workspace_item_route(item)) {
+                            case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                            case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                                /* Observed through a squatter: its own bits name
+                                 * nothing, the squatter's section does */
+                                displaced[displaced_count++] = item;
+                                break;
+
                             case WORKSPACE_ROUTE_CONFLICT:
                             case WORKSPACE_ROUTE_KIND:
                                 /* Neither verb's by default — its own header
@@ -588,7 +597,49 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: Unverifiable paths — the other no-verb bucket: dotta
+            /* Section 3: Displaced paths — observed through a squatter one of
+             * the two sections above holds (the route's DISPLACED_* arms, the
+             * claimant's): every bit was read off the squatter's target, so the
+             * line shows the one tag and the header sends the user to the squatter,
+             * whose own section names its verb. Named by section rather than
+             * "above": under -p the squatter's row may be filtered while a child
+             * is not, and the bare status lists both. */
+            if (displaced_count > 0) {
+                output_list_t *list = output_list_create(
+                    out, "Displaced paths",
+                    "observed through a directory another kind stands at; "
+                    "resolve that directory first (\"dotta status\" lists it "
+                    "under Conflicts or Squatted ancestors)"
+                );
+
+                if (list) {
+                    for (size_t i = 0; i < displaced_count; i++) {
+                        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                        size_t tag_count;
+                        output_color_t color;
+                        char metadata[256];
+                        char path[PATH_MAX + 2];
+
+                        if (workspace_item_extract_display_info(
+                            displaced[i], tags, &tag_count,
+                            &color, metadata, sizeof(metadata)
+                            )) {
+                            snprintf(
+                                path, sizeof(path), "%s%s", displaced[i]->filesystem_path,
+                                path_kind_suffix(displaced[i]->item_kind)
+                            );
+                            output_list_add(
+                                list, tags, tag_count, color, path, metadata
+                            );
+                        }
+                    }
+
+                    output_list_render(list);
+                    output_list_free(list);
+                }
+            }
+
+            /* Section 4: Unverifiable paths — the other no-verb bucket: dotta
              * could not look, so no verb is promised; the way out is the user's,
              * in the words update's counted line already uses */
             if (unverifiable_count > 0) {
@@ -625,7 +676,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 4: Uncommitted Changes */
+            /* Section 5: Uncommitted Changes */
             if (uncommitted_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Uncommitted changes",
@@ -659,7 +710,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 5: Profile Reassignments */
+            /* Section 6: Profile Reassignments */
             if (reassigned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Profile reassignments",
@@ -693,7 +744,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 6: Undeployed Files */
+            /* Section 7: Undeployed Files */
             if (undeployed_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Undeployed files",
@@ -727,7 +778,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 7: New Files */
+            /* Section 8: New Files */
             if (new_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "New files",
@@ -761,7 +812,7 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 8: Issues (orphaned) */
+            /* Section 9: Issues (orphaned) */
             if (orphaned_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Issues",
@@ -817,20 +868,18 @@ static void display_workspace_status(
                         const char *hint = NULL;
                         bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
 
-                        switch (cleanup_verdict(ws, orphaned[i], false)) {
+                        switch (cleanup_verdict(orphaned[i], false)) {
                             case CLEANUP_ABSENT:
                                 hint = "already gone from disk; apply reclaims its entry";
                                 break;
 
                             case CLEANUP_RELEASED:
-                                /* The displaced-ancestor read comes first: such
-                                 * an item's own bits were computed through the
-                                 * squatter, so neither sibling sentence is true
-                                 * of it — the same precedence the verdict's own
-                                 * arms take. */
-                                hint = workspace_displaced_ancestor(
-                                    ws, orphaned[i]->filesystem_path
-                                )
+                                /* The displaced read comes first: such an item's
+                                 * own bits were computed through the squatter,
+                                 * so neither sibling sentence is true of it —
+                                 * the same precedence the verdict's own arms
+                                 * take. */
+                                hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
                                     ? "observed through a displaced directory; "
                                     "apply releases its entry, the path stays"
                                     : (orphaned[i]->divergence & DIVERGENCE_TYPE)

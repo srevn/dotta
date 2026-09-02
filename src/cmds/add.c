@@ -928,18 +928,18 @@ static error_t *update_manifest_after_add(
 
     /* What the commit let go: an ancestor claim the derivation retired leaves
      * the view by this very commit, so its record settles here rather than
-     * orphaning until an apply gets around to it. Not tidiness — the record is
-     * the other half of the displaced-directory question (core/workspace's
-     * collect_displaced reads an orphaned directory record with no item off the
-     * disk), so a record left standing at a path that is no longer a directory
-     * goes on refusing every write beneath it: exactly the write the dropped
-     * claim was meant to release. Enablement was not consulted on the way here:
-     * the derivation saw the disk contradict the claim whatever the enabled set
-     * says, and the record its drop strands would refuse those writes under a
-     * disabled profile exactly as under an enabled one. A rung some other profile
-     * still claims keeps its row and its record — the retire is this profile's
-     * word about its own claim, never about the path — and an unbound claim names
-     * nothing on this machine to retire. */
+     * orphaning until an apply gets around to it — the record the commit stranded
+     * is the commit's to settle. It refuses nothing while it stands: a directory
+     * only a record remembers reaches no view row (the reach rule,
+     * core/workspace.h), so the leaf this add just captured through the arrangement
+     * is judged on its own occupant either way, and a retire that fails here
+     * leaves a [released] [type] row under status's Issues until an apply releases
+     * it. Enablement was not consulted on the way here: the derivation saw the
+     * disk contradict the claim whatever the enabled set says, and the record
+     * its drop strands is stale under a disabled profile exactly as under an
+     * enabled one. A rung some other profile still claims keeps its row and its
+     * record — the retire is this profile's word about its own claim, never about
+     * the path — and an unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
         mount_resolve_outcome_t outcome;
         const char *fs_path = NULL;

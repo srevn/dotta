@@ -112,6 +112,20 @@ static const char *get_status_message_from_item(
                 : "deleted locally (would be removed by update)";
     }
 
+    /* Observed through a squatted directory: every bit below was read off the
+     * squatter's target, so neither sibling sentence is true of the path, and
+     * the way there is the claimant's — the route's two arms, said in a
+     * comparison's own words. Upstream only in practice: the downstream filter
+     * admits nothing but the capture route. */
+    if (item->displaced == WORKSPACE_DISPLACED_TRACKED) {
+        return "observed through a squatted directory "
+               "(apply --force replaces it, then writes this fresh)";
+    }
+    if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
+        return "observed through a squatted directory "
+               "('dotta update <dir>' re-derives the way there)";
+    }
+
     /* Handle divergence-based messages for deployed items */
     if (item->divergence & DIVERGENCE_TYPE) {
         return direction == DIFF_UPSTREAM
@@ -211,6 +225,8 @@ static error_t *show_file_diff_from_workspace(
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED) {
         status_color = OUTPUT_COLOR_RED;
+    } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+        status_color = OUTPUT_COLOR_YELLOW;  /* the bits were read off the squatter's target */
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
     } else if (workspace_item_reassigned(item) &&
@@ -226,6 +242,14 @@ static error_t *show_file_diff_from_workspace(
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED ||
         (item->divergence & DIVERGENCE_TYPE)) {
+        return NULL;
+    }
+
+    /* Observed through a squatter: there are no bytes of this path's to compare
+     * — Git's blob against the squatter's target's file would be a diff of two
+     * unrelated things, and nothing here is overwritten (apply --force replaces
+     * the squatter and writes the row fresh). */
+    if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         return NULL;
     }
 

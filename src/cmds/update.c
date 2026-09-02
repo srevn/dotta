@@ -297,9 +297,9 @@ static bool is_update_candidate(
             /* Deployed items partition by the route table — the same producer
              * status's sections and the skip counter below read
              * (workspace_item_route; workspace.h carries each arm's why). Only
-             * ROUTE_CAPTURE is update's to commit: unverifiable, stale, conflict
-             * and kind are refused, and cmd_update counts them, so the preview
-             * never promises an update the executor would refuse. */
+             * ROUTE_CAPTURE is update's to commit: displaced, unverifiable, stale,
+             * conflict and kind are refused, and cmd_update counts them, so the
+             * preview never promises an update the executor would refuse. */
             return workspace_item_route(item) == WORKSPACE_ROUTE_CAPTURE &&
                    !opts->only_new;
 
@@ -343,9 +343,9 @@ static bool is_update_candidate(
  * EXCLUDED ITEMS:
  * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
  * - ORPHANED state (apply's: cleanup prunes or holds it)
- * - DEPLOYED off the capture route (workspace_item_route): clean, unverifiable,
- *   stale, conflict, or a kind the copy cannot commit — cmd_update counts the
- *   refused routes and says so
+ * - DEPLOYED off the capture route (workspace_item_route): clean, displaced,
+ *   unverifiable, stale, conflict, or a kind the copy cannot commit — cmd_update
+ *   counts the refused routes and says so
  *
  * CLI FILTERS APPLIED:
  * - opts->files: Only specific files (if provided)
@@ -390,17 +390,6 @@ static error_t *filter_items_for_update(
         const workspace_item_t *item = all.entries[i];
 
         if (!is_update_candidate(item, opts, config)) {
-            continue;
-        }
-
-        /* Content observed through a displaced directory carries the squatter's
-         * target's bytes, not the path's: committing it would write a stranger's
-         * file into the profile as the dotfile's new content. Presence is the
-         * whole of the condition — an absent reading beneath a squatter is true
-         * (the lstat reached nothing, and there is no directory for the path to
-         * exist in), so a deletion stays real work to commit. */
-        if (item->occupant != FS_OCCUPANT_NONE &&
-            workspace_displaced_ancestor(ws, item->filesystem_path)) {
             continue;
         }
 
@@ -808,8 +797,9 @@ static error_t *update_profile(
      * over a deleted item — the absence of a leaf says nothing about the chain
      * that led to it. This trigger authors and refreshes but structurally never
      * retires: a leaf read through a squatted rung was refused at the filter
-     * (the displaced guard), whichever profile's claim the squatter displaced,
-     * so a chain that reaches here holds directories at every claimed rung. */
+     * (the route's displaced arms), whichever profile's claim the squatter
+     * displaced, so a chain that reaches here holds directories at every claimed
+     * rung. */
     for (size_t i = 0; i < commit->captured_count; i++) {
         const workspace_item_t *item = commit->captured[i].item;
 
@@ -1794,24 +1784,20 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* What the filter left out on purpose, said once — above the exit below, so
      * a workspace whose only divergence is stale explains itself, and above the
-     * prompt. Same scope triplet as the filter. The displaced guard comes first,
-     * as it does in the filter — an item's route was computed through the squatter
-     * and would misname the remedy — then the skip lines name the routes the
-     * filter refused (workspace_item_route — the same table), in the route order,
-     * each naming its route's way out; a multi-bit divergence counts under the
-     * route that refused it. The displaced family splits by the claim that holds
-     * the offender (workspace_lookup — the same split apply prints from the
-     * fate-borne ancestor_class): a planned squatter is --force's to replace, a
-     * derived rung is the named re-derivation's to drop, and a stale record is
-     * apply's own release — after which the arrangement is the user's own and
-     * update trusts it. The retyped family arrives split from the route (KIND
-     * on a row a plan can hold, KIND_DERIVED on a rung dotta only passes
-     * through). */
+     * prompt. Same scope triplet as the filter. The skip lines name the routes
+     * the filter refused (workspace_item_route — the same table), each naming
+     * its route's way out; a multi-bit divergence counts under the route that
+     * refused it. Two families arrive split from the route by the claim that
+     * holds the offender — the same split apply prints from the fate-borne
+     * ancestor_class: the displaced family (DISPLACED_TRACKED beneath a planned
+     * squatter --force replaces, DISPLACED_DERIVED beneath a rung the named
+     * re-derivation drops) and the retyped family (KIND on a row a plan can hold,
+     * KIND_DERIVED on a rung dotta only passes through). */
     workspace_items_t all = workspace_get_all_diverged(ws);
     size_t unverified_skipped = 0; size_t retyped_skipped = 0;
     size_t stale_skipped = 0; size_t conflict_skipped = 0;
     size_t displaced_tracked = 0; size_t displaced_derived = 0;
-    size_t displaced_record = 0; size_t retyped_derived = 0;
+    size_t retyped_derived = 0;
 
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
@@ -1820,21 +1806,15 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
             continue;
         }
-        if (item->occupant != FS_OCCUPANT_NONE) {
-            const char *dir = workspace_displaced_ancestor(ws, item->filesystem_path);
-
-            if (dir) {
-                /* The displaced set holds directory claims and directory records
-                 * alone, so the lookup is a directory row or nothing. */
-                const manifest_row_t *row = workspace_lookup(ws, dir);
-
-                if (row == NULL) displaced_record++;
-                else if (row->tracked) displaced_tracked++;
-                else displaced_derived++;
-                continue;
-            }
-        }
         switch (workspace_item_route(item)) {
+            case WORKSPACE_ROUTE_DISPLACED_TRACKED:
+                displaced_tracked++;
+                break;
+
+            case WORKSPACE_ROUTE_DISPLACED_DERIVED:
+                displaced_derived++;
+                break;
+
             case WORKSPACE_ROUTE_UNVERIFIABLE:
                 unverified_skipped++;
                 break;
@@ -1876,14 +1856,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "%zu path%s skipped: observed through a displaced directory — "
             "'dotta update <dir>' re-derives the way there",
             displaced_derived, displaced_derived == 1 ? "" : "s"
-        );
-    }
-    if (displaced_record > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: observed through a displaced directory — "
-            "'dotta apply' releases its stale record first",
-            displaced_record, displaced_record == 1 ? "" : "s"
         );
     }
     if (unverified_skipped > 0) {

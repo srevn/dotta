@@ -195,17 +195,17 @@ static error_t *partition_push(
  *
  * Displaced is the workspace's fact (workspace_displaced_ancestor — the outermost
  * decides: a deeper displaced directory was itself observed through it, and
- * replacing the outer one empties every path beneath), and only a squatter this
- * scope converges counts: a squatted tracked row in scope always has work (the
- * TYPE divergence), so "converged this run" is exactly "a tracked view row this
- * scope accepts and does not exclude" — one -e skips is not replaced this run,
- * a squatted ancestor claim is never planned at all (deploy_plan_build), and a
- * record-only claim has no row to converge (cleanup's business, not the plan's).
- * The plan approximates with scope; preflight exacts the same premise against
- * the fates (check_ancestry) and writes the answer into the verdict's occupant,
- * which is where the executors read it. What the plan declines to call absent
- * is not thereby called safe: a row beneath a squatter this run leaves standing
- * is judged by the ancestry rung, which refuses it whatever bucket it sat in.
+ * replacing the outer one empties every path beneath; the view's claims alone,
+ * so the answer always has a row), and only a squatter this scope converges counts:
+ * a squatted tracked row in scope always has work (the TYPE divergence), so
+ * "converged this run" is exactly "a tracked view row this scope accepts and
+ * does not exclude" — one -e skips is not replaced this run, and a squatted
+ * ancestor claim is never planned at all (deploy_plan_build). The plan approximates
+ * with scope; preflight exacts the same premise against the fates (check_ancestry)
+ * and writes the answer into the verdict's occupant, which is where the executors
+ * read it. What the plan declines to call absent is not thereby called safe: a
+ * row beneath a squatter this run leaves standing is judged by the ancestry rung,
+ * which refuses it whatever bucket it sat in.
  *
  * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
  * @param scope Operation scope, for the ancestor's reach (must not be NULL)
@@ -222,7 +222,7 @@ static bool beneath_squatted_directory(
 
     const manifest_row_t *row = workspace_lookup(ws, dir);
 
-    return row && row->tracked &&
+    return row->tracked &&
            scope_accepts_profile(scope, row->profile) &&
            scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY) &&
            !scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY);
@@ -610,13 +610,12 @@ static bool directory_is_deployable(
  *                 --force lifts parent and child together, PERMISSION keeps the
  *                 incapacity no flag lifts
  *   no fate       this run never reaches the ancestor (out of scope, -p'd
- *                 away, -e'd, an ancestor claim the plan never holds, or a
- *                 record-only claim no view row names): ANCESTOR — the same fate
- *                 a squatter no row names earns at check_landing, an incapacity.
- *                 The skip carries which claim holds the squatter (*out_class),
- *                 because the remedies part ways there: a wider scope plans a
- *                 tracked row, the named re-derivation drops an ancestor claim,
- *                 and a record-only claim is apply's own cleanup to release
+ *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
+ *                 — the same fate a squatter no row names earns at check_landing,
+ *                 an incapacity. The skip carries which claim holds the squatter
+ *                 (*out_class), because the remedies part ways there: a wider
+ *                 scope plans a tracked row, the named re-derivation drops an
+ *                 ancestor claim
  *
  * Written default-then-override: ANCESTOR is what an unreached ancestor earns,
  * and the skip scan replaces it with the ancestor's own reason when this run
@@ -667,13 +666,14 @@ static void check_ancestry(
     }
 
     /* The lookup cannot meet a file row: the displaced set holds directory claims
-     * and directory records alone. */
+     * alone. And it cannot miss a row: the probe answers view-side (the reach
+     * rule, workspace.h), so a record that alone remembers a directory never
+     * names the ancestor here. */
     if (*out_reason == DEPLOY_SKIP_ANCESTOR) {
         const manifest_row_t *row = workspace_lookup(ws, dir);
 
-        *out_class = row == NULL ? DEPLOY_ANCESTOR_RECORD
-            : row->tracked ? DEPLOY_ANCESTOR_TRACKED
-            : DEPLOY_ANCESTOR_DERIVED;
+        *out_class = row->tracked
+            ? DEPLOY_ANCESTOR_TRACKED : DEPLOY_ANCESTOR_DERIVED;
     }
 }
 

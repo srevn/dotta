@@ -1403,7 +1403,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_result = NULL;             /* Outcomes borrow the fates; free first */
-    size_t failed_prunes = 0;                          /* Cleanup's undelivered half, for the exit fold */
+    cleanup_result_t *cleanup_result = NULL;           /* Outcomes borrow the verdicts; free first */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -2253,8 +2253,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * and the user would see [undeployed] on working files. Partial success
          * is recorded — the partial result names what did happen — and the next
          * apply re-observes the rest. */
-        cleanup_result_t *cleanup_res = NULL;
-        error_t *cleanup_err = cleanup_execute(cleanup_verdicts, &cleanup_res);
+        error_t *cleanup_err = cleanup_execute(cleanup_verdicts, &cleanup_result);
         if (cleanup_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Orphan cleanup failed: %s",
@@ -2263,8 +2262,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             error_free(cleanup_err);
         }
 
-        if (cleanup_res) {
-            print_cleanup_results(out, cleanup_res);
+        if (cleanup_result) {
+            print_cleanup_results(out, cleanup_result);
 
             /* The record behind a gone or let-go path retires; a skipped or failed
              * one stays. Which outcomes settle is cleanup's rule, read off its
@@ -2284,14 +2283,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * fails to settle is reported and read as an orphan again by the
              * next apply. */
             const ptr_array_t *gone[] = {
-                &cleanup_res->pruned_files,
-                &cleanup_res->reclaimed_files,
-                &cleanup_res->pruned_dirs,
-                &cleanup_res->reclaimed_dirs,
+                &cleanup_result->pruned_files,
+                &cleanup_result->reclaimed_files,
+                &cleanup_result->pruned_dirs,
+                &cleanup_result->reclaimed_dirs,
             };
             const ptr_array_t *let_go[] = {
-                &cleanup_res->released_files,
-                &cleanup_res->released_dirs,
+                &cleanup_result->released_files,
+                &cleanup_result->released_dirs,
             };
             for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
                 workspace_items_t items = workspace_items_view(gone[b]);
@@ -2329,14 +2328,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     }
                 }
             }
-
-            /* For the exit fold at the tail, read before the free. Attempted
-             * and refused only — the skipped orphans stay out: cleanup's plan
-             * is permission, not obligation. */
-            failed_prunes =
-                cleanup_res->failed_files.count + cleanup_res->failed_dirs.count;
-
-            cleanup_result_free(cleanup_res);
         }
 
         /* Record what the run did, path by path
@@ -2571,6 +2562,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (deploy_result) {
         undelivered += deploy_result->failed.count;
     }
+
+    /* Attempted and refused only — the skipped orphans stay out: cleanup's plan
+     * is permission, not obligation. */
+    size_t failed_prunes = 0;
+
+    if (cleanup_result) {
+        failed_prunes = cleanup_result->failed_files.count + cleanup_result->failed_dirs.count;
+    }
+
     if (undelivered > 0 && failed_prunes > 0) {
         err = ERROR(
             ERR_FS, "%zu path%s could not be deployed, %zu orphan%s could not be pruned",
@@ -2596,6 +2596,7 @@ cleanup:
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (deploy_plan) deploy_plan_free(deploy_plan);
+    if (cleanup_result) cleanup_result_free(cleanup_result);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
     if (profiles_str) free(profiles_str);

@@ -1935,9 +1935,8 @@ static error_t *scan_directory_for_untracked(
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
-        return ERROR(
-            ERR_FS, "Error reading directory '%s': %s", dir_path,
-            strerror(saved_errno)
+        return error_from_errno(
+            saved_errno, "Error reading directory '%s'", dir_path
         );
     }
 

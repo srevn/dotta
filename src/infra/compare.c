@@ -66,9 +66,7 @@ error_t *compare_buffer_to_disk(
                 }
                 return NULL;
             }
-            return ERROR(
-                ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno)
-            );
+            return error_from_errno(errno, "Failed to stat '%s'", disk_path);
         }
         stat_ptr = &st;
         if (out_stat) {
@@ -154,8 +152,8 @@ error_t *compare_buffer_to_disk(
                     *result = CMP_MISSING;
                     return NULL;
                 }
-                return ERROR(
-                    ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno)
+                return error_from_errno(
+                    errno, "Failed to open '%s'", disk_path
                 );
             }
 
@@ -250,9 +248,7 @@ error_t *compare_oid_to_disk(
                 }
                 return NULL;
             }
-            return ERROR(
-                ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno)
-            );
+            return error_from_errno(errno, "Failed to stat '%s'", disk_path);
         }
         stat_ptr = &st;
         if (out_stat) {
@@ -332,9 +328,7 @@ error_t *compare_oid_to_disk(
                 *result = CMP_MISSING;
                 return NULL;
             }
-            return ERROR(
-                ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno)
-            );
+            return error_from_errno(errno, "Failed to open '%s'", disk_path);
         }
 
         buffer_t disk_content = BUFFER_INIT;

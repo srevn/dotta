@@ -229,7 +229,7 @@ static error_t *derive_cache_key(
     crypto_blake2b_ctx ctx;
 
     if (gethostname(hostname, sizeof(hostname)) != 0) {
-        return ERROR(ERR_FS, "Failed to read hostname: %s", strerror(errno));
+        return error_from_errno(errno, "Failed to read hostname");
     }
     /* gethostname does not guarantee NUL-termination on truncation. */
     hostname[sizeof(hostname) - 1] = '\0';
@@ -385,9 +385,8 @@ error_t *session_save(
         0600
     );
     if (fd < 0) {
-        err = ERROR(
-            ERR_FS, "Failed to create session cache file '%s': %s",
-            cache_path, strerror(errno)
+        err = error_from_errno(
+            errno, "Failed to create session cache file '%s'", cache_path
         );
         goto cleanup;
     }
@@ -396,9 +395,8 @@ error_t *session_save(
      * bits and produces a 0400 file the load path cannot accept. fchmod forces
      * 0600 regardless of umask. */
     if (fchmod(fd, 0600) != 0) {
-        err = ERROR(
-            ERR_FS, "Failed to set session cache file permissions: %s",
-            strerror(errno)
+        err = error_from_errno(
+            errno, "Failed to set session cache file permissions"
         );
         goto cleanup;
     }
@@ -415,10 +413,7 @@ error_t *session_save(
             if (errno == EINTR) {
                 continue;
             }
-            err = ERROR(
-                ERR_FS, "Failed to write session cache: %s",
-                strerror(errno)
-            );
+            err = error_from_errno(errno, "Failed to write session cache");
             goto cleanup;
         }
         off += (size_t) n;
@@ -428,10 +423,7 @@ error_t *session_save(
      * a crash, and the parent-dir fsync's extra cost doesn't pay for itself under
      * the "ergonomic cache, not credential storage" threat model. */
     if (fsync(fd) != 0) {
-        err = ERROR(
-            ERR_FS, "Failed to fsync session cache: %s",
-            strerror(errno)
-        );
+        err = error_from_errno(errno, "Failed to fsync session cache");
         goto cleanup;
     }
 
@@ -483,9 +475,8 @@ error_t *session_load(
         if (errno == ENOENT) {
             err = ERROR(ERR_NOT_FOUND, "Session cache does not exist");
         } else {
-            err = ERROR(
-                ERR_FS, "Failed to open session cache '%s': %s",
-                cache_path, strerror(errno)
+            err = error_from_errno(
+                errno, "Failed to open session cache '%s'", cache_path
             );
         }
         goto cleanup;
@@ -497,9 +488,7 @@ error_t *session_load(
      * to a moment later. */
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        err = ERROR(
-            ERR_FS, "Failed to stat session cache: %s", strerror(errno)
-        );
+        err = error_from_errno(errno, "Failed to stat session cache");
         goto cleanup;
     }
 
@@ -549,10 +538,7 @@ error_t *session_load(
             if (errno == EINTR) {
                 continue;
             }
-            err = ERROR(
-                ERR_FS, "Failed to read session cache: %s",
-                strerror(errno)
-            );
+            err = error_from_errno(errno, "Failed to read session cache");
             /* Transient I/O — leave file in place. */
             goto cleanup;
         }

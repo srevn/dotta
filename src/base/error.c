@@ -131,11 +131,32 @@ error_code_t error_code_from_errno(int errno_val) {
     }
 }
 
-error_t *error_from_errno(int errno_val) {
-    return error_create(
-        error_code_from_errno(errno_val), "System error: %s",
-        strerror(errno_val)
+error_t *error_from_errno(int errno_val, const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    error_t *err = error_vcreate(
+        error_code_from_errno(errno_val), NULL, 0, fmt, args
     );
+    va_end(args);
+
+    /* The sentinel is static and not ours to write. */
+    if (err == &oom_sentinel) {
+        return err;
+    }
+
+    const char *why = strerror(errno_val);
+    size_t len = strlen(err->message);
+    char *message = realloc(err->message, len + 2 + strlen(why) + 1);
+    if (!message) {
+        free(err->message);
+        free(err);
+        return &oom_sentinel;
+    }
+    memcpy(message + len, ": ", 2);
+    strcpy(message + len + 2, why);
+    err->message = message;
+
+    return err;
 }
 
 void error_free(error_t *err) {

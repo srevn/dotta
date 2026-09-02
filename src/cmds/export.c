@@ -389,9 +389,7 @@ static error_t *validate_destinations(
                     e->dest_path
                 );
             }
-            return error_wrap(
-                error_from_errno(errno), "Cannot stat '%s'", e->dest_path
-            );
+            return error_from_errno(errno, "Cannot stat '%s'", e->dest_path);
         }
 
         switch (e->kind) {
@@ -1124,9 +1122,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             );
             goto cleanup;
         } else if (errno != ENOENT) {
-            err = error_wrap(
-                error_from_errno(errno), "Cannot stat '%s'", root_path
-            );
+            err = error_from_errno(errno, "Cannot stat '%s'", root_path);
             goto cleanup;
         }
     }

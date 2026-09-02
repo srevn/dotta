@@ -67,9 +67,8 @@ static error_t *resolve_relative(const char *relative_path, char **out) {
 
     char cwd[PATH_MAX];
     if (!getcwd(cwd, sizeof(cwd))) {
-        return ERROR(
-            ERR_FS, "Failed to get current working directory: %s",
-            strerror(errno)
+        return error_from_errno(
+            errno, "Failed to get current working directory"
         );
     }
 

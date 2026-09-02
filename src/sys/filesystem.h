@@ -27,6 +27,14 @@
  * libgit2, SQLite, the keymgr or a fork: it is one syscall wide, inside one
  * wrapper.
  *
+ * The word: every error this module makes from a kernel refusal is
+ * error_from_errno's — the site's prose, strerror's word, the errno's code — so
+ * a reader acts on the code and never on the prose: ERR_PERMISSION is what the
+ * hint tails of add and update read, ERR_NOT_FOUND what compare's absence rule
+ * and the mount target's validation read. A site that tells two refusals apart
+ * by errno before the error is made (ENOENT is "already gone" to a removal) keeps
+ * doing so at the syscall; the error carries the rest.
+ *
  * Dotta's own artifacts are the exception and keep their raw calls: the session
  * cache (crypto/session), the temp scripts (cmds/ignore, the bootstrap trio),
  * libgit2's and SQLite's files. Those paths are the invoker's by construction —

@@ -109,10 +109,7 @@ static error_t *copy_file_to_worktree(
      * content_store_file_to_worktree, beside the bytes it reads. */
     struct stat src_stat;
     if (fs_lstat(filesystem_path, &src_stat) != 0) {
-        err = ERROR(
-            ERR_FS, "Failed to stat '%s': %s",
-            filesystem_path, strerror(errno)
-        );
+        err = error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
         goto cleanup;
     }
 

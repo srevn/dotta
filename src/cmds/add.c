@@ -214,10 +214,7 @@ static error_t *collect_tree(
 
     DIR *dir = fs_opendir(dir_fs);
     if (!dir) {
-        return ERROR(
-            error_code_from_errno(errno), "Failed to open directory '%s': %s",
-            dir_fs, strerror(errno)
-        );
+        return error_from_errno(errno, "Failed to open directory '%s'", dir_fs);
     }
 
     error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
@@ -251,9 +248,8 @@ static error_t *collect_tree(
         if (fs_lstat(child_fs, &st) != 0) {
             int saved_errno = errno;
             closedir(dir);
-            return ERROR(
-                error_code_from_errno(saved_errno), "Failed to stat '%s': %s",
-                child_fs, strerror(saved_errno)
+            return error_from_errno(
+                saved_errno, "Failed to stat '%s'", child_fs
             );
         }
         bool is_dir = S_ISDIR(st.st_mode);
@@ -320,9 +316,8 @@ static error_t *collect_tree(
     if (errno != 0) {
         int saved_errno = errno;
         closedir(dir);
-        return ERROR(
-            ERR_FS, "Error reading directory '%s': %s",
-            dir_fs, strerror(saved_errno)
+        return error_from_errno(
+            saved_errno, "Error reading directory '%s'", dir_fs
         );
     }
 
@@ -516,9 +511,8 @@ static error_t *add_file_to_worktree(
         struct stat link_stat;
         if (fs_lstat(filesystem_path, &link_stat) != 0) {
             free(dest_path);
-            return ERROR(
-                ERR_FS, "Failed to stat symlink '%s': %s",
-                filesystem_path, strerror(errno)
+            return error_from_errno(
+                errno, "Failed to stat symlink '%s'", filesystem_path
             );
         }
         err = metadata_capture_from_file(
@@ -1316,9 +1310,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
             case FS_OCCUPANT_UNKNOWN: {
                 int saved_errno = errno;
-                err = ERROR(
-                    error_code_from_errno(saved_errno), "Cannot access '%s': %s",
-                    fs_path, strerror(saved_errno)
+                err = error_from_errno(
+                    saved_errno, "Cannot access '%s'", fs_path
                 );
                 goto cleanup;
             }

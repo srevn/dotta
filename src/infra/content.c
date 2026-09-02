@@ -146,10 +146,7 @@ error_t *content_classify_path(
         if (saved_errno == ENOENT) {
             return ERROR(ERR_NOT_FOUND, "File not found: %s", fs_path);
         }
-        return ERROR(
-            error_code_from_errno(saved_errno), "Failed to open '%s': %s",
-            fs_path, strerror(saved_errno)
-        );
+        return error_from_errno(saved_errno, "Failed to open '%s'", fs_path);
     }
 
     uint8_t header[CIPHER_DETECT_BYTES];
@@ -160,9 +157,8 @@ error_t *content_classify_path(
             if (errno == EINTR) continue;
             int saved_errno = errno;
             close(fd);
-            return ERROR(
-                ERR_FS, "Failed to read '%s': %s",
-                fs_path, strerror(saved_errno)
+            return error_from_errno(
+                saved_errno, "Failed to read '%s'", fs_path
             );
         }
         if (r == 0) break;  /* EOF before window filled — short file */
@@ -527,17 +523,15 @@ error_t *content_store_file_to_worktree(
          * below name the type as before; it binds nothing. */
         int open_errno = errno;
         if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
-            return ERROR(
-                error_code_from_errno(open_errno), "Failed to open '%s': %s",
-                filesystem_path, strerror(open_errno)
+            return error_from_errno(
+                open_errno, "Failed to open '%s'", filesystem_path
             );
         }
     } else if (fstat(fd, &st) < 0) {
         int stat_errno = errno;
         close(fd);
-        return ERROR(
-            ERR_FS, "Failed to stat '%s': %s",
-            filesystem_path, strerror(stat_errno)
+        return error_from_errno(
+            stat_errno, "Failed to stat '%s'", filesystem_path
         );
     }
 

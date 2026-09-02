@@ -86,14 +86,23 @@ error_t *error_from_git(int git_error_code);
 error_code_t error_code_from_errno(int errno_val);
 
 /**
- * Create error from errno
+ * Create an error from a kernel refusal
  *
- * The code is error_code_from_errno's, the message strerror's.
+ * The one producer for every site that turns an errno into an error: the code
+ * is error_code_from_errno's, the message the caller's prose, then ": " and
+ * strerror's word — exactly what a site would spell by hand, so a reader can
+ * act on the code (ERR_PERMISSION, ERR_NOT_FOUND) without matching prose. Read
+ * errno into the argument before anything that could move it (a close, a free).
+ * A site that codes its refusal by subsystem rather than by errno (a session
+ * file's ERR_CRYPTO, the drop's ERR_PERMISSION) keeps its own spelling; every
+ * ERR_FS born from a refusal reads through here.
  *
  * @param errno_val errno value
+ * @param fmt Format string (printf-style) for the caller's part of the message
+ * @param ... Format arguments
  * @return Newly allocated error
  */
-error_t *error_from_errno(int errno_val);
+error_t *error_from_errno(int errno_val, const char *fmt, ...);
 
 /**
  * Free error and all chained causes

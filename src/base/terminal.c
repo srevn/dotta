@@ -51,10 +51,7 @@ error_t *terminal_init(terminal_t **out) {
     /* Save original terminal settings */
     if (tcgetattr(STDIN_FILENO, &term->orig_termios) < 0) {
         free(term);
-        return error_create(
-            ERR_FS, "failed to get terminal attributes: %s",
-            strerror(errno)
-        );
+        return error_from_errno(errno, "failed to get terminal attributes");
     }
 
     /* Configure raw mode */
@@ -93,10 +90,7 @@ error_t *terminal_init(terminal_t **out) {
     /* Apply raw mode settings */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
         free(term);
-        return error_create(
-            ERR_FS, "failed to enable raw mode: %s",
-            strerror(errno)
-        );
+        return error_from_errno(errno, "failed to enable raw mode");
     }
 
     term->raw_mode_enabled = true;
@@ -132,10 +126,7 @@ error_t *terminal_get_size(terminal_size_t *out) {
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {
-        return error_create(
-            ERR_FS, "failed to get terminal size: %s",
-            strerror(errno)
-        );
+        return error_from_errno(errno, "failed to get terminal size");
     }
 
     /* Validate terminal size */

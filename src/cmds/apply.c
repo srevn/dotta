@@ -28,6 +28,8 @@
 #include "utils/hooks.h"
 #include "utils/privilege.h"
 
+#define LIST_LIMIT 20  /* Every capped list in this file trims here. */
+
 /**
  * Print deploy pre-flight results: the warnings, then the skips
  *
@@ -75,8 +77,6 @@
 static void print_deploy_preflight_results(
     const output_t *out, const deploy_preflight_result_t *result
 ) {
-    const size_t limit = 20;   /* Don't flood the terminal */
-
     for (size_t i = 0; i < result->warnings->count; i++) {
         output_warning(out, OUTPUT_NORMAL, "%s", result->warnings->items[i]);
     }
@@ -87,7 +87,7 @@ static void print_deploy_preflight_results(
 
     output_section(out, OUTPUT_NORMAL, "Skipped paths");
 
-    for (size_t i = 0; i < result->skipped.count && i < limit; i++) {
+    for (size_t i = 0; i < result->skipped.count && i < LIST_LIMIT; i++) {
         const deploy_skip_t *s = &result->skipped.entries[i];
         const char *path = s->row->filesystem_path;
 
@@ -169,9 +169,9 @@ static void print_deploy_preflight_results(
         }
     }
 
-    if (result->skipped.count > limit) {
+    if (result->skipped.count > LIST_LIMIT) {
         output_print(
-            out, OUTPUT_NORMAL, "  ... and %zu more\n", result->skipped.count - limit
+            out, OUTPUT_NORMAL, "  ... and %zu more\n", result->skipped.count - LIST_LIMIT
         );
     }
 
@@ -273,7 +273,6 @@ static void print_deploy_preview(
     const output_t *out,
     const deploy_preflight_result_t *verdicts
 ) {
-    const size_t limit = 20;   /* Don't flood the terminal */
     const deploy_verdicts_t *files = &verdicts->files;
     const deploy_verdicts_t *dirs = &verdicts->directories;
 
@@ -317,7 +316,7 @@ static void print_deploy_preview(
 
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < files->count; i++) {
-            if (matched++ < limit) {
+            if (matched++ < LIST_LIMIT) {
                 /* The glyph carries the overwrite split: yellow on exactly the
                  * rows the yellow line counted, cyan on the rest. */
                 bool overwrite =
@@ -331,8 +330,8 @@ static void print_deploy_preview(
                 );
             }
         }
-        if (matched > limit) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        if (matched > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
         }
     }
 
@@ -345,15 +344,15 @@ static void print_deploy_preview(
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) continue;
-            if (matched++ < limit) {
+            if (matched++ < LIST_LIMIT) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
                     dirs->entries[i].row->filesystem_path
                 );
             }
         }
-        if (matched > limit) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        if (matched > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
         }
     }
 
@@ -366,15 +365,15 @@ static void print_deploy_preview(
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_FIX) continue;
-            if (matched++ < limit) {
+            if (matched++ < LIST_LIMIT) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
                     dirs->entries[i].row->filesystem_path
                 );
             }
         }
-        if (matched > limit) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        if (matched > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
         }
     }
 
@@ -387,15 +386,15 @@ static void print_deploy_preview(
         size_t matched = 0;   /* printed up to the cap, counted past it */
         for (size_t i = 0; i < dirs->count; i++) {
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_REPLACE) continue;
-            if (matched++ < limit) {
+            if (matched++ < LIST_LIMIT) {
                 output_styled(
                     out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
                     dirs->entries[i].row->filesystem_path
                 );
             }
         }
-        if (matched > limit) {
-            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - limit);
+        if (matched > LIST_LIMIT) {
+            output_print(out, OUTPUT_VERBOSE, "    ... and %zu more\n", matched - LIST_LIMIT);
         }
     }
 }
@@ -586,8 +585,6 @@ static void print_deploy_results(
     const output_t *out,
     const deploy_result_t *result
 ) {
-    if (!result) return;
-
     deploy_outcomes_t deployed = result->deployed;
     deploy_outcomes_t converged = result->converged;
     deploy_outcomes_t ancestors = result->ancestors;
@@ -776,10 +773,8 @@ static void print_deploy_results(
      * the refusal speaks verbatim — EISDIR, ENOSPC, a blob that would not load;
      * the wraps above it restate the row the line already names. */
     if (result->failed.count > 0) {
-        const size_t limit = 20;   /* Don't flood the terminal */
-
         output_section(out, OUTPUT_NORMAL, "Failed deployments");
-        for (size_t i = 0; i < result->failed.count && i < limit; i++) {
+        for (size_t i = 0; i < result->failed.count && i < LIST_LIMIT; i++) {
             const deploy_outcome_t *o = &result->failed.entries[i];
 
             output_styled(
@@ -788,9 +783,9 @@ static void print_deploy_results(
                 error_message(error_root(o->error))
             );
         }
-        if (result->failed.count > limit) {
+        if (result->failed.count > LIST_LIMIT) {
             output_print(
-                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - limit
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - LIST_LIMIT
             );
         }
     }
@@ -807,8 +802,6 @@ static void print_cleanup_results(
     const output_t *out,
     const cleanup_result_t *result
 ) {
-    if (!result) return;
-
     workspace_items_t pruned_files = workspace_items_view(&result->pruned_files);
     workspace_items_t reclaimed_files = workspace_items_view(&result->reclaimed_files);
     workspace_items_t released_files = workspace_items_view(&result->released_files);
@@ -1015,17 +1008,16 @@ static void print_path_list(
     output_color_t color,
     const char *glyph
 ) {
-    const size_t limit = 20;   /* Don't flood the terminal */
     workspace_items_t items = workspace_items_view(bucket);
 
-    for (size_t i = 0; i < items.count && i < limit; i++) {
+    for (size_t i = 0; i < items.count && i < LIST_LIMIT; i++) {
         output_colored(out, OUTPUT_VERBOSE, color, "    %s", glyph);
         output_print(out, OUTPUT_VERBOSE, " %s\n", items.entries[i]->filesystem_path);
     }
 
-    if (items.count > limit) {
+    if (items.count > LIST_LIMIT) {
         output_print(
-            out, OUTPUT_VERBOSE, "    ... and %zu more\n", items.count - limit
+            out, OUTPUT_VERBOSE, "    ... and %zu more\n", items.count - LIST_LIMIT
         );
     }
 }
@@ -1051,8 +1043,6 @@ static void print_cleanup_preflight_results(
     const output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
-    if (!verdicts) return;
-
     workspace_items_t skipped = workspace_items_view(&verdicts->skipped_files);
     workspace_items_t released = workspace_items_view(&verdicts->released_files);
 
@@ -2309,15 +2299,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 for (size_t i = 0; i < items.count; i++) {
                     const workspace_item_t *item = items.entries[i];
 
-                    err = state_retire_anchor(state, item->filesystem_path);
-                    if (err) {
+                    error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
+                    if (retire_err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
-                            item->filesystem_path, error_message(err)
+                            item->filesystem_path, error_message(retire_err)
                         );
-                        error_free(err);
-                        err = NULL;  /* Don't propagate - continue operation */
-                        continue;
+                        error_free(retire_err);
                     }
                 }
             }
@@ -2328,18 +2316,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 for (size_t i = 0; i < items.count; i++) {
                     const workspace_item_t *item = items.entries[i];
 
-                    err = ((item->divergence & DIVERGENCE_TYPE) ||
+                    error_t *settle_err = ((item->divergence & DIVERGENCE_TYPE) ||
                         item->displaced != WORKSPACE_DISPLACED_NONE)
                         ? state_retire_anchor(state, item->filesystem_path)
                         : state_release(state, item->filesystem_path);
-                    if (err) {
+                    if (settle_err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to settle state entry for %s: %s",
-                            item->filesystem_path, error_message(err)
+                            item->filesystem_path, error_message(settle_err)
                         );
-                        error_free(err);
-                        err = NULL;  /* Don't propagate - continue operation */
-                        continue;
+                        error_free(settle_err);
                     }
                 }
             }
@@ -2425,18 +2411,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 const workspace_item_t *item = o->verdict->item;
                 bool acknowledges = item && workspace_item_reassigned(item);
 
-                err = workspace_anchor(ws, file, &o->stat, now);
-                if (err) {
+                error_t *anchor_err = workspace_anchor(ws, file, &o->stat, now);
+                if (anchor_err) {
                     /* Non-fatal warning - the write landed, just anchor update
                      * failed. The file is already on the filesystem with correct
                      * content. Failure here should not abort the entire
                      * operation. */
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        file->filesystem_path, error_message(err)
+                        file->filesystem_path, error_message(anchor_err)
                     );
-                    error_free(err);
-                    err = NULL;  /* Don't propagate - continue operation */
+                    error_free(anchor_err);
                     continue;
                 }
 
@@ -2454,14 +2439,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 if (!made && !acknowledges) continue;
 
-                err = workspace_anchor(ws, dir, NULL, now);
-                if (err) {
+                error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+                if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        dir->filesystem_path, error_message(err)
+                        dir->filesystem_path, error_message(anchor_err)
                     );
-                    error_free(err);
-                    err = NULL;
+                    error_free(anchor_err);
                     continue;
                 }
 
@@ -2472,14 +2456,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < ancestors.count; i++) {
                 const manifest_row_t *dir = ancestors.entries[i].verdict->row;
 
-                err = workspace_anchor(ws, dir, NULL, now);
-                if (err) {
+                error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+                if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        dir->filesystem_path, error_message(err)
+                        dir->filesystem_path, error_message(anchor_err)
                     );
-                    error_free(err);
-                    err = NULL;
+                    error_free(anchor_err);
                 }
             }
         }
@@ -2607,14 +2590,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* The receipt borrows the fates, and every fate and plan bucket borrows rows
-     * from the workspace arena — receipt before fates, everything before
-     * workspace_free. */
+    /* Each engine's objects in reverse construction order: the receipt borrows
+     * the fates, and the fates and the plan borrow the workspace's rows and items
+     * — everything before workspace_free. */
     if (deploy_result) deploy_result_free(deploy_result);
+    if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (deploy_plan) deploy_plan_free(deploy_plan);
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
-    if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (profiles_str) free(profiles_str);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);

@@ -199,13 +199,13 @@ static error_t *partition_push(
  * so the answer always has a row), and only a squatter this scope converges counts:
  * a squatted tracked row in scope always has work (the TYPE divergence), so
  * "converged this run" is exactly "a tracked view row this scope accepts and
- * does not exclude" — one -e skips is not replaced this run, and a squatted
- * ancestor claim is never planned at all (deploy_plan_build). The plan approximates
- * with scope; preflight exacts the same premise against the fates (check_ancestry)
- * and writes the answer into the verdict's occupant, which is where the executors
- * read it. What the plan declines to call absent is not thereby called safe: a
- * row beneath a squatter this run leaves standing is judged by the ancestry rung,
- * which refuses it whatever bucket it sat in.
+ * does not exclude" (scope_accepts_entry) — one -e skips is not replaced this
+ * run, and a squatted ancestor claim is never planned at all (deploy_plan_build).
+ * The plan approximates with scope; preflight exacts the same premise against
+ * the fates (check_ancestry) and writes the answer into the verdict's occupant,
+ * which is where the executors read it. What the plan declines to call absent
+ * is not thereby called safe: a row beneath a squatter this run leaves standing
+ * is judged by the ancestry rung, which refuses it whatever bucket it sat in.
  *
  * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
  * @param scope Operation scope, for the ancestor's reach (must not be NULL)
@@ -222,10 +222,9 @@ static bool beneath_squatted_directory(
 
     const manifest_row_t *row = workspace_lookup(ws, dir);
 
-    return row->tracked &&
-           scope_accepts_profile(scope, row->profile) &&
-           scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY) &&
-           !scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY);
+    return row->tracked && scope_accepts_entry(
+        scope, row->profile, row->storage_path, PATH_KIND_DIRECTORY
+    );
 }
 
 /**
@@ -1836,7 +1835,6 @@ cleanup:
  */
 static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
     const char *path = v->row->filesystem_path;
-    error_t *err = NULL;
 
     switch (v->occupant) {
         case FS_OCCUPANT_DIRECTORY:
@@ -1847,10 +1845,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
             /* Absent — or beneath a non-directory, which preflight blocked when
              * unplanned and the directory pass replaces when planned (prefix
              * order); one still there is ensure_parents' named error. */
-            err = ensure_parents(run, path);
-            if (err) {
-                return err;
-            }
+            RETURN_IF_ERROR(ensure_parents(run, path));
             break;
 
         case FS_OCCUPANT_UNKNOWN:
@@ -1858,7 +1853,9 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
              * enters the verdict arrays. Said here rather than unlinked. */
             return ERROR(ERR_INTERNAL, "No verdict for '%s' (occupant unknown)", path);
 
-        default:
+        case FS_OCCUPANT_REGULAR:
+        case FS_OCCUPANT_SYMLINK:
+        case FS_OCCUPANT_OTHER:
             /* A single node in the way, cleared before the mkdir — the node the
              * verdict named. It can never be a directory (that is the first arm),
              * and --force was preflight's question. */
@@ -1868,7 +1865,7 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 
     /* Create-or-fix with atomic ownership and permissions (fchown/fchmod on the
      * directory fd — no window with wrong metadata). Idempotent. */
-    err = materialize_directory(run, v);
+    error_t *err = materialize_directory(run, v);
     if (err) {
         return error_wrap(err, "Failed to create directory: %s", path);
     }

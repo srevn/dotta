@@ -32,9 +32,9 @@
 #include "infra/mount.h"
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
-#include "utils/privilege.h"
 
 /**
  * Copy file from filesystem to worktree (with optional encryption)
@@ -1711,9 +1711,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
      * (self-healing optimization). Seeds the fast path for subsequent
-     * status/apply/update calls, including this command's post-privilege re-exec
-     * if one occurs. Non-fatal on failure — update still proceeds; just won't
-     * seed the fast path.
+     * status/apply/update calls. Non-fatal on failure — update still proceeds;
+     * just won't seed the fast path.
      *
      * Files actually updated by this command get their anchor advanced separately
      * inside update_write_record(); this flush covers the clean files the analysis
@@ -1889,52 +1888,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* PRE-FLIGHT PRIVILEGE CHECK
-     *
-     * This check happens AFTER finding modified files but BEFORE any write
-     * operations begin. If elevation is needed, the process will re-exec with
-     * sudo, and all operations will restart cleanly from main().
-     *
-     * If re-exec succeeds, this function DOES NOT RETURN.
-     */
-    {
-        string_array_t labels STRING_ARRAY_AUTO = { 0 };
-        for (size_t i = 0; i < partition.accepted.count; i++) {
-            const workspace_item_t *item = partition.accepted.entries[i];
-            if (item->item_kind != PATH_KIND_FILE) continue;
-            err = privilege_collect_label(
-                &labels, item->storage_path, item->filesystem_path
-            );
-            if (err) goto cleanup;
-        }
-
-        /* Check privilege requirements
-         *
-         * If labels needing root were collected without root privileges:
-         * - Interactive: Prompts user, re-execs with sudo if approved
-         * - Non-interactive: Returns error with clear message
-         *
-         * If re-exec succeeds, this function DOES NOT RETURN. If re-exec fails
-         * or user declines, returns error.
-         */
-        err = privilege_ensure_for_operation(
-            (const char *const *) labels.items,
-            labels.count,
-            "update",
-            opts->interactive,  /* Use existing interactive flag */
-            ctx->argc,
-            ctx->argv,
-            out
-        );
-
-        if (err) {
-            /* User declined elevation or non-interactive mode blocked it */
-            goto cleanup;
-        }
-
-        /* If we reach here, privileges are OK - proceed with operation */
-    }
-
     /* The plan's shape, counted once: the preview gates its sections on these
      * and the new-files prompt binds on new_files */
     update_counts_t counts = { 0 };
@@ -1970,11 +1923,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* The hooks fire around the work — after the nothing-exit and the privilege
-     * gate (a no-op run fires nothing, a sudo re-exec cannot fire the pair twice),
-     * before the prompt: apply's order. The preview's verdicts predate the
-     * pre-hook, but the capture stores execute-time bytes — a pre-hook that edits
-     * a candidate still commits what it wrote. */
+    /* The hooks fire around the work — after the nothing-exit (a no-op run fires
+     * nothing), before the prompt: apply's order. The preview's verdicts predate
+     * the pre-hook, but the capture stores execute-time bytes — a pre-hook that
+     * edits a candidate still commits what it wrote. */
     profiles_str = string_array_join(scope_active(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
@@ -2248,7 +2200,20 @@ static args_want_t update_complete(
 
 static error_t *update_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    return cmd_update(ctx, (const cmd_update_options_t *) opts_v);
+    error_t *err = cmd_update(ctx, (const cmd_update_options_t *) opts_v);
+
+    /* A refusal the invoker met reading a source (add_dispatch has the list)
+     * ends the update before its commit; a run that holds root reads through
+     * it, so the one thing left to say is the command that would. */
+    if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
+        char *hint = identity_sudo_hint(ctx->argc, ctx->argv);
+        if (hint) {
+            err = error_wrap(err, "Only root can read it; run: %s", hint);
+            free(hint);
+        }
+    }
+
+    return err;
 }
 
 static const args_opt_t update_opts[] = {

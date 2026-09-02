@@ -33,10 +33,10 @@
 #include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "sys/source.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
-#include "utils/privilege.h"
 
 /**
  * One path the walk collected, under both its names
@@ -215,7 +215,7 @@ static error_t *collect_tree(
     DIR *dir = fs_opendir(dir_fs);
     if (!dir) {
         return ERROR(
-            ERR_FS, "Failed to open directory '%s': %s",
+            error_code_from_errno(errno), "Failed to open directory '%s': %s",
             dir_fs, strerror(errno)
         );
     }
@@ -252,7 +252,8 @@ static error_t *collect_tree(
             int saved_errno = errno;
             closedir(dir);
             return ERROR(
-                ERR_FS, "Failed to stat '%s': %s", child_fs, strerror(saved_errno)
+                error_code_from_errno(saved_errno), "Failed to stat '%s': %s",
+                child_fs, strerror(saved_errno)
             );
         }
         bool is_dir = S_ISDIR(st.st_mode);
@@ -1011,11 +1012,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;   /* The command's table: see below */
 
-    /* Pre-flight privilege labels. STRING_ARRAY_AUTO releases the backing buffer
-     * at scope exit; the privilege call window closes inside this function (or
-     * the process re-execs), so the array's lifetime is contained here. */
-    string_array_t preflight_labels STRING_ARRAY_AUTO = { 0 };
-
     /* The ancestry pass's other half: the keys it retired, read by the record
      * write once the commit that drops them has landed. */
     string_array_t ancestry_retired STRING_ARRAY_AUTO = { 0 };
@@ -1107,156 +1103,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     } else {
         mounts = ctx->run.mounts;
     }
-
-    /* PRE-FLIGHT PRIVILEGE CHECK
-     *
-     * This check happens BEFORE any operations begin to ensure we have required
-     * privileges. If elevation is needed, the process will re-exec with sudo,
-     * and all operations will restart cleanly from main().
-     *
-     * CRITICAL: Must happen before:
-     * - Hook execution (avoids double execution on re-exec)
-     * - Worktree creation (avoids resource leaks)
-     * - Any filesystem modifications (ensures clean restart)
-     *
-     * If re-exec succeeds, this function DOES NOT RETURN.
-     */
-
-    err = string_array_init_cap(&preflight_labels, opts->file_count);
-    if (err) {
-        err = error_wrap(err, "Failed to reserve privilege label array");
-        goto cleanup;
-    }
-
-    /* Pre-compute whether deployment target lies outside the user's HOME. Every
-     * input in this add invocation shares opts->target, so the answer is identical
-     * for the whole batch — evaluate once, reuse below. The kind-keyed predicate
-     * that consumes this mirrors privilege_needs_elevation's rule (ROOT always;
-     * CUSTOM iff target outside HOME); kept inline because the precomputed bool
-     * would leak the privilege module's CUSTOM-vs-ROOT branch through any public
-     * helper signature. */
-    bool custom_needs_elevation = opts->target
-        ? !privilege_path_is_user_home(opts->target)
-        : false;  /* No target → no custom/ paths → irrelevant */
-
-    /* Collect labels for inputs whose label needs elevation. Only
-     *   ownership-tracking labels are pushed — home/ never does, and custom/
-     *   only does when the deployment target is outside HOME. The shape of the
-     *   test is uniform across both branches: spec->tracks_ownership &&
-     *   (!spec->per_profile || custom_needs_elevation)
-     * — ROOT (per_profile=false) is always; CUSTOM (per_profile=true) defers to
-     * the precomputed bool.
-     *
-     * Each input branch owns its own display string:
-     *   - Storage-path input ("home/X" / "root/X" / "custom/X"): the user-typed
-     *     string IS the display.
-     *   - Filesystem input that classifies cleanly: the classified storage path
-     *     the descendants will hit (e.g. "root/etc/hosts").
-     *   - Classification root (e.g. "dotta add /"): the typed filesystem path
-     *     itself. No storage tail exists for the directory-of-a-mount case, so
-     *     the input path is the most informative label. */
-    for (size_t i = 0; i < opts->file_count; i++) {
-        const char *file_path = opts->files[i];
-        char *absolute = NULL;
-
-        /* Storage-path input: the input itself is the display. One that resolves
-         * to nothing on this machine contributes nothing, like a filesystem path
-         * that does not exist (below): the main loop's existence check is the
-         * surface for that error, and a sudo prompt for `root/x` typed from `/`
-         * as a relative path would stand in its way. A custom/ path with no target
-         * binds nowhere yet; the main loop's --target precondition speaks to
-         * that. */
-        const mount_spec_t *spec = mount_spec_for_path(file_path);
-        if (spec) {
-            if (spec->tracks_ownership
-                && (!spec->per_profile || custom_needs_elevation)) {
-                mount_resolve_outcome_t bound;
-                const char *resolved = NULL;
-                err = mount_resolve(
-                    mounts, opts->profile, file_path, ctx->arena, &bound, &resolved
-                );
-                if (err) goto cleanup;
-                if (bound != MOUNT_RESOLVE_BOUND || !fs_lexists(resolved)) {
-                    continue;
-                }
-                err = string_array_push(&preflight_labels, file_path);
-                if (err) goto cleanup;
-            }
-            continue;
-        }
-
-        /* Filesystem path — normalize raw user input to absolute path first.
-         * `--target` acts as a virtual root: every typed path is resolved as if
-         * the user were operating inside that directory (chroot-style). Tilde
-         * inputs bypass — `~/X` always means HOME. Mount classification below
-         * decides which storage namespace each path lands in (longest match),
-         * which for paths under --target is custom/. */
-        err = path_input_normalize(file_path, opts->target, &absolute);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
-            goto cleanup;
-        }
-
-        /* Pre-flight policy: skip non-existent paths silently. The main resolution
-         * loop's existence check (search "Path not found" below) is the canonical
-         * user-facing surface for this error; firing it twice produces no benefit
-         * and the pre-flight only exists to answer "would this op touch a path
-         * needing elevation?". A non-existent path contributes nothing to that
-         * question. */
-        if (!fs_lexists(absolute)) {
-            free(absolute);
-            continue;
-        }
-
-        /* Classify the path. ROOT outcome means the input equals a mount root
-         * exactly ($HOME, "/", or --target). The walk will still expand its
-         * descendants — what we need here is just the spec to answer "would this
-         * op touch a path needing elevation?". mount_classify writes the spec
-         * in both outcomes; only the storage-path materialization differs. */
-        mount_classify_outcome_t outcome;
-        const char *storage_path = NULL;
-        err = mount_classify(
-            mounts, absolute, ctx->arena, &outcome, &storage_path, &spec
-        );
-        free(absolute);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve path '%s'", file_path);
-            goto cleanup;
-        }
-
-        bool is_classification_root = (outcome == MOUNT_CLASSIFY_ROOT);
-
-        if (spec
-            && spec->tracks_ownership
-            && (!spec->per_profile || custom_needs_elevation)) {
-            const char *display = is_classification_root ? file_path
-                                                         : storage_path;
-            err = string_array_push(&preflight_labels, display);
-            if (err) goto cleanup;
-        }
-    }
-
-    /* Check privilege requirements
-     *
-     * If kinds needing root detected without root privileges:
-     * - Interactive: Prompts user, re-execs with sudo if approved
-     * - Non-interactive: Returns error with clear message
-     *
-     * If re-exec succeeds, this function DOES NOT RETURN. If re-exec fails or
-     * user declines, returns error.
-     */
-    err = privilege_ensure_for_operation(
-        (const char *const *) preflight_labels.items,
-        preflight_labels.count, "add",
-        true, ctx->argc, ctx->argv, out
-    );
-
-    if (err) {
-        /* User declined elevation or non-interactive mode blocked it */
-        goto cleanup;
-    }
-
-    /* If we reach here, privileges are OK - proceed with operation */
 
     /* Build ignore rules once per command.
      *
@@ -1449,21 +1295,39 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        /* Check path exists (use lexists to allow broken symlinks). A storage
-         * path that resolves to nothing is as likely a relative path whose first
-         * component happens to be a label — `root/x` typed from `/` — so the
-         * message says where it looked and how to say the other. */
-        if (!fs_lexists(fs_path)) {
-            if (spec) {
+        /* What stands at the path — the link itself for a symlink, a broken one
+         * included. Absence and a refusal are two answers: a storage path that
+         * resolves to nothing is as likely a relative path whose first component
+         * happens to be a label — `root/x` typed from `/` — so the message says
+         * where it looked and how to say the other; a path the invoker cannot
+         * reach names its reason, and the dispatch tail names the command that
+         * could. */
+        switch (fs_lstat_occupant(fs_path, NULL)) {
+            case FS_OCCUPANT_NONE:
+                if (spec) {
+                    err = ERROR(
+                        ERR_NOT_FOUND, "Path not found: %s (storage path '%s')\n"
+                        "For a relative path, write ./%s", fs_path, file, file
+                    );
+                } else {
+                    err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+                }
+                goto cleanup;
+
+            case FS_OCCUPANT_UNKNOWN: {
+                int saved_errno = errno;
                 err = ERROR(
-                    ERR_NOT_FOUND,
-                    "Path not found: %s (the storage path '%s')\n"
-                    "For a relative path, write ./%s", fs_path, file, file
+                    error_code_from_errno(saved_errno), "Cannot access '%s': %s",
+                    fs_path, strerror(saved_errno)
                 );
-            } else {
-                err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+                goto cleanup;
             }
-            goto cleanup;
+
+            case FS_OCCUPANT_REGULAR:
+            case FS_OCCUPANT_SYMLINK:
+            case FS_OCCUPANT_DIRECTORY:
+            case FS_OCCUPANT_OTHER:
+                break;
         }
 
         /* The argument's storage name — NULL for a mount root ($HOME, "/", the
@@ -1490,8 +1354,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             is_excluded(&walk, fs_path, storage_path, is_dir, &match)) {
             if (match.decided) {
                 err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' is ignored by %s: '%s'\n"
+                    ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
                     "Add it anyway with -e '!%s', or edit the rule with "
                     "'dotta ignore'",
                     file, ignore_origin_describe((ignore_origin_t) match.origin),
@@ -1986,7 +1849,23 @@ static args_want_t add_complete(
 
 static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
-    return cmd_add(ctx, (const cmd_add_options_t *) opts_v);
+    error_t *err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
+
+    /* A refusal the invoker met reading a source — the walk's opendir and lstat,
+     * the open behind the policy sniff and the copy (infra/content), the existence
+     * check — ends the add before anything durable is written: the temp worktree
+     * is removed on the error path and the commit is after the walk. A run that
+     * holds root reads through it (sys/filesystem's second try), so the one thing
+     * left to say is the command that would. */
+    if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
+        char *hint = identity_sudo_hint(ctx->argc, ctx->argv);
+        if (hint) {
+            err = error_wrap(err, "Only root can read it; run: %s", hint);
+            free(hint);
+        }
+    }
+
+    return err;
 }
 
 static const args_opt_t add_opts[] = {

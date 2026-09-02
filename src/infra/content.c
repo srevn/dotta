@@ -147,7 +147,7 @@ error_t *content_classify_path(
             return ERROR(ERR_NOT_FOUND, "File not found: %s", fs_path);
         }
         return ERROR(
-            ERR_FS, "Failed to open '%s': %s",
+            error_code_from_errno(saved_errno), "Failed to open '%s': %s",
             fs_path, strerror(saved_errno)
         );
     }
@@ -528,7 +528,7 @@ error_t *content_store_file_to_worktree(
         int open_errno = errno;
         if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
             return ERROR(
-                ERR_FS, "Failed to open '%s': %s",
+                error_code_from_errno(open_errno), "Failed to open '%s': %s",
                 filesystem_path, strerror(open_errno)
             );
         }

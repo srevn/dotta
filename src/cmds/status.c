@@ -26,7 +26,6 @@
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
-#include "utils/privilege.h"
 
 /**
  * Display enabled profiles and last deployment info
@@ -1356,72 +1355,6 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         if (flush_err) {
             error_free(flush_err);
         }
-
-        /* Check privileges for complete status (may re-exec with sudo)
-         *
-         * Both kinds: a root/ directory carries owner and group exactly as a
-         * root/ file does, so reading what stands there needs the same elevation.
-         * The label predicate is the privilege module's — the loops only hand
-         * it every managed path. */
-        if (!opts->no_sudo) {
-            manifest_rows_t files = workspace_files(ws);
-            manifest_rows_t dirs = workspace_directories(ws);
-
-            string_array_t labels STRING_ARRAY_AUTO = { 0 };
-            error_t *extract_err = NULL;
-            for (size_t i = 0; i < files.count && !extract_err; i++) {
-                extract_err = privilege_collect_label(
-                    &labels,
-                    files.entries[i]->storage_path,
-                    files.entries[i]->filesystem_path
-                );
-            }
-            for (size_t i = 0; i < dirs.count && !extract_err; i++) {
-                extract_err = privilege_collect_label(
-                    &labels,
-                    dirs.entries[i]->storage_path,
-                    dirs.entries[i]->filesystem_path
-                );
-            }
-
-            if (!extract_err && labels.count > 0) {
-                /* Check if privileges needed (may re-exec) */
-                error_t *priv_err = privilege_ensure_for_operation(
-                    (const char *const *) labels.items,
-                    labels.count,
-                    "status",
-                    true,  /* interactive mode (prompt allowed) */
-                    ctx->argc,
-                    ctx->argv,
-                    out
-                );
-
-                if (priv_err) {
-                    /* User declined elevation or non-interactive mode */
-                    output_newline(out, OUTPUT_NORMAL);
-                    output_warning(out, OUTPUT_NORMAL, "Status check will be incomplete:\n");
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {green}✓{reset} Content changes will be detected\n"
-                    );
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {green}✓{reset} Permission mode changes will be detected\n"
-                    );
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} Ownership changes will not be detected\n"
-                    );
-                    output_newline(out, OUTPUT_NORMAL);
-
-                    error_free(priv_err);
-                    /* Continue with partial status */
-                }
-            } else if (extract_err) {
-                /* Extraction failed - non-fatal, continue without privilege check */
-                error_free(extract_err);
-            }
-        }
     }
 
     /* Display enabled profiles and last deployment info */
@@ -1536,11 +1469,6 @@ static const args_opt_t status_opts[] = {
         "Include non-enabled profiles"
     ),
     ARGS_FLAG(
-        "no-sudo",
-        cmd_status_options_t,no_sudo,
-        "Skip sudo; disables ownership checks"
-    ),
-    ARGS_FLAG(
         "full",
         cmd_status_options_t,full,
         "List every managed path with its state"
@@ -1566,10 +1494,10 @@ const args_command_t spec_status = {
         "plus each profile's push/pull state against its remote. Default\n"
         "scope covers both; --local and --remote restrict it.\n",
     .notes        =
-        "Privilege Requirements:\n"
-        "  Ownership checks on root/ files require root privileges. When\n"
-        "  invoked without root, dotta prompts for sudo. --no-sudo skips\n"
-        "  the prompt; ownership divergence will not be detected.\n"
+        "Ownership:\n"
+        "  Ownership is compared like mode, without privileges. A path only\n"
+        "  root can read is reported as unverified; run the command under\n"
+        "  sudo to verify it.\n"
         "\n"
         "Remote State Indicators:\n"
         "  =    up-to-date with remote\n"

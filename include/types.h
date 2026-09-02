@@ -108,7 +108,7 @@ typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
     DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
     DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
-    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner/group changed (requires root) */
+    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
     DIVERGENCE_UNVERIFIED = 1 << 5,  /* Cannot verify (missing key, error, large file) */

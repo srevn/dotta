@@ -47,7 +47,6 @@
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/source.h"
-#include "utils/privilege.h"
 
 /**
  * Pending confirmation (internal type)
@@ -235,17 +234,18 @@ static error_t *workspace_create_empty(
  * Does disk ownership diverge from the claim?
  *
  * The ownership half of every divergence check — one rule for the file, orphan
- * and directory analyzers. Only an elevated run compares (an unelevated one cannot
- * chown, so ownership is not its question), and only the names actually claimed
- * (NULL skips that half). A UID/GID the system cannot resolve to a name reads
- * as divergence: unknown ≠ expected (security-first).
+ * and directory analyzers. Only the names actually claimed are compared (NULL
+ * skips that half); whether this run could chown does not enter — the lstat needs
+ * no privilege, and a claim the disk contradicts is a fact about the path whoever
+ * reads it. A UID/GID the system cannot resolve to a name reads as divergence:
+ * unknown ≠ expected (security-first).
  */
 static bool ownership_diverges(
     const char *owner,
     const char *group,
     const struct stat *st
 ) {
-    if (!privilege_is_elevated() || (!owner && !group)) {
+    if (!owner && !group) {
         return false;
     }
 

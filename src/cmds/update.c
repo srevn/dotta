@@ -202,15 +202,15 @@ cleanup:
 /**
  * The plan's shape, counted once
  *
- * Filled by one walk over the filtered candidates; the preview gates its sections
- * on these and the new-files prompt binds on new_files. Buckets follow the
- * preview's sections: the modified fate splits by kind (a directory's modification
- * is a claim recapture, not a content commit), deleted deliberately does not (a
- * deleted directory is a deletion), and the deployed files split by divergence
- * family (types.h): a path-family bit is a modification, the blob-family ENCRYPTION
- * bit is a policy violation. A file with both diverged families counts in both;
- * a violator with nothing changed on disk counts only as a violation — it is
- * committed for the re-store, not for a modification.
+ * Filled by one walk over the partition's accepted items; the preview gates its
+ * sections on these and the new-files prompt binds on new_files. Buckets follow
+ * the preview's sections: the modified fate splits by kind (a directory's
+ * modification is a claim recapture, not a content commit), deleted deliberately
+ * does not (a deleted directory is a deletion), and the deployed files split by
+ * divergence family (types.h): a path-family bit is a modification, the blob-family
+ * ENCRYPTION bit is a policy violation. A file with both diverged families counts
+ * in both; a violator with nothing changed on disk counts only as a violation —
+ * it is committed for the re-store, not for a modification.
  */
 typedef struct {
     size_t modified_files;  /* DEPLOYED files with a path-family bit: divergent content or metadata */
@@ -281,86 +281,48 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
 }
 
 /**
- * Check if a workspace item's state/divergence qualifies for update
+ * What the filter made of the diverged spine, in scope
  *
- * Pure predicate — no side effects, no filtering by path/profile/exclusion.
- * Extracted to single source of truth for state eligibility logic.
+ * One walk partitions every in-scope item three ways. Accepted — the run's work:
+ * a deployed item on the capture route, a deleted path, a new file under a tracked
+ * directory when a flag or the config asked for it. Refused — a deployed item
+ * on any other route (workspace_item_route), counted under that route so the
+ * census names the table's own reason; a multi-bit divergence counts under the
+ * route that refused it. Or neither — a state that is another verb's, and, under
+ * --only-new, every deployed and deleted item: the user asked about new files,
+ * nothing about the others answers that, so none is accepted and none is counted
+ * (a refused route would name a reason the user did not ask for).
+ *
+ * The equation: in-scope deployed items = accepted deployed ∪ Σ refused[arm],
+ * by one switch that routes each item once — nothing is counted twice, nothing
+ * falls through. CAPTURE's slot stays zero (that arm is accepted) and CLEAN's
+ * (a clean row is no item); REASSIGNED's counts a handover the census has no
+ * line for — apply acknowledges it, the filter only declines it.
  */
-static bool is_update_candidate(
-    const workspace_item_t *item,
-    const cmd_update_options_t *opts,
-    const config_t *config
-) {
-    /* Determine if item should be included based on state + divergence */
-    switch (item->state) {
-        case WORKSPACE_STATE_DEPLOYED:
-            /* Deployed items partition by the route table — the same producer
-             * status's sections and the skip counter below read
-             * (workspace_item_route; workspace.h carries each arm's why). Only
-             * ROUTE_CAPTURE is update's to commit: displaced, unverifiable, stale,
-             * conflict and kind are refused, and cmd_update counts them, so the
-             * preview never promises an update the executor would refuse. */
-            return workspace_item_route(item) == WORKSPACE_ROUTE_CAPTURE &&
-                   !opts->only_new;
-
-        case WORKSPACE_STATE_DELETED:
-            /* File removed from filesystem - include unless --only-new */
-            return !opts->only_new;
-
-        case WORKSPACE_STATE_UNTRACKED:
-            /* New files - include if:
-             * - Explicit flags set (--include-new or --only-new), OR
-             * - Config auto_detect_new_files is enabled (for confirmation
-             *   prompt) */
-            return (opts->include_new || opts->only_new || config->auto_detect_new_files);
-
-        case WORKSPACE_STATE_UNDEPLOYED:
-        case WORKSPACE_STATE_ORPHANED:
-        case WORKSPACE_STATE_RELEASED:
-            /* Not relevant for update command:
-             * - UNDEPLOYED: handled by apply command
-             * - ORPHANED: apply's — cleanup prunes it, or holds it when it was
-             *   changed (never update's to commit)
-             * - RELEASED: handled by apply command */
-            return false;
-    }
-
-    return false;
-}
+typedef struct {
+    workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */
+    size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
+} update_partition_t;
 
 /**
- * Filter workspace items relevant for update command
+ * Partition the workspace's diverged items for update
  *
- * Returns items that should be updated based on command options, workspace state,
- * and divergence.
- *
- * INCLUDED ITEMS (STATE + DIVERGENCE):
- * - DEPLOYED on the capture route (content/mode/ownership/encryption divergence;
- *   a type change only as the file ↔ symlink pair, captured as the new kind)
- * - DELETED state (removed from filesystem)
- * - UNTRACKED state (new files, if flags OR config->auto_detect_new_files)
- *
- * EXCLUDED ITEMS:
- * - UNDEPLOYED state (not modified, just not deployed yet - handled by apply)
- * - ORPHANED state (apply's: cleanup prunes or holds it)
- * - DEPLOYED off the capture route (workspace_item_route): clean, displaced,
- *   unverifiable, stale, conflict, or a kind the copy cannot commit — cmd_update
- *   counts the refused routes and says so
- *
- * CLI FILTERS APPLIED:
- * - opts->files: Only specific files (if provided)
- * - opts->exclude_patterns: Gitignore-style exclusions
- * - opts->only_new: Only untracked files (excludes modified)
- * - operation_profiles: Only items from specified profiles (CLI -p filter)
+ * The scope triplet first — the user's paths, minus the patterns they excluded,
+ * from the profiles they named — as three calls so the exclude arm keeps its
+ * verbose log; the log is the pattern's, and fires for every in-scope item the
+ * pattern hits whatever the state rule then says of it. Then the state rule under
+ * the flags, and for a deployed item the route: the partition (update_partition_t).
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
  * @param scope Operation scope (must not be NULL)
- * @param config Configuration (can be NULL, used for auto_detect_new_files)
- * @param out Output context (for verbose logging, can be NULL)
- * @param out_items Output slice (must not be NULL; entries field is heap-allocated,
- *                  caller frees with free((void *) out_items->entries))
- * @return Error or NULL on success (out_items zeroed if no matches)
+ * @param config Configuration (must not be NULL; auto_detect_new_files admits
+ *               new files for the consent prompt)
+ * @param out Output context (for the verbose "Excluded" log, can be NULL)
+ * @param partition Output, zeroed then filled; accepted.entries is heap-allocated
+ *                  and the caller frees it with free((void *) entries) (must
+ *                  not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *filter_items_for_update(
     const workspace_t *ws,
@@ -368,52 +330,82 @@ static error_t *filter_items_for_update(
     const scope_t *scope,
     const config_t *config,
     output_t *out,
-    workspace_items_t *out_items
+    update_partition_t *partition
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
     CHECK_NULL(scope);
-    CHECK_NULL(out_items);
+    CHECK_NULL(config);
+    CHECK_NULL(partition);
 
-    *out_items = (workspace_items_t){ 0 };
+    *partition = (update_partition_t){ 0 };
 
-    /* Get all diverged items from workspace */
     workspace_items_t all = workspace_get_all_diverged(ws);
-
-    if (all.count == 0) {
-        return NULL;  /* No items - not an error */
-    }
-
-    ptr_array_t matches PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t accepted PTR_ARRAY_AUTO = { 0 };
 
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
 
-        if (!is_update_candidate(item, opts, config)) {
-            continue;
-        }
-
-        /* Apply CLI file filter (using storage_path for canonical matching) */
+        /* The scope triplet, on the storage path (canonical matching) */
         if (!scope_accepts_path(scope, item->storage_path, item->item_kind)) {
             continue;
         }
-
-        /* Apply exclusion patterns (granular: preserves verbose "Excluded" log) */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
             output_info(out, OUTPUT_VERBOSE, "Excluded: %s", item->filesystem_path);
             continue;
         }
-
-        /* Apply profile filter (CLI -p filtering) */
         if (!scope_accepts_profile(scope, item->profile)) {
             continue;
         }
 
-        RETURN_IF_ERROR(ptr_array_push(&matches, item));
+        switch (item->state) {
+            case WORKSPACE_STATE_DEPLOYED: {
+                /* The route table partitions the deployed items — the same producer
+                 * status's sections and sync's guard read (workspace_item_route;
+                 * workspace.h carries each arm's why). CAPTURE is the one arm
+                 * update commits; every other arm is refused and counted under
+                 * its route, so the preview never promises an update the executor
+                 * would refuse and the census says why in the table's words.
+                 * Under --only-new the user asked about new files alone: neither
+                 * accepted nor counted. */
+                if (opts->only_new) continue;
+                workspace_route_t route = workspace_item_route(item);
+                if (route != WORKSPACE_ROUTE_CAPTURE) {
+                    partition->refused[route]++;
+                    continue;
+                }
+                break;
+            }
+
+            case WORKSPACE_STATE_DELETED:
+                /* Removed from disk since deployment: the deletion is update's
+                 * to commit, unless the user asked about new files alone */
+                if (opts->only_new) continue;
+                break;
+
+            case WORKSPACE_STATE_UNTRACKED:
+                /* A new file under a tracked directory: by flag (--include-new,
+                 * --only-new), or by config, for the consent prompt */
+                if (!opts->include_new && !opts->only_new &&
+                    !config->auto_detect_new_files) {
+                    continue;
+                }
+                break;
+
+            case WORKSPACE_STATE_UNDEPLOYED:
+            case WORKSPACE_STATE_ORPHANED:
+            case WORKSPACE_STATE_RELEASED:
+                /* Another verb's: not deployed yet (apply's), or a record the
+                 * view lacks (cleanup prunes or releases it; never update's to
+                 * commit) */
+                continue;
+        }
+
+        RETURN_IF_ERROR(ptr_array_push(&accepted, item));
     }
 
-    out_items->entries = (const workspace_item_t *const *)
-        ptr_array_steal(&matches, &out_items->count);
+    partition->accepted.entries = (const workspace_item_t *const *)
+        ptr_array_steal(&accepted, &partition->accepted.count);
 
     return NULL;
 }
@@ -1366,62 +1358,21 @@ cleanup:
  * preview's.
  *
  * @param out Output context (must not be NULL)
- * @param items Filtered candidates (may be NULL when item_count is 0: a named
- *              run whose candidates all held still previews only its filters)
+ * @param items The accepted items (may be NULL when item_count is 0: a named
+ *              run whose rows all held still has nothing to preview — its filter
+ *              context printed ahead of the census)
  * @param item_count Number of items
- * @param opts Update options (must not be NULL)
- * @param counts The candidates counted by fate (must not be NULL)
+ * @param counts The accepted items counted by fate (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_display_preview(
     output_t *out,
     const workspace_item_t **items,
     size_t item_count,
-    const cmd_update_options_t *opts,
     const update_counts_t *counts
 ) {
     CHECK_NULL(out);
-    CHECK_NULL(opts);
     CHECK_NULL(counts);
-
-    /* Show filter context if any filters are active */
-    bool has_filters = false;
-
-    if (opts->only_new) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Filter: Showing only new files (--only-new)"
-        );
-        has_filters = true;
-    } else if (opts->include_new) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Filter: Including new files from tracked directories (--include-new)"
-        );
-        has_filters = true;
-    }
-
-    if (opts->file_count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Filter: Limiting to %zu specified path%s",
-            opts->file_count, opts->file_count == 1 ? "" : "s"
-        );
-        has_filters = true;
-    }
-
-    if (opts->exclude_count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Filter: Excluding %zu pattern%s",
-            opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
-        );
-        has_filters = true;
-    }
-
-    if (has_filters) {
-        output_newline(out, OUTPUT_NORMAL);
-    }
 
     /* Display modified files section */
     if (counts->modified_files > 0) {
@@ -1688,7 +1639,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     char *profiles_str = NULL;
-    workspace_items_t update_items = { 0 };
+    update_partition_t partition = { 0 };
     ptr_array_t derive_rows = { 0 };
     size_t total_updated = 0;
 
@@ -1772,131 +1723,125 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         error_free(flush_err);
     }
 
-    /* Filter items for update (handles all flags and edge cases internally).
-     * scope_t carries the path/profile/exclude filter dimensions. */
-    err = filter_items_for_update(
-        ws, opts, scope, config, out, &update_items
-    );
+    /* The run's filter context, ahead of everything the filter says against it:
+     * the verbose "Excluded" log, the census, the nothing-exit and the preview */
+    bool has_filters = false;
+    if (opts->only_new) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Showing only new files (--only-new)"
+        );
+        has_filters = true;
+    } else if (opts->include_new) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Including new files from tracked directories (--include-new)"
+        );
+        has_filters = true;
+    }
+    if (opts->file_count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Limiting to %zu specified path%s",
+            opts->file_count, opts->file_count == 1 ? "" : "s"
+        );
+        has_filters = true;
+    }
+    if (opts->exclude_count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Filter: Excluding %zu pattern%s",
+            opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
+        );
+        has_filters = true;
+    }
+    if (has_filters) {
+        output_newline(out, OUTPUT_NORMAL);
+    }
+
+    /* Partition the diverged items: the scope, the flags, and for a deployed
+     * item the route table. */
+    err = filter_items_for_update(ws, opts, scope, config, out, &partition);
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;
     }
 
-    /* What the filter left out on purpose, said once — above the exit below, so
-     * a workspace whose only divergence is stale explains itself, and above the
-     * prompt. Same scope triplet as the filter. The skip lines name the routes
-     * the filter refused (workspace_item_route — the same table), each naming
-     * its route's way out; a multi-bit divergence counts under the route that
-     * refused it. Two families arrive split from the route by the claim that
-     * holds the offender — the same split apply prints from the fate-borne
-     * ancestor_class: the displaced family (DISPLACED_TRACKED beneath a planned
-     * squatter --force replaces, DISPLACED_DERIVED beneath a rung the named
-     * re-derivation drops) and the retyped family (KIND on a row a plan can hold,
-     * KIND_DERIVED on a rung dotta only passes through). */
-    workspace_items_t all = workspace_get_all_diverged(ws);
-    size_t unverified_skipped = 0; size_t retyped_skipped = 0;
-    size_t stale_skipped = 0; size_t conflict_skipped = 0;
-    size_t displaced_tracked = 0; size_t displaced_derived = 0;
-    size_t retyped_derived = 0;
+    /* What the filter refused, said once — above the exit below, so a workspace
+     * whose only divergence is stale explains itself, and above the prompt. One
+     * line per refusing arm, read off the partition's counts in the table's order
+     * (workspace_item_route), each naming its route's way out. Two families arrive
+     * split from the route by the claim that holds the offender — the same split
+     * apply prints from the fate-borne ancestor_class: the displaced family
+     * (DISPLACED_TRACKED beneath a planned squatter --force replaces,
+     * DISPLACED_DERIVED beneath a rung the named re-derivation drops) and the
+     * retyped family (KIND on a row a plan can hold, KIND_DERIVED on a rung dotta
+     * only passes through). */
+    const size_t *refused = partition.refused;
 
-    for (size_t i = 0; i < all.count; i++) {
-        const workspace_item_t *item = all.entries[i];
-
-        if (item->state != WORKSPACE_STATE_DEPLOYED ||
-            !scope_accepts_entry(scope, item->profile, item->storage_path, item->item_kind)) {
-            continue;
-        }
-        switch (workspace_item_route(item)) {
-            case WORKSPACE_ROUTE_DISPLACED_TRACKED:
-                displaced_tracked++;
-                break;
-
-            case WORKSPACE_ROUTE_DISPLACED_DERIVED:
-                displaced_derived++;
-                break;
-
-            case WORKSPACE_ROUTE_UNVERIFIABLE:
-                unverified_skipped++;
-                break;
-
-            case WORKSPACE_ROUTE_CONFLICT:
-                conflict_skipped++;
-                break;
-
-            case WORKSPACE_ROUTE_STALE:
-                stale_skipped++;
-                break;
-
-            case WORKSPACE_ROUTE_KIND:
-                retyped_skipped++;
-                break;
-
-            case WORKSPACE_ROUTE_KIND_DERIVED:
-                retyped_derived++;
-                break;
-
-            case WORKSPACE_ROUTE_CLEAN:
-            case WORKSPACE_ROUTE_CAPTURE:
-            case WORKSPACE_ROUTE_REASSIGNED:
-                break;
-        }
-    }
-
-    if (displaced_tracked > 0) {
+    if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: observed through a displaced directory — "
             "'dotta apply --force' replaces the squatter first",
-            displaced_tracked, displaced_tracked == 1 ? "" : "s"
+            refused[WORKSPACE_ROUTE_DISPLACED_TRACKED],
+            refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] == 1 ? "" : "s"
         );
     }
-    if (displaced_derived > 0) {
+    if (refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: observed through a displaced directory — "
             "'dotta update <dir>' re-derives the way there",
-            displaced_derived, displaced_derived == 1 ? "" : "s"
+            refused[WORKSPACE_ROUTE_DISPLACED_DERIVED],
+            refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] == 1 ? "" : "s"
         );
     }
-    if (unverified_skipped > 0) {
+    if (refused[WORKSPACE_ROUTE_UNVERIFIABLE] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu path%s skipped: cannot be read — fix permissions, or exclude with -e",
-            unverified_skipped, unverified_skipped == 1 ? "" : "s"
+            refused[WORKSPACE_ROUTE_UNVERIFIABLE],
+            refused[WORKSPACE_ROUTE_UNVERIFIABLE] == 1 ? "" : "s"
         );
     }
-    if (retyped_skipped > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: a different kind stands on disk — "
-            "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
-            retyped_skipped, retyped_skipped == 1 ? "" : "s",
-            retyped_skipped == 1 ? "it" : "them", retyped_skipped == 1 ? "it" : "them"
-        );
-    }
-    if (retyped_derived > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: a different kind stands at a directory dotta "
-            "only passes through — 'dotta update <dir>' re-derives %s",
-            retyped_derived, retyped_derived == 1 ? "" : "s",
-            retyped_derived == 1 ? "it" : "them"
-        );
-    }
-    if (stale_skipped > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu file%s skipped: changed in Git since deployment — run 'dotta apply' first",
-            stale_skipped, stale_skipped == 1 ? "" : "s"
-        );
-    }
-    if (conflict_skipped > 0) {
+    if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
             "%zu file%s skipped: changed in Git and on disk — 'dotta diff' shows "
             "Git's version against disk, 'dotta apply --force' keeps Git's, "
             "'dotta add --force' keeps disk's",
-            conflict_skipped, conflict_skipped == 1 ? "" : "s"
+            refused[WORKSPACE_ROUTE_CONFLICT],
+            refused[WORKSPACE_ROUTE_CONFLICT] == 1 ? "" : "s"
+        );
+    }
+    if (refused[WORKSPACE_ROUTE_STALE] > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu file%s skipped: changed in Git since deployment — run 'dotta apply' first",
+            refused[WORKSPACE_ROUTE_STALE],
+            refused[WORKSPACE_ROUTE_STALE] == 1 ? "" : "s"
+        );
+    }
+    if (refused[WORKSPACE_ROUTE_KIND] > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: a different kind stands on disk — "
+            "'dotta apply --force' replaces %s, 'dotta remove' untracks %s",
+            refused[WORKSPACE_ROUTE_KIND],
+            refused[WORKSPACE_ROUTE_KIND] == 1 ? "" : "s",
+            refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them",
+            refused[WORKSPACE_ROUTE_KIND] == 1 ? "it" : "them"
+        );
+    }
+    if (refused[WORKSPACE_ROUTE_KIND_DERIVED] > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "%zu path%s skipped: a different kind stands at a directory dotta "
+            "only passes through — 'dotta update <dir>' re-derives %s",
+            refused[WORKSPACE_ROUTE_KIND_DERIVED],
+            refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "" : "s",
+            refused[WORKSPACE_ROUTE_KIND_DERIVED] == 1 ? "it" : "them"
         );
     }
 
@@ -1932,7 +1877,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* Check if we have anything to update — or, on a named run, any chains to
      * re-derive: whether a chain moved is the walk's to discover, so the named
      * run proceeds on the slice alone and the summary says what came of it */
-    if (update_items.count == 0 && derive_rows.count == 0) {
+    if (partition.accepted.count == 0 && derive_rows.count == 0) {
         if (opts->only_new) {
             output_info(out, OUTPUT_NORMAL, "No new files to add");
         } else if (opts->include_new) {
@@ -1954,8 +1899,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      */
     {
         string_array_t labels STRING_ARRAY_AUTO = { 0 };
-        for (size_t i = 0; i < update_items.count; i++) {
-            const workspace_item_t *item = update_items.entries[i];
+        for (size_t i = 0; i < partition.accepted.count; i++) {
+            const workspace_item_t *item = partition.accepted.entries[i];
             if (item->item_kind != PATH_KIND_FILE) continue;
             err = privilege_collect_label(
                 &labels, item->storage_path, item->filesystem_path
@@ -1993,8 +1938,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* The plan's shape, counted once: the preview gates its sections on these
      * and the new-files prompt binds on new_files */
     update_counts_t counts = { 0 };
-    for (size_t i = 0; i < update_items.count; i++) {
-        const workspace_item_t *item = update_items.entries[i];
+    for (size_t i = 0; i < partition.accepted.count; i++) {
+        const workspace_item_t *item = partition.accepted.entries[i];
 
         if (item->state == WORKSPACE_STATE_DELETED) {
             counts.deleted++;
@@ -2018,8 +1963,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Preview: what this run will do, grouped by fate */
     err = update_display_preview(
-        out, (const workspace_item_t **) update_items.entries,
-        update_items.count, opts, &counts
+        out, (const workspace_item_t **) partition.accepted.entries,
+        partition.accepted.count, &counts
     );
     if (err) {
         goto cleanup;
@@ -2058,8 +2003,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         /* New files the scan found (not asked for by flag) are added only with
          * consent. Declining keeps the rest of the run: the re-filter compacts
-         * the candidate array in place — the preview named the new files
-         * separately, and the receipt reports what actually happens. */
+         * the accepted array in place — the preview named the new files separately,
+         * and the receipt reports what actually happens. */
         if (counts.new_files > 0 && config->confirm_new_files &&
             !opts->include_new && !opts->only_new && config->auto_detect_new_files) {
 
@@ -2071,16 +2016,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             );
             if (!output_confirm(out, confirm_msg, false)) {
                 const workspace_item_t **writable =
-                    (const workspace_item_t **) update_items.entries;
+                    (const workspace_item_t **) partition.accepted.entries;
                 size_t kept = 0;
-                for (size_t i = 0; i < update_items.count; i++) {
+                for (size_t i = 0; i < partition.accepted.count; i++) {
                     if (writable[i]->state != WORKSPACE_STATE_UNTRACKED) {
                         writable[kept++] = writable[i];
                     }
                 }
-                update_items.count = kept;
+                partition.accepted.count = kept;
 
-                if (update_items.count == 0) {
+                if (partition.accepted.count == 0) {
                     output_info(
                         out, OUTPUT_NORMAL,
                         "No modified files remaining after skipping new files"
@@ -2101,8 +2046,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (!opts->dry_run) {
         err = update_execute_for_all_profiles(
             ctx, scope_enabled(scope),
-            (const workspace_item_t **) update_items.entries,
-            update_items.count,
+            (const workspace_item_t **) partition.accepted.entries,
+            partition.accepted.count,
             (const manifest_row_t **) derive_rows.items, derive_rows.count,
             opts, &total_updated, &commits, &commit_count
         );
@@ -2194,8 +2139,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
-    free((void *) update_items.entries);  /* Free array, items are borrowed */
-    ptr_array_deinit(&derive_rows);       /* Rows are the view's */
+    free((void *) partition.accepted.entries); /* The array; the items are the workspace's */
+    ptr_array_deinit(&derive_rows);            /* Rows are the view's */
     if (ws) workspace_free(ws);
     if (profiles_str) free(profiles_str);
     if (scope) scope_free(scope);

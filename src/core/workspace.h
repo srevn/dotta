@@ -236,12 +236,16 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and six readers, each named with the arm it reads; a reader not on this list
+ * and five readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
  *   status's section partition     every arm, one bucket each
- *   update's candidate predicate   CAPTURE — the one arm update commits
- *   update's refusal census        every refusing arm, one line each
+ *   update's filter                CAPTURE accepted; every other arm refused
+ *                                  and counted under its route, one slot per
+ *                                  arm (WORKSPACE_ROUTE_COUNT), which the census
+ *                                  reads back as one line per refusing arm —
+ *                                  the one reader the compiler does not hold to
+ *                                  the table: a new arm needs its line there
  *   sync's guard                   CAPTURE blocks (update's work); CONFLICT ∪
  *                                  KIND block (the conflicts update refuses);
  *                                  UNVERIFIABLE, DISPLACED_* and KIND_DERIVED
@@ -272,6 +276,11 @@ typedef enum {
     WORKSPACE_ROUTE_CAPTURE,           /* Any other divergence — update's to commit */
     WORKSPACE_ROUTE_REASSIGNED         /* No divergence; the record names another profile */
 } workspace_route_t;
+
+/* The table's arity, for an array with one slot per arm. A macro, not an
+ * enumerator: the switches over the table are exhaustive and must not have to
+ * name a sentinel. */
+#define WORKSPACE_ROUTE_COUNT (WORKSPACE_ROUTE_REASSIGNED + 1)
 
 /**
  * Decide which verb's work a deployed item is, from the item alone

@@ -1464,6 +1464,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
+    /* The hooks' profile list, joined beside the scope it reads: the one allocation
+     * on the way to the hooks fails here, before the previews are on screen,
+     * rather than under a consent text the run then abandons. */
+    profiles_str = string_array_join(scope_active(scope), " ");
+    if (!profiles_str) {
+        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
+        goto cleanup;
+    }
+
     /* Load workspace (partitions the view's rows and runs divergence analysis)
      *
      * After workspace_load returns, workspace_files(ws) yields the in-scope active
@@ -2107,11 +2116,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * code at the run's tail. */
 
     /* Build hook invocation with all active profiles */
-    profiles_str = string_array_join(scope_active(scope), " ");
-    if (!profiles_str) {
-        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
-        goto cleanup;
-    }
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
         .profile    = profiles_str,

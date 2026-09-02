@@ -419,9 +419,10 @@ typedef struct {
  * Print pending profile reassignments
  *
  * `reassigned` holds the planned rows whose owning profile changed (collected
- * off the plan's clean and pending buckets, both kinds) — the exact set the run
- * will acknowledge: a clean one by its re-stamp, a pending one by the record
- * step behind its deployment, creation, replacement or convergence.
+ * off the plan's clean buckets, both kinds, and then off the verdicts) — the
+ * exact set the run will acknowledge: a clean one by its re-stamp, a deployable
+ * one by the record step behind its deployment, creation, replacement or
+ * convergence.
  */
 static void print_reassignments(
     const output_t *out, const reassignment_t *reassigned, size_t count
@@ -1707,14 +1708,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * once more, each paired with its item. The four buckets, both kinds, are
      * exactly the rows whose record this run's ownership events rewrite: the
      * clean ones by the adoption and acknowledgement loops below, the pending
-     * ones by the record step behind the deployment — so what the preview names
-     * is what the receipt counts, and the collection runs first: it reads the
-     * present those writes rewrite, and materializes what the preview prints so
-     * no print moment re-reads it. A row the plan skips (-e, --skip-existing)
-     * is in no bucket and is neither previewed nor counted: the run will not
-     * acknowledge it. The scope is not re-derived — the planner applied it once,
-     * and the buckets are its answer. Collected before the early exit so a
-     * reassignment-only workspace is reported and acknowledged there too.
+     * ones by the record step behind the deployment. The collection takes two
+     * moments, one per writer: the clean half here, before the loops rewrite
+     * the record the fact is read against, materialized so no print moment re-reads
+     * it; the pending half off the verdicts after preflight, whose fates already
+     * exclude the skips and whose item is this same analysis object — nothing
+     * rewrites a pending row's record before the record step, so nothing is lost
+     * by reading it late, and what the preview names is what the receipt counts.
+     * One array, sized to the four buckets (the verdicts are a subset of the
+     * pending rows), two fills, one print. A row the plan skips (-e,
+     * --skip-existing) is in no bucket and is neither previewed nor counted:
+     * the run will not acknowledge it. The scope is not re-derived — the planner
+     * applied it once, and the buckets are its answer. Collected before the early
+     * exit so a reassignment-only workspace is reported and acknowledged there
+     * too — an empty plan has no pending rows, so the clean half is the whole
+     * of it there.
      *
      * A reassignment is the workspace's reading of the record against the row —
      * the record dotta owns names one profile, the row another — and one of the
@@ -1757,17 +1765,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             if (item->divergence & DIVERGENCE_STALE) stale_count++;
 
+            /* The pending half reads the verdicts, after preflight. The stale
+             * count above stands for every planned row, a row preflight will
+             * skip included — STALE is the record against Git, no observation
+             * involved, and preflight's answer does not change it. */
+            if (!claimed[b].clean) continue;
+
             /* A clean row observed through a displaced managed directory is not
              * acknowledged this run (the adoption and acknowledgement loops take
              * the same gate, row-keyed; the field on this item is that gate's
-             * answer at its path), so the preview must not promise it. A pending
-             * row stays collected: its handover rides its deployment, and whether
-             * that happens is preflight's to say. The stale count above stands
-             * either way — STALE is the record against Git, no observation
-             * involved. */
-            if (claimed[b].clean && item->displaced != WORKSPACE_DISPLACED_NONE) {
-                continue;
-            }
+             * answer at its path), so the preview must not promise it. */
+            if (item->displaced != WORKSPACE_DISPLACED_NONE) continue;
 
             if (workspace_item_reassigned(item)) {
                 reassigned[reassigned_count++] = (reassignment_t){
@@ -2045,30 +2053,31 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* A collected reassignment whose row preflight skipped is not acknowledged
-     * this run — its handover rides a deployment that will not happen — so it
-     * leaves the preview and the dry-run count before either prints. The
-     * clean-bucket half of the same honesty was taken at collection (the displaced
-     * gate); this is the pending half, against the fates. */
-    {
-        size_t kept = 0;
+    /* The pending half of the collection, off the verdicts: a row preflight skipped
+     * is not here — its handover rides a deployment that will not happen — and
+     * a deployable row's record is rewritten only by the record step, after this
+     * is printed. The item is the verdict's, verbatim (deploy_verdict_t): NULL
+     * where the index holds nothing, and its join facts sound wherever it is
+     * not. The ancestors are outside the plan and stay uncounted, as the record
+     * step leaves them. */
+    const deploy_verdicts_t *kinds[] = {
+        &deploy_verdicts->files,
+        &deploy_verdicts->directories,
+    };
 
-        for (size_t i = 0; i < reassigned_count; i++) {
-            bool skipped = false;
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        for (size_t i = 0; i < kinds[k]->count; i++) {
+            const workspace_item_t *item = kinds[k]->entries[i].item;
 
-            for (size_t s = 0; s < deploy_verdicts->skipped.count; s++) {
-                const deploy_skip_t *skip = &deploy_verdicts->skipped.entries[s];
-
-                if (strcmp(skip->row->filesystem_path, reassigned[i].path) == 0) {
-                    skipped = true;
-                    break;
-                }
-            }
-            if (!skipped) {
-                reassigned[kept++] = reassigned[i];
+            if (item && workspace_item_reassigned(item)) {
+                reassigned[reassigned_count++] = (reassignment_t){
+                    .path = item->filesystem_path,
+                    .from = item->anchor->profile,
+                    .to = item->profile,
+                    .kind = item->item_kind,
+                };
             }
         }
-        reassigned_count = kept;
     }
 
     /* The previews: the reassignments the run acknowledges, then each engine's

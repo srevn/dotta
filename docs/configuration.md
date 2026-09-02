@@ -1,6 +1,6 @@
 # Configuration
 
-Dotta is configured through `~/.config/dotta/config.toml`. A fully annotated sample is available at [`etc/config.toml.sample`](../etc/config.toml.sample).
+Dotta is configured through `~/.config/dotta/config.toml`. A fully annotated sample is available at [`etc/config.example.toml`](../etc/config.example.toml).
 
 ## Environment Variables
 

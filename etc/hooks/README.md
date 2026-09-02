@@ -534,6 +534,6 @@ exit 0
 
 ## See Also
 
-- Main configuration: `etc/config.toml.sample`
+- Main configuration: `etc/config.example.toml`
 - Hook samples: `etc/hooks/*.sample`
 - Security guide: `docs/security.md`

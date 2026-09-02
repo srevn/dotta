@@ -1,7 +1,7 @@
 # Dotta Configuration File
 # =======================
 #
-# This is a sample configuration file for dotta, a dotfile manager.
+# This is an example configuration file for dotta, a dotfile manager.
 # Copy this file to ~/.config/dotta/config.toml and customize it for your needs.
 #
 # Configuration Priority:

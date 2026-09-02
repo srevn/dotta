@@ -357,10 +357,10 @@ install: $(TARGET)
 	@install -m 755 $(TARGET) $(BINDIR)/dotta
 	@echo "  Installed: $(BINDIR)/dotta"
 	@echo ""
-	@echo "Installing configuration samples..."
+	@echo "Installing configuration examples..."
 	@install -d $(DATADIR)
-	@install -m 644 $(ETC_DIR)/config.toml.sample $(DATADIR)/config.toml.sample
-	@echo "  Installed: $(DATADIR)/config.toml.sample"
+	@install -m 644 $(ETC_DIR)/config.example.toml $(DATADIR)/config.example.toml
+	@echo "  Installed: $(DATADIR)/config.example.toml"
 	@echo ""
 	@echo "Installing hook samples..."
 	@install -d $(DATADIR)/hooks

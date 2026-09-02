@@ -101,7 +101,7 @@ sudo make install  # optional, installs to /usr/local
 
 Default config: `~/.config/dotta/config.toml`
 
-See [`etc/config.toml.sample`](etc/config.toml.sample) for all available settings.
+See [`etc/config.example.toml`](etc/config.example.toml) for all available settings.
 
 Key environment variables:
 - `DOTTA_REPO_DIR` -- override repository location

@@ -346,7 +346,7 @@ static void print_deploy_preview(
             if (deploy_convergence(dirs->entries[i].occupant) != DEPLOY_CONVERGE_CREATE) {
                 continue;
             }
-            
+
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
@@ -2063,11 +2063,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and confirmations, and the ownership events above, which claim rows the
      * analysis found clean — and it stays a fact whatever the rest of the run
      * does. What follows can end without writing anything else: the nothing-to-do
-     * exit below, a strict-mode ownership error, a hook that refuses, a declined
-     * prompt. The dispatch transaction is committed here so that none of those
-     * exits rolls the present back — "Adopted N files" has already been said,
-     * and the record must say it too, or the next run adopts them again and the
-     * next status reads a path the load observed as never seen. Dry run included:
+     * exit below, a strict_ownership error, a hook that refuses, a declined prompt.
+     * The dispatch transaction is committed here so that none of those exits
+     * rolls the present back — "Adopted N files" has already been said, and the
+     * record must say it too, or the next run adopts them again and the next
+     * status reads a path the load observed as never seen. Dry run included:
      * its flush is as true as a real run's, and status persists the same writes.
      *
      * The record of the run's own effects — the anchors the deployment writes,
@@ -2129,10 +2129,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Divergence verdicts and occupants come from workspace_load's analysis (O(1)
      * index probes); the landing check is filesystem-level. The mode and ownership
      * every write applies are decided here too — deployable rows alone — so a
-     * strict-mode ownership failure ends the run before the prompt (the wrap
-     * below is for such real errors; a skip is not one), and the anomalies met
-     * on the way — an owner this system does not know — print as warnings closing
-     * the preview.
+     * strict_ownership failure ends the run before the prompt (the wrap below
+     * is for such real errors; a skip is not one), and the anomalies met on the
+     * way — an owner this system does not know — print as warnings closing the
+     * preview.
      */
     /* The trailing blank is this heading's own: the first preview section after
      * it is the run's first section, so output_section has no separator to emit
@@ -2142,7 +2142,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     deploy_options_t deploy_opts = {
         .force            = opts->force,
-        .strict_ownership = config->strict_mode,
+        .strict_ownership = config->strict_ownership,
     };
 
     err = deploy_preflight(ws, deploy_plan, &deploy_opts, &deploy_verdicts);

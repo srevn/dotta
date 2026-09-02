@@ -42,7 +42,8 @@ typedef struct config_auto_encrypt_rules {
 struct config {
     /* [core] */
     char *repo_dir;              /* Repository directory path */
-    bool strict_mode;            /* Strict profile resolution (error if no profiles found) */
+    bool strict_mode;            /* Refuse where the repo's state would otherwise be proceeded past */
+    bool strict_ownership;       /* An ownership claim this system cannot resolve aborts */
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
     /* [hooks] */

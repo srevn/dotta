@@ -802,11 +802,11 @@ cleanup:
  * chown, so the claim stays unresolved (-1/-1) — reachable only in a dry run, a
  * real run's privilege check having re-exec'd under sudo before preflight.
  *
- * Pure decision, taken at preflight — no filesystem mutation — so the strict-mode
- * abort is met before the prompt and never mid-run. A warning is an anomaly report
- * and travels in the preflight result for the caller to print; nothing here reads
- * a verbosity flag, because the warning's visibility is not this module's output
- * policy to set.
+ * Pure decision, taken at preflight — no filesystem mutation — so the
+ * strict_ownership abort is met before the prompt and never mid-run. A warning
+ * is an anomaly report and travels in the preflight result for the caller to
+ * print; nothing here reads a verbosity flag, because the warning's visibility
+ * is not this module's output policy to set.
  *
  * @param storage_path Path in profile (e.g., "home/.bashrc", "root/etc/hosts")
  * @param filesystem_path Resolved deployment path for home detection
@@ -880,8 +880,8 @@ static error_t *resolve_deployment_ownership(
              * ownership. */
             if (strict_ownership) {
                 return error_wrap(
-                    err, "Ownership resolution failed for '%s' (strict_mode enabled)\n"
-                    "Hint: Create the user/group on this system, or disable strict_mode",
+                    err, "Ownership resolution failed for '%s' (strict_ownership enabled)\n"
+                    "Hint: Create the user/group on this system, or disable strict_ownership",
                     storage_path
                 );
             }
@@ -929,7 +929,7 @@ static error_t *resolve_deployment_ownership(
  * @param warnings Preflight warnings (must not be NULL)
  * @param v Verdict whose uid and gid are decided, its row assigned (must not be
  *        NULL)
- * @return Error or NULL on success (a strict-mode ownership failure is one)
+ * @return Error or NULL on success (a strict_ownership failure is one)
  */
 static error_t *resolve_metadata(
     const deploy_options_t *opts,
@@ -965,7 +965,7 @@ static error_t *resolve_metadata(
  * deployable row is never reached. The reach is the verdicts', not the plan's:
  * a skipped row is never written, so an absent claimed ancestor whose only
  * descendants this run skips is never planned, never created, and can neither
- * warn nor fail strict mode (see deploy_preflight's invariant).
+ * warn nor fail strict_ownership (see deploy_preflight's invariant).
  *
  * @param verdicts Both verdict kinds decided (must not be NULL)
  * @param dir Directory path (must not be NULL)

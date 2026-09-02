@@ -17,7 +17,8 @@ DOTTA_EDITOR         # Editor for bootstrap/ignore (fallback: VISUAL → EDITOR 
 ```toml
 [core]
 repo_dir = "~/.local/share/dotta/repo"   # Repository location
-strict_mode = false                      # Fail on validation errors vs warn
+strict_mode = false                      # Fail on a missing profile / uncommitted changes at sync, vs skip / prompt
+strict_ownership = false                 # Abort apply on an unresolvable owner or group, vs warn
 auto_detect_new_files = true             # Detect new files in tracked dirs during update
 ```
 

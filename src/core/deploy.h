@@ -66,7 +66,7 @@ typedef struct content_cache content_cache_t;
  */
 typedef struct {
     bool force;               /* Overwrite modified files; replace a type conflict */
-    bool strict_ownership;    /* Fail if ownership cannot be resolved (strict_mode) */
+    bool strict_ownership;    /* Fail if ownership cannot be resolved */
 } deploy_options_t;
 
 /**
@@ -347,7 +347,7 @@ typedef struct {
 
     /* Anomalies met while deciding — the run goes on; the caller prints them.
      * Only rows the run will touch contribute: a skipped row's ownership is not
-     * resolved, so it can neither warn nor fail strict mode. */
+     * resolved, so it can neither warn nor fail strict_ownership. */
     string_array_t *warnings;
 
     /* The how — one per row the run WILL deploy */
@@ -638,7 +638,7 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   strict_ownership an owner or group this system does not know is an error,
  *   returned here — before the prompt, never mid-run; otherwise it is a warning
  *   and no change. A skipped row is not consulted, so it can neither warn nor
- *   fail strict mode.
+ *   fail strict_ownership.
  *
  * Then the ancestors: every directory row the plan does not act on — an ancestor
  * claim, which the plan never holds, or a tracked row out of scope or skipped —
@@ -646,8 +646,8 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * this run replaces) and standing above a *deployable* row. ensure_parents creates
  * exactly these on the way to a planned path (the parents beside them that no
  * row claims carry no metadata to decide), so their metadata is decided here
- * like any other row's, and a warning or a strict-mode error about one is met
- * before the prompt like any other. This pass is why the plan has no ancestors
+ * like any other row's, and a warning or a strict_ownership error about one is
+ * met before the prompt like any other. This pass is why the plan has no ancestors
  * partition of its own: whether such a row is created turns on facts only preflight
  * holds — that the path is absent, and that something deployable stands beneath it.
  *
@@ -682,7 +682,7 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * @param out Pre-flight results (must not be NULL; caller frees with
  *        deploy_preflight_result_free, after deploy_result_free — the receipt
  *        borrows the verdicts — and before workspace_free)
- * @return Error or NULL on success (a skip is not an error; a strict-mode ownership
+ * @return Error or NULL on success (a skip is not an error; a strict_ownership
  *         failure is)
  */
 error_t *deploy_preflight(

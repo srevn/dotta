@@ -207,6 +207,7 @@ config_t *config_create_default(void) {
     /* Set defaults */
     config->repo_dir = strdup(DEFAULT_REPO_DIR);
     config->strict_mode = false;
+    config->strict_ownership = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
     config->hooks_dir = strdup(DOTTA_DEFAULT_HOOKS_DIR);
@@ -384,8 +385,10 @@ error_t *config_load(const char *config_path, config_t **out) {
     /* Extract [core] section */
     toml_datum_t core = toml_get(result.toptab, "core");
     if (core.type == TOML_TABLE) {
-        static const char *known[] = { "repo_dir", "strict_mode", "auto_detect_new_files" };
-        err = validate_known_keys(core, "core", known, 3);
+        static const char *known[] = {
+            "repo_dir", "strict_mode", "strict_ownership", "auto_detect_new_files"
+        };
+        err = validate_known_keys(core, "core", known, 4);
         if (err) goto cleanup;
 
         toml_datum_t repo_dir = toml_get(core, "repo_dir");
@@ -397,6 +400,11 @@ error_t *config_load(const char *config_path, config_t **out) {
         toml_datum_t strict_mode = toml_get(core, "strict_mode");
         if (strict_mode.type == TOML_BOOLEAN) {
             config->strict_mode = strict_mode.u.boolean;
+        }
+
+        toml_datum_t strict_ownership = toml_get(core, "strict_ownership");
+        if (strict_ownership.type == TOML_BOOLEAN) {
+            config->strict_ownership = strict_ownership.u.boolean;
         }
 
         toml_datum_t auto_detect_new_files = toml_get(core, "auto_detect_new_files");

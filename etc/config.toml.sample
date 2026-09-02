@@ -25,14 +25,21 @@
 repo_dir = "~/.local/share/dotta/repo"
 
 # Strict Mode
-# Controls error handling behavior across operations:
-#   - Profile resolution: When true, fail on missing profiles; when false, skip them
-#   - Ownership resolution: When true, fail if user/group unknown; when false, warn and continue
+# Refuse where the repository's state would otherwise be proceeded past:
+#   - Profile resolution: When true, fail on a named profile that does not exist; when false, skip it
 #   - Sync with uncommitted changes: When true, block sync; when false, warn and prompt for confirmation
 #
 # When false, dotta allows more flexibility with user confirmation for risky operations.
 # Default: false
 strict_mode = false
+
+# Strict Ownership
+# What apply does with an ownership claim this system cannot resolve — a root/
+# or custom/ file captured as a user or group this machine does not have:
+#   - When true, the deploy aborts before anything is written
+#   - When false, a warning names the path and the file lands with default ownership
+# Default: false
+strict_ownership = false
 
 # Auto-detect New Files
 # Automatically detect new files in tracked directories during update/sync

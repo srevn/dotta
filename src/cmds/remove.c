@@ -661,7 +661,7 @@ static bool confirm_removal(
     /* Check config threshold */
     size_t threshold = 5; /* Default threshold */
     if (config->confirm_destructive) {
-        threshold = 1;    /* Always confirm in strict mode */
+        threshold = 1;    /* confirm_destructive: every removal asks, however small */
     }
 
     /* No confirmation needed for small operations below threshold */

@@ -779,6 +779,10 @@ error_t *fs_create_dir_with_ownership(
         );
     }
 
+    /* Whether the directory below is this call's own making: one it made and
+     * cannot attribute is unmade, one it opened stands as found. */
+    bool created = false;
+
     /* Try to open existing directory first (eliminates TOCTOU race)
      * SECURITY: This open-first pattern prevents race conditions where a directory
      * is checked, then deleted/replaced before we operate on it. By attempting
@@ -820,6 +824,7 @@ error_t *fs_create_dir_with_ownership(
             path, strerror(errno)
         );
     }
+    created = true;
 
     /* Open newly created directory for atomic operations
      * SECURITY: O_NOFOLLOW closes the TOCTOU window - if an attacker replaced
@@ -837,11 +842,19 @@ apply_metadata:
     /* Apply ownership atomically via file descriptor
      * SECURITY: Using fchown() on the file descriptor ensures atomicity. The
      * ownership is applied to the directory we have open, not to whatever might
-     * be at 'path' if a race condition occurred. */
+     * be at 'path' if a race condition occurred.
+     *
+     * A refusal here or at the mode below unmakes a directory this call made
+     * (fs_create_dir_exclusive's rule: what it could not create as claimed it
+     * did not create, and the next run meets the same absent path rather than a
+     * directory of the wrong owner that no later run converges — empty by
+     * construction, so the rmdir cannot fail on content). One it opened stands
+     * as it was found. */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fs_fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
+            if (created) (void) fs_rmdir(path);
             return ERROR(
                 ERR_FS, "Failed to set ownership on '%s': %s",
                 path, strerror(saved_errno)
@@ -856,6 +869,7 @@ apply_metadata:
     if (fs_fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
+        if (created) (void) fs_rmdir(path);
         return ERROR(
             ERR_FS, "Failed to set mode on '%s': %s",
             path, strerror(saved_errno)

@@ -1516,11 +1516,12 @@ static error_t *compute_orphan_authority(
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
  * emptiness rule, so there is nothing to measure, only whether it can be: a
- * directory dotta cannot stat or cannot read — the path, or a component above
+ * directory dotta cannot stat, read or search — the path, or a component above
  * it — is UNVERIFIED, the bit an unstattable file carries, and held until the
- * user can say what is in it. That is one fs_eaccess per present directory orphan;
- * the readdir itself stays cleanup's, because what is left in a directory depends
- * on the plan.
+ * user can say what is in it. That is one fs_eaccess per present directory orphan
+ * (read and search: the walk lstat's an entry named like OS metadata to see that
+ * it is a file); the readdir itself stays cleanup's, because what is left in a
+ * directory depends on the plan.
  *
  * This enables status to predict apply behavior (cleanup_verdict reads the same
  * item, and cleanup_skip_reason maps the same bits to the skip):
@@ -1679,7 +1680,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
                     : DIVERGENCE_UNVERIFIED;
-            } else if (occupant == FS_OCCUPANT_UNKNOWN || !fs_eaccess(fs_path, R_OK)) {
+            } else if (occupant == FS_OCCUPANT_UNKNOWN
+                || !fs_eaccess(fs_path, R_OK | X_OK)) {
+                /* Read for the readdir, search for the walk's look at an entry
+                 * named like OS metadata (fs_directory_emptiness). */
                 divergence = DIVERGENCE_UNVERIFIED;
             }
 

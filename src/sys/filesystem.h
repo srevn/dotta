@@ -312,6 +312,9 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents);
  * - If directory doesn't exist: creates with atomic ownership + mode
  * - If directory exists: updates ownership + mode atomically
  * - Use uid=-1 or gid=-1 to skip ownership change
+ * - A directory this call made and could not attribute is unmade — the exclusive
+ *   sibling's rule — so a refusal leaves the path as the call found it; one it
+ *   opened stands as found, its attributes as they were
  * - The parent must exist: this primitive never invents attributes for ancestors
  *   — the caller decides those (core/deploy materializes them from their own
  *   claims, and invents nothing for the rest)

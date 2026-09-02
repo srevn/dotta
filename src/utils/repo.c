@@ -337,7 +337,10 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
             error_free(err);
         } else if (error_code(err) == ERR_PERMISSION) {
             /* libgit2's owner check (CVE-2022-24765): the repository is another
-             * user's — after the drop, root's is. */
+             * user's — any other user's, which is why the hint says "could" —
+             * and root is the one owner an older dotta could have made of it,
+             * since the repository is per-user by design. After the drop, root's
+             * own is one too. */
             answer = error_wrap(
                 err, "Cannot open the repository at: %s\n" REPO_RECLAIM_HINT,
                 repo_path, repo_path

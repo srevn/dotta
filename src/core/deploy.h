@@ -421,9 +421,9 @@ typedef struct {
  * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
  * a blob that would not load, an ancestor this run did not converge) — and NULL
  * in every landed bucket: the bucket is the tag, as UNSET already is for the
- * stat. A deploy failure has a dozen causes where a prune failure is self-naming
- * (cleanup's failed buckets carry none), so the receipt keeps each cause for
- * the caller to render. Owned by the receipt; deploy_result_free frees it.
+ * stat. A failure has a dozen causes and the remedy differs by cause, so the
+ * receipt keeps each for the caller to render, as cleanup's does
+ * (cleanup_outcome_t). Owned by the receipt; deploy_result_free frees it.
  *
  * The verdict is borrowed from the preflight result, whose arrays are sized once
  * and never reallocated, so every address is stable for the receipt's life. Free

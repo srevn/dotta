@@ -47,9 +47,10 @@
  * are decided before parents, so a parent emptied by its children needs no second
  * look and the preview predicts the outcome the prune arrives at.
  *
- * Buckets hold borrowed workspace_item_t pointers (workspace lifetime — the items
- * are arena-allocated, their addresses stable by construction); project them
- * with workspace_items_view. Free plan, verdicts and result BEFORE workspace_free.
+ * The plan's and the verdicts' buckets hold borrowed workspace_item_t pointers
+ * (workspace lifetime — the items are arena-allocated, their addresses stable
+ * by construction); project them with workspace_items_view. The receipt's outcomes
+ * borrow the same items. Free plan, verdicts and result BEFORE workspace_free.
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
@@ -407,48 +408,108 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
 /* ── Outcomes ─────────────────────────────────────────────────────── */
 
 /**
- * Cleanup result — the run's receipt, by outcome
+ * One prunable item's outcome — the item, and the cause where the removal errored
  *
- * pruned_* guarantee a filesystem removal happened. reclaimed_* were absent —
- * at load, or by the time the run looked — so no removal happened or was needed
- * and only the record retires; callers report the two distinctly, because a
- * decision is not an effect. skipped_*, released_* and the absent verdicts are
- * confirmed here by passing them through, never re-decided: the result is the
- * one object apply's record step reads, so "what ran → which records retire" is
- * read in one place.
- *
- * Every planned item appears in exactly one bucket, so the receipt accounts for
- * the whole plan:
- *   plan->files       = pruned_files ∪ reclaimed_files ∪ released_files
- *                       ∪ skipped_files ∪ failed_files
- *   plan->directories = pruned_dirs ∪ reclaimed_dirs ∪ released_dirs ∪ skipped_dirs
- *                       ∪ failed_dirs
- *
- * Records that retire: pruned_files, reclaimed_files, released_files, pruned_dirs,
- * reclaimed_dirs, released_dirs. Records that stay: skipped_*, failed_*.
+ * The item is borrowed from the verdicts' prunable buckets (workspace lifetime
+ * — arena addresses, stable by construction). The error is the failed bucket's
+ * tail: the mechanism's own refusal, verbatim (EACCES on the parent, EROFS, EBUSY,
+ * an EIO the unlink met) — a prune's cause names its remedy the way a deploy's
+ * does, and the remedies differ, so the receipt keeps it for the caller to render.
+ * NULL in every other bucket: the bucket is the tag, as UNSET is for
+ * deploy_outcome_t's stat. Owned by the receipt; cleanup_result_free frees it.
  */
 typedef struct {
-    ptr_array_t pruned_files;      /* Unlinked */
-    ptr_array_t reclaimed_files;   /* Absent at load, or by the time the run looked; record retires */
-    ptr_array_t released_files;    /* Left on disk; record retires */
-    ptr_array_t skipped_files;     /* Skipped at preflight (cleanup_skip_reason); left alone */
-    ptr_array_t failed_files;      /* The removal errored */
-    ptr_array_t pruned_dirs;       /* Removed */
-    ptr_array_t reclaimed_dirs;    /* Absent; record retires */
-    ptr_array_t released_dirs;     /* Left alone; record retires */
-    ptr_array_t skipped_dirs;      /* Skipped at preflight, or no longer a directory / refused on removal */
-    ptr_array_t failed_dirs;       /* The removal errored */
+    const workspace_item_t *item;   /* Borrowed (workspace lifetime) */
+    error_t *error;                 /* The failed bucket's cause; NULL elsewhere (owned) */
+} cleanup_outcome_t;
+
+/**
+ * An outcome array with its count — the shape deploy_outcomes_t gives deploy's
+ */
+typedef struct {
+    cleanup_outcome_t *entries;
+    size_t count;
+} cleanup_outcomes_t;
+
+/**
+ * Cleanup result — the run's receipt: what became of each prunable item
+ *
+ * Execute acts on prunable_files and prunable_dirs alone, so the receipt partitions
+ * exactly those — the one split execute itself takes, and nothing else:
+ *
+ *   verdicts->prunable_files ∪ verdicts->prunable_dirs = pruned_files ∪
+ *       reclaimed_files ∪ pruned_dirs ∪ reclaimed_dirs ∪ skipped_dirs ∪ failed
+ *
+ * — the mirror of deploy_result_t's equation. It holds by the loops' shape: every
+ * iteration ends in exactly one bucket, and the occupant switch is total, so a
+ * new occupant is a build error and never a dropped item. The fates execute never
+ * touches — released, skipped at preflight, absent at load — are the verdicts'
+ * and are read there: they are decisions, and this object reports effects. The
+ * preview says both; the receipt's printer restates the decided ones from the
+ * verdicts and reports the run's own from here, in the preview's order (apply's
+ * print_cleanup_results reads both objects).
+ *
+ * pruned_* guarantee a filesystem removal happened. reclaimed_* were gone by
+ * the time the run looked — after the prompt, before the removal — so no removal
+ * happened or was needed and only the record retires; the caller reports the
+ * two distinctly, because a decision is not an effect, and folds the verdicts'
+ * absent_* (gone at load) into the same reclaimed line, since what the user has
+ * in hand is the same either way: a path that is already gone. skipped_dirs is
+ * execute's own refusal, re-decided by nothing — a directory retyped while the
+ * run waited, or one an entry arrived in that the removal may not clear
+ * (fs_remove_empty_dir's ERR_CONFLICT): what the run found is the next load's
+ * to judge ([type], the entry), no remedy line depends on which, and "skipped"
+ * is still the screen's word for it, so no cause rides on it. failed is both
+ * kinds in act order, each with its cause.
+ *
+ * Each array is sized to its promise at entry (calloc, count + 1, so every array
+ * is an array; the failed bucket to both kinds together — every promised item
+ * could fail) and fills in act order: files, then the directories in the verdicts'
+ * prune order. count gates every read, so an untaken slot is invisible and the
+ * receipt holds exactly what happened, by construction. Nothing here can be
+ * truncated by the run.
+ *
+ * Records that retire: pruned_* and reclaimed_* (here), absent_* (the verdicts).
+ * Records that release: released_* (the verdicts). Records that stay: skipped_dirs
+ * and failed (here), skipped_files and skipped_dirs (the verdicts).
+ *
+ * Exit contract: `failed` alone reaches the exit code. Three columns, and the
+ * two engines draw the line between them differently — deploy_skip_reason_t draws
+ * the same table from its side:
+ *
+ *   never attempted: dotta could not     deploy   exit ≠ 0  the incapacity skips
+ *                                        cleanup  exit 0    a directory's UNVERIFIED
+ *                                                           (cleanup_verdict)
+ *   attempted: the world moved           deploy   exit ≠ 0  failed — EEXIST, EISDIR,
+ *                                                           ENOTEMPTY are the
+ *                                                           row's own outcome
+ *                                        cleanup  exit 0    skipped_dirs
+ *   attempted: the mechanism errored     both     exit ≠ 0  failed
+ *
+ * The line: a plan is a promise, an orphan set is a permission. A skip stays
+ * out whichever phase took it — the skipped orphans are attempted-and-refused
+ * only, never obligations — and a permission the world withdrew while the prompt
+ * waited is not a broken one, where a promise the world moved under is. Both
+ * lines are stated here so the next change picks a column on purpose.
+ */
+typedef struct {
+    cleanup_outcomes_t pruned_files;      /* Unlinked */
+    cleanup_outcomes_t reclaimed_files;   /* Gone by the time the run looked; nothing was needed */
+    cleanup_outcomes_t pruned_dirs;       /* Removed */
+    cleanup_outcomes_t reclaimed_dirs;    /* Gone by the time the run looked */
+    cleanup_outcomes_t skipped_dirs;      /* Retyped, or gained an entry, while the run waited */
+    cleanup_outcomes_t failed;            /* Both kinds, act order, each with its cause */
 } cleanup_result_t;
 
 /**
  * Carry the verdicts out
  *
- * Pure filesystem: no repo, no state — the caller retires rows from the result.
- * Files first (every prunable file), then directories in the verdicts' prune
- * order. Individual removal failures are non-fatal and land in failed_*; the
- * only fatal error is an allocation failure, and then the partial result is
- * returned in *out alongside the error so the caller records what did happen —
- * as it does for deploy.
+ * Pure filesystem: no repo, no state — the caller settles the records from the
+ * receipt and the verdicts. Files first (every prunable file), then directories
+ * in the verdicts' prune order. Individual removal failures are non-fatal and
+ * land in `failed` with their cause; the returned error is the run's infrastructure
+ * alone — the receipt's own allocation failed, *out is unset, nothing ran and
+ * there is nothing to record — deploy_execute's contract.
  *
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
  * @param out Result (must not be NULL; caller frees with cleanup_result_free)
@@ -459,7 +520,10 @@ error_t *cleanup_execute(
     cleanup_result_t **out
 );
 
-/** Free a result. No-op on NULL. Call before workspace_free. */
+/**
+ * Free a result — the failed causes, then the arrays. No-op on NULL. Call before
+ * workspace_free.
+ */
 void cleanup_result_free(cleanup_result_t *result);
 
 #endif /* DOTTA_CLEANUP_H */

@@ -800,9 +800,12 @@ static void print_deploy_results(
 /**
  * Print cleanup results
  *
- * The run's receipt: per-item sections at verbose, summary counts at normal.
- * Every number is a bucket size — cleanup partitioned the plan and this reads
- * that partition, adding nothing of its own.
+ * The run's receipt: per-item sections at verbose, summary counts at normal,
+ * the failures at both. Every number is a bucket size, read off two objects because
+ * the run's story is held by two: the verdicts hold what cleanup decided and
+ * never acted on — released, skipped at preflight, gone at load — and the receipt
+ * what execute found and did — pruned, gone by the time it looked, refused, failed
+ * (cleanup_result_t). Each read names its source; this adds nothing of its own.
  *
  * A receipt reports effects. That is why this one re-tells a fate deploy's does
  * not: a deploy skip has no effect at all — nothing written, no record moved —
@@ -810,184 +813,196 @@ static void print_deploy_results(
  * record retires) and belongs here too. A second telling says the same thing in
  * the same order as the first, so the sections (kind-major) and the summary
  * (fate-major) both take the preview's order — pruned, released, skipped, then
- * what was already gone — and close on the failures.
+ * what was already gone — and close on the failures: one section at every
+ * verbosity, both kinds in act order, each row with its cause, the shape of
+ * deploy's "Failed deployments". Where a section has two sources — the skipped
+ * directories (held at preflight, refused at removal), the reclaimed paths (gone
+ * at load, gone by the time the run looked) — the verdicts' rows print first,
+ * so a run that had both names each once.
  */
 static void print_cleanup_results(
     const output_t *out,
+    const cleanup_preflight_result_t *verdicts,
     const cleanup_result_t *result
 ) {
-    workspace_items_t pruned_files = workspace_items_view(&result->pruned_files);
-    workspace_items_t reclaimed_files = workspace_items_view(&result->reclaimed_files);
-    workspace_items_t released_files = workspace_items_view(&result->released_files);
-    workspace_items_t skipped_files = workspace_items_view(&result->skipped_files);
-    workspace_items_t failed_files = workspace_items_view(&result->failed_files);
-    workspace_items_t pruned_dirs = workspace_items_view(&result->pruned_dirs);
-    workspace_items_t reclaimed_dirs = workspace_items_view(&result->reclaimed_dirs);
-    workspace_items_t released_dirs = workspace_items_view(&result->released_dirs);
-    workspace_items_t skipped_dirs = workspace_items_view(&result->skipped_dirs);
-    workspace_items_t failed_dirs = workspace_items_view(&result->failed_dirs);
-
     /* Verbose mode: show individual items per outcome */
-    if (pruned_files.count > 0) {
+    if (result->pruned_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
-        for (size_t i = 0; i < pruned_files.count; i++) {
+        for (size_t i = 0; i < result->pruned_files.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
-                pruned_files.entries[i]->filesystem_path
+                result->pruned_files.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (released_files.count > 0) {
+    if (verdicts->released_files.count > 0) {
+        workspace_items_t items = workspace_items_view(&verdicts->released_files);
+
         output_section(out, OUTPUT_VERBOSE, "Released files");
-        for (size_t i = 0; i < released_files.count; i++) {
+        for (size_t i = 0; i < items.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                released_files.entries[i]->filesystem_path
+                items.entries[i]->filesystem_path
             );
         }
     }
 
     /* Each skipped file's reason was named by the preview's skipped-files block,
      * which always prints; the receipt only confirms the skip. */
-    if (skipped_files.count > 0) {
+    if (verdicts->skipped_files.count > 0) {
+        workspace_items_t items = workspace_items_view(&verdicts->skipped_files);
+
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
-        for (size_t i = 0; i < skipped_files.count; i++) {
+        for (size_t i = 0; i < items.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                skipped_files.entries[i]->filesystem_path
+                items.entries[i]->filesystem_path
             );
         }
     }
 
-    if (reclaimed_files.count > 0) {
+    if (verdicts->absent_files.count + result->reclaimed_files.count > 0) {
+        workspace_items_t absent = workspace_items_view(&verdicts->absent_files);
+
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
-        for (size_t i = 0; i < reclaimed_files.count; i++) {
+        for (size_t i = 0; i < absent.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                reclaimed_files.entries[i]->filesystem_path
+                absent.entries[i]->filesystem_path
             );
         }
-    }
-
-    if (failed_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Failed to prune orphaned files");
-        for (size_t i = 0; i < failed_files.count; i++) {
+        for (size_t i = 0; i < result->reclaimed_files.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {red}[failed]{reset} %s\n",
-                failed_files.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                result->reclaimed_files.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (pruned_dirs.count > 0) {
+    if (result->pruned_dirs.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned directories");
-        for (size_t i = 0; i < pruned_dirs.count; i++) {
+        for (size_t i = 0; i < result->pruned_dirs.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}[pruned]{reset} %s\n",
-                pruned_dirs.entries[i]->filesystem_path
+                result->pruned_dirs.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (released_dirs.count > 0) {
+    if (verdicts->released_dirs.count > 0) {
+        workspace_items_t items = workspace_items_view(&verdicts->released_dirs);
+
         output_section(out, OUTPUT_VERBOSE, "Released directories");
-        for (size_t i = 0; i < released_dirs.count; i++) {
+        for (size_t i = 0; i < items.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                released_dirs.entries[i]->filesystem_path
+                items.entries[i]->filesystem_path
             );
         }
     }
 
-    if (skipped_dirs.count > 0) {
+    if (verdicts->skipped_dirs.count + result->skipped_dirs.count > 0) {
+        workspace_items_t held = workspace_items_view(&verdicts->skipped_dirs);
+
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
-        for (size_t i = 0; i < skipped_dirs.count; i++) {
+        for (size_t i = 0; i < held.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                skipped_dirs.entries[i]->filesystem_path
+                held.entries[i]->filesystem_path
+            );
+        }
+        for (size_t i = 0; i < result->skipped_dirs.count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
+                result->skipped_dirs.entries[i].item->filesystem_path
             );
         }
     }
 
-    if (reclaimed_dirs.count > 0) {
+    if (verdicts->absent_dirs.count + result->reclaimed_dirs.count > 0) {
+        workspace_items_t absent = workspace_items_view(&verdicts->absent_dirs);
+
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
-        for (size_t i = 0; i < reclaimed_dirs.count; i++) {
+        for (size_t i = 0; i < absent.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                reclaimed_dirs.entries[i]->filesystem_path
+                absent.entries[i]->filesystem_path
             );
         }
-    }
-
-    if (failed_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Failed to prune orphaned directories");
-        for (size_t i = 0; i < failed_dirs.count; i++) {
+        for (size_t i = 0; i < result->reclaimed_dirs.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {red}[failed]{reset} %s\n",
-                failed_dirs.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                result->reclaimed_dirs.entries[i].item->filesystem_path
             );
         }
     }
 
     /* Non-verbose: summary counts only. */
     if (!output_is_verbose(out)) {
-        if (pruned_files.count > 0) {
+        if (result->pruned_files.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned file%s\n",
-                pruned_files.count, pruned_files.count == 1 ? "" : "s"
+                result->pruned_files.count, result->pruned_files.count == 1 ? "" : "s"
             );
         }
 
-        if (pruned_dirs.count > 0) {
+        if (result->pruned_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
-                pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
+                result->pruned_dirs.count, result->pruned_dirs.count == 1 ? "y" : "ies"
             );
         }
 
-        if (released_files.count > 0) {
+        if (verdicts->released_files.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} file%s from management\n",
-                released_files.count, released_files.count == 1 ? "" : "s"
+                verdicts->released_files.count,
+                verdicts->released_files.count == 1 ? "" : "s"
             );
         }
 
-        if (released_dirs.count > 0) {
+        if (verdicts->released_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "Released {cyan}%zu{reset} director%s from management\n",
-                released_dirs.count, released_dirs.count == 1 ? "y" : "ies"
+                verdicts->released_dirs.count,
+                verdicts->released_dirs.count == 1 ? "y" : "ies"
             );
         }
 
         /* No reason here: the preview's skipped-files block named these files,
          * their reasons and the --force override, and it always prints — including
          * on the run that reports this line. */
-        if (skipped_files.count > 0) {
+        if (verdicts->skipped_files.count > 0) {
             output_warning(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s",
-                skipped_files.count, skipped_files.count == 1 ? "" : "s"
+                verdicts->skipped_files.count,
+                verdicts->skipped_files.count == 1 ? "" : "s"
             );
         }
 
         /* Nor here: a directory is skipped because something the run holds back
          * is still in it, because the workspace could not verify it, or because
          * the removal refused — the verbose listing names which. */
-        if (skipped_dirs.count > 0) {
+        size_t skipped_dirs = verdicts->skipped_dirs.count + result->skipped_dirs.count;
+
+        if (skipped_dirs > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned director%s",
-                skipped_dirs.count, skipped_dirs.count == 1 ? "y" : "ies"
+                skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
             );
             output_info(
                 out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped."
             );
         }
 
-        /* Orphans already gone from the filesystem when the run loaded. Reported
-         * separately from "Pruned" — no removal happened or was needed — and
-         * named for the paths, not for the record rows that retire behind them:
-         * what the user has here is a path that is already gone. */
-        size_t reclaimed = reclaimed_files.count + reclaimed_dirs.count;
+        /* Orphans already gone from the filesystem when the run loaded, and the
+         * ones gone by the time the run looked. Reported separately from "Pruned"
+         * — no removal happened or was needed — and named for the paths, not
+         * for the record rows that retire behind them: what the user has here
+         * is a path that is already gone. */
+        size_t reclaimed = verdicts->absent_files.count + verdicts->absent_dirs.count +
+            result->reclaimed_files.count + result->reclaimed_dirs.count;
 
         if (reclaimed > 0) {
             output_styled(
@@ -996,13 +1011,27 @@ static void print_cleanup_results(
                 reclaimed, reclaimed == 1 ? "" : "s"
             );
         }
+    }
 
-        size_t failed = failed_files.count + failed_dirs.count;
+    /* The items the run could not remove — both kinds, act order, each with its
+     * cause. At every verbosity, and after what went (the header carries the
+     * rationale); capped the way deploy's failed section is. The cause is the
+     * chain's root, where the refusal speaks verbatim — EACCES on the parent,
+     * EROFS, EBUSY; the wraps above it restate the path the line already names. */
+    if (result->failed.count > 0) {
+        output_section(out, OUTPUT_NORMAL, "Failed prunes");
+        for (size_t i = 0; i < result->failed.count && i < LIST_LIMIT; i++) {
+            const cleanup_outcome_t *o = &result->failed.entries[i];
 
-        if (failed > 0) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to prune %zu item%s",
-                failed, failed == 1 ? "" : "s"
+            output_styled(
+                out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
+                o->item->filesystem_path,
+                error_message(error_root(o->error))
+            );
+        }
+        if (result->failed.count > LIST_LIMIT) {
+            output_print(
+                out, OUTPUT_NORMAL, "  ... and %zu more\n", result->failed.count - LIST_LIMIT
             );
         }
     }
@@ -2289,10 +2318,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
 
-        /* Prune the orphans the verdicts cleared and retire their records.
+        /* Prune the orphans the verdicts cleared, then settle the records: what
+         * the run found gone (the receipt), what was gone before it began and
+         * what it let go (the verdicts).
          *
          * cleanup_execute changes the filesystem only; apply, as the transaction
-         * owner, retires the records behind what went and what was let go. The
+         * owner, settles the records behind what went and what was let go. The
          * flow for an orphan: the path leaves the view (profile disabled, branch
          * moved, target changed) → the workspace reads its record as an orphan
          * and asks Git why → the verdict → this block → record retired, completing
@@ -2301,53 +2332,46 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *
          * Non-fatal: the deployment's landed writes must be recorded and saved
          * regardless, or the database would show deployed files as undeployed
-         * and the user would see [undeployed] on working files. Partial success
-         * is recorded — the partial result names what did happen — and the next
-         * apply re-observes the rest. */
-        error_t *cleanup_err = cleanup_execute(cleanup_verdicts, &cleanup_result);
-        if (cleanup_err) {
+         * and the user would see [undeployed] on working files. The engine's
+         * one error is its receipt's allocation — nothing ran, nothing to record
+         * — and the next apply re-reads the prunable orphans. */
+        error_t *prune_err = cleanup_execute(cleanup_verdicts, &cleanup_result);
+        if (prune_err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Orphan cleanup failed: %s",
-                error_message(cleanup_err)
+                error_message(prune_err)
             );
-            error_free(cleanup_err);
+            error_free(prune_err);
         }
 
+        /* Which outcomes settle is cleanup's rule, read off its receipt and its
+         * verdicts (cleanup.h); the act is apply's. Kind decides nothing here —
+         * reason decides the verb: a gone copy (pruned, reclaimed, absent) plainly
+         * retires, there is no fact to keep; a let-go copy (released) still stands
+         * on disk, so its record's content-proof is kept through state_release
+         * — except where the copy provably is not, or may not be, dotta's: a
+         * TYPE-displaced item's path holds another kind of node, and a path beneath
+         * a displaced managed directory was only ever observed through the
+         * squatter, so what stands there is the link target's, whatever the bytes
+         * said. Either way the released fact would be false at birth, and the
+         * item takes the plain retire (a released directory needs no carve-out
+         * — the release verb's blob guard makes it a plain retire on its own).
+         * Non-fatal per row: the filesystem effect, if any, already happened,
+         * and a record that fails to settle is reported and read as an orphan
+         * again by the next apply. */
         if (cleanup_result) {
-            print_cleanup_results(out, cleanup_result);
+            print_cleanup_results(out, cleanup_verdicts, cleanup_result);
 
-            /* The record behind a gone or let-go path retires; a skipped or failed
-             * one stays. Which outcomes settle is cleanup's rule, read off its
-             * result (cleanup.h); the act is apply's. Kind decides nothing here
-             * — reason decides the verb: a gone copy (pruned, reclaimed) plainly
-             * retires, there is no fact to keep; a let-go copy (released) still
-             * stands on disk, so its record's content-proof is kept through
-             * state_release — except where the copy provably is not, or may not
-             * be, dotta's: a TYPE-displaced item's path holds another kind of
-             * node, and a path beneath a displaced managed directory was only
-             * ever observed through the squatter, so what stands there is the
-             * link target's, whatever the bytes said. Either way the released
-             * fact would be false at birth, and the item takes the plain retire
-             * (a released directory needs no carve-out — the release verb's blob
-             * guard makes it a plain retire on its own). Non-fatal per row: the
-             * filesystem effect, if any, already happened, and a record that
-             * fails to settle is reported and read as an orphan again by the
-             * next apply. */
-            const ptr_array_t *gone[] = {
+            /* What the run found gone: pruned, or gone by the time it looked */
+            const cleanup_outcomes_t *gone[] = {
                 &cleanup_result->pruned_files,
                 &cleanup_result->reclaimed_files,
                 &cleanup_result->pruned_dirs,
                 &cleanup_result->reclaimed_dirs,
             };
-            const ptr_array_t *let_go[] = {
-                &cleanup_result->released_files,
-                &cleanup_result->released_dirs,
-            };
             for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
-                workspace_items_t items = workspace_items_view(gone[b]);
-
-                for (size_t i = 0; i < items.count; i++) {
-                    const workspace_item_t *item = items.entries[i];
+                for (size_t i = 0; i < gone[b]->count; i++) {
+                    const workspace_item_t *item = gone[b]->entries[i].item;
 
                     error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
                     if (retire_err) {
@@ -2359,24 +2383,50 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     }
                 }
             }
+        }
 
-            for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
-                workspace_items_t items = workspace_items_view(let_go[b]);
+        /* The verdicts' own, settled whether or not the prune engine could start:
+         * neither needed an effect. The receipt's printer told them above when
+         * it did; on the one run whose warning said nothing ran, they settle
+         * unreported. First what was gone before the run began. */
+        const workspace_items_t absent[] = {
+            workspace_items_view(&cleanup_verdicts->absent_files),
+            workspace_items_view(&cleanup_verdicts->absent_dirs),
+        };
+        for (size_t b = 0; b < sizeof(absent) / sizeof(absent[0]); b++) {
+            for (size_t i = 0; i < absent[b].count; i++) {
+                const workspace_item_t *item = absent[b].entries[i];
 
-                for (size_t i = 0; i < items.count; i++) {
-                    const workspace_item_t *item = items.entries[i];
+                error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
+                if (retire_err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
+                        item->filesystem_path, error_message(retire_err)
+                    );
+                    error_free(retire_err);
+                }
+            }
+        }
 
-                    error_t *settle_err = ((item->divergence & DIVERGENCE_TYPE) ||
-                        item->displaced != WORKSPACE_DISPLACED_NONE)
-                        ? state_retire_anchor(state, item->filesystem_path)
-                        : state_release(state, item->filesystem_path);
-                    if (settle_err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to settle state entry for %s: %s",
-                            item->filesystem_path, error_message(settle_err)
-                        );
-                        error_free(settle_err);
-                    }
+        /* Then what the run let go. */
+        const workspace_items_t let_go[] = {
+            workspace_items_view(&cleanup_verdicts->released_files),
+            workspace_items_view(&cleanup_verdicts->released_dirs),
+        };
+        for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
+            for (size_t i = 0; i < let_go[b].count; i++) {
+                const workspace_item_t *item = let_go[b].entries[i];
+
+                error_t *settle_err = ((item->divergence & DIVERGENCE_TYPE) ||
+                    item->displaced != WORKSPACE_DISPLACED_NONE)
+                    ? state_retire_anchor(state, item->filesystem_path)
+                    : state_release(state, item->filesystem_path);
+                if (settle_err) {
+                    output_warning(
+                        out, OUTPUT_NORMAL, "Failed to settle state entry for %s: %s",
+                        item->filesystem_path, error_message(settle_err)
+                    );
+                    error_free(settle_err);
                 }
             }
         }
@@ -2619,7 +2669,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t failed_prunes = 0;
 
     if (cleanup_result) {
-        failed_prunes = cleanup_result->failed_files.count + cleanup_result->failed_dirs.count;
+        failed_prunes = cleanup_result->failed.count;
     }
 
     if (undelivered > 0 && failed_prunes > 0) {

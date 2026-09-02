@@ -540,11 +540,10 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
 /**
  * Carry the verdicts out
  *
- * Acts on prunable_files and prunable_dirs alone; skipped, released and absent
- * are decided at preflight and confirmed here by passing them through, so the
- * receipt accounts for the whole plan and apply's record step reads one object
- * (cleanup.h). Data-loss prevention happened at preflight, in cleanup_skip_reason
- * and the released test; nothing is re-checked here and nothing pretends to be.
+ * Acts on prunable_files and prunable_dirs alone — the fates it does not touch
+ * stay the verdicts', where they were decided (cleanup.h). Data-loss prevention
+ * happened at preflight, in cleanup_skip_reason and the released test; nothing
+ * is re-checked here and nothing pretends to be.
  *
  * Files first, then the directories those files emptied, in the verdicts' prune
  * order (deepest first, the plan's order): every child is decided before its
@@ -572,13 +571,48 @@ error_t *cleanup_execute(
     CHECK_NULL(verdicts);
     CHECK_NULL(out);
 
-    /* calloc zeroes the ten buckets. Handed to the caller at once so a fatal
-     * error mid-run still leaves the partial receipt in its hands. */
     cleanup_result_t *result = calloc(1, sizeof(*result));
     if (!result) {
         return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");
     }
-    *out = result;
+
+    /* The receipt is sized to the promise up front — one slot per prunable item,
+     * zeroed, filled in act order as each removal is attempted (a zero count
+     * allocates one slot rather than nothing, so every array is an array), the
+     * failed bucket to both kinds together — every promised item could fail.
+     * count gates what a consumer reads, so an untaken slot is invisible and
+     * the receipt holds exactly what happened. */
+    result->pruned_files.entries = calloc(
+        verdicts->prunable_files.count + 1,
+        sizeof(*result->pruned_files.entries)
+    );
+    result->reclaimed_files.entries = calloc(
+        verdicts->prunable_files.count + 1,
+        sizeof(*result->reclaimed_files.entries)
+    );
+    result->pruned_dirs.entries = calloc(
+        verdicts->prunable_dirs.count + 1,
+        sizeof(*result->pruned_dirs.entries)
+    );
+    result->reclaimed_dirs.entries = calloc(
+        verdicts->prunable_dirs.count + 1,
+        sizeof(*result->reclaimed_dirs.entries)
+    );
+    result->skipped_dirs.entries = calloc(
+        verdicts->prunable_dirs.count + 1,
+        sizeof(*result->skipped_dirs.entries)
+    );
+    result->failed.entries = calloc(
+        verdicts->prunable_files.count + verdicts->prunable_dirs.count + 1,
+        sizeof(*result->failed.entries)
+    );
+
+    if (!result->pruned_files.entries || !result->reclaimed_files.entries ||
+        !result->pruned_dirs.entries || !result->reclaimed_dirs.entries ||
+        !result->skipped_dirs.entries || !result->failed.entries) {
+        cleanup_result_free(result);
+        return ERROR(ERR_MEMORY, "Failed to allocate cleanup receipt");
+    }
 
     /* Step 1: Prune the orphaned files the verdicts cleared */
     workspace_items_t files = workspace_items_view(&verdicts->prunable_files);
@@ -598,18 +632,21 @@ error_t *cleanup_execute(
          * nothing left that knows about it); a path that cannot be stat'd is
          * not gone either — the unlink is attempted and reports its errno. */
         if (fs_lstat_occupant(path, NULL) == FS_OCCUPANT_NONE) {
-            RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_files, item));
+            result->reclaimed_files.entries[result->reclaimed_files.count++].item = item;
             continue;
         }
 
         error_t *remove_err = fs_remove_file(path);
         if (remove_err) {
-            /* Non-fatal: record the failure and carry on. */
-            error_free(remove_err);
-            RETURN_IF_ERROR(ptr_array_push(&result->failed_files, item));
-        } else {
-            RETURN_IF_ERROR(ptr_array_push(&result->pruned_files, item));
+            /* The item's own outcome; the cause already names its subject */
+            cleanup_outcome_t *o = &result->failed.entries[result->failed.count++];
+
+            o->item = item;
+            o->error = remove_err;
+            continue;
         }
+
+        result->pruned_files.entries[result->pruned_files.count++].item = item;
     }
 
     /* Step 2: Prune the orphaned directories those files emptied */
@@ -623,7 +660,7 @@ error_t *cleanup_execute(
             case FS_OCCUPANT_NONE:
                 /* No filesystem effect happened or was needed — the record retires,
                  * nothing is removed. */
-                RETURN_IF_ERROR(ptr_array_push(&result->reclaimed_dirs, item));
+                result->reclaimed_dirs.entries[result->reclaimed_dirs.count++].item = item;
                 continue;
 
             case FS_OCCUPANT_DIRECTORY:
@@ -636,40 +673,33 @@ error_t *cleanup_execute(
                 /* Replaced, or made unreachable, while the run waited: not ours
                  * to remove. The next load reads it as released [type], or as
                  * unverified. */
-                RETURN_IF_ERROR(ptr_array_push(&result->skipped_dirs, item));
+                result->skipped_dirs.entries[result->skipped_dirs.count++].item = item;
                 continue;
         }
 
         error_t *remove_err = fs_remove_empty_dir(path);
         if (!remove_err) {
-            RETURN_IF_ERROR(ptr_array_push(&result->pruned_dirs, item));
+            result->pruned_dirs.entries[result->pruned_dirs.count++].item = item;
             continue;
         }
 
-        /* Non-fatal either way: record which it was and carry on. */
-        bool gained_content = (error_code(remove_err) == ERR_CONFLICT);
-        error_free(remove_err);
-
-        ptr_array_t *outcome = gained_content ? &result->skipped_dirs : &result->failed_dirs;
-        RETURN_IF_ERROR(ptr_array_push(outcome, item));
-    }
-
-    /* The verdicts this run does not act on, confirmed. */
-    const struct { const ptr_array_t *from; ptr_array_t *to; } confirmed[] = {
-        { &verdicts->absent_files,   &result->reclaimed_files },
-        { &verdicts->released_files, &result->released_files  },
-        { &verdicts->skipped_files,  &result->skipped_files   },
-        { &verdicts->absent_dirs,    &result->reclaimed_dirs  },
-        { &verdicts->released_dirs,  &result->released_dirs   },
-        { &verdicts->skipped_dirs,   &result->skipped_dirs    },
-    };
-
-    for (size_t b = 0; b < sizeof(confirmed) / sizeof(confirmed[0]); b++) {
-        for (size_t i = 0; i < confirmed[b].from->count; i++) {
-            RETURN_IF_ERROR(ptr_array_push(confirmed[b].to, confirmed[b].from->items[i]));
+        /* The refusal is the "not empty" verdict by another route, and the bucket
+         * is the tag: the entry that stopped it is the next load's to read, so
+         * the cause is not kept. Anything else is the item's own failure, kept
+         * with its cause as above. */
+        if (error_code(remove_err) == ERR_CONFLICT) {
+            error_free(remove_err);
+            result->skipped_dirs.entries[result->skipped_dirs.count++].item = item;
+            continue;
         }
+
+        cleanup_outcome_t *o = &result->failed.entries[result->failed.count++];
+
+        o->item = item;
+        o->error = remove_err;
     }
 
+    *out = result;
     return NULL;
 }
 
@@ -678,16 +708,15 @@ void cleanup_result_free(cleanup_result_t *result) {
         return;
     }
 
-    ptr_array_deinit(&result->pruned_files);
-    ptr_array_deinit(&result->reclaimed_files);
-    ptr_array_deinit(&result->released_files);
-    ptr_array_deinit(&result->skipped_files);
-    ptr_array_deinit(&result->failed_files);
-    ptr_array_deinit(&result->pruned_dirs);
-    ptr_array_deinit(&result->reclaimed_dirs);
-    ptr_array_deinit(&result->released_dirs);
-    ptr_array_deinit(&result->skipped_dirs);
-    ptr_array_deinit(&result->failed_dirs);
+    for (size_t i = 0; i < result->failed.count; i++) {
+        error_free(result->failed.entries[i].error);
+    }
 
+    free(result->pruned_files.entries);
+    free(result->reclaimed_files.entries);
+    free(result->pruned_dirs.entries);
+    free(result->reclaimed_dirs.entries);
+    free(result->skipped_dirs.entries);
+    free(result->failed.entries);
     free(result);
 }

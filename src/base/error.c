@@ -118,9 +118,22 @@ error_t *error_from_git(int git_error_code) {
     );
 }
 
+error_code_t error_code_from_errno(int errno_val) {
+    switch (errno_val) {
+        case EACCES:
+        case EPERM:
+            return ERR_PERMISSION;
+        case ENOENT:
+        case ENOTDIR:
+            return ERR_NOT_FOUND;
+        default:
+            return ERR_FS;
+    }
+}
+
 error_t *error_from_errno(int errno_val) {
     return error_create(
-        ERR_FS, "System error: %s",
+        error_code_from_errno(errno_val), "System error: %s",
         strerror(errno_val)
     );
 }

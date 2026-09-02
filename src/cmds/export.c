@@ -380,7 +380,7 @@ static error_t *validate_destinations(
         export_entry_t *e = &list->items[i];
 
         struct stat st;
-        if (lstat(e->dest_path, &st) != 0) {
+        if (fs_lstat(e->dest_path, &st) != 0) {
             if (errno == ENOENT) continue;  /* Fresh path */
             if (errno == ENOTDIR) {
                 return ERROR(
@@ -633,7 +633,8 @@ static error_t *materialize_entries(
                 if (err) return err;
 
                 err = fs_create_symlink(
-                    (const char *) e->content.data, e->dest_path
+                    (const char *) e->content.data, e->dest_path,
+                    (uid_t) -1, (gid_t) -1      /* no claim: the export's own */
                 );
                 if (err) {
                     return error_wrap(
@@ -1097,7 +1098,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
     if (tree_export) {
         struct stat st;
-        if (lstat(root_path, &st) == 0) {
+        if (fs_lstat(root_path, &st) == 0) {
             if (S_ISDIR(st.st_mode)) {
                 root_existed = true;
             } else if (S_ISLNK(st.st_mode)) {

@@ -212,9 +212,12 @@ static error_t *collect_tree(
     /* A directory already walked was walked whole: nothing new beneath it. */
     if (hashmap_has(walk->seen, dir_fs)) return NULL;
 
-    DIR *dir = opendir(dir_fs);
+    DIR *dir = fs_opendir(dir_fs);
     if (!dir) {
-        return ERROR(ERR_FS, "Failed to open directory: %s", dir_fs);
+        return ERROR(
+            ERR_FS, "Failed to open directory '%s': %s",
+            dir_fs, strerror(errno)
+        );
     }
 
     error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
@@ -245,7 +248,7 @@ static error_t *collect_tree(
 
         /* One lstat decides the kind: a symlink is never a directory here. */
         struct stat st;
-        if (lstat(child_fs, &st) != 0) {
+        if (fs_lstat(child_fs, &st) != 0) {
             int saved_errno = errno;
             closedir(dir);
             return ERROR(
@@ -498,7 +501,7 @@ static error_t *add_file_to_worktree(
             );
         }
 
-        err = fs_create_symlink(target, dest_path);
+        err = fs_create_symlink(target, dest_path, (uid_t) -1, (gid_t) -1);
         free(target);
         if (err) {
             free(dest_path);
@@ -510,7 +513,7 @@ static error_t *add_file_to_worktree(
          * look here is a mid-add race — refused, the way the regular arm's store
          * fails on its equivalent. */
         struct stat link_stat;
-        if (lstat(filesystem_path, &link_stat) != 0) {
+        if (fs_lstat(filesystem_path, &link_stat) != 0) {
             free(dest_path);
             return ERROR(
                 ERR_FS, "Failed to stat symlink '%s': %s",
@@ -1626,7 +1629,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * with lstat, so anything else standing here changed since — skip; a
          * follow-stat would launder the target's attributes into the claim. */
         struct stat dir_stat;
-        if (lstat(filesystem_path, &dir_stat) != 0) {
+        if (fs_lstat(filesystem_path, &dir_stat) != 0) {
             output_warning(
                 out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
                 filesystem_path, strerror(errno)

@@ -205,8 +205,9 @@ typedef enum {
  *   an unnamed divergence bit      UNVERIFIED — blocks until this table
  *                                  names it (defensive default)
  *
- * Non-encrypted files are verified by streaming OID hash (git_odb_hashfile) at
- * any size, so they should never reach UNVERIFIED from the compare.
+ * A non-encrypted file is verified by hashing the disk copy, read through
+ * sys/filesystem and bounded by fs_read_fd's cap (256 MB): only a file above
+ * the cap, or one the look itself cannot make, reaches UNVERIFIED from the compare.
  *
  * Called twice per skipped file — by the verdict phase to bucket it and by the
  * preview to name its reason — which is one producer called twice, not two

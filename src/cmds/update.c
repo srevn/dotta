@@ -108,7 +108,7 @@ static error_t *copy_file_to_worktree(
      * the same observation. A regular file's authoritative stat is taken inside
      * content_store_file_to_worktree, beside the bytes it reads. */
     struct stat src_stat;
-    if (lstat(filesystem_path, &src_stat) != 0) {
+    if (fs_lstat(filesystem_path, &src_stat) != 0) {
         err = ERROR(
             ERR_FS, "Failed to stat '%s': %s",
             filesystem_path, strerror(errno)
@@ -124,7 +124,7 @@ static error_t *copy_file_to_worktree(
             goto cleanup;
         }
 
-        err = fs_create_symlink(target, dest_path);
+        err = fs_create_symlink(target, dest_path, (uid_t) -1, (gid_t) -1);
         if (err) {
             err = error_wrap(err, "Failed to create symlink");
             goto cleanup;
@@ -697,7 +697,7 @@ static error_t *update_profile(
                  * attributes into metadata. Skip; the next load classifies what
                  * now stands there. */
                 struct stat dir_stat;
-                if (lstat(item->filesystem_path, &dir_stat) != 0) {
+                if (fs_lstat(item->filesystem_path, &dir_stat) != 0) {
                     output_warning(
                         out, OUTPUT_VERBOSE,
                         "Failed to stat directory '%s': %s",

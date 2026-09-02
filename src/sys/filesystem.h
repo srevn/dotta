@@ -9,15 +9,89 @@
  * - Return errors for all failure cases
  * - Clean up resources on error paths
  * - No silent failures
+ *
+ * The funnel: every question core/, infra/ and cmds/ ask the kernel about a managed
+ * path — what stands there, may it be opened, read, entered, written beneath —
+ * is asked through this module, never through the raw call. What the run may do
+ * to a path is answered in one place, and every reader inherits whatever that
+ * answer becomes. Dotta's own artifacts are the exception and keep their raw
+ * calls: the session cache (crypto/session), the temp scripts (cmds/ignore, the
+ * bootstrap trio), libgit2's and SQLite's files. Those paths are the running
+ * user's by construction, and a refusal on one is a broken installation to report,
+ * not a question about reach.
  */
 
 #ifndef DOTTA_FILESYSTEM_H
 #define DOTTA_FILESYSTEM_H
 
+#include <dirent.h>
 #include <stdbool.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <types.h>
+#include <unistd.h>
+
+/**
+ * The kernel's calls on managed paths
+ *
+ * The syscalls the funnel is made of — one wrapper per kind, syscall-shaped on
+ * purpose: the return and errno are the kernel's, untouched, so a caller's
+ * classification of a failure (ENOENT read as absence, EACCES as a refusal) stays
+ * its own. The primitives below are built on these and never on the raw call,
+ * so a reader that wants an error_t and a reader that wants the errno make the
+ * same call at the same site.
+ */
+
+/**
+ * lstat(2) — the node at the path, a link itself and never its target
+ *
+ * @param path Path (must not be NULL)
+ * @param st Receives the stat (must not be NULL)
+ * @return 0, or -1 with errno
+ */
+int fs_lstat(const char *path, struct stat *st);
+
+/**
+ * stat(2) — through a link to what it names
+ *
+ * @param path Path (must not be NULL)
+ * @param st Receives the stat (must not be NULL)
+ * @return 0, or -1 with errno
+ */
+int fs_stat(const char *path, struct stat *st);
+
+/**
+ * open(2)
+ *
+ * @param path Path (must not be NULL)
+ * @param flags open(2) flags
+ * @param mode Read iff flags carry O_CREAT; 0 otherwise
+ * @return The descriptor, or -1 with errno
+ */
+int fs_open(const char *path, int flags, mode_t mode);
+
+/**
+ * opendir(3)
+ *
+ * @param path Directory path (must not be NULL)
+ * @return The stream, or NULL with errno
+ */
+DIR *fs_opendir(const char *path);
+
+/**
+ * May the effective user do `amode` at the path?
+ *
+ * faccessat(2) with AT_EACCESS. access(2) answers for the real user, which is
+ * the wrong one the moment the two differ, and only the effective one lands a
+ * write. Knows what a mode test does not: ownership, groups, ACLs, root. A
+ * directory's W_OK | X_OK is "may a new entry be made in it" — the question every
+ * write beneath a path asks of its nearest present ancestor (core/deploy).
+ *
+ * @param path Path (must not be NULL)
+ * @param amode R_OK, W_OK, X_OK, or'd
+ * @return true iff permitted
+ */
+bool fs_eaccess(const char *path, int amode);
 
 /**
  * File operations
@@ -461,7 +535,9 @@ error_t *fs_make_absolute(const char *path, char **out);
 /**
  * Canonicalize path (resolve symlinks, . and ..)
  *
- * Path must exist.
+ * Path must exist: a path that does not (ENOENT, or ENOTDIR — a component above
+ * it is not a directory) is ERR_NOT_FOUND; any other failure carries its errno's
+ * code (error_code_from_errno).
  *
  * @param path Path to resolve (must not be NULL)
  * @param out Canonical path (must not be NULL, caller must free)
@@ -570,11 +646,24 @@ error_t *fs_expand_tilde(const char *path, char **out);
 /**
  * Create symbolic link
  *
+ * With its ownership: a link carries no mode (symlink(2) takes none, and most
+ * filesystems ignore one) but it has an owner, and that matters for auditing
+ * and consistency. The link is the one node without a descriptor to fchown, so
+ * the path-based call lives here, inside the primitive — lchown, which changes
+ * the link itself and never its target. -1 for either half leaves it as created.
+ *
  * @param target Link target (must not be NULL)
  * @param linkpath Link path (must not be NULL)
+ * @param uid Owner to set on the link, or (uid_t) -1 to leave it
+ * @param gid Group to set on the link, or (gid_t) -1 to leave it
  * @return Error or NULL on success
  */
-error_t *fs_create_symlink(const char *target, const char *linkpath);
+error_t *fs_create_symlink(
+    const char *target,
+    const char *linkpath,
+    uid_t uid,
+    gid_t gid
+);
 
 /**
  * Read symbolic link target
@@ -618,8 +707,12 @@ error_t *fs_set_permissions(const char *path, mode_t mode);
 /**
  * Check if file is executable
  *
+ * The running user's own question, not a managed path's: a hook is executable
+ * iff the user who will run it may execute it, so this asks for the effective
+ * user (faccessat, AT_EACCESS) and nothing more.
+ *
  * @param path File path (must not be NULL)
- * @return true if file has execute permission for owner
+ * @return true if the effective user may execute the file
  */
 bool fs_is_executable(const char *path);
 

@@ -53,12 +53,10 @@ error_t *compare_buffer_to_disk(
     if (in_stat) {
         /* Caller provided stat - use it (zero syscalls) */
         stat_ptr = in_stat;
-        if (out_stat) {
-            memcpy(out_stat, in_stat, sizeof(struct stat));
-        }
+        if (out_stat) memcpy(out_stat, in_stat, sizeof(struct stat));
     } else {
         /* Need to stat - use lstat to detect symlinks correctly */
-        if (lstat(disk_path, &st) != 0) {
+        if (fs_lstat(disk_path, &st) != 0) {
             if (errno == ENOENT || errno == ENOTDIR) {
                 /* File doesn't exist - not an error, just report it (ENOTDIR: a
                  * component above is no longer a directory — same absence) */
@@ -69,8 +67,7 @@ error_t *compare_buffer_to_disk(
                 return NULL;
             }
             return ERROR(
-                ERR_FS, "Failed to stat '%s': %s",
-                disk_path, strerror(errno)
+                ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno)
             );
         }
         stat_ptr = &st;
@@ -96,7 +93,7 @@ error_t *compare_buffer_to_disk(
              * anything else keeps the original error. It classifies a failure;
              * it binds nothing. */
             struct stat gone;
-            if (lstat(disk_path, &gone) != 0
+            if (fs_lstat(disk_path, &gone) != 0
                 && (errno == ENOENT || errno == ENOTDIR)) {
                 error_free(err);
                 *result = CMP_MISSING;
@@ -146,8 +143,8 @@ error_t *compare_buffer_to_disk(
              * file). read(2) cannot fault on a concurrent truncation the way a
              * stat-sized mmap could — it returns short, and short-or-different
              * is CMP_DIFFERENT below. */
-            int fd = open(
-                disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
+            int fd = fs_open(
+                disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
             );
             if (fd < 0) {
                 if (errno == ENOENT || errno == ENOTDIR) {
@@ -158,8 +155,7 @@ error_t *compare_buffer_to_disk(
                     return NULL;
                 }
                 return ERROR(
-                    ERR_FS, "Failed to open '%s': %s",
-                    disk_path, strerror(errno)
+                    ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno)
                 );
             }
 
@@ -211,8 +207,9 @@ error_t *compare_buffer_to_disk(
  * For symlinks, reads the target string and hashes it identically to how Git
  * stores symlinks (blob containing the target path as raw bytes).
  *
- * For regular files, uses git_odb_hashfile() which streams file content using
- * constant memory regardless of file size.
+ * For regular files, reads the disk copy through one descriptor — the look
+ * compare_buffer_to_disk takes — and hashes the bytes: the file is in memory
+ * for the length of the hash, bounded by fs_read_fd's cap.
  */
 error_t *compare_oid_to_disk(
     const git_oid *blob_oid,
@@ -238,14 +235,12 @@ error_t *compare_oid_to_disk(
     if (in_stat) {
         /* Caller provided stat - use it (zero syscalls) */
         stat_ptr = in_stat;
-        if (out_stat) {
-            memcpy(out_stat, in_stat, sizeof(struct stat));
-        }
+        if (out_stat) memcpy(out_stat, in_stat, sizeof(struct stat));
     } else {
         /* No pre-captured stat - perform lstat internally Using lstat() to not
          * follow symlinks.
          */
-        if (lstat(disk_path, &st) != 0) {
+        if (fs_lstat(disk_path, &st) != 0) {
             if (errno == ENOENT || errno == ENOTDIR) {
                 /* File doesn't exist (ENOTDIR: a component above is no longer a
                  * directory — same absence) */
@@ -256,8 +251,7 @@ error_t *compare_oid_to_disk(
                 return NULL;
             }
             return ERROR(
-                ERR_FS, "Failed to stat '%s': %s",
-                disk_path, strerror(errno)
+                ERR_FS, "Failed to stat '%s': %s", disk_path, strerror(errno)
             );
         }
         stat_ptr = &st;
@@ -290,7 +284,7 @@ error_t *compare_oid_to_disk(
              * anything else keeps the original error. It classifies a failure;
              * it binds nothing. */
             struct stat gone;
-            if (lstat(disk_path, &gone) != 0
+            if (fs_lstat(disk_path, &gone) != 0
                 && (errno == ENOENT || errno == ENOTDIR)) {
                 error_free(err);
                 *result = CMP_MISSING;
@@ -322,26 +316,40 @@ error_t *compare_oid_to_disk(
             return NULL;
         }
 
-        /* Hash file directly from path
-         *
-         * git_odb_hashfile() streams the file content and computes the standard
-         * Git blob hash: SHA-1("blob <size>\0" + content). This uses constant
-         * memory regardless of file size.
-         */
-        int ret = git_odb_hashfile(&computed, disk_path, GIT_OBJECT_BLOB);
-        if (ret != 0) {
-            /* libgit2 collapses every cause into git_error_last() prose; the
-             * errno is gone at that boundary. One classifying lstat re-derives
-             * the verdict-grade cause — the file vanished mid-look (ENOENT/
-             * ENOTDIR, the caller's own absence rule) is CMP_MISSING; anything
-             * else keeps the libgit2 error. It classifies a failure; it binds
-             * nothing. */
-            struct stat gone;
-            if (lstat(disk_path, &gone) != 0
-                && (errno == ENOENT || errno == ENOTDIR)) {
+        /* One look, the same one compare_buffer_to_disk takes and for the same
+         * reasons (the flags are explained there): the bytes hashed are the
+         * descriptor's, one inode with the fstat fs_read_fd makes. libgit2's
+         * git_odb_hashfile would open the path itself — a look sys/filesystem
+         * does not make (filesystem.h's funnel), and with it the errno the absence
+         * rule needs. The whole file is in memory for the length of the hash,
+         * bounded by fs_read_fd's cap; above it the look fails and the caller
+         * reads a failed look, never a verdict. */
+        int fd = fs_open(
+            disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
+        );
+        if (fd < 0) {
+            if (errno == ENOENT || errno == ENOTDIR) {
                 *result = CMP_MISSING;
                 return NULL;
             }
+            return ERROR(
+                ERR_FS, "Failed to open '%s': %s", disk_path, strerror(errno)
+            );
+        }
+
+        buffer_t disk_content = BUFFER_INIT;
+        error_t *err = fs_read_fd(fd, &disk_content);
+        close(fd);
+        if (err) {
+            return error_wrap(err, "Failed to read '%s'", disk_path);
+        }
+
+        /* The standard Git blob hash: SHA-1("blob <size>\0" + content). */
+        int ret = git_odb_hash(
+            &computed, disk_content.data, disk_content.size, GIT_OBJECT_BLOB
+        );
+        buffer_free(&disk_content);
+        if (ret != 0) {
             const git_error *git_err = git_error_last();
             return ERROR(
                 ERR_GIT, "Failed to hash file '%s': %s", disk_path,
@@ -437,9 +445,7 @@ static error_t *generate_symlink_diff(
     char *disk_target = NULL;
     if (fs_is_symlink(disk_path)) {
         error_t *err = fs_read_symlink(disk_path, &disk_target);
-        if (err) {
-            return err;
-        }
+        if (err) return err;
     }
 
     /* Format diff based on direction */
@@ -608,12 +614,7 @@ error_t *compare_generate_diff(
     /* Perform comparison using buffer with optional stat */
     struct stat file_stat;
     error_t *err = compare_buffer_to_disk(
-        content,
-        disk_path,
-        mode,
-        in_stat,
-        &diff->status,
-        &file_stat
+        content, disk_path, mode, in_stat, &diff->status, &file_stat
     );
     if (err) {
         free(diff->path);
@@ -644,15 +645,13 @@ error_t *compare_generate_diff(
         /* Generate actual unified diff */
         if (mode == GIT_FILEMODE_LINK) {
             /* Symlink diff - use buffer directly */
-            err = generate_symlink_diff(content, disk_path, direction, &diff->diff_text);
+            err = generate_symlink_diff(
+                content, disk_path, direction, &diff->diff_text
+            );
         } else {
             /* Regular file diff - use in-memory buffer diff */
             err = generate_text_diff(
-                content,
-                disk_path,
-                path_label,
-                direction,
-                &diff->diff_text
+                content, disk_path, path_label, direction, &diff->diff_text
             );
         }
 

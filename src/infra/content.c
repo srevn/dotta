@@ -140,7 +140,7 @@ error_t *content_classify_path(
      * this is materially cheaper than fs_read_file + classify — we never inflate
      * past the header. EINTR loop covers signals on slow filesystems (NFS,
      * FUSE). */
-    int fd = open(fs_path, O_RDONLY | O_CLOEXEC);
+    int fd = fs_open(fs_path, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) {
         int saved_errno = errno;
         if (saved_errno == ENOENT) {
@@ -454,8 +454,8 @@ error_t *content_compare_blob_to_disk(
     }
 
     if (kind == CONTENT_PLAINTEXT) {
-        /* Fast path: stream-hash disk file, compare to OID. The stored Git blob
-         * is never inflated for the comparison itself. */
+        /* Fast path: hash the disk file, compare to OID. The stored Git blob is
+         * never inflated for the comparison itself. */
         return compare_oid_to_disk(
             blob_oid, fs_path, expected_mode, initial_stat, out_result, out_stat
         );
@@ -517,8 +517,8 @@ error_t *content_store_file_to_worktree(
      * file's blob. O_NOFOLLOW refuses a symlink (callers route symlinks to their
      * own capture before this call), O_NONBLOCK keeps a FIFO with no writer from
      * wedging the open (harmless for a regular file), O_CLOEXEC is hygiene. */
-    int fd = open(
-        filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
+    int fd = fs_open(
+        filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
     );
     struct stat st;
     if (fd < 0) {
@@ -526,7 +526,7 @@ error_t *content_store_file_to_worktree(
          * — neither leaves an fd to fstat. One diagnostic lstat lets the refusal
          * below name the type as before; it binds nothing. */
         int open_errno = errno;
-        if (lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
+        if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
             return ERROR(
                 ERR_FS, "Failed to open '%s': %s",
                 filesystem_path, strerror(open_errno)

@@ -30,7 +30,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "base/arena.h"
 #include "base/array.h"
@@ -1506,7 +1505,7 @@ static error_t *compute_orphan_authority(
  * emptiness rule, so there is nothing to measure, only whether it can be: a
  * directory dotta cannot stat or cannot read — the path, or a component above
  * it — is UNVERIFIED, the bit an unstattable file carries, and held until the
- * user can say what is in it. That is one access(2) per present directory orphan;
+ * user can say what is in it. That is one fs_eaccess per present directory orphan;
  * the readdir itself stays cleanup's, because what is left in a directory depends
  * on the plan.
  *
@@ -1667,7 +1666,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 divergence = (occupant != FS_OCCUPANT_UNKNOWN)
                     ? compute_orphan_divergence(ws, anchor, &orphan_stat)
                     : DIVERGENCE_UNVERIFIED;
-            } else if (occupant == FS_OCCUPANT_UNKNOWN || access(fs_path, R_OK) != 0) {
+            } else if (occupant == FS_OCCUPANT_UNKNOWN || !fs_eaccess(fs_path, R_OK)) {
                 divergence = DIVERGENCE_UNVERIFIED;
             }
 
@@ -1791,7 +1790,7 @@ static error_t *scan_directory_for_untracked(
         return NULL;
     }
 
-    DIR *dir = opendir(dir_path);
+    DIR *dir = fs_opendir(dir_path);
     if (!dir) {
         /* Non-fatal: directory might have been deleted or permissions issue */
         return NULL;

@@ -475,7 +475,7 @@ static fs_occupant_t probe_ancestor(
         *out_is_dir = true;
     } else if (occ == FS_OCCUPANT_SYMLINK) {
         struct stat target;
-        *out_is_dir = (stat(scratch, &target) == 0) && S_ISDIR(target.st_mode);
+        *out_is_dir = (fs_stat(scratch, &target) == 0) && S_ISDIR(target.st_mode);
     } else {
         *out_is_dir = false;
     }
@@ -590,12 +590,12 @@ static bool directory_is_deployable(
  * The one question the ladders ask before any probe of their own, because a
  * displaced directory row above the path invalidates every probe beneath it —
  * the landing check's included: a symlink squatting a claimed directory points
- * somewhere real and writable, so access(2) would wave the write through and
- * the run would deploy INTO the link's target, over whatever the user keeps there.
- * The workspace names the offender (workspace_displaced_ancestor — the outermost,
- * fate-blind); this splits the answer by what the run itself decided about that
- * ancestor, the premise the plan carried by scope now asked of the verdicts, so
- * it is exactly true. In decision order:
+ * somewhere real and writable, so the landing probe would wave the write through
+ * and the run would deploy INTO the link's target, over whatever the user keeps
+ * there. The workspace names the offender (workspace_displaced_ancestor — the
+ * outermost, fate-blind); this splits the answer by what the run itself decided
+ * about that ancestor, the premise the plan carried by scope now asked of the
+ * verdicts, so it is exactly true. In decision order:
  *
  *   deployable    the directory pass converges the ancestor before this row is
  *                 reached — created, fixed or replaced — so from here down the
@@ -701,9 +701,10 @@ static void check_ancestry(
  *   a directory the view      ours to hold (holdable_directory), either class:
  *   names                     if it refuses, ensure_parents opens it for the run
  *                             and releases it afterwards; fine
- *   any other directory       must accept a new entry now — access(2),
+ *   any other directory       must accept a new entry now — fs_eaccess,
  *                             which unlike a mode test knows about ownership,
- *                             groups, ACLs and root — or the row is skipped
+ *                             groups, ACLs and root, and asks for the user the
+ *                             write will be made as — or the row is skipped
  *                             (PERMISSION); a symlink to a directory is asked
  *                             through the link
  *   anything else             a non-directory no row names squats the
@@ -763,7 +764,7 @@ static error_t *check_landing(
     if (directory_is_deployable(verdicts, scratch)) {
         goto cleanup;
     }
-    if (is_dir && access(scratch, W_OK | X_OK) == 0) {
+    if (is_dir && fs_eaccess(scratch, W_OK | X_OK)) {
         goto cleanup;
     }
     if (occ == FS_OCCUPANT_DIRECTORY && holdable_directory(ws, scratch, &st)) {
@@ -1552,7 +1553,7 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
  *
  * The questions check_landing asked of the same ancestor, less the one time has
  * answered: a pending row has been converged by the directory pass before any
- * file lands, so it stands here as a directory at its working mode and access(2)
+ * file lands, so it stands here as a directory at its working mode and fs_eaccess
  * simply passes. Prediction and mechanism, one rule.
  *
  * @param run Run context (must not be NULL)
@@ -1567,7 +1568,7 @@ static error_t *open_landing_directory(
     fs_occupant_t occ,
     const struct stat *st
 ) {
-    if (occ != FS_OCCUPANT_DIRECTORY || access(ancestor, W_OK | X_OK) == 0) {
+    if (occ != FS_OCCUPANT_DIRECTORY || fs_eaccess(ancestor, W_OK | X_OK)) {
         return NULL;
     }
 
@@ -1732,27 +1733,17 @@ static error_t *deploy_file(
             if (err) goto cleanup;
         }
 
-        /* Create symlink */
-        err = fs_create_symlink(target_str, file->filesystem_path);
+        /* Create the link with the ownership the verdict resolved: the one node
+         * without a descriptor, so the primitive applies the pair itself. */
+        err = fs_create_symlink(
+            target_str, file->filesystem_path, v->uid, v->gid
+        );
         if (err) {
             err = error_wrap(
                 err, "Failed to deploy symlink '%s'",
                 file->filesystem_path
             );
             goto cleanup;
-        }
-
-        /* Symlink permissions are ignored by most filesystems, but symlink
-         * OWNERSHIP matters for auditing and consistency. lchown() changes the
-         * link itself, not its target. */
-        if (v->uid != (uid_t) -1 || v->gid != (gid_t) -1) {
-            if (lchown(file->filesystem_path, v->uid, v->gid) != 0) {
-                err = ERROR(
-                    ERR_FS, "Failed to set ownership on symlink '%s': %s",
-                    file->filesystem_path, strerror(errno)
-                );
-                goto cleanup;
-            }
         }
 
         goto cleanup;

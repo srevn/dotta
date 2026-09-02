@@ -4,6 +4,7 @@
 
 #include "sys/credentials.h"
 
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -578,9 +579,13 @@ error_t *credential_helper_fill(
 
 /**
  * Check if a file exists and is readable.
+ *
+ * The running user's own question — the key is read by the user the run is, so
+ * the effective user's answer is the one that matters (AT_EACCESS); never a managed
+ * path's, so the raw call and not sys/filesystem's funnel.
  */
 static bool file_exists(const char *path) {
-    return access(path, R_OK) == 0;
+    return faccessat(AT_FDCWD, path, R_OK, AT_EACCESS) == 0;
 }
 
 /**

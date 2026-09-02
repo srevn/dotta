@@ -40,6 +40,32 @@ static inline error_t *validate_path(const char *path) {
 }
 
 /**
+ * The kernel's calls on managed paths
+ *
+ * One site per syscall kind: the module's own primitives and every outside reader
+ * make the same call here (filesystem.h's funnel).
+ */
+int fs_lstat(const char *path, struct stat *st) {
+    return lstat(path, st);
+}
+
+int fs_stat(const char *path, struct stat *st) {
+    return stat(path, st);
+}
+
+int fs_open(const char *path, int flags, mode_t mode) {
+    return open(path, flags, mode);
+}
+
+DIR *fs_opendir(const char *path) {
+    return opendir(path);
+}
+
+bool fs_eaccess(const char *path, int amode) {
+    return faccessat(AT_FDCWD, path, amode, AT_EACCESS) == 0;
+}
+
+/**
  * Check if filename is OS metadata
  *
  * Detects OS-generated metadata files that should be transparent to dotta. These
@@ -172,7 +198,7 @@ error_t *fs_read_file(const char *path, buffer_t *out) {
     *out = (buffer_t){ 0 };
 
     /* Open file */
-    int fd = open(path, O_RDONLY);
+    int fd = fs_open(path, O_RDONLY, 0);
     if (fd < 0) {
         return ERROR(
             ERR_FS, "Failed to open '%s': %s",
@@ -475,7 +501,7 @@ bool fs_file_exists(const char *path) {
     }
 
     struct stat st;
-    if (stat(path, &st) < 0) {
+    if (fs_stat(path, &st) < 0) {
         return false;
     }
 
@@ -619,7 +645,7 @@ error_t *fs_create_dir_with_ownership(
      * to open first, we either get a valid fd or a clear error. O_NOFOLLOW prevents
      * symlink substitution attacks - if an attacker replaces the directory with
      * a symlink, open() fails with ELOOP instead of following. */
-    int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    int dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
     if (dirfd >= 0) {
         /* Directory exists - update ownership and mode atomically */
         goto apply_metadata;
@@ -640,7 +666,7 @@ error_t *fs_create_dir_with_ownership(
     if (mkdir(path, 0700) < 0) {
         if (errno == EEXIST) {
             /* Race condition: directory created concurrently, open it directly */
-            dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+            dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
             if (dirfd < 0) {
                 return ERROR(
                     ERR_FS, "Directory '%s' created but cannot open: %s",
@@ -659,7 +685,7 @@ error_t *fs_create_dir_with_ownership(
      * SECURITY: O_NOFOLLOW closes the TOCTOU window - if an attacker replaced
      * the directory with a symlink between mkdir() and open(), this fails safely
      * with ELOOP instead of applying ownership to the symlink target. */
-    dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
     if (dirfd < 0) {
         return ERROR(
             ERR_FS, "Failed to open newly created directory '%s': %s",
@@ -736,7 +762,7 @@ error_t *fs_create_dir_exclusive(
     /* SECURITY: O_NOFOLLOW closes the TOCTOU window — if an attacker replaced
      * the directory with a symlink between mkdir() and open(), this fails safely
      * with ELOOP instead of applying attributes to the symlink target. */
-    int dirfd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    int dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
     if (dirfd < 0) {
         return ERROR(
             ERR_FS, "Failed to open newly created directory '%s': %s",
@@ -799,7 +825,7 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
              * to a directory outside it - using stat() would follow the symlink
              * and recursively delete the target directory's contents. */
             struct stat st;
-            if (lstat(full_path, &st) < 0) {
+            if (fs_lstat(full_path, &st) < 0) {
                 /* If lstat fails, try unlink as fallback */
                 err = (errno != ENOENT) ? ERROR(
                     ERR_FS, "Failed to stat '%s': %s",
@@ -840,7 +866,7 @@ error_t *fs_clear_path(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     struct stat st;
-    if (lstat(path, &st) != 0) {
+    if (fs_lstat(path, &st) != 0) {
         if (errno == ENOENT) {
             return NULL;  /* Nothing to clear - success */
         }
@@ -875,7 +901,7 @@ bool fs_is_directory(const char *path) {
     }
 
     struct stat st;
-    if (stat(path, &st) < 0) {
+    if (fs_stat(path, &st) < 0) {
         return false;
     }
 
@@ -907,19 +933,21 @@ static bool entry_is_removable_metadata(const char *dir, const char *name) {
     }
 
     struct stat st;
-    bool removable = (lstat(child, &st) == 0) && S_ISREG(st.st_mode);
+    bool removable = (fs_lstat(child, &st) == 0) && S_ISREG(st.st_mode);
 
     free(child);
     return removable;
 }
 
-fs_emptiness_t fs_directory_emptiness(const char *path, fs_path_pred_fn vouch, void *ctx) {
+fs_emptiness_t fs_directory_emptiness(
+    const char *path, fs_path_pred_fn vouch, void *ctx
+) {
     if (!path) {
         return FS_DIR_UNREADABLE;
     }
 
     /* Try to open directory (opendir checks stat internally) */
-    DIR *dir = opendir(path);
+    DIR *dir = fs_opendir(path);
     if (!dir) {
         /* Can't open (doesn't exist, not a dir, or permission denied): nothing
          * can be said about what it holds. */
@@ -1064,7 +1092,7 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
-    DIR *dir = opendir(path);
+    DIR *dir = fs_opendir(path);
     if (!dir) {
         return ERROR(
             ERR_FS, "Failed to open directory '%s': %s",
@@ -1160,7 +1188,8 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
     char resolved[PATH_MAX];
     if (realpath(path, resolved) == NULL) {
         return ERROR(
-            ERR_FS, "Failed to resolve path '%s': %s",
+            error_code_from_errno(errno),
+            "Failed to resolve path '%s': %s",
             path, strerror(errno)
         );
     }
@@ -1442,7 +1471,10 @@ error_t *fs_expand_tilde(const char *path, char **out) {
 /**
  * Symlink operations
  */
-error_t *fs_create_symlink(const char *target, const char *linkpath) {
+error_t *fs_create_symlink(
+    const char *target, const char *linkpath,
+    uid_t uid, gid_t gid
+) {
     RETURN_IF_ERROR(validate_path(target));
     RETURN_IF_ERROR(validate_path(linkpath));
 
@@ -1451,6 +1483,15 @@ error_t *fs_create_symlink(const char *target, const char *linkpath) {
             ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
             linkpath, target, strerror(errno)
         );
+    }
+
+    if (uid != (uid_t) -1 || gid != (gid_t) -1) {
+        if (lchown(linkpath, uid, gid) < 0) {
+            return ERROR(
+                ERR_FS, "Failed to set ownership on symlink '%s': %s",
+                linkpath, strerror(errno)
+            );
+        }
     }
 
     return NULL;
@@ -1488,7 +1529,7 @@ bool fs_is_symlink(const char *path) {
     }
 
     struct stat st;
-    if (lstat(path, &st) < 0) {
+    if (fs_lstat(path, &st) < 0) {
         return false;
     }
 
@@ -1503,7 +1544,7 @@ error_t *fs_get_permissions(const char *path, mode_t *out) {
     CHECK_NULL(out);
 
     struct stat st;
-    if (stat(path, &st) < 0) {
+    if (fs_stat(path, &st) < 0) {
         return ERROR(
             ERR_FS, "Failed to stat '%s': %s",
             path, strerror(errno)
@@ -1532,7 +1573,8 @@ bool fs_is_executable(const char *path) {
         return false;
     }
 
-    return access(path, X_OK) == 0;
+    /* The running user's own question (filesystem.h): the raw call, on purpose. */
+    return faccessat(AT_FDCWD, path, X_OK, AT_EACCESS) == 0;
 }
 
 bool fs_exists(const char *path) {
@@ -1541,7 +1583,7 @@ bool fs_exists(const char *path) {
     }
 
     struct stat st;
-    return stat(path, &st) == 0;
+    return fs_stat(path, &st) == 0;
 }
 
 bool fs_lexists(const char *path) {
@@ -1550,7 +1592,7 @@ bool fs_lexists(const char *path) {
     }
 
     struct stat st;
-    return lstat(path, &st) == 0;
+    return fs_lstat(path, &st) == 0;
 }
 
 fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st) {
@@ -1559,7 +1601,7 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st) {
         st = &local;
     }
 
-    if (lstat(path, st) != 0) {
+    if (fs_lstat(path, st) != 0) {
         /* ENOTDIR: a component above the path is not a directory, so nothing
          * can be at the path either. Whether that ancestor is anyone's to replace
          * is the caller's question, not this one's. */

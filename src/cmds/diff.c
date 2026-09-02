@@ -29,6 +29,7 @@
 #include "infra/content.h"
 #include "infra/pathspec.h"
 #include "infra/mount.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 
 /**
@@ -691,7 +692,7 @@ static error_t *compare_tree_files_to_filesystem(
             /* Use lstat to detect the path itself (broken symlinks are present,
              * not missing — only the target is absent). */
             struct stat st;
-            bool exists = (lstat(fs_path, &st) == 0);
+            bool exists = (fs_lstat(fs_path, &st) == 0);
 
             if (!exists) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);

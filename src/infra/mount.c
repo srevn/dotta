@@ -230,25 +230,26 @@ error_t *mount_validate_target(const char *target) {
         );
     }
 
-    /* 6. Normalize and verify existence with realpath() */
-    char *resolved = realpath(target, NULL);
-    if (!resolved) {
-        if (errno == ENOENT) {
+    /* 6. Normalize and verify existence through the canonical form */
+    char *resolved = NULL;
+    error_t *resolve_err = fs_canonicalize_path(target, &resolved);
+    if (resolve_err) {
+        if (error_code(resolve_err) == ERR_NOT_FOUND) {
+            error_free(resolve_err);
             return ERROR(
                 ERR_INVALID_ARG,
                 "Mount target directory does not exist: '%s'\n"
                 "Create it first: mkdir -p '%s'", target, target
             );
         }
-        return ERROR(
-            ERR_INVALID_ARG, "Cannot resolve mount target '%s': %s",
-            target, strerror(errno)
+        return error_wrap(
+            resolve_err, "Cannot resolve mount target '%s'", target
         );
     }
 
     /* 7. Verify it's a directory */
     struct stat st;
-    if (stat(resolved, &st) != 0) {
+    if (fs_stat(resolved, &st) != 0) {
         free(resolved);
         return ERROR(
             ERR_INVALID_ARG, "Cannot stat mount target: %s",
@@ -456,8 +457,8 @@ error_t *mount_table_build(
         if (err) return err;
 
         /* The name is copied like the target: the table keeps nothing of the
-         * caller's past the call, so it stands for the arena's lifetime
-         * whatever happens to the rows it was built from. */
+         * caller's past the call, so it stands for the arena's lifetime whatever
+         * happens to the rows it was built from. */
         const char *profile = NULL;
         if (mounts[i].profile) {
             profile = arena_strdup(arena, mounts[i].profile);

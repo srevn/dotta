@@ -74,7 +74,21 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...);
 error_t *error_from_git(int git_error_code);
 
 /**
+ * The error code an errno names
+ *
+ * One mapping, for every site that turns a kernel refusal into an error a caller
+ * can act on: EACCES and EPERM are ERR_PERMISSION; ENOENT and ENOTDIR — nothing
+ * can stand beneath a non-directory — are ERR_NOT_FOUND; anything else is ERR_FS.
+ *
+ * @param errno_val errno value
+ * @return The code
+ */
+error_code_t error_code_from_errno(int errno_val);
+
+/**
  * Create error from errno
+ *
+ * The code is error_code_from_errno's, the message strerror's.
  *
  * @param errno_val errno value
  * @return Newly allocated error

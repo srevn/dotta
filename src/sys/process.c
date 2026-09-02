@@ -26,6 +26,7 @@
 
 #include "base/error.h"
 #include "base/secure.h"
+#include "sys/identity.h"
 
 /* Initial capture buffer size; doubles on demand up to SIZE_MAX/2. */
 #define PROCESS_CAPTURE_INITIAL 4096
@@ -52,13 +53,13 @@
  * in this time, we abandon and let init reap. */
 #define PROCESS_GRACE_ORPHAN_SECONDS 1
 
-/* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero
- * otherwise: published before the parent's own setpgid and cleared on every
- * exit path below. The host program's SIGINT/SIGTERM handler reads it
- * through the declaration in process.h and forwards the signal to the group,
- * so a Ctrl+C kills dotta and the spawned hook atomically rather than
- * orphaning the hook. PROCESS_PGRP_SHARED children leave it at zero — the
- * kernel already delivers terminal signals to the whole foreground group. */
+/* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero otherwise:
+ * published before the parent's own setpgid and cleared on every exit path below.
+ * The host program's SIGINT/SIGTERM handler reads it through the declaration in
+ * process.h and forwards the signal to the group, so a Ctrl+C kills dotta and
+ * the spawned hook atomically rather than orphaning the hook. PROCESS_PGRP_SHARED
+ * children leave it at zero — the kernel already delivers terminal signals to
+ * the whole foreground group. */
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**
@@ -361,6 +362,15 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
 
         if (spec->pgrp_policy == PROCESS_PGRP_NEW) {
             (void) setpgid(0, 0);
+        }
+
+        /* The invoker's child, for good (sys/identity), before anything the child
+         * does — the chdir, the exec, the script. Reported as an exec failure
+         * is: errno over the self-pipe, 126. */
+        if (identity_drop_child() != 0) {
+            int e = errno;
+            (void) write_full(errfd[1], &e, sizeof(e));
+            _exit(126);
         }
 
         close(pipefd[0]);

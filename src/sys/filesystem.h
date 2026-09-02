@@ -14,11 +14,27 @@
  * path — what stands there, may it be opened, read, entered, written beneath —
  * is asked through this module, never through the raw call. What the run may do
  * to a path is answered in one place, and every reader inherits whatever that
- * answer becomes. Dotta's own artifacts are the exception and keep their raw
- * calls: the session cache (crypto/session), the temp scripts (cmds/ignore, the
- * bootstrap trio), libgit2's and SQLite's files. Those paths are the running
- * user's by construction, and a refusal on one is a broken installation to report,
- * not a question about reach.
+ * answer becomes.
+ *
+ * The reach: a run that holds root for a user (sys/identity — `sudo dotta`, dropped
+ * to the invoker at main()) takes it back one syscall at a time. Every kernel
+ * call this module makes on a path is the invoker's first, and on a refusal —
+ * EACCES, EPERM — the same call once more as root. So a path only root can reach
+ * reads as present to a sudo'd run and as absent or refused to a plain one, and
+ * what the second try creates is root's, as sudo would have made it; the claim's
+ * fchown and the invoker's default (core/deploy) then say whose it becomes. Nothing
+ * outside this module ever runs as root, and no second try spans a call into
+ * libgit2, SQLite, the keymgr or a fork: it is one syscall wide, inside one
+ * wrapper.
+ *
+ * Dotta's own artifacts are the exception and keep their raw calls: the session
+ * cache (crypto/session), the temp scripts (cmds/ignore, the bootstrap trio),
+ * libgit2's and SQLite's files. Those paths are the invoker's by construction —
+ * the drop is what makes them so under sudo — and a refusal on one is a broken
+ * installation to report, not a question about reach. Three primitives serve
+ * both worlds (fs_create_dir, fs_remove_dir, fs_write_file: a temp worktree's
+ * directory, init's repository) and carry the reach with them; on the invoker's
+ * own paths it never fires.
  */
 
 #ifndef DOTTA_FILESYSTEM_H
@@ -35,11 +51,13 @@
  * The kernel's calls on managed paths
  *
  * The syscalls the funnel is made of — one wrapper per kind, syscall-shaped on
- * purpose: the return and errno are the kernel's, untouched, so a caller's
- * classification of a failure (ENOENT read as absence, EACCES as a refusal) stays
- * its own. The primitives below are built on these and never on the raw call,
- * so a reader that wants an error_t and a reader that wants the errno make the
- * same call at the same site.
+ * purpose: the return and errno are the kernel's, untouched — the second try's,
+ * where the reach ran — so a caller's classification of a failure (ENOENT read
+ * as absence, EACCES as a refusal) stays its own. The primitives below are built
+ * on these and never on the raw call, so a reader that wants an error_t and a
+ * reader that wants the errno make the same call at the same site. The five here
+ * have outside readers; the write kinds (mkdir, unlink, rename, …) are the
+ * primitives' own and stay inside the module.
  */
 
 /**
@@ -81,11 +99,13 @@ DIR *fs_opendir(const char *path);
 /**
  * May the effective user do `amode` at the path?
  *
- * faccessat(2) with AT_EACCESS. access(2) answers for the real user, which is
- * the wrong one the moment the two differ, and only the effective one lands a
- * write. Knows what a mode test does not: ownership, groups, ACLs, root. A
- * directory's W_OK | X_OK is "may a new entry be made in it" — the question every
- * write beneath a path asks of its nearest present ancestor (core/deploy).
+ * faccessat(2) with AT_EACCESS, with the reach: a run that holds root answers
+ * as root would (a read-only filesystem or an immutable flag still refuses).
+ * access(2) answers for the real user, which is the wrong one the moment the
+ * two differ, and only the effective one lands a write. Knows what a mode test
+ * does not: ownership, groups, ACLs, root. A directory's W_OK | X_OK is "may a
+ * new entry be made in it" — the question every write beneath a path asks of
+ * its nearest present ancestor (core/deploy).
  *
  * @param path Path (must not be NULL)
  * @param amode R_OK, W_OK, X_OK, or'd
@@ -775,50 +795,5 @@ bool fs_stat_is_regular(const struct stat *st);
  * @return true if S_ISDIR(st->st_mode)
  */
 bool fs_stat_is_directory(const struct stat *st);
-
-/**
- * Fix ownership recursively for a directory tree
- *
- * Recursively changes ownership of all files and directories under path to the
- * specified UID/GID. This is used to restore normal user ownership of repository
- * files after operations that ran under sudo.
- *
- * Uses lchown() to handle symlinks safely (changes link ownership, not target).
- * Uses nftw() for efficient recursive traversal with minimal memory usage.
- *
- * Error Handling Philosophy:
- * - Individual file failures (e.g., permission denied): Continue, count as failed
- * - Fatal errors (path doesn't exist, nftw fails): Return error immediately
- * - This ensures we fix as many files as possible even if some fail
- *
- * Behavior:
- * - Traverses entire directory tree depth-first
- * - For each file/directory: checks current ownership, calls lchown() if different
- * - Tracks statistics: files successfully fixed, files that failed
- * - Continues processing even if individual files fail
- * - Safe to run multiple times (idempotent)
- *
- * Security:
- * - Only call this when running as root (effective UID 0)
- * - Uses lchown() to prevent symlink attacks
- * - Validates all inputs before traversal
- *
- * @param path Root path to fix (must not be NULL, must exist, must be a directory)
- * @param uid Target UID for ownership
- * @param gid Target GID for ownership
- * @param out_fixed Optional output: number of files/dirs successfully fixed (can
- *                  be NULL)
- * @param out_failed Optional output: number of files/dirs that failed to fix
- *                   (can be NULL)
- * @return Error for fatal failures, NULL on success (even if some individual
- *         files failed)
- */
-error_t *fs_fix_ownership_recursive(
-    const char *path,
-    uid_t uid,
-    gid_t gid,
-    size_t *out_fixed,
-    size_t *out_failed
-);
 
 #endif /* DOTTA_FILESYSTEM_H */

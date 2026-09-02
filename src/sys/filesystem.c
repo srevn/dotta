@@ -9,7 +9,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <ftw.h>
 #include <libgen.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -43,26 +42,167 @@ static inline error_t *validate_path(const char *path) {
  * The kernel's calls on managed paths
  *
  * One site per syscall kind: the module's own primitives and every outside reader
- * make the same call here (filesystem.h's funnel).
+ * make the same call here (filesystem.h's funnel), and the reach lives here and
+ * nowhere else — the invoker's call, and on a refusal the same call once more
+ * as root when the run holds it (sys/identity). Each wrapper is the whole of
+ * one raise: the second call is the raw syscall, so no raise ever nests, spans
+ * another wrapper, or outlives the return. The five with outside readers are
+ * filesystem.h's; the write kinds are static until one appears.
  */
 int fs_lstat(const char *path, struct stat *st) {
-    return lstat(path, st);
+    int rc = lstat(path, st);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = lstat(path, st);
+        identity_lower();
+    }
+    return rc;
 }
 
 int fs_stat(const char *path, struct stat *st) {
-    return stat(path, st);
+    int rc = stat(path, st);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = stat(path, st);
+        identity_lower();
+    }
+    return rc;
 }
 
 int fs_open(const char *path, int flags, mode_t mode) {
-    return open(path, flags, mode);
+    int fd = open(path, flags, mode);
+    if (fd < 0 && identity_raise_on_refusal()) {
+        fd = open(path, flags, mode);
+        identity_lower();
+    }
+    return fd;
 }
 
 DIR *fs_opendir(const char *path) {
-    return opendir(path);
+    DIR *dir = opendir(path);
+    if (!dir && identity_raise_on_refusal()) {
+        dir = opendir(path);
+        identity_lower();
+    }
+    return dir;
 }
 
 bool fs_eaccess(const char *path, int amode) {
-    return faccessat(AT_FDCWD, path, amode, AT_EACCESS) == 0;
+    int rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
+        identity_lower();
+    }
+    return rc == 0;
+}
+
+static int fs_mkdir(const char *path, mode_t mode) {
+    int rc = mkdir(path, mode);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = mkdir(path, mode);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_rmdir(const char *path) {
+    int rc = rmdir(path);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = rmdir(path);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_unlink(const char *path) {
+    int rc = unlink(path);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = unlink(path);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_rename(const char *from, const char *to) {
+    int rc = rename(from, to);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = rename(from, to);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_symlink(const char *target, const char *linkpath) {
+    int rc = symlink(target, linkpath);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = symlink(target, linkpath);
+        identity_lower();
+    }
+    return rc;
+}
+
+static ssize_t fs_readlink(const char *path, char *buf, size_t size) {
+    ssize_t len = readlink(path, buf, size);
+    if (len < 0 && identity_raise_on_refusal()) {
+        len = readlink(path, buf, size);
+        identity_lower();
+    }
+    return len;
+}
+
+static int fs_chmod(const char *path, mode_t mode) {
+    int rc = chmod(path, mode);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = chmod(path, mode);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_fchmod(int fd, mode_t mode) {
+    int rc = fchmod(fd, mode);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = fchmod(fd, mode);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_fchown(int fd, uid_t uid, gid_t gid) {
+    int rc = fchown(fd, uid, gid);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = fchown(fd, uid, gid);
+        identity_lower();
+    }
+    return rc;
+}
+
+static int fs_lchown(const char *path, uid_t uid, gid_t gid) {
+    int rc = lchown(path, uid, gid);
+    if (rc < 0 && identity_raise_on_refusal()) {
+        rc = lchown(path, uid, gid);
+        identity_lower();
+    }
+    return rc;
+}
+
+/* A failed mkstemp leaves its last candidate where the Xs were, and glibc refuses
+ * a template without them: the second try gets its six back. */
+static int fs_mkstemp(char *tmpl) {
+    int fd = mkstemp(tmpl);
+    if (fd < 0 && identity_raise_on_refusal()) {
+        memset(tmpl + strlen(tmpl) - 6, 'X', 6);
+        fd = mkstemp(tmpl);
+        identity_lower();
+    }
+    return fd;
+}
+
+static char *fs_realpath(const char *path, char *resolved) {
+    char *out = realpath(path, resolved);
+    if (!out && identity_raise_on_refusal()) {
+        out = realpath(path, resolved);
+        identity_lower();
+    }
+    return out;
 }
 
 /**
@@ -254,7 +394,7 @@ static error_t *write_and_close_fd(
      * Use -1 to skip ownership change (preserve current user ownership).
      */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
-        if (fchown(fd, uid, gid) < 0) {
+        if (fs_fchown(fd, uid, gid) < 0) {
             int saved_errno = errno;
             close(fd);
             return ERROR(
@@ -275,7 +415,7 @@ static error_t *write_and_close_fd(
      * 2. Not affected by umask: Exact mode is applied
      * 3. Works even if file was just created
      */
-    if (fchmod(fd, mode) < 0) {
+    if (fs_fchmod(fd, mode) < 0) {
         int saved_errno = errno;
         close(fd);
         return ERROR(
@@ -391,7 +531,7 @@ error_t *fs_write_file_raw(
 
     if (n < 0 || (size_t) n >= sizeof(tmp_path)) {
         tmp_err = ERROR(ERR_FS, "Path too long for atomic write of '%s'", path);
-    } else if ((fd = mkstemp(tmp_path)) < 0) {
+    } else if ((fd = fs_mkstemp(tmp_path)) < 0) {
         tmp_err = ERROR(
             ERR_FS, "Failed to create a temporary file in '%s' for '%s': %s",
             dir, path, strerror(errno)
@@ -406,16 +546,16 @@ error_t *fs_write_file_raw(
      * If anything fails, the original file is untouched. */
     err = write_and_close_fd(fd, path, data, size, mode, uid, gid, out_st);
     if (err) {
-        unlink(tmp_path);
+        fs_unlink(tmp_path);
         return err;
     }
 
     /* Atomic replace: rename temp over target. POSIX guarantees this is atomic
      * on the same filesystem — at no point does the target path contain partial
      * content. */
-    if (rename(tmp_path, path) < 0) {
+    if (fs_rename(tmp_path, path) < 0) {
         int saved_errno = errno;
-        unlink(tmp_path);
+        fs_unlink(tmp_path);
 
         return ERROR(
             ERR_FS, "Failed to replace '%s': %s",
@@ -482,7 +622,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
 error_t *fs_remove_file(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
-    if (unlink(path) < 0) {
+    if (fs_unlink(path) < 0) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if file doesn't exist */
         }
@@ -539,7 +679,7 @@ error_t *fs_create_dir(const char *path, bool parents) {
     }
 
     /* Create directory */
-    if (mkdir(path, 0755) < 0) {
+    if (fs_mkdir(path, 0755) < 0) {
         if (errno == EEXIST && fs_is_directory(path)) {
             return NULL;  /* Race condition - another process created it */
         }
@@ -586,7 +726,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
         }
 
         /* Try to create directory with specified mode */
-        if (mkdir(path, mode) < 0) {
+        if (fs_mkdir(path, mode) < 0) {
             if (errno == EEXIST && fs_is_directory(path)) {
                 existed = true;
             } else {
@@ -613,7 +753,7 @@ error_t *fs_create_dir_with_mode(const char *path, mode_t mode, bool parents) {
      * This makes the function idempotent: "ensure directory exists with exact
      * mode" Matches file behavior (fs_write_file_raw always sets exact mode)
      */
-    if (chmod(path, mode) < 0) {
+    if (fs_chmod(path, mode) < 0) {
         return ERROR(
             ERR_FS, "Failed to set permissions on directory '%s'%s: %s",
             path, existed ? " (already existed)" : "", strerror(errno)
@@ -663,7 +803,7 @@ error_t *fs_create_dir_with_ownership(
     /* Create directory with restrictive initial mode for security
      * SECURITY: Start with 0700 to prevent unauthorized access during setup,
      * then atomically set final mode via fchmod() on the file descriptor. */
-    if (mkdir(path, 0700) < 0) {
+    if (fs_mkdir(path, 0700) < 0) {
         if (errno == EEXIST) {
             /* Race condition: directory created concurrently, open it directly */
             dirfd = fs_open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0);
@@ -699,7 +839,7 @@ apply_metadata:
      * ownership is applied to the directory we have open, not to whatever might
      * be at 'path' if a race condition occurred. */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
-        if (fchown(dirfd, uid, gid) < 0) {
+        if (fs_fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
             return ERROR(
@@ -713,7 +853,7 @@ apply_metadata:
      * SECURITY: fchmod() ensures the mode is set on the directory we have open.
      * This is the final step - after this completes, the directory has the exact
      * ownership and permissions requested, with no security windows. */
-    if (fchmod(dirfd, mode) < 0) {
+    if (fs_fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
         return ERROR(
@@ -746,7 +886,7 @@ error_t *fs_create_dir_exclusive(
      * is no open-existing arm, which is the whole difference from
      * fs_create_dir_with_ownership. The restrictive initial mode closes the setup
      * window; the final attributes apply through the descriptor below. */
-    if (mkdir(path, 0700) < 0) {
+    if (fs_mkdir(path, 0700) < 0) {
         if (errno == EEXIST) {
             return ERROR(
                 ERR_EXISTS, "Path '%s' already exists",
@@ -772,7 +912,7 @@ error_t *fs_create_dir_exclusive(
 
     /* Apply ownership atomically via file descriptor */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
-        if (fchown(dirfd, uid, gid) < 0) {
+        if (fs_fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
             return ERROR(
@@ -783,7 +923,7 @@ error_t *fs_create_dir_exclusive(
     }
 
     /* Apply final mode atomically via file descriptor */
-    if (fchmod(dirfd, mode) < 0) {
+    if (fs_fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
         return ERROR(
@@ -849,7 +989,7 @@ error_t *fs_remove_dir(const char *path, bool recursive) {
     }
 
     /* Remove directory itself */
-    if (rmdir(path) < 0) {
+    if (fs_rmdir(path) < 0) {
         if (errno == ENOENT) {
             return NULL;  /* Not an error if doesn't exist */
         }
@@ -882,7 +1022,7 @@ error_t *fs_clear_path(const char *path) {
     }
 
     /* File or symlink - use unlink */
-    if (unlink(path) != 0) {
+    if (fs_unlink(path) != 0) {
         if (errno == ENOENT) {
             return NULL;  /* Race condition - already gone, success */
         }
@@ -1032,7 +1172,7 @@ error_t *fs_remove_empty_dir(const char *path) {
 
     /* The whole story for a directory that is empty by the kernel's definition,
      * which is nearly all of them. */
-    if (rmdir(path) == 0 || errno == ENOENT) {
+    if (fs_rmdir(path) == 0 || errno == ENOENT) {
         return NULL;
     }
     if (!errno_means_not_empty(errno)) {
@@ -1075,7 +1215,7 @@ error_t *fs_remove_empty_dir(const char *path) {
 
     /* An entry that appeared while the metadata was being cleared lands here,
      * and it is the same refusal by another route. */
-    if (rmdir(path) != 0 && errno != ENOENT) {
+    if (fs_rmdir(path) != 0 && errno != ENOENT) {
         if (errno_means_not_empty(errno)) {
             return ERROR(ERR_CONFLICT, "Directory '%s' is not empty", path);
         }
@@ -1186,7 +1326,7 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
     CHECK_NULL(out);
 
     char resolved[PATH_MAX];
-    if (realpath(path, resolved) == NULL) {
+    if (fs_realpath(path, resolved) == NULL) {
         return ERROR(
             error_code_from_errno(errno),
             "Failed to resolve path '%s': %s",
@@ -1416,7 +1556,7 @@ error_t *fs_create_symlink(
     RETURN_IF_ERROR(validate_path(target));
     RETURN_IF_ERROR(validate_path(linkpath));
 
-    if (symlink(target, linkpath) < 0) {
+    if (fs_symlink(target, linkpath) < 0) {
         return ERROR(
             ERR_FS, "Failed to create symlink '%s' -> '%s': %s",
             linkpath, target, strerror(errno)
@@ -1424,7 +1564,7 @@ error_t *fs_create_symlink(
     }
 
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
-        if (lchown(linkpath, uid, gid) < 0) {
+        if (fs_lchown(linkpath, uid, gid) < 0) {
             return ERROR(
                 ERR_FS, "Failed to set ownership on symlink '%s': %s",
                 linkpath, strerror(errno)
@@ -1440,7 +1580,7 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
     CHECK_NULL(out);
 
     char buf[PATH_MAX];
-    ssize_t len = readlink(linkpath, buf, sizeof(buf) - 1);
+    ssize_t len = fs_readlink(linkpath, buf, sizeof(buf) - 1);
 
     if (len < 0) {
         return ERROR(
@@ -1496,7 +1636,7 @@ error_t *fs_get_permissions(const char *path, mode_t *out) {
 error_t *fs_set_permissions(const char *path, mode_t mode) {
     RETURN_IF_ERROR(validate_path(path));
 
-    if (chmod(path, mode) < 0) {
+    if (fs_chmod(path, mode) < 0) {
         return ERROR(
             ERR_FS, "Failed to set permissions on '%s': %s",
             path, strerror(errno)
@@ -1617,149 +1757,5 @@ error_t *fs_ensure_parent_dirs(const char *path) {
         );
     }
 
-    return NULL;
-}
-
-/**
- * Context for ownership fix callback
- *
- * Since nftw() doesn't support passing user data to the callback, we use a static
- * context pointer. This is safe because:
- * 1. dotta is single-threaded
- * 2. nftw() is not re-entrant
- * 3. We only use this during a single fix operation
- */
-typedef struct {
-    uid_t target_uid;      /* UID to set */
-    gid_t target_gid;      /* GID to set */
-    size_t fixed_count;    /* Number of files successfully fixed */
-    size_t failed_count;   /* Number of files that failed */
-} ownership_fix_context_t;
-
-/* Static context for nftw callback (safe: single-threaded, non-reentrant) */
-static ownership_fix_context_t *g_fix_context = NULL;
-
-/**
- * Callback for nftw() - fixes ownership of a single file/directory
- *
- * This function is called by nftw() for each file/directory in the tree. It checks
- * if the current ownership matches the target, and if not, calls lchown() to
- * fix it.
- *
- * Error handling:
- * - lstat() failure: Count as failed, continue
- * - Ownership already correct: Skip, continue
- * - lchown() success: Count as fixed, continue
- * - lchown() failure: Count as failed, continue
- *
- * @param fpath Path to file/directory
- * @param sb Stat buffer (from nftw)
- * @param typeflag File type flag (from nftw)
- * @param ftwbuf FTW info (from nftw)
- * @return 0 to continue traversal
- */
-static int fix_ownership_callback(
-    const char *fpath,
-    const struct stat *sb,
-    int typeflag,
-    struct FTW *ftwbuf
-) {
-    (void) typeflag;  /* Unused - we handle all types the same way */
-    (void) ftwbuf;    /* Unused - we don't need traversal info */
-
-    /* Sanity check: context must be set */
-    if (!g_fix_context) {
-        return 0;  /* Continue traversal even if context missing (shouldn't happen) */
-    }
-
-    /* Sanity check: stat buffer must be valid */
-    if (!sb) {
-        g_fix_context->failed_count++;
-        return 0;  /* Continue traversal */
-    }
-
-    /* Check if ownership already correct */
-    if (sb->st_uid == g_fix_context->target_uid &&
-        sb->st_gid == g_fix_context->target_gid) {
-        /* Already correct - skip */
-        return 0;
-    }
-
-    /* Ownership needs fixing - use lchown() for safety (doesn't follow symlinks) */
-    if (lchown(fpath, g_fix_context->target_uid, g_fix_context->target_gid) == 0) {
-        /* Success */
-        g_fix_context->fixed_count++;
-    } else {
-        /* Failed (e.g., permission denied on some system files) This is expected
-         * and not fatal - just count it */
-        g_fix_context->failed_count++;
-    }
-
-    return 0;  /* Continue traversal */
-}
-
-error_t *fs_fix_ownership_recursive(
-    const char *path,
-    uid_t uid,
-    gid_t gid,
-    size_t *out_fixed,
-    size_t *out_failed
-) {
-    RETURN_IF_ERROR(validate_path(path));
-
-    /* Verify path exists and is a directory */
-    if (!fs_is_directory(path)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Path '%s' does not exist or is not a directory",
-            path
-        );
-    }
-
-    /* Initialize context */
-    ownership_fix_context_t context = {
-        .target_uid   = uid,
-        .target_gid   = gid,
-        .fixed_count  = 0,
-        .failed_count = 0
-    };
-
-    /* Set global context pointer for callback Safe because we're single-threaded
-     * and nftw is not re-entrant */
-    g_fix_context = &context;
-
-    /* Traverse directory tree and fix ownership
-     *
-     * Flags:
-     * - FTW_PHYS: Don't follow symlinks (safer)
-     * - FTW_DEPTH: Process directories after their contents (cleaner)
-     *
-     * nopenfd: Maximum number of file descriptors nftw may use. 64 is a reasonable
-     * limit that avoids exhausting fd limit while still allowing efficient
-     * traversal.
-     */
-    int result = nftw(path, fix_ownership_callback, 64, FTW_PHYS | FTW_DEPTH);
-
-    /* Clear global context */
-    g_fix_context = NULL;
-
-    /* Check for fatal nftw errors */
-    if (result != 0) {
-        /* nftw() returns -1 on error, or non-zero if callback requested stop
-         * Since our callback always returns 0, non-zero means nftw() failed */
-        return ERROR(
-            ERR_FS, "Failed to traverse directory '%s': %s",
-            path, strerror(errno)
-        );
-    }
-
-    /* Return statistics if requested */
-    if (out_fixed) {
-        *out_fixed = context.fixed_count;
-    }
-    if (out_failed) {
-        *out_failed = context.failed_count;
-    }
-
-    /* Success - even if some individual files failed, we did our best */
     return NULL;
 }

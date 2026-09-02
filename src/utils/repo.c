@@ -12,7 +12,6 @@
 #include "base/error.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/identity.h"
 #include "utils/config.h"
 
 /**
@@ -260,6 +259,14 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     return NULL;
 }
 
+/* The one-time remedy for a repository an older dotta left root-owned. It does
+ * not happen again — the run drops to the invoker at main() (sys/identity) —
+ * and what was left from before is the user's to take back once. Two arms below
+ * name it, for the two faces a root-owned repository has. */
+#define REPO_RECLAIM_HINT \
+    "An older dotta run under sudo could leave it root-owned; take it back " \
+    "once:\n  sudo chown -R \"$(id -u):$(id -g)\" %s"
+
 /**
  * Open dotta repository
  */
@@ -317,11 +324,8 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
             if (holds_repository) {
                 answer = ERROR(
                     ERR_GIT, "Cannot read the repository at: %s\n\n"
-                    "A git directory is present, so this is not a missing "
-                    "repository.\n"
-                    "Check its ownership and permissions — a dotta run under "
-                    "sudo can leave root-owned files behind.%s%s",
-                    repo_path, env_note, env_value
+                    "Check its ownership and permissions. " REPO_RECLAIM_HINT
+                    "%s%s", repo_path, repo_path, env_note, env_value
                 );
             } else {
                 answer = ERROR(
@@ -331,6 +335,13 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
                 );
             }
             error_free(err);
+        } else if (error_code(err) == ERR_PERMISSION) {
+            /* libgit2's owner check (CVE-2022-24765): the repository is another
+             * user's — after the drop, root's is. */
+            answer = error_wrap(
+                err, "Cannot open the repository at: %s\n" REPO_RECLAIM_HINT,
+                repo_path, repo_path
+            );
         } else {
             answer = error_wrap(err, "Failed to open repository at: %s", repo_path);
         }
@@ -359,69 +370,6 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
         *path_out = repo_path;
     } else {
         free(repo_path);
-    }
-
-    return NULL;
-}
-
-/**
- * Fix repository ownership if running under sudo
- */
-error_t *repo_fix_ownership_if_needed(const char *repo_path) {
-    CHECK_NULL(repo_path);
-
-    /* Early exit: only fix ownership when root was obtained for a user — the
-     * identity's invoker is not root. This is the common case - most operations
-     * don't need sudo */
-    const identity_t *id = identity();
-    if (!id->privileged || id->uid == 0) {
-        return NULL;  /* No-op: the run is the invoker's own */
-    }
-
-    /* Root obtained for a user - need to fix ownership to the invoker's pair */
-    uid_t actual_uid = id->uid;
-    gid_t actual_gid = id->gid;
-
-    /* Build path to .git directory */
-    char *git_dir = NULL;
-    error_t *err = fs_path_join(repo_path, ".git", &git_dir);
-    if (err) {
-        return error_wrap(err, "Failed to construct .git path");
-    }
-
-    /* Check if .git directory exists If it doesn't exist, this is likely the
-     * init command creating a new repo. In that case, there's nothing to fix -
-     * just return success. */
-    if (!fs_is_directory(git_dir)) {
-        free(git_dir);
-        return NULL;  /* .git doesn't exist - nothing to fix */
-    }
-
-    /* Fix ownership of the repository directory itself. Without this, libgit2
-     * ownership validation (CVE-2022-24765 mitigations) may reject the repository
-     * on subsequent non-sudo runs. */
-    (void) chown(repo_path, actual_uid, actual_gid);
-
-    /* Fix .git/ ownership recursively */
-    size_t fixed_count = 0;
-    size_t failed_count = 0;
-    err = fs_fix_ownership_recursive(
-        git_dir, actual_uid, actual_gid, &fixed_count, &failed_count
-    );
-    free(git_dir);
-
-    if (err) {
-        return error_wrap(
-            err, "Failed to fix repository ownership"
-        );
-    }
-
-    /* Only warn if there were failures */
-    if (failed_count > 0) {
-        fprintf(
-            stderr, "Warning: Failed to restore ownership for %zu files\n",
-            failed_count
-        );
     }
 
     return NULL;

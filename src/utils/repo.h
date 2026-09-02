@@ -115,37 +115,4 @@ error_t *repo_create_target(
  */
 error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out);
 
-/**
- * Fix repository ownership if running under sudo
- *
- * Automatically restores normal user ownership of the repository directory and
- * .git/ contents when dotta commands are run via sudo. This prevents "Permission
- * denied" errors and libgit2 ownership validation failures (CVE-2022-24765) on
- * subsequent non-sudo runs.
- *
- * WHEN TO CALL:
- * - Call this at process exit, after all Git operations complete
- * - Only effective when running under sudo (detected automatically)
- * - Safe to call always - it's a no-op when not under sudo
- *
- * BEHAVIOR:
- * 1. Checks if root was obtained for a user (sys/identity: privileged, and the
- *    invoker is not root)
- * 2. If not: returns immediately (no-op)
- * 3. If so: the invoker's UID/GID are the identity's
- * 4. Fixes ownership of the repository directory itself
- * 5. Recursively fixes ownership of .git/ directory
- * 6. Logs statistics (files fixed/failed) to stderr
- *
- * ERROR HANDLING:
- * - Individual file failures: Logged, operation continues
- * - Fatal errors (can't get user, .git missing): Returns error
- * - Non-fatal: Even if some files fail, most will be fixed
- *
- * @param repo_path Repository base path (e.g., ~/.local/share/dotta/repo) Must
- *                  not be NULL, must be a valid dotta repository
- * @return Error on fatal failures, NULL on success
- */
-error_t *repo_fix_ownership_if_needed(const char *repo_path);
-
 #endif /* DOTTA_REPO_H */

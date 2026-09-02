@@ -442,7 +442,9 @@ int main(int argc, char **argv) {
 
     /* The identity of the run, before anything reads HOME: libgit2 guesses its
      * global config path from $HOME at init, and the config path below is resolved
-     * from the same fact (sys/identity.h). */
+     * from the same fact (sys/identity.h). Under sudo this is also the drop:
+     * from here on the process is the invoker's, and root is held for the syscalls
+     * that need it. */
     error_t *id_err = identity_init();
     if (id_err) {
         error_print(id_err, stderr);
@@ -502,44 +504,6 @@ int main(int argc, char **argv) {
     }
 
     int ret = run_spec(spec, argc, argv, prog, config, out);
-
-    /* Fix repository ownership if running under sudo
-     *
-     * This ensures that .git/ files created during privileged operations (e.g.,
-     * sudo dotta update crypto) are owned by the original user, not root. Without
-     * this fix, subsequent non-sudo operations would fail with "Permission denied"
-     * when trying to access root-owned files.
-     *
-     * When: After all Git operations complete, before shutdown Why: Catches all
-     * root-owned files created during this run Where: Only when root was obtained
-     * for a user (the identity's invoker is not root) Error handling: Log warning
-     * but don't change exit code (non-fatal)
-     */
-    const identity_t *id = identity();
-    if (id->privileged && id->uid != 0) {
-        char *repo_path = NULL;
-        error_t *err = resolve_repo_path(config, &repo_path);
-
-        if (!err) {
-            /* Fix ownership of .git directory */
-            err = repo_fix_ownership_if_needed(repo_path);
-            if (err) {
-                /* Non-fatal: warn user but don't fail the command The command
-                 * itself succeeded, ownership fix is just cleanup */
-                fprintf(stderr, "\nWarning: Failed to fix repository ownership\n");
-                fprintf(stderr, "The repository may be inaccessible without sudo.\n");
-                fprintf(stderr, "To fix manually, run:\n");
-                fprintf(stderr, "  sudo chown -R $USER:$GROUP %s/.git\n\n", repo_path);
-                error_print(err, stderr);
-                error_free(err);
-            }
-            free(repo_path);
-        } else {
-            /* Path resolution failed - unusual but non-fatal Likely means we're
-             * in a context where there's no repo (e.g., init) */
-            error_free(err);
-        }
-    }
 
     git_libgit2_shutdown();
     output_free(out);

@@ -42,20 +42,35 @@
  * table (195 §8), so `home/` classifies under any spelling. Whether the directory
  * exists is not asked here.
  *
- * Privileged
- * ----------
- * The effective user started as uid 0. A real root run (no tool names a user)
- * is root's own: its invoker is root, its files are root's, its HOME is root's
- * unless $HOME says otherwise — consistent, and stated.
+ * Privileged, and the drop
+ * ------------------------
+ * The effective user started as uid 0. When a tool names the user behind it,
+ * the run becomes that user at identity_init — its supplementary groups, then
+ * its real and effective gid and uid — and keeps root in the saved set: the shape
+ * of a setuid tool run by the user, the one shape every syscall's rule and every
+ * library are written for (getuid, access(2), libgit2's owner check all answer
+ * for the invoker). Everything of dotta's own — the repository, the state, the
+ * session cache, a temp worktree — is then made as the invoker, and root is taken
+ * back for one syscall at a time where the invoker is refused
+ * (identity_raise_on_refusal / identity_lower: sys/filesystem's second try).
+ * HOME, USER and LOGNAME are rewritten in the environment for libgit2 and the
+ * children; sudo's own variables stay, so a hook may tell. A child of the run
+ * drops for good before its exec (identity_drop_child): hooks, scripts, `dotta
+ * git` and the editor run as the invoker.
+ *
+ * A real root run (no tool names a user) drops nothing and raises nothing: its
+ * invoker is root, its files are root's, its HOME is root's unless $HOME says
+ * otherwise — consistent, and stated.
  *
  * Readers
  * -------
  * identity() is borrowed and immutable for the life of the process. Every HOME,
  * every user name and every "is this run root's" answer in the process is
  * identity()'s; a second getenv("HOME"), getuid() or SUDO_UID reader is a bug.
- * The two rules identity_init applies are public beneath it, so a suite can pin
- * them without root (tests/test-identity.c); identity_init is their only production
- * caller.
+ * The raise pair is sys/filesystem's syscall tier's alone; the child drop is
+ * every fork's (sys/process, cmds/git, sys/editor). The two rules identity_init
+ * applies are public beneath it, so a suite can pin them without root
+ * (tests/test-identity.c); identity_init is their only production caller.
  */
 
 #ifndef DOTTA_SYS_IDENTITY_H
@@ -102,6 +117,39 @@ error_t *identity_init(void);
  * @return The identity (never NULL)
  */
 const identity_t *identity(void);
+
+/**
+ * Take root back for one syscall the invoker was refused
+ *
+ * Reads errno first: true iff it is EACCES or EPERM and the run holds root for
+ * a user, in which case the effective user is now 0 — and the effective group,
+ * so what the call creates is root's, as sudo would have made it. The caller
+ * repeats its call and lowers at once (identity_lower), so the window is one
+ * syscall wide and never spans a call into libgit2, SQLite, the keymgr or a fork.
+ * On false nothing changed and errno is still the refused call's.
+ *
+ * @return true iff the effective identity is root until identity_lower
+ */
+bool identity_raise_on_refusal(void);
+
+/**
+ * The invoker's effective identity again, after a raise
+ *
+ * errno is preserved: it is the second call's, which the caller reports.
+ */
+void identity_lower(void);
+
+/**
+ * In a forked child, before its exec: the drop made permanent
+ *
+ * Real, effective and saved ids all the invoker's, so nothing the child execs
+ * can raise. Async-signal-safe (the setuid family and nothing else). A run that
+ * holds no root, or root's own, changes nothing. Every fork site calls it and
+ * reports a failure in its own words.
+ *
+ * @return 0, or -1 with errno
+ */
+int identity_drop_child(void);
 
 /**
  * The invoker rule: who typed the command

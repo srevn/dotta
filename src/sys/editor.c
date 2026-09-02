@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "sys/identity.h"
 
 /**
  * Get editor from environment with fallback chain
@@ -59,7 +60,10 @@ error_t *editor_launch(const char *editor, const char *file_path) {
     }
 
     if (pid == 0) {
-        /* Child process */
+        /* Child process: the invoker's editor, for good (sys/identity). */
+        if (identity_drop_child() != 0) {
+            _exit(126);
+        }
         execlp(editor, editor, file_path, (char *) NULL);
         /* If execlp returns, it failed */
         _exit(127);

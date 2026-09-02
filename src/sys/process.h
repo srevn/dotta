@@ -30,6 +30,9 @@
  * - The child resets SIGINT/SIGTERM/SIGPIPE/SIGALRM to SIG_DFL and clears its
  *   signal mask before exec — parent handlers do not leak into the new program
  *   image.
+ * - The child becomes the invoker for good before exec (identity_drop_child,
+ *   sys/identity): under sudo a hook or a script never runs as root. A failure
+ *   there is reported like an exec failure, errno over the self-pipe.
  * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the primitive publishes
  *   the child's pgid into the volatile sig_atomic_t global `active_child_pgid`
  *   (its own, defined in process.c) for the duration of the child's lifetime,

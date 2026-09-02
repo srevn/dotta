@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "base/args.h"
+#include "sys/identity.h"
 
 /**
  * Execute git command with passthrough
@@ -71,6 +72,13 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
     }
 
     if (pid == 0) {
+        /* The invoker's git, for good (sys/identity): `sudo dotta git` runs git
+         * as the user on the user's repository. */
+        if (identity_drop_child() != 0) {
+            perror("dotta git: cannot run as the invoker");
+            _exit(126);
+        }
+
         /* Child process: execute git argv is intentionally not freed - execvp
          * replaces the process image, and _exit() bypasses cleanup on failure */
         execvp("git", argv);

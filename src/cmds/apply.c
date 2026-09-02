@@ -803,6 +803,14 @@ static void print_deploy_results(
  * The run's receipt: per-item sections at verbose, summary counts at normal.
  * Every number is a bucket size — cleanup partitioned the plan and this reads
  * that partition, adding nothing of its own.
+ *
+ * A receipt reports effects. That is why this one re-tells a fate deploy's does
+ * not: a deploy skip has no effect at all — nothing written, no record moved —
+ * and the preview is its one home, where a cleanup release is an effect (the
+ * record retires) and belongs here too. A second telling says the same thing in
+ * the same order as the first, so the sections (kind-major) and the summary
+ * (fate-major) both take the preview's order — pruned, released, skipped, then
+ * what was already gone — and close on the failures.
  */
 static void print_cleanup_results(
     const output_t *out,
@@ -830,12 +838,12 @@ static void print_cleanup_results(
         }
     }
 
-    if (reclaimed_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
-        for (size_t i = 0; i < reclaimed_files.count; i++) {
+    if (released_files.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Released files");
+        for (size_t i = 0; i < released_files.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                reclaimed_files.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
+                released_files.entries[i]->filesystem_path
             );
         }
     }
@@ -852,12 +860,12 @@ static void print_cleanup_results(
         }
     }
 
-    if (released_files.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released files");
-        for (size_t i = 0; i < released_files.count; i++) {
+    if (reclaimed_files.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
+        for (size_t i = 0; i < reclaimed_files.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                released_files.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                reclaimed_files.entries[i]->filesystem_path
             );
         }
     }
@@ -882,12 +890,12 @@ static void print_cleanup_results(
         }
     }
 
-    if (reclaimed_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
-        for (size_t i = 0; i < reclaimed_dirs.count; i++) {
+    if (released_dirs.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Released directories");
+        for (size_t i = 0; i < released_dirs.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
-                reclaimed_dirs.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
+                released_dirs.entries[i]->filesystem_path
             );
         }
     }
@@ -902,12 +910,12 @@ static void print_cleanup_results(
         }
     }
 
-    if (released_dirs.count > 0) {
-        output_section(out, OUTPUT_VERBOSE, "Released directories");
-        for (size_t i = 0; i < released_dirs.count; i++) {
+    if (reclaimed_dirs.count > 0) {
+        output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
+        for (size_t i = 0; i < reclaimed_dirs.count; i++) {
             output_styled(
-                out, OUTPUT_VERBOSE, "  {cyan}[released]{reset} %s\n",
-                released_dirs.entries[i]->filesystem_path
+                out, OUTPUT_VERBOSE, "  {cyan}[reclaimed]{reset} %s\n",
+                reclaimed_dirs.entries[i]->filesystem_path
             );
         }
     }
@@ -935,20 +943,6 @@ static void print_cleanup_results(
             output_styled(
                 out, OUTPUT_NORMAL, "Pruned {yellow}%zu{reset} orphaned director%s\n",
                 pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
-            );
-        }
-
-        /* Orphans already gone from the filesystem when the run loaded. Reported
-         * separately from "Pruned" — no removal happened or was needed — and
-         * named for the paths, not for the record rows that retire behind them:
-         * what the user has here is a path that is already gone. */
-        size_t reclaimed = reclaimed_files.count + reclaimed_dirs.count;
-
-        if (reclaimed > 0) {
-            output_styled(
-                out, OUTPUT_NORMAL,
-                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)\n",
-                reclaimed, reclaimed == 1 ? "" : "s"
             );
         }
 
@@ -986,6 +980,20 @@ static void print_cleanup_results(
             );
             output_info(
                 out, OUTPUT_NORMAL, "Use --verbose to see which directories were skipped."
+            );
+        }
+
+        /* Orphans already gone from the filesystem when the run loaded. Reported
+         * separately from "Pruned" — no removal happened or was needed — and
+         * named for the paths, not for the record rows that retire behind them:
+         * what the user has here is a path that is already gone. */
+        size_t reclaimed = reclaimed_files.count + reclaimed_dirs.count;
+
+        if (reclaimed > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "Reclaimed {cyan}%zu{reset} orphaned path%s (already gone)\n",
+                reclaimed, reclaimed == 1 ? "" : "s"
             );
         }
 

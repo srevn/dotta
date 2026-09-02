@@ -2313,10 +2313,11 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
  * which must not open a directory whose path resolves through a squatter
  * (analyze_untracked_files). The record side is why the list is trustworthy on
  * every load, whatever the command's analysis options; the view side is as complete
- * as the analyses that ran (workspace_displaced_ancestor documents the reach).
- * The bound counts every no-item orphaned directory record, not just the displaced
- * ones — a true bound, loose only while such a record's path stands honestly,
- * and the list is empty on every healthy load.
+ * as the directory analysis, which every command's load runs (workspace_load_t
+ * — a load that routes items must never read NULL over a squatter). The bound
+ * counts every no-item orphaned directory record, not just the displaced ones —
+ * a true bound, loose only while such a record's path stands honestly, and the
+ * list is empty on every healthy load.
  */
 static error_t *collect_displaced(workspace_t *ws) {
     size_t bound = 0;

@@ -27,10 +27,12 @@
  *   step and the verbs) go to the database directly — no later reader in the
  *   run consults a retired path.
  *
- *   Exception: paths that load no workspace (the verbs — add, update, remove —
- *   profile enable / disable, sync's --force arm, completion) read the dispatcher's
- *   view or build their own with manifest_build, and write the record through
- *   state.h directly; no snapshot exists for them to desync.
+ *   Exception: the verbs — add, remove, and update after its commit — write the
+ *   record through state.h directly, against the post-commit view they build
+ *   with manifest_build. add and remove load no workspace, and nothing reads
+ *   update's after its record write, so there is no snapshot for the write to
+ *   desync. profile enable / disable write only the enabled set, sync writes
+ *   nothing, and completion reads the dispatcher's view alone.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
  *   workspace; the run's resources (the repository, the content cache) are read
@@ -277,6 +279,15 @@ typedef enum {
  * which rows are active and which records are orphans, and each analysis walks
  * its own slice.
  *
+ * Two of them are the join, and every command's load sets both: the file and
+ * the directory analyses observe the view's rows, and the displaced fact
+ * (collect_displaced) is complete only when every directory row has been observed
+ * — a load that routes items (workspace_item_route) must never read NULL over a
+ * squatter. The other two are optional because each has a cost and a reader that
+ * may not exist: the orphan analysis (a Git probe per profile; read by the settle
+ * — apply's cleanup — and status's Issues) and the untracked scan (a readdir
+ * walk per tracked directory; read by update --include-new and status's New files).
+ *
  * Lifetime: Options are read-only during workspace_load(), safe to stack-allocate.
  */
 typedef struct {
@@ -479,12 +490,12 @@ const manifest_row_t *workspace_lookup(
  *
  * The answer is derived from the load's own observations (collect_displaced):
  * the record's claims are covered on every load, the view's exactly when the
- * directory analysis ran — a load with analyze_directories off (sync, diff) reads
- * NULL over a displaced view claim, which is the reporting gap those commands
- * already accept. The outermost such ancestor is returned: the true offender,
- * whose occupant every deeper observation went through. Fate-blind by construction
- * — whether *this run* converges the displacement is deploy's question, asked
- * of its own fates against this answer (check_ancestry).
+ * directory analysis ran — which every command's load runs (workspace_load_t: a
+ * load that routes items must never read NULL over a squatter). The outermost
+ * such ancestor is returned: the true offender, whose occupant every deeper
+ * observation went through. Fate-blind by construction — whether *this run*
+ * converges the displacement is deploy's question, asked of its own fates against
+ * this answer (check_ancestry).
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a

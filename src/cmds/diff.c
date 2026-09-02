@@ -1343,12 +1343,15 @@ static error_t *diff_workspace(
     error_t *err = NULL;
     workspace_t *ws = NULL;
 
-    /* Step 1: Load workspace with full file analysis */
+    /* Step 1: Load the workspace. Both kinds are observed — diff renders the
+     * file items alone (present_diffs_for_direction), but a load that routes
+     * items must never read NULL over a squatter (workspace_load_t). Orphans
+     * have no reader here, and the untracked scan is update's. */
     workspace_load_t ws_opts = {
         .analyze_files       = true,  /* File content divergence detection */
-        .analyze_orphans     = false, /* Orphaned state entries not needed */
-        .analyze_untracked   = false, /* Not needed for diff (expensive) */
-        .analyze_directories = false  /* Not needed for diff */
+        .analyze_orphans     = false,
+        .analyze_untracked   = false,
+        .analyze_directories = true   /* One lstat per directory row: the displaced fact */
     };
 
     err = workspace_load(repo, state, config, cache, manifest, &ws_opts, arena, &ws);

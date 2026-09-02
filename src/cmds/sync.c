@@ -1625,11 +1625,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * the view the pulls produced.
      */
     if (!opts->force) {
+        /* Both kinds are observed: one lstat per directory row, and the guard
+         * below reads a tracked directory's divergence off the same route table
+         * as a file's — a load that routes items must never read NULL over a
+         * squatter (workspace_load_t). Orphans stay off — a Git probe per profile
+         * for items only the settle (apply's cleanup) and status's Issues read;
+         * the guard counts the view's rows, and the block after the Git phase
+         * diffs two views. */
         workspace_load_t ws_opts = {
             .analyze_files       = true,   /* Validate file state for uncommitted changes */
-            .analyze_orphans     = false,  /* Orphans are apply's concern, not sync's */
+            .analyze_orphans     = false,
             .analyze_untracked   = config->auto_detect_new_files, /* Respect config */
-            .analyze_directories = false   /* Directory metadata is apply's concern */
+            .analyze_directories = true    /* The guard reads directory rows too */
         };
         err = workspace_load(
             repo, state, config, content_cache, before, &ws_opts, ctx->arena, &ws

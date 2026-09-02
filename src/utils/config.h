@@ -42,10 +42,20 @@ error_t *config_get_path(char **out);
 error_t *config_validate(const config_t *config);
 
 /**
+ * DOTTA_REPO_DIR as the environment sets it, or NULL
+ *
+ * The one reader of the variable: config_get_repo_dir's first priority, and
+ * repo_open's note when the path it resolved holds no repository — the same reader,
+ * so the note cannot name an origin the resolution did not use. Raw and borrowed
+ * from the environment, unexpanded; an empty value is NULL.
+ */
+const char *config_repo_dir_from_env(void);
+
+/**
  * Get repository directory from config or environment
  *
  * Priority:
- *   1. DOTTA_REPO_DIR environment variable
+ *   1. DOTTA_REPO_DIR environment variable (config_repo_dir_from_env)
  *   2. Config file repo_dir
  *   3. Default: ~/.local/share/dotta/repo
  */

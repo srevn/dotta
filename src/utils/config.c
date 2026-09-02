@@ -886,12 +886,17 @@ error_t *config_validate(const config_t *config) {
     return NULL;
 }
 
+const char *config_repo_dir_from_env(void) {
+    const char *dir = getenv("DOTTA_REPO_DIR");
+    return (dir && dir[0] != '\0') ? dir : NULL;
+}
+
 error_t *config_get_repo_dir(const config_t *config, char **out) {
     CHECK_NULL(out);
 
     /* Priority 1: Environment variable */
-    const char *env_dir = getenv("DOTTA_REPO_DIR");
-    if (env_dir && env_dir[0] != '\0') {
+    const char *env_dir = config_repo_dir_from_env();
+    if (env_dir) {
         return fs_expand_tilde(env_dir, out);
     }
 

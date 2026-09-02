@@ -308,12 +308,11 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
             error_free(join_err);
 
             /* Where the path came from, when it did not come from the default.
-             * The same test config_get_repo_dir's priority 1 makes, so the note
-             * cannot name an origin the resolution did not use. */
-            const char *env_repo = getenv("DOTTA_REPO_DIR");
-            bool from_env = env_repo && env_repo[0] != '\0';
-            const char *env_note = from_env ? "\nDOTTA_REPO_DIR is set to: " : "";
-            const char *env_value = from_env ? env_repo : "";
+             * The reader config_get_repo_dir's priority 1 has, so the note cannot
+             * name an origin the resolution did not use. */
+            const char *env_repo = config_repo_dir_from_env();
+            const char *env_note = env_repo ? "\nDOTTA_REPO_DIR is set to: " : "";
+            const char *env_value = env_repo ? env_repo : "";
 
             if (holds_repository) {
                 answer = ERROR(

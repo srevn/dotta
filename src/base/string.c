@@ -40,6 +40,16 @@ bool str_path_beneath(const char *path, const char *dir, size_t dir_len) {
     return strncmp(path, dir, dir_len) == 0 && path[dir_len] == '/';
 }
 
+size_t str_path_parent_len(const char *path) {
+    const char *slash = strrchr(path, '/');
+
+    if (!slash) {
+        return 0;
+    }
+
+    return (slash == path) ? 1 : (size_t) (slash - path);
+}
+
 char *str_trim(char *str) {
     if (!str) {
         return NULL;

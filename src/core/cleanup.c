@@ -6,17 +6,20 @@
  * becomes of each, and carries that out.
  *
  * The verdict re-verifies nothing and touches neither disk, Git nor state — every
- * input is a field of the workspace item, observed once at load. The one look
- * the directory side takes is the readdir, because what is left in a directory
- * after this run's removals is not a property any earlier phase could have
- * recorded.
+ * input is a field of the workspace item, observed once at load. Preflight takes
+ * two looks past it, neither a property any earlier phase could have recorded:
+ * the readdir, because what is left in a directory after this run's removals is
+ * decided by this run; and the parent's reach, because whether this run may make
+ * a removal is a fact about the run, not the item.
  */
 
 #include "core/cleanup.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "base/array.h"
 #include "base/error.h"
@@ -285,7 +288,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
 typedef enum {
     FATE_UNPLANNED = 0,
     FATE_GONE,        /* This run prunes it — the hole the walk looks through */
-    FATE_HELD,        /* This run skips it — transient: update, --force, or the run that reaches it */
+    FATE_HELD,        /* This run skips it — transient: update, --force, root, or the run that reaches it */
     FATE_PERMANENT    /* This run releases it, or never touches it — nothing of dotta's comes back for it */
 } fate_t;
 
@@ -367,6 +370,34 @@ static bool managed_beneath(const workspace_t *ws, const char *dir) {
 }
 
 /**
+ * May this run make the removal?
+ *
+ * unlink(2) and rmdir(2) ask nothing of the path itself: the entry is the parent's,
+ * and write and search on the parent is the whole of the question (fs_eaccess,
+ * with the reach — a run that holds root is never refused here). The parent is
+ * the path's own, not the nearest present one deploy climbs to: a planned orphan
+ * is present, so its parent is. Not asked, and met by the removal with its cause
+ * instead: a sticky parent's owner rule, an immutable flag, a read-only mount,
+ * and the OS-metadata entries fs_remove_empty_dir clears inside a directory whose
+ * own write bit the invoker lacks. A path this cannot take apart — not absolute,
+ * or longer than any path the kernel takes — cannot happen, and reads as admitted:
+ * the removal reports it.
+ */
+static bool parent_accepts_removal(const char *path) {
+    size_t len = str_path_parent_len(path);
+    char parent[PATH_MAX];
+
+    if (len == 0 || len >= sizeof(parent)) {
+        return true;
+    }
+
+    memcpy(parent, path, len);
+    parent[len] = '\0';
+
+    return fs_eaccess(parent, W_OK | X_OK);
+}
+
+/**
  * Decide the verdicts
  */
 error_t *cleanup_preflight(
@@ -379,7 +410,7 @@ error_t *cleanup_preflight(
     CHECK_NULL(plan);
     CHECK_NULL(out);
 
-    /* calloc zeroes the eight buckets — an empty answer needs no NULL guard
+    /* calloc zeroes the ten buckets — an empty answer needs no NULL guard
      * downstream */
     cleanup_preflight_result_t *verdicts = calloc(1, sizeof(*verdicts));
     if (!verdicts) {
@@ -398,9 +429,9 @@ error_t *cleanup_preflight(
 
     error_t *err = NULL;
 
-    /* One verdict per file, read straight off the item: no syscalls, no queries.
-     * An absent file joins neither the prune count nor the fate set: no filesystem
-     * effect to preview, and no walk meets it. */
+    /* One verdict per file, read off the item, then one probe for the ones it
+     * cleared. An absent file joins neither the prune count nor the fate set:
+     * no filesystem effect to preview, and no walk meets it. */
     workspace_items_t files = workspace_items_view(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
@@ -423,8 +454,15 @@ error_t *cleanup_preflight(
                 break;
 
             case CLEANUP_PRUNABLE:
-                err = ptr_array_push(&verdicts->prunable_files, item);
-                fate = FATE_GONE;
+                /* Nothing of its own in the way; the run's reach is the last
+                 * rung, and a refusal holds the file exactly as a skip does. */
+                if (parent_accepts_removal(item->filesystem_path)) {
+                    err = ptr_array_push(&verdicts->prunable_files, item);
+                    fate = FATE_GONE;
+                } else {
+                    err = ptr_array_push(&verdicts->refused_files, item);
+                    fate = FATE_HELD;
+                }
                 break;
         }
         if (!err && fate != FATE_UNPLANNED) {
@@ -474,12 +512,13 @@ error_t *cleanup_preflight(
             case CLEANUP_PRUNABLE:
                 /* A directory the workspace saw and can read (the occupant is
                  * DIRECTORY: anything else in its place was released above).
-                 * What is left in it after this run finishes the verdict. A managed
-                 * path beneath it is known from the view before any look at the
-                 * disk; otherwise one readdir, which stops at the first permanent
-                 * entry and notes any held one it passed. UNREADABLE is a directory
-                 * that was readable at load and is not now — the world moved,
-                 * and it is held like a refusal on removal, not released. */
+                 * What is left in it after this run, and then the run's reach,
+                 * finish the verdict. A managed path beneath it is known from
+                 * the view before any look at the disk; otherwise one readdir,
+                 * which stops at the first permanent entry and notes any held
+                 * one it passed. UNREADABLE is a directory that was readable at
+                 * load and is not now — the world moved, and it is held like a
+                 * refusal on removal, not released. */
                 if (managed_beneath(ws, path)) {
                     fate = FATE_PERMANENT;
                 } else {
@@ -492,10 +531,20 @@ error_t *cleanup_preflight(
                     }
                 }
 
-                ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
-                                    : (fate == FATE_HELD) ? &verdicts->skipped_dirs
-                                                          : &verdicts->released_dirs;
-                err = ptr_array_push(bucket, item);
+                if (fate == FATE_GONE && !parent_accepts_removal(path)) {
+                    /* Nothing but gone entries left, and not this run's to remove:
+                     * held, as a refused file is, for the run that holds root.
+                     * Asked last, of what the run would otherwise remove, so a
+                     * directory a permanent entry keeps is released whoever owns
+                     * its parent. */
+                    err = ptr_array_push(&verdicts->refused_dirs, item);
+                    fate = FATE_HELD;
+                } else {
+                    ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
+                                        : (fate == FATE_HELD) ? &verdicts->skipped_dirs
+                                                              : &verdicts->released_dirs;
+                    err = ptr_array_push(bucket, item);
+                }
                 break;
         }
         if (!err && fate != FATE_UNPLANNED) {
@@ -522,10 +571,12 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
     }
 
     ptr_array_deinit(&verdicts->prunable_files);
+    ptr_array_deinit(&verdicts->refused_files);
     ptr_array_deinit(&verdicts->skipped_files);
     ptr_array_deinit(&verdicts->released_files);
     ptr_array_deinit(&verdicts->absent_files);
     ptr_array_deinit(&verdicts->prunable_dirs);
+    ptr_array_deinit(&verdicts->refused_dirs);
     ptr_array_deinit(&verdicts->skipped_dirs);
     ptr_array_deinit(&verdicts->released_dirs);
     ptr_array_deinit(&verdicts->absent_dirs);

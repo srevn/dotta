@@ -139,9 +139,11 @@ typedef enum dotta_state_mode {
  *
  * a file-scope compound literal — static storage, its address an address constant
  * (C11 §6.5.2.5p5, §6.6p9). A spec without a payload opens nothing (init, clone,
- * completion). Additional fields (privilege escalation, verbosity override, …)
- * land here as new members without touching the engine — this is the extension
- * point `main.c::run_spec` reads.
+ * completion). Additional fields (a verbosity override, …) land here as new members
+ * without touching the engine — this is the extension point `main.c::run_spec`
+ * reads. Privilege is not one of them and never will be: the identity of the
+ * run is a process fact (sys/identity), and what a run cannot do as the invoker
+ * is each engine's preflight skip, not a need.
  *
  * The spec names the full set, not the deepest need on each chain: a reader learns
  * that `status` reads the state from `status`'s spec, not from a lattice. The

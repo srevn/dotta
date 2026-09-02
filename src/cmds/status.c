@@ -825,10 +825,11 @@ static void display_workspace_status(
                      * tag string, so the key reads back against the list it
                      * follows. The verdict is cleanup's (cleanup_verdict, the
                      * one producer the preview reads too) — this only names it.
-                     * A directory's PRUNABLE is the one verdict status cannot
-                     * finish, and its hint says so; it shares the bare [orphaned]
-                     * key with the files, so the sentence is written to be true
-                     * of both. */
+                     * PRUNABLE is the one verdict status cannot finish — the
+                     * remainder and the run's reach are preflight's, from the
+                     * disk — and the directory hint says so; it shares the bare
+                     * [orphaned] key with the files, so the sentence is written
+                     * to be true of both. */
                     struct { char tags[64]; const char *hint; } legend[16];
                     size_t legend_count = 0;
                     size_t legend_width = 0;

@@ -841,9 +841,10 @@ static void print_deploy_results(
  * The run's receipt: per-item sections at verbose, summary counts at normal,
  * the failures at both. Every number is a bucket size, read off two objects because
  * the run's story is held by two: the verdicts hold what cleanup decided and
- * never acted on — released, skipped at preflight, gone at load — and the receipt
- * what execute found and did — pruned, gone by the time it looked, refused, failed
- * (cleanup_result_t). Each read names its source; this adds nothing of its own.
+ * never acted on — released, skipped or refused at preflight, gone at load —
+ * and the receipt what execute found and did — pruned, gone by the time it looked,
+ * refused, failed (cleanup_result_t). Each read names its source; this adds nothing
+ * of its own.
  *
  * A receipt reports effects. That is why this one re-tells a fate deploy's does
  * not: a deploy skip has no effect at all — nothing written, no record moved —
@@ -853,10 +854,11 @@ static void print_deploy_results(
  * (fate-major) both take the preview's order — pruned, released, skipped, then
  * what was already gone — and close on the failures: one section at every
  * verbosity, both kinds in act order, each row with its cause, the shape of
- * deploy's "Failed deployments". Where a section has two sources — the skipped
- * directories (held at preflight, refused at removal), the reclaimed paths (gone
- * at load, gone by the time the run looked) — the verdicts' rows print first,
- * so a run that had both names each once.
+ * deploy's "Failed deployments". Where a section has more than one source — the
+ * skipped files and directories (held or refused at preflight, and a directory
+ * refused at removal), the reclaimed paths (gone at load, gone by the time the
+ * run looked) — the verdicts' rows print first, so a run that had both names
+ * each once.
  */
 static void print_cleanup_results(
     const output_t *out,
@@ -886,16 +888,24 @@ static void print_cleanup_results(
         }
     }
 
-    /* Each skipped file's reason was named by the preview's skipped-files block,
-     * which always prints; the receipt only confirms the skip. */
-    if (verdicts->skipped_files.count > 0) {
-        workspace_items_t items = workspace_items_view(&verdicts->skipped_files);
+    /* Each skipped file's reason was named by the preview — the skipped-files
+     * block for the item's own, the needing-root block for the run's — and both
+     * always print; the receipt only confirms the skip. */
+    if (verdicts->skipped_files.count + verdicts->refused_files.count > 0) {
+        workspace_items_t held = workspace_items_view(&verdicts->skipped_files);
+        workspace_items_t refused = workspace_items_view(&verdicts->refused_files);
 
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
-        for (size_t i = 0; i < items.count; i++) {
+        for (size_t i = 0; i < held.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                items.entries[i]->filesystem_path
+                held.entries[i]->filesystem_path
+            );
+        }
+        for (size_t i = 0; i < refused.count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
+                refused.entries[i]->filesystem_path
             );
         }
     }
@@ -940,14 +950,22 @@ static void print_cleanup_results(
         }
     }
 
-    if (verdicts->skipped_dirs.count + result->skipped_dirs.count > 0) {
+    if (verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
+        result->skipped_dirs.count > 0) {
         workspace_items_t held = workspace_items_view(&verdicts->skipped_dirs);
+        workspace_items_t refused = workspace_items_view(&verdicts->refused_dirs);
 
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
         for (size_t i = 0; i < held.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
                 held.entries[i]->filesystem_path
+            );
+        }
+        for (size_t i = 0; i < refused.count; i++) {
+            output_styled(
+                out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
+                refused.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < result->skipped_dirs.count; i++) {
@@ -1011,20 +1029,24 @@ static void print_cleanup_results(
         }
 
         /* No reason here: the preview's skipped-files block named these files,
-         * their reasons and the --force override, and it always prints — including
-         * on the run that reports this line. */
-        if (verdicts->skipped_files.count > 0) {
+         * their reasons and the --force override, its needing-root block the
+         * ones the parent refuses and the sudo line, and both always print —
+         * including on the run that reports this line. */
+        size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
+
+        if (skipped_files > 0) {
             output_warning(
                 out, OUTPUT_NORMAL, "Skipped %zu orphaned file%s",
-                verdicts->skipped_files.count,
-                verdicts->skipped_files.count == 1 ? "" : "s"
+                skipped_files, skipped_files == 1 ? "" : "s"
             );
         }
 
         /* Nor here: a directory is skipped because something the run holds back
-         * is still in it, because the workspace could not verify it, or because
-         * the removal refused — the verbose listing names which. */
-        size_t skipped_dirs = verdicts->skipped_dirs.count + result->skipped_dirs.count;
+         * is still in it, because the workspace could not verify it, because
+         * its parent refuses the run, or because the removal refused — the verbose
+         * listing names which. */
+        size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
+            result->skipped_dirs.count;
 
         if (skipped_dirs > 0) {
             output_info(
@@ -1118,25 +1140,28 @@ static void print_path_list(
  * from the promise here to the receipt's own buckets (reclaimed, skipped), and
  * the receipt says so from its side (print_cleanup_results).
  *
- * The summaries only count the files the run will not prune; two blocks name
+ * The summaries only count the files the run will not prune; three blocks name
  * them, with different messaging. The released ones close this preview: a release
  * is a promise of an effect — the record retires — and nothing is asked about
- * it, so the block is the preview's to make. The skipped ones, with their reason
- * and the one lever that overrides it, are the skips' (print_cleanup_skips).
- * Cleanup took that split when it bucketed each file; this is display, so it
- * counts nothing and only routes per item.
+ * it, so the block is the preview's to make. The skipped ones are two buckets
+ * under one count — the skip is the fate, and the record stays either way — named
+ * apart by what holds them: the item's own reason and the one lever that overrides
+ * it (print_cleanup_skips), or the parent that refuses the run and the command
+ * that holds root (print_cleanup_refused). Cleanup took that split when it bucketed
+ * each file; this is display, so it counts nothing and only routes per item.
  */
 static void print_cleanup_preview(
     const output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
-    workspace_items_t skipped = workspace_items_view(&verdicts->skipped_files);
     workspace_items_t released = workspace_items_view(&verdicts->released_files);
+    size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
+    size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count;
 
     /* Every planned item lands in exactly one bucket, so these are the
      * present-orphan counts and the state-only count. */
-    size_t present_files = verdicts->prunable_files.count + skipped.count + released.count;
-    size_t present_dirs = verdicts->prunable_dirs.count + verdicts->skipped_dirs.count +
+    size_t present_files = verdicts->prunable_files.count + skipped_files + released.count;
+    size_t present_dirs = verdicts->prunable_dirs.count + skipped_dirs +
         verdicts->released_dirs.count;
 
     /* An empty plan — no orphans in scope, --keep-orphans — has nothing to say,
@@ -1198,12 +1223,12 @@ static void print_cleanup_preview(
             );
         }
 
-        if (skipped.count > 0) {
+        if (skipped_files > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {yellow}%zu{reset} file%s will be skipped\n",
-                skipped.count,
-                skipped.count == 1 ? "" : "s"
+                skipped_files,
+                skipped_files == 1 ? "" : "s"
             );
         }
 
@@ -1241,9 +1266,10 @@ static void print_cleanup_preview(
          * left behind is not the event a file left behind is — whether the
          * workspace released it or it holds something this run will never remove
          * (cleanup.h's classes). A skipped directory holds something the run
-         * holds back, could not be verified (status tags it [unverified]), or
-         * sits under a moved home ([relocated] — the hold --force lifts); the
-         * slash says "left alone this run" for each. */
+         * holds back, could not be verified (status tags it [unverified]), sits
+         * under a moved home ([relocated] — the hold --force lifts), or sits
+         * under a parent that refuses the run (the needing-root block names it);
+         * the slash says "left alone this run" for each. */
         if (verdicts->released_dirs.count > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
@@ -1255,15 +1281,15 @@ static void print_cleanup_preview(
 
         print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
 
-        if (verdicts->skipped_dirs.count > 0) {
+        if (skipped_dirs > 0) {
             output_styled(
                 out, OUTPUT_NORMAL, "  {yellow}%zu{reset} director%s will be skipped\n",
-                verdicts->skipped_dirs.count,
-                verdicts->skipped_dirs.count == 1 ? "y" : "ies"
+                skipped_dirs, skipped_dirs == 1 ? "y" : "ies"
             );
         }
 
         print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        print_path_list(out, &verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
 
         if (verdicts->absent_dirs.count > 0) {
             output_styled(
@@ -1384,6 +1410,72 @@ static void print_cleanup_skips(
 }
 
 /**
+ * Print the cleanup refusals: what the run cannot prune, and what could
+ *
+ * Both kinds in one section — files, then the directories in prune order — each
+ * row naming the parent that refuses, verbatim, in the words deploy's PERMISSION
+ * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
+ * where the workspace's own lstat was refused on the way — the occupant says so,
+ * and the parent the probe asked is then not the rung that refused), and the one
+ * closer: the command line that holds root, handed in by the caller as
+ * print_deploy_skips's is, so the printer renders and never asks who it is. Capped like deploy's block —
+ * one root-owned parent can hold a subtree — where cleanup's skipped-files block
+ * is not (every row there carries a reason of its own). Neither a --force line
+ * nor a by-hand one: root is not a flag, and the row already names the directory
+ * a hand would have to open.
+ *
+ * Last of the previews, after the skips it is the sibling of: a refusal is a
+ * skip by fate — the count lines above say "skipped", the record stays, the receipt
+ * confirms it under that word — and this block is where its reason lives, the
+ * run's rather than the item's (cleanup_preflight_result_t). Empty under a run
+ * that holds root, by construction, and prints nothing.
+ */
+static void print_cleanup_refused(
+    const output_t *out,
+    const cleanup_preflight_result_t *verdicts,
+    const char *sudo_hint
+) {
+    const workspace_items_t kinds[] = {
+        workspace_items_view(&verdicts->refused_files),
+        workspace_items_view(&verdicts->refused_dirs),
+    };
+    size_t total = kinds[0].count + kinds[1].count;
+
+    if (total == 0) {
+        return;
+    }
+
+    output_section(out, OUTPUT_NORMAL, "Orphaned paths needing root");
+
+    size_t shown = 0;
+    for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
+        for (size_t i = 0; i < kinds[k].count && shown < LIST_LIMIT; i++, shown++) {
+            const workspace_item_t *item = kinds[k].entries[i];
+            const char *path = item->filesystem_path;
+
+            if (item->occupant == FS_OCCUPANT_UNKNOWN) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
+                    path
+                );
+            } else {
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%.*s is not writable)\n",
+                    path, (int) str_path_parent_len(path), path
+                );
+            }
+        }
+    }
+    if (total > LIST_LIMIT) {
+        output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", total - LIST_LIMIT);
+    }
+
+    if (sudo_hint) {
+        output_info(out, OUTPUT_NORMAL, "  Run under sudo to prune them: %s", sudo_hint);
+    }
+}
+
+/**
  * Apply command implementation
  */
 error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
@@ -1479,10 +1571,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* The command line that re-runs this invocation under sudo, for the skips'
-     * closing line (print_deploy_skips). Built here beside the other run-wide
-     * string, and only by a run that holds no root: one that does is never refused
-     * where the invoker is, and would only name a remedy already taken. */
+    /* The command line that re-runs this invocation under sudo, for the two closing
+     * lines that name it (print_deploy_skips, print_cleanup_refused). Built here
+     * beside the other run-wide string, and only by a run that holds no root:
+     * one that does is never refused where the invoker is, and would only name
+     * a remedy already taken. */
     if (!identity()->privileged) {
         sudo_hint = identity_sudo_hint(ctx->argc, ctx->argv);
         if (!sudo_hint) {
@@ -2116,6 +2209,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     print_deploy_skips(out, deploy_verdicts, sudo_hint);
     print_cleanup_preview(out, cleanup_verdicts);
     print_cleanup_skips(out, cleanup_verdicts);
+    print_cleanup_refused(out, cleanup_verdicts, sudo_hint);
 
     /* The previews are over: one blank before whatever follows — the prompt, a
      * dry run's tail, the run's trace. Unconditional, because past the

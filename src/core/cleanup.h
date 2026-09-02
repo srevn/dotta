@@ -11,9 +11,10 @@
  * and applies no filter of its own.
  *
  * Why the verdicts are a phase of their own and not part of the plan: the plan
- * is (workspace, scope) alone — which orphans this run may touch — and the
- * directory verdicts need a look at the disk, the readdir, that a plan has no
- * business taking.
+ * is (workspace, scope) alone — which orphans this run may touch — and a verdict
+ * needs looks at the disk that a plan has no business taking: the readdir that
+ * finishes a directory's, and the one probe of the parent that finishes either
+ * kind's (may this run make the removal at all).
  *
  * The verdicts are a function of the workspace's load-time observation — the
  * occupant, divergence, Git authority — of the view, of the plan, and of --force.
@@ -41,6 +42,13 @@
  *   cleanup_preflight_result_t has the classes), and fs_remove_empty_dir, which
  *   removes exactly what that walk looks past as gone and refuses anything else
  *   before touching it (execute)
+ * - whether this run may make a removal the item's facts cleared: write and search
+ *   on the parent, fs_eaccess, once per such item (preflight — the refused
+ *   buckets). The one fact here that is the run's and not the path's, asked with
+ *   the reach counted in: a run that holds root is never refused, so the buckets
+ *   are empty under sudo by construction, and without it the refusal is a skip
+ *   that names the parent and closes with the sudo line — the shape deploy's
+ *   PERMISSION skip has on the other engine
  *
  * Directory pruning is one deepest-first pass, ordered by the plan. Children
  * are decided before parents, so a parent emptied by its children needs no second
@@ -220,9 +228,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
 /**
  * What becomes of a planned orphan, read off the item alone
  *
- * The four verdict buckets of cleanup_preflight_result_t, as a value: one producer,
- * read by the verdict phase to fill them and by status to predict them, so the
- * two cannot route one item two ways. In the order the tests are taken — the
+ * The verdict buckets of cleanup_preflight_result_t, as a value — PRUNABLE split
+ * once more there, by the run's reach: one producer, read by the verdict phase
+ * to fill them and by status to predict them, so the two cannot route one item
+ * two ways. In the order the tests are taken — the
  * occupant, the state, the divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
@@ -270,18 +279,20 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    the run can see into, and
  *                                                    the receipt would only read
  *                                                    [failed]
- *   else                                  PRUNABLE   a file: removed. A
- *                                                    directory: the candidate
- *                                                    the readdir finishes —
- *                                                    prunable once nothing but
- *                                                    gone entries is left in
- *                                                    it, skipped while a held
- *                                                    one is, released once a
- *                                                    permanent one is (the classes
- *                                                    are on
+ *   else                                  PRUNABLE   the candidate preflight
+ *                                                    finishes. A file: removed,
+ *                                                    once the parent admits the
+ *                                                    run. A directory: prunable
+ *                                                    once nothing but gone entries
+ *                                                    is left in it and the parent
+ *                                                    admits the run, skipped
+ *                                                    while a held one is, released
+ *                                                    once a permanent one is
+ *                                                    (the classes are on
  *                                                    cleanup_preflight_result_t)
  *
- * The one verdict status cannot finish is a directory's PRUNABLE, and it says so.
+ * PRUNABLE is the one verdict status cannot finish — the remainder and the reach
+ * are preflight's, from the disk — and its directory hint says so.
  */
 typedef enum {
     CLEANUP_ABSENT,      /* Not on disk at load → record retires, no filesystem effect */
@@ -304,8 +315,10 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * Cleanup verdicts — what cleanup_execute will do, decided once
  *
  * Every planned item lands in exactly one bucket:
- *   plan->files       = prunable_files ∪ skipped_files ∪ released_files ∪ absent_files
- *   plan->directories = prunable_dirs  ∪ skipped_dirs  ∪ released_dirs  ∪ absent_dirs
+ *   plan->files       = prunable_files ∪ refused_files ∪ skipped_files ∪
+ *                       released_files ∪ absent_files
+ *   plan->directories = prunable_dirs  ∪ refused_dirs  ∪ skipped_dirs  ∪
+ *                       released_dirs  ∪ absent_dirs
  *
  * Counts are bucket sizes: nothing downstream re-folds an array to recover a
  * split this phase already took. The preview and the confirmation prompt both
@@ -315,6 +328,21 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *
  * Every bucket is always initialized — an empty answer is a valid answer, and
  * no consumer needs a NULL guard.
+ *
+ * refused_* hold what every fact of its own cleared and the run cannot remove:
+ * unlink and rmdir ask nothing of the path, only write and search on its parent,
+ * and the parent refuses this run (fs_eaccess, with the reach — a run that holds
+ * root fills neither bucket, and the sudo'd re-run the preview names meets no
+ * refusal). Held exactly as a skip is — left alone, record stays, the directory
+ * above waits with it, the screen counts it as skipped — and kept apart from
+ * one because the reason is the run's, not the item's: --force lifts a skip reason
+ * and never this, and the remedy is root, not consent. The last rung, as OWNERSHIP
+ * is deploy's: an item a skip reason holds is never asked, so a modified orphan
+ * under a root-owned parent reads modified unforced and refused under --force,
+ * each honest about the one thing in the way. Two under-approximations the removal
+ * meets with its cause instead (cleanup_result_t's failed): a sticky parent's
+ * owner rule, and the OS-metadata entries fs_remove_empty_dir clears inside a
+ * directory whose own write bit the invoker lacks.
  *
  * A directory is predicted against this same run's own effects — what is left
  * in it once the run has acted. What the readdir meets falls into three classes,
@@ -361,12 +389,14 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
 typedef struct {
     /* Files */
     ptr_array_t prunable_files;    /* Present, no reason to skip it → unlinked */
+    ptr_array_t refused_files;     /* Present, nothing of its own in the way, the parent refuses this run → left alone, record stays */
     ptr_array_t skipped_files;     /* Present, a skip reason stands → left alone (unless --force) */
     ptr_array_t released_files;    /* Present, Git no longer backs it → left on disk, record retires */
     ptr_array_t absent_files;      /* Not on disk at load → record retires, no filesystem effect */
 
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
+    ptr_array_t refused_dirs;      /* Present; nothing but gone entries left, the parent refuses this run → left alone, record stays */
     ptr_array_t skipped_dirs;      /* Present; a held entry left, could not be verified, or its home moved → left alone, record stays */
     ptr_array_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
     ptr_array_t absent_dirs;       /* Not there → record retires */
@@ -375,13 +405,15 @@ typedef struct {
 /**
  * Decide the verdicts
  *
- * Files from the items alone — cleanup_verdict, one test per item; O(n) in the
- * file count, no syscalls, because every observation it reads was made at workspace
- * load. Directories: cleanup_verdict from the item likewise (a released or
- * unverified directory is left alone, unprobed), then for each candidate the
- * view (a managed path beneath it) and one readdir, against the files above,
- * the directories already decided beneath them, and — for an entry outside the
- * plan — its workspace item.
+ * Files: cleanup_verdict from the item — every observation it reads was made at
+ * workspace load — then, for a prunable one, the parent's reach (one fs_eaccess).
+ * Directories: cleanup_verdict from the item likewise (a released or unverified
+ * directory is left alone, unprobed), then for each candidate the view (a managed
+ * path beneath it) and one readdir, against the files above, the directories
+ * already decided beneath them, and — for an entry outside the plan — its workspace
+ * item; then, for one nothing but gone entries is left in, the parent's reach.
+ * The reach is asked last, of what the run would otherwise remove: a directory
+ * a permanent entry keeps is released whoever owns its parent.
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
@@ -390,7 +422,8 @@ typedef struct {
  *        outside the plan)
  * @param plan Cleanup plan (must not be NULL)
  * @param force --force: prune what would be skipped too; never a released file,
- *        never a directory's UNVERIFIED (cleanup_verdict)
+ *        never a directory's UNVERIFIED (cleanup_verdict), never a refusal (root
+ *        is not a flag)
  * @param out Verdicts (must not be NULL; caller frees with
  *        cleanup_preflight_result_free)
  * @return Error on allocation failure, NULL otherwise
@@ -471,7 +504,7 @@ typedef struct {
  *
  * Records that retire: pruned_* and reclaimed_* (here), absent_* (the verdicts).
  * Records that release: released_* (the verdicts). Records that stay: skipped_dirs
- * and failed (here), skipped_files and skipped_dirs (the verdicts).
+ * and failed (here), skipped_* and refused_* (the verdicts).
  *
  * Exit contract: `failed` alone reaches the exit code. Three columns, and the
  * two engines draw the line between them differently — deploy_skip_reason_t draws
@@ -479,7 +512,9 @@ typedef struct {
  *
  *   never attempted: dotta could not     deploy   exit ≠ 0  the incapacity skips
  *                                        cleanup  exit 0    a directory's UNVERIFIED
- *                                                           (cleanup_verdict)
+ *                                                           (cleanup_verdict);
+ *                                                           a parent that refuses
+ *                                                           the run (refused_*)
  *   attempted: the world moved           deploy   exit ≠ 0  failed — EEXIST, EISDIR,
  *                                                           ENOTEMPTY are the
  *                                                           row's own outcome

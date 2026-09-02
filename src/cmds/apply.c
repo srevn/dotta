@@ -25,8 +25,8 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "sys/filesystem.h"
+#include "sys/identity.h"
 #include "utils/hooks.h"
-#include "utils/privilege.h"
 
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
 
@@ -58,22 +58,27 @@
  * each gated by what is actually present — the reasons, and for a named squatter
  * the claim that holds it (the fate-borne ancestor_class): a conflict-only run
  * is not told to fix paths by hand, a squatted ancestor claim is not told to
- * widen a scope that can never plan it, and an unreadable-only run is offered
- * neither a flag that will not lift it nor a by-hand fix for a path dotta could
- * not even read: it closes with its own line, because dotta never writes on a
- * guess. The consent remedy teaches both directions and names its cost the way
- * cleanup's does: --force keeps Git's and discards what stands there, and a CONTENT
- * skip adds the disk-wins verb, 'dotta update' — gated on CONTENT and not on
- * the class, because update refuses a retyped row (update.c's retyped_skipped).
- * It stops there: the 'dotta add --force' a Git-moved row needs is what update's
- * own refusal says at the moment the user meets it, and '-e' is how to ignore a
- * skip, not how to remedy one. The block sits between the deploy preview and
- * cleanup's, so each engine tells its story the same way — what it will do, then
- * what it will not and why. No total-count line: the exit error's message is
- * the count's one home.
+ * widen a scope that can never plan it, a run that holds root is not told to
+ * hold it, and an unreadable-only run is offered neither a flag that will not
+ * lift it nor a by-hand fix for a path dotta could not even read: it closes with
+ * its own line, because dotta never writes on a guess. The two refusals root
+ * lifts — a landing the invoker cannot write, a pair it cannot set — close with
+ * the one command that would, spelled whole (identity_sudo_hint), and only by a
+ * run that holds none: the caller hands the line or NULL, so the printer renders
+ * and never asks who it is. The consent remedy teaches both directions and names
+ * its cost the way cleanup's does: --force keeps Git's and discards what stands
+ * there, and a CONTENT skip adds the disk-wins verb, 'dotta update' — gated on
+ * CONTENT and not on the class, because update refuses a retyped row (update.c's
+ * retyped_skipped). It stops there: the 'dotta add --force' a Git-moved row needs
+ * is what update's own refusal says at the moment the user meets it, and '-e'
+ * is how to ignore a skip, not how to remedy one. The block sits between the
+ * deploy preview and cleanup's, so each engine tells its story the same way —
+ * what it will do, then what it will not and why. No total-count line: the exit
+ * error's message is the count's one home.
  */
 static void print_deploy_skips(
-    const output_t *out, const deploy_preflight_result_t *verdicts
+    const output_t *out, const deploy_preflight_result_t *verdicts,
+    const char *sudo_hint
 ) {
     if (verdicts->skipped.count == 0) {
         return;
@@ -156,6 +161,18 @@ static void print_deploy_skips(
                 break;
             }
 
+            case DEPLOY_SKIP_OWNERSHIP: {
+                /* The claim as chown(1) spells it: owner, owner:group, or :group */
+                const char *owner = s->row->owner ? s->row->owner : "";
+                const char *group = s->row->group ? s->row->group : "";
+
+                output_styled(
+                    out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
+                    path, owner, *group ? ":" : "", group
+                );
+                break;
+            }
+
             case DEPLOY_SKIP_NONE: {
                 /* Unreachable: a row is in skipped because a reason names it */
                 break;
@@ -220,6 +237,14 @@ static void print_deploy_skips(
                 out, OUTPUT_NORMAL,
                 "  Fix the path by hand, or 'dotta update <dir>' to re-derive the way there"
             );
+            break;
+        }
+    }
+    for (size_t i = 0; sudo_hint && i < verdicts->skipped.count; i++) {
+        deploy_skip_reason_t reason = verdicts->skipped.entries[i].reason;
+
+        if (reason == DEPLOY_SKIP_PERMISSION || reason == DEPLOY_SKIP_OWNERSHIP) {
+            output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them: %s", sudo_hint);
             break;
         }
     }
@@ -1359,104 +1384,6 @@ static void print_cleanup_skips(
 }
 
 /**
- * Check privileges for complete apply operation
- *
- * Examines the deployment plan's pending files and directories (deployed /
- * converged) plus the file and directory orphans being removed, for root/ paths.
- * This ensures we have required privileges BEFORE attempting any filesystem
- * modifications. Reading the plans is an accepted over-approximation, the same
- * one the orphan loops below make: the pending buckets include rows preflight
- * will then skip, and being ready to touch a path the run then leaves alone costs
- * nothing. Parents deploy creates on the way are prefixes of planned paths, so
- * a planned path's own label already covers them.
- *
- * Called before the first write of the run — the adoption loop's — so a re-exec
- * restarts a process that has recorded nothing and printed no receipt line twice.
- * With both plans empty it collects no label and returns at once, so the
- * nothing-to-do exit below it never prompts for privileges it will not use.
- *
- * @param ctx Dispatch context (must not be NULL; argv for the re-exec, out)
- * @param deploy_plan Deployment plan (must not be NULL)
- * @param cleanup_plan Orphans the run may remove; the present ones are checked
- *        (must not be NULL — empty under --keep-orphans)
- * @return NULL if OK to proceed, error otherwise (or does not return if re-exec
- *         with sudo)
- */
-static error_t *ensure_complete_apply_privileges(
-    const dotta_ctx_t *ctx,
-    const deploy_plan_t *deploy_plan,
-    const cleanup_plan_t *cleanup_plan
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(deploy_plan);
-    CHECK_NULL(cleanup_plan);
-
-    manifest_rows_t files = manifest_rows_view(&deploy_plan->files.pending);
-    manifest_rows_t dirs = manifest_rows_view(&deploy_plan->directories.pending);
-
-    workspace_items_t file_orphans = workspace_items_view(&cleanup_plan->files);
-    workspace_items_t dir_orphans = workspace_items_view(&cleanup_plan->directories);
-
-    /* Strict upper bound — every entry across the four sources may need elevation.
-     * Reserve once to keep growth out of the hot loop. */
-    size_t cap = files.count + dirs.count + file_orphans.count + dir_orphans.count;
-    if (cap == 0) return NULL;
-
-    string_array_t labels STRING_ARRAY_AUTO = { 0 };
-    error_t *err = string_array_init_cap(&labels, cap);
-    if (err) return error_wrap(err, "Failed to reserve privilege label array");
-
-    /* Collect labels for entries needing elevation. The collect helper runs the
-     * predicate and pushes the storage_path in one step — the filter is enforced
-     * by the privilege module, not the call site. */
-    for (size_t i = 0; i < files.count; i++) {
-        err = privilege_collect_label(
-            &labels,
-            files.entries[i]->storage_path,
-            files.entries[i]->filesystem_path
-        );
-        if (err) return err;
-    }
-
-    for (size_t i = 0; i < dirs.count; i++) {
-        err = privilege_collect_label(
-            &labels,
-            dirs.entries[i]->storage_path,
-            dirs.entries[i]->filesystem_path
-        );
-        if (err) return err;
-    }
-
-    /* An orphan already gone from disk is a state-only reclaim: no filesystem
-     * effect, so no elevation. The released and skipped ones are an accepted
-     * over-approximation — their verdicts are taken after this check runs, and
-     * being ready to touch a path the run then leaves alone costs nothing. */
-    for (size_t i = 0; i < file_orphans.count; i++) {
-        const workspace_item_t *item = file_orphans.entries[i];
-
-        if (item->occupant == FS_OCCUPANT_NONE) continue;
-
-        err = privilege_collect_label(&labels, item->storage_path, item->filesystem_path);
-        if (err) return err;
-    }
-
-    for (size_t i = 0; i < dir_orphans.count; i++) {
-        const workspace_item_t *item = dir_orphans.entries[i];
-
-        if (item->occupant == FS_OCCUPANT_NONE) continue;
-
-        err = privilege_collect_label(&labels, item->storage_path, item->filesystem_path);
-        if (err) return err;
-    }
-
-    return privilege_ensure_for_operation(
-        (const char *const *) labels.items, labels.count, "apply",
-        true,  /* interactive: prompt user if elevation needed */
-        ctx->argc, ctx->argv, ctx->out
-    );
-}
-
-/**
  * Apply command implementation
  */
 error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
@@ -1481,8 +1408,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
-    deploy_result_t *deploy_result = NULL;             /* Outcomes borrow the fates; free first */
-    cleanup_result_t *cleanup_result = NULL;           /* Outcomes borrow the verdicts; free first */
+    char *sudo_hint = NULL;                  /* Root's remedy for the skips; NULL when the run holds root */
+    deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates; free first */
+    cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts; free first */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1549,6 +1477,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
+    }
+
+    /* The command line that re-runs this invocation under sudo, for the skips'
+     * closing line (print_deploy_skips). Built here beside the other run-wide
+     * string, and only by a run that holds no root: one that does is never refused
+     * where the invoker is, and would only name a remedy already taken. */
+    if (!identity()->privileged) {
+        sudo_hint = identity_sudo_hint(ctx->argc, ctx->argv);
+        if (!sudo_hint) {
+            err = ERROR(ERR_MEMORY, "Failed to build the sudo hint");
+            goto cleanup;
+        }
     }
 
     /* Load workspace (partitions the view's rows and runs divergence analysis)
@@ -1622,11 +1562,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
-     * Every later consumer — preview, adoption, privileges, preflight, the prompt,
-     * execution and the skipped report — reads this one object. The workspace
-     * already computed fresh divergence for every active row; the planner gates
-     * each row on scope and classifies it by deploy's work predicate into pending
-     * / clean, or into one of the two skipped buckets (-e, --skip-existing). */
+     * Every later consumer — preview, adoption, preflight, the prompt, execution
+     * and the skipped report — reads this one object. The workspace already
+     * computed fresh divergence for every active row; the planner gates each
+     * row on scope and classifies it by deploy's work predicate into pending /
+     * clean, or into one of the two skipped buckets (-e, --skip-existing). */
     output_print(out, OUTPUT_VERBOSE, "\nPlanning deployment...\n");
 
     err = deploy_plan_build(ws, scope, opts->skip_existing, &deploy_plan);
@@ -1776,26 +1716,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         output_hint(
             out, OUTPUT_NORMAL, "Check if the path is correct and profile is enabled"
         );
-    }
-
-    /* Check privileges for root/ files AND directories BEFORE the first write
-     *
-     * Both plans are known, so every path the run will touch is known; nothing
-     * has been written yet — the adoption loop below is the run's first write —
-     * so a re-exec with sudo restarts the whole process from main() cleanly (the
-     * state lock is released before execvp() replaces the process) and no receipt
-     * line prints twice across it. Cryptic mid-operation failures and partial
-     * deployments are prevented the same way.
-     *
-     * Skipped in dry-run: a read-only operation needs no privileges. */
-    if (!opts->dry_run) {
-        output_print(out, OUTPUT_VERBOSE, "\nChecking privilege requirements...\n");
-
-        err = ensure_complete_apply_privileges(ctx, deploy_plan, cleanup_plan);
-        if (err) {
-            err = error_wrap(err, "Insufficient privileges for operation");
-            goto cleanup;
-        }
     }
 
     /* Collect the pending profile reassignments and count the stale files, off
@@ -2193,7 +2113,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * with their remedies) — read the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, deploy_verdicts);
-    print_deploy_skips(out, deploy_verdicts);
+    print_deploy_skips(out, deploy_verdicts, sudo_hint);
     print_cleanup_preview(out, cleanup_verdicts);
     print_cleanup_skips(out, cleanup_verdicts);
 
@@ -2731,6 +2651,7 @@ cleanup:
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
     if (profiles_str) free(profiles_str);
+    free(sudo_hint);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 

@@ -357,7 +357,10 @@ error_t *fs_create_dir_with_ownership(
  * 4. fchmod(fd, mode) - atomic permission change
  * 5. Close file descriptor
  *
- * The parent must exist, as for the sibling.
+ * All or nothing: a refusal at step 3 or 4 removes the directory step 1 made,
+ * so a pair the run cannot set (a foreign-owned claim, no root held) leaves the
+ * path absent for the run that can, never a directory of the wrong owner that
+ * no later run converges. The parent must exist, as for the sibling.
  *
  * @param path Directory path (must not be NULL)
  * @param mode Permission mode for the directory (e.g., 0700, 0755)

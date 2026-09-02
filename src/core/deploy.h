@@ -9,9 +9,9 @@
  *                         it is materialized) or a skip (why it is not)
  *   deploy_execute      — carry the verdicts out; decides nothing
  *
- * Preview, privilege check, prompt, reporting and apply's record step all read
- * the one plan and the one set of verdicts; execution applies no filter and takes
- * no decision of its own. Same shape as core/cleanup.
+ * Preview, prompt, reporting and apply's record step all read the one plan and
+ * the one set of verdicts; execution applies no filter and takes no decision of
+ * its own. Same shape as core/cleanup.
  *
  * Design principles:
  * - Every decision is taken at preflight, before anything changes, from the
@@ -202,9 +202,14 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *                TYPE, CONTENT. --force lifts them; the run kept its promise,
  *                so they do not reach the exit code.
  *   incapacity   dotta could not act — PERMISSION, ANCESTOR, OCCUPIED,
- *                UNREADABLE. No flag lifts them (the posture cleanup takes towards
- *                a released file and a directory's UNVERIFIED); the run planned
- *                the row and did not deliver it, so the exit code says so.
+ *                UNREADABLE, OWNERSHIP. No flag lifts them (the posture cleanup
+ *                takes towards a released file and a directory's UNVERIFIED);
+ *                the run planned the row and did not deliver it, so the exit
+ *                code says so. Two of them are the invoker's refusals and root's
+ *                to lift — PERMISSION, OWNERSHIP — and a run that holds none
+ *                closes its skips with the command that would (apply's sudo line);
+ *                one that holds root meets neither, save where root itself is
+ *                refused (a read-only filesystem, an immutable flag).
  *
  * The split is deploy's exit contract, and workspace_item_route's UNVERIFIABLE
  * arm (workspace.h) restates its incapacity half from the route side — a change
@@ -225,11 +230,16 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * on how the user spelled the add. The two producers stay one reason and one
  * exit contribution; what a consumer may tell apart is the claim that holds the
  * squatter, which the skip carries (deploy_ancestor_class_t) — the remedy differs
- * by claimant where the refusal does not. And why UNREADABLE ranks last where
- * its siblings (cleanup_skip_reason, workspace_item_route) rank the same fact
- * first: the landing check, when it has something to say, names the ancestry
- * that refused the look — the actionable half of the very same fact. UNREADABLE
- * is what is left when the landing had nothing to say.
+ * by claimant where the refusal does not. And why UNREADABLE ranks after every
+ * path rung where its siblings (cleanup_skip_reason, workspace_item_route) rank
+ * the same fact first: the landing check, when it has something to say, names
+ * the ancestry that refused the look — the actionable half of the very same fact.
+ * UNREADABLE is what is left when the landing had nothing to say. OWNERSHIP ranks
+ * last of all, an incapacity behind the consent reasons, because it is the row's
+ * rung and not the path's: the ownership is resolved for a row every other rung
+ * passed (a skipped row can neither warn nor fail strict_ownership —
+ * deploy_preflight's invariant), so the question is never asked of a row another
+ * reason already holds, and its place in the order is the place the decision takes.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (file_row_occupant), a retargeted link is CONTENT (the target compare),
@@ -243,7 +253,8 @@ typedef enum {
     DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
     DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
-    DEPLOY_SKIP_UNREADABLE    /* The path could not be read: no verdict, no guess */
+    DEPLOY_SKIP_UNREADABLE,   /* The path could not be read: no verdict, no guess */
+    DEPLOY_SKIP_OWNERSHIP     /* The claim names a pair this run cannot set (no root held) */
 } deploy_skip_reason_t;
 
 /**
@@ -293,17 +304,18 @@ typedef enum {
  * row's own, and so a prefix of filesystem_path by construction (check_landing
  * truncates the planned path; an inheriting row's squatter stands strictly above
  * it) — carried as the byte length of that prefix, not a copy. 0 where the reason
- * has no ancestor to name: it is about the planned path itself, or (PERMISSION
- * alone) the ancestry could not even be reached to name its refusing node.
- * `ancestor_class` says which claim holds the named path — ANCESTOR's alone
- * (deploy_ancestor_class_t), NONE wherever the reason is another.
+ * has no ancestor to name: it is about the planned path itself (OWNERSHIP always
+ * is), or (PERMISSION alone) the ancestry could not even be reached to name its
+ * refusing node. `ancestor_class` says which claim holds the named path —
+ * ANCESTOR's alone (deploy_ancestor_class_t), NONE wherever the reason is another.
  *
  * The item is the verdict's rule with the one inversion a skip forces: a
  * self-judged skip carries its analysis object (a CONTENT skip carries one by
  * construction — content_conflicts(NULL) is false), while a row judged by its
- * ancestry carries NULL. Its own item describes the squatter's target, and a
- * walker must not mistake an inheriting row for the squatter itself; a skip has
- * no occupant field to express that refusal, so here NULL is the override.
+ * ancestry, or planned absent beneath an ancestor this run converges, carries
+ * NULL. Its own item describes the squatter's target, and a walker must not mistake
+ * an inheriting row for the squatter itself; a skip has no occupant field to
+ * express that refusal, so here NULL is the override.
  *
  * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
  * in this module is.
@@ -533,10 +545,10 @@ typedef struct {
  *        everything else a fate carries is workspace vocabulary)
  * @param skip_existing --skip-existing: a file row whose path is already occupied
  *        is not work. A plan fact, not an execution one — the occupancy comes
- *        from the workspace's own lstat, so preflight, the privilege scan, the
- *        prompt and the executor all see one answer. Not overridden by --force:
- *        --force also overrides cleanup's skip reasons and the confirmation prompt,
- *        so the combination is meaningful and the narrower flag keeps its promise.
+ *        from the workspace's own lstat, so preflight, the prompt and the executor
+ *        all see one answer. Not overridden by --force: --force also overrides
+ *        cleanup's skip reasons and the confirmation prompt, so the combination
+ *        is meaningful and the narrower flag keeps its promise.
  * @param out Plan (must not be NULL; caller frees with deploy_plan_free)
  * @return Error or NULL on success
  */
@@ -633,14 +645,18 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses
  *   nothing); mode, ownership and encryption divergence never skip.
- * - Metadata — deployable rows only: the mode the write applies (the row's, total
- *   by build) and the ownership (resolve_deployment_ownership: the row's claim
- *   resolved on this host; where there is none, the invoker's own pair when the
- *   run holds root and no change otherwise — the absent claim's meaning,
- *   metadata.h). Under strict_ownership an owner or group this system does not
- *   know is an error, returned here — before the prompt, never mid-run; otherwise
- *   it is a warning and no change. A skipped row is not consulted, so it can
- *   neither warn nor fail strict_ownership.
+ * - Ownership — the row's rung, last, asked of a row every path rung passed and
+ *   the one rung a row planned absent takes: the pair the write applies
+ *   (resolve_deployment_ownership: the row's claim resolved on this host; where
+ *   there is none, the invoker's own pair when the run holds root and no change
+ *   otherwise — the absent claim's meaning, metadata.h), and whether this run
+ *   may set it (identity_may_chown) — a pair that is not the invoker's to set
+ *   is skipped (OWNERSHIP), the incapacity sudo lifts. The mode the write applies
+ *   is the row's, total by build, and is not decided here. Under strict_ownership
+ *   an owner or group this system does not know is an error, returned here —
+ *   before the prompt, never mid-run; otherwise it is a warning and no change.
+ *   A skipped row is not consulted, so it can neither warn nor fail
+ *   strict_ownership.
  *
  * Then the ancestors: every directory row the plan does not act on — an ancestor
  * claim, which the plan never holds, or a tracked row out of scope or skipped —
@@ -673,8 +689,15 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * row is skipped instead, the row inherits that skip, ancestor named (the plan's
  * premise — "the squatter is gone first" — holds row by row, never on average).
  *
- * Runs under the identity the run will act under: apply's privilege check precedes
- * it, so ownership resolves as the executors will apply it.
+ * Runs as the invoker, the identity every write is made as (sys/identity), and
+ * asks for no other: a landing the invoker cannot write is PERMISSION, a pair
+ * it cannot set is OWNERSHIP — a row is OWNERSHIP-skipped iff its resolved pair
+ * is not the invoker's to set and the run holds no root — and a run that holds
+ * root meets neither refusal, since the executors land the row through the
+ * syscall's second try (sys/filesystem) and root sets any pair. The ancestors
+ * are not asked the ownership rung (a foreign-owned derived claim above a landing
+ * the invoker can write meets the refusal at the create, and the row beneath
+ * carries it as its outcome).
  *
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *

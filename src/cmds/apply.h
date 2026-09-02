@@ -36,9 +36,12 @@ typedef struct {
  * by a disabled profile or by a deletion in Git.
  *
  * Orchestrates scope resolution, workspace divergence analysis, plan construction,
- * privilege and pre-flight checks, the apply hooks, and execution. Builds no
- * manifest of its own — core/manifest maintains that when profiles or files change,
- * and apply reads it through the workspace.
+ * pre-flight checks, the apply hooks, and execution. Builds no manifest of its
+ * own — core/manifest maintains that when profiles or files change, and apply
+ * reads it through the workspace. Never asks for root: a landing the invoker
+ * cannot write or a pair it cannot set is a preflight skip that closes with the
+ * command line to re-run under sudo, and a run under sudo lands it through the
+ * syscall's second try (sys/filesystem) with no prompt of dotta's between.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

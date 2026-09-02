@@ -199,17 +199,21 @@ bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid);
 /**
  * The command line that re-runs this invocation as root
  *
- * "sudo [-E] <prog> <args…>", pasteable: an argument sudo's shell would split
- * or expand is single-quoted. `-E` exactly when a DOTTA_* variable is set in
- * the environment — plain sudo's env_reset would drop it, and everything else
- * dotta reads (HOME, the config path, the repository path) resolves from the
- * invoker and needs nothing preserved.
+ * "sudo [-E] <argv…>", pasteable: argv[0] as the shell handed it — a bare name,
+ * a relative or an absolute path — because what the user typed resolves for sudo
+ * exactly as it did for the shell, where the installed name alone would
+ * not for a build run by its path (a usage line documents and renders the name;
+ * this line is meant to be run). An argument sudo's shell would split or expand
+ * is single-quoted. `-E` exactly when a DOTTA_* variable is set in the environment
+ * — plain sudo's env_reset would drop it, and everything else dotta reads (HOME,
+ * the config path, the repository path) resolves from the invoker and needs nothing
+ * preserved.
  *
- * @param prog The program's name as the usage lines render it (must not be NULL)
  * @param argc The process's argc
- * @param argv The process's argv; argv[0] is not rendered, prog stands for it
+ * @param argv The process's argv; an argc of 0 or an empty argv[0] renders the
+ *        installed name
  * @return The line (caller frees), or NULL on allocation failure
  */
-char *identity_sudo_hint(const char *prog, int argc, char **argv);
+char *identity_sudo_hint(int argc, char **argv);
 
 #endif /* DOTTA_SYS_IDENTITY_H */

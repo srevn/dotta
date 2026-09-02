@@ -910,11 +910,18 @@ error_t *fs_create_dir_exclusive(
         );
     }
 
-    /* Apply ownership atomically via file descriptor */
+    /* Apply ownership atomically via file descriptor. A refusal here or at the
+     * mode below unmakes the directory: this caller's authority is creation alone,
+     * and what it could not create as claimed it did not create — the next run
+     * meets the same absent path, and the same refusal until it holds what the
+     * claim needs, rather than a directory of the wrong owner that no later run
+     * converges (an ancestor claim binds the creation and nothing else). Empty
+     * by construction, so the rmdir cannot fail on content. */
     if (uid != (uid_t) -1 || gid != (gid_t) -1) {
         if (fs_fchown(dirfd, uid, gid) < 0) {
             int saved_errno = errno;
             close(dirfd);
+            (void) fs_rmdir(path);
             return ERROR(
                 ERR_FS, "Failed to set ownership on '%s': %s",
                 path, strerror(saved_errno)
@@ -926,6 +933,7 @@ error_t *fs_create_dir_exclusive(
     if (fs_fchmod(dirfd, mode) < 0) {
         int saved_errno = errno;
         close(dirfd);
+        (void) fs_rmdir(path);
         return ERROR(
             ERR_FS, "Failed to set mode on '%s': %s",
             path, strerror(saved_errno)

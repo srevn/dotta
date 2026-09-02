@@ -6,15 +6,14 @@
  *   cleanup_preflight    — decide *what happens* to each of them: the verdicts
  *   cleanup_execute      — carry the verdicts out and report what happened
  *
- * Same shape as core/deploy. Preview, privilege check, prompt, execution and
- * apply's record step all read the one plan and the one set of verdicts; execution
- * re-decides nothing and applies no filter of its own.
+ * Same shape as core/deploy. Preview, prompt, execution and apply's record step
+ * all read the one plan and the one set of verdicts; execution re-decides nothing
+ * and applies no filter of its own.
  *
  * Why the verdicts are a phase of their own and not part of the plan: the plan
- * is read before apply's privilege check (the root/ labels come from it), and
- * the directory verdicts need a look at the disk — the readdir — taken with the
- * identity the run will act under. Plan → privileges → verdicts is the order
- * the privilege boundary forces.
+ * is (workspace, scope) alone — which orphans this run may touch — and the
+ * directory verdicts need a look at the disk, the readdir, that a plan has no
+ * business taking.
  *
  * The verdicts are a function of the workspace's load-time observation — the
  * occupant, divergence, Git authority — of the view, of the plan, and of --force.

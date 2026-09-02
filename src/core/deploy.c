@@ -18,7 +18,6 @@
 #include "core/scope.h"
 #include "core/workspace.h"
 #include "infra/content.h"
-#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
@@ -811,9 +810,7 @@ cleanup:
  *         as warnings and suppressed)
  */
 static error_t *resolve_deployment_ownership(
-    const manifest_row_t *row,
-    bool strict_ownership,
-    string_array_t *warnings,
+    const manifest_row_t *row, bool strict_ownership, string_array_t *warnings,
     uid_t *out_uid, gid_t *out_gid
 ) {
     CHECK_NULL(row);
@@ -874,30 +871,53 @@ static error_t *resolve_deployment_ownership(
 }
 
 /**
- * The metadata a row's write applies
+ * The ownership rung: the pair the write applies, and whether this run may set it
  *
- * The mode is the row's, verbatim — total for every kind that carries one (the
- * claim, or the floor manifest_build resolved absence into); a symlink row is
- * never asked (symlink(2) takes no mode). The write reads it off the row, and
- * the verdict does not carry it: the decided facts are exactly the ones not on
- * the row. Ownership is one, resolved ahead of the write so the write applies
- * it atomically through the descriptor (fchown on the file or directory fd, lchown
- * on a link): there is never a moment when the path exists with the wrong owner.
+ * The last rung, asked of a row every other rung passed. The ownership is resolved
+ * for deployable rows alone — a skipped row can neither warn nor fail
+ * strict_ownership (deploy_preflight's invariant) — so this is what is left once
+ * the path's rungs had nothing to say, and the one rung a row planned absent
+ * takes at all. The pair is resolve_deployment_ownership's, decided ahead of
+ * the write so the write applies it atomically through the descriptor (fchown
+ * on the file or directory fd, lchown on a link): there is never a moment when
+ * the path exists with the wrong owner. Whether it is this run's to set is the
+ * identity's (identity_may_chown): a run that holds root sets anything, one that
+ * does not may neither give a file away nor set a group it does not hold — an
+ * OWNERSHIP skip, an incapacity whose remedy is sudo. A pair that resolved to
+ * no change (no claim unprivileged, an unknown owner under a warning) is always
+ * the run's to set.
+ *
+ * The mode is not decided here: the write reads it off the row, verbatim — total
+ * for every kind that carries one (the claim, or the floor manifest_build resolved
+ * absence into); a symlink row is never asked (symlink(2) takes no mode). The
+ * verdict carries exactly the facts not on the row.
  *
  * @param opts Deployment options (must not be NULL)
  * @param warnings Preflight warnings (must not be NULL)
- * @param v Verdict whose uid and gid are decided, its row assigned (must not be
- *        NULL)
- * @return Error or NULL on success (a strict_ownership failure is one)
+ * @param row The row (must not be NULL)
+ * @param out_uid Ownership the write applies; -1 = no change (must not be NULL)
+ * @param out_gid Same for the group (must not be NULL)
+ * @param out_reason OWNERSHIP on a refusal, untouched otherwise (must not be NULL)
+ * @return Error or NULL on success (a strict_ownership failure is one; a skip
+ *         is not)
  */
-static error_t *resolve_metadata(
-    const deploy_options_t *opts,
-    string_array_t *warnings,
-    deploy_verdict_t *v
+static error_t *check_ownership(
+    const deploy_options_t *opts, string_array_t *warnings,
+    const manifest_row_t *row, uid_t *out_uid, gid_t *out_gid,
+    deploy_skip_reason_t *out_reason
 ) {
-    return resolve_deployment_ownership(
-        v->row, opts->strict_ownership, warnings, &v->uid, &v->gid
+    error_t *err = resolve_deployment_ownership(
+        row, opts->strict_ownership, warnings, out_uid, out_gid
     );
+    if (err) {
+        return err;
+    }
+
+    if (!identity_may_chown(identity(), *out_uid, *out_gid)) {
+        *out_reason = DEPLOY_SKIP_OWNERSHIP;
+    }
+
+    return NULL;
 }
 
 /**
@@ -1022,62 +1042,61 @@ error_t *deploy_preflight(
 
         check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
 
-        if (reason != DEPLOY_SKIP_NONE) {
-            deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
-
-            s->row = row;
-            s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
-            s->reason = reason;
-            s->ancestor = ancestor;
-            s->ancestor_class = ancestor_class;
-            continue;
-        }
-
-        /* Planned as absent: the path is empty once the directory pass has
+        /* The path's rungs, unless its ancestry answered. A row planned as absent
+         * is asked none of them: the path is empty once the directory pass has
          * converged the ancestor — no type, no content, nothing in the way, and
-         * the landing is that ancestor's. */
-        if (absent) {
-            deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
+         * the landing is that ancestor's. Its item is read for the verdict alone,
+         * verbatim, and the occupant beside it overrides what the item read through
+         * the squatter; a skip carries NULL for it, as for a row judged by its
+         * ancestry. */
+        const workspace_item_t *item = NULL;
+        fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
-            v->row = row;
-            v->item = workspace_get_item(ws, path);   /* verbatim; the occupant below overrides it */
-            v->occupant = FS_OCCUPANT_NONE;
-            err = resolve_metadata(opts, result->warnings, v);
+        if (reason == DEPLOY_SKIP_NONE && !absent) {
+            item = workspace_get_item(ws, path);
+            occupant = item->occupant;
+
+            /* The rungs, first match wins — the enum's own order. A directory
+             * already there is converged in place: fchmod and fchown ask for
+             * ownership, not for a writable parent. Only a create or a replace
+             * lands a new entry. A row the workspace could not settle is asked
+             * too, and skipped on its own account only when the landing had nothing
+             * to say — as for a file. */
+            if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
+                err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
+                if (err) goto cleanup;
+            }
+
+            /* A planned directory squatted by a non-directory (the link itself,
+             * so a symlink to a directory counts) is replaced under --force,
+             * one node at a time. The squatter can never be a directory — that
+             * is the row converging in place — so path_clearance cannot refuse
+             * here, TYPE is the only reachable arm, and "use --force" is always
+             * the true remedy. */
+            if (reason == DEPLOY_SKIP_NONE &&
+                occupant_conflicts(occupant, FS_OCCUPANT_DIRECTORY) &&
+                path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
+                reason = DEPLOY_SKIP_TYPE;
+            }
+
+            /* The leftover, as for a file (the file ladder carries the rationale):
+             * the fact is the UNVERIFIED bit; for an active directory row its
+             * one producer today is the unstattable path (occupant UNKNOWN),
+             * but the rung reads the fact, not its one current encoding, so the
+             * two ladders keep one rule. */
+            if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
+                reason = DEPLOY_SKIP_UNREADABLE;
+            }
+        }
+
+        /* The row's rung, last: the ownership the write applies, and whether
+         * this run may set it (check_ownership). */
+        uid_t uid = (uid_t) -1;
+        gid_t gid = (gid_t) -1;
+
+        if (reason == DEPLOY_SKIP_NONE) {
+            err = check_ownership(opts, result->warnings, row, &uid, &gid, &reason);
             if (err) goto cleanup;
-            continue;
-        }
-
-        const workspace_item_t *item = workspace_get_item(ws, path);
-        fs_occupant_t occupant = item->occupant;
-
-        /* The rungs, first match wins — the enum's own order. A directory already
-         * there is converged in place: fchmod and fchown ask for ownership, not
-         * for a writable parent. Only a create or a replace lands a new entry.
-         * A row the workspace could not settle is asked too, and skipped on its
-         * own account only when the landing had nothing to say — as for a file. */
-        if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
-            err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
-            if (err) goto cleanup;
-        }
-
-        /* A planned directory squatted by a non-directory (the link itself, so
-         * a symlink to a directory counts) is replaced under --force, one node
-         * at a time. The squatter can never be a directory — that is the row
-         * converging in place — so path_clearance cannot refuse here, TYPE is
-         * the only reachable arm, and "use --force" is always the true remedy. */
-        if (reason == DEPLOY_SKIP_NONE &&
-            occupant_conflicts(occupant, FS_OCCUPANT_DIRECTORY) &&
-            path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
-            reason = DEPLOY_SKIP_TYPE;
-        }
-
-        /* The leftover, as for a file (the file ladder carries the rationale):
-         * the fact is the UNVERIFIED bit; for an active directory row its one
-         * producer today is the unstattable path (occupant UNKNOWN), but the
-         * rung reads the fact, not its one current encoding, so the two ladders
-         * keep one rule. */
-        if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
-            reason = DEPLOY_SKIP_UNREADABLE;
         }
 
         if (reason != DEPLOY_SKIP_NONE) {
@@ -1094,10 +1113,10 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
         v->row = row;
-        v->item = item;
+        v->item = absent ? workspace_get_item(ws, path) : item;
         v->occupant = occupant;
-        err = resolve_metadata(opts, result->warnings, v);
-        if (err) goto cleanup;
+        v->uid = uid;
+        v->gid = gid;
     }
 
     for (size_t i = 0; i < files.count; i++) {
@@ -1114,86 +1133,79 @@ error_t *deploy_preflight(
 
         check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
 
-        if (reason != DEPLOY_SKIP_NONE) {
-            deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
+        /* The path's rungs, unless its ancestry answered (see the directory loop):
+         * a row planned as absent is written beneath a directory this run converges
+         * first, so neither a conflict nor a landing question is its own. */
+        const workspace_item_t *item = NULL;
+        fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
-            s->row = row;
-            s->item = NULL;   /* judged by its ancestry — its own item reads through the squatter */
-            s->reason = reason;
-            s->ancestor = ancestor;
-            s->ancestor_class = ancestor_class;
-            continue;
-        }
+        if (reason == DEPLOY_SKIP_NONE && !absent) {
+            /* Self-judged: no displaced ancestor stands above the path, so the
+             * row is pending only because deploy_needs_work said so — and
+             * deploy_needs_work(NULL) is false, so the item is there. */
+            item = workspace_get_item(ws, path);
+            occupant = item->occupant;
 
-        /* Planned as absent (see the directory loop): written beneath a directory
-         * this run converges first, so neither a conflict nor a landing question
-         * is its own. */
-        if (absent) {
-            deploy_verdict_t *v = &result->files.entries[result->files.count++];
-
-            v->row = row;
-            v->item = workspace_get_item(ws, path);   /* verbatim; the occupant below overrides it */
-            v->occupant = FS_OCCUPANT_NONE;
-            err = resolve_metadata(opts, result->warnings, v);
+            /* The rungs, first match wins — the enum's own order. Every file
+             * row lands through its parent, whichever arm writes it and whether
+             * or not something is already at the path — so one question covers
+             * both, and it is never about the path itself. */
+            err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
             if (err) goto cleanup;
-            continue;
-        }
 
-        /* Self-judged: no displaced ancestor stands above the path, so the row
-         * is pending only because deploy_needs_work said so — and
-         * deploy_needs_work(NULL) is false, so the item is there. */
-        const workspace_item_t *item = workspace_get_item(ws, path);
-        fs_occupant_t occupant = item->occupant;
+            if (reason == DEPLOY_SKIP_NONE) {
+                if (occupant_conflicts(occupant, file_row_occupant(row))) {
+                    /* Type: what stands at the path decides the remedy. */
+                    switch (path_clearance(path, occupant, opts->force)) {
+                        case CLEARANCE_OK:
+                            break;
 
-        /* The rungs, first match wins — the enum's own order. Every file row
-         * lands through its parent, whichever arm writes it and whether or not
-         * something is already at the path — so one question covers both, and
-         * it is never about the path itself. */
-        err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
-        if (err) goto cleanup;
+                        case CLEARANCE_NEEDS_FORCE:
+                            reason = DEPLOY_SKIP_TYPE;
+                            break;
 
-        if (reason == DEPLOY_SKIP_NONE) {
-            if (occupant_conflicts(occupant, file_row_occupant(row))) {
-                /* Type: what stands at the path decides the remedy. */
-                switch (path_clearance(path, occupant, opts->force)) {
-                    case CLEARANCE_OK:
-                        break;
-
-                    case CLEARANCE_NEEDS_FORCE:
-                        reason = DEPLOY_SKIP_TYPE;
-                        break;
-
-                    case CLEARANCE_REFUSED:
-                        reason = DEPLOY_SKIP_OCCUPIED;
-                        break;
+                        case CLEARANCE_REFUSED:
+                            reason = DEPLOY_SKIP_OCCUPIED;
+                            break;
+                    }
+                } else if (!opts->force && deploy_content_conflicts(item)) {
+                    /* Content, asked only when the occupant is the row's own
+                     * type: a path holding something else has no content to compare
+                     * — the mask's TYPE arm cannot fire here, a conflicting
+                     * occupant took the TYPE rung above; it is load-bearing at
+                     * the preview's other read. */
+                    reason = DEPLOY_SKIP_CONTENT;
                 }
-            } else if (!opts->force && deploy_content_conflicts(item)) {
-                /* Content, asked only when the occupant is the row's own type:
-                 * a path holding something else has no content to compare — the
-                 * mask's TYPE arm cannot fire here, a conflicting occupant took
-                 * the TYPE rung above; it is load-bearing at the preview's other
-                 * read. */
-                reason = DEPLOY_SKIP_CONTENT;
+            }
+
+            /* A row the workspace could not settle is no verdict — the UNVERIFIED
+             * bit, not its unstattable symptom. The bit has two producers: the
+             * path could not be lstat'd (occupant UNKNOWN, which no rung above
+             * judges — UNKNOWN is not present), or the look at its content failed
+             * with the occupant known — a blob that could not be loaded, decrypted
+             * or compared, an open the file refused — which the content rung
+             * cannot catch either: a failed look accumulates no content verdict.
+             * (A kind mismatch lstat did settle still skips TYPE first, rightly
+             * — that fact depends on no failed look.) Nothing can say what the
+             * run will find there, or that the write's own read will fare better,
+             * and nothing is written on a guess. The ancestry that refused an
+             * lstat is what refuses the write, and the landing has just named
+             * it when it could (EACCES on the way up); the row is skipped on
+             * its own account only when the landing had nothing to say — a failure
+             * the run would otherwise have met mid-run, after siblings already
+             * wrote. */
+            if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
+                reason = DEPLOY_SKIP_UNREADABLE;
             }
         }
 
-        /* A row the workspace could not settle is no verdict — the UNVERIFIED
-         * bit, not its unstattable symptom. The bit has two producers: the path
-         * could not be lstat'd (occupant UNKNOWN, which no rung above judges —
-         * UNKNOWN is not present), or the look at its content failed with the
-         * occupant known — a blob that could not be loaded, decrypted or compared,
-         * an open the file refused — which the content rung cannot catch either:
-         * a failed look accumulates no content verdict. (A kind mismatch lstat
-         * did settle still skips TYPE first, rightly — that fact depends on no
-         * failed look.) Nothing can say what the run will find there, or that
-         * the write's own read will fare better, and nothing is written on a
-         * guess. The ancestry that refused an lstat is what refuses the write,
-         * and the landing has just named it when it could (EACCES on the way
-         * up); the row is skipped on its own account only when the landing had
-         * nothing to say — a failure the run would otherwise have met mid-run,
-         * after siblings already wrote. */
-        if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
-            reason = DEPLOY_SKIP_UNREADABLE;
+        /* The row's rung, last (see the directory loop). */
+        uid_t uid = (uid_t) -1;
+        gid_t gid = (gid_t) -1;
+
+        if (reason == DEPLOY_SKIP_NONE) {
+            err = check_ownership(opts, result->warnings, row, &uid, &gid, &reason);
+            if (err) goto cleanup;
         }
 
         if (reason != DEPLOY_SKIP_NONE) {
@@ -1210,10 +1222,10 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
         v->row = row;
-        v->item = item;
+        v->item = absent ? workspace_get_item(ws, path) : item;
         v->occupant = occupant;
-        err = resolve_metadata(opts, result->warnings, v);
-        if (err) goto cleanup;
+        v->uid = uid;
+        v->gid = gid;
     }
 
     /* The ancestors: every directory row the run does not act on, absent as the
@@ -1262,7 +1274,17 @@ error_t *deploy_preflight(
         v->row = row;
         v->item = item;
         v->occupant = FS_OCCUPANT_NONE;
-        err = resolve_metadata(opts, result->warnings, v);
+
+        /* The pair, without the ownership rung: an ancestor is outside the plan
+         * and has no skip to take, and the rows beneath it are decided by now.
+         * A pair this run cannot set meets the refusal at the create, named on
+         * the row beneath as its outcome (create_ancestor) and leaving nothing
+         * behind (fs_create_dir_exclusive) — the under-approximation this pass
+         * accepts for a foreign-owned derived claim above a landing the invoker
+         * can write. */
+        err = resolve_deployment_ownership(
+            row, opts->strict_ownership, result->warnings, &v->uid, &v->gid
+        );
         if (err) goto cleanup;
     }
 

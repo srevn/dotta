@@ -271,16 +271,18 @@ static error_t *append_argument(buffer_t *buf, const char *arg) {
     return buffer_append(buf, "'", 1);
 }
 
-char *identity_sudo_hint(const char *prog, int argc, char **argv) {
+char *identity_sudo_hint(int argc, char **argv) {
     extern char **environ;
     bool keep = false;
     for (char **e = environ; *e && !keep; e++) {
         keep = strncmp(*e, "DOTTA_", 6) == 0;
     }
 
+    const char *prog = (argc > 0 && argv[0] && *argv[0]) ? argv[0] : "dotta";
+
     buffer_t buf = BUFFER_INIT;
     error_t *err = buffer_append_string(&buf, keep ? "sudo -E " : "sudo ");
-    if (!err) err = buffer_append_string(&buf, prog);
+    if (!err) err = append_argument(&buf, prog);
     for (int i = 1; i < argc && !err; i++) {
         err = buffer_append(&buf, " ", 1);
         if (!err) err = append_argument(&buf, argv[i]);

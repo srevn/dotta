@@ -446,7 +446,7 @@ REFLOW := scripts/reflow_comments.py
 REFLOW_WIDTH ?= 80
 REFLOW_SLACK ?= 4
 # Scope is what git says changed. Override with REFLOW_FILES="src/a.c include/b.h".
-REFLOW_FILES ?= $(shell git diff --name-only HEAD -- 'src/*.c' 'src/*.h' 'include/*.h')
+REFLOW_FILES ?= $(shell git diff --name-only --diff-filter=d HEAD -- 'src/*.c' 'src/*.h' 'include/*.h')
 
 .PHONY: reflow
 reflow:

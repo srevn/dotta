@@ -1340,11 +1340,19 @@ typedef enum {
  *               from a branch that still exists (git rm, rebase, fetch; a directory
  *               item dropped from metadata). The caller emits
  *               WORKSPACE_STATE_RELEASED — left on disk, record retires.
- *   UNVERIFIED  transient I/O, a locked packfile, a corrupt ref, tree or
- *               metadata. Authority cannot be determined and must not be guessed:
- *               LOST would retire the record, BACKED would prune the file. The
- *               caller marks a file DIVERGENCE_UNVERIFIED and the orphan is held
- *               until Git answers.
+ *   UNVERIFIED  the probe could not answer: a ref lookup, a tree or a metadata
+ *               load that failed, transient I/O, a locked packfile, a corrupt
+ *               ref, or an allocation the cache needed. Authority cannot be
+ *               determined and must not be guessed: LOST would retire the record,
+ *               BACKED would prune the file. The caller marks the orphan
+ *               DIVERGENCE_UNVERIFIED and holds it until Git answers.
+ *
+ * No failure is raised. Every one of the six ways this probe can fail says the
+ * same thing — it could not answer — and UNVERIFIED is the word for it, so an
+ * error would carry nothing the answer does not: a probe that cannot answer is
+ * the orphan's hold, never the load's, which is the rule every failed look in
+ * this file takes. Nothing is cached on a failure, so a transient one stays
+ * retryable by the next row.
  *
  * @param repo Repository (must not be NULL)
  * @param cache profile → authority_cache_t (borrowed keys, owned values)
@@ -1352,9 +1360,8 @@ typedef enum {
  * @param storage_path Record's storage path (NOT NULL in the schema)
  * @param kind What the record says stood there — decides which claim is asked for
  * @param out Receives the answer (must not be NULL)
- * @return ERR_MEMORY if the cache entry cannot be created; NULL otherwise
  */
-static error_t *compute_orphan_authority(
+static void compute_orphan_authority(
     git_repository *repo,
     hashmap_t *cache,
     const char *profile,
@@ -1362,12 +1369,6 @@ static error_t *compute_orphan_authority(
     path_kind_t kind,
     orphan_authority_t *out
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(cache);
-    CHECK_NULL(profile);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out);
-
     *out = ORPHAN_AUTHORITY_UNVERIFIED;
 
     authority_cache_t *entry = hashmap_get(cache, profile);
@@ -1379,25 +1380,26 @@ static error_t *compute_orphan_authority(
         error_t *err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
             error_free(err);
-            return NULL;                    /* UNVERIFIED */
+            return;                         /* UNVERIFIED */
         }
 
         entry = calloc(1, sizeof(*entry));
         if (!entry) {
-            return ERROR(ERR_MEMORY, "Failed to allocate authority cache entry");
+            return;                         /* UNVERIFIED */
         }
         entry->exists = exists;
 
         err = hashmap_set(cache, profile, entry);
         if (err) {
+            error_free(err);
             authority_cache_free(entry);
-            return error_wrap(err, "Failed to cache authority for '%s'", profile);
+            return;                         /* UNVERIFIED */
         }
     }
 
     if (!entry->exists) {
         *out = ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
-        return NULL;
+        return;
     }
 
     if (!entry->tree) {
@@ -1408,7 +1410,7 @@ static error_t *compute_orphan_authority(
         error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             error_free(err);
-            return NULL;                    /* UNVERIFIED */
+            return;                         /* UNVERIFIED */
         }
         entry->tree = tree;                 /* Ownership transfers to the cache */
     }
@@ -1425,13 +1427,13 @@ static error_t *compute_orphan_authority(
             if (err) {
                 if (err->code != ERR_NOT_FOUND) {
                     error_free(err);
-                    return NULL;                /* UNVERIFIED */
+                    return;                     /* UNVERIFIED */
                 }
                 error_free(err);
                 err = metadata_create_empty(&metadata);
                 if (err) {
                     error_free(err);
-                    return NULL;                /* UNVERIFIED */
+                    return;                     /* UNVERIFIED */
                 }
             }
             entry->metadata = metadata;         /* Ownership transfers to the cache */
@@ -1444,7 +1446,7 @@ static error_t *compute_orphan_authority(
         *out = (item && item->kind == PATH_KIND_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
                                                            : ORPHAN_AUTHORITY_LOST;
 
-        return NULL;
+        return;
     }
 
     /* Check if file exists in tree via path traversal
@@ -1464,8 +1466,6 @@ static error_t *compute_orphan_authority(
         *out = ORPHAN_AUTHORITY_LOST;
     }
     /* Anything else: *out stays UNVERIFIED */
-
-    return NULL;
 }
 
 /**
@@ -1511,7 +1511,11 @@ static error_t *compute_orphan_authority(
  *     on the item, and the storage label picks the fate (cleanup_verdict);
  *     UNVERIFIED holds the orphan until Git answers — either kind: LOST would
  *     retire the record, BACKED would remove the copy, and neither is a guess
- *     to make about an empty directory any more than about a file.
+ *     to make about an empty directory any more than about a file. Held and not
+ *     measured: no reader shows a bit beside UNVERIFIED, so a compare would only
+ *     give the item a second reason for the one fate it already has. The probe
+ *     raises nothing, so a lookup it could not make is this orphan's hold and
+ *     never the load's — the rule the file analyzer takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
@@ -1603,7 +1607,6 @@ static error_t *analyze_orphans(workspace_t *ws) {
         /* Set by the arms that find the copy dotta's to prune, divergence
          * permitting; measured once, below. */
         bool measure = false;
-        bool unvouched = false;     /* Git was asked and could not answer */
 
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
@@ -1634,39 +1637,42 @@ static error_t *analyze_orphans(workspace_t *ws) {
             /* Owned: ask the profile that deployed it whether it still claims
              * the path. */
             orphan_authority_t authority = ORPHAN_AUTHORITY_UNVERIFIED;
-            err = compute_orphan_authority(
+            compute_orphan_authority(
                 ws->repo, authority_cache, profile, storage_path, kind, &authority
             );
-            if (err) {
-                break;
-            }
 
-            if (authority == ORPHAN_AUTHORITY_LOST) {
+            if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {
+                /* Git could not vouch for the path — a lookup that failed, or
+                 * an allocation the probe needed — and neither LOST nor BACKED
+                 * is a guess to make: held. Not measured, unlike the two arms
+                 * below: no reader shows a bit beside UNVERIFIED, so a compare
+                 * would only give the item a second reason for the fate it already
+                 * has. */
+                divergence = DIVERGENCE_UNVERIFIED;
+            } else if (authority == ORPHAN_AUTHORITY_LOST) {
                 /* Git cannot back the path. Left on disk, record retires — so
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
             } else {
                 measure = true;
-                unvouched = (authority == ORPHAN_AUTHORITY_UNVERIFIED);
-            }
 
-            /* The relocation read — BACKED only: a relocated orphan is an orphan
-             * whose claim still has a row. The record's own (profile, storage
-             * path) pair is asked of the view; a row found here always projects
-             * elsewhere — the partition orphaned this record precisely because
-             * no view row stands at its filesystem path, this row included — so
-             * the claim deploys at a new location now: a moved custom/ target,
-             * a different $HOME. The item carries it (item->row non-NULL on an
-             * ORPHANED item IS the relocation; the label picks the fate at
-             * cleanup_verdict, and root/ never gets here — its projection is
-             * fixed). Strictly the record's own profile: a claim shadowed by
-             * another profile at its new home is not "relocated" — the copy here
-             * is simply no longer active — and the same-profile rule is what
-             * keeps workspace_item_reassigned false by construction on every
-             * orphan (the profiles are equal). A LOST or UNVERIFIED probe carries
-             * nothing: the first releases, the second holds, and neither fate
-             * reads the row. */
-            if (authority == ORPHAN_AUTHORITY_BACKED) {
+                /* The relocation read — BACKED only, which is what this arm is:
+                 * a relocated orphan is an orphan whose claim still has a row.
+                 * The record's own (profile, storage path) pair is asked of the
+                 * view; a row found here always projects elsewhere — the partition
+                 * orphaned this record precisely because no view row stands at
+                 * its filesystem path, this row included — so the claim deploys
+                 * at a new location now: a moved custom/ target, a different
+                 * $HOME. The item carries it (item->row non-NULL on an ORPHANED
+                 * item IS the relocation; the label picks the fate at
+                 * cleanup_verdict, and root/ never gets here — its projection
+                 * is fixed). Strictly the record's own profile: a claim shadowed
+                 * by another profile at its new home is not "relocated" — the
+                 * copy here is simply no longer active — and the same-profile
+                 * rule is what keeps workspace_item_reassigned false by
+                 * construction on every orphan (the profiles are equal). A LOST
+                 * or unanswered probe carries nothing: the first releases, the
+                 * second holds, and neither fate reads the row. */
                 row = manifest_lookup_storage(ws->manifest, storage_path, profile);
             }
         }
@@ -1685,12 +1691,6 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 /* Read for the readdir, search for the walk's look at an entry
                  * named like OS metadata (fs_directory_emptiness). */
                 divergence = DIVERGENCE_UNVERIFIED;
-            }
-
-            if (unvouched) {
-                /* Git could not vouch for the path: skip the orphan until it
-                 * can. */
-                divergence |= DIVERGENCE_UNVERIFIED;
             }
         }
 

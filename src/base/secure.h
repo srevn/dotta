@@ -1,12 +1,12 @@
 /**
  * secure.h - Secure-memory utilities
  *
- * Two unrelated helpers grouped here because both serve the "this buffer is about
- * to hold (or just held) a secret" lifecycle:
+ * Three helpers for one lifecycle — "this memory is about to hold (or just held)
+ * a secret":
  *
- *   - `secure_wipe`           - compiler-resistant zeroization.
- *   - `secure_mlock_warn` - one-time-per-process advisory when an mlock attempt
- *                                fails.
+ *   - `secure_wipe`  - compiler-resistant zeroization of any buffer.
+ *   - `secure_alloc` - a mapping of its own for a secret that outlives a call.
+ *   - `secure_free`  - the end of that mapping: wiped, unlocked, unmapped.
  *
  * `secure_wipe` is the chokepoint for scrubbing secret-bearing memory across
  * non-crypto layers (base/, sys/, infra/, core/, cmds/). The crypto layer
@@ -16,11 +16,24 @@
  * vendor-free is what lets non-crypto modules wipe secrets without dragging a
  * crypto dependency into layers below the crypto layer.
  *
- * `secure_mlock_warn` is shared by every layer (including the crypto layer) because
- * the advisory is purely a stderr message — no crypto primitive is involved,
- * and a single one-time-per-process gate is the right UX regardless of which
- * subsystem hit the limit first. Centralising the gate prevents the user from
- * seeing two, three, or four near-identical warnings in a single command run.
+ * `secure_alloc` / `secure_free` are the one home of every secret that lives
+ * longer than the function that made it: the key manager's slot, a passphrase
+ * between its read and its derivation, the Argon2 work area. Each secret gets
+ * an anonymous private mapping of its own — page-aligned, zero-filled by the
+ * kernel — locked against swap where the process may lock memory, and excluded
+ * from core dumps where the platform can say so. One mapping per secret is what
+ * makes the unlock exact: `munlock` is page-granular and does not stack, so two
+ * secrets on one heap page would unlock each other when the first was freed.
+ * Stack copies (a master between resolve and subkey derivation, a subkey pair,
+ * a candidate plaintext) stay where they are and are wiped, not locked; the
+ * plaintext the content cache holds is about to be a file on disk and is wiped,
+ * not locked.
+ *
+ * The lock is best-effort. Under a tight RLIMIT_MEMLOCK (macOS ships a 64 KiB
+ * default; every Argon2 setting exceeds it) the mapping still serves, unlocked,
+ * and the process prints one advisory the first time a lock fails — one per
+ * process, whichever secret hit the limit first, so the user never sees the same
+ * line three times in one command.
  *
  * Implementation guarantee for `secure_wipe`: writes are not elided by dead-store
  * elimination or whole-program optimization. Implemented via a
@@ -55,9 +68,8 @@
  *
  * NULL-safe: `ptr == NULL` is a no-op. Zero-length: `len == 0` is a no-op.
  *
- * Does not unlock or free; pair with `munlock`/`free` (or use `buffer_secure_free`
- * for the full secret-allocation lifecycle) when the bytes lived in a heap
- * allocation that needs to be released.
+ * Does not unlock or free; a secret in its own mapping ends with `secure_free`,
+ * and a heap string that held a credential with `buffer_secure_free`.
  *
  * @param ptr Memory to wipe (may be NULL)
  * @param len Number of bytes to wipe (may be 0)
@@ -65,30 +77,29 @@
 void secure_wipe(void *ptr, size_t len);
 
 /**
- * Emit a one-time-per-process advisory to stderr about an mlock failure.
+ * Map `len` bytes for a secret that outlives a call.
  *
- * Several call sites attempt `mlock` on secret-bearing buffers (Argon2 work area,
- * master-key cache slot, passphrase buffers). On macOS the default `RLIMIT_MEMLOCK`
- * is 64 KiB — every non-trivial Argon2 setting exceeds that, so failures are
- * the common case for default-configured systems. Without coordination, the user
- * would see one warning per site per command (4+ near-identical messages); this
- * helper gates output on a process-wide flag so the user sees exactly one advisory
- * regardless of which site hit the limit first.
+ * An anonymous private mapping of its own: page-aligned (so it serves Argon2's
+ * u64-aligned blocks as well as a 33-byte passphrase), zero-filled, locked against
+ * swap best-effort (the one-time advisory on failure), and excluded from core
+ * dumps where the platform has MADV_DONTDUMP. Released with `secure_free` and
+ * nothing else — the pointer is not the allocator's.
  *
- * The format string and varargs describe what failed to lock; the helper appends
- * the standard "may be paged to disk / raise RLIMIT_MEMLOCK" remediation
- * boilerplate so every advisory has the same actionable tail.
- *
- * Subsequent calls within the same process are no-ops.
- *
- * Not thread-safe (the gate is a plain `static bool`). Dotta is single-threaded;
- * revisit if that ever changes.
- *
- * @param saved_errno errno value from the failed mlock call
- * @param fmt         printf-style description of the buffer that
- *                    failed to lock (e.g., "%u MiB Argon2 work area")
+ * @param len Bytes to map (> 0)
+ * @return The mapping, or NULL when the mapping fails (the caller reports
+ *         ERR_MEMORY)
  */
-void secure_mlock_warn(int saved_errno, const char *fmt, ...)
-__attribute__((format(printf, 2, 3)));
+void *secure_alloc(size_t len);
+
+/**
+ * End a `secure_alloc` mapping: wipe, unlock, unmap.
+ *
+ * `len` is the length the mapping was made with — the caller's cleanup length,
+ * as `buffer_secure_free` takes it. NULL-safe.
+ *
+ * @param ptr The mapping (may be NULL)
+ * @param len Its length
+ */
+void secure_free(void *ptr, size_t len);
 
 #endif /* DOTTA_SECURE_H */

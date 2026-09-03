@@ -9,9 +9,9 @@
 #include <stdio.h>
 
 #include "base/args.h"
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/secure.h"
 #include "core/manifest.h"
 #include "core/state.h"
 #include "crypto/kdf.h"
@@ -95,9 +95,9 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
         keymgr, (const uint8_t *) passphrase, passphrase_len
     );
 
-    /* Securely clear passphrase from memory. passphrase_prompt returns a buffer
-     * of exactly passphrase_len + 1 bytes with mlock. */
-    buffer_secure_free(passphrase, passphrase_len + 1);
+    /* Wipe and unmap the passphrase. passphrase_prompt returns a mapping of exactly
+     * passphrase_len + 1 bytes. */
+    secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
         err = error_wrap(err, "Failed to set passphrase");

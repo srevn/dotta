@@ -371,11 +371,11 @@ static int run_spec(
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)
- * and crypto_wipe/munlock (needed by keymgr teardown). The kernel reclaims mlocked
- * pages on process death and zeroes them before reallocation, so master keys
- * held in the now-freed keymgr cannot surface in another process's memory.
- * Worktrees are orphan-cleaned by worktree.c on the next invocation, and SQLite
- * WAL mode auto-rolls-back any in-flight transaction.
+ * and secure_free's wipe/munlock/munmap (needed by keymgr teardown). The kernel
+ * reclaims the keymgr's mapping on process death and zeroes its pages before
+ * reallocation, so master keys held in the now-dead keymgr cannot surface in
+ * another process's memory. Worktrees are orphan-cleaned by worktree.c on the
+ * next invocation, and SQLite WAL mode auto-rolls-back any in-flight transaction.
  *
  * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4 §2.4.3. Reading
  * volatile sig_atomic_t is atomic by definition.

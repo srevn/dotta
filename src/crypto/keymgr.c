@@ -18,23 +18,22 @@
  * Wipe discipline: every slot eviction, every per-call key intermediate, every
  * error return path scrubs the relevant buffer via `crypto_wipe` (monocypher's
  * primitive, used directly inside the crypto layer; non-crypto layers use
- * `secure_wipe` from `base/secure.h`). Public API symmetry: every entry point
- * either returns `error_t *` with the cleanup-on-error contract, or runs
- * idempotently with no error surface (free, clear).
+ * `secure_wipe` from `base/secure.h`). The struct itself — the slot is the secret
+ * — is a `secure_alloc` mapping, wiped and unmapped by `keymgr_free`. Public
+ * API symmetry: every entry point either returns `error_t *` with the
+ * cleanup-on-error contract, or runs idempotently with no error surface (free,
+ * clear).
  */
 
 #include "crypto/keymgr.h"
 
-#include <errno.h>
 #include <monocypher.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/secure.h"
 #include "crypto/cipher.h"
@@ -45,8 +44,9 @@
 /**
  * Key manager structure.
  *
- * The epoch, the timeout, and the single in-memory slot. Best-effort mlock'd;
- * the much larger Argon2 work area is mlock'd separately by `kdf_master_key`.
+ * The epoch, the timeout, and the single in-memory slot. A `secure_alloc` mapping
+ * of its own (base/secure.h): the slot is the secret, and everything beside it
+ * is public and rides along.
  */
 struct keymgr {
     /* The repository's epoch and its public fingerprint — set together at create
@@ -62,8 +62,6 @@ struct keymgr {
     bool has_key;
     uint8_t master_key[KDF_KEY_SIZE];
     time_t expires_at;              /* the file's; 0 = never, or no file */
-
-    bool mlocked;
 };
 
 /**
@@ -107,25 +105,14 @@ error_t *keymgr_create(
     CHECK_NULL(epoch);
     CHECK_NULL(out);
 
-    keymgr *km = calloc(1, sizeof(*km));
+    keymgr *km = secure_alloc(sizeof(*km));
     if (!km) {
-        return ERROR(ERR_MEMORY, "Failed to allocate key manager");
+        return ERROR(ERR_MEMORY, "Failed to map key manager");
     }
 
-    /* calloc zeroed every field; only the binding needs assignment. */
+    /* The mapping is zero-filled; only the binding needs assignment. */
     km->session_timeout = session_timeout;
     bind_epoch(km, epoch);
-
-    /* Best-effort mlock to keep the cached master off swap. Failure is non-fatal;
-     * the advisory is process-wide so the user sees one warning regardless of
-     * which subsystem hit RLIMIT_MEMLOCK. */
-    if (mlock(km, sizeof(*km)) == 0) {
-        km->mlocked = true;
-    } else {
-        secure_mlock_warn(
-            errno, "%zu-byte master-key cache slot", sizeof(*km)
-        );
-    }
 
     *out = km;
     return NULL;
@@ -136,11 +123,7 @@ void keymgr_free(keymgr *km) {
         return;
     }
     evict_slot(km);
-    if (km->mlocked) {
-        munlock(km, sizeof(*km));
-        km->mlocked = false;
-    }
-    free(km);
+    secure_free(km, sizeof(*km));
 }
 
 /*
@@ -215,9 +198,9 @@ static bool try_disk_hit(
 /**
  * Tier 3: acquire passphrase via env var or interactive prompt.
  *
- * On success `*out_passphrase` is a heap-allocated, mlock'd buffer the caller
- * releases via `buffer_secure_free(passphrase, *out_passphrase_len + 1)` (the
- * `+1` accounts for the NUL both backends append).
+ * On success `*out_passphrase` is the passphrase's own mapping, which the caller
+ * releases via `secure_free(passphrase, *out_passphrase_len + 1)` (the `+1`
+ * accounts for the NUL both backends append).
  *
  * A successful env-var read prints a stderr advisory; the interactive prompt
  * runs only when the env var is unset and disables echo around the read. All
@@ -323,9 +306,9 @@ static error_t *keymgr_resolve(
         out_master_key
     );
 
-    /* Wipe and free the passphrase regardless of derivation outcome. Both backends
-     * return a buffer of `passphrase_len + 1` bytes (NUL-terminated, mlock'd). */
-    buffer_secure_free(passphrase, passphrase_len + 1);
+    /* Wipe and unmap the passphrase regardless of derivation outcome. Both backends
+     * return a mapping of `passphrase_len + 1` bytes (NUL-terminated). */
+    secure_free(passphrase, passphrase_len + 1);
 
     if (err) {
         return error_wrap(err, "Failed to derive encryption key");

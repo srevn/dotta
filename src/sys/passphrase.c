@@ -9,11 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <termios.h>
 #include <unistd.h>
 
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/secure.h"
 
@@ -215,26 +213,16 @@ error_t *passphrase_prompt(
     fflush(stderr);
 
     /* Fixed-size read buffer caps the damage if a pathological stdin redirect
-     * streams megabytes into the prompt. */
-    char *passphrase = malloc(MAX_PASSPHRASE_LENGTH + 1);
+     * streams megabytes into the prompt. A mapping of its own (base/secure.h):
+     * locked best-effort, wiped and unmapped when it goes. */
+    char *passphrase = secure_alloc(MAX_PASSPHRASE_LENGTH + 1);
     if (!passphrase) {
         if (echo_disabled) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
             saved_term_active = 0;
             passphrase_restore_signal_handlers();
         }
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
-    }
-
-    /* Best-effort mlock. Non-fatal on failure (the process may lack RLIMIT_MEMLOCK
-     * headroom); the bytes still live in the caller's memory and are wiped before
-     * free. The advisory is gated by a process-wide flag in `secure_mlock_warn`
-     * and shared with kdf and keymgr so the user sees one warning per process. */
-    if (mlock(passphrase, MAX_PASSPHRASE_LENGTH + 1) != 0) {
-        secure_mlock_warn(
-            errno, "%d-byte passphrase read buffer",
-            MAX_PASSPHRASE_LENGTH + 1
-        );
+        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     /* EINTR retry: non-terminating signals interrupt fgets because we deliberately
@@ -256,7 +244,7 @@ error_t *passphrase_prompt(
 
     /* Check read result */
     if (result == NULL) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(ERR_FS, "Failed to read passphrase");
     }
 
@@ -268,7 +256,7 @@ error_t *passphrase_prompt(
      * rather than hand the caller a prefix of the intended passphrase. */
     const bool has_newline = (len > 0 && passphrase[len - 1] == '\n');
     if (len == MAX_PASSPHRASE_LENGTH && !has_newline) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(
             ERR_INVALID_ARG,
             "Passphrase too long (maximum %d characters)",
@@ -284,7 +272,7 @@ error_t *passphrase_prompt(
 
     /* Check for empty passphrase */
     if (len == 0) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
         return ERROR(ERR_INVALID_ARG, "Passphrase cannot be empty");
     }
 
@@ -292,22 +280,16 @@ error_t *passphrase_prompt(
      * the actual allocation. Returning the oversized read buffer directly would
      * force the caller to know — and pass — MAX_PASSPHRASE_LENGTH at cleanup
      * time. */
-    char *tight = malloc(len + 1);
+    char *tight = secure_alloc(len + 1);
     if (!tight) {
-        buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
-    }
-
-    if (mlock(tight, len + 1) != 0) {
-        secure_mlock_warn(
-            errno, "%zu-byte passphrase buffer", len + 1
-        );
+        secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     memcpy(tight, passphrase, len + 1);
 
-    /* Zero and free the oversized read buffer */
-    buffer_secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
+    /* Wipe and unmap the oversized read buffer */
+    secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
 
     *out_passphrase = tight;
     *out_len = len;
@@ -320,13 +302,12 @@ error_t *passphrase_prompt(
  *
  * Reads from DOTTA_ENCRYPTION_PASSPHRASE if set.
  *
- * After copying the passphrase into a heap buffer, the env var is unset via
+ * After copying the passphrase into its own mapping, the env var is unset via
  * `unsetenv` so subprocesses spawned by dotta do not inherit it. The original
  * `getenv` string is libc-owned and cannot be wiped — `unsetenv` is the closest
  * available approximation to scrubbing it (the libc may relink the environ entry,
  * but recent glibc/macOS leave only a small residue and the visible env loses
- * the variable). This is defense-in-depth against the env-var inheritance vector
- * flagged by the keymgr advisory; the underlying "env-var passphrases are insecure"
+ * the variable). The underlying "env-var passphrases are visible to ps(1)"
  * trade-off is the user's choice to accept.
  *
  * @param out_passphrase Passphrase (caller must free and zero)
@@ -344,19 +325,11 @@ error_t *passphrase_from_env(
         return ERROR(ERR_NOT_FOUND, "DOTTA_ENCRYPTION_PASSPHRASE not set");
     }
 
-    /* Duplicate passphrase */
+    /* Copy the passphrase into a mapping of its own (base/secure.h). */
     const size_t len = strlen(env_passphrase);
-    char *passphrase = malloc(len + 1);
+    char *passphrase = secure_alloc(len + 1);
     if (!passphrase) {
-        return ERROR(ERR_MEMORY, "Failed to allocate passphrase buffer");
-    }
-
-    /* Lock memory to prevent swapping. Best-effort; non-fatal on failure. Process
-     * isolation still applies. */
-    if (mlock(passphrase, len + 1) != 0) {
-        secure_mlock_warn(
-            errno, "%zu-byte env-var passphrase buffer", len + 1
-        );
+        return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
     memcpy(passphrase, env_passphrase, len + 1);

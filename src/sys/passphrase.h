@@ -1,23 +1,22 @@
 /**
  * passphrase.h — Secure passphrase acquisition
  *
- * Two orthogonal sources for user passphrases, each returning an mlock'd,
- * right-sized heap buffer that the caller releases with buffer_secure_free:
+ * Two orthogonal sources for user passphrases, each returning a right-sized
+ * `secure_alloc` mapping (base/secure.h) that the caller releases with secure_free:
  *
  *   passphrase_prompt    — interactive TTY prompt with echo disabled,
  *                          or piped stdin read for scripts and tests.
  *   passphrase_from_env  — DOTTA_ENCRYPTION_PASSPHRASE fallback, for
- *                          automation contexts. The caller decides whether to
- *                          warn about env-var passphrases; this function only
- *                          returns the bytes.
+ *                          automation contexts. This function only returns the
+ *                          bytes.
  *
  * Cleanup contract:
  *
- *     buffer_secure_free(passphrase, passphrase_len + 1);
+ *     secure_free(passphrase, passphrase_len + 1);
  *
- * The +1 covers the NUL terminator that is guaranteed to be present and also
- * mlock'd. Callers MUST NOT inline munlock / secure_wipe / free —
- * buffer_secure_free is the single correct sequence.
+ * The +1 covers the NUL terminator that is guaranteed to be present. The mapping
+ * is the passphrase's own — locked against swap best-effort, wiped and unmapped
+ * by secure_free — and is not the allocator's: callers MUST NOT free it.
  *
  * Terminal safety (passphrase_prompt only):
  *   During the echo-disabled window the function installs short-lived signal
@@ -65,11 +64,11 @@
  * with default disposition instead of returning.
  *
  * @param prompt          Prompt string written to stderr (must not be NULL).
- * @param out_passphrase  Heap-allocated passphrase buffer. Caller owns;
- *                        free with buffer_secure_free(p, *out_len + 1).
+ * @param out_passphrase  The passphrase's own mapping. Caller owns; release
+ *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
  * @return NULL on success. ERR_FS on tty manipulation or read I/O failure.
- *         ERR_MEMORY on allocation failure. ERR_INVALID_ARG on empty or truncated
+ *         ERR_MEMORY when the mapping fails. ERR_INVALID_ARG on empty or truncated
  *         input.
  */
 error_t *passphrase_prompt(
@@ -82,16 +81,16 @@ error_t *passphrase_prompt(
  * Read the passphrase from DOTTA_ENCRYPTION_PASSPHRASE.
  *
  * Intended for automation contexts where an interactive prompt is unacceptable.
- * The returned buffer is mlock'd and NUL-terminated. The caller is responsible
- * for any advisory warning about env-var
- * passphrases (they leak via ps(1) and child-process inheritance);
- * this function itself prints nothing.
+ * The returned mapping is NUL-terminated. The variable is unset once read, so a
+ * child of the run does not inherit it; the trade-off the variable makes (it is
+ * visible to ps(1) until then) is the user's to accept, and this function prints
+ * nothing about it.
  *
- * @param out_passphrase  Heap-allocated passphrase buffer. Caller owns;
- *                        free with buffer_secure_free(p, *out_len + 1).
+ * @param out_passphrase  The passphrase's own mapping. Caller owns; release
+ *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
  * @return NULL on success. ERR_NOT_FOUND if the env var is unset or empty.
- *         ERR_MEMORY on allocation failure.
+ *         ERR_MEMORY when the mapping fails.
  */
 error_t *passphrase_from_env(
     char **out_passphrase,

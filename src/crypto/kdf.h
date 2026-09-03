@@ -177,9 +177,9 @@ void kdf_epoch_fingerprint(
  * cross-installation precomputation (a table built against one dotta repo is
  * useless against any other); the pair is the per-guess cost.
  *
- * Allocates `memory_mib * 1024 * 1024` bytes via aligned_alloc and best-effort
- * mlocks the work area; failure surfaces a one-time-per-process advisory. The
- * work area is wiped before free on every path.
+ * Maps `memory_mib * 1024 * 1024` bytes for the work area with `secure_alloc`
+ * (base/secure.h) — locked best-effort, with the one-time advisory on failure —
+ * and ends it with `secure_free`: wiped and unmapped on every path.
  *
  * `epoch` is a loaded epoch: its pair is in range by the ref's validation
  * (`infra/epoch`) or a preset's construction, and is not re-checked here.

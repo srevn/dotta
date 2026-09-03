@@ -7,20 +7,15 @@
  *   2. `kdf_siv_subkeys`: master_key + profile → (mac_key, prf_key) via two
  *      domain-separated keyed-BLAKE2b calls.
  *
- * Argon2id work-area lifecycle:
- *   - aligned_alloc(_Alignof(uint64_t), memory_mib * 1024 * 1024). Size is always
- *     a multiple of 8 (1 MiB = 2^20), satisfying the aligned_alloc
- *     multiple-of-alignment rule. monocypher's `crypto_argon2` casts the work
- *     area to `blk *` (u64[128] per block) — 8-byte alignment is what the primitive
- *     requires.
- *   - Best-effort `mlock` to keep the work area off swap. Failure is non-fatal
- *     (the buffer is wiped before free regardless); on macOS the default
- *     RLIMIT_MEMLOCK is 64 KiB so failure is the common case. The advisory routes
- *     through `secure_mlock_warn`, a process-wide gate shared with keymgr and
- *     sys/passphrase.
- *   - Defense-in-depth wipe: monocypher already zeroes the work area on return,
- *     but we wipe again before free to defend against version drift, lane-rounding
- *     edge cases, and early-return paths where Argon2 never executed.
+ * Argon2id work-area lifecycle: one `secure_alloc` mapping of memory_mib MiB
+ * (base/secure.h) — page-aligned, which is more than the u64 alignment
+ * monocypher's `crypto_argon2` requires of its `blk *` (u64[128] per block);
+ * locked against swap best-effort, with the one advisory the process prints when
+ * a lock fails; wiped and unmapped by `secure_free`. monocypher zeroes the work
+ * area itself on return, so the bytes are wiped twice: the second pass is
+ * `secure_free`'s own, paid (about seven percent of a cold derivation) so that
+ * every secret-bearing mapping in the tree ends the one way and no site reasons
+ * about which primitive wiped what.
  *
  * The epoch: the salt is generated once at `dotta init` via `entropy_fill` (see
  * KDF_SALT_SIZE for the 256-bit choice) beside the pair `init` was told to mint
@@ -47,10 +42,10 @@
 #include "base/secure.h"
 #include "crypto/mac.h"
 
-/* Plain `malloc` and `aligned_alloc` need 64-bit `size_t` to express the 4 GiB
- * Argon2 ceiling. On a 32-bit host, `(uint32_t) 4096 * 1024 * 1024` overflows
- * to 0 silently. Refuse to build on 32-bit hosts so the failure is at compile
- * time, not at allocation time. */
+/* The work-area size needs a 64-bit `size_t` to express the 4 GiB Argon2 ceiling.
+ * On a 32-bit host, `(uint32_t) 4096 * 1024 * 1024` overflows to 0 silently.
+ * Refuse to build on 32-bit hosts so the failure is at compile time, not at
+ * allocation time. */
 _Static_assert(
     sizeof(size_t) >= 8,
     "dotta requires a 64-bit host for Argon2 work-area sizing"
@@ -163,31 +158,15 @@ error_t *kdf_master_key(
      * admits. */
     const size_t bytes = (size_t) epoch->memory_mib * 1024U * 1024U;
 
-    /* Argon2 wants u64-aligned blocks. `aligned_alloc(_Alignof(uint64_t), bytes)`
-     * makes the contract explicit; the multiple-of-alignment rule is satisfied
-     * since `bytes` is a multiple of 1 MiB. */
-    void *work_area = aligned_alloc(_Alignof(uint64_t), bytes);
+    /* The work area: a mapping of its own, page-aligned (Argon2 wants u64-aligned
+     * blocks), locked best-effort, wiped and unmapped at the end. */
+    void *work_area = secure_alloc(bytes);
     if (!work_area) {
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
         return ERROR(
             ERR_MEMORY,
-            "Failed to allocate %zu MiB Argon2 work area: %s",
+            "Failed to map %zu MiB Argon2 work area: %s",
             (size_t) epoch->memory_mib, strerror(errno)
-        );
-    }
-
-    /* Best-effort mlock the entire work area. mlock pins pages so the
-     * key-derivation transient state cannot leak to swap. On macOS the default
-     * RLIMIT_MEMLOCK is 64 KiB — every non-trivial Argon2 setting exceeds that
-     * and falls through to the advisory path. The advisory is gated by a
-     * process-wide `static bool` inside `secure_mlock_warn`, so the user sees
-     * one warning per process regardless of how many subsystems hit the limit. */
-    bool mlocked = false;
-    if (mlock(work_area, bytes) == 0) {
-        mlocked = true;
-    } else {
-        secure_mlock_warn(
-            errno, "%u MiB Argon2 work area", (unsigned) epoch->memory_mib
         );
     }
 
@@ -218,17 +197,13 @@ error_t *kdf_master_key(
 
     /* `crypto_argon2` returns void — no failure mode inside the primitive. After
      * return, out_master_key holds the derived key and work_area is
-     * monocypher-zeroed. */
+     * monocypher-zeroed; secure_free wipes it once more (the file header says
+     * why) and unmaps it. */
     crypto_argon2(
         out_master_key, KDF_KEY_SIZE, work_area,
         config, inputs, crypto_argon2_no_extras
     );
-
-    /* Defense-in-depth wipe before free; cost is negligible against the
-     * seconds-scale Argon2 runtime. */
-    crypto_wipe(work_area, bytes);
-    if (mlocked) munlock(work_area, bytes);
-    free(work_area);
+    secure_free(work_area, bytes);
 
     return NULL;
 }

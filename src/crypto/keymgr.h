@@ -34,9 +34,10 @@
  *   - The master lives in process memory and, when the file tier is on, on disk.
  *     The file is obfuscated, NOT encrypted at rest — see crypto/session.h for
  *     what it is and what protects it.
- *   - mlock on the keymgr struct is best-effort; under tight RLIMIT_MEMLOCK the
- *     constructor logs a one-time advisory and continues. The kernel reclaims
- *     the page on process death.
+ *   - The struct is a `secure_alloc` mapping of its own (base/secure.h): locked
+ *     against swap best-effort — under tight RLIMIT_MEMLOCK the process prints
+ *     one advisory and continues — and wiped and unmapped by `keymgr_free`. The
+ *     kernel reclaims the pages on process death.
  *   - Every key buffer (master, mac_key, prf_key, intermediates) is scrubbed
  *     via `crypto_wipe` on every exit path. Callers never see raw key bytes.
  */
@@ -55,8 +56,8 @@
 /**
  * Key manager (opaque).
  *
- * Holds the epoch, the session timeout and the in-memory slot. Best-effort mlock'd
- * at create time. Treat as opaque; access via the functions below.
+ * Holds the epoch, the session timeout and the in-memory slot, in a mapping of
+ * its own. Treat as opaque; access via the functions below.
  */
 typedef struct keymgr keymgr;
 
@@ -161,8 +162,8 @@ error_t *keymgr_decrypt(
  * this function.
  *
  * The passphrase buffer is read-only; the caller owns its lifetime and must scrub
- * it after the call returns (`buffer_secure_free` is canonical for
- * `passphrase_prompt` buffers).
+ * it after the call returns (`secure_free` is canonical for `passphrase_prompt`
+ * buffers).
  *
  * @param km             Key manager (non-NULL)
  * @param passphrase     Passphrase bytes (non-NULL, len > 0)
@@ -230,8 +231,8 @@ bool keymgr_cached(keymgr *km, time_t *out_expires_at);
 /**
  * Free the key manager.
  *
- * Securely zeros the cached key, releases the mlock pin (if held), and frees
- * the struct. NULL-safe.
+ * Securely zeros the cached key and ends the struct's mapping (wiped, unlocked,
+ * unmapped). NULL-safe.
  *
  * @param km Key manager (NULL-safe)
  */

@@ -39,20 +39,21 @@
  * compiler ever elides volatile writes, that is a bug to file upstream, not a
  * workaround to bake into every wipe call.
  *
- * `secure_mlock_warn` — single chokepoint for the "we tried to pin secret-bearing
- * pages and the kernel said no" advisory. Three subsystems (kdf, keymgr,
- * sys/passphrase) hit `mlock` and may fail on macOS's default 64 KiB
- * RLIMIT_MEMLOCK. The first failure prints; subsequent failures within the same
- * process are silent. The format is uniform across call sites so the remediation
- * tail is identical regardless of which subsystem fired first.
+ * `secure_alloc` / `secure_free` — one anonymous mapping per secret. The wipe
+ * before the unmap is the one the spec can state; the kernel zeroes an anonymous
+ * page before it is handed out again regardless, so for a mapping the wipe costs
+ * one pass over the bytes and buys the sentence. The lock is where the pages
+ * are protected from swap, and the advisory below is the one place the process
+ * says it could not lock: the first failure prints, every later one is silent.
  */
 
 #include "base/secure.h"
 
-#include <stdarg.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 
 void secure_wipe(void *ptr, size_t len) {
     if (!ptr || len == 0) {
@@ -66,31 +67,62 @@ void secure_wipe(void *ptr, size_t len) {
     }
 }
 
-void secure_mlock_warn(int saved_errno, const char *fmt, ...) {
-    /* Process-wide gate. Single-threaded, so plain `bool` suffices — no atomic
-     * load/store needed. The first call fires; all later calls return early. */
+/**
+ * One-time-per-process advisory that a lock failed.
+ *
+ * Every non-trivial Argon2 setting exceeds macOS's default RLIMIT_MEMLOCK, so
+ * failure is the common case on a default-configured system; the process-wide
+ * gate keeps it to one line. Not thread-safe (a plain `static bool`); dotta is
+ * single-threaded.
+ */
+static void mlock_warn(int saved_errno, size_t len) {
     static bool warned = false;
     if (warned) {
         return;
     }
     warned = true;
 
-    /* Two-step format so the description (caller-supplied) is bracketed by the
-     * canonical "Warning: Failed to lock " prefix and the standard remediation
-     * tail. Every advisory in dotta therefore shares the same shape — only the
-     * middle clause varies. */
-    fputs("Warning: Failed to lock ", stderr);
-
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-
     fprintf(
         stderr,
-        ": %s\n"
+        "Warning: Failed to lock %zu bytes of secret-bearing memory: %s\n"
         "         Sensitive material may be paged to disk.\n"
         "         Raise RLIMIT_MEMLOCK (ulimit -l) to enable this protection.\n",
-        strerror(saved_errno)
+        len, strerror(saved_errno)
     );
+}
+
+void *secure_alloc(size_t len) {
+    void *ptr = mmap(
+        NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0
+    );
+    if (ptr == MAP_FAILED) {
+        return NULL;
+    }
+
+    if (mlock(ptr, len) != 0) {
+        mlock_warn(errno, len);
+    }
+
+    #ifdef MADV_DONTDUMP
+    /* Belt to the core limit's braces (sys/identity zeroes RLIMIT_CORE): where
+     * the kernel can be told, the pages never enter a dump at all. Advisory; a
+     * refusal changes nothing. */
+    (void) madvise(ptr, len, MADV_DONTDUMP);
+    #endif
+
+    return ptr;
+}
+
+void secure_free(void *ptr, size_t len) {
+    if (!ptr) {
+        return;
+    }
+
+    secure_wipe(ptr, len);
+
+    /* Unlock before unmap, and best-effort: a range the lock refused is not locked,
+     * and munlock on it is a no-op the kernel answers with success or a code
+     * nothing here can act on. */
+    (void) munlock(ptr, len);
+    (void) munmap(ptr, len);
 }

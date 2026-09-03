@@ -14,6 +14,7 @@
 #include "base/output.h"
 #include "core/manifest.h"
 #include "core/state.h"
+#include "crypto/kdf.h"
 #include "crypto/keymgr.h"
 #include "sys/passphrase.h"
 
@@ -209,14 +210,22 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_NORMAL, "  Status: {green}enabled{reset}\n"
         );
 
-        /* Show Argon2id derivation parameters. The pair is what the config schema
-         * exposes (either as a `strength` preset or as raw `memory` (MiB) /
-         * `passes`); printing the resolved values keeps the status output
-         * independent of which input form the user wrote. */
+        /* The Argon2id pair is the repository's epoch — minted at init, the same
+         * on every machine — named by the preset that matches it when one does.
+         * Encryption-enabled implies the dispatcher created the keymgr. */
+        CHECK_NULL(keymgr);
+        const kdf_epoch_t *epoch = keymgr_epoch(keymgr);
+        const char *preset = NULL;
+        for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
+            if (kdf_presets[i].memory_mib == epoch->memory_mib
+                && kdf_presets[i].passes == epoch->passes) {
+                preset = kdf_presets[i].name;
+            }
+        }
         output_print(
-            out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes\n",
-            (unsigned) config->encryption_argon2_memory_mib,
-            (unsigned) config->encryption_argon2_passes
+            out, OUTPUT_VERBOSE, "  Argon2id: %u MiB, %u passes%s%s%s\n",
+            (unsigned) epoch->memory_mib, (unsigned) epoch->passes,
+            preset ? " (" : "", preset ? preset : "", preset ? ")" : ""
         );
 
         /* Show session timeout */
@@ -282,10 +291,6 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
 
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
-
-    /* Encryption-enabled path guarantees ctx->run.keymgr is populated by the
-     * dispatcher under a spec that declares crypto. */
-    CHECK_NULL(keymgr);
 
     bool key_cached = keymgr_probe_key(keymgr);
     output_print(
@@ -547,7 +552,8 @@ const args_command_t spec_key = {
         "  [encryption]\n"
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
-        "  strength         = \"balanced\" # \"fast\", \"balanced\", or \"paranoid\"\n",
+        "The Argon2id strength is the repository's, minted once by\n"
+        "'dotta init --strength <fast|balanced|paranoid>'.\n",
     .examples           =
         "  %s key set               # Cache passphrase for the session\n"
         "  %s key                   # Show cache state and config\n"

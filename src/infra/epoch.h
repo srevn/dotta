@@ -1,7 +1,7 @@
 /**
- * salt.h - Per-repository Argon2id salt
+ * epoch.h - The repository's epoch: its Argon2id salt and parameters
  *
- * Owns the `refs/dotta/salt` ref, a synced piece of repo-wide infrastructure
+ * Owns the `refs/dotta/epoch` ref, a synced piece of repo-wide infrastructure
  * that sits alongside the local-only `dotta-worktree` branch and the user-data
  * profile branches.
  *
@@ -11,34 +11,42 @@
  * exactly this; `repo_open` is the local-side counterpart (dotta-worktree branch
  * presence).
  *
- *     refs/dotta/salt
+ *     refs/dotta/epoch
  *       └── commit
  *             └── tree
- *                   └── salt   (KDF_SALT_SIZE bytes — Argon2id salt)
+ *                   ├── salt     (KDF_SALT_SIZE bytes — the Argon2id salt)
+ *                   └── params   (KDF_PARAMS_SIZE bytes — LE16 memory_mib ‖ passes)
  *
- * The salt makes each repository a distinct attack target: a precomputation table
- * built against one repo's passphrase guesses cannot be reused against any other.
- * It is generated once at `dotta init`, fetched at `dotta clone`, and reconciled
- * at `dotta sync` (establish on the remote, adopt from it, or surface a conflict
- * — see `salt_resolve`), so cross-machine sync of encrypted dotfiles works while
- * still defeating cross-installation precomputation.
+ * The epoch is everything the master-key derivation takes but the passphrase
+ * (`kdf_epoch_t`), and the repository is its one owner: a master is a function
+ * of (passphrase, epoch), so every machine on a repository derives one master
+ * from one passphrase, and a change of strength is a new epoch — every blob
+ * re-sealed, never a second master beside the first. The salt makes each repository
+ * a distinct attack target (a precomputation table built against one repo's
+ * passphrase guesses cannot be reused against any other); the parameters are
+ * the cost of a guess. It is minted once at `dotta init`, fetched at `dotta clone`,
+ * and reconciled at `dotta sync` (establish on the remote, adopt from it, or
+ * surface a conflict — see `epoch_resolve`), so cross-machine sync of encrypted
+ * dotfiles works while still defeating cross-installation precomputation.
  *
  * The commit→tree→blob structure (rather than a ref pointing at a blob directly)
- * is standard Git citizenship: it lets `dotta git show refs/dotta/salt` render
- * a meaningful object header and keeps tree-walk and history tools working.
+ * is standard Git citizenship: it lets `dotta git show refs/dotta/epoch` render
+ * a meaningful object header and keeps tree-walk and history tools working; two
+ * blobs name the two facts under `git ls-tree`.
  *
- * Salt is PUBLIC. Argon2 requires uniqueness across attack targets, not secrecy.
- * Treat as ordinary input bytes; do not mlock or wipe.
+ * The epoch is PUBLIC. Argon2 requires uniqueness across attack targets, not
+ * secrecy. Treat as ordinary input bytes; do not mlock or wipe.
  *
  * Layering — `infra/` depends on sys/gitops + sys/entropy + sys/transfer +
- * crypto/kdf (for the salt-size constant). Consumed by main.c, cmd_init, cmd_clone,
- * cmd_sync. libgit2 is called directly from this module's push/fetch primitives
- * because there is exactly one consumer of "push/fetch a non-branch ref" today
- * and `sys/gitops` does not yet need to abstract that.
+ * crypto/kdf (the epoch type, its encoding and its fingerprint). Consumed by
+ * main.c, cmd_init, cmd_clone, cmd_sync. libgit2 is called directly from this
+ * module's push/fetch primitives because there is exactly one consumer of
+ * "push/fetch a non-branch ref" today and `sys/gitops` does not yet need to
+ * abstract that.
  */
 
-#ifndef DOTTA_SALT_H
-#define DOTTA_SALT_H
+#ifndef DOTTA_EPOCH_H
+#define DOTTA_EPOCH_H
 
 #include <git2.h>
 #include <stdint.h>
@@ -49,137 +57,148 @@
 
 /* Custom-namespace ref. Branch-listing filters target refs/heads/... so this
  * ref does not require additional filtering at branch sites. */
-#define SALT_REF        "refs/dotta/salt"
+#define EPOCH_REF          "refs/dotta/epoch"
 
-/** Tree-entry name for the salt blob. */
-#define SALT_BLOB_NAME  "salt"
+/** Tree-entry names for the two blobs. */
+#define EPOCH_SALT_BLOB    "salt"
+#define EPOCH_PARAMS_BLOB  "params"
 
 /**
- * Initialize the per-repository salt ref.
+ * Initialize the repository's epoch ref.
  *
- * If `refs/dotta/salt` exists with a valid salt blob, no-op (idempotent on repeat
- * `dotta init`, and across partial-init repair paths). Otherwise generates
- * KDF_SALT_SIZE random bytes via `entropy_fill`, writes a commit→tree→`salt`
- * blob, and points the ref at the new commit.
+ * If `refs/dotta/epoch` exists with a valid salt and params, no-op (idempotent
+ * on repeat `dotta init`, and across partial-init repair paths): the pair given
+ * is ignored, and the epoch that stands is what `*out` carries — the caller
+ * compares it against what it asked for. Otherwise generates KDF_SALT_SIZE random
+ * bytes via `entropy_fill`, writes a commit→tree→{`salt`, `params`} with the
+ * pair given, and points the ref at the new commit.
  *
  * Every fresh mint is gated on the ciphertext census, on both ways the ref can
- * fail to yield a salt — malformed (wrong-size blob, broken shape) and absent.
- * The danger is one danger: with the salt's bytes unavailable no blob's fingerprint
- * can be matched against anything, so any reachable ciphertext (any fingerprint,
- * any version) may be keyed by what the ref held, and a fresh salt would orphan
- * it permanently. With any reachable ciphertext — or a census that cannot prove
- * its absence — ERR_CRYPTO propagates naming the state of the ref and the restore
- * that repairs it, and the evidence stays in place (a remote holding the true
- * salt heals a divergence via sync's adopt path instead). With a clean census
- * the ref binds nothing: a malformed one is deleted and re-minted (`*out_repaired`
- * set — the caller renders the repair), an absent one is simply a repository
- * that has no salt yet.
+ * fail to yield an epoch — malformed (a wrong-size blob, a missing blob, a pair
+ * out of range, a broken shape) and absent. The danger is one danger: with the
+ * epoch's bytes unavailable no blob's fingerprint can be matched against anything,
+ * so any reachable ciphertext (any fingerprint, any version) may be keyed by
+ * what the ref held, and a fresh epoch would orphan it permanently. With any
+ * reachable ciphertext — or a census that cannot prove its absence — ERR_CRYPTO
+ * propagates naming the state of the ref and the restore that repairs it, and
+ * the evidence stays in place (a remote holding the true epoch heals a divergence
+ * via sync's adopt path instead). With a clean census the ref binds nothing: a
+ * malformed one is deleted and re-minted (`*out_repaired` set — the caller renders
+ * the repair), an absent one is simply a repository that has no epoch yet.
  *
  * Called by `cmd_init` after the dotta-worktree branch is established.
  * Encryption-disabled installations still produce the ref so a future `dotta
  * key set` (or a clone fetching this remote) finds it ready.
  *
  * @param repo         Repository (must not be NULL)
+ * @param memory_mib   Argon2 memory in MiB to mint with (a preset's; in range)
+ * @param passes       Argon2 pass count to mint with (a preset's; in range)
+ * @param out          The epoch that stands after the call: the existing one,
+ *                     or the one minted (must not be NULL)
  * @param out_repaired Optional: set true iff a malformed ref was deleted and
  *                     re-minted (can be NULL)
  * @return Error or NULL on success
  */
-error_t *salt_init(git_repository *repo, bool *out_repaired);
-
-/**
- * Load the per-repo Argon2id salt.
- *
- * Walks `refs/dotta/salt` → commit → tree → `salt` blob and copies exactly
- * KDF_SALT_SIZE bytes into `out_salt`.
- *
- * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
- * canonical diagnostic for "this dotta repo has not been initialized" or "this
- * clone fetched from a remote that does not host the salt ref". The dispatcher
- * wraps it with an actionable hint; `salt_init` reads it as "there is no ref to
- * delete before minting", which is why the code stops at the ref and never speaks
- * for the payload.
- *
- * Returns ERR_CRYPTO when the ref exists but yields no salt — the tree carries
- * no `salt` blob, the entry is not a blob, or the blob is the wrong size — each
- * indicating tampering or a partial / format-broken commit.
- *
- * @param repo     Repository (must not be NULL)
- * @param out_salt Output buffer for KDF_SALT_SIZE bytes
- * @return Error or NULL on success
- */
-error_t *salt_load(
+error_t *epoch_init(
     git_repository *repo,
-    uint8_t out_salt[KDF_SALT_SIZE]
+    uint16_t memory_mib,
+    uint8_t passes,
+    kdf_epoch_t *out,
+    bool *out_repaired
 );
 
 /**
- * Push `refs/dotta/salt` to the named remote.
+ * Load the repository's epoch.
+ *
+ * Walks `refs/dotta/epoch` → commit → tree → the `salt` and `params` blobs and
+ * fills `*out`: exactly KDF_SALT_SIZE salt bytes, and a pair validated with
+ * `kdf_validate_params` — this is the boundary the pair enters the process at,
+ * and nothing downstream re-checks it.
+ *
+ * Returns ERR_NOT_FOUND when — and only when — the ref itself is missing, the
+ * canonical diagnostic for "this dotta repo has not been initialized" or "this
+ * clone fetched from a remote that does not host the epoch ref". The dispatcher
+ * wraps it with an actionable hint; `epoch_init` reads it as "there is no ref
+ * to delete before minting", which is why the code stops at the ref and never
+ * speaks for the payload.
+ *
+ * Returns ERR_CRYPTO when the ref exists but yields no epoch — the tree lacks a
+ * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of
+ * range — each indicating tampering or a partial / format-broken commit.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out  The epoch (must not be NULL; zeroed on failure)
+ * @return Error or NULL on success
+ */
+error_t *epoch_load(git_repository *repo, kdf_epoch_t *out);
+
+/**
+ * Push `refs/dotta/epoch` to the named remote.
  *
  * No-op when the local ref does not exist (e.g. during sync before any `dotta
  * init` has populated it locally). Idempotent: an already-up-to-date push completes
  * cleanly. Surfaces network and auth failures as regular Git errors.
  *
  * Called once per `dotta sync` after profile pushes complete, so the `dotta init`
- * → `dotta remote add` → `dotta sync` workflow ships the salt to the remote without
- * requiring manual `git push refs/dotta/...`.
+ * → `dotta remote add` → `dotta sync` workflow ships the epoch to the remote
+ * without requiring manual `git push refs/dotta/...`.
  *
  * @param repo        Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL, e.g. "origin")
  * @param xfer        Transfer context for credentials / progress
  * @return Error or NULL on success
  */
-error_t *salt_push(
+error_t *epoch_push(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer
 );
 
 /**
- * Fetch `refs/dotta/salt` from the named remote, validating the result.
+ * Fetch `refs/dotta/epoch` from the named remote, validating the result.
  *
  * Called by `cmd_clone` after the main clone completes and by `cmd_sync` on the
- * adopt path, so the canonical salt is present before any encrypt/decrypt operation
- * runs.
+ * adopt path, so the canonical epoch is present before any encrypt/decrypt
+ * operation runs.
  *
- * This is the salt *acquisition boundary*, so it owns the "is this a well-formed
- * salt?" check. After the force-fetch lands the remote commit in `refs/dotta/salt`,
- * the blob is size-validated via `salt_load`. A malformed salt (wrong size or
- * otherwise unreadable) is rolled back — the local ref is restored to its prior
- * target, or removed if there was none — and ERR_CRYPTO is returned. A corrupt
- * remote salt therefore never lands locally to be mistaken for canonical by a
- * later `salt_resolve` or `salt_load`.
+ * This is the epoch *acquisition boundary*, so it owns the "is this a well-formed
+ * epoch?" check. After the force-fetch lands the remote commit in
+ * `refs/dotta/epoch`, both blobs are validated via `epoch_load`. A malformed
+ * epoch (a wrong-size or missing blob, a pair out of range) is rolled back —
+ * the local ref is restored to its prior target, or removed if there was none —
+ * and ERR_CRYPTO is returned. A corrupt remote epoch therefore never lands locally
+ * to be mistaken for canonical by a later `epoch_resolve` or `epoch_load`.
  *
- * On success the validated salt bytes are copied to `out_salt` when requested —
- * the boundary hands over exactly what it proved, so the adopting caller
- * (`cmd_sync`, which feeds them to `keymgr_rekey`) never re-reads the ref it
- * just watched move. Clone has no crypto handles yet and passes NULL.
+ * On success the validated epoch is copied to `*out` when requested — the boundary
+ * hands over exactly what it proved, so the adopting caller (`cmd_sync`, which
+ * feeds it to `keymgr_rekey`) never re-reads the ref it just watched move. Clone
+ * has no crypto handles yet and passes NULL.
  *
  * @param repo        Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL, e.g. "origin")
  * @param xfer        Transfer context for credentials / progress
- * @param out_salt    Optional: the validated salt bytes (KDF_SALT_SIZE; can be
- *                    NULL)
+ * @param out         Optional: the validated epoch (can be NULL)
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
- *         ERR_CRYPTO if the fetched salt is malformed (already rolled back)
+ *         ERR_CRYPTO if the fetched epoch is malformed (already rolled back)
  */
-error_t *salt_fetch(
+error_t *epoch_fetch(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    uint8_t *out_salt
+    kdf_epoch_t *out
 );
 
 /**
- * Decision of `salt_resolve`: how the local salt relates to the remote's, and
+ * Decision of `epoch_resolve`: how the local epoch relates to the remote's, and
  * what (if anything) the caller should do about it.
  *
- * The fact-finding is exact despite the salt commit carrying a non-deterministic
+ * The fact-finding is exact despite the epoch commit carrying a non-deterministic
  * timestamp. Status comes from a commit-OID comparison, not a blob-byte compare:
- * the salt only ever propagates by force-fetch (clone / adopt), which copies
+ * the epoch only ever propagates by force-fetch (clone / adopt), which copies
  * the *exact* remote commit object, so a converged local ref shares the remote's
  * OID byte-for-byte (EQUAL is then a trivial match with zero object transfer).
- * Two machines that independently minted a salt hold different random bytes in
- * different commits → different OID → genuinely divergent. The only
+ * Two machines that independently minted an epoch hold different random bytes
+ * in different commits → different OID → genuinely divergent. The only
  * equal-bytes-different-OID path (two commit-wraps of the same 32 random bytes)
  * has probability 2^-256 and fails *safe*: it misclassifies as divergent, routing
  * through the in-use census to a conflict rather than a silent overwrite.
@@ -188,28 +207,28 @@ error_t *salt_fetch(
  * and all user-facing rendering are the caller's policy.
  */
 typedef enum {
-    SALT_RECONCILE_EQUAL,          /* remote OID == local; no-op */
-    SALT_RECONCILE_ESTABLISH,      /* remote absent, local salt valid → caller pushes */
-    SALT_RECONCILE_NO_LOCAL_SALT,  /* remote absent, local salt missing/malformed → nothing to publish */
-    SALT_RECONCILE_ADOPT,          /* divergent, no reachable ciphertext keyed by the
-                                    * local salt → caller force-fetches */
-    SALT_RECONCILE_CONFLICT,       /* divergent, local salt keys reachable ciphertext
-                                    * → caller warns, no git op */
-    SALT_RECONCILE_UNREACHABLE,    /* inspect transport failure → caller skips best-effort */
-} salt_reconcile_t;
+    EPOCH_RECONCILE_EQUAL,          /* remote OID == local; no-op */
+    EPOCH_RECONCILE_ESTABLISH,      /* remote absent, local epoch valid → caller pushes */
+    EPOCH_RECONCILE_NO_LOCAL_EPOCH, /* remote absent, local epoch missing/malformed → nothing to publish */
+    EPOCH_RECONCILE_ADOPT,          /* divergent, no reachable ciphertext keyed by the
+                                     * local epoch → caller force-fetches */
+    EPOCH_RECONCILE_CONFLICT,       /* divergent, local epoch keys reachable ciphertext
+                                     * → caller warns, no git op */
+    EPOCH_RECONCILE_UNREACHABLE,    /* inspect transport failure → caller skips best-effort */
+} epoch_reconcile_t;
 
 /**
- * Decide how to reconcile the local salt with the remote's — a pure fact-finder.
+ * Decide how to reconcile the local epoch with the remote's — a pure fact-finder.
  * No I/O beyond git, no rendering, no CLI flags.
  *
  * Connects and lists the remote (commit-OID compare, zero object transfer); on
- * a divergent salt, also validates the local salt and runs a key-free census
+ * a divergent epoch, also validates the local epoch and runs a key-free census
  * over the *full history* of every local branch — `dotta show`/`revert` decrypt
- * blobs at any `@commit`, so history-reachable ciphertext pins the salt exactly
- * as tip ciphertext does. Attribution is by the blob header's salt fingerprint:
- * only ciphertext the local salt keys counts against an adopt; foreign-keyed
- * blobs (pulled from a remote under its own salt) argue FOR converging, not
- * against. The census fails *closed*: any uncertainty — local salt unreadable
+ * blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly
+ * as tip ciphertext does. Attribution is by the blob header's epoch fingerprint:
+ * only ciphertext the local epoch keys counts against an adopt; foreign-keyed
+ * blobs (pulled from a remote under its own epoch) argue FOR converging, not
+ * against. The census fails *closed*: any uncertainty — local epoch unreadable
  * for a reason other than absent/malformed, an unattributable format version,
  * or any census error — lands on CONFLICT, never on a data-destroying ADOPT.
  *
@@ -217,8 +236,8 @@ typedef enum {
  * establish/adopt/conflict actions, CLI gating, and rendering are policy and
  * live in `cmd_sync`.
  *
- * Transport failure (connect / ls) folds to SALT_RECONCILE_UNREACHABLE so the
- * caller can skip salt reconciliation best-effort — the authoritative "remote
+ * Transport failure (connect / ls) folds to EPOCH_RECONCILE_UNREACHABLE so the
+ * caller can skip epoch reconciliation best-effort — the authoritative "remote
  * unreachable" diagnostic comes from the subsequent fetch phase. The only error
  * returned is programmer misuse (a NULL argument).
  *
@@ -228,11 +247,11 @@ typedef enum {
  * @param out_decision Output decision (must not be NULL)
  * @return Error only on a NULL argument; otherwise NULL with *out_decision set
  */
-error_t *salt_resolve(
+error_t *epoch_resolve(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    salt_reconcile_t *out_decision
+    epoch_reconcile_t *out_decision
 );
 
-#endif /* DOTTA_SALT_H */
+#endif /* DOTTA_EPOCH_H */

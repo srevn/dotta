@@ -2,8 +2,8 @@
  * kdf.c - Key derivation implementation
  *
  * Two derivations:
- *   1. `kdf_master_key`: passphrase → master_key via Argon2id. The only step
- *      where an attacker pays per-guess memory cost.
+ *   1. `kdf_master_key`: passphrase + epoch → master_key via Argon2id. The only
+ *      step where an attacker pays per-guess memory cost.
  *   2. `kdf_siv_subkeys`: master_key + profile → (mac_key, prf_key) via two
  *      domain-separated keyed-BLAKE2b calls.
  *
@@ -22,13 +22,14 @@
  *     but we wipe again before free to defend against version drift, lane-rounding
  *     edge cases, and early-return paths where Argon2 never executed.
  *
- * Per-repository salt: the 32-byte `salt` parameter is generated once at `dotta
- * init` via `entropy_fill` (see KDF_SALT_SIZE for the 256-bit choice) and stored
- * at `refs/dotta/salt`, where it syncs with the repository. This makes each dotta
- * repo a distinct attack target: a precomputation table built against one repo
- * cannot be reused against any other, even by an attacker who has both repos'
- * encrypted blobs. The salt is public — its job is uniqueness, not secrecy —
- * and is treated as ordinary input bytes (no mlock/wipe).
+ * The epoch: the salt is generated once at `dotta init` via `entropy_fill` (see
+ * KDF_SALT_SIZE for the 256-bit choice) beside the pair `init` was told to mint
+ * with, and both are stored at `refs/dotta/epoch`, where they sync with the
+ * repository. This makes each dotta repo a distinct attack target: a precomputation
+ * table built against one repo cannot be reused against any other, even by an
+ * attacker who has both repos' encrypted blobs. The epoch is public — the salt's
+ * job is uniqueness, not secrecy, and the pair is the cost of a guess — and is
+ * treated as ordinary input bytes (no mlock/wipe).
  */
 
 #include "crypto/kdf.h"
@@ -41,6 +42,7 @@
 #include <string.h>
 #include <sys/mman.h>
 
+#include "base/encoding.h"
 #include "base/error.h"
 #include "base/secure.h"
 #include "crypto/mac.h"
@@ -53,6 +55,12 @@ _Static_assert(
     sizeof(size_t) >= 8,
     "dotta requires a 64-bit host for Argon2 work-area sizing"
 );
+
+const kdf_preset_t kdf_presets[KDF_PRESET_COUNT] = {
+    { "fast",     64,   3 },  /* ~250–400 ms; CI / test */
+    { "balanced", 256,  3 },  /* ~1.0 s; recommended */
+    { "paranoid", 1024, 4 },  /* ~4–6 s; slow but firm */
+};
 
 error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     if (memory_mib < KDF_ARGON2_MEMORY_MIB_MIN
@@ -79,26 +87,50 @@ error_t *kdf_validate_params(uint16_t memory_mib, uint8_t passes) {
     return NULL;
 }
 
-void kdf_salt_fingerprint(
-    const uint8_t salt[KDF_SALT_SIZE],
-    uint8_t out_fp[KDF_SALT_FP_SIZE]
+void kdf_params_store(
+    uint8_t out[KDF_PARAMS_SIZE],
+    uint16_t memory_mib,
+    uint8_t passes
 ) {
-    /* Public identity of a public value: plain BLAKE2b-8, no key, no wipe. The
-     * 8-byte output length is baked into BLAKE2b's parameter block, giving this
-     * use domain separation from every 32-byte derivation for free. */
-    crypto_blake2b(out_fp, KDF_SALT_FP_SIZE, salt, KDF_SALT_SIZE);
+    store_le16(out, memory_mib);
+    out[2] = passes;
+}
+
+void kdf_params_load(
+    const uint8_t in[KDF_PARAMS_SIZE],
+    uint16_t *out_memory_mib,
+    uint8_t *out_passes
+) {
+    *out_memory_mib = load_le16(in);
+    *out_passes = in[2];
+}
+
+void kdf_epoch_fingerprint(
+    const kdf_epoch_t *epoch,
+    uint8_t out_fp[KDF_EPOCH_FP_SIZE]
+) {
+    /* Public identity of a public value: plain BLAKE2b-8 over the epoch's canonical
+     * bytes — the salt, then the params as the ref spells them. No key, no wipe.
+     * The 8-byte output length is baked into BLAKE2b's parameter block, giving
+     * this use domain separation from every 32-byte derivation for free. */
+    uint8_t params[KDF_PARAMS_SIZE];
+    kdf_params_store(params, epoch->memory_mib, epoch->passes);
+
+    crypto_blake2b_ctx ctx;
+    crypto_blake2b_init(&ctx, KDF_EPOCH_FP_SIZE);
+    crypto_blake2b_update(&ctx, epoch->salt, KDF_SALT_SIZE);
+    crypto_blake2b_update(&ctx, params, KDF_PARAMS_SIZE);
+    crypto_blake2b_final(&ctx, out_fp);
 }
 
 error_t *kdf_master_key(
     const uint8_t *passphrase,
     size_t passphrase_len,
-    const uint8_t salt[KDF_SALT_SIZE],
-    uint16_t memory_mib,
-    uint8_t passes,
+    const kdf_epoch_t *epoch,
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     CHECK_NULL(passphrase);
-    CHECK_NULL(salt);
+    CHECK_NULL(epoch);
     CHECK_NULL(out_master_key);
 
     /* Validation early-returns wipe `out_master_key` so the contract "every error
@@ -126,21 +158,10 @@ error_t *kdf_master_key(
         );
     }
 
-    /* Range-check params at the crypto boundary. cipher_read_header also calls
-     * kdf_validate_params before invoking us on the decrypt path, but
-     * defense-in-depth here protects callers that haven't yet been routed through
-     * cipher (e.g. fresh encrypts where the config-load validation is the only
-     * earlier gate). */
-    error_t *err = kdf_validate_params(memory_mib, passes);
-    if (err) {
-        crypto_wipe(out_master_key, KDF_KEY_SIZE);
-        return err;
-    }
-
-    /* memory_mib ∈ [8, 4096] (validated above); product is at most 4096 * 2^20
-     * = 2^32 bytes, fits size_t on the 64-bit hosts the static assert above
+    /* memory_mib ∈ [8, 4096] by the ref's validation; product is at most 4096 *
+     * 2^20 = 2^32 bytes, fits size_t on the 64-bit hosts the static assert above
      * admits. */
-    const size_t bytes = (size_t) memory_mib * 1024U * 1024U;
+    const size_t bytes = (size_t) epoch->memory_mib * 1024U * 1024U;
 
     /* Argon2 wants u64-aligned blocks. `aligned_alloc(_Alignof(uint64_t), bytes)`
      * makes the contract explicit; the multiple-of-alignment rule is satisfied
@@ -151,7 +172,7 @@ error_t *kdf_master_key(
         return ERROR(
             ERR_MEMORY,
             "Failed to allocate %zu MiB Argon2 work area: %s",
-            (size_t) memory_mib, strerror(errno)
+            (size_t) epoch->memory_mib, strerror(errno)
         );
     }
 
@@ -166,7 +187,7 @@ error_t *kdf_master_key(
         mlocked = true;
     } else {
         secure_mlock_warn(
-            errno, "%u MiB Argon2 work area", (unsigned) memory_mib
+            errno, "%u MiB Argon2 work area", (unsigned) epoch->memory_mib
         );
     }
 
@@ -177,21 +198,20 @@ error_t *kdf_master_key(
      * so any value > 1 costs strictly more time for the same memory hardness.
      * RFC 9106's lanes = 4 recommendation assumes real parallelism that monocypher
      * does not provide. With lanes = 1 the memory hardness metric is `nb_blocks
-     * * passes`; sketch §3.2 documents how the preset numbers compensate via
-     * pass count.
+     * * passes`; the presets compensate via pass count.
      *
      * `nb_blocks` is in 1024-byte Argon2 blocks: memory_mib MiB = memory_mib *
      * 1024 blocks. Bounded by KDF_ARGON2_MEMORY_MIB_MAX (= 4096 * 1024 = 4M
      * blocks), well within `uint32_t`. */
     const crypto_argon2_config config = {
         .algorithm = CRYPTO_ARGON2_ID,
-        .nb_blocks = (uint32_t) memory_mib * 1024U,
-        .nb_passes = passes,
+        .nb_blocks = (uint32_t) epoch->memory_mib * 1024U,
+        .nb_passes = epoch->passes,
         .nb_lanes  = 1,
     };
     const crypto_argon2_inputs inputs = {
         .pass      = passphrase,
-        .salt      = salt,
+        .salt      = epoch->salt,
         .pass_size = (uint32_t) passphrase_len,
         .salt_size = (uint32_t) KDF_SALT_SIZE,
     };
@@ -213,25 +233,12 @@ error_t *kdf_master_key(
     return NULL;
 }
 
-error_t *kdf_siv_subkeys(
+void kdf_siv_subkeys(
     const uint8_t master_key[KDF_KEY_SIZE],
     const char *profile,
     uint8_t out_mac_key[KDF_KEY_SIZE],
     uint8_t out_prf_key[KDF_KEY_SIZE]
 ) {
-    CHECK_NULL(master_key);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_mac_key);
-    CHECK_NULL(out_prf_key);
-
-    if (profile[0] == '\0') {
-        /* Wipe before early return — same scrub-on-every-error contract as
-         * kdf_master_key. */
-        crypto_wipe(out_mac_key, KDF_KEY_SIZE);
-        crypto_wipe(out_prf_key, KDF_KEY_SIZE);
-        return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
-    }
-
     const size_t profile_len = strlen(profile);
 
     /* Two independent keyed-BLAKE2b derivations under distinct CRYPTO_DOMAIN_*
@@ -247,8 +254,4 @@ error_t *kdf_siv_subkeys(
         (const uint8_t *) profile, profile_len,
         NULL, 0
     );
-
-    /* `crypto_mac_oneshot` cannot fail today; the `error_t *` return stays for
-     * forward-compat with future validation steps. */
-    return NULL;
 }

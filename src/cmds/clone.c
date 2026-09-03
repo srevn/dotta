@@ -23,7 +23,7 @@
 #include "core/manifest.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/salt.h"
+#include "infra/epoch.h"
 #include "sys/bootstrap.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -380,13 +380,13 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
     clone_landed = true;
 
-    /* Identity gate + salt acquisition. refs/dotta/salt is the one unconditional,
+    /* Identity gate + epoch acquisition. refs/dotta/epoch is the one unconditional,
      * synced dotta artifact (dotta-worktree never leaves the local repo), so a
      * remote that does not advertise it is not a dotta repository — refuse before
      * any local materialization below (state DB, dotta-worktree branch, baseline
-     * .dottaignore). The ref also carries the per-repo Argon2id salt; without
-     * it, every encrypted blob is undecryptable. */
-    err = salt_fetch(repo, "origin", xfer, NULL);
+     * .dottaignore). The ref also carries the repository's epoch; without it,
+     * every encrypted blob is undecryptable. */
+    err = epoch_fetch(repo, "origin", xfer, NULL);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
             /* Split the diagnostic: an empty remote is a publish-first problem,
@@ -422,26 +422,26 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     "Check the URL. If this remote should be one, run "
                     "'dotta sync' from a machine that has the repository "
                     "to establish the ref.",
-                    SALT_REF
+                    EPOCH_REF
                 );
             }
             goto cleanup;
         } else if (err->code == ERR_CRYPTO) {
-            /* Malformed remote salt — salt_fetch already rolled back, so no garbage
-             * ref persists. The advertised ref establishes identity (the gate
-             * above), but its payload is a crypto concern: warn-and-continue, a
-             * plaintext clone is still fine, only encryption is unavailable until
-             * a valid salt arrives. */
+            /* Malformed remote epoch — epoch_fetch already rolled back, so no
+             * garbage ref persists. The advertised ref establishes identity (the
+             * gate above), but its payload is a crypto concern: warn-and-continue,
+             * a plaintext clone is still fine, only encryption is unavailable
+             * until a valid epoch arrives. */
             output_warning(
                 out, OUTPUT_NORMAL,
-                "%s. Encryption operations will fail until a valid salt "
+                "%s. Encryption operations will fail until a valid epoch "
                 "is fetched or 'dotta init' is run locally.",
                 error_message(err)
             );
             error_free(err);
             err = NULL;
         } else {
-            err = error_wrap(err, "Failed to fetch repository salt");
+            err = error_wrap(err, "Failed to fetch repository epoch");
             goto cleanup;
         }
     }

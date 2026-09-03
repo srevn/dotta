@@ -36,7 +36,7 @@
  * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops), crypto
  *   (cipher for the format's constants and header, keymgr for every encrypt and
  *   decrypt)
- * - Used by: infra/salt (the census classifies), core (workspace's looks, deploy's
+ * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
  *   reads, policy's byte truth), commands (show, diff, export, revert, list;
  *   add and update through the store)
  */
@@ -100,8 +100,8 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * canonical entry point for the question "is this blob encrypted?". Header-only
  * inspection — no keymgr required.
  *
- * When `out_salt_fp` is non-NULL and the blob classifies ENCRYPTED, the header's
- * salt fingerprint (KDF_SALT_FP_SIZE bytes — which repository salt keyed this
+ * When `out_epoch_fp` is non-NULL and the blob classifies ENCRYPTED, the header's
+ * epoch fingerprint (KDF_EPOCH_FP_SIZE bytes — which repository epoch keyed this
  * ciphertext) is copied out from the same parse; a truncated header then fails
  * the call rather than yielding an unattributable fingerprint. For PLAINTEXT
  * and UNSUPPORTED_VERSION the buffer is untouched — there is no fingerprint to
@@ -110,20 +110,20 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * @param repo Repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
  * @param out_kind Output kind on success (must not be NULL)
- * @param out_salt_fp Optional salt fingerprint out (KDF_SALT_FP_SIZE bytes;
+ * @param out_epoch_fp Optional epoch fingerprint out (KDF_EPOCH_FP_SIZE bytes;
  *          filled only for CONTENT_ENCRYPTED; can be NULL)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_GIT: Failed to load blob (corruption, missing object)
- * - ERR_CRYPTO: out_salt_fp requested but the encrypted header is truncated
+ * - ERR_CRYPTO: out_epoch_fp requested but the encrypted header is truncated
  * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
     content_kind_t *out_kind,
-    uint8_t *out_salt_fp
+    uint8_t *out_epoch_fp
 );
 
 /**

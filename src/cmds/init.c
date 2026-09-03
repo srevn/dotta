@@ -14,7 +14,8 @@
 #include "base/output.h"
 #include "core/ignore.h"
 #include "core/state.h"
-#include "infra/salt.h"
+#include "crypto/kdf.h"
+#include "infra/epoch.h"
 #include "sys/gitops.h"
 #include "utils/repo.h"
 
@@ -62,7 +63,7 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
  * May dotta make this repository its own?
  *
  * Everything below writes — HEAD moves, the working directory is checked out
- * against dotta-worktree's empty tree, a salt ref and a baseline `.dottaignore`
+ * against dotta-worktree's empty tree, an epoch ref and a baseline `.dottaignore`
  * are committed. Right for dotta's repository, destructive for somebody else's,
  * so the question is asked once here, before the first of them, and answered
  * from refs alone: nothing on disk tells the two apart.
@@ -73,9 +74,9 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
  *   dotta-worktree exists   dotta's local marker, and `repo_open`'s own identity
  *                           test — the row that keeps its "Run 'dotta init'"
  *                           true when only the branch is gone
- *   refs/dotta/salt exists  dotta's synced marker, in a namespace nothing else
- *                           writes. Presence alone: a malformed salt is still
- *                           dotta's, and `salt_init` is what judges the payload
+ *   refs/dotta/epoch exists dotta's synced marker, in a namespace nothing else
+ *                           writes. Presence alone: a malformed epoch is still
+ *                           dotta's, and `epoch_init` is what judges the payload
  *   no references at all    a bare `git init`. Untracked files are not history
  *                           and no step below touches them — the one that could,
  *                           the `.dottaignore` seed, adopts rather than overwrites
@@ -106,15 +107,15 @@ static error_t *ensure_repository_adoptable(
         return NULL;
     }
 
-    git_reference *salt_ref = NULL;
-    int git_err = git_reference_lookup(&salt_ref, repo, SALT_REF);
+    git_reference *epoch_ref = NULL;
+    int git_err = git_reference_lookup(&epoch_ref, repo, EPOCH_REF);
     if (git_err == 0) {
-        git_reference_free(salt_ref);
+        git_reference_free(epoch_ref);
         return NULL;
     }
     if (git_err != GIT_ENOTFOUND) {
         return error_wrap(
-            error_from_git(git_err), "Failed to look up '%s'", SALT_REF
+            error_from_git(git_err), "Failed to look up '%s'", EPOCH_REF
         );
     }
 
@@ -253,6 +254,23 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         output_set_verbosity(out, OUTPUT_QUIET);
     }
 
+    /* The strength the epoch is minted at: a preset by name, the default when
+     * none was given. Parsed before anything writes, so an unknown name refuses
+     * with nothing on disk. */
+    const kdf_preset_t *preset = NULL;
+    const char *strength = opts->strength ? opts->strength : KDF_PRESET_DEFAULT;
+    for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
+        if (strcmp(kdf_presets[i].name, strength) == 0) {
+            preset = &kdf_presets[i];
+        }
+    }
+    if (!preset) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Unknown strength '%s' (valid: fast, balanced, paranoid)", strength
+        );
+    }
+
     /* Where the repository goes: the positional when one was given, this machine's
      * configured location otherwise — one answer, expanded, absolute and with
      * its parents made (utils/repo.h). */
@@ -293,28 +311,47 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
-    /* Per-repo Argon2id salt at refs/dotta/salt. Idempotent — keeps an existing
-     * valid blob; a malformed one is regenerated when the ciphertext census proves
-     * nothing depends on it, and surfaced as an error otherwise. Done
-     * unconditionally (not gated on encryption_enabled) so a later `dotta key
-     * set` finds the salt ready, and so `dotta clone` of this repo can fetch
-     * the salt regardless of the cloner's config. */
-    bool salt_repaired = false;
-    err = salt_init(repo, &salt_repaired);
+    /* The repository's epoch at refs/dotta/epoch, minted at the preset's strength.
+     * Idempotent — keeps an existing valid one; a malformed one is regenerated
+     * when the ciphertext census proves nothing depends on it, and surfaced as
+     * an error otherwise. Done unconditionally (not gated on encryption_enabled)
+     * so a later `dotta key set` finds the epoch ready, and so `dotta clone` of
+     * this repo can fetch it regardless of the cloner's config. */
+    kdf_epoch_t epoch;
+    bool epoch_repaired = false;
+    err = epoch_init(
+        repo, preset->memory_mib, preset->passes, &epoch, &epoch_repaired
+    );
     if (err) {
         /* ERR_CRYPTO is the refusal to mint over reachable ciphertext. It already
          * names the state of the ref and the restore that repairs it, so a wrap
          * would only push both under a line that says less. */
         if (err->code != ERR_CRYPTO) {
-            err = error_wrap(err, "Failed to initialize repository salt");
+            err = error_wrap(err, "Failed to initialize repository epoch");
         }
         goto cleanup;
     }
-    if (salt_repaired) {
+    if (epoch_repaired) {
         output_info(
             out, OUTPUT_NORMAL,
-            "Repaired malformed repository salt (no encrypted data depended on it)"
+            "Repaired malformed repository epoch (no encrypted data depended on it)"
         );
+    }
+
+    /* An epoch that already stood is the repository's, whatever this run was
+     * told: a strength given by name that it does not match is refused — a change
+     * of strength is a new epoch, never a note — and one that matches, or none
+     * given, is the no-op it reads as. */
+    if (opts->strength &&
+        (epoch.memory_mib != preset->memory_mib || epoch.passes != preset->passes)) {
+        err = ERROR(
+            ERR_CONFLICT,
+            "The repository's epoch is already minted at %u MiB, %u passes; "
+            "a change of strength is a new epoch: remove the encrypted files, "
+            "delete '%s', and run init again",
+            (unsigned) epoch.memory_mib, (unsigned) epoch.passes, EPOCH_REF
+        );
+        goto cleanup;
     }
 
     /* Baseline .dottaignore on dotta-worktree. Seeded once: a branch that already
@@ -363,16 +400,25 @@ cleanup:
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What can stand at the cursor: the repository location, a directory, until one
- * is given.
+ * What can stand at the cursor: a preset's name after --strength; otherwise the
+ * repository location, a directory, until one is given.
  */
 static args_want_t init_complete(
     const void *ctx, const void *opts_v, const args_completion_t *at, FILE *out
 ) {
     (void) ctx;
-    (void) at;
-    (void) out;
     const cmd_init_options_t *o = opts_v;
+
+    if (ARGS_VALUE_IS(at, cmd_init_options_t, strength)) {
+        for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
+            fprintf(
+                out, "%s\t%u MiB, %u passes\n", kdf_presets[i].name,
+                (unsigned) kdf_presets[i].memory_mib,
+                (unsigned) kdf_presets[i].passes
+            );
+        }
+        return ARGS_WANT_NONE;
+    }
 
     return o->repo_path == NULL ? ARGS_WANT_DIRS : ARGS_WANT_NONE;
 }
@@ -384,6 +430,11 @@ static error_t *init_dispatch(const void *ctx_v, void *opts_v) {
 
 static const args_opt_t init_opts[] = {
     ARGS_GROUP("Options:"),
+    ARGS_STRING(
+        "strength",        "<preset>",
+        cmd_init_options_t,strength,
+        "Argon2id strength: fast, balanced or paranoid"
+    ),
     ARGS_FLAG(
         "q quiet",
         cmd_init_options_t,quiet,
@@ -412,10 +463,20 @@ const args_command_t spec_init = {
         "  files staged for deletion. An empty repository, or no repository\n"
         "  at all, is initialized in place; dotta's own is repaired in place.\n"
         "  An existing .dottaignore is never rewritten: one already on the\n"
-        "  branch is kept, one sitting in the directory becomes the baseline.\n",
+        "  branch is kept, one sitting in the directory becomes the baseline.\n"
+        "\n"
+        "Strength:\n"
+        "  The repository's Argon2id strength — the memory and passes every\n"
+        "  passphrase is derived under, on every machine — is minted once,\n"
+        "  here, and travels with the repository. It cannot be changed in\n"
+        "  place: a new strength is a new epoch, which means removing the\n"
+        "  encrypted files, deleting refs/dotta/epoch, and running init again.\n"
+        "  An existing epoch is kept; naming a strength it does not match is\n"
+        "  refused.\n",
     .examples    =
         "  %s init                    # Default location\n"
         "  %s init ~/dotfiles         # Custom path\n"
+        "  %s init --strength fast    # A cheaper derivation (tests, throwaway)\n"
         "  %s init --quiet            # No progress output\n",
     .epilogue    =
         "See also:\n"

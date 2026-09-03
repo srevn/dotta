@@ -16,6 +16,7 @@
  */
 typedef struct {
     const char *repo_path;   /* Repository path (NULL = current dir) */
+    const char *strength;    /* Preset the epoch is minted at (NULL = the default) */
     bool quiet;              /* Suppress output */
 } cmd_init_options_t;
 

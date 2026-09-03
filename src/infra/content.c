@@ -98,7 +98,7 @@ error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
     content_kind_t *out_kind,
-    uint8_t *out_salt_fp
+    uint8_t *out_epoch_fp
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
@@ -119,12 +119,10 @@ error_t *content_classify(
      * authenticated header. cipher_read_header validates the full header, so a
      * blob long enough to classify but too short to carry the fingerprint (a
      * forged prefix) fails here instead of yielding garbage attribution. */
-    if (out_salt_fp != NULL && *out_kind == CONTENT_ENCRYPTED) {
-        cipher_header_t header;
-        err = cipher_read_header((const uint8_t *) view.data, view.size, &header);
-        if (!err) {
-            memcpy(out_salt_fp, header.salt_fp, KDF_SALT_FP_SIZE);
-        }
+    if (out_epoch_fp != NULL && *out_kind == CONTENT_ENCRYPTED) {
+        err = cipher_read_header(
+            (const uint8_t *) view.data, view.size, out_epoch_fp
+        );
     }
 
     gitops_blob_view_close(&view);

@@ -2,8 +2,7 @@
  * cipher.c - SIV encryption/decryption implementation
  *
  * Pipeline (4 steps; decrypt mirrors steps 2–4):
- *   1. Build the 17-byte authenticated header (magic, version, Argon2 params,
- *      salt fingerprint).
+ *   1. Build the 14-byte authenticated header (magic, version, epoch fingerprint).
  *   2. SIV = MAC(mac_key, CIPHER_SIV, header, path, plaintext) — all variable
  *      inputs LE64-prefixed by `crypto_mac_absorb`, foreclosing
  *      concatenation-collision attacks.
@@ -30,7 +29,6 @@
 #include <string.h>
 
 #include "base/buffer.h"
-#include "base/encoding.h"
 #include "base/error.h"
 #include "crypto/mac.h"
 
@@ -39,26 +37,24 @@
  * platform PATH_MAX (1024 on macOS, 4096 on Linux). */
 #define CIPHER_STORAGE_PATH_MAX 4096
 
-/* Header byte offsets within the 17-byte authenticated header. Bound into the
+/* Header byte offsets within the 14-byte authenticated header. Bound into the
  * SIV verbatim; changing any offset is a format-version bump (see CIPHER_VERSION
  * in cipher.h). */
-#define CIPHER_OFFSET_MAGIC   0      /* "DOTTA" — 5 bytes */
-#define CIPHER_OFFSET_VERSION 5      /* CIPHER_VERSION byte */
-#define CIPHER_OFFSET_MIB     6      /* LE16 argon2_memory_mib */
-#define CIPHER_OFFSET_PASSES  8      /* uint8 argon2_passes */
-#define CIPHER_OFFSET_SALT_FP 9      /* 8-byte salt fingerprint */
+#define CIPHER_OFFSET_MAGIC    0      /* "DOTTA" — 5 bytes */
+#define CIPHER_OFFSET_VERSION  5      /* CIPHER_VERSION byte */
+#define CIPHER_OFFSET_EPOCH_FP 6      /* 8-byte epoch fingerprint */
 
 _Static_assert(
     CIPHER_OFFSET_VERSION == CIPHER_MAGIC_SIZE,
     "version byte must come immediately after magic"
 );
 _Static_assert(
-    CIPHER_OFFSET_SALT_FP == CIPHER_OFFSET_PASSES + 1,
-    "salt fingerprint must come immediately after the params"
+    CIPHER_OFFSET_EPOCH_FP == CIPHER_OFFSET_VERSION + 1,
+    "epoch fingerprint must come immediately after the version"
 );
 _Static_assert(
-    CIPHER_OFFSET_SALT_FP + KDF_SALT_FP_SIZE == CIPHER_HEADER_SIZE,
-    "salt fingerprint must close out the header"
+    CIPHER_OFFSET_EPOCH_FP + KDF_EPOCH_FP_SIZE == CIPHER_HEADER_SIZE,
+    "epoch fingerprint must close out the header"
 );
 
 /**
@@ -85,18 +81,17 @@ static error_t *validate_path(const char *storage_path, size_t *out_len) {
 }
 
 /**
- * Validate the 17-byte cipher-blob header.
+ * Validate the 14-byte cipher-blob header.
  *
- * Length → magic → version → `kdf_validate_params` on the recorded (memory_mib,
- * passes). The salt fingerprint needs no validation — any 8 bytes are a well-formed
- * fingerprint; whether it names *this* repository's salt is the caller's question
- * (`keymgr_decrypt`). Used by `cipher_read_header` and `cipher_decrypt`;
- * centralising "what does a well-formed header look like" keeps the version-bump
- * policy tractable.
+ * Length → magic → version. The epoch fingerprint needs no validation — any 8
+ * bytes are a well-formed fingerprint; whether it names *this* repository's epoch
+ * is the caller's question (`keymgr_decrypt`). Used by `cipher_read_header` and
+ * `cipher_decrypt`; centralising "what does a well-formed header look like" keeps
+ * the version-bump policy tractable.
  *
  * @param data     Blob bytes (must point to at least data_len bytes)
  * @param data_len Blob length
- * @return Error or NULL if the header is well-formed and in-range
+ * @return Error or NULL if the header is well-formed
  */
 static error_t *validate_header(const uint8_t *data, size_t data_len) {
     if (data_len < CIPHER_HEADER_SIZE) {
@@ -119,10 +114,7 @@ static error_t *validate_header(const uint8_t *data, size_t data_len) {
             (unsigned) data[CIPHER_OFFSET_VERSION], (unsigned) CIPHER_VERSION
         );
     }
-    return kdf_validate_params(
-        load_le16(&data[CIPHER_OFFSET_MIB]),
-        data[CIPHER_OFFSET_PASSES]
-    );
+    return NULL;
 }
 
 /**
@@ -153,19 +145,17 @@ static void compute_siv(
 error_t *cipher_read_header(
     const uint8_t *data,
     size_t data_len,
-    cipher_header_t *out
+    uint8_t out_epoch_fp[KDF_EPOCH_FP_SIZE]
 ) {
     CHECK_NULL(data);
-    CHECK_NULL(out);
+    CHECK_NULL(out_epoch_fp);
 
     error_t *err = validate_header(data, data_len);
     if (err) {
         return err;
     }
 
-    out->memory_mib = load_le16(&data[CIPHER_OFFSET_MIB]);
-    out->passes = data[CIPHER_OFFSET_PASSES];
-    memcpy(out->salt_fp, &data[CIPHER_OFFSET_SALT_FP], KDF_SALT_FP_SIZE);
+    memcpy(out_epoch_fp, &data[CIPHER_OFFSET_EPOCH_FP], KDF_EPOCH_FP_SIZE);
 
     return NULL;
 }
@@ -176,16 +166,14 @@ error_t *cipher_encrypt(
     const uint8_t mac_key[KDF_KEY_SIZE],
     const uint8_t prf_key[KDF_KEY_SIZE],
     const char *storage_path,
-    uint16_t argon2_memory_mib,
-    uint8_t argon2_passes,
-    const uint8_t salt_fp[KDF_SALT_FP_SIZE],
+    const uint8_t epoch_fp[KDF_EPOCH_FP_SIZE],
     buffer_t *out_ciphertext
 ) {
     CHECK_NULL(plaintext);
     CHECK_NULL(mac_key);
     CHECK_NULL(prf_key);
     CHECK_NULL(storage_path);
-    CHECK_NULL(salt_fp);
+    CHECK_NULL(epoch_fp);
     CHECK_NULL(out_ciphertext);
 
     error_t *err = NULL;
@@ -204,15 +192,6 @@ error_t *cipher_encrypt(
      * is BUFFER_INIT), so the early-validation paths pay nothing. */
 
     err = validate_path(storage_path, &path_len);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Defense-in-depth params validation. Symmetrical with cipher_decrypt's header
-     * re-validation: keymgr already snapshots config-validated params, but the
-     * cost of re-checking is a handful of comparisons and the failure mode is a
-     * clean error rather than a corrupt header on disk. */
-    err = kdf_validate_params(argon2_memory_mib, argon2_passes);
     if (err) {
         goto cleanup;
     }
@@ -243,14 +222,12 @@ error_t *cipher_encrypt(
     }
     const size_t total_len = CIPHER_OVERHEAD + plaintext_len;
 
-    /* Build the header on the stack so its type stays strictly `uint8_t[17]`
+    /* Build the header on the stack so its type stays strictly `uint8_t[14]`
      * for the SIV-input contract; the same bytes feed both `memcpy` into output
      * and `compute_siv`'s first absorb. */
     memcpy(&header[CIPHER_OFFSET_MAGIC], CIPHER_MAGIC, CIPHER_MAGIC_SIZE);
     header[CIPHER_OFFSET_VERSION] = CIPHER_VERSION;
-    store_le16(&header[CIPHER_OFFSET_MIB], argon2_memory_mib);
-    header[CIPHER_OFFSET_PASSES] = argon2_passes;
-    memcpy(&header[CIPHER_OFFSET_SALT_FP], salt_fp, KDF_SALT_FP_SIZE);
+    memcpy(&header[CIPHER_OFFSET_EPOCH_FP], epoch_fp, KDF_EPOCH_FP_SIZE);
 
     /* Claim the final size outright; the SIV and the ciphertext are written into
      * their slots in place, so peak memory stays at `total_len` plus the one
@@ -259,7 +236,7 @@ error_t *cipher_encrypt(
     err = buffer_resize(&output, total_len);
     if (err) goto cleanup;
 
-    /* Layout: [header(17) | siv(32) | ciphertext(N)] */
+    /* Layout: [header(14) | siv(32) | ciphertext(N)] */
     memcpy(output.data, header, CIPHER_HEADER_SIZE);
     uint8_t *siv_slot = (uint8_t *) output.data + CIPHER_HEADER_SIZE;
     uint8_t *ct_slot = siv_slot + CIPHER_SIV_SIZE;
@@ -358,9 +335,9 @@ error_t *cipher_decrypt(
         goto cleanup;
     }
 
-    /* Defense-in-depth header validation at the cipher boundary. The recorded
-     * params themselves are not used here — their bytes are bound into the SIV
-     * via the header, so any tamper fails the constant-time MAC verify below. */
+    /* The primitive's own gate: the header's bytes are bound into the SIV, so
+     * any tamper fails the constant-time MAC verify below; the gate keeps a
+     * malformed header a parse failure with its own words. */
     err = validate_header(ciphertext, ciphertext_len);
     if (err) goto cleanup;
 

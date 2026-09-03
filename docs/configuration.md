@@ -43,7 +43,6 @@ diverged_strategy = "warn"    # warn, rebase, merge, ours, theirs
 ```toml
 [encryption]
 enabled = false               # Enable encryption (opt-in)
-strength = "balanced"         # Controls the memory and pass count of the password-based key derivation
 session_timeout = 3600        # Key cache timeout in seconds (0=always prompt, -1=never expire)
 auto_encrypt = [              # Patterns for automatic encryption
     ".ssh/id_*",

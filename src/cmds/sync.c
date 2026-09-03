@@ -23,7 +23,7 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "crypto/keymgr.h"
-#include "infra/salt.h"
+#include "infra/epoch.h"
 #include "sys/gitops.h"
 #include "sys/resolve.h"
 #include "sys/transfer.h"
@@ -1358,14 +1358,14 @@ static error_t *sync_failure(const sync_results_t *results) {
 }
 
 /*
- * Render the one unrecoverable cell: the local salt differs from the remote's
- * canonical salt and reachable ciphertext (tip or history, any branch) is keyed
+ * Render the one unrecoverable cell: the local epoch differs from the remote's
+ * canonical epoch and reachable ciphertext (tip or history, any branch) is keyed
  * by the local one. Warn loudly and continue — plaintext profiles still sync.
  */
-static void salt_emit_conflict(output_t *out) {
+static void epoch_emit_conflict(output_t *out) {
     output_warning(
         out, OUTPUT_NORMAL,
-        "Repository salt conflict: local salt differs from the remote's; "
+        "Repository epoch conflict: the local epoch differs from the remote's; "
         "encrypted files pulled by this sync will not decrypt"
     );
     output_hint(
@@ -1377,22 +1377,22 @@ static void salt_emit_conflict(output_t *out) {
         out, OUTPUT_NORMAL,
         "Or delete the profiles whose encrypted content (including history) "
         "you no longer need ('dotta remove <name> --delete-profile'); the "
-        "next sync then adopts the remote salt"
+        "next sync then adopts the remote epoch"
     );
 }
 
 /*
- * Apply the CLI gates to salt_resolve's verdict, render the outcome, and run
- * the chosen git action (establish via salt_push, adopt via salt_fetch). The
- * fact-finding already happened in infra/salt; this layer is pure policy +
+ * Apply the CLI gates to epoch_resolve's verdict, render the outcome, and run
+ * the chosen git action (establish via epoch_push, adopt via epoch_fetch). The
+ * fact-finding already happened in infra/epoch; this layer is pure policy +
  * rendering.
  *
  * Runs before the fetch phase so the decision's census is never contaminated by
- * pulled remote ciphertext. Best-effort: returns NULL on every salt-level outcome
+ * pulled remote ciphertext. Best-effort: returns NULL on every epoch-level outcome
  * (warn-and-continue); a non-NULL return is reserved for programmer misuse surfaced
  * by the decide call.
  */
-static error_t *salt_reconcile(
+static error_t *epoch_reconcile(
     const dotta_ctx_t *ctx,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -1402,8 +1402,8 @@ static error_t *salt_reconcile(
     keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
-    salt_reconcile_t decision;
-    error_t *err = salt_resolve(repo, remote_name, xfer, &decision);
+    epoch_reconcile_t decision;
+    error_t *err = epoch_resolve(repo, remote_name, xfer, &decision);
     if (err) {
         /* decide errors only on programmer misuse (a NULL argument) — it folds
          * transport failure to UNREACHABLE. Surface the bug rather than swallow
@@ -1412,45 +1412,45 @@ static error_t *salt_reconcile(
     }
 
     switch (decision) {
-        case SALT_RECONCILE_UNREACHABLE:
+        case EPOCH_RECONCILE_UNREACHABLE:
             /* The authoritative "remote unreachable" error comes from the fetch
              * phase that runs next. */
-            output_info(out, OUTPUT_VERBOSE, "Skipped salt sync (remote unreachable)");
+            output_info(out, OUTPUT_VERBOSE, "Skipped epoch sync (remote unreachable)");
             return NULL;
 
-        case SALT_RECONCILE_EQUAL:
-            output_info(out, OUTPUT_VERBOSE, "Repository salt up to date");
+        case EPOCH_RECONCILE_EQUAL:
+            output_info(out, OUTPUT_VERBOSE, "Repository epoch up to date");
             return NULL;
 
-        case SALT_RECONCILE_NO_LOCAL_SALT:
+        case EPOCH_RECONCILE_NO_LOCAL_EPOCH:
             /* Nothing to publish; never claim an establish (the guard). */
             output_info(
                 out, OUTPUT_VERBOSE,
-                "No local repository salt to establish (run 'dotta init')"
+                "No local repository epoch to establish (run 'dotta init')"
             );
             return NULL;
 
-        case SALT_RECONCILE_ESTABLISH: {
+        case EPOCH_RECONCILE_ESTABLISH: {
             /* Establish is push-shaped: gate on --no-push. */
             if (opts->no_push) {
                 output_info(
                     out, OUTPUT_VERBOSE,
-                    "Remote has no repository salt; establish skipped"
+                    "Remote has no repository epoch; establish skipped"
                 );
                 return NULL;
             }
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_VERBOSE,
-                    "Would establish repository salt on remote"
+                    "Would establish repository epoch on remote"
                 );
                 return NULL;
             }
-            err = salt_push(repo, remote_name, xfer);
+            err = epoch_push(repo, remote_name, xfer);
             if (err) {
                 output_warning(
                     out, OUTPUT_NORMAL,
-                    "Failed to establish repository salt on remote: %s",
+                    "Failed to establish repository epoch on remote: %s",
                     error_message(err)
                 );
                 error_free(err);
@@ -1458,62 +1458,57 @@ static error_t *salt_reconcile(
             }
             output_success(
                 out, OUTPUT_VERBOSE,
-                "Established repository salt on remote"
+                "Established repository epoch on remote"
             );
             return NULL;
         }
 
-        case SALT_RECONCILE_CONFLICT:
-            salt_emit_conflict(out);
+        case EPOCH_RECONCILE_CONFLICT:
+            epoch_emit_conflict(out);
             return NULL;  /* warn-and-continue; no git op */
 
-        case SALT_RECONCILE_ADOPT: {
+        case EPOCH_RECONCILE_ADOPT: {
             /* Adopt is pull-shaped: gate on --no-pull. */
             if (opts->no_pull) {
                 output_info(
                     out, OUTPUT_VERBOSE,
-                    "Remote repository salt differs; adopt skipped"
+                    "Remote repository epoch differs; adopt skipped"
                 );
                 return NULL;
             }
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_VERBOSE,
-                    "Would adopt repository salt from remote"
+                    "Would adopt repository epoch from remote"
                 );
                 return NULL;
             }
-            uint8_t adopted[KDF_SALT_SIZE];
-            err = salt_fetch(repo, remote_name, xfer, adopted);
+            kdf_epoch_t adopted;
+            err = epoch_fetch(repo, remote_name, xfer, &adopted);
             if (err) {
-                if (err->code == ERR_CRYPTO) {
-                    /* salt_fetch validated the bytes and rolled the local ref
-                     * back; nothing landed. */
-                    output_warning(
-                        out, OUTPUT_NORMAL,
-                        "Remote salt is malformed; the remote repo may be corrupt"
-                    );
-                } else {
-                    output_warning(
-                        out, OUTPUT_NORMAL,
-                        "Failed to adopt repository salt from remote: %s",
-                        error_message(err)
-                    );
-                }
+                /* A malformed remote epoch: epoch_fetch validated the bytes,
+                 * rolled the local ref back, and its message names the blob that
+                 * is wrong — printed whole, as clone prints it. Anything else
+                 * is the fetch's own failure under one line of context. */
+                output_warning(
+                    out, OUTPUT_NORMAL, err->code == ERR_CRYPTO ? "%s"
+                    : "Failed to adopt repository epoch from remote: %s",
+                    error_message(err)
+                );
                 error_free(err);
                 return NULL;  /* best-effort */
             }
             output_success(
                 out, OUTPUT_VERBOSE,
-                "Adopted repository salt from remote (no local ciphertext "
-                "depended on the replaced salt)"
+                "Adopted repository epoch from remote (no local ciphertext "
+                "depended on the replaced one)"
             );
-            /* The run's crypto handles were bound to the salt at dispatch; the
+            /* The run's crypto handles were bound to the epoch at dispatch; the
              * adopt moved that authority mid-command, so re-bind — the same duty
              * sync discharges for Git by rebuilding the manifest after the pulls.
              * NULL-safe for encryption-disabled runs; the on-disk session cache
              * MAC-binds the salt and self-heals regardless. */
-            keymgr_rekey(keymgr, adopted);
+            keymgr_rekey(keymgr, &adopted);
             return NULL;
         }
     }
@@ -2011,9 +2006,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         goto cleanup;
     }
 
-    /* Reconcile the repository salt with the remote. Placed before the fetch
+    /* Reconcile the repository epoch with the remote. Placed before the fetch
      * phase so the in-use census cannot see pulled remote ciphertext. */
-    err = salt_reconcile(ctx, remote_name, xfer, opts);
+    err = epoch_reconcile(ctx, remote_name, xfer, opts);
     if (err) {
         goto cleanup;
     }

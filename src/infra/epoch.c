@@ -1,12 +1,13 @@
 /**
- * salt.c - Per-repository Argon2id salt implementation
+ * epoch.c - The repository's epoch: implementation
  *
  * Five entry points:
- *   - salt_init      — generate salt + write commit/tree/blob (idempotent)
- *   - salt_load      — walk ref → commit → tree → blob, copy bytes
- *   - salt_push      — push refs/dotta/salt to a remote
- *   - salt_fetch     — fetch + validate refs/dotta/salt from a remote
- *   - salt_resolve   — pure fact-finder for cmd_sync's salt policy
+ *   - epoch_init      — mint the salt beside the pair given + write commit/tree/blobs
+ *                       (idempotent)
+ *   - epoch_load      — walk ref → commit → tree → blobs, validate, copy
+ *   - epoch_push      — push refs/dotta/epoch to a remote
+ *   - epoch_fetch     — fetch + validate refs/dotta/epoch from a remote
+ *   - epoch_resolve   — pure fact-finder for cmd_sync's epoch policy
  *
  * Every entry point validates inputs, manages libgit2 object lifetimes via local
  * cleanup blocks, and translates libgit2 error codes through `error_from_git`.
@@ -18,12 +19,12 @@
  * recurring need (this is the only consumer). If a second non-branch consumer
  * arrives, that's the moment to extract a `gitops_fetch_refspec` helper.
  *
- * Salt-blob mode: stored as a regular file blob (mode 0100644). The mode is
- * irrelevant to dotta — nothing checks it out — but using the standard file mode
- * keeps the tree inspectable via `dotta git show`.
+ * Blob mode: both blobs are stored as regular files (mode 0100644). The mode is
+ * irrelevant to dotta — nothing checks out the tree — but using the standard
+ * file mode keeps the tree inspectable via `dotta git show`.
  */
 
-#include "infra/salt.h"
+#include "infra/epoch.h"
 
 #include <git2.h>
 #include <stdbool.h>
@@ -40,12 +41,12 @@
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 
-/* Standard regular-file mode for the salt blob. Nothing checks out the tree;
+/* Standard regular-file mode for the two blobs. Nothing checks out the tree;
  * the choice keeps `git show` / `git ls-tree` output readable. */
-#define SALT_BLOB_MODE 0100644
+#define EPOCH_BLOB_MODE 0100644
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
- * salt_init gates every fresh mint on it. */
+ * epoch_init gates every fresh mint on it. */
 static error_t *local_has_ciphertext(
     git_repository *repo,
     const uint8_t *local_fp,
@@ -53,25 +54,25 @@ static error_t *local_has_ciphertext(
 );
 
 /**
- * Resolve refs/dotta/salt to a tree.
+ * Resolve refs/dotta/epoch to a tree.
  *
  * Returns ERR_NOT_FOUND when the ref is missing, the canonical "uninitialized"
  * diagnostic. Caller is responsible for freeing `*out_tree` via `git_tree_free`
  * on success.
  */
-static error_t *resolve_salt_tree(
+static error_t *resolve_epoch_tree(
     git_repository *repo,
     git_tree **out_tree
 ) {
     *out_tree = NULL;
 
     git_reference *ref = NULL;
-    int git_err = git_reference_lookup(&ref, repo, SALT_REF);
+    int git_err = git_reference_lookup(&ref, repo, EPOCH_REF);
     if (git_err == GIT_ENOTFOUND) {
         return ERROR(
             ERR_NOT_FOUND,
-            "Salt ref '%s' not found",
-            SALT_REF
+            "Epoch ref '%s' not found",
+            EPOCH_REF
         );
     }
     if (git_err < 0) {
@@ -79,7 +80,7 @@ static error_t *resolve_salt_tree(
     }
 
     /* Peel through any annotated-tag layers down to the commit. The ref is created
-     * as a direct commit by salt_init, but peeling defends against future shapes
+     * as a direct commit by epoch_init, but peeling defends against future shapes
      * (signed-tag wrappers, symbolic refs) without changing the load semantics. */
     git_object *commit_obj = NULL;
     git_err = git_reference_peel(&commit_obj, ref, GIT_OBJECT_COMMIT);
@@ -87,7 +88,7 @@ static error_t *resolve_salt_tree(
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to peel '%s' to a commit", SALT_REF
+            "Failed to peel '%s' to a commit", EPOCH_REF
         );
     }
 
@@ -97,7 +98,7 @@ static error_t *resolve_salt_tree(
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to load tree from '%s'", SALT_REF
+            "Failed to load tree from '%s'", EPOCH_REF
         );
     }
 
@@ -105,103 +106,135 @@ static error_t *resolve_salt_tree(
 }
 
 /**
- * Read the salt blob from a tree, validating size.
+ * Read one fixed-size blob from the epoch tree by name.
  *
- * Wipes `out_salt` via memset on every error path so a caller cannot accidentally
- * proceed with stale stack content under a swallowed error code.
- *
- * ERR_NOT_FOUND belongs to the ref alone (`resolve_salt_tree`), so nothing here
- * returns it: a ref that resolves to a commit whose tree carries no salt blob
- * is a broken shape, not an uninitialized repository. `salt_init` reads exactly
- * that distinction to decide whether there is a ref to delete before it mints.
+ * ERR_NOT_FOUND belongs to the ref alone (`resolve_epoch_tree`), so nothing here
+ * returns it: a ref that resolves to a commit whose tree lacks a blob is a broken
+ * shape, not an uninitialized repository. `epoch_init` reads exactly that
+ * distinction to decide whether there is a ref to delete before it mints.
  */
-static error_t *read_salt_blob(
+static error_t *read_epoch_blob(
     git_repository *repo,
     git_tree *tree,
-    uint8_t out_salt[KDF_SALT_SIZE]
+    const char *name,
+    size_t size,
+    uint8_t *out
 ) {
-    const git_tree_entry *entry = git_tree_entry_byname(
-        tree, SALT_BLOB_NAME
-    );
+    const git_tree_entry *entry = git_tree_entry_byname(tree, name);
     if (entry == NULL) {
-        memset(out_salt, 0, KDF_SALT_SIZE);
         return ERROR(
             ERR_CRYPTO,
-            "Salt blob '%s' missing from %s tree",
-            SALT_BLOB_NAME, SALT_REF
+            "Blob '%s' missing from %s tree",
+            name, EPOCH_REF
         );
     }
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
-        memset(out_salt, 0, KDF_SALT_SIZE);
         return ERROR(
             ERR_CRYPTO,
             "Tree entry '%s' in %s is not a blob",
-            SALT_BLOB_NAME, SALT_REF
+            name, EPOCH_REF
         );
     }
 
     git_blob *blob = NULL;
     int git_err = git_blob_lookup(&blob, repo, git_tree_entry_id(entry));
     if (git_err < 0) {
-        memset(out_salt, 0, KDF_SALT_SIZE);
         return error_from_git(git_err);
     }
 
-    git_object_size_t size = git_blob_rawsize(blob);
-    if (size != KDF_SALT_SIZE) {
+    git_object_size_t got = git_blob_rawsize(blob);
+    if (got != size) {
         git_blob_free(blob);
-        memset(out_salt, 0, KDF_SALT_SIZE);
         return ERROR(
             ERR_CRYPTO,
-            "Salt blob in %s has wrong size: %lld bytes (expected %u)",
-            SALT_REF, (long long) size, (unsigned) KDF_SALT_SIZE
+            "Blob '%s' in %s has wrong size: %lld bytes (expected %zu)",
+            name, EPOCH_REF, (long long) got, size
         );
     }
 
-    memcpy(out_salt, git_blob_rawcontent(blob), KDF_SALT_SIZE);
+    memcpy(out, git_blob_rawcontent(blob), size);
     git_blob_free(blob);
 
     return NULL;
 }
 
-error_t *salt_load(
+/**
+ * Read the epoch from a tree, validating both blobs.
+ *
+ * Zeroes `*out` on every error path so a caller cannot accidentally proceed with
+ * stale stack content under a swallowed error code. The pair is validated here
+ * — the boundary it enters at — with `kdf_validate_params`.
+ */
+static error_t *read_epoch_tree(
     git_repository *repo,
-    uint8_t out_salt[KDF_SALT_SIZE]
+    git_tree *tree,
+    kdf_epoch_t *out
 ) {
+    uint8_t params[KDF_PARAMS_SIZE];
+
+    error_t *err = read_epoch_blob(
+        repo, tree, EPOCH_SALT_BLOB, KDF_SALT_SIZE, out->salt
+    );
+    if (!err) {
+        err = read_epoch_blob(
+            repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
+        );
+    }
+    if (!err) {
+        kdf_params_load(params, &out->memory_mib, &out->passes);
+        err = kdf_validate_params(out->memory_mib, out->passes);
+        if (err) {
+            err = error_wrap(err, "Params blob in %s is out of range", EPOCH_REF);
+        }
+    }
+    if (err) {
+        memset(out, 0, sizeof(*out));
+    }
+
+    return err;
+}
+
+error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
     CHECK_NULL(repo);
-    CHECK_NULL(out_salt);
+    CHECK_NULL(out);
 
     git_tree *tree = NULL;
-    error_t *err = resolve_salt_tree(repo, &tree);
+    error_t *err = resolve_epoch_tree(repo, &tree);
     if (err) {
-        memset(out_salt, 0, KDF_SALT_SIZE);
+        memset(out, 0, sizeof(*out));
         return err;
     }
 
-    err = read_salt_blob(repo, tree, out_salt);
+    err = read_epoch_tree(repo, tree, out);
     git_tree_free(tree);
     return err;
 }
 
-error_t *salt_init(git_repository *repo, bool *out_repaired) {
+error_t *epoch_init(
+    git_repository *repo,
+    uint16_t memory_mib,
+    uint8_t passes,
+    kdf_epoch_t *out,
+    bool *out_repaired
+) {
     CHECK_NULL(repo);
+    CHECK_NULL(out);
 
     if (out_repaired) {
         *out_repaired = false;
     }
 
-    /* Idempotency: if the ref already resolves and the salt blob is the right
-     * size, treat as success. A user re-running `dotta init` on an existing repo
-     * must not regenerate the salt — that would silently invalidate every encrypted
-     * blob in the repo. */
-    uint8_t existing_salt[KDF_SALT_SIZE];
-    error_t *probe_err = salt_load(repo, existing_salt);
+    /* Idempotency: if the ref already resolves to a valid epoch, treat as success
+     * and hand that epoch back. A user re-running `dotta init` on an existing
+     * repo must not regenerate the epoch — that would silently invalidate every
+     * encrypted blob in the repo. */
+    error_t *probe_err = epoch_load(repo, out);
     if (probe_err == NULL) {
         return NULL;  /* already initialized */
     }
 
-    /* The ref yielded no salt. Damaged or gone, its bytes are unavailable either
+    /* The ref yielded no epoch. Damaged or gone, its bytes are unavailable either
      * way, so no blob's fingerprint can be matched against anything: any ciphertext
      * in this repository (any fingerprint, any version) may be keyed by what
      * the ref held, and minting over it would orphan that ciphertext permanently.
@@ -216,30 +249,30 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
 
     if (probe_err->code != ERR_NOT_FOUND) {
         /* The ref is there and damaged. Over reachable ciphertext it may be the
-         * damaged form of the salt that keys it, so the refusal keeps the probe
-         * as its cause — salt_load names what is wrong with the blob — and the
+         * damaged form of the epoch that keys it, so the refusal keeps the probe
+         * as its cause — epoch_load names what is wrong with the blob — and the
          * evidence stays in place for a restore. A clean census makes the ref
          * pure noise: delete it, mint fresh, and tell the caller a repair
          * happened. */
         if (any_ciphertext) {
             return error_wrap(
                 probe_err,
-                "Repository salt '%s' is malformed and encrypted files depend "
+                "Repository epoch '%s' is malformed and encrypted files depend "
                 "on it\n\n"
                 "Minting a new one would seal every encrypted file in this "
                 "repository away permanently. Restore the ref instead:\n"
                 "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
-                SALT_REF
+                EPOCH_REF
             );
         }
         error_free(probe_err);
 
-        int rc = git_reference_remove(repo, SALT_REF);
+        int rc = git_reference_remove(repo, EPOCH_REF);
         if (rc < 0) {
             return error_wrap(
                 error_from_git(rc),
-                "Failed to remove malformed salt ref '%s'", SALT_REF
+                "Failed to remove malformed epoch ref '%s'", EPOCH_REF
             );
         }
         if (out_repaired) {
@@ -255,29 +288,34 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
         if (any_ciphertext) {
             return ERROR(
                 ERR_CRYPTO,
-                "Repository salt '%s' is missing and encrypted files depend "
+                "Repository epoch '%s' is missing and encrypted files depend "
                 "on it\n\n"
                 "Minting a new one would seal every encrypted file in this "
                 "repository away permanently. Restore the ref instead:\n"
                 "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
-                SALT_REF
+                EPOCH_REF
             );
         }
     }
 
-    /* Generate the salt. entropy_fill scrubs the buffer to zeros on any failure,
-     * so a half-populated salt cannot leak out. */
-    uint8_t salt[KDF_SALT_SIZE];
-    error_t *err = entropy_fill(salt, sizeof(salt));
+    /* Mint: a fresh salt beside the pair given. entropy_fill scrubs the buffer
+     * to zeros on any failure, so a half-populated salt cannot leak out. */
+    error_t *err = entropy_fill(out->salt, KDF_SALT_SIZE);
     if (err) {
+        memset(out, 0, sizeof(*out));
         return error_wrap(err, "Failed to generate repository salt");
     }
+    out->memory_mib = memory_mib;
+    out->passes = passes;
 
-    /* Write the salt as a blob. */
-    git_oid blob_oid;
+    uint8_t params[KDF_PARAMS_SIZE];
+    kdf_params_store(params, memory_mib, passes);
+
+    /* Write the two blobs. */
+    git_oid salt_oid;
     int git_err = git_blob_create_from_buffer(
-        &blob_oid, repo, salt, sizeof(salt)
+        &salt_oid, repo, out->salt, KDF_SALT_SIZE
     );
     if (git_err < 0) {
         return error_wrap(
@@ -285,26 +323,40 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
             "Failed to write salt blob"
         );
     }
+    git_oid params_oid;
+    git_err = git_blob_create_from_buffer(
+        &params_oid, repo, params, KDF_PARAMS_SIZE
+    );
+    if (git_err < 0) {
+        return error_wrap(
+            error_from_git(git_err),
+            "Failed to write params blob"
+        );
+    }
 
-    /* Build a tree containing only the salt blob. */
+    /* Build a tree holding the two. */
     git_treebuilder *tb = NULL;
     git_err = git_treebuilder_new(&tb, repo, NULL);
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to create salt tree builder"
+            "Failed to create epoch tree builder"
         );
     }
 
     git_err = git_treebuilder_insert(
-        NULL, tb, SALT_BLOB_NAME, &blob_oid,
-        SALT_BLOB_MODE
+        NULL, tb, EPOCH_SALT_BLOB, &salt_oid, EPOCH_BLOB_MODE
     );
+    if (git_err == 0) {
+        git_err = git_treebuilder_insert(
+            NULL, tb, EPOCH_PARAMS_BLOB, &params_oid, EPOCH_BLOB_MODE
+        );
+    }
     if (git_err < 0) {
         git_treebuilder_free(tb);
         return error_wrap(
             error_from_git(git_err),
-            "Failed to insert salt blob into tree"
+            "Failed to insert epoch blobs into tree"
         );
     }
 
@@ -314,7 +366,7 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to write salt tree"
+            "Failed to write epoch tree"
         );
     }
 
@@ -323,7 +375,7 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to look up newly-written salt tree"
+            "Failed to look up newly-written epoch tree"
         );
     }
 
@@ -334,20 +386,20 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
     if (sig_err) {
         git_tree_free(tree);
         return error_wrap(
-            sig_err, "Failed to get signature for salt commit"
+            sig_err, "Failed to get signature for epoch commit"
         );
     }
 
-    /* Orphan commit (no parents) writing directly to refs/dotta/salt. The message
+    /* Orphan commit (no parents) writing directly to refs/dotta/epoch. The message
      * is purely diagnostic; nothing in dotta parses it. */
     git_oid commit_oid;
     git_err = git_commit_create(
         &commit_oid,
         repo,
-        SALT_REF,
+        EPOCH_REF,
         sig, sig,
         NULL,                      /* encoding: default */
-        "Initialize repository salt",
+        "Initialize repository epoch",
         tree,
         0, NULL                    /* no parents = orphan */
     );
@@ -358,14 +410,14 @@ error_t *salt_init(git_repository *repo, bool *out_repaired) {
     if (git_err < 0) {
         return error_wrap(
             error_from_git(git_err),
-            "Failed to commit salt to '%s'", SALT_REF
+            "Failed to commit epoch to '%s'", EPOCH_REF
         );
     }
 
     return NULL;
 }
 
-error_t *salt_push(
+error_t *epoch_push(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer
@@ -379,7 +431,7 @@ error_t *salt_push(
      * init` populates it but a `dotta sync` on a freshly-cloned encryption-disabled
      * repo may not have one yet. */
     git_reference *local_ref = NULL;
-    int git_err = git_reference_lookup(&local_ref, repo, SALT_REF);
+    int git_err = git_reference_lookup(&local_ref, repo, EPOCH_REF);
     if (git_err == GIT_ENOTFOUND) {
         return NULL;
     }
@@ -400,18 +452,18 @@ error_t *salt_push(
         &push_opts.callbacks, xfer, GIT_DIRECTION_PUSH
     );
 
-    /* Non-force refspec: a salt push must be fast-forward. Two machines that
-     * independently `dotta init`ed and now race their salts to the same remote
+    /* Non-force refspec: an epoch push must be fast-forward. Two machines that
+     * independently `dotta init`ed and now race their epochs to the same remote
      * will see the second one fail here — surfaced as a regular non-fast-forward
      * Git error so the user understands they need to reconcile. */
     char refspec[DOTTA_REFSPEC_MAX];
     int n = snprintf(
-        refspec, sizeof(refspec), "%s:%s", SALT_REF, SALT_REF
+        refspec, sizeof(refspec), "%s:%s", EPOCH_REF, EPOCH_REF
     );
     if (n < 0 || (size_t) n >= sizeof(refspec)) {
         git_remote_free(remote);
         return ERROR(
-            ERR_INTERNAL, "Salt refspec buffer too small"
+            ERR_INTERNAL, "Epoch refspec buffer too small"
         );
     }
 
@@ -436,7 +488,7 @@ error_t *salt_push(
 }
 
 /**
- * Probe the remote's advertised `refs/dotta/salt`.
+ * Probe the remote's advertised `refs/dotta/epoch`.
  *
  * Uses `git_remote_connect` + `git_remote_ls` so the absence diagnostic is "remote
  * does not advertise this ref" — distinct from "fetch failed for transport
@@ -444,14 +496,14 @@ error_t *salt_push(
  * direction purely to align the credential path with the subsequent fetch.
  *
  * When the ref is advertised and `out_oid` is non-NULL, the advertised commit
- * OID is copied out — the hook `salt_inspect_remote` uses to compare against
- * the local ref without transferring the blob. Pass NULL for `out_oid` when only
- * presence matters (the `salt_fetch` case).
+ * OID is copied out — the hook `epoch_inspect_remote` uses to compare against
+ * the local ref without transferring the blobs. Pass NULL for `out_oid` when
+ * only presence matters (the `epoch_fetch` case).
  *
  * Returns NULL with `*out_present` set; never surfaces "ref missing" as an error
  * code (that is the load-bearing return value of this predicate).
  */
-static error_t *probe_remote_salt(
+static error_t *probe_remote_epoch(
     git_remote *remote,
     transfer_context_t *xfer,
     bool *out_present,
@@ -482,7 +534,7 @@ static error_t *probe_remote_salt(
 
     for (size_t i = 0; i < heads_len; i++) {
         if (heads[i] != NULL && heads[i]->name != NULL
-            && strcmp(heads[i]->name, SALT_REF) == 0) {
+            && strcmp(heads[i]->name, EPOCH_REF) == 0) {
             *out_present = true;
             if (out_oid != NULL) {
                 git_oid_cpy(out_oid, &heads[i]->oid);
@@ -495,11 +547,11 @@ static error_t *probe_remote_salt(
     return NULL;
 }
 
-error_t *salt_fetch(
+error_t *epoch_fetch(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    uint8_t *out_salt
+    kdf_epoch_t *out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -516,10 +568,10 @@ error_t *salt_fetch(
      * constructing a refspec that targets a possibly-absent ref. `git_remote_fetch`
      * on a missing ref surfaces a generic Git error indistinguishable from real
      * transport failures by error code alone — the probe gives us a clean
-     * ERR_NOT_FOUND surface for the "remote isn't a dotta v7 repo" case. Presence
-     * is all we need here; the OID-comparison consumer is salt_inspect_remote. */
+     * ERR_NOT_FOUND surface for the "remote isn't a dotta repo" case. Presence
+     * is all we need here; the OID-comparison consumer is epoch_inspect_remote. */
     bool present = false;
-    error_t *err = probe_remote_salt(remote, xfer, &present, NULL);
+    error_t *err = probe_remote_epoch(remote, xfer, &present, NULL);
     if (err) {
         git_remote_free(remote);
         return err;
@@ -529,17 +581,17 @@ error_t *salt_fetch(
         return ERROR(
             ERR_NOT_FOUND,
             "Remote '%s' does not advertise '%s'",
-            remote_name, SALT_REF
+            remote_name, EPOCH_REF
         );
     }
 
-    /* Capture the current local salt target before the force-fetch overwrites
-     * it, so a malformed fetched salt can be rolled back to exactly the prior
+    /* Capture the current local epoch target before the force-fetch overwrites
+     * it, so a malformed fetched epoch can be rolled back to exactly the prior
      * state: a failed adopt never leaves garbage, and never bricks a valid local
-     * salt. */
+     * epoch. */
     git_oid prior_oid;
     bool prior_exists =
-        (git_reference_name_to_id(&prior_oid, repo, SALT_REF) == 0);
+        (git_reference_name_to_id(&prior_oid, repo, EPOCH_REF) == 0);
 
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
@@ -549,22 +601,22 @@ error_t *salt_fetch(
 
     /* Force update (`+` prefix): the local ref is replaced wholesale by the
      * remote's. This is safe because the only caller that reaches a *divergent*
-     * local salt — `cmd_sync`'s adopt path — gates the fetch on the key-free
+     * local epoch — `cmd_sync`'s adopt path — gates the fetch on the key-free
      * census proving no reachable ciphertext (any commit, any branch) is keyed
-     * by the salt being replaced. Clone reaches a missing (not divergent) local
-     * salt, so there is nothing to overwrite. Deliberate salt rotation remains
-     * unsupported end-to-end: a re-minted salt cannot even be published (the
-     * push is non-force), and a clone whose ciphertext the old salt keys lands
+     * by the epoch being replaced. Clone reaches a missing (not divergent) local
+     * epoch, so there is nothing to overwrite. Deliberate epoch rotation remains
+     * unsupported end-to-end: a re-minted epoch cannot even be published (the
+     * push is non-force), and a clone whose ciphertext the old epoch keys lands
      * on CONFLICT, not adopt. */
     char refspec[DOTTA_REFSPEC_MAX];
     int n = snprintf(
         refspec, sizeof(refspec), "+%s:%s",
-        SALT_REF, SALT_REF
+        EPOCH_REF, EPOCH_REF
     );
     if (n < 0 || (size_t) n >= sizeof(refspec)) {
         git_remote_free(remote);
         return ERROR(
-            ERR_INTERNAL, "Salt refspec buffer too small"
+            ERR_INTERNAL, "Epoch refspec buffer too small"
         );
     }
 
@@ -577,18 +629,18 @@ error_t *salt_fetch(
     git_remote_free(remote);
 
     if (git_err < 0) {
-        /* Bare, matching salt_push: the boundaries (sync's adopt arm, clone's
+        /* Bare, matching epoch_push: the boundaries (sync's adopt arm, clone's
          * acquisition gate) each attach their own single layer of context. */
         return error_from_git(git_err);
     }
 
-    /* Validate the bytes we just landed. This is the salt acquisition boundary:
-     * a malformed salt must never persist in refs/dotta/salt where a later inspect
-     * would read it as canonical or salt_load would surface a deferred, cryptic
-     * decrypt failure. */
-    uint8_t scratch[KDF_SALT_SIZE];
-    err = salt_load(repo, scratch);
-    /* Salt is public — no wipe. */
+    /* Validate the bytes we just landed. This is the epoch acquisition boundary:
+     * a malformed epoch must never persist in refs/dotta/epoch where a later
+     * inspect would read it as canonical or epoch_load would surface a deferred,
+     * cryptic decrypt failure. */
+    kdf_epoch_t scratch;
+    err = epoch_load(repo, &scratch);
+    /* The epoch is public — no wipe. */
     if (err) {
         /* Roll the local ref back to its prior state so the failed adopt leaves
          * nothing behind. Best-effort: a local ref write failing here is
@@ -597,33 +649,34 @@ error_t *salt_fetch(
         if (prior_exists) {
             git_reference *restored = NULL;
             int rc = git_reference_create(
-                &restored, repo, SALT_REF, &prior_oid, 1, NULL
+                &restored, repo, EPOCH_REF, &prior_oid, 1, NULL
             );
             if (rc == 0) {
                 git_reference_free(restored);
             }
         } else {
-            git_reference_remove(repo, SALT_REF);
+            git_reference_remove(repo, EPOCH_REF);
         }
 
-        /* Normalize every validation failure (wrong size, missing blob, non-commit
-         * object) to a single ERR_CRYPTO surface so callers route uniformly —
-         * fold salt_load's specific cause into the message rather than chaining,
-         * since error_wrap would inherit salt_load's varied codes (ERR_CRYPTO /
-         * ERR_NOT_FOUND / ERR_GIT) and split the callers' handling. */
+        /* Normalize every validation failure (wrong size, missing blob, a pair
+         * out of range, non-commit object) to a single ERR_CRYPTO surface so
+         * callers route uniformly — fold epoch_load's specific cause into the
+         * message rather than chaining, since error_wrap would inherit epoch_load's
+         * varied codes (ERR_CRYPTO / ERR_NOT_FOUND / ERR_GIT) and split the
+         * callers' handling. */
         error_t *malformed = ERROR(
             ERR_CRYPTO,
-            "Remote salt is malformed; remote repo may be corrupt (%s)",
+            "Remote epoch is malformed; remote repo may be corrupt (%s)",
             error_message(err)
         );
         error_free(err);
         return malformed;
     }
 
-    /* Hand over exactly the bytes the validation proved — the caller never re-reads
+    /* Hand over exactly what the validation proved — the caller never re-reads
      * the ref it just watched move. */
-    if (out_salt != NULL) {
-        memcpy(out_salt, scratch, KDF_SALT_SIZE);
+    if (out != NULL) {
+        *out = scratch;
     }
 
     return NULL;
@@ -631,18 +684,18 @@ error_t *salt_fetch(
 
 /*
  * Local-ciphertext census: "does any commit reachable from any local branch carry
- * ciphertext keyed by a given salt?", answered key-free (content_classify is
- * header-only, the salt fingerprint is public) so it runs before any passphrase
- * is available. Gates the divergent-salt decision — replacing a salt that keys
- * reachable ciphertext bricks it (deterministic SIV), and *reachable* means the
- * full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at any
- * `@commit`, every one of them under the current salt.
+ * ciphertext keyed by a given epoch?", answered key-free (content_classify is
+ * header-only, the epoch fingerprint is public) so it runs before any passphrase
+ * is available. Gates the divergent-epoch decision — replacing an epoch that
+ * keys reachable ciphertext bricks it (deterministic SIV), and *reachable* means
+ * the full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at
+ * any `@commit`, every one of them under the current epoch.
  *
- * Attribution is by the blob header's salt fingerprint. With a fingerprint to
- * match (`local_fp` non-NULL), only ciphertext this salt keys counts — foreign
- * ciphertext (pulled from a remote under its own salt) neither pins the local
- * salt nor blocks converging to the salt that CAN decrypt it. With no fingerprint
- * (`local_fp` NULL), any ciphertext counts — the caller has no salt to attribute
+ * Attribution is by the blob header's epoch fingerprint. With a fingerprint to
+ * match (`local_fp` non-NULL), only ciphertext this epoch keys counts — foreign
+ * ciphertext (pulled from a remote under its own epoch) neither pins the local
+ * epoch nor blocks converging to the epoch that CAN decrypt it. With no fingerprint
+ * (`local_fp` NULL), any ciphertext counts — the caller has no epoch to attribute
  * against, so presence alone must fail closed.
  */
 
@@ -654,7 +707,7 @@ typedef struct {
     hashmap_t *seen;        /* borrowed; visited tree/blob OIDs (hex keys) */
     bool found;             /* set on the first blob that counts */
     error_t *error;         /* set if classification/bookkeeping fails (owned) */
-} salt_census_t;
+} epoch_census_t;
 
 /*
  * Tree-walk callback (pre-order). Returns 0 to continue, 1 to skip an
@@ -663,16 +716,16 @@ typedef struct {
  * the walk could not prove anything. gitops_tree_walk maps the -1 to a non-NULL
  * error_t that the driver discards in favour of the payload.
  */
-static int salt_census_cb(
+static int epoch_census_cb(
     const char *root,
     const git_tree_entry *entry,
     void *payload
 ) {
     (void) root;
-    salt_census_t *data = (salt_census_t *) payload;
+    epoch_census_t *data = (epoch_census_t *) payload;
 
     /* Only trees descend and only blobs carry content; anything else (a submodule
-     * commit) has no bytes under this salt. */
+     * commit) has no bytes under this epoch. */
     git_object_t type = git_tree_entry_type(entry);
     if (type != GIT_OBJECT_BLOB && type != GIT_OBJECT_TREE) {
         return 0;
@@ -696,7 +749,7 @@ static int salt_census_cb(
     }
 
     content_kind_t kind;
-    uint8_t fp[KDF_SALT_FP_SIZE];
+    uint8_t fp[KDF_EPOCH_FP_SIZE];
     err = content_classify(
         data->repo, git_tree_entry_id(entry), &kind,
         data->local_fp ? fp : NULL
@@ -717,19 +770,19 @@ static int salt_census_cb(
         data->found = true;  /* unattributable format → fail closed */
         return -1;
     }
-    if (memcmp(fp, data->local_fp, KDF_SALT_FP_SIZE) == 0) {
-        data->found = true;  /* keyed by exactly the salt in question */
+    if (memcmp(fp, data->local_fp, KDF_EPOCH_FP_SIZE) == 0) {
+        data->found = true;  /* keyed by exactly the epoch in question */
         return -1;
     }
-    return 0;  /* foreign-keyed; some other salt's concern */
+    return 0;  /* foreign-keyed; some other epoch's concern */
 }
 
 /*
  * Walk the full history of every local branch — disabled profiles included, whose
- * ciphertext a salt swap bricks just the same — and report whether any reachable
+ * ciphertext an epoch swap bricks just the same — and report whether any reachable
  * blob counts under the census rules above. Short-circuits on the first decisive
  * hit. Lists branches via sys/gitops and skips the local-only dotta-worktree
- * anchor inline, so infra/salt takes no core/ dependency; the revwalk speaks
+ * anchor inline, so infra/epoch takes no core/ dependency; the revwalk speaks
  * libgit2 directly the way sys/stats does. Propagates any error so the caller
  * can fail closed.
  */
@@ -746,16 +799,16 @@ static error_t *local_has_ciphertext(
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
-        return error_wrap(err, "Failed to list local branches for salt census");
+        return error_wrap(err, "Failed to list local branches for epoch census");
     }
 
     hashmap_t *seen = hashmap_create(0);
     if (!seen) {
         string_array_free(branches);
-        return ERROR(ERR_MEMORY, "Failed to allocate salt census visited set");
+        return ERROR(ERR_MEMORY, "Failed to allocate epoch census visited set");
     }
 
-    salt_census_t data = {
+    epoch_census_t data = {
         .repo  = repo,  .local_fp = local_fp, .seen = seen,
         .found = false, .error    = NULL,
     };
@@ -765,7 +818,7 @@ static error_t *local_has_ciphertext(
         const char *branch = branches->items[i];
 
         /* dotta-worktree is the local-only empty HEAD anchor, never a profile
-         * branch — skip it (the salt ref lives outside refs/heads and is never
+         * branch — skip it (the epoch ref lives outside refs/heads and is never
          * walked here either). */
         if (strcmp(branch, "dotta-worktree") == 0) {
             continue;
@@ -826,7 +879,7 @@ static error_t *local_has_ciphertext(
                 goto cleanup;
             }
 
-            error_t *walk_err = gitops_tree_walk(tree, salt_census_cb, &data);
+            error_t *walk_err = gitops_tree_walk(tree, epoch_census_cb, &data);
             git_tree_free(tree);
 
             if (data.error) {
@@ -862,27 +915,27 @@ cleanup:
 }
 
 /*
- * Would replacing the local salt brick local data? True iff a valid local salt
+ * Would replacing the local epoch brick local data? True iff a valid local epoch
  * exists AND ciphertext it keys is reachable from some local branch. Fails CLOSED:
  * any uncertainty returns true, because a false "not in use" green-lights an
  * adopt that destroys data while a false "in use" only costs a manual reconcile.
  *
- *   local salt absent / malformed → derives nothing → not in use local salt
- *   unreadable for any other reason → can't prove safe → in use local salt valid
+ *   local epoch absent / malformed → derives nothing → not in use local epoch
+ *   unreadable for any other reason → can't prove safe → in use local epoch valid
  *   → census against its fingerprint; a census error → in use
  */
-static bool salt_local_in_use(git_repository *repo) {
-    uint8_t salt[KDF_SALT_SIZE];
-    error_t *lerr = salt_load(repo, salt);
-    /* Salt is public — no wipe. */
+static bool epoch_local_in_use(git_repository *repo) {
+    kdf_epoch_t epoch;
+    error_t *lerr = epoch_load(repo, &epoch);
+    /* The epoch is public — no wipe. */
     if (lerr) {
         error_code_t code = lerr->code;
         error_free(lerr);
         return !(code == ERR_NOT_FOUND || code == ERR_CRYPTO);
     }
 
-    uint8_t fp[KDF_SALT_FP_SIZE];
-    kdf_salt_fingerprint(salt, fp);
+    uint8_t fp[KDF_EPOCH_FP_SIZE];
+    kdf_epoch_fingerprint(&epoch, fp);
 
     bool in_use = false;
     error_t *cerr = local_has_ciphertext(repo, fp, &in_use);
@@ -894,29 +947,29 @@ static bool salt_local_in_use(git_repository *repo) {
 }
 
 /*
- * Remote salt status relative to the local ref, by commit-OID compare (the
- * OID-vs-byte exactness rationale lives on the public salt_reconcile_t). DIVERGENT
- * subsumes the local-absent case: a joiner with no salt must converge to the
+ * Remote epoch status relative to the local ref, by commit-OID compare (the
+ * OID-vs-byte exactness rationale lives on the public epoch_reconcile_t). DIVERGENT
+ * subsumes the local-absent case: a joiner with no epoch must converge to the
  * remote's.
  */
 typedef enum {
-    SALT_REMOTE_ABSENT,     /* remote does not advertise refs/dotta/salt */
-    SALT_REMOTE_EQUAL,      /* advertised OID == local ref target */
-    SALT_REMOTE_DIVERGENT,  /* advertised OID != local target (incl. local-absent) */
-} salt_remote_status_t;
+    EPOCH_REMOTE_ABSENT,     /* remote does not advertise refs/dotta/epoch */
+    EPOCH_REMOTE_EQUAL,      /* advertised OID == local ref target */
+    EPOCH_REMOTE_DIVERGENT,  /* advertised OID != local target (incl. local-absent) */
+} epoch_remote_status_t;
 
 /*
- * Inspect the remote salt without transferring objects: connect + ls, then compare
- * the advertised refs/dotta/salt OID against the local ref target. Read-only
- * and dry-run-safe. Transport failure surfaces as an error (which salt_resolve
+ * Inspect the remote epoch without transferring objects: connect + ls, then compare
+ * the advertised refs/dotta/epoch OID against the local ref target. Read-only
+ * and dry-run-safe. Transport failure surfaces as an error (which epoch_resolve
  * folds to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an
  * error.
  */
-static error_t *salt_inspect_remote(
+static error_t *epoch_inspect_remote(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    salt_remote_status_t *out_status
+    epoch_remote_status_t *out_status
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -932,26 +985,26 @@ static error_t *salt_inspect_remote(
 
     bool present = false;
     git_oid remote_oid;
-    error_t *err = probe_remote_salt(remote, xfer, &present, &remote_oid);
+    error_t *err = probe_remote_epoch(remote, xfer, &present, &remote_oid);
     git_remote_free(remote);
     if (err) {
-        /* Transport failure — propagate so the caller can skip salt reconciliation
+        /* Transport failure — propagate so the caller can skip epoch reconciliation
          * best-effort. */
         return err;
     }
 
     if (!present) {
-        *out_status = SALT_REMOTE_ABSENT;
+        *out_status = EPOCH_REMOTE_ABSENT;
         return NULL;
     }
 
     /* Remote advertises the ref. Compare its commit OID against the local ref
-     * target. A missing local ref is DIVERGENT (a joiner that has no salt yet
+     * target. A missing local ref is DIVERGENT (a joiner that has no epoch yet
      * must converge to the remote's). */
     git_oid local_oid;
-    git_err = git_reference_name_to_id(&local_oid, repo, SALT_REF);
+    git_err = git_reference_name_to_id(&local_oid, repo, EPOCH_REF);
     if (git_err == GIT_ENOTFOUND) {
-        *out_status = SALT_REMOTE_DIVERGENT;
+        *out_status = EPOCH_REMOTE_DIVERGENT;
         return NULL;
     }
     if (git_err < 0) {
@@ -959,66 +1012,66 @@ static error_t *salt_inspect_remote(
     }
 
     *out_status = git_oid_equal(&local_oid, &remote_oid)
-        ? SALT_REMOTE_EQUAL
-        : SALT_REMOTE_DIVERGENT;
+        ? EPOCH_REMOTE_EQUAL
+        : EPOCH_REMOTE_DIVERGENT;
     return NULL;
 }
 
-error_t *salt_resolve(
+error_t *epoch_resolve(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
-    salt_reconcile_t *out_decision
+    epoch_reconcile_t *out_decision
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
     CHECK_NULL(out_decision);
 
-    salt_remote_status_t status;
-    error_t *err = salt_inspect_remote(repo, remote_name, xfer, &status);
+    epoch_remote_status_t status;
+    error_t *err = epoch_inspect_remote(repo, remote_name, xfer, &status);
     if (err) {
-        /* Transport / lookup failure folds to UNREACHABLE: the caller skips salt
+        /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
          * reconciliation best-effort, and the fetch phase carries the authoritative
          * "remote unreachable" diagnostic. */
         error_free(err);
-        *out_decision = SALT_RECONCILE_UNREACHABLE;
+        *out_decision = EPOCH_RECONCILE_UNREACHABLE;
         return NULL;
     }
 
     switch (status) {
-        case SALT_REMOTE_EQUAL:
-            *out_decision = SALT_RECONCILE_EQUAL;
+        case EPOCH_REMOTE_EQUAL:
+            *out_decision = EPOCH_RECONCILE_EQUAL;
             return NULL;
 
-        case SALT_REMOTE_ABSENT: {
-            /* Establish publishes THIS machine's salt, so a valid local one must
-             * exist. A repo with no local salt (or a malformed one) has nothing
-             * to publish — distinguish the two so the caller never claims an
-             * establish it cannot perform (the establish guard). */
-            uint8_t scratch[KDF_SALT_SIZE];
-            error_t *lerr = salt_load(repo, scratch);  /* public — no wipe */
+        case EPOCH_REMOTE_ABSENT: {
+            /* Establish publishes THIS machine's epoch, so a valid local one
+             * must exist. A repo with no local epoch (or a malformed one) has
+             * nothing to publish — distinguish the two so the caller never claims
+             * an establish it cannot perform (the establish guard). */
+            kdf_epoch_t scratch;
+            error_t *lerr = epoch_load(repo, &scratch);  /* public — no wipe */
             if (lerr) {
                 error_free(lerr);
-                *out_decision = SALT_RECONCILE_NO_LOCAL_SALT;
+                *out_decision = EPOCH_RECONCILE_NO_LOCAL_EPOCH;
             } else {
-                *out_decision = SALT_RECONCILE_ESTABLISH;
+                *out_decision = EPOCH_RECONCILE_ESTABLISH;
             }
             return NULL;
         }
 
-        case SALT_REMOTE_DIVERGENT:
-            /* Fail closed: salt_local_in_use returns true on any uncertainty,
-             * so ADOPT (which overwrites the local salt) is reached only when
+        case EPOCH_REMOTE_DIVERGENT:
+            /* Fail closed: epoch_local_in_use returns true on any uncertainty,
+             * so ADOPT (which overwrites the local epoch) is reached only when
              * no local ciphertext can be bricked. */
-            *out_decision = salt_local_in_use(repo)
-                ? SALT_RECONCILE_CONFLICT
-                : SALT_RECONCILE_ADOPT;
+            *out_decision = epoch_local_in_use(repo)
+                ? EPOCH_RECONCILE_CONFLICT
+                : EPOCH_RECONCILE_ADOPT;
             return NULL;
     }
 
-    /* salt_inspect_remote yields exactly one of three statuses; fold any
+    /* epoch_inspect_remote yields exactly one of three statuses; fold any
      * hypothetical out-of-range value to the best-effort skip. */
-    *out_decision = SALT_RECONCILE_UNREACHABLE;
+    *out_decision = EPOCH_RECONCILE_UNREACHABLE;
     return NULL;
 }

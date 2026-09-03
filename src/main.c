@@ -44,7 +44,7 @@
 #include "core/state.h"
 #include "crypto/keymgr.h"
 #include "infra/content.h"
-#include "infra/salt.h"
+#include "infra/epoch.h"
 #include "utils/config.h"
 #include "utils/repo.h"
 #include "utils/version.h"
@@ -102,7 +102,7 @@ const args_command_t *const *dotta_registry(void) {
  * already opened are exactly what `close_run` releases.
  *
  * The first open that fails returns its own error — it names the resource and,
- * for the salt and the view, the repair — and the run stays partially open for
+ * for the epoch and the view, the repair — and the run stays partially open for
  * `close_run`. Under `tolerant` the same failure ends the open silently: what
  * opened stays, the rest is NULL, and the handler runs with that shape.
  */
@@ -154,35 +154,34 @@ static error_t *open_run(
      * always (possibly with a NULL keymgr — see runtime.h's crypto rationale). */
     if (needs->crypto) {
         if (config->encryption_enabled) {
-            /* Load the per-repo Argon2id salt from refs/dotta/salt before
-             * constructing the keymgr — the salt is part of the master-key
-             * derivation contract, so the keymgr cannot exist without it. */
-            uint8_t salt[KDF_SALT_SIZE];
-            err = salt_load(run->repo, salt);
+            /* Load the repository's epoch from refs/dotta/epoch before constructing
+             * the keymgr — the epoch is the derivation's input, so the keymgr
+             * cannot exist without it. */
+            kdf_epoch_t epoch;
+            err = epoch_load(run->repo, &epoch);
             if (err) {
                 if (err->code == ERR_NOT_FOUND) {
-                    /* Restoration leads. Minting a fresh salt is safe only on a
-                     * repository that holds no encrypted files, and `dotta init`
-                     * is what decides that — so the user never has to answer it
-                     * before acting. */
+                    /* Restoration leads. Minting a fresh epoch is safe only on
+                     * a repository that holds no encrypted files, and `dotta
+                     * init` is what decides that — so the user never has to answer
+                     * it before acting. */
                     err = error_wrap(
                         err,
-                        "Encryption is enabled but this repository has no salt "
+                        "Encryption is enabled but this repository has no epoch "
                         "(%s); every encrypted file is sealed under it\n"
                         "  - Restore it: dotta git fetch origin "
                         "'refs/dotta/*:refs/dotta/*'\n"
                         "  - Or mint a fresh one with 'dotta init', which refuses "
                         "if any encrypted file would be orphaned\n"
                         "  - Or set encryption.enabled = false to work without "
-                        "encryption for now", SALT_REF
+                        "encryption for now", EPOCH_REF
                     );
                 }
                 goto done;
             }
 
-            err = keymgr_create(config, salt, &run->keymgr);
-            /* Salt is public; no wipe needed. The keymgr has copied it into its
-             * own storage. */
+            /* The epoch is public; the keymgr copies it. */
+            err = keymgr_create(config->session_timeout, &epoch, &run->keymgr);
             if (err) goto done;
         }
 

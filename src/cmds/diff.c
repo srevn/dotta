@@ -58,26 +58,36 @@ static bool should_show_item_for_direction(
          * reassignment (apply acknowledges reassignment). TYPE rides along —
          * replacing the occupant is apply's (--force for the kinds the copy cannot
          * commit), and status's Conflicts remedy sends the user here to compare,
-         * so hiding it answered that remedy with silence. ENCRYPTION alone stays
-         * out: how Git stores the blob is no difference between Git and disk,
-         * and apply deploying it changes nothing. */
+         * so hiding it answered that remedy with silence. UNVERIFIED is shown
+         * too: a look that failed is a difference nobody has ruled out, and hiding
+         * it reported the tree in sync over a file the user had just edited.
+         * ENCRYPTION alone stays out: how Git stores the blob is no difference
+         * between Git and disk, and apply deploying it changes nothing. */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
-               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE)) ||
-               workspace_item_reassigned(item)));
+               DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
+               DIVERGENCE_UNVERIFIED)) || workspace_item_reassigned(item)));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
         /* Downstream: What would update do? The route answers verbatim
          * (workspace_item_route — the same table update's filter reads), so this
-         * cannot promise a commit update refuses (STALE, CONFLICT, KIND,
-         * UNVERIFIABLE) or hide one it would take (a TYPE the copy can commit,
-         * ENCRYPTION, OWNERSHIP). */
-        return (item->state == WORKSPACE_STATE_DELETED) ||
-               (item->state == WORKSPACE_STATE_DEPLOYED &&
-               workspace_item_route(item) == WORKSPACE_ROUTE_CAPTURE);
+         * cannot promise a commit update refuses (STALE, CONFLICT, KIND) or hide
+         * one it would take (a TYPE the copy can commit, ENCRYPTION, OWNERSHIP).
+         * UNVERIFIABLE is the one refusal shown: the row's status says update
+         * skips it, where a listing that left it out would say "no local changes"
+         * over a file nobody could read. */
+        if (item->state == WORKSPACE_STATE_DELETED) {
+            return true;
+        }
+        if (item->state != WORKSPACE_STATE_DEPLOYED) {
+            return false;
+        }
+        workspace_route_t route = workspace_item_route(item);
+        return route == WORKSPACE_ROUTE_CAPTURE ||
+               route == WORKSPACE_ROUTE_UNVERIFIABLE;
     }
 
     /* DIFF_BOTH is always decomposed into two explicit calls by the caller before
@@ -125,6 +135,15 @@ static const char *get_status_message_from_item(
     if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
         return "observed through a squatted directory "
                "('dotta update <dir>' re-derives the way there)";
+    }
+
+    /* A look that failed: no bit below was settled, so neither verb's sentence
+     * is true of the path — apply skips the row at preflight, update in its census.
+     * Ranked where the route ranks it, above every settled bit. */
+    if (item->divergence & DIVERGENCE_UNVERIFIED) {
+        return direction == DIFF_UPSTREAM
+                ? "could not be verified (apply skips it)"
+                : "could not be verified (update skips it)";
     }
 
     /* Handle divergence-based messages for deployed items */
@@ -228,6 +247,8 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         status_color = OUTPUT_COLOR_YELLOW;  /* the bits were read off the squatter's target */
+    } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
+        status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
     } else if (workspace_item_reassigned(item) &&
@@ -239,10 +260,12 @@ static error_t *show_file_diff_from_workspace(
     output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
     output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
 
-    /* For missing files or type changes, no content diff to show */
+    /* For missing files, type changes and failed looks, no content diff to show:
+     * an unverified row has no bytes the analysis could compare, and reading
+     * them here would fail the way the look did. */
     if (item->state == WORKSPACE_STATE_DELETED ||
         item->state == WORKSPACE_STATE_UNDEPLOYED ||
-        (item->divergence & DIVERGENCE_TYPE)) {
+        (item->divergence & (DIVERGENCE_TYPE | DIVERGENCE_UNVERIFIED))) {
         return NULL;
     }
 
@@ -324,6 +347,8 @@ static error_t *show_file_diff_from_workspace(
  * @param opts Command options (must not be NULL)
  * @param out Output context (must not be NULL)
  * @param diff_count Output: number of diffs shown (must not be NULL)
+ * @param unverified Output: how many of them were rows the analysis could not
+ *                   look at; shown by their status line, no hunk (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *present_diffs_for_direction(
@@ -333,15 +358,19 @@ static error_t *present_diffs_for_direction(
     const scope_t *scope,
     const cmd_diff_options_t *opts,
     output_t *out,
-    size_t *diff_count
+    size_t *diff_count,
+    size_t *unverified
 ) {
     CHECK_NULL(cache);
     CHECK_NULL(scope);
     CHECK_NULL(opts);
     CHECK_NULL(out);
     CHECK_NULL(diff_count);
+    CHECK_NULL(unverified);
 
     *diff_count = 0;
+    *unverified = 0;
+
     error_t *err = NULL;
 
     /* Early return if no diverged items */
@@ -378,14 +407,16 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Show the diff (content already analyzed by workspace) */
-        err = show_file_diff_from_workspace(
-            item, cache, direction, opts, out
-        );
+        err = show_file_diff_from_workspace(item, cache, direction, opts, out);
         if (err) {
             return err;
         }
 
         (*diff_count)++;
+
+        if (item->divergence & DIVERGENCE_UNVERIFIED) {
+            (*unverified)++;
+        }
     }
 
     return NULL;
@@ -1410,24 +1441,34 @@ static error_t *diff_workspace(
         }
     }
 
-    /* Step 5: Filter and present diffs based on direction */
+    /* Step 5: Filter and present diffs based on direction. A row the analysis
+     * could not look at is shown by its status line and counted: it is never
+     * "in sync", and each section says how many it could not settle. */
     size_t total_diff_count = 0;
 
     if (opts->direction == DIFF_BOTH) {
         /* Show both directions with headers */
         size_t upstream_count = 0, downstream_count = 0;
+        size_t unverified = 0;
 
         /* Upstream section */
         output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
 
         err = present_diffs_for_direction(
-            diverged, cache, DIFF_UPSTREAM, scope, opts, out, &upstream_count
+            diverged, cache, DIFF_UPSTREAM, scope, opts, out,
+            &upstream_count, &unverified
         );
         if (err) goto cleanup;
 
         if (upstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No upstream differences\n");
+        }
+        if (unverified > 0 && !opts->name_only) {
+            output_info(
+                out, OUTPUT_NORMAL, "%zu file%s could not be verified\n",
+                unverified, unverified == 1 ? "" : "s"
+            );
         }
 
         /* Downstream section */
@@ -1435,22 +1476,27 @@ static error_t *diff_workspace(
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
 
         err = present_diffs_for_direction(
-            diverged, cache, DIFF_DOWNSTREAM,
-            scope, opts, out, &downstream_count
+            diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
+            &downstream_count, &unverified
         );
         if (err) goto cleanup;
 
         if (downstream_count == 0 && !opts->name_only) {
             output_info(out, OUTPUT_NORMAL, "No downstream differences\n");
         }
+        if (unverified > 0 && !opts->name_only) {
+            output_info(
+                out, OUTPUT_NORMAL, "%zu file%s could not be verified\n",
+                unverified, unverified == 1 ? "" : "s"
+            );
+        }
 
         total_diff_count = upstream_count + downstream_count;
-
     } else {
-        /* Single direction */
+        size_t unverified = 0;
         err = present_diffs_for_direction(
-            diverged, cache, opts->direction,
-            scope, opts, out, &total_diff_count
+            diverged, cache, opts->direction, scope, opts, out,
+            &total_diff_count, &unverified
         );
         if (err) goto cleanup;
 
@@ -1463,6 +1509,12 @@ static error_t *diff_workspace(
             } else {
                 output_info(out, OUTPUT_NORMAL, "No local changes to commit");
             }
+        }
+        if (unverified > 0 && !opts->name_only) {
+            output_info(
+                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
+                unverified, unverified == 1 ? "" : "s"
+            );
         }
     }
 

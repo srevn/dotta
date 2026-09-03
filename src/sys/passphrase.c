@@ -159,13 +159,10 @@ static void passphrase_restore_signal_handlers(void) {
 /**
  * Read a passphrase from the user with terminal echo disabled.
  *
- *
- * @param prompt Prompt string written to stderr (must not be NULL).
- * @param out_passphrase Heap-allocated passphrase buffer
- * @param out_len Passphrase length, excluding the NUL terminator.
- * @return NULL on success. ERR_FS on tty manipulation or read I/O failure.
- *         ERR_MEMORY on allocation failure. ERR_INVALID_ARG on empty or truncated
- *         input.
+ * The contract is the header's. Setup order — save termios → set the flag → install
+ * the handlers → disable echo — and teardown order — restore echo → clear the
+ * flag → uninstall the handlers — are the signal-handler comment's at file scope:
+ * the flag is what makes a signal in either window a no-op plus a default re-raise.
  */
 error_t *passphrase_prompt(
     const char *prompt,
@@ -180,9 +177,8 @@ error_t *passphrase_prompt(
     struct termios old_term, new_term;
     bool echo_disabled = false;
 
-    /* Arm the terminal-restoration machinery BEFORE disabling echo. Order: save
-     * termios → set flag → install handlers → disable echo. See the "Setup"
-     * ordering comment at the top of this file for why. */
+    /* Arm the terminal-restoration machinery BEFORE disabling echo: save termios
+     * → set flag → install handlers → disable echo. */
     if (is_tty) {
         if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
             return ERROR(ERR_FS, "Failed to get terminal attributes");
@@ -207,10 +203,14 @@ error_t *passphrase_prompt(
         echo_disabled = true;
     }
 
-    /* Display the prompt. fflush ensures it is visible before fgets blocks on
-     * stdin, even when stderr is line-buffered. */
-    fprintf(stderr, "%s", prompt);
-    fflush(stderr);
+    /* Display the prompt — at a terminal, where somebody reads it; a pipe has
+     * its answer ready and its transcript is not the place for a question. fflush
+     * ensures it is visible before fgets blocks on stdin, even when stderr is
+     * line-buffered. */
+    if (is_tty) {
+        fprintf(stderr, "%s", prompt);
+        fflush(stderr);
+    }
 
     /* Fixed-size read buffer caps the damage if a pathological stdin redirect
      * streams megabytes into the prompt. A mapping of its own (base/secure.h):
@@ -226,15 +226,19 @@ error_t *passphrase_prompt(
     }
 
     /* EINTR retry: non-terminating signals interrupt fgets because we deliberately
-     * did not set SA_RESTART. */
+     * did not set SA_RESTART. The stream's error indicator is sticky, so each
+     * attempt starts it clean and the indicator after the loop is the last
+     * attempt's. */
     char *result = NULL;
     do {
+        clearerr(stdin);
         errno = 0;
         result = fgets(passphrase, MAX_PASSPHRASE_LENGTH + 1, stdin);
     } while (result == NULL && errno == EINTR);
+    const bool read_failed = ferror(stdin);
+    const int read_errno = errno;  /* before the teardown's own calls move it */
 
-    /* Teardown order: restore echo → clear flag → uninstall handlers. See
-     * "Teardown" comment at the top of this file. */
+    /* Teardown order: restore echo → clear flag → uninstall handlers. */
     if (echo_disabled) {
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         fprintf(stderr, "\n");  /* the Enter keypress echo was suppressed */
@@ -242,10 +246,15 @@ error_t *passphrase_prompt(
         passphrase_restore_signal_handlers();
     }
 
-    /* Check read result */
+    /* Nothing read: end of input (a closed stdin, a pipe that ran out of lines)
+     * or a failed read. The stream's indicators tell them apart — errno does
+     * not: stdio's first use of a stream probes it with isatty, which leaves
+     * ENOTTY behind on a clean end of input. */
     if (result == NULL) {
         secure_free(passphrase, MAX_PASSPHRASE_LENGTH + 1);
-        return ERROR(ERR_FS, "Failed to read passphrase");
+        return read_failed
+            ? error_from_errno(read_errno, "Read failed")
+            : ERROR(ERR_FS, "End of input");
     }
 
     /* Calculate length */

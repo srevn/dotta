@@ -201,9 +201,13 @@ typedef enum dotta_crypto_mode {
  * clear), so a look at an encrypted row with cold caches fails as ERR_LOCKED
  * and the row reads as unverifiable. OBTAIN may read the environment and prompt;
  * the commands the user asked to do something with the content declare it (add,
- * update, apply, diff, show, export, revert, key set). Requires `repo`. Both
- * handles are borrowed by the handler; the dispatcher tears them down LIFO (cache,
- * then keymgr) before state teardown.
+ * update, apply, diff, show, export, revert, key set). A fresh master an OBTAIN
+ * run derives is verified against the repository's own ciphertext before it is
+ * kept — the keymgr finds one through the witness source it is created with
+ * (`epoch_find_ciphertext`) — and `key set` is the verb that verifies against
+ * the repository rather than against what an earlier run left. Requires `repo`.
+ * Both handles are borrowed by the handler; the dispatcher tears them down LIFO
+ * (cache, then keymgr) before state teardown.
  *
  * Why no split between "key only" and "key + cache": the codebase has exactly
  * one cache primitive (`infra/content`'s blob-OID → plaintext map). With one

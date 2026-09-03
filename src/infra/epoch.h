@@ -37,12 +37,19 @@
  * The epoch is PUBLIC. Argon2 requires uniqueness across attack targets, not
  * secrecy. Treat as ordinary input bytes; do not mlock or wipe.
  *
+ * The repository's ciphertext is also where a passphrase is proved. The same
+ * key-free walk that the reconcile's census runs — every local branch, its full
+ * history — is the keymgr's witness source (`epoch_find_ciphertext`): a fresh
+ * master is kept only after it opened a ciphertext of this epoch the repository
+ * holds, and this module is what presents them (crypto/keymgr.h).
+ *
  * Layering — `infra/` depends on sys/gitops + sys/entropy + sys/transfer +
- * crypto/kdf (the epoch type, its encoding and its fingerprint). Consumed by
- * main.c, cmd_init, cmd_clone, cmd_sync. libgit2 is called directly from this
- * module's push/fetch primitives because there is exactly one consumer of
- * "push/fetch a non-branch ref" today and `sys/gitops` does not yet need to
- * abstract that.
+ * crypto/kdf (the epoch type, its encoding and its fingerprint) + crypto/keymgr
+ * (the witness vocabulary). Consumed by main.c (the load at dispatch, and the
+ * witness source the keymgr is created with), cmd_init, cmd_clone, cmd_sync.
+ * libgit2 is called directly from this module's push/fetch primitives because
+ * there is exactly one consumer of "push/fetch a non-branch ref" today and
+ * `sys/gitops` does not yet need to abstract that.
  */
 
 #ifndef DOTTA_EPOCH_H
@@ -53,6 +60,7 @@
 #include <types.h>
 
 #include "crypto/kdf.h"
+#include "crypto/keymgr.h"
 #include "sys/transfer.h"
 
 /* Custom-namespace ref. Branch-listing filters target refs/heads/... so this
@@ -252,6 +260,46 @@ error_t *epoch_resolve(
     const char *remote_name,
     transfer_context_t *xfer,
     epoch_reconcile_t *out_decision
+);
+
+/**
+ * The keymgr's witness source (`keymgr_witness_source_fn`): find a ciphertext
+ * of `epoch` the master on trial opens.
+ *
+ * Presents every ciphertext of `epoch` the repository holds — the census's walk
+ * over every local branch and its full history, tips first, so the first presented
+ * is usually a live file — to `accept` with the binding it stands under (the
+ * branch, and the tree path), until one is accepted. One object at two paths,
+ * or at one path under two branches, is presented under each: only one of them
+ * can be the binding it was sealed under, and the walk cannot know which. A blob
+ * of another epoch or of a version this build does not read is never presented:
+ * no master here can open either, so it says nothing about a passphrase. The
+ * keymgr asks two questions through this one function: whether any ciphertext
+ * exists (an `accept` that takes the first) and whether a fresh master opens
+ * one (an `accept` that decrypts).
+ *
+ * The walk's own failure — a branch that will not list, an object that will not
+ * load — is returned and stands as that attempt's refusal in the keymgr; a
+ * ciphertext reachable from no local branch is never presented, and a decrypt
+ * of one reads its refusal on its own row.
+ *
+ * Given to the keymgr at its creation by the dispatcher (`keymgr_create`); the
+ * keymgr calls it only for a fresh master with no blob in hand or whose blob in
+ * hand refused it, and once on the prompt path to choose verify over confirm.
+ *
+ * @param repo      Repository (must not be NULL)
+ * @param epoch     The epoch whose ciphertext is presented (must not be NULL)
+ * @param accept    The keymgr's predicate (must not be NULL)
+ * @param self      Its payload, passed through untouched (can be NULL)
+ * @param out_found True iff `accept` accepted a witness (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *epoch_find_ciphertext(
+    git_repository *repo,
+    const kdf_epoch_t *epoch,
+    keymgr_opens_fn accept,
+    void *self,
+    bool *out_found
 );
 
 #endif /* DOTTA_EPOCH_H */

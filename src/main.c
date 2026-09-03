@@ -188,13 +188,18 @@ static error_t *open_run(
             }
 
             /* The epoch is public; the keymgr copies it. The reach is the spec's
-             * word for how far the keymgr may go for a passphrase. */
+             * word for how far the keymgr may go for a passphrase. The repository's
+             * own ciphertext is where a fresh master is verified before it is
+             * kept: the keymgr walks it through the source given here when it
+             * has one to verify and the blob in hand did not settle it — never
+             * at dispatch, never on a warm run. */
             const keymgr_reach_t reach = needs->crypto == DOTTA_CRYPTO_OBTAIN
                 ? KEYMGR_REACH_OBTAIN
                 : KEYMGR_REACH_CACHED;
 
             err = keymgr_create(
-                config->session_timeout, &epoch, reach, &run->keymgr
+                config->session_timeout, &epoch, reach,
+                epoch_find_ciphertext, run->repo, &run->keymgr
             );
             if (err) goto done;
         }

@@ -11,17 +11,19 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/secure.h"
 #include "core/manifest.h"
 #include "core/state.h"
 #include "crypto/kdf.h"
 #include "crypto/keymgr.h"
-#include "sys/passphrase.h"
 
 /**
  * Execute key set action
  *
- * Prompts user for passphrase and caches it in the dispatcher-owned keymgr.
+ * Obtains the passphrase through the keymgr's ladder — DOTTA_ENCRYPTION_PASSPHRASE
+ * when it is set, the prompt otherwise — verified against the repository's own
+ * ciphertext, and caches it in the dispatcher-owned keymgr. The command never
+ * holds passphrase bytes: what to verify against, how many times to ask, and
+ * what stands after a refusal are the keymgr's decisions.
  */
 static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
     keymgr *keymgr = ctx->run.keymgr;
@@ -40,81 +42,40 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
      * that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
-    error_t *err = NULL;
-
-    /* Notify if key is already cached (check both memory and disk). Rotation
-     * UX: when a key is already cached, the new passphrase silently invalidates
-     * every blob encrypted under the old one. Surfacing the warning here (per
-     * sketch §5.4) keeps the keymgr_set_passphrase contract narrow — the function
-     * does the derivation; the CLI owns the human-facing warning. */
+    /* What stands is replaced: say so, with the window it had. There is no rotation
+     * to warn about — a passphrase that opens none of the repository's encrypted
+     * files is refused below, so nothing can be silently sealed away. */
     time_t expires_at = 0;
     if (keymgr_cached(keymgr, &expires_at)) {
         if (expires_at == 0) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "A passphrase is already cached (no expiration)"
+                "A passphrase is already cached (no expiration); the one you "
+                "enter replaces it"
             );
         } else {
             output_info(
                 out, OUTPUT_NORMAL,
-                "A passphrase is already cached (expires in %lld seconds)",
+                "A passphrase is already cached (expires in %lld seconds); the "
+                "one you enter replaces it",
                 (long long) (expires_at - time(NULL))
             );
         }
-        output_warning(
-            out, OUTPUT_NORMAL,
-            "Setting a new passphrase will invalidate every file already "
-            "encrypted under the current one — those files will fail "
-            "authentication on next decrypt. To replace the cached "
-            "passphrase without rotation, run `dotta key clear` first, "
-            "then `dotta key set` again with the same passphrase."
-        );
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Enter a new passphrase to replace it."
-        );
-        output_newline(out, OUTPUT_NORMAL);
     }
 
-    /* Prompt for passphrase */
-    char *passphrase = NULL;
-    size_t passphrase_len = 0;
-    err = passphrase_prompt(
-        "Enter encryption passphrase: ", &passphrase, &passphrase_len
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to read passphrase");
-        goto cleanup;
-    }
+    /* The ladder's refusal names its cause and the way out; the save's error is
+     * the verb's own failure. Neither gains a wrap here. */
+    RETURN_IF_ERROR(keymgr_set(keymgr));
 
-    /* Set passphrase in keymgr (derives and caches master key). The cast bridges
-     * the passphrase API (`char *` for TTY ergonomics)
-     * with the crypto API (`uint8_t *` for byte-array discipline);
-     * both types alias `unsigned char` on every platform with <stdint.h>. */
-    err = keymgr_set_passphrase(
-        keymgr, (const uint8_t *) passphrase, passphrase_len
-    );
-
-    /* Wipe and unmap the passphrase. passphrase_prompt returns a mapping of exactly
-     * passphrase_len + 1 bytes. */
-    secure_free(passphrase, passphrase_len + 1);
-
-    if (err) {
-        err = error_wrap(err, "Failed to set passphrase");
-        goto cleanup;
-    }
-
-    /* Display success message */
     if (config->session_timeout == 0) {
         output_success(
             out, OUTPUT_NORMAL,
-            "Passphrase set (will be prompted on each use)"
+            "Passphrase verified (not cached: session_timeout = 0)"
         );
     } else if (config->session_timeout > 0) {
         output_success(
             out, OUTPUT_NORMAL,
-            "Passphrase cached for %d seconds",
-            config->session_timeout
+            "Passphrase cached for %d seconds", config->session_timeout
         );
     } else {
         output_success(
@@ -123,15 +84,20 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
         );
     }
 
-    output_print(
-        out, OUTPUT_VERBOSE,
-        "\nThe encryption key will be used for encrypting and decrypting files\n"
-        "in all profiles until the cache expires or is explicitly cleared.\n"
-    );
+    /* What the passphrase was proved against */
+    const char *profile = NULL; const char *storage_path = NULL;
+    if (keymgr_witness(keymgr, &profile, &storage_path)) {
+        output_print(
+            out, OUTPUT_VERBOSE, "Verified against %s:%s\n", profile,
+            storage_path
+        );
+    } else {
+        output_print(
+            out, OUTPUT_VERBOSE, "No encrypted file to verify against\n"
+        );
+    }
 
-cleanup:
-    /* keymgr borrowed from ctx — never freed here. */
-    return err;
+    return NULL;
 }
 
 /**
@@ -168,8 +134,7 @@ static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
 
     output_print(
         out, OUTPUT_VERBOSE,
-        "\nCache location: ~/.cache/dotta/session-<epoch> "
-        "(one file per repository epoch)\n"
+        "\nCache location: ~/.cache/dotta/session-<epoch>\n"
         "You will be prompted for your passphrase on the next "
         "operation that requires encryption or decryption.\n"
     );
@@ -204,8 +169,8 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
         const kdf_epoch_t *epoch = keymgr_epoch(keymgr);
         const char *preset = NULL;
         for (size_t i = 0; i < KDF_PRESET_COUNT; i++) {
-            if (kdf_presets[i].memory_mib == epoch->memory_mib
-                && kdf_presets[i].passes == epoch->passes) {
+            if (kdf_presets[i].memory_mib == epoch->memory_mib &&
+                kdf_presets[i].passes == epoch->passes) {
                 preset = kdf_presets[i].name;
             }
         }
@@ -429,7 +394,7 @@ static const args_opt_t key_set_opts[] = {
     ARGS_FLAG(
         "v verbose",
         cmd_key_options_t, verbose,
-        "Verbose output"
+        "Name the file the passphrase was verified against"
     ),
     ARGS_END,
 };
@@ -439,8 +404,12 @@ static const args_command_t spec_key_set = {
     .summary       = "Cache the passphrase for the session",
     .usage         = "%s key set [-v]",
     .description   =
-        "Prompts for the passphrase, derives the master key and caches it for\n"
-        "the session; a passphrase already cached is replaced.\n",
+        "Obtains the passphrase — DOTTA_ENCRYPTION_PASSPHRASE when it is\n"
+        "set, a prompt otherwise — verifies it against an encrypted file\n"
+        "the repository holds (or confirms it by asking twice when there is\n"
+        "none), derives the master key and caches it for the session; a\n"
+        "passphrase already cached is replaced. A passphrase that opens none\n"
+        "of the repository's encrypted files is refused.\n",
     .opts_size     = sizeof(cmd_key_options_t),
     .opts          = key_set_opts,
     .init_defaults = key_set_defaults,
@@ -462,7 +431,7 @@ static const args_opt_t key_clear_opts[] = {
     ARGS_FLAG(
         "v verbose",
         cmd_key_options_t, verbose,
-        "Verbose output"
+        "Show where the session cache lives"
     ),
     ARGS_END,
 };
@@ -534,7 +503,13 @@ const args_command_t spec_key = {
         "  enabled          = true\n"
         "  session_timeout  = 3600      # 1 hour\n"
         "The Argon2id strength is the repository's, minted once by\n"
-        "'dotta init --strength <fast|balanced|paranoid>'.\n",
+        "'dotta init --strength <fast|balanced|paranoid>'.\n"
+        "\n"
+        "Automation:\n"
+        "  DOTTA_ENCRYPTION_PASSPHRASE, when set, is read instead of\n"
+        "  prompting — by 'key set' and by every command that obtains a\n"
+        "  passphrase (add, update, apply, diff, show, export, revert). It is\n"
+        "  unset once read, so a child of the run does not inherit it.\n",
     .examples           =
         "  %s key set               # Cache passphrase for the session\n"
         "  %s key                   # Show cache state and config\n"

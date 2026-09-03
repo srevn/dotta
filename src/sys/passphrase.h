@@ -47,10 +47,11 @@
  * Read a passphrase from the user with terminal echo disabled.
  *
  * Modes:
- *   - TTY input: echo is disabled for the read window and restored on every return
- *     path, including signal-induced exits.
- *   - Non-TTY input: echo handling is skipped. Reading still works normally,
- *     which is what scripts and integration tests rely on.
+ *   - TTY input: the prompt is written to stderr, echo is disabled for the read
+ *     window and restored on every return path, including signal-induced exits.
+ *   - Non-TTY input: nothing is written and echo handling is skipped. The read
+ *     works normally — a script or a suite pipes the answer — and the prompt
+ *     text is not in its transcript, since nobody was there to read it.
  *
  * Input validation:
  *   - Empty input → ERR_INVALID_ARG.
@@ -63,13 +64,18 @@
  * user to re-enter. The terminating signals we install handlers for re-raise
  * with default disposition instead of returning.
  *
- * @param prompt          Prompt string written to stderr (must not be NULL).
+ * The failure's line is the cause alone ("End of input", "Passphrase cannot be
+ * empty", the errno's word), so the caller that folds it into its own sentence
+ * — the keymgr's "No passphrase: …" — reads as one.
+ *
+ * @param prompt          Prompt string, written to stderr when stdin is a
+ *                        terminal (must not be NULL).
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).
  * @param out_len         Passphrase length, excluding the NUL terminator.
- * @return NULL on success. ERR_FS on tty manipulation or read I/O failure.
- *         ERR_MEMORY when the mapping fails. ERR_INVALID_ARG on empty or truncated
- *         input.
+ * @return NULL on success. ERR_FS on tty manipulation or end of input; the errno's
+ *         code on a read failure. ERR_MEMORY when the mapping fails.
+ *         ERR_INVALID_ARG on empty or truncated input.
  */
 error_t *passphrase_prompt(
     const char *prompt,

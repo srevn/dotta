@@ -1,13 +1,14 @@
 /**
  * epoch.c - The repository's epoch: implementation
  *
- * Five entry points:
- *   - epoch_init      — mint the salt beside the pair given + write commit/tree/blobs
- *                       (idempotent)
- *   - epoch_load      — walk ref → commit → tree → blobs, validate, copy
- *   - epoch_push      — push refs/dotta/epoch to a remote
- *   - epoch_fetch     — fetch + validate refs/dotta/epoch from a remote
- *   - epoch_resolve   — pure fact-finder for cmd_sync's epoch policy
+ * Six entry points:
+ *   - epoch_init            — mint the salt beside the pair given + write
+ *                             commit/tree/blobs (idempotent)
+ *   - epoch_load            — walk ref → commit → tree → blobs, validate, copy
+ *   - epoch_push            — push refs/dotta/epoch to a remote
+ *   - epoch_fetch           — fetch + validate refs/dotta/epoch from a remote
+ *   - epoch_resolve         — pure fact-finder for cmd_sync's epoch policy
+ *   - epoch_find_ciphertext — the keymgr's witness source, over the census's walk
  *
  * Every entry point validates inputs, manages libgit2 object lifetimes via local
  * cleanup blocks, and translates libgit2 error codes through `error_from_git`.
@@ -27,6 +28,7 @@
 #include "infra/epoch.h"
 
 #include <git2.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,6 +38,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "crypto/keymgr.h"
 #include "infra/content.h"
 #include "sys/entropy.h"
 #include "sys/gitops.h"
@@ -683,46 +686,65 @@ error_t *epoch_fetch(
 }
 
 /*
- * Local-ciphertext census: "does any commit reachable from any local branch carry
- * ciphertext keyed by a given epoch?", answered key-free (content_classify is
- * header-only, the epoch fingerprint is public) so it runs before any passphrase
- * is available. Gates the divergent-epoch decision — replacing an epoch that
- * keys reachable ciphertext bricks it (deterministic SIV), and *reachable* means
- * the full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at
- * any `@commit`, every one of them under the current epoch.
- *
- * Attribution is by the blob header's epoch fingerprint. With a fingerprint to
- * match (`local_fp` non-NULL), only ciphertext this epoch keys counts — foreign
- * ciphertext (pulled from a remote under its own epoch) neither pins the local
- * epoch nor blocks converging to the epoch that CAN decrypt it. With no fingerprint
- * (`local_fp` NULL), any ciphertext counts — the caller has no epoch to attribute
- * against, so presence alone must fail closed.
+ * The ciphertext walk: every blob reachable from any local branch's full history
+ * — disabled profiles included — classified key-free by its header
+ * (content_classify is header-only, the epoch fingerprint is public), with every
+ * ciphertext presented to a callback until it stops the walk. Two askers: the
+ * census — "does the repository hold ciphertext keyed by a given epoch?", which
+ * gates the divergent-epoch decision, because replacing an epoch that keys
+ * reachable ciphertext bricks it (deterministic SIV), and *reachable* means the
+ * full history, not the tips: `dotta show`/`revert`/`diff` decrypt blobs at any
+ * `@commit`, every one of them under the current epoch — and the keymgr's witness
+ * source, "is there a ciphertext of this epoch a fresh master opens?" Two sites
+ * answering one question — what ciphertext of this epoch does the repository
+ * hold — get one walker, so neither can skip a branch or forget an object the
+ * other remembers.
  */
 
-/* Payload for the census walks, shared across every branch so an object visited
- * under one branch is never re-classified under another. */
+/* One ciphertext the walk met: the binding it stands under, what its header says,
+ * and its bytes for as long as the callback runs. Plaintext blobs never reach a
+ * callback. */
 typedef struct {
-    git_repository *repo;   /* borrowed; for content_classify blob loads */
-    const uint8_t *local_fp;/* fingerprint to attribute against; NULL = any */
-    hashmap_t *seen;        /* borrowed; visited tree/blob OIDs (hex keys) */
-    bool found;             /* set on the first blob that counts */
-    error_t *error;         /* set if classification/bookkeeping fails (owned) */
-} epoch_census_t;
+    const char *branch;         /* the profile */
+    const char *storage_path;   /* the tree path, root ‖ name */
+    const git_oid *oid;
+    content_kind_t kind;        /* ENCRYPTED or UNSUPPORTED_VERSION */
+    const uint8_t *epoch_fp;    /* ENCRYPTED: the header's; else NULL */
+    const uint8_t *data;        /* the blob, borrowed while the callback runs */
+    size_t size;
+} epoch_ciphertext_t;
+
+/* The asker's callback: continue, or stop with its answer in its payload. */
+typedef error_t *(*epoch_ciphertext_fn)(
+    const epoch_ciphertext_t *ct,
+    void *payload,
+    bool *stop
+);
+
+/* The walk's own payload, shared across every branch. */
+typedef struct {
+    git_repository *repo;       /* borrowed; for blob loads */
+    hashmap_t *seen;            /* borrowed; visited (object, branch, path) */
+    epoch_ciphertext_fn fn;     /* the asker, and its payload */
+    void *payload;
+    const char *branch;         /* the branch under walk */
+    bool stopped;               /* the asker stopped the walk */
+    error_t *error;             /* the walk could not prove anything (owned) */
+} epoch_walk_t;
 
 /*
  * Tree-walk callback (pre-order). Returns 0 to continue, 1 to skip an
  * already-visited subtree, -1 to stop; the stop reason is disambiguated by the
- * payload — `found` set means decisive ciphertext located, `error` set means
- * the walk could not prove anything. gitops_tree_walk maps the -1 to a non-NULL
- * error_t that the driver discards in favour of the payload.
+ * payload — `stopped` means the asker answered, `error` means the walk could
+ * not prove anything. gitops_tree_walk maps the -1 to a non-NULL error_t that
+ * the driver discards in favour of the payload.
  */
-static int epoch_census_cb(
+static int epoch_walk_cb(
     const char *root,
     const git_tree_entry *entry,
     void *payload
 ) {
-    (void) root;
-    epoch_census_t *data = (epoch_census_t *) payload;
+    epoch_walk_t *walk = payload;
 
     /* Only trees descend and only blobs carry content; anything else (a submodule
      * commit) has no bytes under this epoch. */
@@ -731,16 +753,40 @@ static int epoch_census_cb(
         return 0;
     }
 
-    char oid_hex[GIT_OID_HEXSZ + 1];
-    git_oid_tostr(oid_hex, sizeof(oid_hex), git_tree_entry_id(entry));
-    if (hashmap_has(data->seen, oid_hex)) {
-        /* History shares objects heavily between commits: pruning a visited subtree
-         * is what keeps the full-history walk at O(unique objects). */
+    /* The unit of the walk is the binding, not the object: one blob standing at
+     * two paths, or at one path under two branches, is two witnesses (the SIV
+     * binds the path, the pair the profile), and each must be presented. So the
+     * visited set keys by object, branch and path, and prunes a subtree only
+     * where the same tree stands at the same path of the same branch — where
+     * every binding beneath it recurs. History shares objects heavily between
+     * commits, and orphan profile branches share none, so this is still one visit
+     * per object in practice. The key's parts are bounded: the branch by its
+     * refname (gitops_build_refname), the path by PATH_MAX (checked here). */
+    const git_oid *oid = git_tree_entry_id(entry);
+    char path[PATH_MAX];
+    int n = snprintf(
+        path, sizeof(path), "%s%s", root, git_tree_entry_name(entry)
+    );
+    if (n < 0 || (size_t) n >= sizeof(path)) {
+        walk->error = ERROR(
+            ERR_INVALID_ARG, "Tree path too long in '%s': %s%s",
+            walk->branch, root, git_tree_entry_name(entry)
+        );
+        return -1;
+    }
+
+    char key[GIT_OID_HEXSZ + DOTTA_REFNAME_MAX + PATH_MAX + 3];
+    git_oid_tostr(key, GIT_OID_HEXSZ + 1, oid);
+    snprintf(
+        key + GIT_OID_HEXSZ, sizeof(key) - GIT_OID_HEXSZ, ":%s:%s",
+        walk->branch, path
+    );
+    if (hashmap_has(walk->seen, key)) {
         return (type == GIT_OBJECT_TREE) ? 1 : 0;
     }
-    error_t *err = hashmap_set(data->seen, oid_hex, NULL);
+    error_t *err = hashmap_set(walk->seen, key, NULL);
     if (err) {
-        data->error = err;
+        walk->error = err;
         return -1;
     }
 
@@ -750,71 +796,81 @@ static int epoch_census_cb(
 
     content_kind_t kind;
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    err = content_classify(
-        data->repo, git_tree_entry_id(entry), &kind,
-        data->local_fp ? fp : NULL
-    );
+    err = content_classify(walk->repo, oid, &kind, fp);
     if (err) {
-        data->error = err;
+        walk->error = err;
         return -1;
     }
-
     if (kind == CONTENT_PLAINTEXT) {
         return 0;
     }
-    if (data->local_fp == NULL) {
-        data->found = true;  /* any ciphertext counts */
+
+    /* A ciphertext: present it with its bytes. The second open is a cached object
+     * lookup, paid for the few blobs that are ciphertext. */
+    gitops_blob_view_t view;
+    err = gitops_blob_view_open(walk->repo, oid, &view);
+    if (err) {
+        walk->error = err;
         return -1;
     }
-    if (kind == CONTENT_UNSUPPORTED_VERSION) {
-        data->found = true;  /* unattributable format → fail closed */
+
+    const epoch_ciphertext_t ct = {
+        .branch       = walk->branch,
+        .storage_path = path,
+        .oid          = oid,
+        .kind         = kind,
+        .epoch_fp     = kind == CONTENT_ENCRYPTED ? fp : NULL,
+        .data         = view.data,
+        .size         = view.size,
+    };
+    bool stop = false;
+    err = walk->fn(&ct, walk->payload, &stop);
+    gitops_blob_view_close(&view);
+    if (err) {
+        walk->error = err;
         return -1;
     }
-    if (memcmp(fp, data->local_fp, KDF_EPOCH_FP_SIZE) == 0) {
-        data->found = true;  /* keyed by exactly the epoch in question */
+    if (stop) {
+        walk->stopped = true;
         return -1;
     }
-    return 0;  /* foreign-keyed; some other epoch's concern */
+    return 0;
 }
 
 /*
- * Walk the full history of every local branch — disabled profiles included, whose
- * ciphertext an epoch swap bricks just the same — and report whether any reachable
- * blob counts under the census rules above. Short-circuits on the first decisive
- * hit. Lists branches via sys/gitops and skips the local-only dotta-worktree
- * anchor inline, so infra/epoch takes no core/ dependency; the revwalk speaks
- * libgit2 directly the way sys/stats does. Propagates any error so the caller
- * can fail closed.
+ * Walk the full history of every local branch and present every ciphertext to
+ * `fn` until it stops the walk. Lists branches via sys/gitops and skips the
+ * local-only dotta-worktree anchor inline, so infra/epoch takes no core/
+ * dependency; the revwalk speaks libgit2 directly the way sys/stats does.
+ * Propagates any error so the caller can fail closed.
  */
-static error_t *local_has_ciphertext(
+static error_t *walk_ciphertext(
     git_repository *repo,
-    const uint8_t *local_fp,
-    bool *out_in_use
+    epoch_ciphertext_fn fn,
+    void *payload
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out_in_use);
-
-    *out_in_use = false;
-
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
-        return error_wrap(err, "Failed to list local branches for epoch census");
+        return error_wrap(
+            err, "Failed to list local branches for the ciphertext walk"
+        );
     }
 
     hashmap_t *seen = hashmap_create(0);
     if (!seen) {
         string_array_free(branches);
-        return ERROR(ERR_MEMORY, "Failed to allocate epoch census visited set");
+        return ERROR(
+            ERR_MEMORY, "Failed to allocate the ciphertext walk's visited set"
+        );
     }
 
-    epoch_census_t data = {
-        .repo  = repo,  .local_fp = local_fp, .seen = seen,
-        .found = false, .error    = NULL,
+    epoch_walk_t walk = {
+        .repo = repo, .seen = seen, .fn = fn, .payload = payload,
     };
     git_revwalk *walker = NULL;
 
-    for (size_t i = 0; i < branches->count && !data.found; i++) {
+    for (size_t i = 0; i < branches->count && !walk.stopped; i++) {
         const char *branch = branches->items[i];
 
         /* dotta-worktree is the local-only empty HEAD anchor, never a profile
@@ -823,6 +879,7 @@ static error_t *local_has_ciphertext(
         if (strcmp(branch, "dotta-worktree") == 0) {
             continue;
         }
+        walk.branch = branch;
 
         char refname[DOTTA_REFNAME_MAX];
         err = gitops_build_refname(
@@ -854,18 +911,21 @@ static error_t *local_has_ciphertext(
                 goto cleanup;
             }
 
-            /* A commit whose root tree was already walked (identical content in
-             * an earlier commit or another branch) contributes nothing new —
-             * skip it before loading the tree. */
-            char tree_hex[GIT_OID_HEXSZ + 1];
-            git_oid_tostr(
-                tree_hex, sizeof(tree_hex), git_commit_tree_id(commit)
+            /* A commit whose root tree was already walked under this branch
+             * (identical content in an earlier commit) contributes nothing new
+             * — skip it before loading the tree. The key is the walk's: object,
+             * branch, path — the root's path being empty. */
+            char key[GIT_OID_HEXSZ + DOTTA_REFNAME_MAX + 3];
+            git_oid_tostr(key, GIT_OID_HEXSZ + 1, git_commit_tree_id(commit));
+            snprintf(
+                key + GIT_OID_HEXSZ, sizeof(key) - GIT_OID_HEXSZ, ":%s:",
+                branch
             );
-            if (hashmap_has(seen, tree_hex)) {
+            if (hashmap_has(seen, key)) {
                 git_commit_free(commit);
                 continue;
             }
-            err = hashmap_set(seen, tree_hex, NULL);
+            err = hashmap_set(seen, key, NULL);
             if (err) {
                 git_commit_free(commit);
                 goto cleanup;
@@ -879,16 +939,16 @@ static error_t *local_has_ciphertext(
                 goto cleanup;
             }
 
-            error_t *walk_err = gitops_tree_walk(tree, epoch_census_cb, &data);
+            error_t *walk_err = gitops_tree_walk(tree, epoch_walk_cb, &walk);
             git_tree_free(tree);
 
-            if (data.error) {
+            if (walk.error) {
                 error_free(walk_err);  /* benign stop wrapper */
-                err = data.error;
-                data.error = NULL;
+                err = walk.error;
+                walk.error = NULL;
                 goto cleanup;
             }
-            if (data.found) {
+            if (walk.stopped) {
                 error_free(walk_err);  /* benign stop wrapper */
                 break;                 /* short-circuit; outer loop exits too */
             }
@@ -902,7 +962,6 @@ static error_t *local_has_ciphertext(
         walker = NULL;
     }
 
-    *out_in_use = data.found;
     err = NULL;
 
 cleanup:
@@ -911,6 +970,114 @@ cleanup:
     }
     hashmap_free(seen, NULL);
     string_array_free(branches);
+    return err;
+}
+
+/*
+ * The census. Attribution is by the blob header's epoch fingerprint. With a
+ * fingerprint to match (`local_fp` non-NULL), only ciphertext this epoch keys
+ * counts — foreign ciphertext (pulled from a remote under its own epoch) neither
+ * pins the local epoch nor blocks converging to the epoch that CAN decrypt it —
+ * and a version this build cannot attribute fails closed. With no fingerprint
+ * (`local_fp` NULL), any ciphertext counts — the caller has no epoch to attribute
+ * against, so presence alone must fail closed.
+ */
+typedef struct {
+    const uint8_t *local_fp;    /* the fingerprint to attribute to; NULL: any */
+    bool found;                 /* set on the first blob that counts */
+} epoch_census_t;
+
+static error_t *epoch_census_cb(
+    const epoch_ciphertext_t *ct,
+    void *payload,
+    bool *stop
+) {
+    epoch_census_t *census = payload;
+
+    /* Any ciphertext counts with no fingerprint to attribute to; an unattributable
+     * format fails closed; otherwise only a blob keyed by exactly the epoch in
+     * question. A foreign-keyed blob is some other epoch's concern. */
+    if (census->local_fp == NULL
+        || ct->kind == CONTENT_UNSUPPORTED_VERSION
+        || memcmp(ct->epoch_fp, census->local_fp, KDF_EPOCH_FP_SIZE) == 0) {
+        census->found = true;
+        *stop = true;
+    }
+    return NULL;
+}
+
+static error_t *local_has_ciphertext(
+    git_repository *repo,
+    const uint8_t *local_fp,
+    bool *out_in_use
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out_in_use);
+
+    epoch_census_t census = { .local_fp = local_fp };
+    error_t *err = walk_ciphertext(repo, epoch_census_cb, &census);
+    *out_in_use = !err && census.found;
+    return err;
+}
+
+/*
+ * The witness source. A ciphertext of this epoch is presented with the binding
+ * it stands under — the branch, and the tree path — and the keymgr's predicate
+ * says whether the master on trial opens it; one object under two bindings is
+ * presented under each, since only one of them can be the one it was sealed under.
+ * A version this build does not read is never a witness, nor is another epoch's
+ * ciphertext: no master here can open either, so they say nothing about a
+ * passphrase.
+ */
+typedef struct {
+    uint8_t fp[KDF_EPOCH_FP_SIZE];  /* the epoch's; only its ciphertext shows */
+    keymgr_opens_fn accept;         /* the keymgr's predicate and its payload */
+    void *self;
+    bool found;                     /* set when the predicate accepted one */
+} epoch_find_t;
+
+static error_t *epoch_find_cb(
+    const epoch_ciphertext_t *ct,
+    void *payload,
+    bool *stop
+) {
+    epoch_find_t *find = payload;
+
+    if (ct->kind != CONTENT_ENCRYPTED
+        || memcmp(ct->epoch_fp, find->fp, KDF_EPOCH_FP_SIZE) != 0) {
+        return NULL;
+    }
+
+    const keymgr_witness_t witness = {
+        .ciphertext   = ct->data,
+        .len          = ct->size,
+        .profile      = ct->branch,
+        .storage_path = ct->storage_path,
+    };
+    if (find->accept(find->self, &witness)) {
+        find->found = true;
+        *stop = true;
+    }
+    return NULL;
+}
+
+error_t *epoch_find_ciphertext(
+    git_repository *repo,
+    const kdf_epoch_t *epoch,
+    keymgr_opens_fn accept,
+    void *self,
+    bool *out_found
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(epoch);
+    CHECK_NULL(accept);
+    CHECK_NULL(out_found);
+
+    epoch_find_t find = { .accept = accept, .self = self };
+    kdf_epoch_fingerprint(epoch, find.fp);
+
+    error_t *err = walk_ciphertext(repo, epoch_find_cb, &find);
+    *out_found = !err && find.found;
     return err;
 }
 

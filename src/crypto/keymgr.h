@@ -1,5 +1,5 @@
 /**
- * keymgr.h — The repository's unlock proof, and per-operation subkey acquisition
+ * keymgr.h - The repository's unlock proof, and per-operation subkey acquisition
  *
  * The single chokepoint between dotta's command/content layers and the cipher /
  * kdf / session primitives. Two responsibilities:
@@ -374,6 +374,10 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch);
  *
  * `dotta key status` prints its pair. Borrowed; valid for the keymgr's lifetime
  * and until the next `keymgr_rekey`.
+ *
+ * The one entry point that dereferences `km` without a `CHECK_NULL`: it returns
+ * a borrowed pointer, so it has nowhere to put a refusal, and the non-NULL is
+ * the caller's to honour.
  *
  * @param km Key manager (non-NULL)
  * @return The epoch

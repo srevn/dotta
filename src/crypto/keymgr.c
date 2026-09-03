@@ -1,5 +1,5 @@
 /**
- * keymgr.c — The repository's unlock proof, and per-operation subkey acquisition
+ * keymgr.c - The repository's unlock proof, and per-operation subkey acquisition
  *
  * Implements the slot, the session file, the ladder and the proof documented in
  * keymgr.h.
@@ -7,21 +7,24 @@
  * Internal layout:
  *   - `evict_slot` / `install_slot` — the two writers of the slot; every write
  *     to (master_key, has_key, expires_at, the witness) goes through one of them.
- *   - `refuse` / `reissue` / `clear_refusal` — the standing refusal: the ladder's
- *     first refusal, held for the run and re-issued by every resolve after.
+ *   - `refuse` / `reissue_refusal` / `clear_refusal` — the standing refusal:
+ *     the ladder's first refusal, held for the run and re-issued by every resolve
+ *     after.
  *   - `keymgr_proof_t` — what the ladder yields: a fresh master and the binding
  *     of the witness it opened; consumed by `keep`.
- *   - `opens` / `trial_opens` / `any_witness` / `derive_and_check` — the proof:
- *     Argon2 under the epoch, then the witnesses in order — the blob in hand,
- *     then whatever the witness source presents — until one opens.
+ *   - `open_witness` / `trial_opens` / `witness_exists` / `derive_and_check` —
+ *     the proof: Argon2 under the epoch, then the witnesses in order — the blob
+ *     in hand, then whatever the witness source presents — until one opens.
  *   - `prompt_and_verify` / `prompt_and_confirm` / `obtain` — the ladder's user
  *     half: the environment, then the prompt, with retries at a terminal; two
  *     loops for two questions (is it the right passphrase / is it the passphrase
  *     the user meant), one refusal policy.
- *   - `cached` / `keep` / `resolve` — the caches in front of `obtain`, and the
- *     keep behind it; `keymgr_set` walks `obtain` and `keep` without the caches.
- *   - `keymgr_acquire_subkeys` — resolve + derive the pair + wipe the master,
- *     used by both encrypt and decrypt so the operation paths only own (mac, prf).
+ *   - `warm_slot` / `keep` / `resolve_master` — the caches in front of `obtain`,
+ *     and the keep behind it; `keymgr_set` walks `obtain` and `keep` without
+ *     the caches.
+ *   - `acquire_subkeys` — resolve, then derive the pair from the slot in place,
+ *     used by both encrypt and decrypt so the operation paths only own (mac,
+ *     prf) and the master never reaches a stack.
  *
  * Wipe discipline: every slot eviction, every per-call key intermediate, every
  * fresh master that opened nothing, every witness's decrypt and every error return
@@ -30,7 +33,10 @@
  * from `base/secure.h`). The struct itself — the slot is the secret — is a
  * `secure_alloc` mapping, wiped and unmapped by `keymgr_free`. Public API symmetry:
  * every entry point either returns `error_t *` with the cleanup-on-error contract,
- * or runs idempotently with no error surface (free, clear).
+ * runs idempotently with no error surface (free, clear), or is a getter reporting
+ * what the slot holds (witness, cached, epoch) — the getters are NULL-safe except
+ * `keymgr_epoch`, which returns a borrowed pointer and so has nowhere to put a
+ * refusal.
  */
 
 #include "crypto/keymgr.h"
@@ -68,9 +74,9 @@ struct keymgr {
     int32_t session_timeout;   /* the file's life; 0 = no file, -1 = forever */
     keymgr_reach_t reach;      /* the caches alone, or the user beyond them */
 
-    /* The slot: the process memo of one verified master, and the witness it
-     * opened — both witness fields NULL when the master came from a cache or
-     * was taken as given. */
+    /* The slot: the process memo of one verified master, and the witness it opened
+     * — both witness fields NULL when the master came from a cache or was taken
+     * as given. */
     bool has_key;                       /* the slot is occupied */
     uint8_t master_key[KDF_KEY_SIZE];   /* the verified master */
     time_t expires_at;                  /* the file's; 0 = never, or no file */
@@ -135,7 +141,7 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
  * The standing refusal, re-issued: a fresh error with the first refusal's code
  * and line, so N rows that could not be verified read the one cause.
  */
-static error_t *reissue(const keymgr *km) {
+static error_t *reissue_refusal(const keymgr *km) {
     return ERROR(km->refusal->code, "%s", error_message(km->refusal));
 }
 
@@ -147,7 +153,7 @@ static error_t *reissue(const keymgr *km) {
 static error_t *refuse(keymgr *km, error_t *err) {
     error_free(km->refusal);
     km->refusal = err;
-    return reissue(km);
+    return reissue_refusal(km);
 }
 
 static void clear_refusal(keymgr *km) {
@@ -206,7 +212,7 @@ typedef struct {
     char *witness_path;
 } keymgr_proof_t;
 
-static void proof_wipe(keymgr_proof_t *proof) {
+static void wipe_proof(keymgr_proof_t *proof) {
     crypto_wipe(proof->master, sizeof(proof->master));
     free(proof->witness_profile);
     free(proof->witness_path);
@@ -219,7 +225,7 @@ static void proof_wipe(keymgr_proof_t *proof) {
  * unnamed rather than failing it: the binding is the receipt's line, not the
  * verification.
  */
-static void proof_bind(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
+static void bind_proof(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
     proof->witness_profile = strdup(witness->profile);
     proof->witness_path = strdup(witness->storage_path);
     if (!proof->witness_profile || !proof->witness_path) {
@@ -236,7 +242,7 @@ static void proof_bind(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
  * plaintext, and the decrypt that asked runs its own once the master is kept.
  * ERR_CRYPTO is "no"; any other error is the decrypt's own failure.
  */
-static error_t *opens(
+static error_t *open_witness(
     const uint8_t master[KDF_KEY_SIZE],
     const keymgr_witness_t *witness
 ) {
@@ -297,7 +303,7 @@ static bool trial_opens(void *self, const keymgr_witness_t *witness) {
     }
     trial->tried++;
 
-    error_t *err = opens(trial->proof->master, witness);
+    error_t *err = open_witness(trial->proof->master, witness);
     if (err && err->code == ERR_CRYPTO) {
         error_free(err);
         return false;
@@ -307,7 +313,7 @@ static bool trial_opens(void *self, const keymgr_witness_t *witness) {
         return true;
     }
 
-    proof_bind(trial->proof, witness);
+    bind_proof(trial->proof, witness);
     return true;
 }
 
@@ -315,7 +321,7 @@ static bool trial_opens(void *self, const keymgr_witness_t *witness) {
  * keymgr_opens_fn: the prompt's question — is there any ciphertext to verify
  * against? — answered by the first witness presented.
  */
-static bool any_witness(void *self, const keymgr_witness_t *witness) {
+static bool witness_exists(void *self, const keymgr_witness_t *witness) {
     (void) self;
     (void) witness;
     return true;
@@ -331,15 +337,13 @@ static bool any_witness(void *self, const keymgr_witness_t *witness) {
  * "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
  */
 static error_t *derive_and_check(
-    keymgr *km,
-    const char *source,
-    const char *passphrase,
-    size_t passphrase_len,
-    const keymgr_witness_t *in_hand,
+    keymgr *km, const char *source, const char *passphrase,
+    size_t passphrase_len, const keymgr_witness_t *in_hand,
     keymgr_proof_t *out
 ) {
     error_t *err = kdf_master_key(
-        (const uint8_t *) passphrase, passphrase_len, &km->epoch, out->master
+        (const uint8_t *) passphrase, passphrase_len,
+        &km->epoch, out->master
     );
     if (err) {
         return err;
@@ -349,9 +353,9 @@ static error_t *derive_and_check(
 
     if (in_hand) {
         trial.tried = 1;
-        err = opens(out->master, in_hand);
+        err = open_witness(out->master, in_hand);
         if (!err) {
-            proof_bind(out, in_hand);
+            bind_proof(out, in_hand);
             return NULL;
         }
         if (err->code != ERR_CRYPTO) {
@@ -398,7 +402,7 @@ static error_t *derive_and_check(
     }
 
 fail:
-    proof_wipe(out);
+    wipe_proof(out);
     return err;
 }
 
@@ -496,20 +500,20 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
 
         char *again = NULL;
         size_t again_len = 0;
-        bool same = false;
         err = passphrase_prompt(
             "Confirm encryption passphrase: ", &again, &again_len
         );
-        if (!err) {
-            same = again_len == passphrase_len
-                && memcmp(again, passphrase, passphrase_len) == 0;
-            secure_free(again, again_len + 1);
-        } else if (err->code == ERR_INVALID_ARG) {
-            error_free(err);
-        } else {
+        /* Nothing readable at all ends the ladder; a line the primitive refuses
+         * is a mismatch, and falls through to be one. */
+        if (err && err->code != ERR_INVALID_ARG) {
             secure_free(passphrase, passphrase_len + 1);
             return refuse(km, nothing_read(err));
         }
+
+        const bool same = !err && again_len == passphrase_len
+            && memcmp(again, passphrase, passphrase_len) == 0;
+        error_free(err);
+        secure_free(again, again_len + 1);
 
         if (same) {
             err = kdf_master_key(
@@ -545,14 +549,12 @@ static error_t *obtain(
     /* The caches are as far as a reporting command may reach: below them the
      * user would be asked, and a report never asks. */
     if (km->reach != KEYMGR_REACH_OBTAIN) {
-        return refuse(
-            km,
-            ERROR(
+        error_t *err = ERROR(
             ERR_LOCKED,
-            "No passphrase is cached, and this command does not ask for "
-            "one; run 'dotta key set'"
-            )
+            "No passphrase is cached, and this command does not ask for one; "
+            "run 'dotta key set'"
         );
+        return refuse(km, err);
     }
 
     char *passphrase = NULL;
@@ -575,7 +577,7 @@ static error_t *obtain(
      * the passphrase is verified, none means it is confirmed. */
     bool any = in_hand != NULL;
     if (!any && km->source) {
-        err = km->source(km->repo, &km->epoch, any_witness, NULL, &any);
+        err = km->source(km->repo, &km->epoch, witness_exists, NULL, &any);
         if (err) {
             return refuse(km, err);
         }
@@ -594,7 +596,7 @@ static error_t *obtain(
  * found, expired, tampered (the loader unlinked it), an I/O failure (the loader
  * kept it). The refusal gates the probe, so N rows under a cold run cost one.
  */
-static bool cached(keymgr *km) {
+static bool warm_slot(keymgr *km) {
     if (km->has_key) {
         return true;
     }
@@ -620,10 +622,11 @@ static bool cached(keymgr *km) {
  *
  * The slot is the process memo under every timeout. The file's expiry is computed
  * here (`now + timeout`, or 0 for never) and is what the slot then carries. Returns
- * the save's error for the caller whose job the file is (`keymgr_set`); `resolve`
- * drops it — the slot is installed either way. A save that fails unlinks the
- * file, so the next process never loads a master this one meant to replace. The
- * proof is consumed: its master wiped, its binding moved into the slot.
+ * the save's error for the caller whose job the file is (`keymgr_set`);
+ * `resolve_master` drops it — the slot is installed either way. A save that fails
+ * unlinks the file, so the next process never loads a master this one meant to
+ * replace. The proof is consumed: its master wiped, its binding moved into the
+ * slot.
  */
 static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
     time_t expires_at = 0;
@@ -652,52 +655,42 @@ static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
 }
 
 /**
- * The whole ladder: the caches, the standing refusal, then obtain and keep. Copies
- * the slot's master to `out_master_key` on success; writes nothing on a refusal.
+ * The whole ladder: the caches, the standing refusal, then obtain and keep. On
+ * success the slot holds a verified master; a refusal leaves it empty and writes
+ * nothing.
  */
-static error_t *resolve(
-    keymgr *km,
-    const keymgr_witness_t *in_hand,
-    uint8_t out_master_key[KDF_KEY_SIZE]
-) {
-    if (!cached(km)) {
-        if (km->refusal) {
-            return reissue(km);
-        }
-
-        keymgr_proof_t proof = { 0 };
-        RETURN_IF_ERROR(obtain(km, in_hand, &proof));
-        error_free(keep(km, &proof));
+static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
+    if (warm_slot(km)) {
+        return NULL;
+    }
+    if (km->refusal) {
+        return reissue_refusal(km);
     }
 
-    memcpy(out_master_key, km->master_key, KDF_KEY_SIZE);
+    keymgr_proof_t proof = { 0 };
+    RETURN_IF_ERROR(obtain(km, in_hand, &proof));
+    error_free(keep(km, &proof));
     return NULL;
 }
 
 /**
- * Resolve the master key, derive (mac_key, prf_key) for a profile, and scrub
- * the master copy before return.
+ * Resolve the master key and derive (mac_key, prf_key) for a profile.
  *
  * Both encrypt and decrypt go through this single entry point so the master-key
- * lifetime is owned in one place. The caller wipes (mac_key, prf_key) after
- * per-operation use; this helper guarantees only that the master never leaks
- * past its boundary.
+ * lifetime is owned in one place. Nothing copies the master out of the slot:
+ * the derivation reads it where it lives, inside the keymgr's own locked mapping,
+ * so there is no per-call copy on the stack to scrub. The caller wipes (mac_key,
+ * prf_key) after per-operation use.
  */
-static error_t *keymgr_acquire_subkeys(
+static error_t *acquire_subkeys(
     keymgr *km,
     const char *profile,
     const keymgr_witness_t *in_hand,
     uint8_t out_mac_key[KDF_KEY_SIZE],
     uint8_t out_prf_key[KDF_KEY_SIZE]
 ) {
-    uint8_t master_key[KDF_KEY_SIZE];
-    error_t *err = resolve(km, in_hand, master_key);
-    if (err) {
-        return err;
-    }
-
-    kdf_siv_subkeys(master_key, profile, out_mac_key, out_prf_key);
-    crypto_wipe(master_key, sizeof(master_key));
+    RETURN_IF_ERROR(resolve_master(km, in_hand));
+    kdf_siv_subkeys(km->master_key, profile, out_mac_key, out_prf_key);
 
     return NULL;
 }
@@ -717,8 +710,7 @@ error_t *keymgr_set(keymgr *km) {
 }
 
 bool keymgr_witness(
-    const keymgr *km,
-    const char **out_profile,
+    const keymgr *km, const char **out_profile,
     const char **out_storage_path
 ) {
     if (!km || !km->has_key || !km->witness_profile) {
@@ -726,6 +718,7 @@ bool keymgr_witness(
     }
     *out_profile = km->witness_profile;
     *out_storage_path = km->witness_path;
+
     return true;
 }
 
@@ -758,24 +751,18 @@ const kdf_epoch_t *keymgr_epoch(const keymgr *km) {
 }
 
 bool keymgr_cached(keymgr *km, time_t *out_expires_at) {
+    const bool warm = km && warm_slot(km);
+
     if (out_expires_at) {
-        *out_expires_at = 0;
+        *out_expires_at = warm ? km->expires_at : 0;
     }
-    if (!km || !cached(km)) {
-        return false;
-    }
-    if (out_expires_at) {
-        *out_expires_at = km->expires_at;
-    }
-    return true;
+
+    return warm;
 }
 
 error_t *keymgr_encrypt(
-    keymgr *km,
-    const char *profile,
-    const char *storage_path,
-    const uint8_t *plaintext,
-    size_t plaintext_len,
+    keymgr *km, const char *profile, const char *storage_path,
+    const uint8_t *plaintext, size_t plaintext_len,
     buffer_t *out_ciphertext
 ) {
     CHECK_NULL(km);
@@ -792,17 +779,14 @@ error_t *keymgr_encrypt(
 
     /* No blob in hand: a fresh master is verified against what the repository
      * holds, or confirmed when it holds nothing. */
-    error_t *err = keymgr_acquire_subkeys(km, profile, NULL, mac_key, prf_key);
+    error_t *err = acquire_subkeys(km, profile, NULL, mac_key, prf_key);
     if (err) {
         return err;
     }
 
     err = cipher_encrypt(
-        plaintext, plaintext_len,
-        mac_key, prf_key,
-        storage_path,
-        km->epoch_fp,
-        out_ciphertext
+        plaintext, plaintext_len, mac_key, prf_key, storage_path,
+        km->epoch_fp, out_ciphertext
     );
 
     /* Wipe on every path; otherwise 64 bytes of subkey material survive on the
@@ -814,11 +798,8 @@ error_t *keymgr_encrypt(
 }
 
 error_t *keymgr_decrypt(
-    keymgr *km,
-    const char *profile,
-    const char *storage_path,
-    const uint8_t *ciphertext,
-    size_t ciphertext_len,
+    keymgr *km, const char *profile, const char *storage_path,
+    const uint8_t *ciphertext, size_t ciphertext_len,
     buffer_t *out_plaintext
 ) {
     CHECK_NULL(km);
@@ -864,15 +845,13 @@ error_t *keymgr_decrypt(
         .profile      = profile,
         .storage_path = storage_path,
     };
-    err = keymgr_acquire_subkeys(km, profile, &in_hand, mac_key, prf_key);
+    err = acquire_subkeys(km, profile, &in_hand, mac_key, prf_key);
     if (err) {
         return err;
     }
 
     err = cipher_decrypt(
-        ciphertext, ciphertext_len,
-        mac_key, prf_key,
-        storage_path,
+        ciphertext, ciphertext_len, mac_key, prf_key, storage_path,
         out_plaintext
     );
 

@@ -590,10 +590,7 @@ error_t *content_store_file_to_worktree(
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 3: Get source file's mode (preserve permissions in worktree -> git) */
-    mode_t mode = st.st_mode;  /* Reuse mode from the fstat above */
-
-    /* Step 4: Encrypt if requested; else refuse a plaintext that would read as
+    /* Step 3: Encrypt if requested; else refuse a plaintext that would read as
      * ciphertext.
      *
      * Every reader classifies the stored bytes by their magic (content_classify:
@@ -603,6 +600,7 @@ error_t *content_store_file_to_worktree(
      * would be stamped plaintext by the caller and read as ciphertext by every
      * reader after, and no key would open it. With the refusal, `should_encrypt`
      * is the byte truth. */
+    const uint8_t *bytes = (const uint8_t *) content.data;
     buffer_t *data_to_write = &content;  /* Default: write plaintext */
     buffer_t ciphertext = BUFFER_INIT;
 
@@ -617,8 +615,7 @@ error_t *content_store_file_to_worktree(
         }
 
         err = keymgr_encrypt(
-            keymgr, profile, storage_path, (const uint8_t *) content.data,
-            content.size, &ciphertext
+            keymgr, profile, storage_path, bytes, content.size, &ciphertext
         );
         if (err) {
             if (content.data) secure_wipe(content.data, content.size);
@@ -628,9 +625,7 @@ error_t *content_store_file_to_worktree(
 
         /* Use encrypted data for writing */
         data_to_write = &ciphertext;
-    } else if (content_classify_bytes((const uint8_t *) content.data, content.size)
-        != CONTENT_PLAINTEXT) {
-
+    } else if (content_classify_bytes(bytes, content.size) != CONTENT_PLAINTEXT) {
         if (content.data) secure_wipe(content.data, content.size);
         buffer_free(&content);
         return ERROR(
@@ -641,7 +636,7 @@ error_t *content_store_file_to_worktree(
         );
     }
 
-    /* Step 5: Write to worktree with original mode
+    /* Step 4: Write to worktree with original mode
      * CRITICAL: Use source file's mode so git commits with correct permissions.
      * This ensures git mode matches metadata mode, preventing spurious MODE
      * diffs. */
@@ -649,9 +644,9 @@ error_t *content_store_file_to_worktree(
         worktree_path,
         (const unsigned char *) data_to_write->data,
         data_to_write->size,
-        mode,  /* Preserve source mode */
-        -1,    /* Don't change ownership */
-        -1,    /* Don't change ownership */
+        st.st_mode, /* Preserve source mode */
+        -1,         /* Don't change ownership */
+        -1,         /* Don't change ownership */
         NULL
     );
 

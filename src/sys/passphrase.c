@@ -1,5 +1,5 @@
 /**
- * passphrase.c — Secure passphrase acquisition implementation
+ * passphrase.c - Secure passphrase acquisition implementation
  */
 
 #include "sys/passphrase.h"

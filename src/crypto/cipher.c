@@ -194,9 +194,7 @@ error_t *cipher_encrypt(
      * is BUFFER_INIT), so the early-validation paths pay nothing. */
 
     err = validate_path(storage_path, &path_len);
-    if (err) {
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Policy cap: dotta manages small configuration files. A single cap on the
      * crypto entry point enforces the rule for every caller. */

@@ -398,7 +398,7 @@ Files: {count}
 #   - Per-profile key isolation
 #   - Passphrase-based key derivation (no key files to manage)
 #
-# ⚠️  WARNING: ENCRYPTION KEY LOSS MEANS DATA LOSS
+#   ⚠ WARNING: ENCRYPTION KEY LOSS MEANS DATA LOSS
 #     If you forget your passphrase, encrypted files CANNOT be recovered.
 #     Store your passphrase securely (password manager recommended).
 #

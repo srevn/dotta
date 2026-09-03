@@ -1,5 +1,5 @@
 /**
- * passphrase.h — Secure passphrase acquisition
+ * passphrase.h - Secure passphrase acquisition
  *
  * Two orthogonal sources for user passphrases, each returning a right-sized
  * `secure_alloc` mapping (base/secure.h) that the caller releases with secure_free:

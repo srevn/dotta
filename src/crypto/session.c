@@ -158,9 +158,10 @@ static error_t *resolve_cache_path(const kdf_epoch_t *epoch, char **out_file) {
     }
 
     char *file = NULL;
-    if (asprintf(
+    int n = asprintf(
         &file, "%s/" SESSION_CACHE_DIR "/session-%s", identity()->home, fp_hex
-        ) < 0 || !file) {
+    );
+    if (n < 0 || !file) {
         return ERROR(ERR_MEMORY, "Failed to allocate session cache file path");
     }
 
@@ -335,7 +336,7 @@ error_t *session_load(
 
     char *cache_path = NULL;
     int fd = -1;
-    struct session_cache_file cache;
+    struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
     uint8_t computed_mac[CRYPTO_MAC_SIZE] = { 0 };
     /* `unlink_on_fail` distinguishes ERR_FS (transient I/O — leave the file in
@@ -434,9 +435,7 @@ error_t *session_load(
 
     /* Magic + version. A version mismatch is an unloadable file (alpha policy:
      * no migration). */
-    if (memcmp(
-        cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE
-        ) != 0) {
+    if (memcmp(cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE) != 0) {
         err = ERROR(ERR_CRYPTO, "Session cache magic mismatch");
         unlink_on_fail = true;
         goto cleanup;

@@ -1,5 +1,5 @@
 /**
- * Manifest Module — the precedence oracle
+ * manifest.h - The precedence oracle
  *
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
  * one row per managed filesystem path, both kinds, the winning profile's claim

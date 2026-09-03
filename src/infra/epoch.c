@@ -165,37 +165,39 @@ static error_t *read_epoch_blob(
 /**
  * Read the epoch from a tree, validating both blobs.
  *
- * Zeroes `*out` on every error path so a caller cannot accidentally proceed with
- * stale stack content under a swallowed error code. The pair is validated here
- * — the boundary it enters at — with `kdf_validate_params`.
+ * A failure can leave `*out` half-filled — the salt read before the params blob
+ * refused. The one caller, `epoch_load`, zeroes it on every error path, which
+ * is where its header states the promise, so no caller proceeds with stale stack
+ * content under a swallowed error code. The pair is validated here — the boundary
+ * it enters at — with `kdf_validate_params`.
  */
 static error_t *read_epoch_tree(
-    git_repository *repo,
-    git_tree *tree,
-    kdf_epoch_t *out
+    git_repository *repo, git_tree *tree, kdf_epoch_t *out
 ) {
-    uint8_t params[KDF_PARAMS_SIZE];
-
     error_t *err = read_epoch_blob(
         repo, tree, EPOCH_SALT_BLOB, KDF_SALT_SIZE, out->salt
     );
-    if (!err) {
-        err = read_epoch_blob(
-            repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
-        );
-    }
-    if (!err) {
-        kdf_params_load(params, &out->memory_mib, &out->passes);
-        err = kdf_validate_params(out->memory_mib, out->passes);
-        if (err) {
-            err = error_wrap(err, "Params blob in %s is out of range", EPOCH_REF);
-        }
-    }
     if (err) {
-        memset(out, 0, sizeof(*out));
+        return err;
     }
 
-    return err;
+    uint8_t params[KDF_PARAMS_SIZE];
+    err = read_epoch_blob(
+        repo, tree, EPOCH_PARAMS_BLOB, KDF_PARAMS_SIZE, params
+    );
+    if (err) {
+        return err;
+    }
+
+    kdf_params_load(params, &out->memory_mib, &out->passes);
+    err = kdf_validate_params(out->memory_mib, out->passes);
+    if (err) {
+        return error_wrap(
+            err, "Params blob in %s is out of range", EPOCH_REF
+        );
+    }
+
+    return NULL;
 }
 
 error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
@@ -211,6 +213,8 @@ error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
 
     err = read_epoch_tree(repo, tree, out);
     git_tree_free(tree);
+    if (err) memset(out, 0, sizeof(*out));
+
     return err;
 }
 
@@ -459,18 +463,7 @@ error_t *epoch_push(
      * independently `dotta init`ed and now race their epochs to the same remote
      * will see the second one fail here — surfaced as a regular non-fast-forward
      * Git error so the user understands they need to reconcile. */
-    char refspec[DOTTA_REFSPEC_MAX];
-    int n = snprintf(
-        refspec, sizeof(refspec), "%s:%s", EPOCH_REF, EPOCH_REF
-    );
-    if (n < 0 || (size_t) n >= sizeof(refspec)) {
-        git_remote_free(remote);
-        return ERROR(
-            ERR_INTERNAL, "Epoch refspec buffer too small"
-        );
-    }
-
-    char *refspecs[] = { refspec };
+    char *refspecs[] = { EPOCH_REF ":" EPOCH_REF };
     git_strarray refs = { refspecs, 1 };
 
     transfer_op_begin(xfer, GIT_DIRECTION_PUSH);
@@ -499,7 +492,7 @@ error_t *epoch_push(
  * direction purely to align the credential path with the subsequent fetch.
  *
  * When the ref is advertised and `out_oid` is non-NULL, the advertised commit
- * OID is copied out — the hook `epoch_inspect_remote` uses to compare against
+ * OID is copied out — the hook `inspect_remote_epoch` uses to compare against
  * the local ref without transferring the blobs. Pass NULL for `out_oid` when
  * only presence matters (the `epoch_fetch` case).
  *
@@ -536,14 +529,15 @@ static error_t *probe_remote_epoch(
     }
 
     for (size_t i = 0; i < heads_len; i++) {
-        if (heads[i] != NULL && heads[i]->name != NULL
-            && strcmp(heads[i]->name, EPOCH_REF) == 0) {
-            *out_present = true;
-            if (out_oid != NULL) {
-                git_oid_cpy(out_oid, &heads[i]->oid);
-            }
-            break;
+        if (heads[i] == NULL || heads[i]->name == NULL
+            || strcmp(heads[i]->name, EPOCH_REF) != 0) {
+            continue;
         }
+        *out_present = true;
+        if (out_oid != NULL) {
+            git_oid_cpy(out_oid, &heads[i]->oid);
+        }
+        break;
     }
 
     git_remote_disconnect(remote);
@@ -572,7 +566,7 @@ error_t *epoch_fetch(
      * on a missing ref surfaces a generic Git error indistinguishable from real
      * transport failures by error code alone — the probe gives us a clean
      * ERR_NOT_FOUND surface for the "remote isn't a dotta repo" case. Presence
-     * is all we need here; the OID-comparison consumer is epoch_inspect_remote. */
+     * is all we need here; the OID-comparison consumer is inspect_remote_epoch. */
     bool present = false;
     error_t *err = probe_remote_epoch(remote, xfer, &present, NULL);
     if (err) {
@@ -582,8 +576,7 @@ error_t *epoch_fetch(
     if (!present) {
         git_remote_free(remote);
         return ERROR(
-            ERR_NOT_FOUND,
-            "Remote '%s' does not advertise '%s'",
+            ERR_NOT_FOUND, "Remote '%s' does not advertise '%s'",
             remote_name, EPOCH_REF
         );
     }
@@ -593,11 +586,11 @@ error_t *epoch_fetch(
      * state: a failed adopt never leaves garbage, and never bricks a valid local
      * epoch. */
     git_oid prior_oid;
-    bool prior_exists =
-        (git_reference_name_to_id(&prior_oid, repo, EPOCH_REF) == 0);
+    bool prior_exists = (git_reference_name_to_id(&prior_oid, repo, EPOCH_REF) == 0);
 
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
+
     transfer_configure_callbacks(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
@@ -611,19 +604,7 @@ error_t *epoch_fetch(
      * unsupported end-to-end: a re-minted epoch cannot even be published (the
      * push is non-force), and a clone whose ciphertext the old epoch keys lands
      * on CONFLICT, not adopt. */
-    char refspec[DOTTA_REFSPEC_MAX];
-    int n = snprintf(
-        refspec, sizeof(refspec), "+%s:%s",
-        EPOCH_REF, EPOCH_REF
-    );
-    if (n < 0 || (size_t) n >= sizeof(refspec)) {
-        git_remote_free(remote);
-        return ERROR(
-            ERR_INTERNAL, "Epoch refspec buffer too small"
-        );
-    }
-
-    char *refspecs[] = { refspec };
+    char *refspecs[] = { "+" EPOCH_REF ":" EPOCH_REF };
     git_strarray refs = { refspecs, 1 };
 
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
@@ -709,8 +690,7 @@ typedef struct {
     const char *storage_path;   /* the tree path, root ‖ name */
     const git_oid *oid;         /* the blob object, borrowed from the tree entry */
     content_kind_t kind;        /* ENCRYPTED or UNSUPPORTED_VERSION */
-    const uint8_t *epoch_fp;    /* set iff ENCRYPTED: the header's; else NULL, so
-                                 * every reader tests the kind first */
+    const uint8_t *epoch_fp;    /* set iff ENCRYPTED: the header's; else NULL */
     const uint8_t *data;        /* the blob, borrowed while the callback runs */
     size_t size;                /* its length, the header included */
 } epoch_ciphertext_t;
@@ -776,12 +756,11 @@ static int epoch_walk_cb(
         return -1;
     }
 
+    char oid_hex[GIT_OID_HEXSZ + 1];
+    git_oid_tostr(oid_hex, sizeof(oid_hex), oid);
+
     char key[GIT_OID_HEXSZ + DOTTA_REFNAME_MAX + PATH_MAX + 3];
-    git_oid_tostr(key, GIT_OID_HEXSZ + 1, oid);
-    snprintf(
-        key + GIT_OID_HEXSZ, sizeof(key) - GIT_OID_HEXSZ, ":%s:%s",
-        walk->branch, path
-    );
+    snprintf(key, sizeof(key), "%s:%s:%s", oid_hex, walk->branch, path);
     if (hashmap_has(walk->seen, key)) {
         return (type == GIT_OBJECT_TREE) ? 1 : 0;
     }
@@ -916,12 +895,11 @@ static error_t *walk_ciphertext(
              * (identical content in an earlier commit) contributes nothing new
              * — skip it before loading the tree. The key is the walk's: object,
              * branch, path — the root's path being empty. */
+            char oid_hex[GIT_OID_HEXSZ + 1];
+            git_oid_tostr(oid_hex, sizeof(oid_hex), git_commit_tree_id(commit));
+
             char key[GIT_OID_HEXSZ + DOTTA_REFNAME_MAX + 3];
-            git_oid_tostr(key, GIT_OID_HEXSZ + 1, git_commit_tree_id(commit));
-            snprintf(
-                key + GIT_OID_HEXSZ, sizeof(key) - GIT_OID_HEXSZ, ":%s:",
-                branch
-            );
+            snprintf(key, sizeof(key), "%s:%s:", oid_hex, branch);
             if (hashmap_has(seen, key)) {
                 git_commit_free(commit);
                 continue;
@@ -1007,6 +985,12 @@ static error_t *epoch_census_cb(
     return NULL;
 }
 
+/*
+ * On an error the out-param says nothing: it is written `false`, and both callers
+ * overwrite it with `true` before reading it. Failing closed is their policy,
+ * not the walk's — a false "not in use" green-lights a mint or an adopt that
+ * destroys data, while a false "in use" costs a manual reconcile.
+ */
 static error_t *local_has_ciphertext(
     git_repository *repo,
     const uint8_t *local_fp,
@@ -1092,7 +1076,7 @@ error_t *epoch_find_ciphertext(
  *   unreadable for any other reason → can't prove safe → in use local epoch valid
  *   → census against its fingerprint; a census error → in use
  */
-static bool epoch_local_in_use(git_repository *repo) {
+static bool local_epoch_in_use(git_repository *repo) {
     kdf_epoch_t epoch;
     error_t *lerr = epoch_load(repo, &epoch);
     /* The epoch is public — no wipe. */
@@ -1133,7 +1117,7 @@ typedef enum {
  * folds to UNREACHABLE); a remote that simply lacks the ref is ABSENT, never an
  * error.
  */
-static error_t *epoch_inspect_remote(
+static error_t *inspect_remote_epoch(
     git_repository *repo,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -1182,6 +1166,7 @@ static error_t *epoch_inspect_remote(
     *out_status = git_oid_equal(&local_oid, &remote_oid)
         ? EPOCH_REMOTE_EQUAL
         : EPOCH_REMOTE_DIVERGENT;
+
     return NULL;
 }
 
@@ -1197,7 +1182,7 @@ error_t *epoch_resolve(
     CHECK_NULL(out_decision);
 
     epoch_remote_status_t status;
-    error_t *err = epoch_inspect_remote(repo, remote_name, xfer, &status);
+    error_t *err = inspect_remote_epoch(repo, remote_name, xfer, &status);
     if (err) {
         /* Transport / lookup failure folds to UNREACHABLE: the caller skips epoch
          * reconciliation best-effort, and the fetch phase carries the authoritative
@@ -1218,27 +1203,25 @@ error_t *epoch_resolve(
              * nothing to publish — distinguish the two so the caller never claims
              * an establish it cannot perform (the establish guard). */
             kdf_epoch_t scratch;
-            error_t *lerr = epoch_load(repo, &scratch);  /* public — no wipe */
-            if (lerr) {
-                error_free(lerr);
-                *out_decision = EPOCH_RECONCILE_NO_LOCAL_EPOCH;
-            } else {
-                *out_decision = EPOCH_RECONCILE_ESTABLISH;
-            }
+            error_t *lerr = epoch_load(repo, &scratch);
+            *out_decision = lerr ? EPOCH_RECONCILE_NO_LOCAL_EPOCH
+                                 : EPOCH_RECONCILE_ESTABLISH;
+
+            error_free(lerr);
             return NULL;
         }
 
         case EPOCH_REMOTE_DIVERGENT:
-            /* Fail closed: epoch_local_in_use returns true on any uncertainty,
+            /* Fail closed: local_epoch_in_use returns true on any uncertainty,
              * so ADOPT (which overwrites the local epoch) is reached only when
              * no local ciphertext can be bricked. */
-            *out_decision = epoch_local_in_use(repo)
+            *out_decision = local_epoch_in_use(repo)
                 ? EPOCH_RECONCILE_CONFLICT
                 : EPOCH_RECONCILE_ADOPT;
             return NULL;
     }
 
-    /* epoch_inspect_remote yields exactly one of three statuses; fold any
+    /* inspect_remote_epoch yields exactly one of three statuses; fold any
      * hypothetical out-of-range value to the best-effort skip. */
     *out_decision = EPOCH_RECONCILE_UNREACHABLE;
     return NULL;

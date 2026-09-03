@@ -1647,9 +1647,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
             ? (occupant == FS_OCCUPANT_DIRECTORY)
             : (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN);
 
-        /* Set by the arms that find the copy dotta's to prune, divergence
-         * permitting; measured once, below. */
-        bool measure = false;
+        /* Set by the arms that find the copy dotta's to prune — a candidacy,
+         * not cleanup's verdict, which still holds the copy back on a divergence
+         * or a hold of its own; measured once, below. */
+        bool prunable = false;
 
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent: ORPHANED with no divergence — a reclaim whatever Git says. */
@@ -1667,7 +1668,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * the ownership gate below by design: a named path must go whether
              * dotta deployed it or only ever found it. Divergence still protects
              * an edited copy — cleanup's skip reasons read the same bits. */
-            measure = true;
+            prunable = true;
 
         } else if (anchor->deployed_at == 0) {
             /* The ownership gate: dotta never put this here. Released — the copy
@@ -1700,7 +1701,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
             } else {
-                measure = true;
+                prunable = true;
 
                 /* The relocation read — BACKED only, which is what this arm is:
                  * a relocated orphan is an orphan whose claim still has a row.
@@ -1723,7 +1724,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             }
         }
 
-        if (measure) {
+        if (prunable) {
             /* A file: disk against what dotta last deployed. A directory: nothing
              * to measure — cleanup's emptiness rule decides — only whether it
              * can be: one dotta cannot stat or cannot read is held, as an

@@ -108,9 +108,11 @@ static error_t *validate_header(const uint8_t *data, size_t data_len) {
         );
     }
     if (data[CIPHER_OFFSET_VERSION] != CIPHER_VERSION) {
+        /* The same words infra/content uses when it classifies the version away
+         * before a decrypt: one fact, one spelling. */
         return ERROR(
             ERR_CRYPTO,
-            "Unsupported encryption version: %u (build with version %u)",
+            "Unsupported encryption version 0x%02X (this build reads 0x%02X)",
             (unsigned) data[CIPHER_OFFSET_VERSION], (unsigned) CIPHER_VERSION
         );
     }

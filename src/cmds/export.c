@@ -455,16 +455,16 @@ static error_t *validate_destinations(
  * Phase-1 content validation.
  *
  * Classify every blob by its bytes — the authoritative source of encryption state
- * (metadata's flag is a cache; bytes win) — refuse version-skewed ciphertext,
- * and decrypt encrypted files NOW, holding the plaintext. The first decryption
- * triggers the passphrase prompt, so the prompt and every crypto failure (wrong
- * key, corruption, path mismatch) land in the pre-write window. Symlink targets
- * are read here too: tiny, needed by phase 2, and shown by --dry-run.
+ * (metadata's flag is a cache; bytes win) — and read every sealed one NOW, holding
+ * the plaintext. The first decryption triggers the passphrase prompt, so the
+ * prompt and every crypto failure (no key, wrong key, corruption, path mismatch,
+ * a version this build does not read) land in the pre-write window, each in the
+ * content reader's own words — its ladder names the path and the cause, and nothing
+ * here restates either. Symlink targets are read here too: tiny, needed by phase
+ * 2, and shown by --dry-run.
  */
 static error_t *validate_content(
-    const dotta_ctx_t *ctx,
-    const char *profile,
-    export_entry_list_t *list
+    const dotta_ctx_t *ctx, const char *profile, export_entry_list_t *list
 ) {
     git_repository *repo = ctx->run.repo;
     keymgr *keymgr = ctx->run.keymgr;
@@ -477,8 +477,7 @@ static error_t *validate_content(
 
         if (e->kind == EXPORT_ENTRY_SYMLINK) {
             err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, profile, keymgr,
-                &e->content
+                repo, &e->blob_oid, e->storage_path, profile, keymgr, &e->content
             );
             if (err) {
                 return error_wrap(
@@ -500,28 +499,19 @@ static error_t *validate_content(
         if (err) {
             return error_wrap(err, "Failed to read '%s'", e->storage_path);
         }
+        if (ckind == CONTENT_PLAINTEXT) continue;
 
-        if (ckind == CONTENT_UNSUPPORTED_VERSION) {
-            return ERROR(
-                ERR_CRYPTO,
-                "Cannot decrypt '%s': encrypted under an unsupported "
-                "format version", e->storage_path
-            );
+        /* Sealed — or sealed under a version this build does not read, which
+         * the reader refuses with the version pair. Its error passes through:
+         * "Cannot decrypt '<path>'" over the cause is the whole story. */
+        e->encrypted = (ckind == CONTENT_ENCRYPTED);
+        err = content_get_from_blob_oid(
+            repo, &e->blob_oid, e->storage_path, profile, keymgr, &e->content
+        );
+        if (err) {
+            return err;
         }
-
-        if (ckind == CONTENT_ENCRYPTED) {
-            e->encrypted = true;
-            err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, profile, keymgr,
-                &e->content
-            );
-            if (err) {
-                return error_wrap(
-                    err, "Failed to decrypt '%s'", e->storage_path
-                );
-            }
-            e->content_held = true;
-        }
+        e->content_held = true;
     }
 
     return NULL;
@@ -567,9 +557,7 @@ static error_t *materialize_entries(
                  * blob-less ancestor no walk entry created — intermediates land
                  * at the default mode, deploy's own ancestor rule. Walk entries'
                  * parents always exist. */
-                err = fs_create_dir_with_mode(
-                    e->dest_path, e->mode | S_IRWXU, true
-                );
+                err = fs_create_dir_with_mode(e->dest_path, e->mode | S_IRWXU, true);
                 if (err) {
                     return error_wrap(
                         err, "Failed to create directory '%s'", e->dest_path
@@ -589,13 +577,10 @@ static error_t *materialize_entries(
                 const buffer_t *bytes = &e->content;
                 if (!e->content_held) {
                     err = content_get_from_blob_oid(
-                        repo, &e->blob_oid, e->storage_path, profile, keymgr,
-                        &local
+                        repo, &e->blob_oid, e->storage_path, profile, keymgr, &local
                     );
                     if (err) {
-                        return error_wrap(
-                            err, "Failed to read '%s'", e->storage_path
-                        );
+                        return error_wrap(err, "Failed to read '%s'", e->storage_path);
                     }
                     bytes = &local;
                 }
@@ -612,10 +597,8 @@ static error_t *materialize_entries(
                 }
                 if (verbose) {
                     output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  wrote {cyan}%s{reset} (mode %04o%s)\n",
-                        e->rel_path, (unsigned) e->mode,
-                        e->encrypted ? ", decrypted" : ""
+                        out, OUTPUT_NORMAL, "  wrote {cyan}%s{reset} (mode %04o%s)\n",
+                        e->rel_path, (unsigned) e->mode, e->encrypted ? ", decrypted" : ""
                     );
                 }
                 break;
@@ -641,8 +624,7 @@ static error_t *materialize_entries(
                 }
                 if (verbose) {
                     output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  linked {cyan}%s{reset} -> %s\n",
+                        out, OUTPUT_NORMAL, "  linked {cyan}%s{reset} -> %s\n",
                         e->rel_path, (const char *) e->content.data
                     );
                 }

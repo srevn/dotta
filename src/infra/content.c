@@ -189,13 +189,24 @@ size_t content_estimated_plaintext_size(
 }
 
 /**
+ * The one line for a sealed blob met with the feature off — the read's and the
+ * store's alike. ERR_LOCKED: no key is in reach at all, which is the run's fault
+ * and not the blob's, and turning the feature on and setting the key is what
+ * settles every such row at once. Names no path: a row's reader takes the root
+ * of a failed look for its cause line and prints the run's once (core/workspace.h).
+ */
+static const char ENCRYPTION_DISABLED[] =
+    "Encryption is disabled (encryption.enabled = false); enable it in "
+    "config.toml, then run 'dotta key set'";
+
+/**
  * Get plaintext from blob (internal workhorse)
  *
  * Classifies the blob by magic header (the single source of truth for encryption
  * state) and routes accordingly:
  *   - PLAINTEXT           → copy bytes
  *   - ENCRYPTED           → decrypt via keymgr
- *   - UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
+ *   - UNSUPPORTED_VERSION → ERR_CRYPTO naming the version pair
  *
  * Works on a zero-copy view, so callers must keep the backing blob alive for
  * the duration of the call.
@@ -203,6 +214,12 @@ size_t content_estimated_plaintext_size(
  * No external claim is consulted: the bytes carry the answer. This is the choke
  * point that makes the "metadata says encrypted but bytes say plaintext" drift
  * class structurally impossible.
+ *
+ * Every refusal is the ladder's shape (crypto/keymgr.h): the root names the cause
+ * in one line — the keymgr's, the cipher's, or the two of this layer's own —
+ * and the wrap adds the subject, "Cannot decrypt/read '<path>'". No list of
+ * possible causes: the root already is the cause, and a list printed over a prompt
+ * that yielded nothing or an epoch that can never match said what did not happen.
  *
  * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
  * @param blob_size Raw blob size in bytes
@@ -213,12 +230,8 @@ size_t content_estimated_plaintext_size(
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
-    const uint8_t *blob_data,
-    size_t blob_size,
-    const char *storage_path,
-    const char *profile,
-    keymgr *keymgr,
-    buffer_t *out_content
+    const uint8_t *blob_data, size_t blob_size, const char *storage_path,
+    const char *profile, keymgr *keymgr, buffer_t *out_content
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
@@ -243,29 +256,19 @@ static error_t *get_plaintext_from_blob(
 
         case CONTENT_ENCRYPTED: {
             if (!keymgr) {
-                /* No key in reach at all — the feature is off — which is the
-                 * locked fault, not a cipher's refusal: turning the feature on
-                 * and setting the key is what settles it. */
-                return ERROR(
-                    ERR_LOCKED,
-                    "Cannot decrypt '%s': encryption is disabled "
-                    "(encryption.enabled = false)", storage_path
-                );
+                /* The feature off is the locked root. */
+                error_t *err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
+                return error_wrap(err, "Cannot decrypt '%s'", storage_path);
             }
 
-            /* Decrypt via keymgr (fetches profile key, decrypts, zeroes the key
-             * buffer; raw key material never leaves the crypto layer). */
+            /* The keymgr's ladder decides (fetches the profile key, decrypts,
+             * zeroes the key buffer; raw key material never leaves the crypto
+             * layer), and its refusal is the root. */
             error_t *err = keymgr_decrypt(
                 keymgr, profile, storage_path, blob_data, blob_size, out_content
             );
             if (err) {
-                return error_wrap(
-                    err,
-                    "Failed to decrypt '%s'.\n\nPossible causes:\n"
-                    "  - Wrong passphrase (try: dotta key clear)\n"
-                    "  - File corrupted in repository\n"
-                    "  - File encrypted with different passphrase", storage_path
-                );
+                return error_wrap(err, "Cannot decrypt '%s'", storage_path);
             }
             return NULL;
         }
@@ -273,18 +276,14 @@ static error_t *get_plaintext_from_blob(
         case CONTENT_UNSUPPORTED_VERSION: {
             /* content_classify_bytes only returns this branch when blob_size is
              * large enough to carry the version byte at offset CIPHER_MAGIC_SIZE,
-             * so reading it here is safe. Surface the byte for diagnostics. */
-            unsigned blob_version = blob_data[CIPHER_MAGIC_SIZE];
-            return ERROR(
+             * so reading it here is safe. The version pair is the root, in the
+             * words the cipher's own header gate uses for the same fact. */
+            error_t *err = ERROR(
                 ERR_CRYPTO,
-                "Cannot read '%s': blob uses cipher version 0x%02X which "
-                "this dotta build does not support (expects 0x%02X).\n\n"
-                "Possible causes:\n"
-                "  - The repository was written with a different dotta build\n"
-                "  - The file is corrupted or has been tampered with\n\n"
-                "Update dotta or restore from a compatible version.",
-                storage_path, blob_version, (unsigned) CIPHER_VERSION
+                "Unsupported encryption version 0x%02X (this build reads 0x%02X)",
+                (unsigned) blob_data[CIPHER_MAGIC_SIZE], (unsigned) CIPHER_VERSION
             );
+            return error_wrap(err, "Cannot read '%s'", storage_path);
         }
     }
 
@@ -607,21 +606,17 @@ error_t *content_store_file_to_worktree(
 
     if (should_encrypt) {
         if (!keymgr) {
+            /* The store's twin of the read's locked root: no key is in reach
+             * because the feature is off. */
             if (content.data) secure_wipe(content.data, content.size);
             buffer_free(&content);
-            return ERROR(
-                ERR_CRYPTO,
-                "Cannot encrypt '%s': encryption key is not available.\n\n"
-                "To enable encryption, edit config.toml:\n\n"
-                "  [encryption]\n"
-                "  enabled = true\n\n"
-                "Then set a passphrase: dotta key set", storage_path
-            );
+            err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
+            return error_wrap(err, "Cannot encrypt '%s'", storage_path);
         }
 
         err = keymgr_encrypt(
-            keymgr, profile, storage_path,
-            (const uint8_t *) content.data, content.size, &ciphertext
+            keymgr, profile, storage_path, (const uint8_t *) content.data,
+            content.size, &ciphertext
         );
         if (err) {
             if (content.data) secure_wipe(content.data, content.size);

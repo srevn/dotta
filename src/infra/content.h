@@ -214,15 +214,17 @@ typedef struct content_cache content_cache_t;
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name for key derivation (must not be NULL)
  * @param keymgr Key manager (can be NULL if file is known to be plaintext;
- *          required for ENCRYPTED blobs, returns ERR_CRYPTO otherwise)
+ *          required for ENCRYPTED blobs, returns ERR_LOCKED otherwise)
  * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
  * @return Error or NULL on success
  *
- * Errors:
- * - ERR_CRYPTO: File is encrypted but no keymgr provided
- * - ERR_CRYPTO: Decryption failed (wrong key, corruption, or path mismatch)
- * - ERR_CRYPTO: Blob version unsupported by this build
- * - ERR_NOT_FOUND: Blob not found
+ * Errors — a failed read is the ladder's shape (crypto/keymgr.h): the root names
+ * the cause in one line, and "Cannot decrypt '<path>'" / "Cannot read '<path>'"
+ * wraps it; the root's code is the chain's:
+ * - ERR_LOCKED: encryption is disabled, or the keymgr holds no usable master
+ * - ERR_CRYPTO: a held master does not open the blob (wrong key, corruption,
+ *   path mismatch), a foreign epoch, or a version this build does not read
+ * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
  * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_get_from_blob_oid(
@@ -374,7 +376,8 @@ void content_cache_free(content_cache_t *cache);
  * Errors:
  * - ERR_IO: Failed to read source file
  * - ERR_VALIDATION: A plaintext store whose bytes would classify as ciphertext
- * - ERR_CRYPTO: Encryption requested but keymgr unavailable
+ * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
+ *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
  * - ERR_CRYPTO: Encryption failed
  * - ERR_IO: Failed to write worktree file
  * - ERR_INVALID_ARG: Required arguments are NULL

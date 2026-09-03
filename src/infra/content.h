@@ -335,29 +335,27 @@ void content_cache_free(content_cache_t *cache);
  * Store file to worktree with optional encryption
  *
  * High-level helper that combines: read file → encrypt (if needed) → write to
- * worktree This encapsulates the common pattern used in add/update commands.
+ * worktree. This encapsulates the common pattern used in add/update commands.
  *
  * Process:
  * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
  *    and the stored bytes are one inode by construction
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
  *    c. Write encrypted content to worktree path
- * 3. If should_encrypt=false: a. Write plaintext content to worktree path
- * 4. Classify the bytes that were actually written and return the kind
+ * 3. If should_encrypt=false: refuse a plaintext whose first bytes are the cipher
+ *    magic, else write the plaintext to the worktree path
  *
  * This is a convenience wrapper — the caller still decides policy via
  * should_encrypt; use encryption_policy_should_encrypt() to compute it.
  *
- * Write-time invariant: the returned `out_kind` is derived from the bytes the
- * function just wrote to the worktree, not from `should_encrypt`. The caller
- * MUST stamp metadata.encrypted from `out_kind` (not from the policy decision)
- * so metadata.json:encrypted is byte-derived at the write boundary. See
- * `docs/encryption-spec.md` for the cache discipline.
- *
- * In debug builds, the function asserts that `out_kind` agrees with
- * `should_encrypt` — a tripwire for the magic-collision case (a plaintext file
- * whose first 6 bytes happen to be `"DOTTA" || CIPHER_VERSION`) and for any future
- * crypto-layer drift in the encrypt path.
+ * Write-time invariant: the bytes stored classify (content_classify_bytes) as
+ * `should_encrypt` says — ENCRYPTED iff true. An encrypt writes the magic, and
+ * a plaintext that would read as ciphertext is refused, so the caller stamps
+ * metadata.encrypted from `should_encrypt` and every reader, which classifies
+ * the bytes, agrees with the stamp for any blob this store wrote. The one collision
+ * the model has — a plaintext file whose first six bytes happen to be `"DOTTA"
+ * || CIPHER_VERSION` — is therefore refused here with its way out (--encrypt,
+ * or change the bytes), never stored under a claim every reader would contradict.
  *
  * @param filesystem_path Path to source file on filesystem (must not be NULL)
  * @param worktree_path Destination path in worktree (must not be NULL)
@@ -370,13 +368,11 @@ void content_cache_free(content_cache_t *cache);
  * @param out_stat The capture's stat: the fstat of the descriptor whose bytes
  *                 were stored (optional, can be NULL; filled only when the look
  *                 reached a regular file's fd)
- * @param out_kind Output content kind of the bytes written (optional, can be
- *                 NULL; when non-NULL, this is the byte-derived truth callers
- *                 MUST use for metadata.encrypted)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_IO: Failed to read source file
+ * - ERR_VALIDATION: A plaintext store whose bytes would classify as ciphertext
  * - ERR_CRYPTO: Encryption requested but keymgr unavailable
  * - ERR_CRYPTO: Encryption failed
  * - ERR_IO: Failed to write worktree file
@@ -389,8 +385,7 @@ error_t *content_store_file_to_worktree(
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
-    struct stat *out_stat,
-    content_kind_t *out_kind
+    struct stat *out_stat
 );
 
 #endif /* DOTTA_CONTENT_H */

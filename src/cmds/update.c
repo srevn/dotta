@@ -154,14 +154,11 @@ static error_t *copy_file_to_worktree(
         }
 
         /* Store file to worktree (handles read → encrypt → write) and capture
-         * stat + byte-derived content kind atomically.
+         * the stat.
          * ARCHITECTURE: the store's fstat of the descriptor it read is captured
          * and propagated to caller for metadata operations — bytes and stat one
-         * inode by construction.
-         * INVARIANT: written_kind is byte-truth for the bytes that hit the
-         * worktree; out_was_encrypted reflects byte truth, not policy. */
+         * inode by construction. */
         struct stat file_stat;
-        content_kind_t written_kind = CONTENT_PLAINTEXT;
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -169,8 +166,7 @@ static error_t *copy_file_to_worktree(
             profile,
             keymgr,
             should_encrypt,
-            &file_stat,
-            &written_kind
+            &file_stat
         );
         if (err) {
             err = error_wrap(err, "Failed to store file to worktree");
@@ -182,9 +178,11 @@ static error_t *copy_file_to_worktree(
             memcpy(out_stat, &file_stat, sizeof(struct stat));
         }
 
-        /* Propagate encryption status to caller — byte-derived, NOT policy */
+        /* The store's write-time invariant: the bytes it wrote classify as the
+         * decision says (a plaintext that would not is refused there), so the
+         * decision is what the caller stamps. */
         if (out_was_encrypted) {
-            *out_was_encrypted = (written_kind != CONTENT_PLAINTEXT);
+            *out_was_encrypted = should_encrypt;
         }
     }
 

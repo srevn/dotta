@@ -560,12 +560,9 @@ static error_t *add_file_to_worktree(
         }
 
         /* Store file to worktree (handles read → encrypt → write) and capture
-         * both stat data and the byte-derived content kind.
+         * the stat.
          * SECURITY: the stat is the fstat of the fd the store read — bytes and
-         * triple one inode by construction.
-         * INVARIANT: written_kind is byte-truth for the bytes that hit the
-         * worktree; metadata.encrypted is stamped from it below. */
-        content_kind_t written_kind = CONTENT_PLAINTEXT;
+         * triple one inode by construction. */
         err = content_store_file_to_worktree(
             filesystem_path,
             dest_path,
@@ -573,8 +570,7 @@ static error_t *add_file_to_worktree(
             opts->profile,
             keymgr,
             should_encrypt,
-            &file_stat,
-            &written_kind
+            &file_stat
         );
         if (err) {
             free(dest_path);
@@ -595,13 +591,14 @@ static error_t *add_file_to_worktree(
         }
         *out_stat = stat_cache_from_stat(&file_stat);
 
-        /* Stamp metadata.encrypted from byte truth, NOT from policy. This is
-         * the write-time invariant: bytes-on-disk and the metadata cache are
-         * bound at the same boundary, by construction. */
-        if (item) item->encrypted = (written_kind != CONTENT_PLAINTEXT);
+        /* The store's write-time invariant: the bytes it wrote classify as the
+         * decision says (a plaintext that would not is refused there), so the
+         * claim is stamped from the decision and every reader of the bytes agrees
+         * with it. */
+        if (item) item->encrypted = should_encrypt;
 
         /* Verbose output */
-        if (written_kind == CONTENT_ENCRYPTED) {
+        if (should_encrypt) {
             output_info(
                 out, OUTPUT_VERBOSE, "Encrypted: %s -> %s",
                 filesystem_path, storage_path

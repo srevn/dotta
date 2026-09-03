@@ -907,7 +907,7 @@ const args_command_t spec_show = {
         .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_READ,
         .mounts  = true,
-        .crypto  = true,
+        .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch    = show_dispatch,
 };

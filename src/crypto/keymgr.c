@@ -57,6 +57,7 @@ struct keymgr {
     uint8_t epoch_fp[KDF_EPOCH_FP_SIZE];
 
     int32_t session_timeout;        /* seconds the file lives; 0 = no file, -1 = never expires */
+    keymgr_reach_t reach;           /* the caches alone, or the user beyond them */
 
     /* The slot: the process memo of the master. */
     bool has_key;
@@ -100,6 +101,7 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
 error_t *keymgr_create(
     int32_t session_timeout,
     const kdf_epoch_t *epoch,
+    keymgr_reach_t reach,
     keymgr **out
 ) {
     CHECK_NULL(epoch);
@@ -112,6 +114,7 @@ error_t *keymgr_create(
 
     /* The mapping is zero-filled; only the binding needs assignment. */
     km->session_timeout = session_timeout;
+    km->reach = reach;
     bind_epoch(km, epoch);
 
     *out = km;
@@ -292,6 +295,16 @@ static error_t *keymgr_resolve(
     }
     if (try_disk_hit(km, out_master_key)) {
         return NULL;
+    }
+
+    /* The caches are as far as a reporting command may reach: below them the
+     * user would be asked, and a report never asks. */
+    if (km->reach != KEYMGR_REACH_OBTAIN) {
+        return ERROR(
+            ERR_LOCKED,
+            "No passphrase is cached, and this command does not ask for one; "
+            "run 'dotta key set'"
+        );
     }
 
     char *passphrase = NULL;

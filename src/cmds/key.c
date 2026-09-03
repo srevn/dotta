@@ -446,7 +446,7 @@ static const args_command_t spec_key_set = {
     .init_defaults = key_set_defaults,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
-        .crypto    = true,
+        .crypto    = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch      = key_dispatch,
 };
@@ -476,7 +476,7 @@ static const args_command_t spec_key_clear = {
     .init_defaults = key_clear_defaults,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
-        .crypto    = true,
+        .crypto    = DOTTA_CRYPTO_CACHED,
     },
     .dispatch      = key_dispatch,
 };
@@ -506,7 +506,7 @@ static const args_command_t spec_key_status = {
     .init_defaults = key_status_defaults,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,          .state= DOTTA_STATE_READ,
-        .crypto    = true,
+        .crypto    = DOTTA_CRYPTO_CACHED,
     },
     .dispatch      = key_dispatch,
 };

@@ -30,6 +30,12 @@
  * `keymgr_cached` reports it — and nothing else keeps time: a master that came
  * from a file the loader accepted is good for the run.
  *
+ * The reach. A command declares how far the keymgr may go for a passphrase
+ * (`keymgr_reach_t`): the caches alone, or the environment and the prompt beyond
+ * them. Under CACHED a cold resolve is ERR_LOCKED — no passphrase in reach —
+ * and the row that asked reads as unverifiable; nothing is asked and nothing is
+ * written. `status` and `sync` report; `apply` and `add` obtain.
+ *
  * Security:
  *   - The master lives in process memory and, when the file tier is on, on disk.
  *     The file is obfuscated, NOT encrypted at rest — see crypto/session.h for
@@ -62,6 +68,20 @@
 typedef struct keymgr keymgr;
 
 /**
+ * How far the keymgr may reach for a passphrase.
+ *
+ * CACHED: the slot and the session file — what earlier runs left — and nothing
+ * else: no environment variable, no prompt, no file written. A resolve that finds
+ * nothing there is ERR_LOCKED. OBTAIN: then the environment, then the prompt.
+ * The command declares it (include/runtime.h's crypto need) and the dispatcher
+ * maps it here.
+ */
+typedef enum keymgr_reach {
+    KEYMGR_REACH_CACHED,
+    KEYMGR_REACH_OBTAIN
+} keymgr_reach_t;
+
+/**
  * Create a key manager bound to an epoch.
  *
  * Copies the epoch and computes its fingerprint (`kdf_epoch_fingerprint`), which
@@ -78,12 +98,14 @@ typedef struct keymgr keymgr;
  * @param session_timeout Seconds the on-disk file lives (config); 0 = no file,
  *                        -1 = never expires
  * @param epoch           The repository's epoch (non-NULL; copied)
+ * @param reach           How far a resolve may go for a passphrase
  * @param out             Key manager (caller frees with keymgr_free)
  * @return Error or NULL on success
  */
 error_t *keymgr_create(
     int32_t session_timeout,
     const kdf_epoch_t *epoch,
+    keymgr_reach_t reach,
     keymgr **out
 );
 
@@ -94,8 +116,9 @@ error_t *keymgr_create(
  * with the epoch's fingerprint, and wipes every intermediate buffer on every
  * exit path.
  *
- * Cold cache: prompts and runs memory-hard Argon2id. Warm cache: two BLAKE2b
- * derivations plus SIV+keystream bandwidth.
+ * Cold cache: prompts and runs memory-hard Argon2id — under OBTAIN; under CACHED
+ * a cold cache is ERR_LOCKED. Warm cache: two BLAKE2b derivations plus
+ * SIV+keystream bandwidth.
  *
  * Errors pass through unwrapped: a resolve names its own cause, and a
  * `cipher_encrypt` refusal is the caller's to attach file-level context to.

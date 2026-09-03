@@ -1415,14 +1415,14 @@ static void print_cleanup_skips(
  * Both kinds in one section — files, then the directories in prune order — each
  * row naming the parent that refuses, verbatim, in the words deploy's PERMISSION
  * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
- * where the workspace's own lstat was refused on the way — the occupant says so,
- * and the parent the probe asked is then not the rung that refused), and the one
- * closer: the command line that holds root, handed in by the caller as
- * print_deploy_skips's is, so the printer renders and never asks who it is. Capped like deploy's block —
- * one root-owned parent can hold a subtree — where cleanup's skipped-files block
- * is not (every row there carries a reason of its own). Neither a --force line
- * nor a by-hand one: root is not a flag, and the row already names the directory
- * a hand would have to open.
+ * where the workspace's own lstat was refused on the way — the occupant says
+ * so, and the parent the probe asked is then not the rung that refused), and
+ * the one closer: the command line that holds root, handed in by the caller as
+ * print_deploy_skips's is, so the printer renders and never asks who it is. Capped
+ * like deploy's block — one root-owned parent can hold a subtree — where cleanup's
+ * skipped-files block is not (every row there carries a reason of its own). Neither
+ * a --force line nor a by-hand one: root is not a flag, and the row already names
+ * the directory a hand would have to open.
  *
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
@@ -2892,7 +2892,7 @@ const args_command_t spec_apply = {
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_WRITE,
         .mounts   = true,
-        .crypto   = true,
+        .crypto   = DOTTA_CRYPTO_OBTAIN,
         .manifest = true,
     },
     .dispatch     = apply_dispatch,

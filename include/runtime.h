@@ -11,6 +11,7 @@
  *
  * Contents:
  *   - `dotta_state_mode_t` — the shape a command opens state in;
+ *   - `dotta_crypto_mode_t` — how far the keymgr may reach for a passphrase;
  *   - `dotta_needs_t`      — payload referenced by `args_command_t::payload`:
  *                            the run members a handler reads, declared in full,
  *                            without the base/args engine learning them;
@@ -130,6 +131,23 @@ typedef enum dotta_state_mode {
 } dotta_state_mode_t;
 
 /**
+ * How far the keymgr may reach for a passphrase
+ *
+ * The caches — what earlier runs left — or the user. CACHED never asks: a command
+ * that reports declares it, and an encrypted row it cannot open with what is
+ * cached reads as unverifiable (ERR_LOCKED at the look) rather than the report
+ * stopping at a prompt. OBTAIN may read DOTTA_ENCRYPTION_PASSPHRASE and prompt:
+ * a command the user asked to do something with the content declares it. NONE
+ * is no crypto member at all. The words are `keymgr_reach_t`'s (crypto/keymgr.h),
+ * plus NONE.
+ */
+typedef enum dotta_crypto_mode {
+    DOTTA_CRYPTO_NONE,     /* No crypto members */
+    DOTTA_CRYPTO_CACHED,   /* The keymgr reads the caches and never asks */
+    DOTTA_CRYPTO_OBTAIN    /* … and may read the environment and prompt */
+} dotta_crypto_mode_t;
+
+/**
  * The needs — every run member a command's handler reads
  *
  * Pointed at by `args_command_t::payload`, in place on the spec:
@@ -175,9 +193,17 @@ typedef enum dotta_state_mode {
  *
  * crypto
  * ------
- * The content cache always, the keymgr iff `config->encryption_enabled`. Requires
- * `repo`. Both handles are borrowed by the handler; the dispatcher tears them
- * down LIFO (cache, then keymgr) before state teardown.
+ * The content cache always, the keymgr iff `config->encryption_enabled`, at the
+ * declared strength (`dotta_crypto_mode_t`): how far the keymgr may reach for a
+ * passphrase. CACHED reads what earlier runs left — the session file — and never
+ * asks: it never prompts, never reads DOTTA_ENCRYPTION_PASSPHRASE, never writes
+ * the file. The commands that report declare it (status, sync, key status, key
+ * clear), so a look at an encrypted row with cold caches fails as ERR_LOCKED
+ * and the row reads as unverifiable. OBTAIN may read the environment and prompt;
+ * the commands the user asked to do something with the content declare it (add,
+ * update, apply, diff, show, export, revert, key set). Requires `repo`. Both
+ * handles are borrowed by the handler; the dispatcher tears them down LIFO (cache,
+ * then keymgr) before state teardown.
  *
  * Why no split between "key only" and "key + cache": the codebase has exactly
  * one cache primitive (`infra/content`'s blob-OID → plaintext map). With one
@@ -192,10 +218,10 @@ typedef enum dotta_state_mode {
  * Disabled-encryption semantics: when `config->encryption_enabled == false`,
  * `run.keymgr` stays NULL regardless of the need; the cache is still created
  * with a NULL keymgr so callers deal with one shape. Handlers forward `run.keymgr`
- * to the content layer unconditionally — it surfaces ERR_CRYPTO with a user-facing
- * message naming the file if a per-file operation asks to encrypt or decrypt
- * without a key, so commands never need to gate on "do I have a key?" before
- * calling through.
+ * to the content layer unconditionally — it refuses with a message naming the
+ * file if a per-file operation asks to encrypt (ERR_CRYPTO) or decrypt (ERR_LOCKED:
+ * no key in reach) without a keymgr, so commands never need to gate on "do I
+ * have a key?" before calling through.
  *
  * manifest
  * --------
@@ -243,7 +269,7 @@ typedef struct dotta_needs {
     dotta_repo_mode_t repo;     /* NONE, PATH or OPEN */
     dotta_state_mode_t state;   /* NONE, READ or WRITE. Requires repo OPEN */
     bool mounts;                /* This machine's topology over the enabled set. Requires state */
-    bool crypto;                /* The content cache, and the keymgr iff encryption is on. Requires repo OPEN */
+    dotta_crypto_mode_t crypto; /* NONE, CACHED or OBTAIN: the content cache, and the keymgr iff encryption is on. Requires repo OPEN */
     bool manifest;              /* The view at dispatch. Requires state */
     bool tolerant;              /* Open what opens; a failure ends the open without error */
 } dotta_needs_t;
@@ -316,8 +342,8 @@ typedef struct dotta_run {
     const char *repo_path;              /* needs->repo != NONE; an arena copy */
     state_t *state;                     /* needs->state != NONE; the READ or WRITE shape */
     const mount_table_t *mounts;        /* needs->mounts; this machine's topology at dispatch */
-    keymgr *keymgr;                     /* needs->crypto, and only if encryption is on */
-    content_cache_t *content_cache;     /* needs->crypto */
+    keymgr *keymgr;                     /* needs->crypto != NONE, and only if encryption is on */
+    content_cache_t *content_cache;     /* needs->crypto != NONE */
     manifest_t *manifest;               /* needs->manifest; the view at dispatch */
 } dotta_run_t;
 

@@ -243,12 +243,13 @@ static error_t *get_plaintext_from_blob(
 
         case CONTENT_ENCRYPTED: {
             if (!keymgr) {
+                /* No key in reach at all — the feature is off — which is the
+                 * locked fault, not a cipher's refusal: turning the feature on
+                 * and setting the key is what settles it. */
                 return ERROR(
-                    ERR_CRYPTO,
-                    "File '%s' is encrypted but no key manager provided.\n\n"
-                    "To decrypt this file, ensure encryption is configured:\n"
-                    "  1. Set passphrase: dotta key set\n"
-                    "  2. Configure encryption in config.toml", storage_path
+                    ERR_LOCKED,
+                    "Cannot decrypt '%s': encryption is disabled "
+                    "(encryption.enabled = false)", storage_path
                 );
             }
 

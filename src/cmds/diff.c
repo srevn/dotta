@@ -1766,7 +1766,7 @@ const args_command_t spec_diff = {
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_READ,
         .mounts   = true,
-        .crypto   = true,
+        .crypto   = DOTTA_CRYPTO_OBTAIN,
         .manifest = true,
     },
     .dispatch     = diff_dispatch,

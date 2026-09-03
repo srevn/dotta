@@ -1947,7 +1947,7 @@ const args_command_t spec_add = {
         .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_WRITE,
         .mounts  = true,
-        .crypto  = true,
+        .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch    = add_dispatch,
 };

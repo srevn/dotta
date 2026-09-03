@@ -68,15 +68,12 @@
  * loops.
  */
 static const args_command_t *const dotta_commands[] = {
-    &spec_init,     &spec_clone,      &spec_add,
-    &spec_remove,   &spec_update,     &spec_apply,
-    &spec_revert,   &spec_status,     &spec_diff,
-    &spec_list,     &spec_show,       &spec_export,
-    &spec_sync,     &spec_profile,    &spec_remote,
-    &spec_ignore,   &spec_bootstrap,  &spec_key,
-    &spec_git,      &spec_completion, &spec_interactive,
-    &spec_complete,
-    NULL
+    &spec_init,        &spec_clone,    &spec_add,    &spec_remove,
+    &spec_update,      &spec_apply,    &spec_revert, &spec_status,
+    &spec_diff,        &spec_list,     &spec_show,   &spec_export,
+    &spec_sync,        &spec_profile,  &spec_remote, &spec_ignore,
+    &spec_bootstrap,   &spec_key,      &spec_git,    &spec_completion,
+    &spec_interactive, &spec_complete, NULL
 };
 
 /**
@@ -114,12 +111,22 @@ static error_t *open_run(
 ) {
     /* Closure: a derived member's input is declared beside it. An incoherent
      * spec is a programming error, caught on the command's first run. */
-    bool has_state = needs->state != DOTTA_STATE_NONE;
-    bool has_repo = needs->repo == DOTTA_REPO_OPEN;
-    CHECK_ARG(!has_state || has_repo, "Spec declares state without the repository handle");
-    CHECK_ARG(!needs->crypto || has_repo, "Spec declares crypto without the repository handle");
-    CHECK_ARG(!needs->mounts || has_state, "Spec declares mounts without state");
-    CHECK_ARG(!needs->manifest || has_state, "Spec declares manifest without state");
+    CHECK_ARG(
+        needs->state == DOTTA_STATE_NONE || needs->repo == DOTTA_REPO_OPEN,
+        "Spec declares state without the repository handle"
+    );
+    CHECK_ARG(
+        needs->crypto == DOTTA_CRYPTO_NONE || needs->repo == DOTTA_REPO_OPEN,
+        "Spec declares crypto without the repository handle"
+    );
+    CHECK_ARG(
+        !needs->mounts || needs->state != DOTTA_STATE_NONE,
+        "Spec declares mounts without state"
+    );
+    CHECK_ARG(
+        !needs->manifest || needs->state != DOTTA_STATE_NONE,
+        "Spec declares manifest without state"
+    );
 
     error_t *err = NULL;
 
@@ -129,8 +136,8 @@ static error_t *open_run(
      * way the run keeps an arena copy so it holds no heap string. */
     if (needs->repo != DOTTA_REPO_NONE) {
         char *repo_path = NULL;
-        err = has_repo ? repo_open(config, &run->repo, &repo_path)
-                       : resolve_repo_path(config, &repo_path);
+        err = (needs->repo == DOTTA_REPO_OPEN) ? repo_open(config, &run->repo, &repo_path)
+                                               : resolve_repo_path(config, &repo_path);
         if (err) goto done;
 
         run->repo_path = arena_strdup(arena, repo_path);
@@ -144,7 +151,7 @@ static error_t *open_run(
     /* State, in the shape the spec declared. A WRITE handle holds BEGIN IMMEDIATE
      * for the whole dispatch; the command calls state_save, and close_run's
      * state_free rolls back anything it did not. */
-    if (has_state) {
+    if (needs->state != DOTTA_STATE_NONE) {
         err = (needs->state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
                                                   : state_load(run->repo, &run->state);
         if (err) goto done;
@@ -152,7 +159,7 @@ static error_t *open_run(
 
     /* The crypto handles: the keymgr iff encryption is enabled, the content cache
      * always (possibly with a NULL keymgr — see runtime.h's crypto rationale). */
-    if (needs->crypto) {
+    if (needs->crypto != DOTTA_CRYPTO_NONE) {
         if (config->encryption_enabled) {
             /* Load the repository's epoch from refs/dotta/epoch before constructing
              * the keymgr — the epoch is the derivation's input, so the keymgr
@@ -180,8 +187,15 @@ static error_t *open_run(
                 goto done;
             }
 
-            /* The epoch is public; the keymgr copies it. */
-            err = keymgr_create(config->session_timeout, &epoch, &run->keymgr);
+            /* The epoch is public; the keymgr copies it. The reach is the spec's
+             * word for how far the keymgr may go for a passphrase. */
+            const keymgr_reach_t reach = needs->crypto == DOTTA_CRYPTO_OBTAIN
+                ? KEYMGR_REACH_OBTAIN
+                : KEYMGR_REACH_CACHED;
+
+            err = keymgr_create(
+                config->session_timeout, &epoch, reach, &run->keymgr
+            );
             if (err) goto done;
         }
 

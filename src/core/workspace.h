@@ -147,10 +147,10 @@ typedef enum {
  * it can carry comes from an errno.
  *
  * Readers: workspace_item_extract_display_info (the tag — [locked] / [unreadable]
- * / [unverified], the same word on both arms), status's Unverifiable closers
- * and Issues legend, update's census, apply's preflight rows and the closers
- * under them, diff's status line. The engines read the bit and never the fault:
- * one verb, three words.
+ * / [unverified], the same word on both arms), status's two keys — Unverifiable's
+ * and Issues' — update's census, apply's preflight rows and the closers under
+ * them, diff's status line. The engines read the bit and never the fault: one
+ * verb, three words.
  */
 typedef enum {
     WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */

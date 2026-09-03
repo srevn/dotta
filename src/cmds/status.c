@@ -640,10 +640,14 @@ static void display_workspace_status(
             }
 
             /* Section 4: Unverifiable paths — the other no-verb bucket: dotta
-             * could not look, so no verb is promised. The header says only that;
-             * the ways out close the block, one per class the block actually
-             * holds (workspace_fault_t), because one sentence over three refusals
-             * is how a locked path came to be told to fix its permissions. */
+             * could not look, so no verb is promised. The header says only that,
+             * and a key beneath names each failed look and its way out, one line
+             * per tag string the block shows — the Issues key's shape, for the
+             * reason that block has one: the tag is a word the reader has to be
+             * taught, and one sentence over three refusals is how a locked path
+             * came to be told to fix its permissions. A key rather than a closer
+             * because a closer speaks only for a class that has a remedy, and
+             * [unverified] has none — it would stand on the screen unexplained. */
             if (unverifiable_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Unverifiable paths",
@@ -651,8 +655,14 @@ static void display_workspace_status(
                 );
 
                 if (list) {
-                    bool locked = false;
-                    bool unreadable = false;
+                    /* Keyed by the exact tags the line shows, the way Issues is
+                     * keyed, so the column below reads back against the one above.
+                     * Three classes (workspace_fault_t), and the policy bit can
+                     * ride beside each ([unencrypted] [locked]), so six keys is
+                     * the whole domain. */
+                    struct { char tags[64]; const char *hint; } legend[6];
+                    size_t legend_count = 0;
+                    size_t legend_width = 0;
 
                     for (size_t i = 0; i < unverifiable_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
@@ -661,48 +671,83 @@ static void display_workspace_status(
                         char metadata[256];
                         char path[PATH_MAX + 2];
 
-                        if (workspace_item_extract_display_info(
+                        if (!workspace_item_extract_display_info(
                             unverifiable[i], tags, &tag_count,
                             &color, metadata, sizeof(metadata)
                             )) {
+                            continue;
+                        }
+                        snprintf(
+                            path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
+                            path_kind_suffix(unverifiable[i]->item_kind)
+                        );
+                        output_list_add(
+                            list, tags, tag_count, color, path, metadata
+                        );
+
+                        /* What the failed look was, then the way out of it: a
+                         * key for the locked rows, root for the unreadable ones
+                         * and only where the run holds none. The residual class
+                         * has no remedy to name — there is no one remedy for a
+                         * foreign epoch, a cipher this build does not read and
+                         * an I/O error — so its line names the verb that will
+                         * print the cause instead. */
+                        const char *hint = NULL;
+
+                        switch (unverifiable[i]->fault) {
+                            case WORKSPACE_FAULT_LOCKED:
+                                hint = "encrypted, and no key opened it; "
+                                    "'dotta key set' unlocks it";
+                                break;
+                            case WORKSPACE_FAULT_UNREADABLE:
+                                hint = identity()->privileged
+                                    ? "permissions refused the read"
+                                    : "permissions refused the read; "
+                                    "sudo would lift it";
+                                break;
+                            case WORKSPACE_FAULT_NONE:
+                            case WORKSPACE_FAULT_UNVERIFIED:
+                                hint = "no remedy dotta can name; the verb that "
+                                    "meets it prints why";
+                                break;
+                        }
+
+                        /* Same bracketing and spacing the list gives the item
+                         * line, so the column below matches the one above */
+                        char key[64] = "";
+                        for (size_t t = 0; t < tag_count; t++) {
+                            size_t used = strlen(key);
                             snprintf(
-                                path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
-                                path_kind_suffix(unverifiable[i]->item_kind)
-                            );
-                            output_list_add(
-                                list, tags, tag_count, color, path, metadata
+                                key + used, sizeof(key) - used, "%s[%s]",
+                                t > 0 ? " " : "", tags[t]
                             );
                         }
 
-                        locked |= unverifiable[i]->fault == WORKSPACE_FAULT_LOCKED;
-                        unreadable |=
-                            unverifiable[i]->fault == WORKSPACE_FAULT_UNREADABLE;
+                        size_t slot = 0;
+                        while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                            slot++;
+                        }
+                        if (slot == legend_count &&
+                            legend_count < sizeof(legend) / sizeof(legend[0])) {
+                            size_t len = strlen(key);
+                            memcpy(legend[legend_count].tags, key, len + 1);
+                            legend[legend_count].hint = hint;
+                            legend_count++;
+                            if (len > legend_width) legend_width = len;
+                        }
                     }
 
                     output_list_render(list);
                     output_list_free(list);
 
-                    /* The ways out, each printed only for a class the block holds
-                     * and each in this block's own words: a key for the locked
-                     * rows, root for the unreadable ones and only where the run
-                     * holds none. The rest have no remedy to name — the verb
-                     * that meets the refusal is what says which — so they close
-                     * with nothing. */
-                    bool sudo = unreadable && !identity()->privileged;
-
-                    if (locked || sudo) {
+                    if (legend_count > 0) {
                         output_newline(out, OUTPUT_NORMAL);
-                    }
-                    if (locked) {
-                        output_hintline(
-                            out, OUTPUT_NORMAL,
-                            "  Run 'dotta key set' to unlock them"
-                        );
-                    }
-                    if (sudo) {
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  Run under sudo to verify them"
-                        );
+                        for (size_t i = 0; i < legend_count; i++) {
+                            output_hintline(
+                                out, OUTPUT_NORMAL, "  %-*s - %s",
+                                (int) legend_width, legend[i].tags, legend[i].hint
+                            );
+                        }
                     }
                 }
             }

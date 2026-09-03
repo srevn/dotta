@@ -112,7 +112,7 @@ typedef enum {
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
-    DIVERGENCE_UNVERIFIED = 1 << 5,  /* Cannot verify (missing key, error, large file) */
+    DIVERGENCE_UNVERIFIED = 1 << 5,  /* The look failed; the item's fault says whose remedy that is (core/workspace.h) */
     DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */
 } divergence_type_t;
 

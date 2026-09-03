@@ -290,13 +290,18 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
  *
  * The equation: in-scope deployed items = accepted deployed ∪ Σ refused[arm],
  * by one switch that routes each item once — nothing is counted twice, nothing
- * falls through. CAPTURE's slot stays zero (that arm is accepted) and CLEAN's
- * (a clean row is no item); REASSIGNED's counts a handover the census has no
- * line for — apply acknowledges it, the filter only declines it.
+ * falls through. The UNVERIFIABLE arm keeps a second index beside it, for the
+ * same reason the first one exists: one route, three ways out (workspace_fault_t),
+ * and the census prints a line per class. Σ faults[f] == refused[UNVERIFIABLE],
+ * and faults[NONE] is zero by the fold's invariant. CAPTURE's slot stays zero
+ * (that arm is accepted) and CLEAN's (a clean row is no item); REASSIGNED's counts
+ * a handover the census has no line for — apply acknowledges it, the filter only
+ * declines it.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
+    size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
 } update_partition_t;
 
 /**
@@ -367,6 +372,9 @@ static error_t *filter_items_for_update(
                 workspace_route_t route = workspace_item_route(item);
                 if (route != WORKSPACE_ROUTE_CAPTURE) {
                     partition->refused[route]++;
+                    if (route == WORKSPACE_ROUTE_UNVERIFIABLE) {
+                        partition->faults[item->fault]++;
+                    }
                     continue;
                 }
                 break;
@@ -1792,12 +1800,42 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         );
     }
     if (refused[WORKSPACE_ROUTE_UNVERIFIABLE] > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "%zu path%s skipped: cannot be read — fix permissions, or exclude with -e",
-            refused[WORKSPACE_ROUTE_UNVERIFIABLE],
-            refused[WORKSPACE_ROUTE_UNVERIFIABLE] == 1 ? "" : "s"
-        );
+        /* One arm, up to three lines — by whose remedy the failed look is
+         * (workspace_fault_t), because one sentence over the three is how a locked
+         * path came to be told to fix its permissions. The key's rows name the
+         * verb that unlocks them; the unreadable ones name permissions, and root
+         * where the run holds none; the rest have no remedy to name and point
+         * at the listing that names each path. */
+        const size_t *faults = partition.faults;
+
+        if (faults[WORKSPACE_FAULT_LOCKED] > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%zu path%s skipped: locked — run 'dotta key set'",
+                faults[WORKSPACE_FAULT_LOCKED],
+                faults[WORKSPACE_FAULT_LOCKED] == 1 ? "" : "s"
+            );
+        }
+        if (faults[WORKSPACE_FAULT_UNREADABLE] > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%zu path%s skipped: cannot be read — fix permissions, or exclude with -e",
+                faults[WORKSPACE_FAULT_UNREADABLE],
+                faults[WORKSPACE_FAULT_UNREADABLE] == 1 ? "" : "s"
+            );
+            if (!identity()->privileged) {
+                output_info(out, OUTPUT_NORMAL, "  Run under sudo to read them");
+            }
+        }
+        if (faults[WORKSPACE_FAULT_UNVERIFIED] > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%zu path%s skipped: could not be verified — 'dotta status' lists %s",
+                faults[WORKSPACE_FAULT_UNVERIFIED],
+                faults[WORKSPACE_FAULT_UNVERIFIED] == 1 ? "" : "s",
+                faults[WORKSPACE_FAULT_UNVERIFIED] == 1 ? "it" : "them"
+            );
+        }
     }
     if (refused[WORKSPACE_ROUTE_CONFLICT] > 0) {
         output_info(

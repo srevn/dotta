@@ -180,13 +180,15 @@ typedef enum {
  *   DIVERGENCE_UNVERIFIED          UNVERIFIED   — a bit the workspace could
  *                                  not settle outranks the ones it could: Git
  *                                  could not vouch for the path, the content
- *                                  compare failed (encrypted file over 100MB —
- *                                  AEAD needs the whole ciphertext, so this is
- *                                  OOM protection; blob corruption; I/O), or
- *                                  the file is present but unstattable (EACCES,
- *                                  EIO). status ranks its [unverified] tag the
- *                                  same way, so one item has one name in both
- *                                  places.
+ *                                  compare failed (no key in reach, a blob a
+ *                                  held key refuses, an unsupported cipher version,
+ *                                  blob corruption, I/O), or the file is present
+ *                                  but unstattable (EACCES, EIO). Which of the
+ *                                  three refusals it was is the item's fault
+ *                                  (core/workspace.h); this table does not read
+ *                                  it, and status ranks its tag — [locked],
+ *                                  [unreadable] or [unverified] — the same way,
+ *                                  so one item has one name in both places.
  *   a held relocation              RELOCATED    — the item carries the claim's
  *                                  row (item->row, the relocation) under a label
  *                                  whose projection is not the user's to move
@@ -231,8 +233,8 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  * The verdict buckets of cleanup_preflight_result_t, as a value — PRUNABLE split
  * once more there, by the run's reach: one producer, read by the verdict phase
  * to fill them and by status to predict them, so the two cannot route one item
- * two ways. In the order the tests are taken — the
- * occupant, the state, the divergence bits:
+ * two ways. In the order the tests are taken — the occupant, the state, the
+ * divergence bits:
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires

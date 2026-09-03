@@ -117,7 +117,9 @@ DIR *fs_opendir(const char *path);
  *
  * @param path Path (must not be NULL)
  * @param amode R_OK, W_OK, X_OK, or'd
- * @return true iff permitted
+ * @return true iff permitted; on false errno is faccessat's — the reach's second
+ *         call's where root was tried — so a caller can tell a refusal from a
+ *         path that went away
  */
 bool fs_eaccess(const char *path, int amode);
 

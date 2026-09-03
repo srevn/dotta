@@ -108,6 +108,62 @@ typedef enum {
 } workspace_displaced_t;
 
 /**
+ * Why a look failed — the class of DIVERGENCE_UNVERIFIED, by whose remedy it is
+ *
+ * The bit answers the verb question: no verb resolves this item — apply skips
+ * it, update refuses it, cleanup holds the orphan — and every engine reads it.
+ * It does not answer the user's question, what do I do, and the things that can
+ * make it have three different answers to that: a missing key, a permission,
+ * and a list of one-offs no key or privilege settles. One remedy over all three
+ * is how a locked path came to be told to fix its permissions.
+ *
+ * The fault is that partition, read off the root error's code at the one moment
+ * an analyzer holds it — crypto/keymgr.h's "The codes" is the producer's half
+ * of the contract, and sys/filesystem's errno the other:
+ *
+ *   LOCKED       ERR_LOCKED: the run holds no usable master — none in reach,
+ *                none read, none that opens this repository — or the feature is
+ *                off over a sealed blob. One key settles every such row at once.
+ *   UNREADABLE   ERR_PERMISSION: the invoker cannot read the path. Permissions,
+ *                or a run that holds root.
+ *   UNVERIFIED   anything else: a foreign epoch, a cipher version this build does
+ *                not read, a Git object that would not load, an I/O error, a
+ *                probe that could not answer. Dotta names no remedy for these,
+ *                because there is no one remedy to name — the verb that meets
+ *                the refusal prints its cause, and a block that lists such a
+ *                path points at the verb.
+ *
+ * The class is the whole of what the item carries. The mechanism's own sentence
+ * stays in the error the analyzer freed, where the verb that raises it prints
+ * it ("dotta show", "dotta export", add's and update's wraps): a report is a
+ * list of paths and their state, and every block in cmds/ closes by naming a
+ * remedy in its own fixed words, never by quoting a line another layer wrote.
+ *
+ * One invariant, established at every fold and trusted downstream: `fault !=
+ * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds)
+ * and ORPHANED items can carry one — RELEASED is born of three answers that are
+ * not looks, and UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And
+ * only a file row can be LOCKED: a directory seals no content, so every fault
+ * it can carry comes from an errno.
+ *
+ * Readers: workspace_item_extract_display_info (the tag — [locked] / [unreadable]
+ * / [unverified], the same word on both arms), status's Unverifiable closers
+ * and Issues legend, update's census, apply's preflight rows and the closers
+ * under them, diff's status line. The engines read the bit and never the fault:
+ * one verb, three words.
+ */
+typedef enum {
+    WORKSPACE_FAULT_NONE = 0,     /* The look succeeded */
+    WORKSPACE_FAULT_LOCKED,       /* No usable key this run — one key settles them all */
+    WORKSPACE_FAULT_UNREADABLE,   /* Refused by permissions — root would read it */
+    WORKSPACE_FAULT_UNVERIFIED    /* Anything else — no remedy dotta can name */
+} workspace_fault_t;
+
+/* The classes' arity, for an array with one slot per class. A macro, not an
+ * enumerator, for the reason WORKSPACE_ROUTE_COUNT is one. */
+#define WORKSPACE_FAULT_COUNT (WORKSPACE_FAULT_UNVERIFIED + 1)
+
+/**
  * Diverged item entry
  *
  * Represents a single item (file or directory) with divergence between states.
@@ -136,7 +192,8 @@ typedef enum {
  * Beside it, whether the lstat reached this path at all: the displaced class
  * (workspace_displaced_t) names the claim whose squatter the look resolved through,
  * and every bit the divergence carries was read off that squatter's target when
- * it is not NONE.
+ * it is not NONE. And where a look failed outright, whose remedy that is: the
+ * fault (workspace_fault_t), NONE on every item the analysis could verify.
  *
  * Lifetime — every borrowed pointer on the item is arena-backed and valid for
  * the workspace's lifetime (the arena outlives it): the view's rows, the anchors
@@ -180,6 +237,7 @@ typedef struct {
     /* The observation */
     fs_occupant_t occupant;           /* What the analysis's lstat found at the path (see above) */
     workspace_displaced_t displaced;  /* Whose squatter the lstat resolved through, or NONE */
+    workspace_fault_t fault;          /* Whose remedy the failed look is; NONE unless UNVERIFIED */
 } workspace_item_t;
 
 /**
@@ -316,6 +374,9 @@ typedef enum {
  *                            what it cannot read, and says so through the exit
  *                            code — and an ENCRYPTION bit beside it changes nothing
  *                            the user can act on while the path cannot be read.
+ *                            Which of the three refusals it was, and what settles
+ *                            it, is the item's fault (workspace_fault_t); the
+ *                            route does not read it — one verb, three words.
  *   STALE ∧ CONTENT          CONFLICT — both sides moved since dotta last
  *                            deployed: the edit is real, but update will not
  *                            commit bytes Git has moved past, and apply skips
@@ -653,6 +714,10 @@ const anchor_t *workspace_get_anchor(
  *      past the deployed blob; next to "modified" it names a conflict and the
  *      primary tag's colour stands
  *   4. Secondary: "mode", "ownership", "unencrypted" - Metadata divergence
+ *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
+ *      The look that failed, worded by the item's fault (workspace_fault_t)
+ *      so one path reads the same word wherever it is listed. What settles it
+ *      is the block's to say, in its own words, not the row's
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)

@@ -192,8 +192,10 @@ size_t content_estimated_plaintext_size(
  * The one line for a sealed blob met with the feature off — the read's and the
  * store's alike. ERR_LOCKED: no key is in reach at all, which is the run's fault
  * and not the blob's, and turning the feature on and setting the key is what
- * settles every such row at once. Names no path: a row's reader takes the root
- * of a failed look for its cause line and prints the run's once (core/workspace.h).
+ * settles every such row at once. Names no path, and needs to name none: a report
+ * that meets it already lists the path, and what it takes from the refusal is
+ * the root's code alone — which classes the look LOCKED and puts the key in the
+ * block's own closing line (core/workspace.h, workspace_fault_t).
  */
 static const char ENCRYPTION_DISABLED[] =
     "Encryption is disabled (encryption.enabled = false); enable it in "

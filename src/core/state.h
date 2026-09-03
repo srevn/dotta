@@ -126,7 +126,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  * writes into its index. The alternative was worse than the race: a deploy could
  * never arm a proof, every deployed path paid one redundant content read on its
  * next load, and a deployed 0000 claim — whose read the mode itself forbids —
- * stood [unverified] forever.
+ * stood [unreadable] forever.
  */
 static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
     return (stat_cache_t){

@@ -279,6 +279,36 @@ static bool ownership_diverges(
 }
 
 /**
+ * Class a failed look by whose remedy it is
+ *
+ * The root's code, and nothing else (workspace.h, workspace_fault_t): ERR_LOCKED
+ * is the run's key, ERR_PERMISSION is root's, and everything else is a refusal
+ * dotta cannot name one remedy for. The root, not the top — the layers above it
+ * added the subject the row already names, and the code the producer chose is
+ * the root's (crypto/keymgr.h, "The codes").
+ */
+static workspace_fault_t fault_class(error_code_t code) {
+    switch (code) {
+        case ERR_LOCKED:     return WORKSPACE_FAULT_LOCKED;
+        case ERR_PERMISSION: return WORKSPACE_FAULT_UNREADABLE;
+        default:             return WORKSPACE_FAULT_UNVERIFIED;
+    }
+}
+
+/**
+ * Class a failed look's error, and consume it
+ *
+ * The class is all the item keeps: the message is the failing verb's to print,
+ * and this analysis is not failing — it is reporting a path it could not read.
+ * Five folds call this, each holding the error of the look it just made.
+ */
+static workspace_fault_t fault_of(error_t *err) {
+    workspace_fault_t fault = fault_class(error_code(error_root(err)));
+    error_free(err);
+    return fault;
+}
+
+/**
  * Add a diverged item from the join's sources
  *
  * The three join analyzers produce through here: at least one source is non-NULL,
@@ -295,6 +325,8 @@ static bool ownership_diverges(
  * @param state Where the item exists (deployed/undeployed/etc.)
  * @param divergence What's wrong with it (bit flags, can combine)
  * @param occupant What the producer's lstat found at the path (workspace.h)
+ * @param fault Whose remedy the failed look is — NONE unless the divergence carries
+ *              DIVERGENCE_UNVERIFIED, which is the fold's invariant
  */
 static error_t *workspace_add_diverged(
     workspace_t *ws,
@@ -302,7 +334,8 @@ static error_t *workspace_add_diverged(
     const anchor_t *anchor,
     workspace_state_t state,
     divergence_type_t divergence,
-    fs_occupant_t occupant
+    fs_occupant_t occupant,
+    workspace_fault_t fault
 ) {
     CHECK_NULL(ws);
 
@@ -336,6 +369,7 @@ static error_t *workspace_add_diverged(
     entry->state = state;
     entry->divergence = divergence;
     entry->occupant = occupant;
+    entry->fault = fault;
 
     error_t *err = ptr_array_push(&ws->diverged, entry);
     if (err) {
@@ -614,6 +648,7 @@ static error_t *analyze_file_divergence(
      */
     struct stat initial_stat;
     fs_occupant_t occupant = fs_lstat_occupant(fs_path, &initial_stat);
+    int lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
     if (occupant == FS_OCCUPANT_UNKNOWN) {
         /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
@@ -634,7 +669,8 @@ static error_t *analyze_file_divergence(
         return workspace_add_diverged(
             ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
             DIVERGENCE_UNVERIFIED | policy,
-            occupant                     /* assumed present */
+            occupant,                    /* assumed present */
+            fault_class(error_code_from_errno(lstat_errno))
         );
     }
 
@@ -713,6 +749,11 @@ static error_t *analyze_file_divergence(
         struct stat file_stat;
         memset(&file_stat, 0, sizeof(file_stat));
         compare_result_t cmp_result;
+
+        /* Whose remedy a failed look is, folded where it fails and read by the
+         * CMP_UNVERIFIED arm below — the one arm that can see it, since that
+         * verdict has no other producer. */
+        workspace_fault_t fault = WORKSPACE_FAULT_NONE;
 
         error_t *err = NULL;
 
@@ -850,7 +891,7 @@ static error_t *analyze_file_divergence(
                  * failed look is never fatal to the load. The CMP_UNVERIFIED
                  * arm below routes it; the confirmation and base-question gates
                  * between read EQUAL and DIFFERENT, so they skip themselves. */
-                error_free(err);
+                fault = fault_of(err);
                 cmp_result = CMP_UNVERIFIED;
             }
 
@@ -957,7 +998,7 @@ static error_t *analyze_file_divergence(
                  * a type change. */
                 return workspace_add_diverged(
                     ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE | policy, occupant
+                    DIVERGENCE_TYPE | policy, occupant, WORKSPACE_FAULT_NONE
                 );
 
             case CMP_MISSING:
@@ -985,7 +1026,7 @@ static error_t *analyze_file_divergence(
                  * a failed look this way, and one policy beats two. */
                 return workspace_add_diverged(
                     ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_UNVERIFIED | policy, occupant
+                    DIVERGENCE_UNVERIFIED | policy, occupant, fault
                 );
         }
 
@@ -1063,7 +1104,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED ||
         divergence != DIVERGENCE_NONE || profile_changed) {
         error_t *err = workspace_add_diverged(
-            ws, row, anchor, state, divergence, occupant
+            ws, row, anchor, state, divergence, occupant, WORKSPACE_FAULT_NONE
         );
         if (err) return err;
     }
@@ -1103,21 +1144,28 @@ static error_t *analyze_file_divergence(
  * - Content cache (reuses decrypted content across checks)
  * - Stat propagation (zero redundant lstat syscalls)
  *
+ * A measure that can fail says so: the look's error is returned and the caller
+ * decides what a failure to look means, which is the rule the active analyzer
+ * already keeps for its own (never fatal to the load; the item holds the class
+ * and the bit). Nothing is guarded here — the one caller cannot pass a NULL,
+ * and a break that reached this would rather crash than be read as a silent
+ * [orphaned, unverified].
+ *
  * @param ws Workspace (provides content_cache, repo)
  * @param anchor The record dotta keeps of the path (must not be NULL;
  *               non-zero blob_oid)
  * @param in_stat Pre-captured stat from caller (must not be NULL)
- * @return Divergence flags or DIVERGENCE_UNVERIFIED on error
+ * @param out Receives the divergence flags (must not be NULL); DIVERGENCE_NONE
+ *            when the look failed and the error is returned
+ * @return The look's error when the compare could not be made; NULL otherwise
  */
-static divergence_type_t compute_orphan_divergence(
+static error_t *compute_orphan_divergence(
     workspace_t *ws,
     const anchor_t *anchor,
-    const struct stat *in_stat
+    const struct stat *in_stat,
+    divergence_type_t *out
 ) {
-    /* Defensive NULL checks */
-    if (!ws || !anchor || !in_stat) {
-        return DIVERGENCE_UNVERIFIED;
-    }
+    *out = DIVERGENCE_NONE;
 
     const char *fs_path = anchor->filesystem_path;
     const char *storage_path = anchor->storage_path;
@@ -1180,18 +1228,13 @@ static divergence_type_t compute_orphan_divergence(
         );
 
         if (err) {
-            /* Cannot classify, load, decrypt, or compare. Possible causes:
-             * - Encrypted file but no passphrase available (missing key)
-             * - Decryption failed (wrong passphrase, corrupted ciphertext)
-             * - Blob uses an unsupported cipher version (skew)
-             * - I/O error reading blob from git
-             * - Blob missing from repository (corruption)
-             *
-             * The active analyzer maps its content-phase errors the same way
-             * (analyze_file_divergence): same causes, same word. The CMP_UNVERIFIED
-             * arm below routes it. */
-            error_free(err);
-            cmp_result = CMP_UNVERIFIED;
+            /* Cannot classify, load, decrypt, or compare — no key in reach, a
+             * blob a held key refuses, an unsupported cipher version, an I/O
+             * error, a blob missing from the repository. Handed back whole: the
+             * caller folds its class onto the item and holds the orphan, which
+             * is what the active analyzer does with the same causes at the same
+             * step (analyze_file_divergence). */
+            return err;
         }
     }
 
@@ -1235,12 +1278,9 @@ static divergence_type_t compute_orphan_divergence(
             break;
 
         case CMP_UNVERIFIED:
-            /* The failed look, mapped above — no compare path returns this verdict
-             * itself. Conservative: the user sees [orphaned, unverified] and
-             * investigates, rather than a false [orphaned, clean] or noisy
-             * [orphaned, modified]; metadata checks on content dotta could not
-             * read would say nothing more. */
-            return DIVERGENCE_UNVERIFIED;
+            /* Unreachable: a look that failed returned its error above, and no
+             * compare path produces this verdict of its own. */
+            break;
     }
 
     /* Step 5: Permission checking (if the path still stands)
@@ -1265,7 +1305,8 @@ static divergence_type_t compute_orphan_divergence(
         }
     }
 
-    return divergence;
+    *out = divergence;
+    return NULL;
 }
 
 /**
@@ -1577,9 +1618,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
          */
         struct stat orphan_stat;
         fs_occupant_t occupant = fs_lstat_occupant(fs_path, &orphan_stat);
+        int lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
         workspace_state_t item_state = WORKSPACE_STATE_ORPHANED;
         divergence_type_t divergence = DIVERGENCE_NONE;
+        workspace_fault_t fault = WORKSPACE_FAULT_NONE;
 
         /* The relocated claim's row, set only where the probe answers BACKED:
          * the record's own (profile, storage path) claim, still in the view,
@@ -1647,8 +1690,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * is a guess to make: held. Not measured, unlike the two arms
                  * below: no reader shows a bit beside UNVERIFIED, so a compare
                  * would only give the item a second reason for the fate it already
-                 * has. */
+                 * has. Its class is UNVERIFIED whatever went wrong: the probe
+                 * meets Git and its own allocations, never a key or a
+                 * permission. */
                 divergence = DIVERGENCE_UNVERIFIED;
+                fault = WORKSPACE_FAULT_UNVERIFIED;
             } else if (authority == ORPHAN_AUTHORITY_LOST) {
                 /* Git cannot back the path. Left on disk, record retires — so
                  * there is nothing a content comparison would decide. */
@@ -1682,21 +1728,31 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * to measure — cleanup's emptiness rule decides — only whether it
              * can be: one dotta cannot stat or cannot read is held, as an
              * unstattable file is, until the user can say what is in it. */
-            if (kind == PATH_KIND_FILE) {
-                divergence = (occupant != FS_OCCUPANT_UNKNOWN)
-                    ? compute_orphan_divergence(ws, anchor, &orphan_stat)
-                    : DIVERGENCE_UNVERIFIED;
-            } else if (occupant == FS_OCCUPANT_UNKNOWN
-                || !fs_eaccess(fs_path, R_OK | X_OK)) {
-                /* Read for the readdir, search for the walk's look at an entry
-                 * named like OS metadata (fs_directory_emptiness). */
+            if (kind == PATH_KIND_FILE && occupant != FS_OCCUPANT_UNKNOWN) {
+                error_t *look = compute_orphan_divergence(
+                    ws, anchor, &orphan_stat, &divergence
+                );
+                if (look) {
+                    divergence = DIVERGENCE_UNVERIFIED;
+                    fault = fault_of(look);
+                }
+            } else if (occupant == FS_OCCUPANT_UNKNOWN) {
+                /* Present but unstattable, either kind: nothing to measure the
+                 * copy with, and the errno says whose refusal it was. */
                 divergence = DIVERGENCE_UNVERIFIED;
+                fault = fault_class(error_code_from_errno(lstat_errno));
+            } else if (!fs_eaccess(fs_path, R_OK | X_OK)) {
+                /* A directory: read for the readdir, search for the walk's look
+                 * at an entry named like OS metadata (fs_directory_emptiness).
+                 * fs_eaccess leaves faccessat's errno on false. */
+                divergence = DIVERGENCE_UNVERIFIED;
+                fault = fault_class(error_code_from_errno(errno));
             }
         }
 
         err = workspace_add_diverged(
             ws, row,  /* The relocated claim's row, or NULL; identity is the record's */
-            anchor, item_state, divergence, occupant
+            anchor, item_state, divergence, occupant, fault
         );
         if (err) {
             err = error_wrap(err, "Failed to add orphaned/released path");
@@ -2177,6 +2233,7 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * - DIRECTORY: Actual directory, check metadata */
         struct stat dir_stat;
         fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &dir_stat);
+        int lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
         if (occupant == FS_OCCUPANT_NONE) {
             /* Absent path: classify_absent decides, and this is where its claim
@@ -2193,7 +2250,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 anchor,
                 classify_absent(row, anchor),
                 DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
-                occupant
+                occupant,
+                WORKSPACE_FAULT_NONE
             );
 
             if (err) {
@@ -2216,7 +2274,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
-                occupant                  /* assumed present */
+                occupant,                 /* assumed present */
+                fault_class(error_code_from_errno(lstat_errno))
             );
 
             if (err) {
@@ -2254,7 +2313,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
-                occupant                   /* path exists, wrong type */
+                occupant,                  /* path exists, wrong type */
+                WORKSPACE_FAULT_NONE
             );
 
             if (err) {
@@ -2312,7 +2372,8 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
-                occupant
+                occupant,
+                WORKSPACE_FAULT_NONE
             );
 
             if (err) {
@@ -3066,12 +3127,24 @@ bool workspace_item_extract_display_info(
                 }
 
                 if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                    /* The failed look: an unstattable path, or content that could
-                     * not be loaded, decrypted, or compared. Conservative handling
-                     * downstream (update refuses it, apply surfaces the real
-                     * error, cleanup skips the orphan). */
+                    /* The failed look, worded by whose remedy it is
+                     * (workspace_fault_t) — the same word the orphaned arm below
+                     * prints, so one path has one name wherever it is listed.
+                     * Conservative handling downstream (update refuses it, apply
+                     * skips it at preflight, cleanup skips the orphan). */
                     if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                        tags_out[tag_count++] = "unverified";
+                        switch (item->fault) {
+                            case WORKSPACE_FAULT_LOCKED:
+                                tags_out[tag_count++] = "locked";
+                                break;
+                            case WORKSPACE_FAULT_UNREADABLE:
+                                tags_out[tag_count++] = "unreadable";
+                                break;
+                            case WORKSPACE_FAULT_NONE:
+                            case WORKSPACE_FAULT_UNVERIFIED:
+                                tags_out[tag_count++] = "unverified";
+                                break;
+                        }
                     }
                     /* Upgrade color to MAGENTA (special visual treatment for
                      * unverifiable state) */
@@ -3129,12 +3202,23 @@ bool workspace_item_extract_display_info(
                 *color_out = OUTPUT_COLOR_CYAN;
 
             } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                /* Cannot verify state - could be large file, missing key, I/O
-                 * error, etc. Conservative: apply skips it
-                 * (CLEANUP_SKIP_UNVERIFIED, ranked first there as it is here —
-                 * one item, one name). */
+                /* The failed look, worded by whose remedy it is (workspace_fault_t)
+                 * — the deployed arm's switch, so one item has one name in both.
+                 * Conservative: apply skips it (CLEANUP_SKIP_UNVERIFIED, ranked
+                 * first there as it is here — one item, one name). */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                    tags_out[tag_count++] = "unverified";
+                    switch (item->fault) {
+                        case WORKSPACE_FAULT_LOCKED:
+                            tags_out[tag_count++] = "locked";
+                            break;
+                        case WORKSPACE_FAULT_UNREADABLE:
+                            tags_out[tag_count++] = "unreadable";
+                            break;
+                        case WORKSPACE_FAULT_NONE:
+                        case WORKSPACE_FAULT_UNVERIFIED:
+                            tags_out[tag_count++] = "unverified";
+                            break;
+                    }
                 }
                 *color_out = OUTPUT_COLOR_MAGENTA;
 

@@ -24,6 +24,7 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 
@@ -639,16 +640,20 @@ static void display_workspace_status(
             }
 
             /* Section 4: Unverifiable paths — the other no-verb bucket: dotta
-             * could not look, so no verb is promised; the way out is the user's,
-             * in the words update's counted line already uses */
+             * could not look, so no verb is promised. The header says only that;
+             * the ways out close the block, one per class the block actually
+             * holds (workspace_fault_t), because one sentence over three refusals
+             * is how a locked path came to be told to fix its permissions. */
             if (unverifiable_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Unverifiable paths",
-                    "dotta cannot read these paths; fix permissions, or "
-                    "exclude with -e"
+                    "dotta could not verify these paths"
                 );
 
                 if (list) {
+                    bool locked = false;
+                    bool unreadable = false;
+
                     for (size_t i = 0; i < unverifiable_count; i++) {
                         const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
                         size_t tag_count;
@@ -668,10 +673,37 @@ static void display_workspace_status(
                                 list, tags, tag_count, color, path, metadata
                             );
                         }
+
+                        locked |= unverifiable[i]->fault == WORKSPACE_FAULT_LOCKED;
+                        unreadable |=
+                            unverifiable[i]->fault == WORKSPACE_FAULT_UNREADABLE;
                     }
 
                     output_list_render(list);
                     output_list_free(list);
+
+                    /* The ways out, each printed only for a class the block holds
+                     * and each in this block's own words: a key for the locked
+                     * rows, root for the unreadable ones and only where the run
+                     * holds none. The rest have no remedy to name — the verb
+                     * that meets the refusal is what says which — so they close
+                     * with nothing. */
+                    bool sudo = unreadable && !identity()->privileged;
+
+                    if (locked || sudo) {
+                        output_newline(out, OUTPUT_NORMAL);
+                    }
+                    if (locked) {
+                        output_hintline(
+                            out, OUTPUT_NORMAL,
+                            "  Run 'dotta key set' to unlock them"
+                        );
+                    }
+                    if (sudo) {
+                        output_hintline(
+                            out, OUTPUT_NORMAL, "  Run under sudo to verify them"
+                        );
+                    }
                 }
             }
 
@@ -895,17 +927,39 @@ static void display_workspace_status(
                                     /* The two ways a directory reaches SKIPPED
                                      * here (force=false): the workspace could
                                      * not verify it — which outranks the hold,
-                                     * as it does in the file table — or the
-                                     * relocation hold. */
-                                    hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
-                                        ? "cannot be verified; apply skips it"
-                                        : relocated_hint;
+                                     * as it does in the file table, and is worded
+                                     * by whose remedy it is — or the relocation
+                                     * hold. A directory seals no content, so
+                                     * its failed look is never the key's. */
+                                    hint = !(orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
+                                        ? relocated_hint
+                                        : orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
+                                        ? "cannot be read; apply skips it"
+                                        : "could not be verified; apply skips it";
                                     break;
                                 }
                                 switch (cleanup_skip_reason(orphaned[i])) {
                                     case CLEANUP_SKIP_UNVERIFIED:
-                                        hint = "cannot be verified; "
-                                            "apply skips it, --force prunes it";
+                                        /* Worded by whose remedy the failed look
+                                         * is, so the hint and the tag it is keyed
+                                         * by say the same thing
+                                         * (workspace_fault_t). */
+                                        switch (orphaned[i]->fault) {
+                                            case WORKSPACE_FAULT_LOCKED:
+                                                hint = "encrypted, and no key opened it "
+                                                    "('dotta key set'); apply skips it, "
+                                                    "--force prunes it";
+                                                break;
+                                            case WORKSPACE_FAULT_UNREADABLE:
+                                                hint = "cannot be read; "
+                                                    "apply skips it, --force prunes it";
+                                                break;
+                                            case WORKSPACE_FAULT_NONE:
+                                            case WORKSPACE_FAULT_UNVERIFIED:
+                                                hint = "could not be verified; "
+                                                    "apply skips it, --force prunes it";
+                                                break;
+                                        }
                                         break;
                                     case CLEANUP_SKIP_RELOCATED:
                                         hint = relocated_hint;
@@ -1497,7 +1551,7 @@ const args_command_t spec_status = {
     .notes        =
         "Ownership:\n"
         "  Ownership is compared like mode, without privileges. A path only\n"
-        "  root can read is reported as unverified; run the command under\n"
+        "  root can read is reported as [unreadable]; run the command under\n"
         "  sudo to verify it.\n"
         "\n"
         "Remote State Indicators:\n"

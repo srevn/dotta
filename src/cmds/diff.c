@@ -139,11 +139,27 @@ static const char *get_status_message_from_item(
 
     /* A look that failed: no bit below was settled, so neither verb's sentence
      * is true of the path — apply skips the row at preflight, update in its census.
-     * Ranked where the route ranks it, above every settled bit. */
+     * Ranked where the route ranks it, above every settled bit, and worded by
+     * whose remedy the failure is (workspace_fault_t) — the three words status
+     * tags the same row with. */
     if (item->divergence & DIVERGENCE_UNVERIFIED) {
-        return direction == DIFF_UPSTREAM
-                ? "could not be verified (apply skips it)"
-                : "could not be verified (update skips it)";
+        switch (item->fault) {
+            case WORKSPACE_FAULT_LOCKED:
+                return direction == DIFF_UPSTREAM
+                        ? "locked (apply skips it)"
+                        : "locked (update skips it)";
+
+            case WORKSPACE_FAULT_UNREADABLE:
+                return direction == DIFF_UPSTREAM
+                        ? "cannot be read (apply skips it)"
+                        : "cannot be read (update skips it)";
+
+            case WORKSPACE_FAULT_NONE:
+            case WORKSPACE_FAULT_UNVERIFIED:
+                return direction == DIFF_UPSTREAM
+                        ? "could not be verified (apply skips it)"
+                        : "could not be verified (update skips it)";
+        }
     }
 
     /* Handle divergence-based messages for deployed items */

@@ -53,6 +53,9 @@
  * disk moved, changed in Git and on disk where both sides did. A CONTENT skip
  * carries its item by construction — content_conflicts(NULL) is false — and it
  * is DEPLOYED (no path bit survives absence), so the route read is total here.
+ * An UNREADABLE label reads the item's fault the same way (workspace_fault_t —
+ * locked, unreadable, or the plain "cannot verify"); it is a self-judged skip,
+ * so it always carries one.
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by what is actually present — the reasons, and for a named squatter
@@ -61,12 +64,15 @@
  * widen a scope that can never plan it, a run that holds root is not told to
  * hold it, and an unreadable-only run is offered neither a flag that will not
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
- * its own line, because dotta never writes on a guess. The two refusals root
- * lifts — a landing the invoker cannot write, a pair it cannot set — close with
- * by naming sudo, and only for a run that holds none — identity()->privileged,
- * the one process fact this block asks. The command itself is not spelled: the
- * user typed it, and what sudo does to their environment on the way is sudo's
- * to document, not dotta's. The consent remedy teaches both directions and names
+ * its own line, because dotta never writes on a guess. The refusals root lifts
+ * — a landing the invoker cannot write, a pair it cannot set, and a look that
+ * met EACCES on the path itself — close by naming sudo, and only for a run that
+ * holds none: identity()->privileged, the one process fact this block asks. The
+ * key's refusal closes the same way, naming the verb that lifts it; the two are
+ * told apart by the field the label above reads. Neither line spells the command
+ * that would: the user typed one, the verb the other names says the rest when
+ * it is run, and what sudo does to their environment on the way is sudo's to
+ * document, not dotta's. The consent remedy teaches both directions and names
  * its cost the way cleanup's does: --force keeps Git's and discards what stands
  * there, and a CONTENT skip adds the disk-wins verb, 'dotta update' — gated on
  * CONTENT and not on the class, because update refuses a retyped row (update.c's
@@ -153,9 +159,27 @@ static void print_deploy_skips(
             }
 
             case DEPLOY_SKIP_UNREADABLE: {
+                /* The failed look's word, by the item's fault (workspace_fault_t)
+                 * — a self-judged skip, so the item is always there. apply's
+                 * own vocabulary: "cannot verify" beside "modified locally",
+                 * not the status tag. */
+                const char *label = NULL;
+                switch (s->item->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        label = "locked";
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        label = "unreadable";
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        label = "cannot verify";
+                        break;
+                }
+
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
-                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(cannot verify from ");
+                output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(%s from ", label);
                 output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
@@ -241,10 +265,21 @@ static void print_deploy_skips(
         }
     }
     for (size_t i = 0; !identity()->privileged && i < verdicts->skipped.count; i++) {
-        deploy_skip_reason_t reason = verdicts->skipped.entries[i].reason;
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (reason == DEPLOY_SKIP_PERMISSION || reason == DEPLOY_SKIP_OWNERSHIP) {
+        if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OWNERSHIP ||
+            (s->reason == DEPLOY_SKIP_UNREADABLE &&
+            s->item->fault == WORKSPACE_FAULT_UNREADABLE)) {
             output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them");
+            break;
+        }
+    }
+    for (size_t i = 0; i < verdicts->skipped.count; i++) {
+        const deploy_skip_t *s = &verdicts->skipped.entries[i];
+
+        if (s->reason == DEPLOY_SKIP_UNREADABLE &&
+            s->item->fault == WORKSPACE_FAULT_LOCKED) {
+            output_info(out, OUTPUT_NORMAL, "  Run 'dotta key set' to deploy them");
             break;
         }
     }
@@ -1388,8 +1423,22 @@ static void print_cleanup_skips(
                 label = "permissions changed";
                 break;
             case CLEANUP_SKIP_UNVERIFIED:
+                /* The failed look's word, by the item's fault (workspace_fault_t)
+                 * — the same three the deploy block's UNREADABLE row prints, so
+                 * one path reads the same way in both previews. */
                 glyph = "?";
-                label = "cannot verify";
+                switch (item->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        label = "locked";
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        label = "unreadable";
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        label = "cannot verify";
+                        break;
+                }
                 break;
             case CLEANUP_SKIP_NONE:
                 /* Unreachable: a file is in skipped_files because a reason names it */

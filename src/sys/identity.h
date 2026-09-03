@@ -102,7 +102,10 @@ typedef struct identity {
  *
  * Reads the kernel's ids, the privilege tool's variables, the passwd database
  * and $HOME, and applies the two rules below. Called once, first in main();
- * every other entry point of this module reads what it wrote.
+ * every other entry point of this module reads what it wrote. Sets the process's
+ * limits on the way: core dumps off (no core dump holds a key — the soft limit,
+ * so a child may still write its own) and, under sudo, the memlock limit raised
+ * while root can raise it.
  *
  * @return Error when no home directory can be named for the invoker (no $HOME,
  *         no passwd entry) or the one named is not absolute; NULL on success

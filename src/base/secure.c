@@ -90,8 +90,7 @@ void secure_mlock_warn(int saved_errno, const char *fmt, ...) {
         stderr,
         ": %s\n"
         "         Sensitive material may be paged to disk.\n"
-        "         Raise RLIMIT_MEMLOCK (ulimit -l) or run under sudo to enable\n"
-        "         this protection.\n",
+        "         Raise RLIMIT_MEMLOCK (ulimit -l) to enable this protection.\n",
         strerror(saved_errno)
     );
 }

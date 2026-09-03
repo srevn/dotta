@@ -459,8 +459,11 @@ typedef enum {
  * the predicate is not asked about every entry.
  *
  * UNREADABLE when the directory cannot be opened or read (absent, not a directory,
- * permission denied, an I/O error) and for a NULL path. An entry whose path cannot
- * be built is OCCUPIED — don't promise a removal you cannot verify.
+ * permission denied, an I/O error), for a NULL path, and for an entry whose path
+ * could not be built: the walk stopped without asking, so "cannot tell" is the
+ * answer — never OCCUPIED, which a caller may read as a settled fact about the
+ * directory (core/cleanup's permanent fate retires the record on it) and which
+ * an allocation failure has not established.
  *
  * @param path Directory path to check (NULL reads UNREADABLE)
  * @param vouch Predicate answering "look past that entry" (may be NULL)

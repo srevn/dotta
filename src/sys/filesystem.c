@@ -1108,9 +1108,12 @@ fs_emptiness_t fs_directory_emptiness(
             char *child = NULL;
             error_t *err = fs_path_join(path, entry->d_name, &child);
             if (err) {
-                /* Cannot name it, so cannot let the caller vouch for it. */
+                /* Cannot name it, so cannot let the caller vouch for it — and
+                 * an entry nobody could be asked about is not an entry nobody
+                 * vouched for. The walk is incomplete, which is what the read
+                 * error above answers too: nothing can be said. */
                 error_free(err);
-                answer = FS_DIR_OCCUPIED;
+                answer = FS_DIR_UNREADABLE;
                 break;
             }
 

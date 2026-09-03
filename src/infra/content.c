@@ -179,12 +179,15 @@ size_t content_estimated_plaintext_size(
     /* Only ENCRYPTED blobs carry the cipher's framing overhead. For PLAINTEXT
      * and UNSUPPORTED_VERSION, blob_size is the only honest number — subtracting
      * overhead under UNSUPPORTED_VERSION would be a lie, since this build cannot
-     * decrypt to confirm. */
+     * decrypt to confirm. A blob of exactly the overhead is an empty plaintext
+     * sealed; only a blob shorter than that — a truncated one, which the cipher
+     * refuses — keeps its raw size. */
     if (kind != CONTENT_ENCRYPTED) {
         return blob_size;
     }
-    return blob_size > CIPHER_OVERHEAD ? blob_size - CIPHER_OVERHEAD
-                                       : blob_size;
+
+    return blob_size >= CIPHER_OVERHEAD ? blob_size - CIPHER_OVERHEAD
+                                        : blob_size;
 }
 
 /**

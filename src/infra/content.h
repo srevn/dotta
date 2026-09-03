@@ -160,16 +160,17 @@ error_t *content_classify_path(
  *
  * Returns:
  *   PLAINTEXT           → blob_size unchanged
- *   ENCRYPTED           → blob_size minus the cipher's fixed overhead
- *                         when the blob is at least that large; otherwise blob_size
- *                         (defensive — a too-small blob would have been
- *                         misclassified upstream)
+ *   ENCRYPTED           → blob_size minus the cipher's fixed overhead when the
+ *                         blob is at least that large (a blob of exactly the
+ *                         overhead is an empty plaintext sealed); a shorter one
+ *                         is truncated — the cipher refuses it — and keeps its
+ *                         raw size
  *   UNSUPPORTED_VERSION → blob_size unchanged. Cannot decrypt under this build,
  *                         so subtracting overhead would be a lie.
  *
- * Estimate, not exact size — header-only inspection cannot know the plaintext
- * length, only bound it. For exact sizes, decrypt via content_get_from_blob_oid
- * and read the buffer length.
+ * Exact for a well-formed blob — the stream cipher pads nothing, so the body is
+ * the plaintext's length — and an estimate only in that nothing here verifies
+ * the blob. For the bytes themselves, decrypt via content_get_from_blob_oid.
  */
 size_t content_estimated_plaintext_size(
     content_kind_t kind, size_t blob_size

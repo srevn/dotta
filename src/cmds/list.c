@@ -366,8 +366,8 @@ static error_t *list_files(
     bool verbose = output_is_verbose(out);
 
     /* One branch read serves the whole listing: the file walk, the verbose
-     * per-entry lookups and commit map, and the metadata (encryption flags;
-     * the directory count when the file list is empty). */
+     * per-entry lookups and commit map, and the metadata (the directory count
+     * when the file list is empty). */
     git_tree *tree = NULL;
     error_t *err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
     if (err) {
@@ -433,9 +433,8 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Build file→commit map and load metadata if verbose */
+    /* Build file→commit map if verbose */
     file_commit_map_t *commit_map = NULL;
-    metadata_t *metadata = NULL;
     if (verbose) {
         err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
         if (err) {
@@ -444,14 +443,6 @@ static error_t *list_files(
                 out, OUTPUT_NORMAL, "Failed to load commit history: %s",
                 error_message(err)
             );
-            error_free(err);
-            err = NULL;
-        }
-
-        /* Load metadata for encryption status from the tree already open. Don't
-         * warn — metadata may not exist yet (perfectly normal). */
-        err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
-        if (err) {
             error_free(err);
             err = NULL;
         }
@@ -498,42 +489,34 @@ static error_t *list_files(
             git_tree_entry *entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, tree, file_path);
             if (git_err == 0) {
-                /* Check encryption status and display indicator */
-                bool encrypted = metadata_file_encrypted(metadata, file_path);
-                if (encrypted) {
-                    output_styled(
-                        out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} "
-                    );
-                } else {
-                    /* Space padding to maintain alignment */
-                    output_print(
-                        out, OUTPUT_VERBOSE, "      "
-                    );
+                /* The blob's own bytes say whether it is ciphertext: the indicator
+                 * and the size read one classification, never the claim sheet's
+                 * flag. The size shown is the plaintext's — the cipher's framing
+                 * taken off a blob this build can open — through the helper that
+                 * keeps crypto/cipher.h out of the command layer. */
+                const git_oid *blob_oid = git_tree_entry_id(entry);
+                content_kind_t kind = CONTENT_PLAINTEXT;
+                size_t size = 0;
+                error_t *blob_err = content_classify(repo, blob_oid, &kind, NULL);
+                if (!blob_err) {
+                    blob_err = stats_get_blob_size(repo, blob_oid, &size);
                 }
+                if (!blob_err) {
+                    if (kind != CONTENT_PLAINTEXT) {
+                        output_styled(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
+                    } else {
+                        /* Space padding to maintain alignment */
+                        output_print(out, OUTPUT_VERBOSE, "      ");
+                    }
 
-                /* Get blob size efficiently */
-                size_t size;
-                error_t *stats_err = stats_get_blob_size(
-                    repo, git_tree_entry_id(entry), &size
-                );
-                if (!stats_err) {
-                    /* Show plaintext content size for encrypted blobs by
-                     * subtracting the cipher's framing overhead. The helper keeps
-                     * crypto/cipher.h imports out of the command layer (only
-                     * infra/content and the crypto layer itself import
-                     * cipher.h). */
-                    content_kind_t kind = encrypted
-                                        ? CONTENT_ENCRYPTED
-                                        : CONTENT_PLAINTEXT;
-                    size_t display_size =
-                        content_estimated_plaintext_size(kind, size);
+                    size_t display_size = content_estimated_plaintext_size(kind, size);
 
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));
                     output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
                     total_size += display_size;
                 }
-                error_free(stats_err);
+                error_free(blob_err);
 
                 /* Get last commit for this file */
                 if (commit_map) {
@@ -556,7 +539,6 @@ static error_t *list_files(
                         );
                     }
                 }
-
                 git_tree_entry_free(entry);
             } else {
                 /* Tree entry lookup failed unexpectedly */
@@ -588,9 +570,6 @@ static error_t *list_files(
     /* Cleanup */
     if (commit_map) {
         stats_free_file_commit_map(commit_map);
-    }
-    if (metadata) {
-        metadata_free(metadata);
     }
     git_tree_free(tree);
     string_array_free(files);

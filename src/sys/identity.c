@@ -19,7 +19,6 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-#include "base/buffer.h"
 #include "base/error.h"
 #include "sys/filesystem.h"
 
@@ -251,59 +250,4 @@ bool identity_may_chown(const identity_t *idn, uid_t uid, gid_t gid) {
     }
 
     return false;
-}
-
-/* An argument the shell would split, expand or misread stands single-quoted,
- * the quote itself spelled '\'' — the one POSIX quoting that needs no other escape.
- * The safe set is what a path, a flag or a profile name is made of. */
-static bool shell_safe(const char *arg) {
-    if (*arg == '\0') return false;
-    for (const char *p = arg; *p; p++) {
-        if (!isalnum((unsigned char) *p) && !strchr("_-./:@%+=,", *p)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static error_t *append_argument(buffer_t *buf, const char *arg) {
-    if (shell_safe(arg)) return buffer_append_string(buf, arg);
-
-    RETURN_IF_ERROR(buffer_append(buf, "'", 1));
-    for (const char *p = arg; *p; p++) {
-        if (*p == '\'') {
-            RETURN_IF_ERROR(buffer_append_string(buf, "'\\''"));
-        } else {
-            RETURN_IF_ERROR(buffer_append(buf, p, 1));
-        }
-    }
-
-    return buffer_append(buf, "'", 1);
-}
-
-char *identity_sudo_hint(int argc, char **argv) {
-    extern char **environ;
-    bool keep = false;
-    for (char **e = environ; *e && !keep; e++) {
-        keep = strncmp(*e, "DOTTA_", 6) == 0;
-    }
-
-    const char *prog = (argc > 0 && argv[0] && *argv[0]) ? argv[0] : "dotta";
-
-    buffer_t buf = BUFFER_INIT;
-    error_t *err = buffer_append_string(&buf, keep ? "sudo -E " : "sudo ");
-    if (!err) err = append_argument(&buf, prog);
-    for (int i = 1; i < argc && !err; i++) {
-        err = buffer_append(&buf, " ", 1);
-        if (!err) err = append_argument(&buf, argv[i]);
-    }
-
-    if (err) {
-        error_free(err);
-        buffer_free(&buf);
-        return NULL;
-    }
-
-    return buffer_detach(&buf);
 }

@@ -40,9 +40,9 @@ typedef struct {
  * own — core/manifest maintains that when profiles or files change, and apply
  * reads it through the workspace. Never asks for root: a landing the invoker
  * cannot write, a pair it cannot set or an orphan whose parent refuses its removal
- * is a preflight skip that closes with the command line to re-run under sudo,
- * and a run under sudo lands or prunes it through the syscall's second try
- * (sys/filesystem) with no prompt of dotta's between.
+ * is a preflight skip that closes by naming sudo, and a run under sudo lands or
+ * prunes it through the syscall's second try (sys/filesystem) with no prompt of
+ * dotta's between.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

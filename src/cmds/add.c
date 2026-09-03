@@ -1846,13 +1846,9 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
      * check — ends the add before anything durable is written: the temp worktree
      * is removed on the error path and the commit is after the walk. A run that
      * holds root reads through it (sys/filesystem's second try), so the one thing
-     * left to say is the command that would. */
+     * left to say is sudo. */
     if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
-        char *hint = identity_sudo_hint(ctx->argc, ctx->argv);
-        if (hint) {
-            err = error_wrap(err, "Only root can read it; run: %s", hint);
-            free(hint);
-        }
+        err = error_wrap(err, "Only root can read it; re-run under sudo");
     }
 
     return err;

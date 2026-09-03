@@ -207,7 +207,7 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *                the run planned the row and did not deliver it, so the exit
  *                code says so. Two of them are the invoker's refusals and root's
  *                to lift — PERMISSION, OWNERSHIP — and a run that holds none
- *                closes its skips with the command that would (apply's sudo line);
+ *                closes its skips by naming it (apply's sudo line);
  *                one that holds root meets neither, save where root itself is
  *                refused (a read-only filesystem, an immutable flag).
  *

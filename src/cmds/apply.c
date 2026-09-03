@@ -63,9 +63,10 @@
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
  * its own line, because dotta never writes on a guess. The two refusals root
  * lifts — a landing the invoker cannot write, a pair it cannot set — close with
- * the one command that would, spelled whole (identity_sudo_hint), and only by a
- * run that holds none: the caller hands the line or NULL, so the printer renders
- * and never asks who it is. The consent remedy teaches both directions and names
+ * by naming sudo, and only for a run that holds none — identity()->privileged,
+ * the one process fact this block asks. The command itself is not spelled: the
+ * user typed it, and what sudo does to their environment on the way is sudo's
+ * to document, not dotta's. The consent remedy teaches both directions and names
  * its cost the way cleanup's does: --force keeps Git's and discards what stands
  * there, and a CONTENT skip adds the disk-wins verb, 'dotta update' — gated on
  * CONTENT and not on the class, because update refuses a retyped row (update.c's
@@ -77,8 +78,7 @@
  * error's message is the count's one home.
  */
 static void print_deploy_skips(
-    const output_t *out, const deploy_preflight_result_t *verdicts,
-    const char *sudo_hint
+    const output_t *out, const deploy_preflight_result_t *verdicts
 ) {
     if (verdicts->skipped.count == 0) {
         return;
@@ -240,11 +240,11 @@ static void print_deploy_skips(
             break;
         }
     }
-    for (size_t i = 0; sudo_hint && i < verdicts->skipped.count; i++) {
+    for (size_t i = 0; !identity()->privileged && i < verdicts->skipped.count; i++) {
         deploy_skip_reason_t reason = verdicts->skipped.entries[i].reason;
 
         if (reason == DEPLOY_SKIP_PERMISSION || reason == DEPLOY_SKIP_OWNERSHIP) {
-            output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them: %s", sudo_hint);
+            output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them");
             break;
         }
     }
@@ -1417,12 +1417,12 @@ static void print_cleanup_skips(
  * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
  * where the workspace's own lstat was refused on the way — the occupant says
  * so, and the parent the probe asked is then not the rung that refused), and
- * the one closer: the command line that holds root, handed in by the caller as
- * print_deploy_skips's is, so the printer renders and never asks who it is. Capped
- * like deploy's block — one root-owned parent can hold a subtree — where cleanup's
- * skipped-files block is not (every row there carries a reason of its own). Neither
- * a --force line nor a by-hand one: root is not a flag, and the row already names
- * the directory a hand would have to open.
+ * the one closer: sudo, named for a run that holds none the way print_deploy_skips
+ * names it — asked of the identity, never handed in. Capped like deploy's block
+ * — one root-owned parent can hold a subtree — where cleanup's skipped-files
+ * block is not (every row there carries a reason of its own). Neither a --force
+ * line nor a by-hand one: root is not a flag, and the row already names the
+ * directory a hand would have to open.
  *
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
@@ -1432,8 +1432,7 @@ static void print_cleanup_skips(
  */
 static void print_cleanup_refused(
     const output_t *out,
-    const cleanup_preflight_result_t *verdicts,
-    const char *sudo_hint
+    const cleanup_preflight_result_t *verdicts
 ) {
     const workspace_items_t kinds[] = {
         workspace_items_view(&verdicts->refused_files),
@@ -1470,8 +1469,8 @@ static void print_cleanup_refused(
         output_print(out, OUTPUT_NORMAL, "  ... and %zu more\n", total - LIST_LIMIT);
     }
 
-    if (sudo_hint) {
-        output_info(out, OUTPUT_NORMAL, "  Run under sudo to prune them: %s", sudo_hint);
+    if (!identity()->privileged) {
+        output_info(out, OUTPUT_NORMAL, "  Run under sudo to prune them");
     }
 }
 
@@ -1500,7 +1499,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
-    char *sudo_hint = NULL;                  /* Root's remedy for the skips; NULL when the run holds root */
     deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates; free first */
     cleanup_result_t *cleanup_result = NULL; /* Outcomes borrow the verdicts; free first */
 
@@ -1569,19 +1567,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
-    }
-
-    /* The command line that re-runs this invocation under sudo, for the two closing
-     * lines that name it (print_deploy_skips, print_cleanup_refused). Built here
-     * beside the other run-wide string, and only by a run that holds no root:
-     * one that does is never refused where the invoker is, and would only name
-     * a remedy already taken. */
-    if (!identity()->privileged) {
-        sudo_hint = identity_sudo_hint(ctx->argc, ctx->argv);
-        if (!sudo_hint) {
-            err = ERROR(ERR_MEMORY, "Failed to build the sudo hint");
-            goto cleanup;
-        }
     }
 
     /* Load workspace (partitions the view's rows and runs divergence analysis)
@@ -2206,10 +2191,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * with their remedies) — read the same way in a real run and a dry run. */
     print_reassignments(out, reassigned, reassigned_count);
     print_deploy_preview(out, deploy_verdicts);
-    print_deploy_skips(out, deploy_verdicts, sudo_hint);
+    print_deploy_skips(out, deploy_verdicts);
     print_cleanup_preview(out, cleanup_verdicts);
     print_cleanup_skips(out, cleanup_verdicts);
-    print_cleanup_refused(out, cleanup_verdicts, sudo_hint);
+    print_cleanup_refused(out, cleanup_verdicts);
 
     /* The previews are over: one blank before whatever follows — the prompt, a
      * dry run's tail, the run's trace. Unconditional, because past the
@@ -2745,7 +2730,6 @@ cleanup:
     if (cleanup_verdicts) cleanup_preflight_result_free(cleanup_verdicts);
     if (cleanup_plan) cleanup_plan_free(cleanup_plan);
     if (profiles_str) free(profiles_str);
-    free(sudo_hint);
     if (ws) workspace_free(ws);
     if (scope) scope_free(scope);
 

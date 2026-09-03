@@ -13,32 +13,32 @@
  * One master, one slot. The master is a function of (passphrase, epoch), and
  * the epoch — the salt and the Argon2id pair — is the repository's, minted once
  * and immutable under ciphertext (crypto/kdf.h, infra/epoch.h). A keymgr is bound
- * to one epoch at create time and holds at most one master: the in-memory slot
- * is the process memo of it, the on-disk session cache (crypto/session) the memo
- * across processes. Nothing routes by parameters: every blob names its epoch by
- * fingerprint, and either it is this repository's or no master here can open it
- * — `keymgr_decrypt` refuses the foreign one before asking for anything.
+ * to one epoch at create time and holds at most one master. Nothing routes by
+ * parameters: every blob names its epoch by fingerprint, and either it is this
+ * repository's or no master here can open it — `keymgr_decrypt` refuses the foreign
+ * one before asking for anything.
  *
- * Two-tier cache:
- *   - In-memory slot. One (master_key, cached_at) record inside the keymgr struct.
- *   - On-disk session cache (~/.cache/dotta/session, owned by crypto/session),
- *     written by every fresh derivation and read by the first resolve of a process.
+ * The slot and the file. The in-memory slot is the process memo of the master:
+ * once resolved, every later operation of the run reads it, under every
+ * `session_timeout` — a two-file `add` derives once. The on-disk session file
+ * (crypto/session; one per epoch, under the invoker's home) is the memo across
+ * processes: written by every fresh derivation when the file tier is on, read
+ * by the first resolve of a process. `session_timeout` governs the file alone:
+ * 0 turns the tier off (nothing is written, so the next process asks again), -1
+ * writes a file that never expires, a positive value one that expires that many
+ * seconds after it was written. The slot carries the file's expiry —
+ * `keymgr_cached` reports it — and nothing else keeps time: a master that came
+ * from a file the loader accepted is good for the run.
  *
  * Security:
- *   - The master lives in process memory and on disk. The disk cache is obfuscated
- *     and machine-bound, NOT encrypted at rest — see crypto/session.h for the
- *     full threat model.
+ *   - The master lives in process memory and, when the file tier is on, on disk.
+ *     The file is obfuscated, NOT encrypted at rest — see crypto/session.h for
+ *     what it is and what protects it.
  *   - mlock on the keymgr struct is best-effort; under tight RLIMIT_MEMLOCK the
  *     constructor logs a one-time advisory and continues. The kernel reclaims
  *     the page on process death.
- *   - In-memory expiry uses CLOCK_MONOTONIC so cache lifetime cannot be extended
- *     by skewing the system clock. The on-disk cache uses wall-clock so it can
- *     survive reboots.
  *   - Every key buffer (master, mac_key, prf_key, intermediates) is scrubbed
  *     via `crypto_wipe` on every exit path. Callers never see raw key bytes.
- *   - Always-prompt mode (`session_timeout == 0`) bypasses both cache tiers
- *     entirely: derivations succeed but the master is never installed in the
- *     slot or persisted, so no master-key bytes outlive a single operation.
  */
 
 #ifndef DOTTA_KEYMGR_H
@@ -55,8 +55,8 @@
 /**
  * Key manager (opaque).
  *
- * Holds the epoch, the session timeout and the in-memory cache slot. Best-effort
- * mlock'd at create time. Treat as opaque; access via the functions below.
+ * Holds the epoch, the session timeout and the in-memory slot. Best-effort mlock'd
+ * at create time. Treat as opaque; access via the functions below.
  */
 typedef struct keymgr keymgr;
 
@@ -69,13 +69,13 @@ typedef struct keymgr keymgr;
  * that moves that ref mid-run (sync's adopt) re-binds via `keymgr_rekey`.
  *
  * No derivation, prompt, or I/O at create time. The first call to encrypt / decrypt
- * / set_passphrase / probe_key triggers the lazy resolution chain.
+ * / set_passphrase / cached triggers the lazy resolution chain.
  *
  * Loading the epoch is the caller's responsibility (`infra/epoch::epoch_load`
  * at the dispatcher boundary). The epoch is public; treat as ordinary input.
  *
- * @param session_timeout Seconds the on-disk cache lives (config); 0 = always
- *                        prompt, -1 = never expire
+ * @param session_timeout Seconds the on-disk file lives (config); 0 = no file,
+ *                        -1 = never expires
  * @param epoch           The repository's epoch (non-NULL; copied)
  * @param out             Key manager (caller frees with keymgr_free)
  * @return Error or NULL on success
@@ -149,13 +149,11 @@ error_t *keymgr_decrypt(
 /**
  * Explicitly set the passphrase (`dotta key set`).
  *
- * Derives the master key under the epoch. Behavior branches on `session_timeout`:
- *   - `session_timeout != 0`: install the master in the in-memory slot (replacing
- *     any prior contents) AND write to the on-disk session cache.
- *   - `session_timeout == 0` (always-prompt): derive — which validates the
- *     passphrase — but neither install nor persist; the master is scrubbed before
- *     return. Subsequent operations re-prompt as expected under the always-prompt
- *     contract.
+ * Derives the master key under the epoch, installs it in the slot (replacing
+ * any prior occupant) and, when the file tier is on (`session_timeout != 0`),
+ * writes the session file. Under `session_timeout == 0` the derivation — which
+ * is what validates the passphrase — runs and the slot is installed for this
+ * process; no file is written, so the next process asks again.
  *
  * Rotation UX: if a master derived from a different passphrase was cached, this
  * call silently invalidates every blob encrypted under the prior passphrase.
@@ -180,13 +178,13 @@ error_t *keymgr_set_passphrase(
 /**
  * Clear the cached master key.
  *
- * Securely zeros the in-memory slot and unlinks the on-disk session cache. Used
- * by `dotta key clear` and at process shutdown via the cleanup chain. Safe to
- * call multiple times and on a never-warmed keymgr.
+ * Securely zeros the in-memory slot and unlinks the epoch's session file. Used
+ * by `dotta key clear`. Safe to call multiple times and on a never-warmed keymgr.
  *
  * @param km Key manager (NULL-safe)
+ * @return true iff a session file was there and is gone
  */
-void keymgr_clear(keymgr *km);
+bool keymgr_clear(keymgr *km);
 
 /**
  * Re-bind the key manager to a new epoch.
@@ -195,9 +193,8 @@ void keymgr_clear(keymgr *km);
  * The create-time copy goes stale the moment the ref moves, so the command that
  * moved it re-establishes the binding, the same duty sync discharges for Git by
  * rebuilding the manifest after its pulls. Evicts the in-memory master (it derives
- * from the old epoch), recomputes the fingerprint, and unlinks the on-disk session
- * cache eagerly (its MAC binds the salt, so a stale file would fail-and-unlink
- * lazily regardless).
+ * from the old epoch), unlinks the old epoch's session file (the file is the
+ * epoch's by name; nothing would read it again), and recomputes the fingerprint.
  *
  * @param km    Key manager (NULL-safe — encryption-disabled runs have none)
  * @param epoch The newly adopted epoch (non-NULL; copied)
@@ -216,38 +213,19 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch);
 const kdf_epoch_t *keymgr_epoch(const keymgr *km);
 
 /**
- * Probe whether the master key is available without prompting.
+ * Is the master key available without asking?
  *
- * Checks the in-memory slot first; on miss, consults the on-disk session cache.
+ * The slot, else — when the file tier is on — the epoch's session file, which a
+ * hit installs into the slot so the operation that follows reuses it. Never prompts
+ * and never reads `DOTTA_ENCRYPTION_PASSPHRASE`; for the full resolution chain
+ * use `keymgr_encrypt` / `keymgr_decrypt`.
  *
- * Side effect: a successful disk-cache hit installs the key into the in-memory
- * slot so the subsequent operation reuses it.
- *
- * Never prompts and never reads `DOTTA_ENCRYPTION_PASSPHRASE`. For the full
- * resolution chain use `keymgr_encrypt` / `keymgr_decrypt`.
- *
- * @param km Key manager (NULL-safe; returns false)
+ * @param km             Key manager (NULL-safe; returns false)
+ * @param out_expires_at Optional: the file's expiry, Unix seconds; 0 when the
+ *                       key is not cached or the file never expires
  * @return true iff the key is cached
  */
-bool keymgr_probe_key(keymgr *km);
-
-/**
- * Get time until the cached slot expires.
- *
- * Reports against the master occupying the in-memory slot — a per-process freshness
- * estimate. For "is the key warm?" use `keymgr_probe_key` first, then this for
- * the time component.
- *
- * @param km             Key manager (NULL-safe; returns 0)
- * @param out_expires_at Optional output for the wall-clock expiry time; 0 when
- *                       cache is cold or never expires
- * @return Seconds until expiration; 0 if not cached or expired; -1 if the slot
- *         never expires
- */
-int64_t keymgr_time_until_expiry(
-    const keymgr *km,
-    time_t *out_expires_at
-);
+bool keymgr_cached(keymgr *km, time_t *out_expires_at);
 
 /**
  * Free the key manager.

@@ -47,18 +47,18 @@ static error_t *cmd_key_set(const dotta_ctx_t *ctx) {
      * every blob encrypted under the old one. Surfacing the warning here (per
      * sketch §5.4) keeps the keymgr_set_passphrase contract narrow — the function
      * does the derivation; the CLI owns the human-facing warning. */
-    if (keymgr_probe_key(keymgr)) {
-        int64_t seconds_remaining = keymgr_time_until_expiry(keymgr, NULL);
-        if (seconds_remaining == -1) {
+    time_t expires_at = 0;
+    if (keymgr_cached(keymgr, &expires_at)) {
+        if (expires_at == 0) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "A passphrase is already cached (no expiration)"
             );
-        } else if (seconds_remaining > 0) {
+        } else {
             output_info(
                 out, OUTPUT_NORMAL,
-                "A passphrase is already cached (expires in %ld seconds)",
-                (long) seconds_remaining
+                "A passphrase is already cached (expires in %lld seconds)",
+                (long long) (expires_at - time(NULL))
             );
         }
         output_warning(
@@ -157,32 +157,19 @@ static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
      * that declares crypto. See runtime.h's run invariants. */
     CHECK_NULL(keymgr);
 
-    /* Probe consults both in-memory and on-disk caches, loading the latter into
-     * memory if present. ctx->run.keymgr is freshly-created for this command
-     * (one process, one dispatch), so an in-memory hit is impossible — `true`
-     * here means the on-disk cache existed, which is what users mean by "had a
-     * key". */
-    bool had_key = keymgr_probe_key(keymgr);
-
-    /* Always clear both memory and file cache (even if no in-memory key) */
-    keymgr_clear(keymgr);
-
-    /* Display result */
-    if (had_key) {
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Encryption key cleared from memory and disk cache"
-        );
+    /* The slot is this process's and empty (one process, one dispatch), so the
+     * clear's answer is the file's: whether this epoch's session file was there
+     * and is gone — which is what users mean by "had a key". */
+    if (keymgr_clear(keymgr)) {
+        output_success(out, OUTPUT_NORMAL, "Session cache cleared");
     } else {
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Disk cache cleared (no key was cached)"
-        );
+        output_success(out, OUTPUT_NORMAL, "No session cache to clear");
     }
 
     output_print(
         out, OUTPUT_VERBOSE,
-        "\nCache location: ~/.cache/dotta/session\n"
+        "\nCache location: ~/.cache/dotta/session-<epoch> "
+        "(one file per repository epoch)\n"
         "You will be prompted for your passphrase on the next "
         "operation that requires encryption or decryption.\n"
     );
@@ -292,7 +279,8 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
     /* Display key cache status */
     output_section(out, OUTPUT_NORMAL, "Key Cache Status");
 
-    bool key_cached = keymgr_probe_key(keymgr);
+    time_t expires_at = 0;
+    bool key_cached = keymgr_cached(keymgr, &expires_at);
     output_print(
         out, OUTPUT_NORMAL, "  Key cached: "
     );
@@ -302,35 +290,28 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_NORMAL, "{green}yes{reset}"
         );
 
-        /* Show time until expiry */
-        time_t expires_at = 0;
-        int64_t seconds_remaining =
-            keymgr_time_until_expiry(keymgr, &expires_at);
-
-        if (seconds_remaining == -1) {
+        /* The expiry is the session file's own, so the number counts down across
+         * processes instead of restarting at each. A loaded file is unexpired
+         * by the loader's contract; 0 is the file that never expires. */
+        if (expires_at == 0) {
             output_print(
                 out, OUTPUT_NORMAL, " (no expiration)"
             );
-        } else if (seconds_remaining > 0) {
+        } else {
             output_print(
-                out, OUTPUT_NORMAL, " (expires in %ld seconds",
-                (long) seconds_remaining
+                out, OUTPUT_NORMAL, " (expires in %lld seconds",
+                (long long) (expires_at - time(NULL))
             );
 
-            if (expires_at > 0) {
-                struct tm *tm_info = localtime(&expires_at);
-
-                char time_buf[64];
-                strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
-                output_print(
-                    out, OUTPUT_VERBOSE, " at %s",
-                    time_buf
-                );
-            }
+            struct tm *tm_info = localtime(&expires_at);
+            char time_buf[64];
+            strftime(time_buf, sizeof(time_buf), "%H:%M:%S", tm_info);
+            output_print(
+                out, OUTPUT_VERBOSE, " at %s",
+                time_buf
+            );
 
             output_print(out, OUTPUT_NORMAL, ")");
-        } else {
-            output_print(out, OUTPUT_NORMAL, " (expired)");
         }
 
         output_newline(out, OUTPUT_NORMAL);

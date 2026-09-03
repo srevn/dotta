@@ -3,39 +3,35 @@
  *
  * Symmetric save/load pipeline:
  *
- *   save:  build struct → fill (magic, version, params, timestamps)
- *                       → entropy_fill(salt) → derive_cache_key(salt) → XChaCha20
- *                       obfuscate (master XOR keystream) → MAC over [0..76) ||
- *                       repo_salt → atomic-mode 0600 open + write + fsync
+ *   save:  build the struct (magic, version, timestamps)
+ *                       → entropy_fill(nonce) → derive_cache_key(epoch) → XChaCha20
+ *                       obfuscate (master XOR keystream) → MAC over [0..81) →
+ *                       mode-0600 open + write + fsync
  *
- *   load:  open(O_NOFOLLOW) + fstat (size/mode/uid)
- *                       → read 108 bytes → magic + version →
- *                       derive_cache_key(loaded_salt) → MAC verify (constant-time)
- *                       over [0..76) || repo_salt → expiry check (after MAC, on
- *                       trusted bytes) → params range check → XChaCha20 deobfuscate
- *                       into out_master_key
+ *   load:  open(O_NOFOLLOW) + fstat (mode/uid/size) → read 113 bytes
+ *                       → magic + version → derive_cache_key(epoch) → MAC verify
+ *                       (constant-time) → expiry (on trusted bytes) → XChaCha20
+ *                       deobfuscate into out_master_key
  *
- * Both halves share `derive_cache_key`, so the absorbed byte stream is identical
- * on the same machine; a copy to another host produces a different cache_key
- * and fails MAC. The MAC also absorbs the caller-supplied `repo_salt` as additional
- * input — a cache produced under repo A's salt fails MAC verification when loaded
- * against repo B's salt, defending against cross-repo cache confusion when two
- * dotta repositories share a passphrase.
+ * Both halves derive cache_key from the epoch alone, so a file is readable exactly
+ * under the epoch that wrote it: the file is named by the epoch's fingerprint
+ * and keyed by its bytes, and a file renamed under another epoch's name fails
+ * the MAC.
  *
- * Wiping: the 108-byte struct, `cache_key`, and `computed_mac` are scrubbed on
+ * Wiping: the 113-byte struct, `cache_key` and `computed_mac` are scrubbed on
  * every exit path. `out_master_key` is scrubbed on every error path; on success
  * it carries the deobfuscated master and ownership transfers. Wipe primitive:
- * `crypto_wipe` directly (this layer already includes `<monocypher.h>`).
+ * `crypto_wipe` directly (this layer already includes <monocypher.h>).
  *
  * Why unkeyed BLAKE2b for cache_key derivation: the no-keyed-BLAKE2b-outside-mac.c
- * rule governs only *keyed* BLAKE2b. cache_key is the OUTPUT of derivation, not
- * a key into a keyed primitive, so we use monocypher's unkeyed BLAKE2b directly
- * here; the keyed primitive is reserved for the MAC step that follows.
+ * rule governs only *keyed* BLAKE2b. cache_key is the OUTPUT of a derivation,
+ * not a key into a keyed primitive; the keyed primitive is reserved for the MAC
+ * step that follows.
  *
- * Why XChaCha20 (not ChaCha20): XChaCha20 is the same primitive cipher.c uses,
- * so reusing it minimises the stack's primitive surface. The constant-zero 24-byte
- * nonce is safe because cache_key carries entropy via the per-file machine_salt
- * — no two cache files share a (key, nonce) pair under any non-pathological flow.
+ * Why XChaCha20: the same primitive cipher.c uses, so reusing it keeps the stack's
+ * primitive surface small. The nonce is drawn per file, which is what XChaCha20's
+ * 24-byte nonce is for: one cache_key per epoch, and no two files under it share
+ * a (key, nonce) pair.
  */
 
 #include "crypto/session.h"
@@ -59,43 +55,45 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-/* Magic prefix: "DOTTASES" — Dotta SESsion. 8 bytes; the cache is fixed-size
- * and never sniffed, so no length-byte header. */
+/* Magic prefix: "DOTTASES" — Dotta SESsion. 8 bytes; the file is fixed-size and
+ * never sniffed, so no length-byte header. */
 #define SESSION_CACHE_MAGIC      "DOTTASES"
 #define SESSION_CACHE_MAGIC_SIZE 8
 
-/* Format version. Bumps invalidate prior caches without migration — unsupported
- * versions surface as ERR_CRYPTO and are unlinked. */
-#define SESSION_CACHE_VERSION    0x03
+/* Format version. Bumps invalidate prior files without migration — an unsupported
+ * version surfaces as ERR_CRYPTO and is unlinked. */
+#define SESSION_CACHE_VERSION    0x04
+
+/* The directory under the invoker's home, spelled once for both paths. */
+#define SESSION_CACHE_DIR        ".cache/dotta"
 
 /* Field offsets within the on-disk layout. Named so parser and builder share
  * one source of truth.
  *
- *   bytes [0..8)    magic
- *   byte   [8]      version
- *   bytes [9..11)   memory_mib (LE16)
- *   byte   [11]     passes
- *   bytes [12..20)  created_at (LE64)
- *   bytes [20..28)  expires_at (LE64)
- *   bytes [28..44)  machine_salt
- *   bytes [44..76)  obfuscated_key
- *   bytes [76..108) mac
+ *   bytes [0..8)     magic
+ *   byte   [8]       version
+ *   bytes [9..17)    created_at (LE64)
+ *   bytes [17..25)   expires_at (LE64)
+ *   bytes [25..49)   nonce
+ *   bytes [49..81)   obfuscated_key
+ *   bytes [81..113)  mac
  */
 #define SESSION_OFF_MAGIC        0
 #define SESSION_OFF_VERSION      8
-#define SESSION_OFF_MEMORY_MIB   9
-#define SESSION_OFF_PASSES       11
-#define SESSION_OFF_CREATED_AT   12
-#define SESSION_OFF_EXPIRES_AT   20
-#define SESSION_OFF_MACHINE_SALT 28
-#define SESSION_OFF_OBFUSCATED   44
-#define SESSION_OFF_MAC          76
-#define SESSION_FILE_SIZE        108
+#define SESSION_OFF_CREATED_AT   9
+#define SESSION_OFF_EXPIRES_AT   17
+#define SESSION_OFF_NONCE        25
+#define SESSION_OFF_OBFUSCATED   49
+#define SESSION_OFF_MAC          81
+#define SESSION_FILE_SIZE        113
+
+/* The XChaCha20 nonce: 24 bytes, per file. */
+#define SESSION_NONCE_SIZE       24
 
 /* Bytes covered by the MAC: the prefix before the MAC field (magic..obfuscated_key
  * inclusive). Bound to a named constant so save and load cannot accidentally
  * MAC a different range. */
-#define SESSION_MAC_INPUT_SIZE   76
+#define SESSION_MAC_INPUT_SIZE   81
 
 _Static_assert(
     SESSION_OFF_MAC == SESSION_MAC_INPUT_SIZE,
@@ -111,18 +109,16 @@ _Static_assert(
 );
 
 /* On-disk struct mirroring the layout above. Multi-byte numerics are raw byte
- * arrays (LE-encoded via store_le16/store_le64) so the on-disk bytes never depend
- * on host byte order. */
+ * arrays (LE-encoded via store_le64) so the on-disk bytes never depend on host
+ * byte order. */
 struct session_cache_file {
     uint8_t magic[8];                       /* "DOTTASES" */
     uint8_t version;                        /* SESSION_CACHE_VERSION */
-    uint8_t memory_mib_le[2];               /* LE16 — Argon2 memory params */
-    uint8_t passes;                         /* Argon2 pass count */
     uint8_t created_at_le[8];               /* LE64 — Unix seconds, informational */
     uint8_t expires_at_le[8];               /* LE64 — Unix seconds; 0 = never */
-    uint8_t machine_salt[16];               /* entropy_fill */
+    uint8_t nonce[SESSION_NONCE_SIZE];      /* entropy_fill; the XChaCha20 nonce */
     uint8_t obfuscated_key[KDF_KEY_SIZE];   /* master XOR keystream */
-    uint8_t mac[CRYPTO_MAC_SIZE];           /* keyed BLAKE2b over [0..76) */
+    uint8_t mac[CRYPTO_MAC_SIZE];           /* keyed BLAKE2b over [0..81) */
 } __attribute__((packed));
 
 _Static_assert(
@@ -134,172 +130,81 @@ _Static_assert(
     "MAC field offset must match SESSION_OFF_MAC"
 );
 _Static_assert(
-    offsetof(struct session_cache_file, machine_salt)
-    == SESSION_OFF_MACHINE_SALT,
-    "machine_salt offset must match SESSION_OFF_MACHINE_SALT"
-);
-
-/* Hostname/username buffers for cache_key derivation. 256 is the safe upper bound
- * across platforms (HOST_NAME_MAX is 64 on Linux, 255 on macOS). Username is
- * bounded defensively.
- *
- * Truncation: `derive_cache_key` calls `strnlen(name, MAX)`, so two host/user
- * pairs whose first MAX bytes coincide produce the same cache_key — pathological,
- * and outside the local-machine threat model. The lower-bound assertion catches
- * an accidentally-tiny cap that would degrade machine-binding on real systems. */
-#define SESSION_HOSTNAME_BUF 256
-#define SESSION_USERNAME_MAX 256
-
-_Static_assert(
-    SESSION_HOSTNAME_BUF >= 64,
-    "hostname buffer must hold typical host names without truncation"
-);
-_Static_assert(
-    SESSION_USERNAME_MAX >= 32,
-    "username cap must hold typical user names without truncation"
+    offsetof(struct session_cache_file, nonce) == SESSION_OFF_NONCE,
+    "nonce offset must match SESSION_OFF_NONCE"
 );
 
 /**
- * Resolve the cache file path (~/.cache/dotta/session) and its parent directory.
- * Caller frees both pointers.
+ * Resolve the epoch's session file path (~/.cache/dotta/session-<fingerprint>).
+ * Caller frees.
  *
  * Under the invoker's home (sys/identity) whatever the run's identity: a master
- * key set without sudo lands at /home/user/.cache/dotta/session, and a later
- * `sudo dotta apply` finds it there rather than under /root.
+ * set without sudo lands under /home/user, and a later `sudo dotta apply` finds
+ * it there rather than under /root.
  *
- * @param out_file Cache file path (caller frees)
- * @param out_dir  Parent directory path (caller frees)
+ * @param epoch    The epoch whose file to name
+ * @param out_file File path (caller frees)
  * @return ERR_MEMORY on allocation failure
  */
-static error_t *resolve_cache_paths(char **out_file, char **out_dir) {
+static error_t *resolve_cache_path(const kdf_epoch_t *epoch, char **out_file) {
     *out_file = NULL;
-    *out_dir = NULL;
+
+    uint8_t fp[KDF_EPOCH_FP_SIZE];
+    kdf_epoch_fingerprint(epoch, fp);
+
+    char fp_hex[KDF_EPOCH_FP_SIZE * 2 + 1];
+    for (size_t i = 0; i < KDF_EPOCH_FP_SIZE; i++) {
+        snprintf(fp_hex + i * 2, 3, "%02x", fp[i]);
+    }
 
     char *file = NULL;
-    char *dir = NULL;
-    if (asprintf(&dir, "%s/.cache/dotta", identity()->home) < 0 || !dir) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate session cache dir path"
-        );
-    }
-    if (asprintf(&file, "%s/session", dir) < 0 || !file) {
-        free(dir);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate session cache file path"
-        );
+    if (asprintf(
+        &file, "%s/" SESSION_CACHE_DIR "/session-%s", identity()->home, fp_hex
+        ) < 0 || !file) {
+        return ERROR(ERR_MEMORY, "Failed to allocate session cache file path");
     }
 
     *out_file = file;
-    *out_dir = dir;
-
     return NULL;
 }
 
 /**
- * Derive the 32-byte cache_key from the per-file salt plus the host's stable
- * identity (hostname + username).
+ * Derive the 32-byte cache_key from the epoch's bytes.
  *
- *     cache_key = BLAKE2b(LE64(host_len) || host || LE64(user_len) || user ||
- *                      salt[16])
+ *     cache_key = BLAKE2b-32(salt ‖ params)
  *
- * Identical inputs on the same machine produce the same cache_key; a copy to
- * another host produces a different cache_key and fails MAC verification.
+ * The same 35 bytes the fingerprint hashes at length 8 (kdf_epoch_fingerprint);
+ * the 32-byte output length keeps this derivation distinct from it. Both inputs
+ * are fixed-width, so nothing is length-framed. Cannot fail.
  *
- * The salt is absorbed UNFRAMED (16 bytes verbatim, fixed-width by construction);
- * the variable-length inputs (host, user) ARE LE64-prefixed so an attacker cannot
- * construct two distinct (host, user) tuples whose absorbed bytes coincide. Same
- * fixed-width carve-out that `crypto_mac_init` uses for its 8-byte tag.
- *
- * The user is the identity's name (sys/identity) — the invoker's, so a cache
- * written by the user is the one a `sudo dotta` reads — and that name is the
- * passwd entry's, a kernel-anchored lookup taken once: getlogin reads utmp
- * (unreliable in containers, under sudo, with no controlling TTY) and getenv is
- * user-spoofable.
- *
- * @param salt    Per-file random salt (16 bytes)
+ * @param epoch   The epoch
  * @param out_key 32-byte output buffer (cache_key)
- * @return ERR_FS if the hostname cannot be read or the invoker has no name
  */
-static error_t *derive_cache_key(
-    const uint8_t salt[16],
+static void derive_cache_key(
+    const kdf_epoch_t *epoch,
     uint8_t out_key[CRYPTO_KEY_SIZE]
 ) {
-    error_t *err = NULL;
-    char hostname[SESSION_HOSTNAME_BUF];
+    uint8_t params[KDF_PARAMS_SIZE];
+    kdf_params_store(params, epoch->memory_mib, epoch->passes);
+
     crypto_blake2b_ctx ctx;
-
-    if (gethostname(hostname, sizeof(hostname)) != 0) {
-        return error_from_errno(errno, "Failed to read hostname");
-    }
-    /* gethostname does not guarantee NUL-termination on truncation. */
-    hostname[sizeof(hostname) - 1] = '\0';
-    const size_t host_len = strnlen(hostname, sizeof(hostname));
-
-    const identity_t *id = identity();
-    if (!id->name) {
-        err = ERROR(
-            ERR_FS, "No user name for uid %u in the password database",
-            (unsigned) id->uid
-        );
-        goto cleanup;
-    }
-    const size_t user_len = strnlen(id->name, SESSION_USERNAME_MAX);
-
-    /* LE64-prefixed BLAKE2b absorb mirroring crypto/mac.c's framing, run on the
-     * unkeyed primitive (cache_key is the OUTPUT of derivation, not a key into
-     * a keyed hash). */
     crypto_blake2b_init(&ctx, CRYPTO_KEY_SIZE);
-
-    uint8_t len_le[8];
-    store_le64(len_le, (uint64_t) host_len);
-    crypto_blake2b_update(&ctx, len_le, sizeof(len_le));
-    crypto_blake2b_update(&ctx, (const uint8_t *) hostname, host_len);
-
-    store_le64(len_le, (uint64_t) user_len);
-    crypto_blake2b_update(&ctx, len_le, sizeof(len_le));
-    crypto_blake2b_update(&ctx, (const uint8_t *) id->name, user_len);
-
-    crypto_blake2b_update(&ctx, salt, 16);
+    crypto_blake2b_update(&ctx, epoch->salt, KDF_SALT_SIZE);
+    crypto_blake2b_update(&ctx, params, KDF_PARAMS_SIZE);
     crypto_blake2b_final(&ctx, out_key);
 
-cleanup:
-    /* Wipe the BLAKE2b state. The internal accumulator carries intermediate state
-     * derived from the inputs; the inputs themselves (hostname, username) are
-     * non-secret per threat model, but scrubbing the state keeps the audit
-     * chokepoint legible.
-     *
-     * `hostname` is wiped as defense in depth — non-secret content, but stack
-     * hygiene matches the rest of the crypto stack. The identity's name is the
-     * process's, borrowed, and not touched. */
+    /* The inputs are public; the state is scrubbed for the audit's sake, so every
+     * BLAKE2b context in the crypto layer ends the same way. */
     crypto_wipe(&ctx, sizeof(ctx));
-    crypto_wipe(hostname, sizeof(hostname));
-    return err;
 }
 
 error_t *session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
-    uint16_t memory_mib,
-    uint8_t passes,
-    const uint8_t repo_salt[KDF_SALT_SIZE],
-    int32_t timeout_seconds
+    const kdf_epoch_t *epoch,
+    time_t expires_at
 ) {
     CHECK_NULL(master_key);
-    CHECK_NULL(repo_salt);
-
-    if (timeout_seconds == 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "session_save invoked with timeout=0 (always-prompt policy "
-            "must be gated by the caller before reaching session.c)"
-        );
-    }
-
-    /* Defense-in-depth params validation; otherwise malformed params would surface
-     * as a corrupt cache file rather than a clear error. */
-    error_t *err = kdf_validate_params(memory_mib, passes);
-    if (err) {
-        return err;
-    }
+    CHECK_NULL(epoch);
 
     char *cache_path = NULL;
     char *cache_dir = NULL;
@@ -307,13 +212,19 @@ error_t *session_save(
     struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
 
-    err = resolve_cache_paths(&cache_path, &cache_dir);
+    error_t *err = resolve_cache_path(epoch, &cache_path);
     if (err) {
         goto cleanup;
     }
 
-    /* Always-call form: tightens a pre-existing dir with weaker mode to 0700
-     * instead of leaving it alone. Parent ~/.cache gets the default 0755. */
+    /* The one caller that makes the directory. Always-call form: tightens a
+     * pre-existing dir with a weaker mode to 0700 instead of leaving it alone.
+     * The parent ~/.cache gets the default 0755. */
+    if (asprintf(&cache_dir, "%s/" SESSION_CACHE_DIR, identity()->home) < 0
+        || !cache_dir) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate session cache dir path");
+        goto cleanup;
+    }
     err = fs_create_dir_with_mode(cache_dir, 0700, true);
     if (err) {
         err = error_wrap(err, "Failed to ensure session cache directory");
@@ -323,62 +234,38 @@ error_t *session_save(
     /* Build the on-disk struct field by field. */
     memcpy(cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE);
     cache.version = SESSION_CACHE_VERSION;
-    store_le16(cache.memory_mib_le, memory_mib);
-    cache.passes = passes;
+    store_le64(cache.created_at_le, (uint64_t) time(NULL));
+    store_le64(cache.expires_at_le, (uint64_t) expires_at);
 
-    const uint64_t now_seconds = (uint64_t) time(NULL);
-    store_le64(cache.created_at_le, now_seconds);
-    /* timeout < 0 ("never expire") encodes as expires_at == 0; load treats 0 as
-     * the never-expire sentinel. */
-    const uint64_t expires_at = (timeout_seconds < 0)
-        ? 0U
-        : now_seconds + (uint64_t) timeout_seconds;
-    store_le64(cache.expires_at_le, expires_at);
-
-    /* entropy_fill scrubs the buffer to zeros on failure, so a failed salt cannot
+    /* entropy_fill scrubs the buffer to zeros on failure, so a failed draw cannot
      * leak partial random state. */
-    err = entropy_fill(cache.machine_salt, sizeof(cache.machine_salt));
+    err = entropy_fill(cache.nonce, sizeof(cache.nonce));
     if (err) {
-        err = error_wrap(err, "Failed to read random bytes for session salt");
+        err = error_wrap(err, "Failed to read random bytes for session nonce");
         goto cleanup;
     }
 
-    /* Derive cache_key from salt + machine identity. cache_key doubles as
-     * obfuscation key and MAC key; CRYPTO_DOMAIN_SESSION_MAC at the MAC step
-     * keeps this MAC distinct from other call sites. */
-    err = derive_cache_key(cache.machine_salt, cache_key);
-    if (err) {
-        goto cleanup;
-    }
+    /* cache_key doubles as obfuscation key and MAC key; CRYPTO_DOMAIN_SESSION_MAC
+     * at the MAC step keeps this MAC distinct from every other call site. */
+    derive_cache_key(epoch, cache_key);
 
-    /* Obfuscate: master XOR XChaCha20(cache_key, zero_nonce). The constant-zero
-     * nonce is safe because cache_key already carries entropy via the per-file
-     * machine_salt. crypto_chacha20_x XORs in one pass without a separate keystream
-     * allocation. */
-    static const uint8_t zero_nonce[24] = { 0 };
+    /* Obfuscate: master XOR XChaCha20(cache_key, nonce). crypto_chacha20_x XORs
+     * in one pass without a separate keystream allocation. */
     crypto_chacha20_x(
         cache.obfuscated_key, master_key, KDF_KEY_SIZE,
-        cache_key, zero_nonce, /*ctr=*/ 0
+        cache_key, cache.nonce, /*ctr=*/ 0
     );
 
-    /* MAC over the 76-byte struct prefix AND the caller-supplied repo_salt.
-     * Domain-tagged with CRYPTO_DOMAIN_SESSION_MAC so it cannot be confused with
-     * a cipher-blob SIV under another key.
-     *
-     * Repo-salt binding: the salt is NOT stored in the cache file; load callers
-     * re-supply it from the current repo's refs/dotta/salt. A cache produced
-     * under one repo's salt fails MAC verification under another repo's salt —
-     * same uniform "tampered or wrong target" path the rest of the cache uses. */
+    /* MAC over the 81-byte struct prefix. */
     crypto_mac_oneshot(
         cache.mac, cache_key, CRYPTO_DOMAIN_SESSION_MAC,
         (const uint8_t *) &cache, SESSION_MAC_INPUT_SIZE,
-        repo_salt, KDF_SALT_SIZE
+        NULL, 0
     );
 
-    /* Open with secure permissions atomically. O_NOFOLLOW guards against a
-     * symlink-attack swapping our cache path with a sensitive file; O_CLOEXEC
-     * matches the secure-file pattern used elsewhere in the codebase (see
-     * fs_write_file_raw). */
+    /* Open with secure permissions atomically. O_NOFOLLOW guards against a symlink
+     * swapping our path for a sensitive file; O_CLOEXEC matches the secure-file
+     * pattern used elsewhere (see fs_write_file_raw). */
     fd = open(
         cache_path,
         O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC,
@@ -401,10 +288,8 @@ error_t *session_save(
         goto cleanup;
     }
 
-    /* Write the 108-byte struct in a loop that handles EINTR and partial writes.
-     * For a 108-byte buffer on a regular file, the loop is in practice one
-     * iteration — the loop guards against pathological kernels and is cheap
-     * insurance. */
+    /* Write the struct in a loop that handles EINTR and partial writes. For 113
+     * bytes on a regular file the loop is in practice one iteration. */
     const uint8_t *bytes = (const uint8_t *) &cache;
     size_t off = 0;
     while (off < sizeof(cache)) {
@@ -419,9 +304,9 @@ error_t *session_save(
         off += (size_t) n;
     }
 
-    /* fsync the file but not the parent dir: a half-written cache cannot survive
-     * a crash, and the parent-dir fsync's extra cost doesn't pay for itself under
-     * the "ergonomic cache, not credential storage" threat model. */
+    /* fsync the file but not the parent dir: a half-written file cannot survive
+     * a crash, and the parent-dir fsync's extra cost does not pay for itself
+     * under the "save re-typing a passphrase" threat model. */
     if (fsync(fd) != 0) {
         err = error_from_errno(errno, "Failed to fsync session cache");
         goto cleanup;
@@ -441,35 +326,31 @@ cleanup:
 
 error_t *session_load(
     uint8_t out_master_key[KDF_KEY_SIZE],
-    uint16_t *out_memory_mib,
-    uint8_t *out_passes,
-    const uint8_t repo_salt[KDF_SALT_SIZE]
+    const kdf_epoch_t *epoch,
+    time_t *out_expires_at
 ) {
     CHECK_NULL(out_master_key);
-    CHECK_NULL(out_memory_mib);
-    CHECK_NULL(out_passes);
-    CHECK_NULL(repo_salt);
+    CHECK_NULL(epoch);
+    CHECK_NULL(out_expires_at);
 
     char *cache_path = NULL;
-    char *cache_dir = NULL;
     int fd = -1;
     struct session_cache_file cache;
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
     uint8_t computed_mac[CRYPTO_MAC_SIZE] = { 0 };
-    /* `unlink_on_fail` distinguishes ERR_FS (transient I/O — leave file in place)
-     * from ERR_CRYPTO / expired ERR_NOT_FOUND (the file is unrecoverable from
-     * this build's perspective — delete it so the next invocation starts fresh). */
+    /* `unlink_on_fail` distinguishes ERR_FS (transient I/O — leave the file in
+     * place) from ERR_CRYPTO / expired ERR_NOT_FOUND (the file is unrecoverable
+     * from this build's perspective — delete it so the next call starts fresh). */
     bool unlink_on_fail = false;
 
-    error_t *err = resolve_cache_paths(&cache_path, &cache_dir);
+    error_t *err = resolve_cache_path(epoch, &cache_path);
     if (err) {
         goto cleanup;
     }
 
-    /* Open with O_NOFOLLOW so a symlink-swapped cache path returns ELOOP rather
-     * than reading the unintended file. ENOENT is the "no cache yet" path —
-     * distinct from ERR_FS so the caller can silently proceed to prompt without
-     * a warning. */
+    /* Open with O_NOFOLLOW so a symlink-swapped path returns ELOOP rather than
+     * reading the unintended file. ENOENT is the "no cache yet" path — distinct
+     * from ERR_FS so the caller can proceed silently. */
     fd = open(cache_path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
         if (errno == ENOENT) {
@@ -482,10 +363,9 @@ error_t *session_load(
         goto cleanup;
     }
 
-    /* fstat against the OPENED fd (not stat against path) closes the TOCTOU window
-     * between the permission check and the read. Successful open + fstat means
-     * we're checking the inode we'll read from, not whatever the path resolves
-     * to a moment later. */
+    /* fstat against the OPENED fd (not stat against the path) closes the TOCTOU
+     * window between the checks and the read: what is checked is the inode that
+     * will be read. */
     struct stat st;
     if (fstat(fd, &st) != 0) {
         err = error_from_errno(errno, "Failed to stat session cache");
@@ -526,10 +406,9 @@ error_t *session_load(
     }
 
     /* Read exactly sizeof(cache) bytes, retrying on EINTR. A genuine I/O failure
-     * (kernel error) surfaces as ERR_FS without unlink so a flaky disk doesn't
-     * kill the cache; a short read on a file we just verified to be sizeof(cache)
-     * bytes indicates corruption (or a race where someone truncated the file
-     * between fstat and read) and unlinks. */
+     * surfaces as ERR_FS without unlink so a flaky disk does not kill the cache;
+     * a short read on a file just verified to be sizeof(cache) bytes is corruption
+     * (or a truncation raced between fstat and read) and unlinks. */
     uint8_t *bytes = (uint8_t *) &cache;
     size_t off = 0;
     while (off < sizeof(cache)) {
@@ -539,7 +418,6 @@ error_t *session_load(
                 continue;
             }
             err = error_from_errno(errno, "Failed to read session cache");
-            /* Transient I/O — leave file in place. */
             goto cleanup;
         }
         if (n == 0) {
@@ -554,8 +432,8 @@ error_t *session_load(
         off += (size_t) n;
     }
 
-    /* Magic + version checks. A version mismatch is treated as an unloadable
-     * file (alpha policy: no migration). */
+    /* Magic + version. A version mismatch is an unloadable file (alpha policy:
+     * no migration). */
     if (memcmp(
         cache.magic, SESSION_CACHE_MAGIC, SESSION_CACHE_MAGIC_SIZE
         ) != 0) {
@@ -574,77 +452,43 @@ error_t *session_load(
         goto cleanup;
     }
 
-    /* Derive cache_key with the (still-unauthenticated) salt. If the salt has
-     * been altered, the MAC verify below fails. We do not trust ANY field beyond
-     * magic/version until MAC has verified. */
-    err = derive_cache_key(cache.machine_salt, cache_key);
-    if (err) {
-        goto cleanup;
-    }
-
-    /* Recompute MAC over the 76-byte prefix AND caller-supplied repo_salt under
-     * cache_key + SESSION_MAC tag. crypto_verify32 is constant-time; the comparison
-     * runs in the same number of cycles regardless of how many bytes match.
-     *
-     * A cache from a different repo (different repo_salt) reaches here with a
-     * MAC that won't verify under the current salt — the unlink path handles it
-     * as any other tampered cache, and the caller (keymgr) prompts fresh under
-     * the correct repo. */
+    /* Recompute the MAC over the 81-byte prefix under the epoch's cache_key.
+     * crypto_verify32 is constant-time. No field beyond magic and version is
+     * trusted until the tag verifies. */
+    derive_cache_key(epoch, cache_key);
     crypto_mac_oneshot(
         computed_mac,
         cache_key, CRYPTO_DOMAIN_SESSION_MAC,
         (const uint8_t *) &cache, SESSION_MAC_INPUT_SIZE,
-        repo_salt, KDF_SALT_SIZE
+        NULL, 0
     );
     if (crypto_verify32(computed_mac, cache.mac) != 0) {
         err = ERROR(
             ERR_CRYPTO,
             "Session cache MAC verification failed "
-            "(tampered, copied from another machine, wrong user, "
-            "or cache belongs to a different dotta repository)"
+            "(tampered, or written for another repository epoch)"
         );
         unlink_on_fail = true;
         goto cleanup;
     }
 
-    /* From here on, the on-disk fields are authenticated and we can trust them
-     * — including expires_at. Apply expiry AFTER MAC so an attacker who flipped
-     * expiry bits surfaces as MAC failure, not as a misleading "expired"
-     * diagnostic. */
+    /* From here on the fields are authenticated — expires_at included. Expiry
+     * after the MAC, so a flipped expiry bit surfaces as tampering, not as a
+     * misleading "expired". */
     const uint64_t expires_at = load_le64(cache.expires_at_le);
-    if (expires_at != 0) {
-        const uint64_t now_seconds = (uint64_t) time(NULL);
-        if (now_seconds >= expires_at) {
-            err = ERROR(ERR_NOT_FOUND, "Session cache expired");
-            unlink_on_fail = true;
-            goto cleanup;
-        }
-    }
-
-    /* Validate cached params: a corrupted (memory_mib, passes) pair would have
-     * failed MAC, but defense in depth keeps the boundary uniform with
-     * cipher_read_header. */
-    const uint16_t memory_mib = load_le16(cache.memory_mib_le);
-    err = kdf_validate_params(memory_mib, cache.passes);
-    if (err) {
+    if (expires_at != 0 && (uint64_t) time(NULL) >= expires_at) {
+        err = ERROR(ERR_NOT_FOUND, "Session cache expired");
         unlink_on_fail = true;
         goto cleanup;
     }
 
-    /* Deobfuscate master_key directly into the caller's output buffer.
-     * crypto_chacha20_x XORs cache.obfuscated_key with the keystream and writes
-     * to out_master_key in one pass — no temporary buffer. This is the FINAL
-     * step before success: any error path above returns before we touch
-     * out_master_key, and the cleanup below scrubs it on every error path
-     * regardless. */
-    static const uint8_t zero_nonce[24] = { 0 };
+    /* Deobfuscate directly into the caller's buffer: the FINAL step, so every
+     * error path above returns before out_master_key is touched. */
     crypto_chacha20_x(
         out_master_key, cache.obfuscated_key, KDF_KEY_SIZE,
-        cache_key, zero_nonce, /*ctr=*/ 0
+        cache_key, cache.nonce, /*ctr=*/ 0
     );
-
-    *out_memory_mib = memory_mib;
-    *out_passes = cache.passes;
+    *out_expires_at = (time_t) expires_at;
 
 cleanup:
     if (fd >= 0) {
@@ -656,41 +500,24 @@ cleanup:
     crypto_wipe(&cache, sizeof(cache));
     crypto_wipe(cache_key, sizeof(cache_key));
     crypto_wipe(computed_mac, sizeof(computed_mac));
-    /* Scrub the output on every error path. See header for why this loosens the
-     * sketch's "left untouched" wording. */
     if (err != NULL) {
         crypto_wipe(out_master_key, KDF_KEY_SIZE);
     }
     free(cache_path);
-    free(cache_dir);
 
     return err;
 }
 
-void session_clear(void) {
+bool session_clear(const kdf_epoch_t *epoch) {
     char *cache_path = NULL;
-    char *cache_dir = NULL;
-    if (resolve_cache_paths(&cache_path, &cache_dir) != NULL) {
-        free(cache_path);
-        free(cache_dir);
-        return;
+    if (resolve_cache_path(epoch, &cache_path) != NULL) {
+        return false;
     }
 
-    /* Fast path: file doesn't exist, nothing to do. fs_exists guards against
-     * transient ENOENT; the open below would also surface ENOENT, but checking
-     * once up front lets us skip the open call entirely in the common no-cache
-     * case. */
-    if (!fs_exists(cache_path)) {
-        free(cache_path);
-        free(cache_dir);
-        return;
-    }
-
-    /* Open without O_TRUNC so we can overwrite the existing bytes with zeros
-     * before unlinking. O_NOFOLLOW so we cannot be tricked into truncating an
-     * unrelated file via a symlink swap. Best-effort throughout: any failure
-     * here falls through to unlink, which is what guarantees the cache entry is
-     * gone. */
+    /* Open without O_TRUNC so the existing bytes can be overwritten with zeros
+     * before the unlink; O_NOFOLLOW so a symlink swap cannot make this truncate
+     * an unrelated file. Best-effort throughout: any failure here falls through
+     * to the unlink, which is what guarantees the file is gone. */
     int fd = open(cache_path, O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd >= 0) {
         const uint8_t zero_block[SESSION_FILE_SIZE] = { 0 };
@@ -701,7 +528,7 @@ void session_clear(void) {
                 if (errno == EINTR) {
                     continue;
                 }
-                break;  /* best-effort: stop and let unlink finish the job */
+                break;  /* best-effort: stop and let the unlink finish the job */
             }
             off += (size_t) n;
         }
@@ -709,7 +536,7 @@ void session_clear(void) {
         (void) close(fd);
     }
 
-    (void) unlink(cache_path);
+    const bool removed = unlink(cache_path) == 0;
     free(cache_path);
-    free(cache_dir);
+    return removed;
 }

@@ -451,10 +451,12 @@ auto_encrypt = [
 # Cache behavior:
 #   - In-memory: Key cached for the lifetime of a single command
 #   - File cache: Key persists across commands until timeout
-#   - Location: ~/.cache/dotta/session (machine-bound, auto-expires)
+#   - Location: ~/.cache/dotta/session-<epoch> (one file per repository
+#     epoch; the expiry is the file's own and counts down across commands)
 #
 # Options:
-#   0     - No caching (always prompt, most secure)
+#   0     - No file cache (every command asks again; the key still serves
+#           the whole of the command that asked)
 #   1800  - 30 minutes
 #   3600  - 1 hour (default)
 #   7200  - 2 hours

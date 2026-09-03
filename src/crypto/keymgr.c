@@ -1,16 +1,15 @@
 /**
  * keymgr.c — Master-key lifecycle and per-operation subkey acquisition
  *
- * Implements the two-tier cache (in-memory slot + on-disk session) and the
- * resolution chain documented in keymgr.h.
+ * Implements the slot, the session file and the resolution chain documented in
+ * keymgr.h.
  *
  * Internal layout:
- *   - `is_slot_valid` — slot freshness predicate (expiry).
  *   - `evict_slot` / `install_slot` — single chokepoints for slot mutations;
- *     every write to (master_key, has_key, cached_at) goes through one of these.
- *   - `try_memory_hit` / `try_disk_hit` / `prompt_passphrase` /
- *     `derive_and_install` — the four tiers of the resolution decision tree.
- *     Each owns one storage location, one decision.
+ *     every write to (master_key, has_key, expires_at) goes through one of these.
+ *   - `try_memory_hit` / `try_disk_hit` / `prompt_passphrase` / `keep` — the
+ *     four tiers of the resolution decision tree. Each owns one storage location,
+ *     one decision.
  *   - `keymgr_resolve` — orchestrator composing the four tiers in memory → disk
  *     → env → prompt order.
  *   - `keymgr_acquire_subkeys` — atomic resolve + derive + wipe-master used by
@@ -46,7 +45,7 @@
 /**
  * Key manager structure.
  *
- * The epoch, the timeout, and the single in-memory cache slot. Best-effort mlock'd;
+ * The epoch, the timeout, and the single in-memory slot. Best-effort mlock'd;
  * the much larger Argon2 work area is mlock'd separately by `kdf_master_key`.
  */
 struct keymgr {
@@ -57,75 +56,37 @@ struct keymgr {
     kdf_epoch_t epoch;
     uint8_t epoch_fp[KDF_EPOCH_FP_SIZE];
 
-    int32_t session_timeout;        /* seconds; 0 = always prompt, -1 = never expire */
+    int32_t session_timeout;        /* seconds the file lives; 0 = no file, -1 = never expires */
 
-    /* Cache slot. */
+    /* The slot: the process memo of the master. */
     bool has_key;
     uint8_t master_key[KDF_KEY_SIZE];
-    time_t cached_at;               /* CLOCK_MONOTONIC seconds; 0 if !has_key */
+    time_t expires_at;              /* the file's; 0 = never, or no file */
 
     bool mlocked;
 };
 
 /**
- * Monotonic timestamp in seconds — used for in-memory cache expiry so the user
- * cannot stretch cache lifetime by skewing the wall clock. The on-disk cache
- * uses wall-clock instead (must survive reboots, which reset CLOCK_MONOTONIC).
- */
-static time_t get_monotonic_time(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        /* Falls back to wall-clock so a malfunctioning monotonic clock degrades
-         * gracefully rather than crashing. Should not happen on any modern POSIX
-         * system. */
-        return time(NULL);
-    }
-    return ts.tv_sec;
-}
-
-/**
- * Is the in-memory slot a valid hit?
- *
- * `session_timeout == 0` (always-prompt) treats the slot as already-expired;
- * `session_timeout < 0` (never-expire) skips the elapsed-time check.
- */
-static bool is_slot_valid(const keymgr *km) {
-    if (!km->has_key) {
-        return false;
-    }
-    if (km->session_timeout == 0) {
-        return false;
-    }
-    if (km->session_timeout < 0) {
-        return true;
-    }
-    const time_t now = get_monotonic_time();
-    const time_t elapsed = now - km->cached_at;
-    return elapsed < km->session_timeout;
-}
-
-/**
- * Evict the in-memory slot. Scrubs the master key and resets every cache field
+ * Evict the in-memory slot. Scrubs the master key and resets every slot field
  * to its post-`calloc` state. Idempotent.
  */
 static void evict_slot(keymgr *km) {
     crypto_wipe(km->master_key, sizeof(km->master_key));
     km->has_key = false;
-    km->cached_at = 0;
+    km->expires_at = 0;
 }
 
 /**
- * Install a freshly resolved master key into the slot.
- *
- * Caller must evict any prior occupant first — calling over a non-empty slot
- * leaks the old key.
+ * Install a master key into the slot, with the expiry of the file it came from
+ * or was written to (0 = never, or no file). Replaces any occupant.
  */
 static void install_slot(
     keymgr *km,
-    const uint8_t master_key[KDF_KEY_SIZE]
+    const uint8_t master_key[KDF_KEY_SIZE],
+    time_t expires_at
 ) {
     memcpy(km->master_key, master_key, KDF_KEY_SIZE);
-    km->cached_at = get_monotonic_time();
+    km->expires_at = expires_at;
     km->has_key = true;
 }
 
@@ -189,65 +150,47 @@ void keymgr_free(keymgr *km) {
  *   try_memory_hit     — in-memory slot   (fast path)
  *   try_disk_hit       — on-disk session  (process-fresh warm path)
  *   prompt_passphrase  — env or TTY       (cold path)
- *   derive_and_install — Argon2id + slot + disk save
+ *   keep               — the slot, and the file when the tier is on
  *
  * `keymgr_resolve` is the orchestrator that composes them in order.
  */
 
 /**
- * Tier 1: in-memory cache hit.
- *
- * Hit copies the master key to `out_master_key`. On miss, an expired occupant
- * is evicted so the caller can install fresh material. Never writes to
- * `out_master_key` on miss.
+ * Tier 1: in-memory slot hit. Copies the master to `out_master_key`; never writes
+ * it on a miss.
  */
 static bool try_memory_hit(
-    keymgr *km,
+    const keymgr *km,
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
-    if (is_slot_valid(km)) {
-        memcpy(out_master_key, km->master_key, KDF_KEY_SIZE);
-        return true;
+    if (!km->has_key) {
+        return false;
     }
-    if (km->has_key) {
-        evict_slot(km);
-    }
-    return false;
+    memcpy(out_master_key, km->master_key, KDF_KEY_SIZE);
+    return true;
 }
 
 /**
- * Tier 2: on-disk session cache hit.
+ * Tier 2: on-disk session file hit.
  *
- * Hit copies the master to `out_master_key` AND installs it into the in-memory
- * slot. Miss covers cache-disabled, file missing, expired, MAC failure, wrong
- * perms, or a file recording a pair that is not the epoch's — one written by a
- * build before the epoch owned the pair. Transient I/O failure surfaces a stderr
- * advisory and counts as a miss. On miss `out_master_key` is scrubbed.
+ * Hit copies the master to `out_master_key` AND installs it into the slot with
+ * the file's expiry. Miss covers the tier being off, no file, expired, MAC failure,
+ * wrong mode or owner. Transient I/O failure surfaces a stderr advisory and counts
+ * as a miss. On miss `out_master_key` is scrubbed.
  */
 static bool try_disk_hit(
     keymgr *km,
     uint8_t out_master_key[KDF_KEY_SIZE]
 ) {
     if (km->session_timeout == 0) {
-        /* Always-prompt mode: file never exists (gated in derive_and_install);
-         * skipping the load avoids a syscall. */
         return false;
     }
 
-    uint16_t loaded_memory_mib = 0;
-    uint8_t loaded_passes = 0;
-    error_t *err = session_load(
-        out_master_key, &loaded_memory_mib, &loaded_passes, km->epoch.salt
-    );
-
+    time_t expires_at = 0;
+    error_t *err = session_load(out_master_key, &km->epoch, &expires_at);
     if (err == NULL) {
-        if (loaded_memory_mib == km->epoch.memory_mib
-            && loaded_passes == km->epoch.passes) {
-            install_slot(km, out_master_key);
-            return true;
-        }
-        crypto_wipe(out_master_key, KDF_KEY_SIZE);
-        return false;
+        install_slot(km, out_master_key, expires_at);
+        return true;
     }
 
     if (err->code == ERR_NOT_FOUND || err->code == ERR_CRYPTO) {
@@ -317,60 +260,34 @@ static error_t *prompt_passphrase(
 }
 
 /**
- * Tier 4: derive the master under the epoch; install in the slot and persist to
- * the on-disk session cache — except under always-prompt mode, where the master
- * must not outlive one operation.
+ * Tier 4: keep a freshly derived master — the slot always, the file when the
+ * tier is on.
  *
- * Slot must already be empty (caller evicts). On success `out_master_key` holds
- * the derived master. Slot/disk state branches on session_timeout:
- *   - `session_timeout != 0`: slot mirrors `out_master_key`; the on-disk cache
- *     is written. `session_save` failures are non-fatal — the in-memory slot is
- *     authoritative for this process.
- *   - `session_timeout == 0` (always-prompt): slot stays empty; disk is not
- *     touched. The caller's wipe path bounds the master's lifetime to a single
- *     operation, honoring the user's opt-out.
- *
- * On failure the buffer is wiped (`kdf_master_key`'s contract) and the slot is
- * unchanged.
+ * The slot is the process memo under every timeout: an operation that follows
+ * in this run reads it rather than deriving again. The file's expiry is computed
+ * here (`now + timeout`, or 0 for never) and is what the slot then carries.
+ * `session_save` failures are non-fatal — the slot is authoritative for this
+ * process; failing to persist only costs a re-prompt in the next one.
  */
-static error_t *derive_and_install(
-    keymgr *km,
-    const uint8_t *passphrase,
-    size_t passphrase_len,
-    uint8_t out_master_key[KDF_KEY_SIZE]
-) {
-    error_t *err = kdf_master_key(
-        passphrase, passphrase_len, &km->epoch, out_master_key
-    );
-    if (err) {
-        return error_wrap(err, "Failed to derive encryption key");
+static void keep(keymgr *km, const uint8_t master_key[KDF_KEY_SIZE]) {
+    time_t expires_at = 0;
+
+    if (km->session_timeout != 0) {
+        expires_at = km->session_timeout < 0
+            ? 0
+            : time(NULL) + km->session_timeout;
+        error_t *save_err = session_save(master_key, &km->epoch, expires_at);
+        if (save_err) {
+            fprintf(
+                stderr, "Warning: Failed to save session cache: %s\n",
+                error_message(save_err)
+            );
+            error_free(save_err);
+            expires_at = 0;
+        }
     }
 
-    /* Always-prompt mode: hand the master back via out_master_key for one-shot
-     * use, but skip the slot install AND the disk cache. The caller's wipe
-     * (keymgr_acquire_subkeys → wipe master after subkey derivation) is the
-     * master's full lifetime in this mode. */
-    if (km->session_timeout == 0) {
-        return NULL;
-    }
-
-    install_slot(km, out_master_key);
-
-    error_t *save_err = session_save(
-        out_master_key, km->epoch.memory_mib, km->epoch.passes,
-        km->epoch.salt, km->session_timeout
-    );
-    if (save_err) {
-        /* Non-fatal. The in-memory slot is authoritative for this process; failing
-         * to persist the cache only costs a re-prompt in the next process. */
-        fprintf(
-            stderr, "Warning: Failed to save session cache: %s\n",
-            error_message(save_err)
-        );
-        error_free(save_err);
-    }
-
-    return NULL;
+    install_slot(km, master_key, expires_at);
 }
 
 /**
@@ -401,15 +318,21 @@ static error_t *keymgr_resolve(
         return err;
     }
 
-    err = derive_and_install(
-        km, (const uint8_t *) passphrase, passphrase_len, out_master_key
+    err = kdf_master_key(
+        (const uint8_t *) passphrase, passphrase_len, &km->epoch,
+        out_master_key
     );
 
     /* Wipe and free the passphrase regardless of derivation outcome. Both backends
      * return a buffer of `passphrase_len + 1` bytes (NUL-terminated, mlock'd). */
     buffer_secure_free(passphrase, passphrase_len + 1);
 
-    return err;
+    if (err) {
+        return error_wrap(err, "Failed to derive encryption key");
+    }
+
+    keep(km, out_master_key);
+    return NULL;
 }
 
 /**
@@ -451,7 +374,7 @@ error_t *keymgr_set_passphrase(
     }
 
     /* Stage the new master locally so a derivation failure cannot leave a half-key
-     * in the slot — evict and install only on success. */
+     * in the slot — the slot is replaced only on success. */
     uint8_t new_master[KDF_KEY_SIZE];
     error_t *err = kdf_master_key(
         passphrase, passphrase_len, &km->epoch, new_master
@@ -460,43 +383,19 @@ error_t *keymgr_set_passphrase(
         return error_wrap(err, "Failed to derive encryption key");
     }
 
-    /* Always-prompt mode: derivation succeeded, which validates the passphrase,
-     * but the master must not survive past return — neither in the slot nor on
-     * disk. */
-    if (km->session_timeout == 0) {
-        evict_slot(km);
-        crypto_wipe(new_master, sizeof(new_master));
-        return NULL;
-    }
-
-    evict_slot(km);
-    install_slot(km, new_master);
-
-    /* Persist to disk so the next process inherits the cached key. */
-    error_t *save_err = session_save(
-        new_master, km->epoch.memory_mib, km->epoch.passes,
-        km->epoch.salt, km->session_timeout
-    );
-    if (save_err) {
-        fprintf(
-            stderr, "Warning: Failed to save session cache: %s\n",
-            error_message(save_err)
-        );
-        error_free(save_err);
-    }
-
+    keep(km, new_master);
     crypto_wipe(new_master, sizeof(new_master));
 
     return NULL;
 }
 
-void keymgr_clear(keymgr *km) {
+bool keymgr_clear(keymgr *km) {
     if (!km) {
-        return;
+        return false;
     }
 
     evict_slot(km);
-    session_clear();
+    return session_clear(&km->epoch);
 }
 
 void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
@@ -504,106 +403,35 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
         return;
     }
 
-    /* The cached master derives from the old epoch — evict before re-binding.
-     * The on-disk cache is unlinked eagerly; its MAC absorbs the salt, so a stale
-     * file would fail-and-unlink lazily anyway (crypto/session.h). */
+    /* The cached master derives from the old epoch — evict before re-binding,
+     * and take the old epoch's file with it: the file is the epoch's by name,
+     * and nothing would read it again. */
     evict_slot(km);
+    (void) session_clear(&km->epoch);
     bind_epoch(km, epoch);
-    session_clear();
 }
 
 const kdf_epoch_t *keymgr_epoch(const keymgr *km) {
     return &km->epoch;
 }
 
-bool keymgr_probe_key(keymgr *km) {
+bool keymgr_cached(keymgr *km, time_t *out_expires_at) {
+    if (out_expires_at) {
+        *out_expires_at = 0;
+    }
     if (!km) {
         return false;
     }
 
-    if (is_slot_valid(km)) {
-        return true;
+    uint8_t master_key[KDF_KEY_SIZE];
+    const bool cached = try_memory_hit(km, master_key)
+        || try_disk_hit(km, master_key);
+    crypto_wipe(master_key, sizeof(master_key));
+
+    if (cached && out_expires_at) {
+        *out_expires_at = km->expires_at;
     }
-
-    /* Skip disk in always-prompt mode (the file never exists either;
-     * the double-gate is cheap). */
-    if (km->session_timeout == 0) {
-        return false;
-    }
-
-    uint8_t loaded[KDF_KEY_SIZE];
-    uint16_t loaded_memory_mib = 0;
-    uint8_t loaded_passes = 0;
-    error_t *err = session_load(
-        loaded, &loaded_memory_mib, &loaded_passes, km->epoch.salt
-    );
-    if (err) {
-        /* ERR_NOT_FOUND, ERR_CRYPTO, ERR_FS — all "no key available without
-         * prompting". Forget the error; probe is a boolean question. */
-        error_free(err);
-        return false;
-    }
-
-    if (loaded_memory_mib != km->epoch.memory_mib
-        || loaded_passes != km->epoch.passes) {
-        /* A file from before the epoch owned the pair: not this epoch's master. */
-        crypto_wipe(loaded, sizeof(loaded));
-        return false;
-    }
-
-    /* Disk hit. Promote into the in-memory slot, evicting any expired occupant
-     * first (install_slot's precondition). */
-    if (km->has_key) {
-        evict_slot(km);
-    }
-    install_slot(km, loaded);
-    crypto_wipe(loaded, sizeof(loaded));
-
-    return true;
-}
-
-int64_t keymgr_time_until_expiry(
-    const keymgr *km,
-    time_t *out_expires_at
-) {
-    if (!km || !km->has_key) {
-        if (out_expires_at) {
-            *out_expires_at = 0;
-        }
-        return 0;
-    }
-
-    if (km->session_timeout < 0) {
-        if (out_expires_at) {
-            *out_expires_at = 0;
-        }
-        return -1;
-    }
-
-    if (km->session_timeout == 0) {
-        /* Always-prompt mode: surface "0 seconds remaining" so the UI renders
-         * "expired" rather than "indefinite". */
-        if (out_expires_at) {
-            *out_expires_at = time(NULL);
-        }
-        return 0;
-    }
-
-    const time_t now_monotonic = get_monotonic_time();
-    const time_t elapsed = now_monotonic - km->cached_at;
-    int64_t remaining = (int64_t) (km->session_timeout - elapsed);
-    if (remaining < 0) {
-        remaining = 0;
-    }
-
-    if (out_expires_at) {
-        /* Convert to wall-clock for display: monotonic and wall-clock have
-         * different epochs, so add `remaining` to time(NULL) rather than mixing
-         * `cached_at` directly. */
-        *out_expires_at = time(NULL) + remaining;
-    }
-
-    return remaining;
+    return cached;
 }
 
 error_t *keymgr_encrypt(

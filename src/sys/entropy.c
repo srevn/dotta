@@ -16,8 +16,9 @@
 #include "base/secure.h"
 
 /* POSIX 2024 caps a single getentropy() call at 256 bytes; larger requests loop.
- * The one in-tree caller asks for 16 bytes — the loop is kept so the function
- * honestly serves any future caller without a hidden size ceiling. */
+ * The two in-tree callers ask for 32 (the epoch's salt) and 24 (the session
+ * file's nonce) — the loop is kept so the function honestly serves any future
+ * caller without a hidden size ceiling. */
 #define ENTROPY_CHUNK_MAX 256
 
 error_t *entropy_fill(uint8_t *out, size_t len) {

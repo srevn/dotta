@@ -10,17 +10,16 @@
  * little-endian hosts a modern optimizer lowers each body to a single aligned
  * load or store, and on big-endian hosts to a load or store plus a bswap. Call
  * overhead is one or two instructions — negligible against the bandwidth-bound
- * work that surrounds every call (keyed-BLAKE2b absorption in `crypto/mac.c`,
- * XChaCha20 keystream in `crypto/cipher.c`, and session-cache MAC computation
- * in `crypto/session.c`).
+ * work that surrounds every call (keyed-BLAKE2b absorption in `crypto/mac.c`
+ * and session-file MAC computation in `crypto/session.c`).
  *
  * Single source of truth for byte-order conversions across the crypto stack:
  *   - `crypto/mac.c`      — canonical LE64 framing of every variable-
  *                           length input absorbed into keyed BLAKE2b.
- *   - `crypto/cipher.c`   — LE16 Argon2-params field in the encrypted-
- *                           blob header.
- *   - `crypto/session.c`  — LE16/LE64 numeric fields in the on-disk
- *                           session-cache layout.
+ *   - `crypto/kdf.c`      — the LE16 memory_mib of the epoch's params
+ *                           blob at `refs/dotta/epoch`.
+ *   - `crypto/session.c`  — the LE64 timestamps of the on-disk session
+ *                           file.
  */
 
 #ifndef DOTTA_ENCODING_H

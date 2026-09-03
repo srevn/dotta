@@ -65,6 +65,16 @@
  * and the row that asked reads as unverifiable; nothing is asked and nothing is
  * written. `status` and `sync` report; `apply` and `add` obtain.
  *
+ * The codes. ERR_LOCKED means this run holds no usable master: none in reach,
+ * none read at the prompt, none that opens the repository's ciphertext — one
+ * fact for every row of the run, and a key is what settles it. ERR_CRYPTO is
+ * the cipher's word under a held master — a blob it does not open is that blob's
+ * fault — and the refusals no master can ever lift here: a foreign epoch, a version
+ * this build does not read, a malformed header. A witness walk or a derivation
+ * that fails on its own keeps its own code. The workspace reads the code to name
+ * a failed look's fault (core/workspace.h), so the boundary is a contract, not
+ * a habit.
+ *
  * The layer computes, the verbs report: nothing here writes to a stream but the
  * prompt's own text, and that only at a terminal (sys/passphrase). Every refusal
  * is one `error_t` naming its cause and the way out.
@@ -139,7 +149,7 @@ typedef enum keymgr_reach {
  */
 typedef struct keymgr_witness {
     const uint8_t *ciphertext;    /* the blob, whole (header, SIV, body) */
-    size_t len;
+    size_t len;                   /* its length, the header included */
     const char *profile;          /* the branch it is sealed under */
     const char *storage_path;     /* the tree path bound into its SIV */
 } keymgr_witness_t;
@@ -270,7 +280,9 @@ error_t *keymgr_encrypt(
  * @param ciphertext     Dotta-encrypted bytes including header (non-NULL)
  * @param ciphertext_len Ciphertext length (≥ CIPHER_OVERHEAD)
  * @param out_plaintext  Output buffer (caller frees with buffer_free)
- * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
+ * @return Error or NULL on success: ERR_LOCKED when the run holds no usable master,
+ *         ERR_CRYPTO when a held master does not open this blob or no master
+ *         here ever could (the codes paragraph above)
  */
 error_t *keymgr_decrypt(
     keymgr *km,
@@ -301,9 +313,9 @@ error_t *keymgr_decrypt(
  * the slot is installed either way, and the file was unlinked so it never lies.
  *
  * @param km Key manager (non-NULL)
- * @return Error or NULL on success: the ladder's refusal (ERR_LOCKED when nothing
- *         usable was obtained, ERR_CRYPTO when the passphrase opened nothing),
- *         or the save's
+ * @return Error or NULL on success: the ladder's refusal (ERR_LOCKED — nothing
+ *         usable was obtained, or the passphrase opened nothing; a walk or a
+ *         derivation that failed keeps its own code), or the save's
  */
 error_t *keymgr_set(keymgr *km);
 

@@ -29,8 +29,8 @@
  *   populated with random bytes (on success) or fully zeroed (on error). Never
  *   partial-with-garbage.
  *
- * Used at `dotta init` for the repository's Argon2id salt (infra/salt) and by
- * every session-cache save for the file's own salt (crypto/session). Encryption
+ * Used at `dotta init` for the repository's Argon2id salt (infra/epoch) and by
+ * every session-file save for the file's own nonce (crypto/session). Encryption
  * itself is deterministic by design (SIV) and uses no randomness — see
  * `docs/encryption-spec.md`.
  */

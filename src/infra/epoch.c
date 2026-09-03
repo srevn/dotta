@@ -707,11 +707,12 @@ error_t *epoch_fetch(
 typedef struct {
     const char *branch;         /* the profile */
     const char *storage_path;   /* the tree path, root ‖ name */
-    const git_oid *oid;
+    const git_oid *oid;         /* the blob object, borrowed from the tree entry */
     content_kind_t kind;        /* ENCRYPTED or UNSUPPORTED_VERSION */
-    const uint8_t *epoch_fp;    /* ENCRYPTED: the header's; else NULL */
+    const uint8_t *epoch_fp;    /* set iff ENCRYPTED: the header's; else NULL, so
+                                 * every reader tests the kind first */
     const uint8_t *data;        /* the blob, borrowed while the callback runs */
-    size_t size;
+    size_t size;                /* its length, the header included */
 } epoch_ciphertext_t;
 
 /* The asker's callback: continue, or stop with its answer in its payload. */
@@ -725,8 +726,8 @@ typedef error_t *(*epoch_ciphertext_fn)(
 typedef struct {
     git_repository *repo;       /* borrowed; for blob loads */
     hashmap_t *seen;            /* borrowed; visited (object, branch, path) */
-    epoch_ciphertext_fn fn;     /* the asker, and its payload */
-    void *payload;
+    epoch_ciphertext_fn fn;     /* the asker */
+    void *payload;              /* the asker's, carried untouched */
     const char *branch;         /* the branch under walk */
     bool stopped;               /* the asker stopped the walk */
     error_t *error;             /* the walk could not prove anything (owned) */
@@ -1031,8 +1032,8 @@ static error_t *local_has_ciphertext(
  */
 typedef struct {
     uint8_t fp[KDF_EPOCH_FP_SIZE];  /* the epoch's; only its ciphertext shows */
-    keymgr_opens_fn accept;         /* the keymgr's predicate and its payload */
-    void *self;
+    keymgr_opens_fn accept;         /* the keymgr's predicate */
+    void *self;                     /* the predicate's, carried untouched */
     bool found;                     /* set when the predicate accepted one */
 } epoch_find_t;
 

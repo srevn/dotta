@@ -68,13 +68,14 @@ struct keymgr {
     int32_t session_timeout;   /* the file's life; 0 = no file, -1 = forever */
     keymgr_reach_t reach;      /* the caches alone, or the user beyond them */
 
-    /* The slot: the process memo of one verified master, and the witness it opened
-     * — NULL when it came from a cache or was taken as given. */
-    bool has_key;
-    uint8_t master_key[KDF_KEY_SIZE];
-    time_t expires_at;              /* the file's; 0 = never, or no file */
-    char *witness_profile;
-    char *witness_path;
+    /* The slot: the process memo of one verified master, and the witness it
+     * opened — both witness fields NULL when the master came from a cache or
+     * was taken as given. */
+    bool has_key;                       /* the slot is occupied */
+    uint8_t master_key[KDF_KEY_SIZE];   /* the verified master */
+    time_t expires_at;                  /* the file's; 0 = never, or no file */
+    char *witness_profile;              /* the branch it opened */
+    char *witness_path;                 /* the tree path it opened */
 
     /* The ladder ran and refused; re-issued by every resolve after. */
     error_t *refusal;
@@ -379,14 +380,19 @@ static error_t *derive_and_check(
         return NULL;  /* nothing to open: taken as given */
     }
 
+    /* ERR_LOCKED, not the cipher's ERR_CRYPTO: the run is left with no master —
+     * every row after this one re-issues the same refusal — and a key is what
+     * settles it. The cipher's code is for a held master that one blob refuses;
+     * that is the blob's fault, and the reader that tells the two apart (the
+     * workspace's fault) reads the code. */
     if (in_hand && trial.tried == 1) {
         err = ERROR(
-            ERR_CRYPTO, "%s does not open '%s:%s'",
+            ERR_LOCKED, "%s does not open '%s:%s'",
             source, in_hand->profile, in_hand->storage_path
         );
     } else {
         err = ERROR(
-            ERR_CRYPTO, "%s opens none of this repository's encrypted files",
+            ERR_LOCKED, "%s opens none of this repository's encrypted files",
             source
         );
     }
@@ -453,7 +459,10 @@ static error_t *prompt_and_verify(
         if (!err) {
             return NULL;
         }
-        if (!tty || err->code != ERR_CRYPTO || attempt == KEYMGR_ATTEMPTS) {
+        /* A wrong passphrase — derive_and_check's ERR_LOCKED — is re-asked at a
+         * terminal; a derivation or a walk that failed on its own is refused at
+         * once. */
+        if (!tty || err->code != ERR_LOCKED || attempt == KEYMGR_ATTEMPTS) {
             return refuse(km, err);
         }
         error_free(err);
@@ -522,10 +531,11 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
 /**
  * The ladder's user half: the environment, then the prompt — OBTAIN only. The
  * fresh master it yields is verified before it is returned, and every refusal
- * is recorded for the run: nothing usable obtained (no source in reach, nothing
- * read, a confirm that never matched, a walk that failed) is ERR_LOCKED or the
- * failure's own code; obtained and wrong is ERR_CRYPTO. Nothing here installs
- * or persists — the callers keep what verified.
+ * is recorded for the run. The run is left without a master either way, and the
+ * code says so: no source in reach, nothing read, a confirm that never matched,
+ * a passphrase that opened nothing — ERR_LOCKED, a key would settle it; a
+ * derivation or a witness walk that failed on its own keeps the failure's code.
+ * Nothing here installs or persists — the callers keep what verified.
  */
 static error_t *obtain(
     keymgr *km,

@@ -35,7 +35,7 @@ typedef enum {
     ERR_VALIDATION,            /* Validation failed */
     ERR_MEMORY,                /* Memory allocation failed */
     ERR_CRYPTO,                /* Cryptographic operation failed */
-    ERR_LOCKED,                /* No passphrase in reach */
+    ERR_LOCKED,                /* No usable passphrase this run */
     ERR_INTERNAL               /* Internal error */
 } error_code_t;
 

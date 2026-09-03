@@ -20,7 +20,8 @@
  *     expires_at_le[8]    LE64 — Unix seconds; 0 = never expires
  *     nonce[24]           entropy_fill — the XChaCha20 nonce of the obfuscation
  *     obfuscated_key[32]  master XOR XChaCha20(cache_key, nonce)
- *     mac[32]             keyed BLAKE2b(cache_key, SESSION_MAC) over bytes [0..81)
+ *     mac[32]             keyed BLAKE2b(cache_key, CRYPTO_DOMAIN_SESSION_MAC)
+ *                         over bytes [0..81)
  *
  *     cache_key = BLAKE2b-32(salt ‖ params) — the epoch's own bytes
  *

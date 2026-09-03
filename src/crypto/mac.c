@@ -121,8 +121,7 @@ void crypto_mac_init(
 
     /* Absorb the 8-byte domain tag UNFRAMED. Fixed length by construction; LE64(8)
      * would add no security and would force a canonicalisation rule on a tag
-     * that has none. The same pattern is used by `derive_cache_key` in session.c
-     * for its 16-byte machine_salt. */
+     * that has none. */
     crypto_blake2b_update(&ctx->blake, domain_tags[domain], 8);
 }
 

@@ -379,9 +379,9 @@ error_t *metadata_prune_directories(
  *
  * A key that is absent, held as a directory, or held unstamped answers false.
  *
- * Common usage pattern for historical operations:
- *   bool encrypted = metadata_file_encrypted(metadata, storage_path);
- *   err = content_get_from_blob_oid(..., encrypted, ...);
+ * The reader takes no such flag: `content_get_from_blob_oid` classifies the
+ * blob's own bytes and never cross-checks an external claim (infra/content.h).
+ * This answers "was it stamped encrypted", for a metadata consumer.
  *
  * Note: the view carries the flag on its rows (manifest_row_t.encrypted, projected
  * from this metadata at build); workspace-backed operations read it there.

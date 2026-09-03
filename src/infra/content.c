@@ -499,7 +499,7 @@ void content_cache_free(content_cache_t *cache) {
     }
 
     /* Free all cached buffers with secure cleanup
-     * SECURITY: Use buffer_free_secure() to zero plaintext memory before freeing.
+     * SECURITY: buffer_destroy_secure() zeroes plaintext memory before freeing.
      * The cache contains decrypted sensitive data that must not linger in
      * memory. */
     if (cache->cache_map) {

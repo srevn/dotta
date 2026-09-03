@@ -61,9 +61,11 @@
  * prf_key)` pair so this module stays free of master-key and profile-name
  * knowledge. The canonical caller is `crypto/keymgr`, which derives the pair
  * via `kdf_siv_subkeys` and wipes both buffers after the single per-operation
- * use. Any other call site needs explicit justification — `kdf_siv_subkeys` is
- * what makes the two subkeys cryptographically independent, and per-operation
- * derive + wipe is what bounds subkey lifetime on the stack.
+ * use. Any other production call site needs explicit justification —
+ * `kdf_siv_subkeys` is what makes the two subkeys cryptographically independent,
+ * and per-operation derive + wipe is what bounds subkey lifetime on the stack.
+ * tests/test-cipher.c calls both with a fixed pair to pin the format at its own
+ * boundary.
  */
 
 #ifndef DOTTA_CRYPTO_CIPHER_H
@@ -137,51 +139,45 @@ _Static_assert(
 );
 
 /**
- * Read the Argon2 params from a cipher-blob header without touching the SIV or
- * attempting decryption.
- *
- * Used by `keymgr_decrypt` to derive the master key under the params the producer
- * used. Applies `kdf_validate_params` so an out-of-range header rejects before
- * any Argon2 work area is allocated — closes the DoS surface where an
- * attacker-planted blob would otherwise force tens-of-GiB allocations.
- *
- * Failure modes (all ERR_CRYPTO): too short, magic mismatch, unsupported version,
- * params out of [KDF_ARGON2_*_MIN..MAX].
- *
- * @param data            Blob bytes (must include at least HEADER_SIZE)
- * @param data_len        Blob length
- * @param out_memory_mib  Set to header's argon2_memory_mib on success
- * @param out_passes      Set to header's argon2_passes on success
- * @return Error or NULL on success
+ * The fields a cipher-blob header carries, as `cipher_read_header` hands them
+ * out: the Argon2 params the producer derived under and the fingerprint of the
+ * salt it derived from. The magic and the version are not fields — a header whose
+ * version is not this build's is refused at the read, so a reader never holds one.
  */
-error_t *cipher_peek_params(
-    const uint8_t *data,
-    size_t data_len,
-    uint16_t *out_memory_mib,
-    uint8_t *out_passes
-);
+typedef struct cipher_header {
+    uint16_t memory_mib;                /* argon2_memory_mib, in range */
+    uint8_t passes;                     /* argon2_passes, in range */
+    uint8_t salt_fp[KDF_SALT_FP_SIZE];  /* kdf_salt_fingerprint of the producer's salt */
+} cipher_header_t;
 
 /**
- * Read the salt fingerprint from a cipher-blob header without touching the SIV
- * or attempting decryption.
+ * Read a cipher-blob header without touching the SIV or attempting decryption.
  *
- * The fingerprint names the repository salt the producer derived under (see the
- * file-level layout). Key-free: used by `keymgr_decrypt` to refuse foreign-salt
- * blobs before any passphrase prompt, and by `infra/content`'s classifier so
- * the salt census can attribute ciphertext to a salt.
+ * The one reader of a header's fields, key-free. Length → magic → version →
+ * `kdf_validate_params` on the recorded (memory_mib, passes), so an out-of-range
+ * header is refused before any caller allocates an Argon2 work area for it — an
+ * attacker-planted blob cannot force a tens-of-GiB allocation. The fingerprint
+ * needs no validation: any 8 bytes are a well-formed fingerprint, and whether
+ * it names *this* repository's salt is the caller's question.
  *
- * Runs the same header validation as `cipher_peek_params`; the same failure modes
- * apply (all ERR_CRYPTO).
+ * Readers: `keymgr_decrypt` (the salt gate, then the params to derive under)
+ * and `content_classify` (the fingerprint the salt census attributes by);
+ * tests/test-cipher.c pins the fields and the refusals. `cipher_decrypt` runs
+ * the same validation as its own gate and reads no field — every one is bound
+ * into the SIV.
  *
- * @param data     Blob bytes (must include at least HEADER_SIZE)
+ * Failure modes (all ERR_CRYPTO): too short, magic mismatch, unsupported version,
+ * params out of [KDF_ARGON2_*_MIN..MAX]. `*out` is untouched on failure.
+ *
+ * @param data     Blob bytes (must point to at least data_len bytes)
  * @param data_len Blob length
- * @param out_fp   Set to the header's 8-byte salt fingerprint on success
+ * @param out      The header's fields on success
  * @return Error or NULL on success
  */
-error_t *cipher_peek_salt_fp(
+error_t *cipher_read_header(
     const uint8_t *data,
     size_t data_len,
-    uint8_t out_fp[KDF_SALT_FP_SIZE]
+    cipher_header_t *out
 );
 
 /**

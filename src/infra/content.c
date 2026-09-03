@@ -67,9 +67,8 @@ static void buffer_destroy_secure(void *ptr) {
  * Pure computation; no I/O. Boundary handling:
  *
  * - Short blob (size < CIPHER_DETECT_BYTES) → PLAINTEXT. Real cipher blobs are
- *   at least CIPHER_OVERHEAD (41) bytes; even a bare 5-byte "DOTTA" prefix lacks
- *   both the version byte and the SIV, so plaintext is the only safe
- *   interpretation.
+ *   at least CIPHER_OVERHEAD bytes; even a bare 5-byte "DOTTA" prefix lacks both
+ *   the version byte and the SIV, so plaintext is the only safe interpretation.
  * - Magic prefix mismatch → PLAINTEXT.
  * - Magic match + current version → ENCRYPTED.
  * - Magic match + non-current version → UNSUPPORTED_VERSION.
@@ -117,13 +116,15 @@ error_t *content_classify(
 
     /* Attribution rides the same parse: an ENCRYPTED verdict means the detect
      * window matched, and the fingerprint sits a few bytes further into the
-     * authenticated header. cipher_peek_salt_fp re-validates the full header,
-     * so a blob long enough to classify but too short to carry the fingerprint
-     * (a forged prefix) fails here instead of yielding garbage attribution. */
+     * authenticated header. cipher_read_header validates the full header, so a
+     * blob long enough to classify but too short to carry the fingerprint (a
+     * forged prefix) fails here instead of yielding garbage attribution. */
     if (out_salt_fp != NULL && *out_kind == CONTENT_ENCRYPTED) {
-        err = cipher_peek_salt_fp(
-            (const uint8_t *) view.data, view.size, out_salt_fp
-        );
+        cipher_header_t header;
+        err = cipher_read_header((const uint8_t *) view.data, view.size, &header);
+        if (!err) {
+            memcpy(out_salt_fp, header.salt_fp, KDF_SALT_FP_SIZE);
+        }
     }
 
     gitops_blob_view_close(&view);

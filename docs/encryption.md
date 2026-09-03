@@ -1,5 +1,7 @@
 # Encryption
 
+> **Stale in places (0.134):** a clone of a remote without the salt ref is refused, not warned about; a wrong passphrase re-prompts rather than failing "unrecoverably"; and the key-management sections describe the key manager before the key-of-the-repository arc. Rewritten whole when that arc lands; the headers under `src/crypto/` are current.
+
 Dotta supports transparent file encryption for sensitive dotfiles. Files are encrypted at rest in Git and decrypted on demand during deployment.
 
 For the cryptographic design, see [Encryption Specification](encryption-spec.md).

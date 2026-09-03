@@ -33,8 +33,12 @@
  *
  * Architectural placement:
  * - Layer: Infrastructure (src/infra/)
- * - Depends on: base (encryption, gitops), utils (buffer, hashmap, keymgr)
- * - Used by: core (workspace), commands (show, diff)
+ * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops), crypto
+ *   (cipher for the format's constants and header, keymgr for every encrypt and
+ *   decrypt)
+ * - Used by: infra/salt (the census classifies), core (workspace's looks, deploy's
+ *   reads, policy's byte truth), commands (show, diff, export, revert, list;
+ *   add and update through the store)
  */
 
 #ifndef DOTTA_CONTENT_H

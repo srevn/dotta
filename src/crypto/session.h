@@ -52,7 +52,8 @@
  * access recovers the master key — this is "save re-typing a passphrase", not
  * "credential at rest".
  *
- * Crypto-internal header. keymgr.c is the sole consumer.
+ * Crypto-internal header. keymgr.c is the sole consumer; tests/test-session.c
+ * reads it at its own boundary to pin the format.
  */
 
 #ifndef DOTTA_CRYPTO_SESSION_H

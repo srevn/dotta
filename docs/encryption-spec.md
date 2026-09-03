@@ -1,5 +1,7 @@
 # Encryption Technical Specification
 
+> **Stale: this document describes cipher format v7 and the key manager before 0.134.** The code stores cipher v8 (a 17-byte authenticated header — magic, version, the Argon2 params and the repository salt's fingerprint — and 49 bytes of overhead); the write-time invariant is a refusal at the store, not a debug assert (a plaintext whose first bytes are the magic is not stored); there is no signal-handled wipe; a clone of a remote without the salt ref is refused, not warned about; and a wrong passphrase re-prompts rather than failing. The session-cache format (v3) and the Argon2id, MAC and SIV constructions are as described. The document is rewritten whole when the key-of-the-repository arc lands; until then the headers under `src/crypto/` and `src/infra/content.h` are current.
+
 ## Overview
 
 Dotta encrypts sensitive dotfiles transparently so they can be stored in a Git repository without exposing their contents. Files are encrypted at rest in Git and decrypted only when deployed to the filesystem.

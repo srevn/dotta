@@ -141,7 +141,7 @@ error_t *keymgr_encrypt(
  * fingerprint can never decrypt here (the master would derive under a different
  * salt), so it is refused up front — before any passphrase prompt — with a precise
  * ERR_CRYPTO instead of a misleading authentication failure. Then reads
- * (memory_mib, passes) from the blob header via `cipher_peek_params` and acquires
+ * (memory_mib, passes) from the blob header via `cipher_read_header` and acquires
  * the master key under those blob-recorded params. Decryption thus survives config
  * edits.
  *

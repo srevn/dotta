@@ -623,7 +623,7 @@ error_t *session_load(
 
     /* Validate cached params: a corrupted (memory_mib, passes) pair would have
      * failed MAC, but defense in depth keeps the boundary uniform with
-     * cipher_peek_params (sketch §10/I-20). */
+     * cipher_read_header. */
     const uint16_t memory_mib = load_le16(cache.memory_mib_le);
     err = kdf_validate_params(memory_mib, cache.passes);
     if (err) {

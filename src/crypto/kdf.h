@@ -19,7 +19,7 @@
  *
  * Argon2 parameter bounds: the maxima below are DoS bounds, not representational.
  * Cipher blobs carry their own params in the authenticated header, and
- * `cipher_peek_params` validates against KDF_ARGON2_*_MAX BEFORE any Argon2 work
+ * `cipher_read_header` validates against KDF_ARGON2_*_MAX BEFORE any Argon2 work
  * area is allocated — without this gate, an attacker-planted blob with `memory_mib
  * = 65535` would force a 64 GiB allocation before the SIV check fires.
  *
@@ -65,7 +65,7 @@ _Static_assert(
 /**
  * Validate Argon2id parameters against KDF_ARGON2_*_MIN/MAX.
  *
- * Exposed so `cipher_peek_params` can apply the same defense-in-depth check at
+ * Exposed so `cipher_read_header` can apply the same defense-in-depth check at
  * the blob-parse step. Returns ERR_CRYPTO on out-of-range values so a tampered
  * blob surfaces as an authentication-class error rather than leaking format detail
  * through the error code.

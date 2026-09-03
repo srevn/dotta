@@ -749,21 +749,22 @@ error_t *keymgr_decrypt(
      * of it and can refuse. */
     *out_plaintext = (buffer_t){ 0 };
 
-    /* Salt-lineage gate: the blob header names the salt its keys derive from. A
-     * foreign fingerprint means no passphrase can ever verify here — the master
-     * would derive under a different salt — so refuse up front with the precise
-     * fact instead of prompting and then reporting a misleading SIV authentication
-     * failure. Public identity, plain memcmp. */
-    uint8_t blob_salt_fp[KDF_SALT_FP_SIZE];
-    error_t *err = cipher_peek_salt_fp(
-        ciphertext, ciphertext_len, blob_salt_fp
-    );
+    /* One read of the header: the salt the blob's keys derive from and the params
+     * they derive under. */
+    cipher_header_t header;
+    error_t *err = cipher_read_header(ciphertext, ciphertext_len, &header);
     if (err) {
         /* Parse-level errors pass through unwrapped so the precise diagnostic
-         * (bad magic, version, params) reaches the caller. */
+         * (bad magic, version, params out of range — the read refuses those before
+         * any Argon2 allocation) reaches the caller. */
         return err;
     }
-    if (memcmp(blob_salt_fp, km->salt_fp, KDF_SALT_FP_SIZE) != 0) {
+
+    /* Salt-lineage gate: a foreign fingerprint means no passphrase can ever verify
+     * here — the master would derive under a different salt — so refuse up front
+     * with the precise fact instead of prompting and then reporting a misleading
+     * SIV authentication failure. Public identity, plain memcmp. */
+    if (memcmp(header.salt_fp, km->salt_fp, KDF_SALT_FP_SIZE) != 0) {
         return ERROR(
             ERR_CRYPTO,
             "Encrypted under a different repository salt; this repository's "
@@ -771,25 +772,14 @@ error_t *keymgr_decrypt(
         );
     }
 
-    /* Read the params bound into the blob header so the master is derived under
-     * the producer's Argon2 parameters. A tampered params field surfaces later
-     * as a SIV authentication failure; cipher_peek_params runs the range check
-     * up front so an out-of-range header is rejected before any Argon2
-     * allocation. */
-    uint16_t blob_memory_mib = 0;
-    uint8_t blob_passes = 0;
-    err = cipher_peek_params(
-        ciphertext, ciphertext_len, &blob_memory_mib, &blob_passes
-    );
-    if (err) {
-        return err;
-    }
-
+    /* The master is derived under the producer's Argon2 parameters, read from
+     * the bound header; a tampered params field surfaces later as a SIV
+     * authentication failure. */
     uint8_t mac_key[KDF_KEY_SIZE];
     uint8_t prf_key[KDF_KEY_SIZE];
 
     err = keymgr_acquire_subkeys(
-        km, blob_memory_mib, blob_passes, profile, mac_key, prf_key
+        km, header.memory_mib, header.passes, profile, mac_key, prf_key
     );
     if (err) {
         return error_wrap(

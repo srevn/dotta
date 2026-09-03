@@ -126,7 +126,7 @@ error_t *kdf_master_key(
         );
     }
 
-    /* Range-check params at the crypto boundary. cipher_peek_params also calls
+    /* Range-check params at the crypto boundary. cipher_read_header also calls
      * kdf_validate_params before invoking us on the decrypt path, but
      * defense-in-depth here protects callers that haven't yet been routed through
      * cipher (e.g. fresh encrypts where the config-load validation is the only

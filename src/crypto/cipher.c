@@ -90,9 +90,9 @@ static error_t *validate_path(const char *storage_path, size_t *out_len) {
  * Length → magic → version → `kdf_validate_params` on the recorded (memory_mib,
  * passes). The salt fingerprint needs no validation — any 8 bytes are a well-formed
  * fingerprint; whether it names *this* repository's salt is the caller's question
- * (`keymgr_decrypt`). Used by the two peeks and `cipher_decrypt`; centralising
- * "what does a well-formed header look like" keeps the version-bump policy
- * tractable.
+ * (`keymgr_decrypt`). Used by `cipher_read_header` and `cipher_decrypt`;
+ * centralising "what does a well-formed header look like" keeps the version-bump
+ * policy tractable.
  *
  * @param data     Blob bytes (must point to at least data_len bytes)
  * @param data_len Blob length
@@ -150,48 +150,22 @@ static void compute_siv(
     crypto_wipe(&ctx, sizeof(ctx));
 }
 
-error_t *cipher_peek_params(
+error_t *cipher_read_header(
     const uint8_t *data,
     size_t data_len,
-    uint16_t *out_memory_mib,
-    uint8_t *out_passes
+    cipher_header_t *out
 ) {
     CHECK_NULL(data);
-    CHECK_NULL(out_memory_mib);
-    CHECK_NULL(out_passes);
+    CHECK_NULL(out);
 
-    /* validate_header runs the same length / magic / version / params-range checks
-     * that decrypt will run; we re-extract the (mib, passes) pair here for the
-     * caller. The redundant LE16 load is a couple of bytes — well below the noise
-     * floor of any caller (Argon2 derivations are seconds-scale). */
     error_t *err = validate_header(data, data_len);
     if (err) {
         return err;
     }
 
-    *out_memory_mib = load_le16(&data[CIPHER_OFFSET_MIB]);
-    *out_passes = data[CIPHER_OFFSET_PASSES];
-
-    return NULL;
-}
-
-error_t *cipher_peek_salt_fp(
-    const uint8_t *data,
-    size_t data_len,
-    uint8_t out_fp[KDF_SALT_FP_SIZE]
-) {
-    CHECK_NULL(data);
-    CHECK_NULL(out_fp);
-
-    /* Same gate as cipher_peek_params: a caller holding both facts pays the header
-     * validation twice, a handful of comparisons against the seconds-scale Argon2
-     * work that follows on any decrypt path. */
-    error_t *err = validate_header(data, data_len);
-    if (err) {
-        return err;
-    }
-
-    memcpy(out_fp, &data[CIPHER_OFFSET_SALT_FP], KDF_SALT_FP_SIZE);
+    out->memory_mib = load_le16(&data[CIPHER_OFFSET_MIB]);
+    out->passes = data[CIPHER_OFFSET_PASSES];
+    memcpy(out->salt_fp, &data[CIPHER_OFFSET_SALT_FP], KDF_SALT_FP_SIZE);
 
     return NULL;
 }

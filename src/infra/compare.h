@@ -22,6 +22,8 @@
  * - Compare permissions accurately (executable bit)
  * - Clear comparison results
  * - Stat propagation to minimize redundant syscalls
+ * - The disk copy is wiped before it is freed: for an encrypted row it is the
+ *   plaintext, the twin of the buffer the content cache wipes on its side
  */
 
 #ifndef DOTTA_COMPARE_H

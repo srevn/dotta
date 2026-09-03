@@ -13,6 +13,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/secure.h"
 #include "sys/filesystem.h"
 
 const char *compare_result_string(compare_result_t result) {
@@ -204,7 +205,15 @@ static error_t *compare_reference_to_disk(
     }
 
     err = judge(ref, disk_content.data, disk_content.size, disk_path, result);
+
+    /* For an encrypted row the disk copy is the plaintext — the twin of the buffer
+     * the content cache wipes before it frees. Wiped like it, not left for the
+     * allocator. */
+    if (disk_content.data) {
+        secure_wipe(disk_content.data, disk_content.size);
+    }
     buffer_free(&disk_content);
+
     return err;
 }
 
@@ -445,7 +454,11 @@ static error_t *generate_text_diff(
         );
     }
 
-    /* Cleanup disk content buffer */
+    /* The disk copy, wiped before it is freed (compare_reference_to_disk's rule):
+     * for an encrypted row it is the plaintext. */
+    if (disk_content.data) {
+        secure_wipe(disk_content.data, disk_content.size);
+    }
     buffer_free(&disk_content);
 
     if (git_err < 0) {

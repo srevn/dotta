@@ -174,8 +174,12 @@ size_t content_estimated_plaintext_size(
 /**
  * Content cache (opaque)
  *
- * Caches decrypted content for the duration of an operation. Provides O(1) lookup
- * by blob OID.
+ * Caches decrypted content for the duration of an operation. An entry is the
+ * proof one decrypt made for one binding — the profile whose pair unsealed the
+ * blob, the storage path the SIV absorbed, and the blob — and the key names the
+ * whole binding (`profile:path@oid`, the refspec grammar with the blob's OID
+ * where a commit would stand), so a row naming the same ciphertext under another
+ * path or profile never reads an entry the cipher did not verify for it.
  *
  * Ownership:
  * - Cache owns all buffers
@@ -289,12 +293,12 @@ content_cache_t *content_cache_create(
  * Use for batch operations (e.g., status, workspace analysis). Returns borrowed
  * reference valid until cache is freed.
  *
- * On first access for a given blob OID:
+ * On first access for a given binding (profile, storage path, blob):
  * - Loads and classifies the blob (PLAINTEXT / ENCRYPTED / UNSUPPORTED_VERSION)
  * - Decrypts if needed; UNSUPPORTED_VERSION surfaces ERR_CRYPTO
  * - Stores plaintext in cache
  *
- * On subsequent access for same OID:
+ * On subsequent access for the same binding:
  * - Returns cached buffer (O(1) lookup)
  *
  * @param cache Content cache (must not be NULL)

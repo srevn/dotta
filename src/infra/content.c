@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <git2.h>
+#include <limits.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -28,7 +29,7 @@
 struct content_cache {
     git_repository *repo;     /* Borrowed reference */
     keymgr *keymgr;           /* Borrowed reference (can be NULL) */
-    hashmap_t *cache_map;     /* OID hex -> buffer_t* (owned) */
+    hashmap_t *cache_map;     /* binding (profile:path@oid) -> buffer_t* (owned) */
 };
 
 /**
@@ -366,12 +367,27 @@ error_t *content_cache_get_from_blob_oid(
     CHECK_NULL(profile);
     CHECK_NULL(out_content);
 
-    /* Convert OID to hex string (cache key) */
+    /* The key names the whole binding a decrypt proves — the profile whose pair
+     * unseals the blob, the storage path the SIV absorbs, the blob itself — spelled
+     * the way base/refspec spells a content name, the blob's OID where a commit
+     * would stand. Injective: a profile name is a ref name and cannot contain
+     * ':', and the OID is a fixed-width suffix. A hit is therefore an entry the
+     * cipher verified for exactly this binding; a second row naming the same
+     * ciphertext under another path or profile misses and runs its own decrypt,
+     * which the cipher refuses. A plaintext blob shared by two rows is read twice
+     * — one inflate of a dotfile; the cache exists for the decrypt. */
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), blob_oid);
 
-    /* Check cache */
-    buffer_t *cached_content = hashmap_get(cache->cache_map, oid_str);
+    char key[DOTTA_REFNAME_MAX + PATH_MAX + sizeof(oid_str) + 2];
+    int n = snprintf(key, sizeof(key), "%s:%s@%s", profile, storage_path, oid_str);
+    if (n < 0 || (size_t) n >= sizeof(key)) {
+        return ERROR(
+            ERR_INVALID_ARG, "Content key too long for '%s'", storage_path
+        );
+    }
+
+    buffer_t *cached_content = hashmap_get(cache->cache_map, key);
     if (cached_content) {
         /* Cache hit! */
         *out_content = cached_content;
@@ -407,7 +423,7 @@ error_t *content_cache_get_from_blob_oid(
     }
 
     /* Store in cache (cache takes ownership) */
-    err = hashmap_set(cache->cache_map, oid_str, content);
+    err = hashmap_set(cache->cache_map, key, content);
     if (err) {
         /* Fatal - cannot return borrowed reference if caching fails */
         /* Ownership contract requires cache to own the buffer */

@@ -93,9 +93,7 @@ static bool hook_is_enabled(const config_t *config, hook_type_t type) {
  * Get hook script path
  */
 static error_t *hook_get_path(
-    const config_t *config,
-    hook_type_t type,
-    char **out
+    const config_t *config, hook_type_t type, char **out
 ) {
     CHECK_NULL(config);
     CHECK_NULL(out);
@@ -170,9 +168,16 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     } while (0)
 
     /* DOTTA_* surface — three optional, two always-on, then per-file. */
-    if (context->repo_dir) APPEND(str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
-    if (context->command)  APPEND(str_format("DOTTA_COMMAND=%s", context->command));
-    if (context->profile)  APPEND(str_format("DOTTA_PROFILE=%s", context->profile));
+    if (context->repo_dir) {
+        APPEND(str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
+    }
+    if (context->command) {
+        APPEND(str_format("DOTTA_COMMAND=%s", context->command));
+    }
+    if (context->profile) {
+        APPEND(str_format("DOTTA_PROFILE=%s", context->profile));
+    }
+
     APPEND(str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0"));
     APPEND(str_format("DOTTA_FILE_COUNT=%zu", context->file_count));
 

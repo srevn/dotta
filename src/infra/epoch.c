@@ -6,7 +6,8 @@
  *                             commit/tree/blobs (idempotent)
  *   - epoch_load            — walk ref → commit → tree → blobs, validate, copy
  *   - epoch_push            — push refs/dotta/epoch to a remote
- *   - epoch_fetch           — fetch + validate refs/dotta/epoch from a remote
+ *   - epoch_fetch           — obtain, validate, then install refs/dotta/epoch
+ *                             from a remote
  *   - epoch_resolve         — pure fact-finder for cmd_sync's epoch policy
  *   - epoch_find_ciphertext — the keymgr's witness source, over the census's walk
  *
@@ -17,12 +18,16 @@
  * The push/fetch primitives speak libgit2 directly rather than going through
  * `sys/gitops::gitops_*_branches` — those build branch-specific `refs/heads/...`
  * refspecs internally, and "abstract over arbitrary refspec sync" is not yet a
- * recurring need (this is the only consumer). If a second non-branch consumer
- * arrives, that's the moment to extract a `gitops_fetch_refspec` helper.
+ * recurring need (this is the only consumer). The acquisition side differs in
+ * kind and not only in refspec: gitops fetches with `git_remote_fetch`, which
+ * updates the tips a branch fetch is *for*, while `epoch_fetch` downloads the
+ * objects and stores no ref, because it installs one only after judging them. A
+ * second non-branch consumer would be the moment to extract a helper — of whichever
+ * of the two shapes it turns out to want.
  *
- * Blob mode: both blobs are stored as regular files (mode 0100644). The mode is
- * irrelevant to dotta — nothing checks out the tree — but using the standard
- * file mode keeps the tree inspectable via `dotta git show`.
+ * Blob mode: both blobs are stored as regular files (GIT_FILEMODE_BLOB). The
+ * mode is irrelevant to dotta — nothing checks out the tree — but using the
+ * standard file mode keeps the tree inspectable via `dotta git show`.
  */
 
 #include "infra/epoch.h"
@@ -43,10 +48,6 @@
 #include "sys/entropy.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
-
-/* Standard regular-file mode for the two blobs. Nothing checks out the tree;
- * the choice keeps `git show` / `git ls-tree` output readable. */
-#define EPOCH_BLOB_MODE 0100644
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
  * epoch_init gates every fresh mint on it. */
@@ -162,10 +163,11 @@ static error_t *read_epoch_blob(
  * Read the epoch from a tree, validating both blobs.
  *
  * A failure can leave `*out` half-filled — the salt read before the params blob
- * refused. The one caller, `epoch_load`, zeroes it on every error path, which
- * is where its header states the promise, so no caller proceeds with stale stack
- * content under a swallowed error code. The pair is validated here — the boundary
- * it enters at — with `kdf_validate_params`.
+ * refused. `epoch_load` zeroes it at its one exit, which is where its header
+ * states the promise, so no caller proceeds with stale stack content under a
+ * swallowed error code; `read_epoch_commit` makes no such promise and its caller
+ * discards a failed read whole. The pair is validated here — the boundary it
+ * enters at — with `kdf_validate_params`.
  */
 static error_t *read_epoch_tree(
     git_repository *repo, git_tree *tree, kdf_epoch_t *out
@@ -196,20 +198,53 @@ static error_t *read_epoch_tree(
     return NULL;
 }
 
+/**
+ * Read the epoch from the commit at `oid`, validating both blobs.
+ *
+ * The ref is never consulted, which is exactly what the acquisition boundary
+ * needs: bytes sitting in the object database while `refs/dotta/epoch` still
+ * holds whatever it held. An object that is not a commit, or a commit whose tree
+ * or blobs the transfer did not carry, refuses here — before anything points at it.
+ */
+static error_t *read_epoch_commit(
+    git_repository *repo, const git_oid *oid, kdf_epoch_t *out
+) {
+    git_commit *commit = NULL;
+    int git_err = git_commit_lookup(&commit, repo, oid);
+    if (git_err < 0) {
+        return error_wrap(
+            error_from_git(git_err), "Failed to load the epoch commit"
+        );
+    }
+
+    git_tree *tree = NULL;
+    git_err = git_commit_tree(&tree, commit);
+    git_commit_free(commit);
+    if (git_err < 0) {
+        return error_wrap(
+            error_from_git(git_err), "Failed to load the epoch commit's tree"
+        );
+    }
+
+    error_t *err = read_epoch_tree(repo, tree, out);
+    git_tree_free(tree);
+
+    return err;
+}
+
 error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
     git_tree *tree = NULL;
     error_t *err = resolve_epoch_tree(repo, &tree);
-    if (err) {
-        memset(out, 0, sizeof(*out));
-        return err;
+    if (!err) {
+        err = read_epoch_tree(repo, tree, out);
+        git_tree_free(tree);
     }
-
-    err = read_epoch_tree(repo, tree, out);
-    git_tree_free(tree);
-    if (err) memset(out, 0, sizeof(*out));
+    if (err) {
+        memset(out, 0, sizeof(*out));  /* the header's promise, made once */
+    }
 
     return err;
 }
@@ -345,11 +380,11 @@ error_t *epoch_init(
     }
 
     git_err = git_treebuilder_insert(
-        NULL, tb, EPOCH_SALT_BLOB, &salt_oid, EPOCH_BLOB_MODE
+        NULL, tb, EPOCH_SALT_BLOB, &salt_oid, GIT_FILEMODE_BLOB
     );
     if (git_err == 0) {
         git_err = git_treebuilder_insert(
-            NULL, tb, EPOCH_PARAMS_BLOB, &params_oid, EPOCH_BLOB_MODE
+            NULL, tb, EPOCH_PARAMS_BLOB, &params_oid, GIT_FILEMODE_BLOB
         );
     }
     if (git_err < 0) {
@@ -480,12 +515,19 @@ error_t *epoch_push(
  * Uses `git_remote_connect` + `git_remote_ls` so the absence diagnostic is "remote
  * does not advertise this ref" — distinct from "fetch failed for transport
  * reasons". `git_remote_ls` transfers no byte payload, so the connect uses FETCH
- * direction purely to align the credential path with the subsequent fetch.
+ * direction purely to align the credential path with whatever the caller does next.
  *
- * When the ref is advertised and `out_oid` is non-NULL, the advertised commit
- * OID is copied out — the hook `inspect_remote_epoch` uses to compare against
- * the local ref without transferring the blobs. Pass NULL for `out_oid` when
- * only presence matters (the `epoch_fetch` case).
+ * The advertised commit OID is the fact both callers came for, and it is copied
+ * to `*out_oid` when — and only when — the ref is advertised, `*out_present`
+ * being what says whether to read it. `inspect_remote_epoch` compares it against
+ * the local ref without transferring a blob; `epoch_fetch` downloads it and,
+ * once proved, installs it.
+ *
+ * The prober never owns the connection: it leaves the remote connected and the
+ * caller's `git_remote_free` closes the transport. That is what lets `epoch_fetch`
+ * download over the very connection that made the advertisement, so the OID it
+ * validates is the one that connection named rather than whatever the remote's
+ * ref has moved to since.
  *
  * Returns NULL with `*out_present` set; never surfaces "ref missing" as an error
  * code (that is the load-bearing return value of this predicate).
@@ -513,7 +555,6 @@ static error_t *probe_remote_epoch(
     size_t heads_len = 0;
     git_err = git_remote_ls(&heads, &heads_len, remote);
     if (git_err < 0) {
-        git_remote_disconnect(remote);
         return error_from_git(git_err);
     }
 
@@ -523,13 +564,10 @@ static error_t *probe_remote_epoch(
             continue;
         }
         *out_present = true;
-        if (out_oid != NULL) {
-            git_oid_cpy(out_oid, &heads[i]->oid);
-        }
+        git_oid_cpy(out_oid, &heads[i]->oid);
         break;
     }
 
-    git_remote_disconnect(remote);
     return NULL;
 }
 
@@ -548,14 +586,16 @@ error_t *epoch_fetch(
         return error_from_git(git_err);
     }
 
-    /* Two-step probe-then-fetch: check the remote's advertised refs before
-     * constructing a refspec that targets a possibly-absent ref. `git_remote_fetch`
-     * on a missing ref surfaces a generic Git error indistinguishable from real
-     * transport failures by error code alone — the probe gives us a clean
-     * ERR_NOT_FOUND surface for the "remote isn't a dotta repo" case. Presence
-     * is all we need here; the OID-comparison consumer is inspect_remote_epoch. */
+    /* Look before taking. The advertisement gives a clean ERR_NOT_FOUND surface
+     * for "this remote is not a dotta repository", where asking for a ref the
+     * remote lacks surfaces a generic Git error indistinguishable from real
+     * transport failure by code alone. The commit it names is the one this call
+     * acquires: the probe leaves the connection open and the download below runs
+     * on it, so nothing the remote does meanwhile can substitute another commit
+     * for the one that was judged. */
     bool present = false;
-    error_t *err = probe_remote_epoch(remote, xfer, &present, NULL);
+    git_oid advertised;
+    error_t *err = probe_remote_epoch(remote, xfer, &present, &advertised);
     if (err) {
         git_remote_free(remote);
         return err;
@@ -568,13 +608,6 @@ error_t *epoch_fetch(
         );
     }
 
-    /* Capture the current local epoch target before the force-fetch overwrites
-     * it, so a malformed fetched epoch can be rolled back to exactly the prior
-     * state: a failed adopt never leaves garbage, and never bricks a valid local
-     * epoch. */
-    git_oid prior_oid;
-    bool prior_exists = (git_reference_name_to_id(&prior_oid, repo, EPOCH_REF) == 0);
-
     git_fetch_options fetch_opts;
     git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
 
@@ -582,22 +615,18 @@ error_t *epoch_fetch(
         &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
     );
 
-    /* Force update (`+` prefix): the local ref is replaced wholesale by the
-     * remote's. This is safe because the only caller that reaches a *divergent*
-     * local epoch — `cmd_sync`'s adopt path — gates the fetch on the key-free
-     * census proving no reachable ciphertext (any commit, any branch) is keyed
-     * by the epoch being replaced. Clone reaches a missing (not divergent) local
-     * epoch, so there is nothing to overwrite. Deliberate epoch rotation remains
-     * unsupported end-to-end: a re-minted epoch cannot even be published (the
-     * push is non-force), and a clone whose ciphertext the old epoch keys lands
-     * on CONFLICT, not adopt. */
-    char *refspecs[] = { "+" EPOCH_REF ":" EPOCH_REF };
+    /* A refspec with no destination means "want these objects, store no ref for
+     * them", and `git_remote_download` — unlike `git_remote_fetch` — never updates
+     * tips, so it writes no FETCH_HEAD either. The remote epoch's bytes become
+     * readable at `advertised` while refs/dotta/epoch still holds whatever it
+     * held. */
+    char *refspecs[] = { EPOCH_REF };
     git_strarray refs = { refspecs, 1 };
 
     transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    git_err = git_remote_fetch(remote, &refs, &fetch_opts, NULL);
+    git_err = git_remote_download(remote, &refs, &fetch_opts);
     transfer_op_end(xfer, git_err);
-    git_remote_free(remote);
+    git_remote_free(remote);  /* freeing the remote closes the transport */
 
     if (git_err < 0) {
         /* Bare, matching epoch_push: the boundaries (sync's adopt arm, clone's
@@ -605,36 +634,20 @@ error_t *epoch_fetch(
         return error_from_git(git_err);
     }
 
-    /* Validate the bytes we just landed. This is the epoch acquisition boundary:
-     * a malformed epoch must never persist in refs/dotta/epoch where a later
-     * inspect would read it as canonical or epoch_load would surface a deferred,
-     * cryptic decrypt failure. */
-    kdf_epoch_t scratch;
-    err = epoch_load(repo, &scratch);
+    /* Judge the bytes while no ref names them. This is the epoch acquisition
+     * boundary, so it owns the "is this a well-formed epoch?" check — and there
+     * is nothing to undo when the answer is no, because a malformed remote epoch
+     * never stood in refs/dotta/epoch for a later inspect to read as canonical
+     * or a later load to surface as a deferred, cryptic decrypt failure. */
+    kdf_epoch_t fetched;
+    err = read_epoch_commit(repo, &advertised, &fetched);
     /* The epoch is public — no wipe. */
     if (err) {
-        /* Roll the local ref back to its prior state so the failed adopt leaves
-         * nothing behind. Best-effort: a local ref write failing here is
-         * extraordinarily rare and does not change the diagnostic the caller
-         * acts on. */
-        if (prior_exists) {
-            git_reference *restored = NULL;
-            int rc = git_reference_create(
-                &restored, repo, EPOCH_REF, &prior_oid, 1, NULL
-            );
-            if (rc == 0) {
-                git_reference_free(restored);
-            }
-        } else {
-            (void) git_reference_remove(repo, EPOCH_REF);
-        }
-
         /* Normalize every validation failure (wrong size, missing blob, a pair
-         * out of range, non-commit object) to a single ERR_CRYPTO surface so
-         * callers route uniformly — fold epoch_load's specific cause into the
-         * message rather than chaining, since error_wrap would inherit epoch_load's
-         * varied codes (ERR_CRYPTO / ERR_NOT_FOUND / ERR_GIT) and split the
-         * callers' handling. */
+         * out of range, a non-commit object) to a single ERR_CRYPTO surface so
+         * callers route uniformly — fold the read's specific cause into the message
+         * rather than chaining, since error_wrap would inherit its varied codes
+         * (ERR_CRYPTO / ERR_GIT) and split the callers' handling. */
         error_t *malformed = ERROR(
             ERR_CRYPTO,
             "Remote epoch is malformed; remote repo may be corrupt (%s)",
@@ -644,10 +657,29 @@ error_t *epoch_fetch(
         return malformed;
     }
 
-    /* Hand over exactly what the validation proved — the caller never re-reads
-     * the ref it just watched move. */
+    /* Install, and only now: the one mutation this function makes, and its last
+     * step. The write is forced — the local ref is replaced wholesale by the
+     * remote's — which is safe because the only caller that reaches a *divergent*
+     * local epoch, `cmd_sync`'s adopt path, gates the fetch on the key-free census
+     * proving no reachable ciphertext (any commit, any branch) is keyed by the
+     * epoch being replaced. Clone reaches a missing (not divergent) local epoch,
+     * so there is nothing to overwrite. Deliberate epoch rotation remains
+     * unsupported end-to-end: a re-minted epoch cannot even be published (the
+     * push is non-force), and a clone whose ciphertext the old epoch keys lands
+     * on CONFLICT, not adopt. NULL ref_out: libgit2 frees the handle it makes. */
+    git_err = git_reference_create(NULL, repo, EPOCH_REF, &advertised, 1, NULL);
+    if (git_err < 0) {
+        return error_wrap(
+            error_from_git(git_err),
+            "Failed to point '%s' at the epoch fetched from '%s'",
+            EPOCH_REF, remote_name
+        );
+    }
+
+    /* Hand over exactly what the validation proved, and only once the ref carries
+     * it — the caller never re-reads the ref it just watched move. */
     if (out != NULL) {
-        *out = scratch;
+        *out = fetched;
     }
 
     return NULL;
@@ -945,7 +977,6 @@ static error_t *walk_ciphertext(
             if (walk.error) {
                 error_free(walk_err);  /* benign stop wrapper */
                 err = walk.error;
-                walk.error = NULL;
                 goto cleanup;
             }
             if (walk.stopped) {

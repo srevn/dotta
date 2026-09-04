@@ -179,12 +179,20 @@ error_t *epoch_push(
  * operation runs.
  *
  * This is the epoch *acquisition boundary*, so it owns the "is this a well-formed
- * epoch?" check. After the force-fetch lands the remote commit in
- * `refs/dotta/epoch`, both blobs are validated via `epoch_load`. A malformed
- * epoch (a wrong-size or missing blob, a pair out of range) is rolled back —
- * the local ref is restored to its prior target, or removed if there was none —
- * and ERR_CRYPTO is returned. A corrupt remote epoch therefore never lands locally
- * to be mistaken for canonical by a later `epoch_resolve` or `epoch_load`.
+ * epoch?" check — and it is transactional about it: obtain, prove, install. The
+ * remote's advertisement names a commit; its objects are downloaded under a refspec
+ * with no destination, so nothing local points at them; both blobs are validated
+ * at that commit; and only a proven epoch is written to `refs/dotta/epoch`, the
+ * one mutation this call makes and its last step. A malformed epoch (a wrong-size
+ * or missing blob, a pair out of range) returns ERR_CRYPTO with the local ref
+ * untouched — there is nothing to roll back, because a corrupt remote epoch never
+ * stood in `refs/dotta/epoch` for a later `epoch_resolve` or `epoch_load` to
+ * read as canonical.
+ *
+ * The install is a force: whatever the local ref held is replaced wholesale.
+ * Whether that is safe is the caller's to decide, not this boundary's —
+ * `cmd_sync`'s adopt path gates it on the ciphertext census, `cmd_clone` reaches
+ * a repository that has no epoch at all.
  *
  * On success the validated epoch is copied to `*out` when requested — the boundary
  * hands over exactly what it proved, so the adopting caller (`cmd_sync`, which
@@ -196,7 +204,7 @@ error_t *epoch_push(
  * @param xfer        Transfer context for credentials / progress
  * @param out         Optional: the validated epoch (can be NULL)
  * @return Error or NULL on success; ERR_NOT_FOUND if the remote lacks the ref;
- *         ERR_CRYPTO if the fetched epoch is malformed (already rolled back)
+ *         ERR_CRYPTO if the fetched epoch is malformed (the local ref untouched)
  */
 error_t *epoch_fetch(
     git_repository *repo,

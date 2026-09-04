@@ -180,7 +180,7 @@ The census behind `ADOPT` walks the **full history** of every local branch, not 
 
 Two ways the walk could report an absence it had not proved are closed at the walk itself. A revwalk that ends on an unreadable object returns that error instead of reading as a finished history. And a branch listing that does not contain `dotta-worktree` — the one branch every repository holding this ref has — is refused outright, because libgit2's filesystem refdb *skips* a ref it cannot open or parse rather than reporting it, so an unlistable `refs/heads` otherwise yields an empty list and a clean `GIT_ITEROVER`. A listing that lost only some of its refs while the anchor still reads stays Git's limit, stated as one at both headers rather than defended.
 
-`epoch_fetch` is the acquisition boundary: after the force-fetch lands the remote commit, both blobs are validated, and a malformed epoch is rolled back to the prior target (or removed) with `ERR_CRYPTO`. A corrupt remote epoch never persists locally to be mistaken for canonical later.
+`epoch_fetch` is the acquisition boundary, and it is transactional: obtain, prove, install. The remote's advertisement names a commit; a refspec with no destination downloads its objects without storing a ref for them; both blobs are validated at that commit; and only then is `refs/dotta/epoch` pointed at it. A malformed epoch returns `ERR_CRYPTO` with the local ref untouched — there is nothing to roll back, because a corrupt remote epoch never stood there to be mistaken for canonical later.
 
 ## SIV construction (cipher format v9)
 

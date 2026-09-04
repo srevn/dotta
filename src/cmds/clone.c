@@ -427,11 +427,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             }
             goto cleanup;
         } else if (err->code == ERR_CRYPTO) {
-            /* Malformed remote epoch — epoch_fetch already rolled back, so no
-             * garbage ref persists. The advertised ref establishes identity (the
-             * gate above), but its payload is a crypto concern: warn-and-continue,
-             * a plaintext clone is still fine, only encryption is unavailable
-             * until a valid epoch arrives. */
+            /* Malformed remote epoch — epoch_fetch installs only what it proved,
+             * so no garbage ref persists. The advertised ref establishes identity
+             * (the gate above), but its payload is a crypto concern:
+             * warn-and-continue, a plaintext clone is still fine, only encryption
+             * is unavailable until a valid epoch arrives. */
             output_warning(
                 out, OUTPUT_NORMAL,
                 "%s. Encryption operations will fail until a valid epoch "

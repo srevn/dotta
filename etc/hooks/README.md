@@ -303,6 +303,29 @@ direct the output to a destination dotta does not capture:
 - `>> "$HOME/.local/state/dotta/hook.log"`  — append to a file
 - `notify-send` / `osascript`  — surface a desktop notification
 
+### The run's identity is your environment
+
+A hook runs as the run's invoker — the user who typed the command. A run
+that obtained root through `sudo` drops back to that user before the fork,
+so your script has exactly the reach the invoker has and nothing more.
+
+`HOME`, `USER` and `LOGNAME` name that same user, on every run and not only
+a `sudo`'d one. `HOME` is the directory dotta itself resolved and classified
+`home/` paths against — absolute and lexically normalised — so an absolute
+path tested against it gets the answer dotta would give:
+
+```bash
+case "$file" in
+    "$HOME"/*) echo "under home/" ;;
+esac
+```
+
+`DOTTA_FILE_*` is not guaranteed absolute: several commands pass the paths on
+to the hook as they received them. Make a path absolute before comparing it.
+
+Sudo's own variables (`SUDO_USER`, `SUDO_UID`, ...) are left as they were, so
+a hook that wants to know how the run was started can still tell.
+
 ### Best Practices
 
 1. **Always use `set -euo pipefail`** at the top of bash scripts

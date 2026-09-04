@@ -1,11 +1,14 @@
 /**
  * identity.c - The identity of the run
  *
- * The shell around the two rules: read what the kernel and the environment hand
- * the process, apply the invoker rule, copy the passwd entry before any other
- * lookup can overwrite it, apply the HOME rule, normalise, drop to the invoker
- * when root was obtained for one, read the groups. Written once into file scope,
- * read for the life of the process.
+ * The process's prologue, in five stanzas: the privilege state every stanza below
+ * reads; the limits a secret-bearing process wants, while root — where this run
+ * holds any — has not been given away; who the invoker is, by the invoker rule,
+ * the passwd entry copied before any other lookup can overwrite it, and the HOME
+ * rule, normalised; the drop to that invoker where root was obtained for one,
+ * and then the group list it left; and the environment the identity implies.
+ * Every stanza runs on every run — only the transition is conditional. Written
+ * once into file scope, read for the life of the process.
  */
 
 #include "sys/identity.h"
@@ -89,12 +92,11 @@ const char *identity_home(const char *env_home, bool sudoed, const char *pw_dir)
  * the gids while the effective user is still root, the uids last. The real ids
  * move with the effective ones, and setting the real id alone leaves the saved
  * one where it was, so the process ends as (uid, uid, 0) — a setuid tool run by
- * the user — and seteuid(0) stays permitted for the raise. The environment follows,
- * for libgit2's global config and the children.
+ * the user — and seteuid(0) stays permitted for the raise.
  *
- * Root gave the process its memlock limit; the keymgr and the KDF pin their secrets
- * under it, and only root may raise a hard limit, so it is raised ahead of the
- * drop. Best effort.
+ * The privilege transition and nothing else. What the run needed root to raise
+ * and what its children need to read are the process's own, established for every
+ * run whether or not this is called (identity_init).
  */
 static error_t *drop_to_invoker(void) {
     if (!id.name) {
@@ -104,44 +106,58 @@ static error_t *drop_to_invoker(void) {
         );
     }
 
-    struct rlimit unlimited = { RLIM_INFINITY, RLIM_INFINITY };
-    (void) setrlimit(RLIMIT_MEMLOCK, &unlimited);
-
     if (initgroups(id.name, id.gid) != 0
         || setregid(id.gid, (gid_t) -1) != 0 || setegid(id.gid) != 0
         || setreuid(id.uid, (uid_t) -1) != 0 || seteuid(id.uid) != 0) {
+        /* Coded by subsystem and not by errno, which is why error_from_errno is
+         * not the producer here — base/error.h names this site: initgroups can
+         * fail EAGAIN or EINVAL on Linux, and error_code_from_errno would call
+         * a group-list failure ERR_FS. */
         return ERROR(
             ERR_PERMISSION, "Failed to run as %s (uid %u): %s",
             id.name, (unsigned) id.uid, strerror(errno)
         );
     }
 
-    if (setenv("HOME", id.home, 1) != 0 || setenv("USER", id.name, 1) != 0
-        || setenv("LOGNAME", id.name, 1) != 0) {
-        return ERROR(ERR_MEMORY, "Failed to set the invoker's environment");
-    }
-
     return NULL;
 }
 
 error_t *identity_init(void) {
+    uid_t ruid = getuid();
+    uid_t euid = geteuid();
+    id.privileged = (euid == 0);
+
     /* No core dump holds a key: the process writes none, from before anything
-     * secret-bearing runs and before the drop, root or not. The soft limit alone
-     * — a child of the run (a hook, the editor) inherits it and may raise it
-     * back for its own crashes; the secrets are this process's, never a child's:
-     * the master never leaves this address space, and the passphrase variable
-     * is unset by the read, or stripped from the environment a hook or a bootstrap
-     * script is built (sys/passphrase.h). Best effort. */
+     * secret-bearing runs. The soft limit alone — a child of the run (a hook,
+     * the editor) inherits it and may raise it back for its own crashes; the
+     * secrets are this process's, never a child's: the master never leaves this
+     * address space, and the passphrase variable is unset by the read, or stripped
+     * from the environment a hook or a bootstrap script is built
+     * (sys/passphrase.h). Best effort. */
     struct rlimit core;
     if (getrlimit(RLIMIT_CORE, &core) == 0) {
         core.rlim_cur = 0;
         (void) setrlimit(RLIMIT_CORE, &core);
     }
 
-    uid_t ruid = getuid();
-    uid_t euid = geteuid();
+    /* Every lock this run may ask for: secure_alloc pins each secret that outlives
+     * a call against swap, and the Argon2 work area alone is 256 MiB at the default
+     * strength. Only root may raise a hard limit and this is the last moment
+     * root is held — the drop below gives it away — so the hard one goes to
+     * infinity where the run holds root at all, and the soft one to whatever
+     * the hard one ends up being, which anyone may do. That second half is the
+     * case that matters: an unprivileged run is where the lock is refused and
+     * the advisory fires (base/secure.h). Best effort — a refusal costs the pinning
+     * and nothing else. The raise outlives the drop and every child inherits
+     * it, which is the invoker's own hook holding a limit the root it just spent
+     * could have handed it anyway. */
+    struct rlimit memlock;
+    if (getrlimit(RLIMIT_MEMLOCK, &memlock) == 0) {
+        if (id.privileged) memlock.rlim_max = RLIM_INFINITY;
+        memlock.rlim_cur = memlock.rlim_max;
+        (void) setrlimit(RLIMIT_MEMLOCK, &memlock);
+    }
 
-    id.privileged = (euid == 0);
     id.uid = identity_invoker(ruid, euid);
     bool sudoed = id.privileged && id.uid != 0;
 
@@ -200,6 +216,30 @@ error_t *identity_init(void) {
     id.ngroups = groups ? getgroups(n, groups) : 0;
     if (id.ngroups < 0) id.ngroups = 0;
     id.groups = groups;
+
+    /* The environment the identity implies, for libgit2 — which reads $HOME at
+     * its init to find the global config — and for every child: a hook and a
+     * bootstrap script are built over environ, `dotta git` and the editor exec
+     * into it. $HOME is the ruled, normalised answer every layer of this process
+     * computes against, so a child asking whether a path dotta handed it starts
+     * with $HOME asks the question the mount table already answered; the shell's
+     * own spelling, a doubled slash or a trailing dot, answers another. USER
+     * and LOGNAME name that same identity — sudo's are root's until this rewrites
+     * them, an `env -i` run has none — and a run whose invoker the passwd database
+     * cannot name leaves them alone rather than writing a name it does not have.
+     * The rules are a fixed point over their own publication: a nested dotta
+     * reads back what this one wrote and answers with it. */
+    if (setenv("HOME", id.home, 1) != 0) {
+        return ERROR(ERR_MEMORY, "Failed to set HOME to '%s'", id.home);
+    }
+    if (id.name) {
+        if (setenv("USER", id.name, 1) != 0
+            || setenv("LOGNAME", id.name, 1) != 0) {
+            return ERROR(
+                ERR_MEMORY, "Failed to set USER and LOGNAME to '%s'", id.name
+            );
+        }
+    }
 
     return NULL;
 }

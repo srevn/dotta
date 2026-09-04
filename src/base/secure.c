@@ -70,10 +70,14 @@ void secure_wipe(void *ptr, size_t len) {
 /**
  * One-time-per-process advisory that a lock failed.
  *
- * Every non-trivial Argon2 setting exceeds macOS's default RLIMIT_MEMLOCK, so
- * failure is the common case on a default-configured system; the process-wide
- * gate keeps it to one line. Not thread-safe (a plain `static bool`); dotta is
- * single-threaded.
+ * What failed and what it costs, and no remedy. The prologue already raised
+ * RLIMIT_MEMLOCK as far as this run may (sys/identity), so the knob that is left
+ * is the system's hard limit — limits.conf, a systemd unit, launchd, or nothing
+ * at all on a platform that wires against something else — and which one it is
+ * cannot be told from here. On Linux every non-trivial Argon2 setting exceeds
+ * the default, which makes failure the common case on a default-configured system.
+ * The process-wide gate keeps it to one line. Not thread-safe (a plain `static
+ * bool`); dotta is single-threaded.
  */
 static void mlock_warn(int saved_errno, size_t len) {
     static bool warned = false;
@@ -85,8 +89,7 @@ static void mlock_warn(int saved_errno, size_t len) {
     fprintf(
         stderr,
         "Warning: Failed to lock %zu bytes of secret-bearing memory: %s\n"
-        "         Sensitive material may be paged to disk.\n"
-        "         Raise RLIMIT_MEMLOCK (ulimit -l) to enable this protection.\n",
+        "         Sensitive material may be paged to disk.\n",
         len, strerror(saved_errno)
     );
 }

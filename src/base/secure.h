@@ -29,8 +29,13 @@
  * plaintext the content cache holds is about to be a file on disk and is wiped,
  * not locked.
  *
- * The lock is best-effort. Under a tight RLIMIT_MEMLOCK (macOS ships a 64 KiB
- * default; every Argon2 setting exceeds it) the mapping still serves, unlocked,
+ * The lock is best-effort, and the run has already asked for as much of it as
+ * it may: sys/identity raises RLIMIT_MEMLOCK's soft limit to the hard one at
+ * the prologue, and the hard one to infinity where the run holds root. What is
+ * left is the platform's answer. Linux's default is the tight one — 8 MiB under
+ * a modern systemd, 64 KiB on older kernels, and every Argon2 setting exceeds
+ * both; macOS leaves the rlimit unlimited and wires against vm.user_wire_limit
+ * instead. Where the process may not lock, the mapping still serves, unlocked,
  * and the process prints one advisory the first time a lock fails — one per
  * process, whichever secret hit the limit first, so the user never sees the same
  * line three times in one command.

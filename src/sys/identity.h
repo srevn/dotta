@@ -43,6 +43,15 @@
  * table (195 §8), so `home/` classifies under any spelling. Whether the directory
  * exists is not asked here.
  *
+ * The answer is published back into the environment, on every run and not only
+ * a sudo'd one: $HOME becomes the ruled, normalised spelling, and USER and LOGNAME
+ * name the invoker wherever the passwd database can. libgit2 reads $HOME at its
+ * init to find the global config, and a hook, a bootstrap script, the editor
+ * and `dotta git` compute paths against it — so a run that left the shell's
+ * spelling standing would hand its children a home the mount table never used.
+ * The rules are a fixed point over their own publication: a nested dotta reads
+ * back what this one wrote and answers with it.
+ *
  * Privileged, and the drop
  * ------------------------
  * The effective user started as uid 0. When a tool names the user behind it,
@@ -54,10 +63,10 @@
  * session cache, a temp worktree — is then made as the invoker, and root is taken
  * back for one syscall at a time where the invoker is refused
  * (identity_raise_on_refusal / identity_lower: sys/filesystem's second try).
- * HOME, USER and LOGNAME are rewritten in the environment for libgit2 and the
- * children; sudo's own variables stay, so a hook may tell. A child of the run
- * drops for good before its exec (identity_drop_child): hooks, scripts, `dotta
- * git` and the editor run as the invoker.
+ * The environment the children read is the identity's whether or not this run
+ * dropped (HOME above); sudo's own variables stay, so a hook may tell. A child
+ * of the run drops for good before its exec (identity_drop_child): hooks, scripts,
+ * `dotta git` and the editor run as the invoker.
  *
  * A real root run (no tool names a user) drops nothing and raises nothing: its
  * invoker is root, its files are root's, its HOME is root's unless $HOME says
@@ -109,13 +118,19 @@ typedef struct identity {
  *
  * Reads the kernel's ids, the privilege tool's variables, the passwd database
  * and $HOME, and applies the two rules below. Called once, first in main();
- * every other entry point of this module reads what it wrote. Sets the process's
- * limits on the way: core dumps off (no core dump holds a key — the soft limit,
- * so a child may still write its own) and, under sudo, the memlock limit raised
- * while root can raise it.
+ * every other entry point of this module reads what it wrote.
+ *
+ * Sets the process's shape on the way, for every run: core dumps off (no core
+ * dump holds a key — the soft limit, so a child may still write its own), the
+ * memlock limit as high as the run may raise it (the hard one too where root is
+ * held, which is the one moment it can be — base/secure pins every secret under
+ * it), and the environment the rules below answered. The drop is the one step a
+ * run can skip.
  *
  * @return Error when no home directory can be named for the invoker (no $HOME,
- *         no passwd entry) or the one named is not absolute; NULL on success
+ *         no passwd entry), when the one named is not absolute, when a drop the
+ *         run owes cannot be made, or when the environment cannot be set; NULL
+ *         on success
  */
 error_t *identity_init(void);
 

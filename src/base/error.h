@@ -2,6 +2,25 @@
  * error.h - Error handling for dotta
  *
  * Centralized error handling with context tracking and propagation helpers.
+ *
+ * ERR_PERMISSION
+ * --------------
+ * The one code a consumer acts on rather than prints, so its meaning is fixed
+ * here and not per producer: a refusal an identity met. The kernel's — EACCES
+ * or EPERM, through error_from_errno below — and libgit2's owner check on the
+ * repository, which spells its own because GIT_EOWNER carries no errno. An answer
+ * dotta looked up is never one, whatever the answer is about: a hook's mode, a
+ * claim's ids, a policy's verdict. Every reader turns the code straight into a
+ * remedy only a refusal has — cmds/add and cmds/update close with the sudo line,
+ * core/workspace classes the failed look UNREADABLE and its readers name root,
+ * utils/repo offers to reclaim the repository — and none of them can see which
+ * producer it came from, which is what makes the class load-bearing rather than
+ * descriptive.
+ *
+ * sys/identity's drop is outside the rule and out of reach of it: its two refusals
+ * say the run cannot *become* an identity, they are coded by subsystem because
+ * a setuid-family EAGAIN is not ERR_FS, and identity_init returns to main() before
+ * there is a command to read them.
  */
 
 #ifndef DOTTA_ERROR_H

@@ -66,9 +66,15 @@ typedef struct {
  * OUTPUT_NORMAL and returns a wrapped error "Pre-<cmd> hook failed". Callers
  * should goto-cleanup on non-NULL return.
  *
+ * Every way a hook fails is ERR_INTERNAL — a mode that will not exec, an exec
+ * that failed, a timeout, a signal, a non-zero exit — and nothing branches on
+ * the code. Never ERR_PERMISSION, however permission-shaped the cause: that code
+ * is a refusal an identity met (base/error.h), and the commands that fire this
+ * close an escaping one with the sudo line.
+ *
  * `repo_dir` is exported to the hook as DOTTA_REPO_DIR. Expected to come from
- * ctx->run.repo_path — the dispatcher already resolved it when opening the repo, so
- * callers borrow the string rather than re-resolving. NULL suppresses the
+ * ctx->run.repo_path — the dispatcher already resolved it when opening the repo,
+ * so callers borrow the string rather than re-resolving. NULL suppresses the
  * DOTTA_REPO_DIR export.
  */
 error_t *hook_fire_pre(

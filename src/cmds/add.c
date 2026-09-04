@@ -1844,9 +1844,13 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
     /* A refusal the invoker met reading a source — the walk's opendir and lstat,
      * the open behind the policy sniff and the copy (infra/content), the existence
      * check — ends the add before anything durable is written: the temp worktree
-     * is removed on the error path and the commit is after the walk. A run that
-     * holds root reads through it (sys/filesystem's second try), so the one thing
-     * left to say is sudo. */
+     * is removed on the error path and the commit is after the walk. The code
+     * is enough to say so without matching prose: ERR_PERMISSION is a refusal
+     * an identity met and never an answer dotta looked up (base/error.h),
+     * everything add reads is a source, and a read the kernel refuses is one a
+     * run that holds root reads through (sys/filesystem's second try) — EROFS
+     * and an immutable flag refuse writes, never reads, and code ERR_FS besides.
+     * So the one thing left to say is sudo. */
     if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
         err = error_wrap(err, "Only root can read it; re-run under sudo");
     }

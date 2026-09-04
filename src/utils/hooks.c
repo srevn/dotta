@@ -273,10 +273,20 @@ static error_t *hook_execute(
     /* Missing hook is not an error — silently skip. */
     if (!fs_file_exists(hook_path)) goto cleanup;
 
+    /* Not a refusal the invoker met: fs_is_executable asks faccessat(X_OK) as
+     * the running user — the identity process_run will exec the hook under —
+     * and this is its clean no. ERR_PERMISSION is a refusal an identity met
+     * (base/error.h), which cmds/add and cmds/update close with the sudo line;
+     * a mode bit is not one, and a hook that did not run is the class its four
+     * siblings below are in. The check earns its place ahead of the exec by the
+     * message it makes: exec's own EACCES would reach the reader as "Permission
+     * denied", the reading this class exists to keep honest. The path is named
+     * because hooks_dir is the config's to choose and the type alone is not
+     * something a reader can act on. */
     if (!fs_is_executable(hook_path)) {
         err = ERROR(
-            ERR_PERMISSION,
-            "Hook '%s' is not executable", hook_type_name(type)
+            ERR_INTERNAL, "Hook '%s' at '%s' is not executable",
+            hook_type_name(type), hook_path
         );
         goto cleanup;
     }

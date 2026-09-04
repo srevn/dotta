@@ -35,10 +35,11 @@
  * cache handed back is not re-verified: a blob it does not open is that blob's
  * fault, and the slot stays.
  *
- * The ladder asks once per run. Its refusal — no source in reach, nothing read
- * at the prompt, a passphrase that opened nothing — stands for the process: every
- * later resolve re-issues the same line without asking again, so a workspace of
- * N encrypted rows costs one prompt and one file probe, not N. Retries only
+ * The ladder asks once per run. Its refusal — no passphrase in reach, nothing
+ * read at the prompt, a passphrase that opened nothing — stands for the process:
+ * the asker that met it gets that error whole, causes and all, and every later
+ * resolve re-issues its one line without asking again, so a workspace of N
+ * encrypted rows costs one prompt and one file probe, not N. Retries only
  * at a terminal (KEYMGR_ATTEMPTS, misses of any kind); over a pipe, one line;
  * from the environment, none. `key set` is the one ask that clears a standing
  * refusal; a rekey clears it too (the sources are now about another epoch);

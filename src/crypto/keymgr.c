@@ -7,9 +7,9 @@
  * Internal layout:
  *   - `evict_slot` / `install_slot` — the two writers of the slot; every write
  *     to (master_key, has_key, expires_at, the witness) goes through one of them.
- *   - `refuse` / `reissue_refusal` / `clear_refusal` — the standing refusal:
- *     the ladder's first refusal, held for the run and re-issued by every resolve
- *     after.
+ *   - `refuse` / `clear_refusal` — the standing refusal: the code and the line
+ *     of the ladder's first refusal, held for the run and re-issued by every
+ *     resolve after.
  *   - `keymgr_proof_t` — what the ladder yields: a fresh master and the binding
  *     of the witness it opened; consumed by `keep`.
  *   - `open_witness` / `trial_opens` / `witness_exists` / `derive_and_check` —
@@ -83,8 +83,17 @@ struct keymgr {
     char *witness_profile;              /* the branch it opened */
     char *witness_path;                 /* the tree path it opened */
 
-    /* The ladder ran and refused; re-issued by every resolve after. */
-    error_t *refusal;
+    /* The ladder ran and refused: the code and the top line of what it refused
+     * with, re-issued by every resolve after. A NULL line means none stands.
+     * The asker that met it got the error itself, causes and all — the chain
+     * describes an event that happened once, at the row that met it — and what
+     * stands for the run is the one sentence that is true of the run. An allocation
+     * failure leaves no refusal standing rather than a wrong one: the next row
+     * walks the ladder again (bind_proof's fallback, same idiom). */
+    struct {
+        error_code_t code;
+        char *line;
+    } refusal;
 
     /* Where a fresh master finds witnesses; NULL for none, which is the unit
      * suites' shape. `repo` is the source's own argument, carried untouched. */
@@ -138,27 +147,23 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
 }
 
 /**
- * The standing refusal, re-issued: a fresh error with the first refusal's code
- * and line, so N rows that could not be verified read the one cause.
- */
-static error_t *reissue_refusal(const keymgr *km) {
-    return ERROR(km->refusal->code, "%s", error_message(km->refusal));
-}
-
-/**
  * Record the ladder's refusal for the run — the first one stands; a later one
  * replaces it only through `keymgr_set`, which clears it before asking again —
- * and hand back its first issue. Takes ownership of `err`.
+ * and hand `err` back to the asker that met it, whole. The record is the code
+ * and the message's top line, which is what a later resolve re-issues; `err`
+ * itself, causes and all, stays the caller's to free.
  */
 static error_t *refuse(keymgr *km, error_t *err) {
-    error_free(km->refusal);
-    km->refusal = err;
-    return reissue_refusal(km);
+    free(km->refusal.line);
+    km->refusal.line = strdup(error_message(err));
+    km->refusal.code = err->code;
+
+    return err;
 }
 
 static void clear_refusal(keymgr *km) {
-    error_free(km->refusal);
-    km->refusal = NULL;
+    free(km->refusal.line);
+    km->refusal.line = NULL;
 }
 
 error_t *keymgr_create(
@@ -602,7 +607,7 @@ static bool warm_slot(keymgr *km) {
     if (km->has_key) {
         return true;
     }
-    if (km->refusal || km->session_timeout == 0) {
+    if (km->refusal.line || km->session_timeout == 0) {
         return false;
     }
 
@@ -665,8 +670,8 @@ static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
     if (warm_slot(km)) {
         return NULL;
     }
-    if (km->refusal) {
-        return reissue_refusal(km);
+    if (km->refusal.line) {
+        return ERROR(km->refusal.code, "%s", km->refusal.line);
     }
 
     keymgr_proof_t proof = { 0 };

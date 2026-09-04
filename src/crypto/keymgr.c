@@ -5,16 +5,19 @@
  * keymgr.h.
  *
  * Internal layout:
+ *   - `keymgr_proof_t` / `wipe_proof` / `bind_proof` — a master outside the slot,
+ *     with the binding of the witness it opened; every master anywhere but the
+ *     slot lives in one.
  *   - `evict_slot` / `install_slot` — the two writers of the slot; every write
- *     to (master_key, has_key, expires_at, the witness) goes through one of them.
+ *     to (master_key, has_key, expires_at, the witness) goes through one of them,
+ *     and `install_slot` is the one verb that consumes a proof.
  *   - `refuse` / `clear_refusal` — the standing refusal: the code and the line
  *     of the ladder's first refusal, held for the run and re-issued by every
  *     resolve after.
- *   - `keymgr_proof_t` — what the ladder yields: a fresh master and the binding
- *     of the witness it opened; consumed by `keep`.
  *   - `open_witness` / `trial_opens` / `witness_exists` / `derive_and_check` —
- *     the proof: Argon2 under the epoch, then the witnesses in order — the blob
- *     in hand, then whatever the witness source presents — until one opens.
+ *     the proof's making: Argon2 under the epoch, then the witnesses in order —
+ *     the blob in hand, then whatever the witness source presents — until one
+ *     opens.
  *   - `prompt_and_verify` / `prompt_and_confirm` / `obtain` — the ladder's user
  *     half: the environment, then the prompt, with retries at a terminal; two
  *     loops for two questions (is it the right passphrase / is it the passphrase
@@ -102,6 +105,44 @@ struct keymgr {
 };
 
 /**
+ * A master outside the slot, with the binding of the witness it opened. What
+ * the ladder yields and what the file tier loads: every master this module holds
+ * anywhere but the slot lives in one of these, and `install_slot` is the one
+ * verb that consumes one. The strings are owned; both NULL when there was nothing
+ * to open and the master was confirmed, taken as given, or handed back by a file
+ * an earlier run wrote.
+ */
+typedef struct {
+    uint8_t master[KDF_KEY_SIZE];   /* fresh from the derivation, or the file's */
+    char *witness_profile;          /* the branch it opened */
+    char *witness_path;             /* the tree path it opened */
+} keymgr_proof_t;
+
+static void wipe_proof(keymgr_proof_t *proof) {
+    crypto_wipe(proof->master, sizeof(proof->master));
+    free(proof->witness_profile);
+    free(proof->witness_path);
+    proof->witness_profile = NULL;
+    proof->witness_path = NULL;
+}
+
+/**
+ * The proof takes the witness's binding. An allocation failure leaves the proof
+ * unnamed rather than failing it: the binding is the receipt's line, not the
+ * verification.
+ */
+static void bind_proof(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
+    proof->witness_profile = strdup(witness->profile);
+    proof->witness_path = strdup(witness->storage_path);
+    if (!proof->witness_profile || !proof->witness_path) {
+        free(proof->witness_profile);
+        free(proof->witness_path);
+        proof->witness_profile = NULL;
+        proof->witness_path = NULL;
+    }
+}
+
+/**
  * Evict the in-memory slot. Scrubs the master key, drops the witness and resets
  * every slot field to its post-`calloc` state. Idempotent.
  */
@@ -116,25 +157,23 @@ static void evict_slot(keymgr *km) {
 }
 
 /**
- * Install a master key into the slot, with the expiry of the file it came from
- * or was written to (0 = never, or no file) and the binding of the witness it
- * opened (both NULL when none: a cache hit, or a master taken as given). Takes
- * ownership of the two strings. Replaces any occupant.
+ * A proof enters the slot, with the expiry of the file it came from or was written
+ * to (0 = never, or no file). Replaces any occupant. The proof is consumed: its
+ * master copied in and wiped where it stood, its binding moved rather than copied
+ * (both NULL when there was none), so it needs no `wipe_proof` after.
  */
-static void install_slot(
-    keymgr *km,
-    const uint8_t master_key[KDF_KEY_SIZE],
-    time_t expires_at,
-    char *witness_profile,
-    char *witness_path
-) {
+static void install_slot(keymgr *km, keymgr_proof_t *proof, time_t expires_at) {
     free(km->witness_profile);
     free(km->witness_path);
-    memcpy(km->master_key, master_key, KDF_KEY_SIZE);
+    memcpy(km->master_key, proof->master, KDF_KEY_SIZE);
     km->expires_at = expires_at;
-    km->witness_profile = witness_profile;
-    km->witness_path = witness_path;
+    km->witness_profile = proof->witness_profile;
+    km->witness_path = proof->witness_path;
     km->has_key = true;
+
+    crypto_wipe(proof->master, sizeof(proof->master));
+    proof->witness_profile = NULL;
+    proof->witness_path = NULL;
 }
 
 /**
@@ -203,43 +242,8 @@ void keymgr_free(keymgr *km) {
 }
 
 /*
- * The proof: a fresh master, and what it opened.
+ * The proof's making: Argon2 under the epoch, then the witnesses in order.
  */
-
-/**
- * What the ladder yields and `keep` consumes: a fresh master with the binding
- * of the witness it opened. The strings are owned; both NULL when there was nothing
- * to open and the master was confirmed or taken as given.
- */
-typedef struct {
-    uint8_t master[KDF_KEY_SIZE];
-    char *witness_profile;
-    char *witness_path;
-} keymgr_proof_t;
-
-static void wipe_proof(keymgr_proof_t *proof) {
-    crypto_wipe(proof->master, sizeof(proof->master));
-    free(proof->witness_profile);
-    free(proof->witness_path);
-    proof->witness_profile = NULL;
-    proof->witness_path = NULL;
-}
-
-/**
- * The proof takes the witness's binding. An allocation failure leaves the proof
- * unnamed rather than failing it: the binding is the receipt's line, not the
- * verification.
- */
-static void bind_proof(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
-    proof->witness_profile = strdup(witness->profile);
-    proof->witness_path = strdup(witness->storage_path);
-    if (!proof->witness_profile || !proof->witness_path) {
-        free(proof->witness_profile);
-        free(proof->witness_path);
-        proof->witness_profile = NULL;
-        proof->witness_path = NULL;
-    }
-}
 
 /**
  * Does `master` open `witness`? The pair for the witness's profile, one
@@ -624,23 +628,23 @@ static error_t *obtain(
  * — the ladder and `keymgr_cached` both read the slot first — and safe with an
  * occupied one, since `install_slot` replaces. Every miss is silent: the tier
  * off, not found, expired, tampered (the loader unlinked it), an I/O failure
- * (the loader kept it).
+ * (the loader kept it), and it leaves the proof as `session_load` left it —
+ * scrubbed, by that function's contract — so nothing here wipes it.
  */
 static bool warm_from_file(keymgr *km) {
     if (km->session_timeout == 0) {
         return false;
     }
 
-    uint8_t master_key[KDF_KEY_SIZE];
+    keymgr_proof_t proof = { 0 };
     time_t expires_at = 0;
-    error_t *err = session_load(master_key, &km->epoch, &expires_at);
+    error_t *err = session_load(proof.master, &km->epoch, &expires_at);
     if (err) {
         error_free(err);
         return false;
     }
 
-    install_slot(km, master_key, expires_at, NULL, NULL);
-    crypto_wipe(master_key, sizeof(master_key));
+    install_slot(km, &proof, expires_at);
     return true;
 }
 
@@ -652,8 +656,7 @@ static bool warm_from_file(keymgr *km) {
  * the save's error for the caller whose job the file is (`keymgr_set`);
  * `resolve_master` drops it — the slot is installed either way. A save that fails
  * unlinks the file, so the next process never loads a master this one meant to
- * replace. The proof is consumed: its master wiped, its binding moved into the
- * slot.
+ * replace.
  */
 static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
     time_t expires_at = 0;
@@ -670,14 +673,7 @@ static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
         }
     }
 
-    install_slot(
-        km, proof->master, expires_at,
-        proof->witness_profile, proof->witness_path
-    );
-    proof->witness_profile = NULL;
-    proof->witness_path = NULL;
-    crypto_wipe(proof->master, sizeof(proof->master));
-
+    install_slot(km, proof, expires_at);
     return err;
 }
 

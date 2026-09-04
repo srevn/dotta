@@ -767,13 +767,17 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
         return;
     }
 
-    /* The cached master derives from the old epoch — evict before re-binding,
-     * and take the old epoch's file with it: the file is the epoch's by name,
-     * and nothing would read it again. A refusal was about the old epoch's
-     * ciphertext; the new one is asked afresh. */
+    /* What this keymgr holds under the old epoch goes: the master, which derives
+     * from it, and the refusal, which was about its ciphertext — the new one is
+     * asked afresh. The old epoch's session file is not one of those things. It
+     * is named by the epoch and shared by every checkout on it (crypto/session.h),
+     * and this keymgr has just stopped being one of them; the adopt that brings
+     * us here is taken only when no local ciphertext depended on the epoch
+     * replaced, so there is nothing left here that file's master could open.
+     * After the re-binding, `session_load` resolves the new epoch's path and
+     * the old file is out of reach anyway. */
     evict_slot(km);
     clear_refusal(km);
-    (void) session_clear(&km->epoch);
     bind_epoch(km, epoch);
 }
 

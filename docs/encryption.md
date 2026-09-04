@@ -115,7 +115,7 @@ When a passphrase is verified, the master key is held in process memory and save
 ~/.cache/dotta/session-<epoch fingerprint, 16 hex>
 ```
 
-Each repository epoch gets its own dedicated session file, eliminating cache collisions between different repositories on the same machine.
+The file is the **epoch's**, not the repository's. Two repositories that each minted their own epoch never contest a file; two checkouts of one repository share one, deliberately — the master is a function of (passphrase, epoch), so there is only one of it to cache. A checkout that adopts a different epoch during `dotta sync` leaves its old file where it stands, for whichever checkout is still on that epoch.
 
 ```toml
 [encryption]
@@ -158,7 +158,9 @@ Unverifiable paths (1 item) (dotta could not verify these paths)
 |---|---|---|
 | `[locked]` | File is encrypted, but no valid key is currently cached (or encryption is disabled over a sealed file). | Run `dotta key set` to authenticate. |
 | `[unreadable]` | Filesystem permissions prevented reading the file. | Run under `sudo` or adjust permissions. |
-| `[unverified]` | Cipher rejected the blob (wrong passphrase, tampered file, foreign epoch, unsupported version, or I/O error). | Run the verb that touches it (`dotta show`, `dotta export`) to view the cause. |
+| `[unverified]` | A held key did not open this blob, or nothing ever could: a tampered file, a foreign epoch, an unsupported version, or an I/O error. | Run the verb that touches it (`dotta show`, `dotta export`) to view the cause. |
+
+A wrong passphrase reads `[locked]`, not `[unverified]`. It leaves the run holding no key at all — one fact for every encrypted row, and one `dotta key set` settles them — where `[unverified]` is a key in hand that this one blob refuses, which is the blob's own problem.
 
 Dotta names no single remedy for `[unverified]` because there is none. The command that actually touches the file prints the reason:
 

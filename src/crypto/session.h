@@ -7,10 +7,15 @@
  *     ~/.cache/dotta/session-<epoch fingerprint, 16 hex>
  *
  * under the invoker's home (sys/identity), so a master set without sudo is found
- * by a later `sudo dotta apply`. Two repositories on one machine never contest
- * a file — each epoch names its own — and a file is only ever read under the
- * epoch that named it. Owned entirely by this module; keymgr orchestrates
- * save/load/clear and never touches the format.
+ * by a later `sudo dotta apply`. The file is the EPOCH's, not the repository's:
+ * two repositories that each minted their own never contest one, and two checkouts
+ * of one repository share one — deliberately, since a master is a function of
+ * (passphrase, epoch) and there is only one of it to cache. So a file outlives
+ * any single keymgr's interest in it: a repository that adopts another epoch
+ * leaves its old file to whoever is still on that epoch (crypto/keymgr.h,
+ * `keymgr_rekey`). A file is only ever read under the epoch that named it. Owned
+ * entirely by this module; keymgr orchestrates save/load/clear and never touches
+ * the format.
  *
  * File format (113 bytes; little-endian; the offsets are session.c's):
  *

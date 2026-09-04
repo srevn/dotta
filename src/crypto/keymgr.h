@@ -58,7 +58,10 @@
  * loader accepted is good for the run. A save that fails is silent inside an
  * operation (the slot is the run's; the operation must not fail for want of a
  * cache) and unlinks the file so it never lies; `keymgr_set`, whose job the file
- * is, returns it.
+ * is, returns it. Both unlinks this module performs — that one, and `keymgr_clear`
+ * — take the file of the epoch it is bound to, and it reaches for no other: a
+ * file is the epoch's, and whatever else still holds that epoch is entitled to
+ * it (crypto/session.h).
  *
  * The reach. A command declares how far the keymgr may go for a passphrase
  * (`keymgr_reach_t`): the caches alone, or the environment and the prompt beyond
@@ -372,9 +375,14 @@ bool keymgr_clear(keymgr *km);
  * The create-time copy goes stale the moment the ref moves, so the command that
  * moved it re-establishes the binding, the same duty sync discharges for Git by
  * rebuilding the manifest after its pulls. Evicts the in-memory master (it derives
- * from the old epoch), unlinks the old epoch's session file (the file is the
- * epoch's by name; nothing would read it again), clears a standing refusal (the
- * sources are now about another epoch), and recomputes the fingerprint.
+ * from the old epoch), clears a standing refusal (the sources are now about another
+ * epoch), and recomputes the fingerprint.
+ *
+ * The old epoch's session file stays where it is. It is named by that epoch and
+ * shared by every checkout still on it (crypto/session.h), and this keymgr has
+ * just stopped being one of them; an adopt is taken only when no local ciphertext
+ * depended on the epoch replaced, so nothing here could open what that file holds.
+ * From the re-binding on, the file tier reads the new epoch's path.
  *
  * @param km    Key manager (NULL-safe — encryption-disabled runs have none)
  * @param epoch The newly adopted epoch (non-NULL; copied)

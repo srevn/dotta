@@ -1506,9 +1506,10 @@ static error_t *epoch_reconcile(
             /* The run's crypto handles were bound to the epoch at dispatch; the
              * adopt moved that authority mid-command, so re-bind — the same duty
              * sync discharges for Git by rebuilding the manifest after the pulls.
-             * NULL-safe for encryption-disabled runs; the rekey takes the old
-             * epoch's session file with it, since the file is the epoch's by
-             * name. */
+             * NULL-safe for encryption-disabled runs. What the old epoch's session
+             * file holds is not this run's to remove: the file is named by the
+             * epoch, and a checkout still on that epoch is the one entitled to
+             * read it. */
             keymgr_rekey(keymgr, &adopted);
             return NULL;
         }

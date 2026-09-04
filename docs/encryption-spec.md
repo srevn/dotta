@@ -178,6 +178,8 @@ The epoch structure guarantees that every input to key derivation except the pas
 
 The census behind `ADOPT` walks the **full history** of every local branch, not just the tips — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as tip ciphertext does. Attribution is by fingerprint: only ciphertext the *local* epoch keys argues against adopting; foreign-keyed blobs argue for converging. The census **fails closed** — any uncertainty lands on `CONFLICT`, never on a data-destroying `ADOPT`.
 
+Two ways the walk could report an absence it had not proved are closed at the walk itself. A revwalk that ends on an unreadable object returns that error instead of reading as a finished history. And a branch listing that does not contain `dotta-worktree` — the one branch every repository holding this ref has — is refused outright, because libgit2's filesystem refdb *skips* a ref it cannot open or parse rather than reporting it, so an unlistable `refs/heads` otherwise yields an empty list and a clean `GIT_ITEROVER`. A listing that lost only some of its refs while the anchor still reads stays Git's limit, stated as one at both headers rather than defended.
+
 `epoch_fetch` is the acquisition boundary: after the force-fetch lands the remote commit, both blobs are validated, and a malformed epoch is rolled back to the prior target (or removed) with `ERR_CRYPTO`. A corrupt remote epoch never persists locally to be mistaken for canonical later.
 
 ## SIV construction (cipher format v9)
@@ -299,7 +301,7 @@ The deployment anchor (`anchor.blob_oid` in the state DB) does **not** carry an 
 
 ### Session cache (`SESSION_CACHE_VERSION = 0x04`)
 
-Each repository epoch gets a dedicated session cache file:
+The cache file is named by the epoch, and is therefore the epoch's rather than any one checkout's:
 
 ```
 ~/.cache/dotta/session-<epoch fingerprint, 16 hex>
@@ -348,7 +350,7 @@ mac = crypto_mac_oneshot(cache_key, CRYPTO_DOMAIN_SESSION_MAC,
                          /*data=*/&cache[0..81], /*data_len=*/81);
 ```
 
-The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It detects file corruption or tampering. Because the file name and MAC key are bound to the epoch, session files cannot be confused across repositories. Verification is constant-time via `crypto_verify32`.
+The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It detects file corruption or tampering. Because the file name and MAC key are both bound to the epoch, a file is only ever read under the epoch that named it: repositories with distinct epochs never contest a file, and checkouts sharing an epoch share the one master it caches. `keymgr_rekey` (sync's `ADOPT`) therefore leaves the old epoch's file in place — it belongs to that epoch, not to the checkout that has just stopped holding it. Verification is constant-time via `crypto_verify32`.
 
 ## Encryption workflow
 
@@ -397,7 +399,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
    IF CONTENT_ENCRYPTED:
      - cipher_read_header validates header and extracts epoch_fp.
      - keymgr_decrypt verifies epoch_fp matches repository epoch.
-     - keymgr resolves master_key using the blob in hand as verification probe.
+     - keymgr resolves master_key with this blob as the witness in hand.
      - kdf_siv_subkeys → mac_key, prf_key.
      - cipher_decrypt: derives seed, XChaCha20, recomputes SIV,
                        constant-time compare; returns plaintext on match,
@@ -465,24 +467,29 @@ struct keymgr {
     int32_t        session_timeout;
     keymgr_reach_t reach;
 
-    /* In-memory slot: process memo of one verified master key */
+    /* The slot: process memo of one verified master, and the binding of the
+     * witness it opened (both strings NULL when the master came from a cache
+     * or was taken as given). */
     bool           has_key;
     uint8_t        master_key[KDF_KEY_SIZE];
     time_t         expires_at;
-
-    /* Process-wide refusal memoization */
-    error_code_t   refused;
-
-    /* Dynamic witness provider */
-    keymgr_witness_source_fn witness_source;
-    void                    *witness_payload;
-
     char          *witness_profile;
-    char          *witness_storage_path;
+    char          *witness_path;
+
+    /* The standing refusal: the code and the top line of the ladder's first
+     * refusal, re-issued by every resolve after. A NULL line means none
+     * stands. */
+    struct { error_code_t code; char *line; } refusal;
+
+    /* The witness source, and the repository token handed back to it. */
+    keymgr_witness_source_fn source;
+    struct git_repository   *repo;
 };
 ```
 
 The key manager struct lives in its own `secure_alloc` mapping (anonymous `mmap`, `mlock`ed, dump-excluded).
+
+Every master this module holds lives in exactly one of two carriers, each with one verb that fills it and one that empties it: the slot above (`install_slot` / `evict_slot`), and a `keymgr_proof_t` — a fresh master with the binding of whatever it opened — filled by `kdf_master_key` or `session_load` plus `bind_proof`, emptied by `wipe_proof`, or consumed by `install_slot`. There is no third buffer: subkeys are derived from the slot in place, and a witness trial's two subkeys are per-call intermediates wiped where they stand.
 
 ### The Witness
 
@@ -507,7 +514,7 @@ A master that opens nothing is wiped and never kept. Tampered or relocated blobs
 
 1. **Verified before kept**: A fresh master key is never stored in the in-memory slot or session file until it has opened a witness (or, in an empty repository with no ciphertext, confirmed twice or supplied via `DOTTA_ENCRYPTION_PASSPHRASE`).
 2. **Failure does not evict**: A cached master that fails to decrypt a blob stays cached. Tampered or corrupted blobs do not cost the user a verified key; the row is reported as `[unverified]`.
-3. **Refusal stands for the process**: If passphrase acquisition fails (no passphrase in reach, prompt aborted, or 3 wrong attempts at a TTY), `km->refused` is set to `ERR_LOCKED`. Subsequent operations in the process return the same refusal immediately without re-prompting. `dotta key set` and `keymgr_rekey` clear a standing refusal; `dotta key clear` does not.
+3. **Refusal stands for the process**: If passphrase acquisition fails (no passphrase in reach, prompt aborted, a passphrase that opens nothing, or 3 wrong attempts at a TTY), the code and the top line of that refusal are recorded on `km->refusal`. The asker that met it receives the error itself, causes and all — the chain describes an event that happened once — while every later resolve re-issues the recorded line, which is the one sentence true of the whole run. The refusal therefore names no row: `infra/content` wraps it with the path of the row that asked, and what varies in its wording is only how much there was to open, since against a single ciphertext a miss is undecidable. `dotta key set` and `keymgr_rekey` clear a standing refusal; `dotta key clear` does not.
 
 ### Command Reach (`keymgr_reach_t`)
 
@@ -529,17 +536,18 @@ The workspace item holds only the enum (`item->fault`). Display printers generat
 
 ### Master-key resolution ladder
 
-`resolve(km, probe, out_master)`:
+`resolve_master(km, in_hand)`, in cost order — `in_hand` is the blob a decrypt was asked for, or NULL for an encrypt and for `key set`:
 
-1. **In-memory slot hit**: If `km->has_key`, return master key directly (O(1)).
-2. **On-disk session file**: If `session_timeout != 0`, attempt `session_load`:
-   - Success → install into slot with the file's recorded `expires_at`, return.
-   - `ERR_NOT_FOUND` / expired / MAC mismatch → fall through (invalid session files are unlinked).
-3. **Reach gate**: If `km->reach == KEYMGR_REACH_CACHED`, return `ERR_LOCKED("No passphrase is cached...")`.
-4. **Process refusal check**: If `km->refused` is non-zero, return previous refusal immediately.
-5. **Environment variable**: Check `DOTTA_ENCRYPTION_PASSPHRASE`. If present, derive candidate master and verify against probe. On mismatch, set `km->refused` and return `ERR_LOCKED`.
-6. **Interactive TTY prompt**: If stdin is a TTY, prompt up to 3 times (`Wrong passphrase, try again: `). Verify candidate against probe (or confirm twice if no probe).
-7. **Install & Persist**: On success, store in slot and write session file (if `session_timeout != 0`).
+1. **The slot**: if `km->has_key`, return (O(1)). The slot is read first, so a master that arrived *after* the ladder refused — one another process wrote and `keymgr_cached`'s probe installed — wins over an answer that is no longer true.
+2. **The standing refusal**: if one stands, re-issue its line and stop. It sits above the file because it can only stand once the file tier has already been asked and missed, so N encrypted rows under a cold run cost one probe and one prompt, not N.
+3. **The file tier** (`warm_from_file`): when `session_timeout != 0`, `session_load` under this epoch. Every miss is silent — absent, expired, MAC mismatch (the loader unlinks it), a transient I/O failure (it does not) — and a hit installs the slot with the file's recorded `expires_at`.
+4. **`obtain`** — the ladder's user half, and the only step that can record a refusal:
+   - **Reach gate**: `KEYMGR_REACH_CACHED` stops here with `ERR_LOCKED` ("No passphrase is cached, and this command does not ask for one").
+   - **Environment**: `DOTTA_ENCRYPTION_PASSPHRASE`, derived and checked against the witnesses. One attempt, no retry — an explicit variable is the automation's own assertion.
+   - **Prompt**: the shape is the repository's. A witness in reach means verify (`prompt_and_verify`); none means confirm by typing twice (`prompt_and_confirm`). Up to `KEYMGR_ATTEMPTS` rounds at a terminal, one over a pipe, and a miss of any kind spends a round.
+5. **`keep`**: the verified proof enters the slot, and the session file when the tier is on. A save that fails unlinks the file so it never lies; it is silent inside an operation and returned by `keymgr_set`, whose job the file is.
+
+Verification of a fresh master is `derive_and_check`: Argon2 under the epoch, then the witnesses in order — `in_hand` first, then whatever the source presents — until one opens. Nothing shown to it at all means nothing can refuse it, and it is taken as given.
 
 ### Session-cache load validation
 

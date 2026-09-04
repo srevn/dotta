@@ -575,9 +575,7 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
  * by the derivation that failed. Callers return it without a wipe.
  */
 static error_t *obtain(
-    keymgr *km,
-    const keymgr_witness_t *in_hand,
-    keymgr_proof_t *out
+    keymgr *km, const keymgr_witness_t *in_hand, keymgr_proof_t *out
 ) {
     /* The caches are as far as a reporting command may reach: below them the
      * user would be asked, and a report never asks. */
@@ -607,7 +605,12 @@ static error_t *obtain(
     error_free(err);
 
     /* The prompt's shape is the repository's to decide: a witness in reach means
-     * the passphrase is verified, none means it is confirmed. */
+     * the passphrase is verified, none means it is confirmed. The question is
+     * shaped before it is asked, and nothing cheaper shapes it — a pipe is not
+     * a terminal and answers a prompt perfectly well — so even a run with no
+     * readable stdin pays this one walk to find that out. The verify loop below
+     * walks again per attempt: N misses at a terminal cost 1 + N walks, and any
+     * walk with a witness to find stops at the first. */
     bool any = in_hand != NULL;
     if (!any && km->source) {
         err = km->source(km->repo, &km->epoch, witness_exists, NULL, &any);
@@ -744,6 +747,10 @@ bool keymgr_witness(
     const keymgr *km, const char **out_profile,
     const char **out_storage_path
 ) {
+    /* One test for the pair: the two strings are set together or not at all —
+     * `bind_proof` writes both or neither, `install_slot` moves them together.
+     * The profile therefore answers for the path, and the invariant is kept where
+     * it is established rather than re-tested here. */
     if (!km || !km->has_key || !km->witness_profile) {
         return false;
     }

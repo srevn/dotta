@@ -191,6 +191,22 @@ typedef error_t *(*keymgr_opens_fn)(
  * one implementation is `infra/epoch::epoch_find_ciphertext`, over the ciphertext
  * census's walk of every local branch and its history; the unit suites bring
  * their own.
+ *
+ * That reach — every local branch, its whole history — is load-bearing, not
+ * thorough, and it is what two of this module's promises rest on. It makes one
+ * trial's verdict the run's: a decrypt's blob is always reachable from its own
+ * profile's branch, so the walk is a superset of what any row can present, and
+ * a master that opens none of it opens none of any row — which is why a standing
+ * refusal may be re-issued to rows the ladder never saw. And it keeps "nothing
+ * to open" honest: a narrower walk would report an absence over ciphertext that
+ * exists, and an absence here is the licence to take a passphrase as given. A
+ * source that presented less would read like an optimisation and would be a
+ * correctness change.
+ *
+ * The cost is the wrong answer's alone. A miss runs a full decrypt per distinct
+ * (blob, branch, path) binding — deduped by the walk, so it scales with churn
+ * rather than with the file count — and KEYMGR_ATTEMPTS multiplies it at a
+ * terminal. The right passphrase opens the first witness and stops.
  */
 typedef error_t *(*keymgr_witness_source_fn)(
     struct git_repository *repo,
@@ -259,7 +275,7 @@ error_t *keymgr_create(
  * `cipher_encrypt` refusal is the caller's to attach file-level context to.
  *
  * @param km             Key manager (non-NULL)
- * @param profile        Profile name (non-NULL, non-empty)
+ * @param profile        Profile name (non-NULL)
  * @param storage_path   File path (non-NULL; bound into SIV)
  * @param plaintext      Plaintext bytes (non-NULL when len > 0)
  * @param plaintext_len  Plaintext length (≤ CIPHER_MAX_CONTENT)
@@ -289,7 +305,7 @@ error_t *keymgr_encrypt(
  * file-level diagnostics without stacking wraps.
  *
  * @param km             Key manager (non-NULL)
- * @param profile        Profile name (non-NULL, non-empty)
+ * @param profile        Profile name (non-NULL)
  * @param storage_path   File path (non-NULL; must match the path used
  *                       at encryption — mismatch fails SIV verify)
  * @param ciphertext     Dotta-encrypted bytes including header (non-NULL)

@@ -208,10 +208,13 @@ error_t *kdf_master_key(
  *
  * Subkey independence is essential to the SIV construction and comes from the
  * distinct domain tags. Cannot fail: two keyed BLAKE2b calls. `profile` is a
- * ref name — non-NULL and non-empty by construction at every caller.
+ * ref name — non-NULL, and non-empty by construction at every caller. Nothing
+ * checks the second and nothing needs to: the name is absorbed under a length
+ * prefix (crypto/mac.h), so an empty one would derive a valid nameless domain
+ * rather than collide with a named profile's.
  *
  * @param master_key  Master key (32 bytes)
- * @param profile     Profile name (non-NULL, non-empty)
+ * @param profile     Profile name (non-NULL)
  * @param out_mac_key Output buffer for 32-byte MAC key
  * @param out_prf_key Output buffer for 32-byte PRF key
  */

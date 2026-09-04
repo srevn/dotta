@@ -64,8 +64,7 @@ static error_t *local_has_ciphertext(
  * on success.
  */
 static error_t *resolve_epoch_tree(
-    git_repository *repo,
-    git_tree **out_tree
+    git_repository *repo, git_tree **out_tree
 ) {
     *out_tree = NULL;
 
@@ -117,11 +116,8 @@ static error_t *resolve_epoch_tree(
  * distinction to decide whether there is a ref to delete before it mints.
  */
 static error_t *read_epoch_blob(
-    git_repository *repo,
-    git_tree *tree,
-    const char *name,
-    size_t size,
-    uint8_t *out
+    git_repository *repo, git_tree *tree, const char *name,
+    size_t size, uint8_t *out
 ) {
     const git_tree_entry *entry = git_tree_entry_byname(tree, name);
     if (entry == NULL) {
@@ -219,11 +215,8 @@ error_t *epoch_load(git_repository *repo, kdf_epoch_t *out) {
 }
 
 error_t *epoch_init(
-    git_repository *repo,
-    uint16_t memory_mib,
-    uint8_t passes,
-    kdf_epoch_t *out,
-    bool *out_repaired
+    git_repository *repo, uint16_t memory_mib, uint8_t passes,
+    kdf_epoch_t *out, bool *out_repaired
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
@@ -425,9 +418,7 @@ error_t *epoch_init(
 }
 
 error_t *epoch_push(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
@@ -500,9 +491,7 @@ error_t *epoch_push(
  * code (that is the load-bearing return value of this predicate).
  */
 static error_t *probe_remote_epoch(
-    git_remote *remote,
-    transfer_context_t *xfer,
-    bool *out_present,
+    git_remote *remote, transfer_context_t *xfer, bool *out_present,
     git_oid *out_oid
 ) {
     *out_present = false;
@@ -545,9 +534,7 @@ static error_t *probe_remote_epoch(
 }
 
 error_t *epoch_fetch(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     kdf_epoch_t *out
 ) {
     CHECK_NULL(repo);
@@ -721,9 +708,7 @@ typedef struct {
  * the driver discards in favour of the payload.
  */
 static int epoch_walk_cb(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
+    const char *root, const git_tree_entry *entry, void *payload
 ) {
     epoch_walk_t *walk = payload;
 
@@ -839,9 +824,7 @@ static int epoch_walk_cb(
  * stated where the listing is made.
  */
 static error_t *walk_ciphertext(
-    git_repository *repo,
-    epoch_ciphertext_fn fn,
-    void *payload
+    git_repository *repo, epoch_ciphertext_fn fn, void *payload
 ) {
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
@@ -1007,9 +990,7 @@ typedef struct {
 } epoch_census_t;
 
 static error_t *epoch_census_cb(
-    const epoch_ciphertext_t *ct,
-    void *payload,
-    bool *stop
+    const epoch_ciphertext_t *ct, void *payload, bool *stop
 ) {
     epoch_census_t *census = payload;
 
@@ -1032,9 +1013,7 @@ static error_t *epoch_census_cb(
  * destroys data, while a false "in use" costs a manual reconcile.
  */
 static error_t *local_has_ciphertext(
-    git_repository *repo,
-    const uint8_t *local_fp,
-    bool *out_in_use
+    git_repository *repo, const uint8_t *local_fp, bool *out_in_use
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out_in_use);
@@ -1062,9 +1041,7 @@ typedef struct {
 } epoch_find_t;
 
 static error_t *epoch_find_cb(
-    const epoch_ciphertext_t *ct,
-    void *payload,
-    bool *stop
+    const epoch_ciphertext_t *ct, void *payload, bool *stop
 ) {
     epoch_find_t *find = payload;
 
@@ -1092,11 +1069,8 @@ static error_t *epoch_find_cb(
 }
 
 error_t *epoch_find_ciphertext(
-    git_repository *repo,
-    const kdf_epoch_t *epoch,
-    keymgr_opens_fn accept,
-    void *self,
-    bool *out_accepted
+    git_repository *repo, const kdf_epoch_t *epoch, keymgr_opens_fn accept,
+    void *self, bool *out_accepted
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(epoch);
@@ -1163,9 +1137,7 @@ typedef enum {
  * error.
  */
 static error_t *inspect_remote_epoch(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     epoch_remote_status_t *out_status
 ) {
     CHECK_NULL(repo);
@@ -1216,9 +1188,7 @@ static error_t *inspect_remote_epoch(
 }
 
 error_t *epoch_resolve(
-    git_repository *repo,
-    const char *remote_name,
-    transfer_context_t *xfer,
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer,
     epoch_reconcile_t *out_decision
 ) {
     CHECK_NULL(repo);

@@ -288,6 +288,11 @@ error_t *epoch_resolve(
  * exists (an `accept` that takes the first) and whether a fresh master opens
  * one (an `accept` that decrypts).
  *
+ * The full history and not the tips, for the reason at the head of this file:
+ * an absence here is a licence, and a walk that stopped at the tips would report
+ * one over ciphertext the repository still holds — which for this asker means
+ * taking a wrong passphrase as given (crypto/keymgr.h).
+ *
  * The walk's own failure — a branch that will not list, an object that will not
  * load — is returned and stands as that attempt's refusal in the keymgr, and so
  * is a refusal `accept` itself raises; either leaves `*out_accepted` false. A

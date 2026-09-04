@@ -399,10 +399,18 @@ const kdf_epoch_t *keymgr_epoch(const keymgr *km);
 /**
  * Is the master key available without asking?
  *
- * The slot, else — when the file tier is on and no refusal stands — the epoch's
- * session file, which a hit installs into the slot so the operation that follows
- * reuses it. Never prompts and never reads `DOTTA_ENCRYPTION_PASSPHRASE`; for
- * the full resolution chain use `keymgr_encrypt` / `keymgr_decrypt`.
+ * The slot, else — when the file tier is on — the epoch's session file, which a
+ * hit installs. The install is what a hit is rather than a service to the caller:
+ * no expiry can be reported before the file has been opened, read and MAC-verified,
+ * and keeping the master those same bytes carry costs one 32-byte deobfuscation
+ * and a copy more than dropping it would. The two readers — `key status`, and
+ * `key set`'s notice that a cached passphrase is about to be replaced — only
+ * report; one that went on to decrypt would find the slot already warm. A standing
+ * refusal does not gate the probe: the refusal is the ladder's answer, and a
+ * file another process wrote since is a better one — a resolve reads the slot
+ * before the refusal, so what this installs wins. Never prompts and never reads
+ * `DOTTA_ENCRYPTION_PASSPHRASE`; for the full resolution chain use `keymgr_encrypt`
+ * / `keymgr_decrypt`.
  *
  * @param km             Key manager (NULL-safe; returns false)
  * @param out_expires_at Optional: the file's expiry, Unix seconds; 0 when the

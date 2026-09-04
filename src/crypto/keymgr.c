@@ -19,9 +19,9 @@
  *     half: the environment, then the prompt, with retries at a terminal; two
  *     loops for two questions (is it the right passphrase / is it the passphrase
  *     the user meant), one refusal policy.
- *   - `warm_slot` / `keep` / `resolve_master` — the caches in front of `obtain`,
- *     and the keep behind it; `keymgr_set` walks `obtain` and `keep` without
- *     the caches.
+ *   - `warm_from_file` / `keep` / `resolve_master` — the caches in front of
+ *     `obtain`, and the keep behind it; `keymgr_set` walks `obtain` and `keep`
+ *     without the caches.
  *   - `acquire_subkeys` — resolve, then derive the pair from the slot in place,
  *     used by both encrypt and decrypt so the operation paths only own (mac,
  *     prf) and the master never reaches a stack.
@@ -620,16 +620,14 @@ static error_t *obtain(
  */
 
 /**
- * The CACHED half of the ladder: the slot, else — unless a refusal stands or
- * the file tier is off — the epoch's file, installed. Every miss is silent: not
- * found, expired, tampered (the loader unlinked it), an I/O failure (the loader
- * kept it). The refusal gates the probe, so N rows under a cold run cost one.
+ * The file tier: the epoch's session file, installed. Called with an empty slot
+ * — the ladder and `keymgr_cached` both read the slot first — and safe with an
+ * occupied one, since `install_slot` replaces. Every miss is silent: the tier
+ * off, not found, expired, tampered (the loader unlinked it), an I/O failure
+ * (the loader kept it).
  */
-static bool warm_slot(keymgr *km) {
-    if (km->has_key) {
-        return true;
-    }
-    if (km->refusal.line || km->session_timeout == 0) {
+static bool warm_from_file(keymgr *km) {
+    if (km->session_timeout == 0) {
         return false;
     }
 
@@ -684,16 +682,24 @@ static error_t *keep(keymgr *km, keymgr_proof_t *proof) {
 }
 
 /**
- * The whole ladder: the caches, the standing refusal, then obtain and keep. On
- * success the slot holds a verified master; a refusal leaves it empty and writes
- * nothing.
+ * The whole ladder, in cost order: the slot, the standing refusal, the epoch's
+ * file, then the ask. The slot is read first, so a master that arrived after
+ * the ladder refused — one another process wrote and `keymgr_cached`'s probe
+ * installed — is used rather than shadowed by an answer that is no longer true.
+ * The refusal sits above the file because it can only stand once the file tier
+ * has already been asked and missed, so N rows under a cold run cost one probe;
+ * this is the one place the question is asked. On success the slot holds a verified
+ * master; a refusal leaves it empty and writes nothing.
  */
 static error_t *resolve_master(keymgr *km, const keymgr_witness_t *in_hand) {
-    if (warm_slot(km)) {
+    if (km->has_key) {
         return NULL;
     }
     if (km->refusal.line) {
         return ERROR(km->refusal.code, "%s", km->refusal.line);
+    }
+    if (warm_from_file(km)) {
+        return NULL;
     }
 
     keymgr_proof_t proof = { 0 };
@@ -780,7 +786,7 @@ const kdf_epoch_t *keymgr_epoch(const keymgr *km) {
 }
 
 bool keymgr_cached(keymgr *km, time_t *out_expires_at) {
-    const bool warm = km && warm_slot(km);
+    const bool warm = km && (km->has_key || warm_from_file(km));
 
     if (out_expires_at) {
         *out_expires_at = warm ? km->expires_at : 0;

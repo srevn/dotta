@@ -823,6 +823,20 @@ static int epoch_walk_cb(
  * local-only dotta-worktree anchor inline, so infra/epoch takes no core/
  * dependency; the revwalk speaks libgit2 directly the way sys/stats does.
  * Propagates any error so the caller can fail closed.
+ *
+ * Including the listing's own. Every asker here acts on an ABSENCE of ciphertext
+ * — the licence to mint, to adopt, or to take a passphrase as given — and a branch
+ * listing is not a proof of one: libgit2 skips a ref it cannot open or parse
+ * rather than reporting it (sys/gitops.h), so a `refs/heads` it may traverse
+ * but not read yields an EMPTY array and no error at all. The anchor is the proof
+ * this module holds: dotta-worktree stands in every repository that reaches here
+ * — `repo_open` refuses one without it, and `cmd_init` makes it before the first
+ * census — and the walk already names it, to skip it. A listing without it did
+ * not list this repository.
+ *
+ * That catches a listing that lost everything. One that lost a single unreadable
+ * ref while the anchor still reads it cannot, and that limit stays libgit2's,
+ * stated where the listing is made.
  */
 static error_t *walk_ciphertext(
     git_repository *repo,
@@ -834,6 +848,18 @@ static error_t *walk_ciphertext(
     if (err) {
         return error_wrap(
             err, "Failed to list local branches for the ciphertext walk"
+        );
+    }
+    if (!string_array_contains(branches, "dotta-worktree")) {
+        string_array_free(branches);
+        return ERROR(
+            ERR_GIT,
+            "This repository's branch listing came back without "
+            "'dotta-worktree', so it did not list this repository and nothing "
+            "can be concluded about the encrypted files it holds\n\n"
+            "Git skips a ref it cannot read instead of reporting it — check "
+            "that the refs under '%s' are readable.",
+            git_repository_path(repo)
         );
     }
 
@@ -853,9 +879,9 @@ static error_t *walk_ciphertext(
     for (size_t i = 0; i < branches->count && !walk.stopped; i++) {
         const char *branch = branches->items[i];
 
-        /* dotta-worktree is the local-only empty HEAD anchor, never a profile
-         * branch — skip it (the epoch ref lives outside refs/heads and is never
-         * walked here either). */
+        /* The anchor, whose presence in the listing was the proof above: an empty
+         * HEAD, never a profile branch, and nothing to walk. (The epoch ref lives
+         * outside refs/heads and is never walked here either.) */
         if (strcmp(branch, "dotta-worktree") == 0) {
             continue;
         }
@@ -953,7 +979,9 @@ static error_t *walk_ciphertext(
         walker = NULL;
     }
 
-    err = NULL;
+    /* Falling out of the loop is the walk finished: every assignment to `err`
+     * inside it goes straight to the label, so `err` is still the listing's NULL.
+     * A reader of a fail-closed walk should not have to re-derive that. */
 
 cleanup:
     if (walker) {

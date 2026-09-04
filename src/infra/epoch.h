@@ -43,6 +43,15 @@
  * master is kept only after it opened a ciphertext of this epoch the repository
  * holds, and this module is what presents them (crypto/keymgr.h).
  *
+ * Every asker of that walk acts on an ABSENCE of ciphertext — the licence to
+ * mint, to adopt, or to take a passphrase as given — and a branch listing is
+ * not a proof of one: Git skips a ref it cannot read rather than reporting it
+ * (sys/gitops.h), so an unlistable `refs/heads` reads as a repository with no
+ * branches. So the walk proves the listing is this repository's before walking
+ * it, by the one branch every repository that reaches it holds — `dotta-worktree`
+ * — and refuses a listing without it. That catches a listing that lost everything;
+ * one that lost a single unreadable ref it cannot, and that limit stays Git's.
+ *
  * Layering — `infra/` depends on sys/gitops + sys/entropy + sys/transfer +
  * crypto/kdf (the epoch type, its encoding and its fingerprint) + crypto/keymgr
  * (the witness vocabulary). Consumed by main.c (the load at dispatch, and the
@@ -237,8 +246,9 @@ typedef enum {
  * only ciphertext the local epoch keys counts against an adopt; foreign-keyed
  * blobs (pulled from a remote under its own epoch) argue FOR converging, not
  * against. The census fails *closed*: any uncertainty — local epoch unreadable
- * for a reason other than absent/malformed, an unattributable format version,
- * or any census error — lands on CONFLICT, never on a data-destroying ADOPT.
+ * for a reason other than absent/malformed, an unattributable format version, a
+ * branch listing that cannot be this repository's, or any census error — lands
+ * on CONFLICT, never on a data-destroying ADOPT.
  *
  * This module owns only the *mechanism* of looking and classifying; the
  * establish/adopt/conflict actions, CLI gating, and rendering are policy and

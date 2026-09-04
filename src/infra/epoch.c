@@ -639,7 +639,7 @@ error_t *epoch_fetch(
                 git_reference_free(restored);
             }
         } else {
-            git_reference_remove(repo, EPOCH_REF);
+            (void) git_reference_remove(repo, EPOCH_REF);
         }
 
         /* Normalize every validation failure (wrong size, missing blob, a pair
@@ -760,7 +760,7 @@ static int epoch_walk_cb(
     git_oid_tostr(oid_hex, sizeof(oid_hex), oid);
 
     char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + PATH_MAX + 3];
-    snprintf(key, sizeof(key), "%s:%s:%s", oid_hex, walk->branch, path);
+    (void) snprintf(key, sizeof(key), "%s:%s:%s", oid_hex, walk->branch, path);
     if (hashmap_has(walk->seen, key)) {
         return (type == GIT_OBJECT_TREE) ? 1 : 0;
     }
@@ -937,7 +937,7 @@ static error_t *walk_ciphertext(
             git_oid_tostr(oid_hex, sizeof(oid_hex), git_commit_tree_id(commit));
 
             char key[GIT_OID_SHA1_HEXSIZE + DOTTA_REFNAME_MAX + 3];
-            snprintf(key, sizeof(key), "%s:%s:", oid_hex, branch);
+            (void) snprintf(key, sizeof(key), "%s:%s:", oid_hex, branch);
             if (hashmap_has(seen, key)) {
                 git_commit_free(commit);
                 continue;

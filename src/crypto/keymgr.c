@@ -348,24 +348,29 @@ static error_t *witness_exists(
  * With nothing to open at all the master is taken as given: the caller confirmed
  * it, or the environment asserted it. `subject` is what the refusal is about:
  * "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
+ *
+ * Three returns and one refusal: each success is taken where its condition is
+ * decided, and every failure — the derivation's own included — leaves through
+ * the one exit that scrubs the proof. So a caller may return a refusal without
+ * a wipe, which is what `obtain`'s contract promises its own.
  */
 static error_t *derive_and_check(
     keymgr *km, const char *subject, const char *passphrase,
     size_t passphrase_len, const keymgr_witness_t *in_hand,
     keymgr_proof_t *out
 ) {
+    keymgr_trial_t trial = { .in_hand = in_hand, .proof = out };
+
     error_t *err = kdf_master_key(
         (const uint8_t *) passphrase, passphrase_len,
         &km->epoch, out->master
     );
     if (err) {
-        return err;
+        goto fail;
     }
 
-    keymgr_trial_t trial = { .in_hand = in_hand, .proof = out };
-
     if (in_hand) {
-        trial.tried = 1;
+        trial.tried++;
         err = open_witness(out->master, in_hand);
         if (!err) {
             bind_proof(out, in_hand);
@@ -388,8 +393,12 @@ static error_t *derive_and_check(
         }
     }
 
+    /* Nothing was shown to the master, so nothing can refuse it: an operation
+     * with no blob in hand against a repository whose ciphertext the source found
+     * none of, or a keymgr with no source at all (the unit suites' shape). The
+     * caller confirmed it, or the environment asserted it. */
     if (trial.tried == 0) {
-        return NULL;  /* nothing to open: taken as given */
+        return NULL;
     }
 
     /* ERR_LOCKED, not the cipher's ERR_CRYPTO: the run is left with no master —
@@ -557,6 +566,9 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
  * a passphrase that opened nothing — ERR_LOCKED, a key would settle it; a
  * derivation or a witness walk that failed on its own keeps the failure's code.
  * Nothing here installs or persists — the callers keep what verified.
+ *
+ * A refusal leaves the proof as it found it: nothing written, or already scrubbed
+ * by the derivation that failed. Callers return it without a wipe.
  */
 static error_t *obtain(
     keymgr *km,

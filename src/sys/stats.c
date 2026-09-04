@@ -20,7 +20,6 @@
 
 /* Configuration constants */
 #define PATH_BUFFER_SIZE 1024
-#define REFNAME_BUFFER_SIZE 256
 #define HASHMAP_INITIAL_SIZE 256
 #define COMMITS_INITIAL_CAPACITY 16
 #define COMMITS_MAX_CAPACITY (SIZE_MAX / sizeof(commit_info_t) / 2)
@@ -235,43 +234,26 @@ static error_t *walk_commits(
     CHECK_NULL(branch_name);
     CHECK_NULL(ctx);
 
-    error_t *err = NULL;
-    git_reference *ref = NULL;
     git_revwalk *walker = NULL;
     commit_info_t *current_commit_info = NULL;
 
-    /* Build refname */
-    char refname[REFNAME_BUFFER_SIZE];
-    err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", branch_name
-    );
+    /* Resolve the branch head. The walk needs the OID, not the reference that
+     * carries it — git_revwalk_push copies what it is given. */
+    git_oid head_oid;
+    error_t *err = gitops_resolve_branch_head_oid(repo, branch_name, &head_oid);
     if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
-    }
-
-    /* Lookup branch reference */
-    err = gitops_lookup_reference(repo, refname, &ref);
-    if (err) {
-        return error_wrap(err, "Failed to lookup branch '%s'", branch_name);
-    }
-
-    const git_oid *target_oid = git_reference_target(ref);
-    if (!target_oid) {
-        git_reference_free(ref);
-        return ERROR(ERR_INTERNAL, "Branch '%s' has no commits", branch_name);
+        return err;
     }
 
     /* Create revwalker */
     int git_err = git_revwalk_new(&walker, repo);
     if (git_err < 0) {
-        git_reference_free(ref);
         return error_from_git(git_err);
     }
 
-    git_err = git_revwalk_push(walker, target_oid);
+    git_err = git_revwalk_push(walker, &head_oid);
     if (git_err < 0) {
         git_revwalk_free(walker);
-        git_reference_free(ref);
         return error_from_git(git_err);
     }
 
@@ -492,7 +474,6 @@ static error_t *walk_commits(
 
     /* Success */
     git_revwalk_free(walker);
-    git_reference_free(ref);
     return NULL;
 
 cleanup:
@@ -501,9 +482,6 @@ cleanup:
     }
     if (walker) {
         git_revwalk_free(walker);
-    }
-    if (ref) {
-        git_reference_free(ref);
     }
     return err;
 }

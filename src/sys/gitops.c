@@ -2032,23 +2032,6 @@ error_t *gitops_create_reference(
     return NULL;
 }
 
-error_t *gitops_lookup_reference(
-    git_repository *repo,
-    const char *name,
-    git_reference **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(name);
-    CHECK_NULL(out);
-
-    int err = git_reference_lookup(out, repo, name);
-    if (err < 0) {
-        return error_from_git(err);
-    }
-
-    return NULL;
-}
-
 error_t *gitops_resolve_reference_oid(
     git_repository *repo,
     const char *ref_name,

@@ -748,21 +748,6 @@ error_t *gitops_create_reference(
 );
 
 /**
- * Lookup reference
- *
- * @param repo Repository (must not be NULL)
- * @param name Reference name (must not be NULL)
- * @param out Reference object (must not be NULL, caller must free with
- *            git_reference_free)
- * @return Error or NULL on success
- */
-error_t *gitops_lookup_reference(
-    git_repository *repo,
-    const char *name,
-    git_reference **out
-);
-
-/**
  * Resolve reference name to OID
  *
  * Convenience function that resolves a reference name directly to its target

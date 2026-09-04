@@ -279,7 +279,8 @@ error_t *epoch_resolve(
  * one (an `accept` that decrypts).
  *
  * The walk's own failure — a branch that will not list, an object that will not
- * load — is returned and stands as that attempt's refusal in the keymgr; a
+ * load — is returned and stands as that attempt's refusal in the keymgr, and so
+ * is a refusal `accept` itself raises; either leaves `*out_accepted` false. A
  * ciphertext reachable from no local branch is never presented, and a decrypt
  * of one reads its refusal on its own row.
  *
@@ -287,11 +288,12 @@ error_t *epoch_resolve(
  * keymgr calls it only for a fresh master with no blob in hand or whose blob in
  * hand refused it, and once on the prompt path to choose verify over confirm.
  *
- * @param repo      Repository (must not be NULL)
- * @param epoch     The epoch whose ciphertext is presented (must not be NULL)
- * @param accept    The keymgr's predicate (must not be NULL)
- * @param self      Its payload, passed through untouched (can be NULL)
- * @param out_found True iff `accept` accepted a witness (must not be NULL)
+ * @param repo         Repository (must not be NULL)
+ * @param epoch        The epoch whose ciphertext is presented (must not be NULL)
+ * @param accept       The keymgr's predicate (must not be NULL)
+ * @param self         Its payload, passed through untouched (can be NULL)
+ * @param out_accepted True iff `accept` accepted a witness; false on any error
+ *                     (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *epoch_find_ciphertext(
@@ -299,7 +301,7 @@ error_t *epoch_find_ciphertext(
     const kdf_epoch_t *epoch,
     keymgr_opens_fn accept,
     void *self,
-    bool *out_found
+    bool *out_accepted
 );
 
 #endif /* DOTTA_EPOCH_H */

@@ -287,44 +287,51 @@ typedef struct {
     const keymgr_witness_t *in_hand;  /* tried first; skipped if presented */
     size_t tried;                     /* witnesses decrypted, the in-hand too */
     keymgr_proof_t *proof;            /* the master under trial */
-    error_t *error;                   /* a decrypt that failed on its own */
 } keymgr_trial_t;
 
 /**
- * keymgr_opens_fn: the trial's answer to a presented witness. A witness the master
- * opens ends the walk with its binding on the proof; a decrypt that fails for a
- * reason other than the cipher's refusal ends it with the error.
+ * keymgr_opens_fn: the trial's answer to a presented witness. One the master
+ * opens is accepted with its binding on the proof. The cipher's "no" is that
+ * witness's refusal and not the master's, so the walk goes on. A decrypt that
+ * failed on its own is neither answer, and its error ends the walk.
  */
-static bool trial_opens(void *self, const keymgr_witness_t *witness) {
+static error_t *trial_opens(
+    void *self, const keymgr_witness_t *witness, bool *out_accepted
+) {
     keymgr_trial_t *trial = self;
 
+    *out_accepted = false;
     if (trial->in_hand && witness_same(trial->in_hand, witness)) {
-        return false;
+        return NULL;
     }
     trial->tried++;
 
     error_t *err = open_witness(trial->proof->master, witness);
-    if (err && err->code == ERR_CRYPTO) {
-        error_free(err);
-        return false;
+    if (!err) {
+        bind_proof(trial->proof, witness);
+        *out_accepted = true;
+        return NULL;
     }
-    if (err) {
-        trial->error = err;
-        return true;
+    if (err->code != ERR_CRYPTO) {
+        return err;
     }
+    error_free(err);
 
-    bind_proof(trial->proof, witness);
-    return true;
+    return NULL;
 }
 
 /**
  * keymgr_opens_fn: the prompt's question — is there any ciphertext to verify
  * against? — answered by the first witness presented.
  */
-static bool witness_exists(void *self, const keymgr_witness_t *witness) {
+static error_t *witness_exists(
+    void *self, const keymgr_witness_t *witness, bool *out_accepted
+) {
     (void) self;
     (void) witness;
-    return true;
+    *out_accepted = true;
+
+    return NULL;
 }
 
 /**
@@ -365,17 +372,12 @@ static error_t *derive_and_check(
     }
 
     if (km->source) {
-        bool found = false;
-        err = km->source(km->repo, &km->epoch, trial_opens, &trial, &found);
+        bool accepted = false;
+        err = km->source(km->repo, &km->epoch, trial_opens, &trial, &accepted);
         if (err) {
-            error_free(trial.error);
             goto fail;
         }
-        if (trial.error) {
-            err = trial.error;
-            goto fail;
-        }
-        if (found) {
+        if (accepted) {
             return NULL;
         }
     }

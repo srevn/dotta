@@ -1030,7 +1030,7 @@ typedef struct {
     uint8_t fp[KDF_EPOCH_FP_SIZE];  /* the epoch's; only its ciphertext shows */
     keymgr_opens_fn accept;         /* the keymgr's predicate */
     void *self;                     /* the predicate's, carried untouched */
-    bool found;                     /* set when the predicate accepted one */
+    bool accepted;                  /* set when the predicate accepted one */
 } epoch_find_t;
 
 static error_t *epoch_find_cb(
@@ -1051,8 +1051,13 @@ static error_t *epoch_find_cb(
         .profile      = ct->branch,
         .storage_path = ct->storage_path,
     };
-    if (find->accept(find->self, &witness)) {
-        find->found = true;
+    bool accepted = false;
+    error_t *err = find->accept(find->self, &witness, &accepted);
+    if (err) {
+        return err;
+    }
+    if (accepted) {
+        find->accepted = true;
         *stop = true;
     }
     return NULL;
@@ -1063,18 +1068,18 @@ error_t *epoch_find_ciphertext(
     const kdf_epoch_t *epoch,
     keymgr_opens_fn accept,
     void *self,
-    bool *out_found
+    bool *out_accepted
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(epoch);
     CHECK_NULL(accept);
-    CHECK_NULL(out_found);
+    CHECK_NULL(out_accepted);
 
     epoch_find_t find = { .accept = accept, .self = self };
     kdf_epoch_fingerprint(epoch, find.fp);
 
     error_t *err = walk_ciphertext(repo, epoch_find_cb, &find);
-    *out_found = !err && find.found;
+    *out_accepted = !err && find.accepted;
     return err;
 }
 

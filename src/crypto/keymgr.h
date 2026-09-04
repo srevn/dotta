@@ -156,12 +156,22 @@ typedef struct keymgr_witness {
 
 /**
  * The keymgr's answer to a witness a source presents: does the master on trial
- * open it? The source stops presenting at the first `true`.
+ * open it? An accepted witness ends the walk. `*out_accepted` is written on every
+ * return that has an answer, the refusals included.
+ *
+ * A predicate that cannot answer — a decrypt that failed for a reason other than
+ * the cipher's "no" — returns its error instead, and that error becomes the walk's:
+ * the source stops, reports it, and the attempt is refused with it. A question
+ * nobody could answer is never an absence.
  *
  * `self` is what the keymgr handed the source beside the predicate; the source
  * passes it back untouched and never reads it.
  */
-typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
+typedef error_t *(*keymgr_opens_fn)(
+    void *self,
+    const keymgr_witness_t *witness,
+    bool *out_accepted
+);
 
 /**
  * Where the keymgr finds witnesses: whoever holds the repository.
@@ -172,8 +182,9 @@ typedef bool (*keymgr_opens_fn)(void *self, const keymgr_witness_t *witness);
  * of them can be the one it was sealed under — to `accept` until one is accepted,
  * and reports whether one was. A ciphertext of another epoch or of a version
  * this build does not read is never presented. The walk's own failure (an object
- * that will not load) is returned and stands as that attempt's refusal. The one
- * implementation is `infra/epoch::epoch_find_ciphertext`, over the ciphertext
+ * that will not load) is returned, and so is a refusal `accept` itself raises;
+ * either stands as that attempt's refusal, and `*out_accepted` is false. The
+ * one implementation is `infra/epoch::epoch_find_ciphertext`, over the ciphertext
  * census's walk of every local branch and its history; the unit suites bring
  * their own.
  */
@@ -182,7 +193,7 @@ typedef error_t *(*keymgr_witness_source_fn)(
     const kdf_epoch_t *epoch,
     keymgr_opens_fn accept,
     void *self,
-    bool *out_found
+    bool *out_accepted
 );
 
 /**

@@ -52,9 +52,7 @@
 /* The local-ciphertext census (defined with the reconcile machinery below);
  * epoch_init gates every fresh mint on it. */
 static error_t *local_has_ciphertext(
-    git_repository *repo,
-    const uint8_t *local_fp,
-    bool *out_in_use
+    git_repository *repo, const uint8_t *local_fp, bool *out_found
 );
 
 /**
@@ -269,33 +267,44 @@ error_t *epoch_init(
         return NULL;  /* already initialized */
     }
 
-    /* The ref yielded no epoch. Damaged or gone, its bytes are unavailable either
-     * way, so no blob's fingerprint can be matched against anything: any ciphertext
-     * in this repository (any fingerprint, any version) may be keyed by what
-     * the ref held, and minting over it would orphan that ciphertext permanently.
-     * One census answers both because it is one danger, and a census that cannot
-     * prove absence is the same verdict (fail closed). */
-    bool any_ciphertext = true;
+    /* The ref yielded no epoch. Unreadable or gone, its bytes are unavailable
+     * either way, so no blob's fingerprint can be matched against anything: any
+     * ciphertext in this repository (any fingerprint, any version) may be keyed
+     * by what the ref held, and minting over it would orphan that ciphertext
+     * permanently. One census answers both because it is one danger. */
+    bool any_ciphertext = false;
     error_t *cerr = local_has_ciphertext(repo, NULL, &any_ciphertext);
     if (cerr) {
-        error_free(cerr);
-        any_ciphertext = true;
+        /* No absence was proved, so the verdict is the found-ciphertext verdict
+         * — do not mint — but the reason is not that reason, and the census's
+         * own message names the listing or the object that stopped it. Carry
+         * it. The probe goes: what is wrong with the ref is not actionable until
+         * the thing that broke the census is, and this refusal is the one blocking
+         * it. */
+        error_free(probe_err);
+        return error_wrap(
+            cerr,
+            "Cannot tell whether this repository holds encrypted files sealed "
+            "under the epoch at '%s', so minting a new one is refused\n\n"
+            "Repair the repository and run 'dotta init' again.",
+            EPOCH_REF
+        );
     }
 
     if (probe_err->code != ERR_NOT_FOUND) {
-        /* The ref is there and damaged. Over reachable ciphertext it may be the
-         * damaged form of the epoch that keys it, so the refusal keeps the probe
-         * as its cause — epoch_load names what is wrong with the blob — and the
-         * evidence stays in place for a restore. A clean census makes the ref
-         * pure noise: delete it, mint fresh, and tell the caller a repair
-         * happened. */
+        /* The ref is there and yields no epoch. Over reachable ciphertext it
+         * may be the unreadable form of the epoch that keys it, so the refusal
+         * keeps the probe as its cause — epoch_load names what is wrong with
+         * the blob — and the evidence stays in place for a restore. A clean census
+         * makes the ref pure noise: delete it, mint fresh, and tell the caller
+         * a repair happened. */
         if (any_ciphertext) {
             return error_wrap(
                 probe_err,
-                "Repository epoch '%s' is malformed and encrypted files depend "
-                "on it\n\n"
-                "Minting a new one would seal every encrypted file in this "
-                "repository away permanently. Restore the ref instead:\n"
+                "Repository epoch '%s' cannot be read and encrypted files may "
+                "be sealed under it\n\n"
+                "Minting a new one would seal them away permanently. Restore "
+                "the ref instead:\n"
                 "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
@@ -307,7 +316,7 @@ error_t *epoch_init(
         if (rc < 0) {
             return error_wrap(
                 error_from_git(rc),
-                "Failed to remove malformed epoch ref '%s'", EPOCH_REF
+                "Failed to remove unreadable epoch ref '%s'", EPOCH_REF
             );
         }
         if (out_repaired) {
@@ -323,10 +332,10 @@ error_t *epoch_init(
         if (any_ciphertext) {
             return ERROR(
                 ERR_CRYPTO,
-                "Repository epoch '%s' is missing and encrypted files depend "
-                "on it\n\n"
-                "Minting a new one would seal every encrypted file in this "
-                "repository away permanently. Restore the ref instead:\n"
+                "Repository epoch '%s' is missing and encrypted files may be "
+                "sealed under it\n\n"
+                "Minting a new one would seal them away permanently. Restore "
+                "the ref instead:\n"
                 "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
@@ -1038,20 +1047,21 @@ static error_t *epoch_census_cb(
 }
 
 /*
- * On an error the out-param says nothing: it is written `false`, and both callers
- * overwrite it with `true` before reading it. Failing closed is their policy,
- * not the walk's — a false "not in use" green-lights a mint or an adopt that
- * destroys data, while a false "in use" costs a manual reconcile.
+ * Three states in two values, and the error is one of them: an unfinished census
+ * proved no absence, and an absence is the whole of what both callers act on.
+ * So neither reads `*out_found` past an error — each returns the cause to whoever
+ * can name the subject — and the `false` written on that path is a courtesy,
+ * not an answer. Failing closed is their policy, not the walk's.
  */
 static error_t *local_has_ciphertext(
-    git_repository *repo, const uint8_t *local_fp, bool *out_in_use
+    git_repository *repo, const uint8_t *local_fp, bool *out_found
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(out_in_use);
+    CHECK_NULL(out_found);
 
     epoch_census_t census = { .local_fp = local_fp };
     error_t *err = walk_ciphertext(repo, epoch_census_cb, &census);
-    *out_in_use = !err && census.found;
+    *out_found = !err && census.found;
     return err;
 }
 
@@ -1117,35 +1127,76 @@ error_t *epoch_find_ciphertext(
 }
 
 /*
- * Would replacing the local epoch brick local data? True iff a valid local epoch
- * exists AND ciphertext it keys is reachable from some local branch. Fails CLOSED:
- * any uncertainty returns true, because a false "not in use" green-lights an
- * adopt that destroys data while a false "in use" only costs a manual reconcile.
+ * The divergent branch's one question — not "is the local epoch in use" but "does
+ * anything this repository holds depend on the BYTES at refs/dotta/epoch?" The
+ * two come apart on a ref that stands and yields no epoch, which is precisely
+ * where the salt blob may still be one restore away, and that is the whole of
+ * the difference. Five findings out of one load and at most one census:
  *
- *   local epoch absent / malformed → derives nothing → not in use local epoch
- *   unreadable for any other reason → can't prove safe → in use local epoch valid
- *   → census against its fingerprint; a census error → in use
+ *   ref absent             nothing to lose, nothing to attribute   ADOPT
+ *   ref yields no epoch    + any ciphertext at all                 DAMAGED
+ *   ref yields no epoch    + none                                  ADOPT
+ *   an epoch               + ciphertext its fingerprint keys       CONFLICT
+ *   an epoch               + none it keys                          ADOPT
+ *
+ * Three routes to one act, two refusals. The censuses differ where the verdict
+ * does not: only a readable epoch has a fingerprint to attribute against, so
+ * the top row asks nothing and the two middle rows ask for any ciphertext at
+ * all. That is why the caller's adopt line may name the act and never the census.
+ *
+ * Fails CLOSED by returning: a census that could not finish is an error the caller
+ * refuses on, never a verdict. Nothing here writes a value to stand in for a
+ * refusal it could not phrase, which is what the bool this replaced had to do —
+ * and what it wrote for a ref that yields no epoch was the permissive one.
+ *
+ * The rationale for each row, and for the row that runs no census, is at
+ * `epoch_resolve` in the header; it is the caller's contract, not an internal.
  */
-static bool local_epoch_in_use(git_repository *repo) {
-    kdf_epoch_t epoch;
-    error_t *lerr = epoch_load(repo, &epoch);
+static error_t *decide_divergence(
+    git_repository *repo, epoch_reconcile_t *out_decision
+) {
+    kdf_epoch_t local;
+    error_t *lerr = epoch_load(repo, &local);
     /* The epoch is public — no wipe. */
-    if (lerr) {
-        error_code_t code = lerr->code;
+
+    if (lerr && lerr->code == ERR_NOT_FOUND) {
+        /* No bytes at the ref: nothing to make unreachable, and whatever this
+         * repository holds was orphaned by whatever removed them. A census here
+         * would attribute against a value that does not exist. */
         error_free(lerr);
-        return !(code == ERR_NOT_FOUND || code == ERR_CRYPTO);
+        *out_decision = EPOCH_RECONCILE_ADOPT;
+        return NULL;
     }
 
+    if (lerr) {
+        /* The ref stands and yields no epoch, whichever mechanism got there
+         * (epoch.h). Its salt blob may be intact and may be the only copy of
+         * what keys this repository — but with the pair unreadable no fingerprint
+         * can be matched against anything, so the census asks for any ciphertext
+         * at all. Its own cause has nothing to add to either verdict: what the
+         * blob is wrong about does not change whether something is sealed. */
+        error_free(lerr);
+
+        bool any = false;
+        error_t *cerr = local_has_ciphertext(repo, NULL, &any);
+        if (cerr) {
+            return cerr;
+        }
+        *out_decision = any ? EPOCH_RECONCILE_DAMAGED : EPOCH_RECONCILE_ADOPT;
+        return NULL;
+    }
+
+    /* A readable epoch: only the ciphertext IT keys pins it. */
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    kdf_epoch_fingerprint(&epoch, fp);
+    kdf_epoch_fingerprint(&local, fp);
 
-    bool in_use = false;
-    error_t *cerr = local_has_ciphertext(repo, fp, &in_use);
+    bool keyed = false;
+    error_t *cerr = local_has_ciphertext(repo, fp, &keyed);
     if (cerr) {
-        error_free(cerr);
-        return true;  /* census error → fail closed */
+        return cerr;
     }
-    return in_use;
+    *out_decision = keyed ? EPOCH_RECONCILE_CONFLICT : EPOCH_RECONCILE_ADOPT;
+    return NULL;
 }
 
 /*
@@ -1245,9 +1296,9 @@ error_t *epoch_resolve(
 
         case EPOCH_REMOTE_ABSENT: {
             /* Establish publishes THIS machine's epoch, so a valid local one
-             * must exist. A repo with no local epoch (or a malformed one) has
-             * nothing to publish — distinguish the two so the caller never claims
-             * an establish it cannot perform (the establish guard). */
+             * must exist. A repo whose ref is absent, or stands and yields no
+             * epoch, has nothing to publish — distinguish the two so the caller
+             * never claims an establish it cannot perform (the establish guard). */
             kdf_epoch_t scratch;
             error_t *lerr = epoch_load(repo, &scratch);
             *out_decision = lerr ? EPOCH_RECONCILE_NO_LOCAL_EPOCH
@@ -1258,13 +1309,9 @@ error_t *epoch_resolve(
         }
 
         case EPOCH_REMOTE_DIVERGENT:
-            /* Fail closed: local_epoch_in_use returns true on any uncertainty,
-             * so ADOPT (which overwrites the local epoch) is reached only when
-             * no local ciphertext can be bricked. */
-            *out_decision = local_epoch_in_use(repo)
-                ? EPOCH_RECONCILE_CONFLICT
-                : EPOCH_RECONCILE_ADOPT;
-            return NULL;
+            /* Five findings, and the fail-closed one is the return: a fetch arm
+             * is reached only over bytes nothing here can depend on. */
+            return decide_divergence(repo, out_decision);
     }
 
     /* inspect_remote_epoch yields exactly one of three statuses; fold any

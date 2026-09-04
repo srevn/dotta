@@ -25,8 +25,8 @@
  * a distinct attack target (a precomputation table built against one repo's
  * passphrase guesses cannot be reused against any other); the parameters are
  * the cost of a guess. It is minted once at `dotta init`, fetched at `dotta clone`,
- * and reconciled at `dotta sync` (establish on the remote, adopt from it, or
- * surface a conflict — see `epoch_resolve`), so cross-machine sync of encrypted
+ * and reconciled at `dotta sync` (establish it on the remote, take the remote's,
+ * or refuse and say why — see `epoch_resolve`), so cross-machine sync of encrypted
  * dotfiles works while still defeating cross-installation precomputation.
  *
  * The commit→tree→blob structure (rather than a ref pointing at a blob directly)
@@ -91,17 +91,20 @@
  * pair given, and points the ref at the new commit.
  *
  * Every fresh mint is gated on the ciphertext census, on both ways the ref can
- * fail to yield an epoch — malformed (a wrong-size blob, a missing blob, a pair
- * out of range, a broken shape) and absent. The danger is one danger: with the
- * epoch's bytes unavailable no blob's fingerprint can be matched against anything,
- * so any reachable ciphertext (any fingerprint, any version) may be keyed by
- * what the ref held, and a fresh epoch would orphan it permanently. With any
- * reachable ciphertext — or a census that cannot prove its absence — ERR_CRYPTO
- * propagates naming the state of the ref and the restore that repairs it, and
- * the evidence stays in place (a remote holding the true epoch heals a divergence
- * via sync's adopt path instead). With a clean census the ref binds nothing: a
- * malformed one is deleted and re-minted (`*out_repaired` set — the caller renders
- * the repair), an absent one is simply a repository that has no epoch yet.
+ * fail to yield an epoch — it stands and yields none (a wrong-size blob, a missing
+ * blob, a pair out of range, a broken shape, an object libgit2 will not load)
+ * or it is absent. The danger is one danger: with the epoch's bytes unavailable
+ * no blob's fingerprint can be matched against anything, so any reachable
+ * ciphertext (any fingerprint, any version) may be keyed by what the ref held,
+ * and a fresh epoch would orphan it permanently. With any reachable ciphertext,
+ * ERR_CRYPTO propagates naming the state of the ref and the restore that repairs
+ * it, and the evidence stays in place (a remote holding the true epoch heals a
+ * divergence via sync's fetch paths instead). A census that cannot finish proves
+ * no absence and reaches the same verdict, but not for the same reason, so it
+ * carries its own cause rather than borrowing that sentence. With a clean census
+ * the ref binds nothing: an unreadable one is deleted and re-minted
+ * (`*out_repaired` set — the caller renders the repair), an absent one is simply
+ * a repository that has no epoch yet.
  *
  * Called by `cmd_init` after the dotta-worktree branch is established.
  * Encryption-disabled installations still produce the ref so a future `dotta
@@ -112,7 +115,7 @@
  * @param passes       Argon2 pass count to mint with (a preset's; in range)
  * @param out          The epoch that stands after the call: the existing one,
  *                     or the one minted (must not be NULL)
- * @param out_repaired Optional: set true iff a malformed ref was deleted and
+ * @param out_repaired Optional: set true iff an unreadable ref was deleted and
  *                     re-minted (can be NULL)
  * @return Error or NULL on success
  */
@@ -237,52 +240,99 @@ error_t *epoch_fetch(
  * in different commits → different OID → genuinely divergent. The only
  * equal-bytes-different-OID path (two commit-wraps of the same 32 random bytes)
  * has probability 2^-256 and fails *safe*: it misclassifies as divergent, routing
- * through the in-use census to a conflict rather than a silent overwrite.
+ * through the census to a refusal rather than a silent overwrite.
+ *
+ * EQUAL is that OID comparison and nothing more — not a claim that the epoch
+ * can be read. A repository whose epoch objects are gone still names the remote's
+ * commit, so there is genuinely nothing to reconcile and sync says so, while
+ * every command that must *read* the epoch fails at dispatch. The two are
+ * consistent because the reconcile's subject is the ref, not the bytes under it.
  *
  * The decision is the fact; the CLI gating (--no-push / --no-pull / --dry-run)
  * and all user-facing rendering are the caller's policy.
+ *
+ * ADOPT is one arm over three findings — an absent ref, one that yields no epoch
+ * with nothing sealed here, and a readable epoch that keys nothing here — because
+ * the caller does the same thing with all three and has the same thing to say
+ * about it. They differ in the census that established them, not in the act, so
+ * the split lives in `epoch_resolve`'s reasoning and not in this vocabulary.
+ * What the adopt must NOT do is describe the census it was reached by: only one
+ * of the three ran an attributed one, and a line claiming otherwise is a claim
+ * about work that did not happen.
  */
 typedef enum {
-    EPOCH_RECONCILE_EQUAL,          /* remote OID == local; no-op */
-    EPOCH_RECONCILE_ESTABLISH,      /* remote absent, local epoch valid → caller pushes */
-    EPOCH_RECONCILE_NO_LOCAL_EPOCH, /* remote absent, local epoch missing/malformed → nothing to publish */
-    EPOCH_RECONCILE_ADOPT,          /* divergent, no reachable ciphertext keyed by the
-                                     * local epoch → caller force-fetches */
-    EPOCH_RECONCILE_CONFLICT,       /* divergent, local epoch keys reachable ciphertext
-                                     * → caller warns, no git op */
+    /* Nothing to do. */
+    EPOCH_RECONCILE_EQUAL,          /* remote OID == local ref target */
     EPOCH_RECONCILE_UNREACHABLE,    /* inspect transport failure → caller skips best-effort */
+
+    /* Push. */
+    EPOCH_RECONCILE_ESTABLISH,      /* remote absent, the local ref yields an epoch */
+    EPOCH_RECONCILE_NO_LOCAL_EPOCH, /* remote absent, the local ref yields none */
+
+    /* Fetch — three findings, one act. */
+    EPOCH_RECONCILE_ADOPT,          /* divergent, and nothing here depends on the bytes
+                                     * at the local ref → caller takes the remote's */
+
+    /* Refuse — two findings, two remedies. */
+    EPOCH_RECONCILE_CONFLICT,       /* divergent, the local epoch keys reachable ciphertext
+                                     * → caller warns, no git op */
+    EPOCH_RECONCILE_DAMAGED,        /* divergent, the local ref yields no epoch over
+                                     * ciphertext it may key → restore, never replace */
 } epoch_reconcile_t;
 
 /**
  * Decide how to reconcile the local epoch with the remote's — a pure fact-finder.
  * No I/O beyond git, no rendering, no CLI flags.
  *
- * Connects and lists the remote (commit-OID compare, zero object transfer); on
- * a divergent epoch, also validates the local epoch and runs a key-free census
- * over the *full history* of every local branch — `dotta show`/`revert` decrypt
- * blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly
- * as tip ciphertext does. Attribution is by the blob header's epoch fingerprint:
- * only ciphertext the local epoch keys counts against an adopt; foreign-keyed
- * blobs (pulled from a remote under its own epoch) argue FOR converging, not
- * against. The census fails *closed*: any uncertainty — local epoch unreadable
- * for a reason other than absent/malformed, an unattributable format version, a
- * branch listing that cannot be this repository's, or any census error — lands
- * on CONFLICT, never on a data-destroying ADOPT.
+ * Connects and lists the remote (commit-OID compare, zero object transfer). A
+ * divergence is then decided from two things and nothing else — what the local
+ * ref yields, and what a key-free census over the *full history* of every local
+ * branch finds. The history and not the tips: `dotta show`/`revert` decrypt blobs
+ * at any `@commit`, so history-reachable ciphertext pins the epoch exactly as
+ * tip ciphertext does.
  *
- * This module owns only the *mechanism* of looking and classifying; the
- * establish/adopt/conflict actions, CLI gating, and rendering are policy and
- * live in `cmd_sync`.
+ *   ref absent             nothing to lose, nothing to attribute   ADOPT
+ *   ref yields no epoch    + any ciphertext at all                 DAMAGED
+ *   ref yields no epoch    + none                                  ADOPT
+ *   an epoch               + ciphertext its fingerprint keys       CONFLICT
+ *   an epoch               + none it keys                          ADOPT
  *
- * Transport failure (connect / ls) folds to EPOCH_RECONCILE_UNREACHABLE so the
- * caller can skip epoch reconciliation best-effort — the authoritative "remote
- * unreachable" diagnostic comes from the subsequent fetch phase. The only error
- * returned is programmer misuse (a NULL argument).
+ * The question is about the BYTES at the ref, not about the epoch derived from
+ * them, and the two come apart on exactly one input: a ref that stands and yields
+ * no epoch may hold the only copy of the salt that keys this repository, one
+ * blob away from a restore. With the pair unreadable no blob's fingerprint can
+ * be matched against anything, so the census there must ask for ANY ciphertext
+ * — any fingerprint, any version. That is the census `epoch_init` runs over the
+ * identical state, for the same reason, reaching the same verdict: leave the
+ * evidence in place for a restore. With a readable epoch only the ciphertext IT
+ * keys counts; foreign-keyed blobs (pulled from a remote under its own epoch)
+ * argue FOR converging, not against, and a version this build cannot attribute
+ * counts either way.
+ *
+ * An absent ref is the one row that runs no census, because `epoch_init`'s reason
+ * for running one there does not hold here: a mint would introduce a *new* root
+ * that orphans whatever the ref used to key, while a fetch installs the remote's,
+ * which may be exactly that root. The bytes are already gone; nothing this decision
+ * licenses can make it worse.
+ *
+ * Fails closed by returning: a census that cannot finish is an error, never a
+ * verdict, and it is the only error this call produces beyond a NULL argument.
+ * Transport failure (connect / ls) still folds to EPOCH_RECONCILE_UNREACHABLE
+ * so the caller can skip epoch reconciliation best-effort — the authoritative
+ * "remote unreachable" diagnostic comes from the subsequent fetch phase — but a
+ * census failure has no second reporter anywhere in sync, so its cause is returned
+ * rather than freed. It is returned bare: this boundary knows the mechanism,
+ * and the caller that renders it is the one that can name the subject.
+ *
+ * This module owns only the *mechanism* of looking and classifying; the acts,
+ * the CLI gating, and the rendering are policy and live in `cmd_sync`.
  *
  * @param repo         Repository (must not be NULL)
  * @param remote_name  Remote name (must not be NULL, e.g. "origin")
  * @param xfer         Transfer context for credentials / progress (must not be NULL)
  * @param out_decision Output decision (must not be NULL)
- * @return Error only on a NULL argument; otherwise NULL with *out_decision set
+ * @return Error on a NULL argument or on a census that could not finish; otherwise
+ *         NULL with *out_decision set
  */
 error_t *epoch_resolve(
     git_repository *repo,

@@ -1358,9 +1358,11 @@ static error_t *sync_failure(const sync_results_t *results) {
 }
 
 /*
- * Render the one unrecoverable cell: the local epoch differs from the remote's
- * canonical epoch and reachable ciphertext (tip or history, any branch) is keyed
- * by the local one. Warn loudly and continue — plaintext profiles still sync.
+ * Render one of the two refusals: the local epoch reads, differs from the remote's
+ * canonical epoch, and keys reachable ciphertext (tip or history, any branch).
+ * Two independent encryption roots, and every hint below is licensed by the census
+ * having attributed a blob to the one that stands here. Warn loudly and continue
+ * — plaintext profiles still sync.
  */
 static void epoch_emit_conflict(output_t *out) {
     output_warning(
@@ -1382,17 +1384,52 @@ static void epoch_emit_conflict(output_t *out) {
 }
 
 /*
+ * Render the other: the local ref stands, yields no epoch, and this repository
+ * holds encrypted files that may be sealed under the bytes it carries. A different
+ * finding from the conflict and so a different remedy — none of that one's three
+ * hints fit a ref that is merely unreadable, where the salt blob is often intact
+ * and one fetch away from whole. This is `epoch_init`'s refusal over the identical
+ * state, said by the other verb.
+ *
+ * The refspec is forced, because an epoch commit is an orphan: over a ref that
+ * is present but unreadable a plain fetch is rejected as non-fast-forward and
+ * restores nothing.
+ */
+static void epoch_emit_damaged(output_t *out) {
+    output_warning(
+        out, OUTPUT_NORMAL,
+        "Repository epoch left alone: '%s' cannot be read and this repository "
+        "holds encrypted files that may be sealed under it",
+        EPOCH_REF
+    );
+    output_hint(
+        out, OUTPUT_NORMAL,
+        "Restore the ref rather than replacing it: dotta git fetch origin "
+        "'+refs/dotta/*:refs/dotta/*'"
+    );
+}
+
+/*
  * Apply the CLI gates to epoch_resolve's verdict, render the outcome, and run
  * the chosen git action (establish via epoch_push, adopt via epoch_fetch). The
  * fact-finding already happened in infra/epoch; this layer is pure policy +
  * rendering.
  *
  * Runs before the fetch phase so the decision's census is never contaminated by
- * pulled remote ciphertext. Best-effort: returns NULL on every epoch-level outcome
- * (warn-and-continue); a non-NULL return is reserved for programmer misuse surfaced
- * by the decide call.
+ * pulled remote ciphertext. Every outcome is best-effort — a warning and the
+ * rest of the sync — which is why nothing here is returned: the one error the
+ * resolve produces is a census that could not finish, and that is a verdict to
+ * render, not a run to fail.
+ *
+ * The epoch is machinery, so it says as little as it can get away with. Five of
+ * the seven verdicts are a verbose line or nothing at all: dotta either did the
+ * right thing or had nothing to do, and neither is the user's business at NORMAL.
+ * What speaks up is what the user has to act on — a divergence over ciphertext,
+ * a ref that cannot be read over ciphertext, and a census that could not finish
+ * — and each is one line of finding plus one of remedy or cause. Nothing here
+ * reports the census, the salt, or which of three routes reached an adopt.
  */
-static error_t *epoch_reconcile(
+static void epoch_reconcile(
     const dotta_ctx_t *ctx,
     const char *remote_name,
     transfer_context_t *xfer,
@@ -1405,10 +1442,21 @@ static error_t *epoch_reconcile(
     epoch_reconcile_t decision;
     error_t *err = epoch_resolve(repo, remote_name, xfer, &decision);
     if (err) {
-        /* decide errors only on programmer misuse (a NULL argument) — it folds
-         * transport failure to UNREACHABLE. Surface the bug rather than swallow
-         * it as best-effort. */
-        return err;
+        /* The census could not finish, so no absence was proved and the verdict
+         * is the one a found ciphertext gets: no git op. Sync is the only place
+         * this cause is ever reported — the resolve returns it bare precisely
+         * so that the line naming the subject is written here. */
+        output_warning(
+            out, OUTPUT_NORMAL,
+            "Repository epoch left alone: whether any encrypted file here is "
+            "sealed under the local epoch could not be determined"
+        );
+        /* The cause, not a hint: it is the mechanism's own words and the only
+         * lead there is, so it is printed the way a continuation line is rather
+         * than dressed up as advice. */
+        output_hintline(out, OUTPUT_NORMAL, "  %s", error_message(err));
+        error_free(err);
+        return;
     }
 
     switch (decision) {
@@ -1416,19 +1464,22 @@ static error_t *epoch_reconcile(
             /* The authoritative "remote unreachable" error comes from the fetch
              * phase that runs next. */
             output_info(out, OUTPUT_VERBOSE, "Skipped epoch sync (remote unreachable)");
-            return NULL;
+            return;
 
         case EPOCH_RECONCILE_EQUAL:
             output_info(out, OUTPUT_VERBOSE, "Repository epoch up to date");
-            return NULL;
+            return;
 
         case EPOCH_RECONCILE_NO_LOCAL_EPOCH:
-            /* Nothing to publish; never claim an establish (the guard). */
+            /* Nothing to publish; never claim an establish (the guard). "Usable"
+             * covers both ways the ref fails to yield an epoch, and 'dotta init'
+             * is the right remedy for each — it repairs one that binds nothing
+             * and refuses one that may. */
             output_info(
                 out, OUTPUT_VERBOSE,
-                "No local repository epoch to establish (run 'dotta init')"
+                "No usable local repository epoch to establish (run 'dotta init')"
             );
-            return NULL;
+            return;
 
         case EPOCH_RECONCILE_ESTABLISH: {
             /* Establish is push-shaped: gate on --no-push. */
@@ -1437,14 +1488,14 @@ static error_t *epoch_reconcile(
                     out, OUTPUT_VERBOSE,
                     "Remote has no repository epoch; establish skipped"
                 );
-                return NULL;
+                return;
             }
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_VERBOSE,
                     "Would establish repository epoch on remote"
                 );
-                return NULL;
+                return;
             }
             err = epoch_push(repo, remote_name, xfer);
             if (err) {
@@ -1454,40 +1505,52 @@ static error_t *epoch_reconcile(
                     error_message(err)
                 );
                 error_free(err);
-                return NULL;  /* best-effort; retried next sync */
+                return;  /* best-effort; retried next sync */
             }
             output_success(
                 out, OUTPUT_VERBOSE,
                 "Established repository epoch on remote"
             );
-            return NULL;
+            return;
         }
 
         case EPOCH_RECONCILE_CONFLICT:
             epoch_emit_conflict(out);
-            return NULL;  /* warn-and-continue; no git op */
+            return;  /* warn-and-continue; no git op */
+
+        case EPOCH_RECONCILE_DAMAGED:
+            epoch_emit_damaged(out);
+            return;  /* warn-and-continue; no git op */
 
         case EPOCH_RECONCILE_ADOPT: {
-            /* Adopt is pull-shaped: gate on --no-pull. */
+            /* Three findings, one act (epoch.h): whatever stands at the local
+             * ref — nothing, unreadable bytes, or an epoch that keys nothing
+             * here — is not worth keeping, so the remote's replaces it. One line
+             * for all three, and it describes the act rather than the census
+             * that licensed it: only one of the three ran a census it could
+             * attribute, so any "no local ciphertext depended on it" would be a
+             * claim about work that did not happen on the other two. Pull-shaped:
+             * gate on --no-pull. */
             if (opts->no_pull) {
                 output_info(
                     out, OUTPUT_VERBOSE,
                     "Remote repository epoch differs; adopt skipped"
                 );
-                return NULL;
+                return;
             }
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_VERBOSE,
                     "Would adopt repository epoch from remote"
                 );
-                return NULL;
+                return;
             }
-            kdf_epoch_t adopted;
-            err = epoch_fetch(repo, remote_name, xfer, &adopted);
+
+            kdf_epoch_t fetched;
+            err = epoch_fetch(repo, remote_name, xfer, &fetched);
             if (err) {
                 /* A malformed remote epoch: epoch_fetch judged the bytes before
-                 * installing them, so the local epoch still stands, and its message
+                 * installing them, so the local ref still stands, and its message
                  * names the blob that is wrong — printed whole, as clone prints
                  * it. Anything else is the fetch's own failure under one line
                  * of context. */
@@ -1497,26 +1560,25 @@ static error_t *epoch_reconcile(
                     error_message(err)
                 );
                 error_free(err);
-                return NULL;  /* best-effort */
+                return;  /* best-effort */
             }
             output_success(
-                out, OUTPUT_VERBOSE,
-                "Adopted repository epoch from remote (no local ciphertext "
-                "depended on the replaced one)"
+                out, OUTPUT_VERBOSE, "Adopted repository epoch from remote"
             );
+
             /* The run's crypto handles were bound to the epoch at dispatch; the
-             * adopt moved that authority mid-command, so re-bind — the same duty
+             * fetch moved that authority mid-command, so re-bind — the same duty
              * sync discharges for Git by rebuilding the manifest after the pulls.
-             * NULL-safe for encryption-disabled runs. What the old epoch's session
-             * file holds is not this run's to remove: the file is named by the
-             * epoch, and a checkout still on that epoch is the one entitled to
-             * read it. */
-            keymgr_rekey(keymgr, &adopted);
-            return NULL;
+             * NULL-safe, and on two of the three findings that is what it is: a
+             * local ref yielding no epoch fails the dispatch load, so a run that
+             * reaches them has encryption off and no keymgr to re-bind. What
+             * the old epoch's session file holds is not this run's to remove:
+             * the file is named by the epoch, and a checkout still on that epoch
+             * is the one entitled to read it. */
+            keymgr_rekey(keymgr, &fetched);
+            return;
         }
     }
-
-    return NULL;  /* unreachable: decide returns one of six decisions */
 }
 
 /**
@@ -2010,11 +2072,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Reconcile the repository epoch with the remote. Placed before the fetch
-     * phase so the in-use census cannot see pulled remote ciphertext. */
-    err = epoch_reconcile(ctx, remote_name, xfer, opts);
-    if (err) {
-        goto cleanup;
-    }
+     * phase so the divergence's census cannot see pulled remote ciphertext. */
+    epoch_reconcile(ctx, remote_name, xfer, opts);
 
     /* Phase 1: Fetch profiles in sync scope from remote */
     err = sync_fetch_phase(

@@ -170,13 +170,26 @@ The epoch structure guarantees that every input to key derivation except the pas
 | Decision | Condition | `cmd_sync` does |
 |---|---|---|
 | `EQUAL` | same OID | nothing |
-| `ESTABLISH` | remote has none, local is valid | push the ref |
-| `NO_LOCAL_EPOCH` | remote has none, local missing or malformed | nothing to publish |
-| `ADOPT` | divergent, no reachable ciphertext keyed by the local epoch | force-fetch, then `keymgr_rekey` |
-| `CONFLICT` | divergent, local epoch keys reachable ciphertext | warn; plaintext profiles still sync |
 | `UNREACHABLE` | transport failure | skip, best-effort |
+| `ESTABLISH` | remote has none, the local ref yields an epoch | push the ref |
+| `NO_LOCAL_EPOCH` | remote has none, the local ref yields none | nothing to publish |
+| `ADOPT` | divergent, and nothing here depends on the bytes at the local ref | fetch, then `keymgr_rekey` |
+| `CONFLICT` | divergent, the local epoch keys reachable ciphertext | warn; plaintext profiles still sync |
+| `DAMAGED` | divergent, the local ref yields no epoch over ciphertext it may key | warn with the restore remedy; no git op |
 
-The census behind `ADOPT` walks the **full history** of every local branch, not just the tips — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as tip ciphertext does. Attribution is by fingerprint: only ciphertext the *local* epoch keys argues against adopting; foreign-keyed blobs argue for converging. The census **fails closed** — any uncertainty lands on `CONFLICT`, never on a data-destroying `ADOPT`.
+`EQUAL` is that OID comparison and nothing more, not a claim that the epoch can be read: a repository whose epoch objects are gone still names the remote's commit, so sync has nothing to reconcile while every command that must *read* the epoch fails at dispatch.
+
+The census walks the **full history** of every local branch, not just the tips — `dotta show` and `dotta revert` open blobs at any `@commit`, so history-reachable ciphertext pins the epoch exactly as tip ciphertext does. What it is asked depends on what the local ref yields, because the question is about the **bytes at the ref**, not about the epoch derived from them:
+
+- **The ref yields an epoch.** Attribution is by fingerprint: only ciphertext that epoch keys argues against replacing it; foreign-keyed blobs (pulled from a remote under its own epoch) argue *for* converging. Found → `CONFLICT`, clean → `ADOPT`.
+- **The ref stands and yields no epoch.** Its salt blob may be intact and may be the only copy of what keys this repository — but with the pair unreadable no fingerprint can be matched against anything, so the census asks for *any* ciphertext, any fingerprint, any version. Found → `DAMAGED`, clean → `ADOPT`. This is the same census `epoch_init` runs over the identical state, and on the found side it reaches the same verdict and prints the same remedy: restore the ref, do not replace it.
+- **The ref is absent.** No census: the bytes are already gone, so nothing this decision licenses can make it worse, and the remote's epoch may be exactly the root that keys whatever is here. → `ADOPT`. (`epoch_init` *does* census this state, because a mint introduces a **new** root that would orphan the ciphertext, where a fetch installs the remote's.)
+
+Three routes reach one `ADOPT`, and the line `cmd_sync` prints for it names the act, never the census: only the third route ran a census it could attribute, so a success claiming "no local ciphertext depended on the replaced one" would describe work the other two did not do.
+
+The census **fails closed by returning**: one that cannot finish — a branch listing that cannot be this repository's, a history that will not walk, an unattributable format version — is an error, never a verdict, and it is the only error `epoch_resolve` produces beyond a NULL argument. Sync renders its cause under a line of its own and continues; no git op runs.
+
+The epoch is machinery, and sync's output treats it that way: five of the seven verdicts are a verbose line or nothing, and the two that speak at normal verbosity are the two the user must act on — `CONFLICT` and `DAMAGED` — each one line of finding and one of remedy.
 
 Two ways the walk could report an absence it had not proved are closed at the walk itself. A revwalk that ends on an unreadable object returns that error instead of reading as a finished history. And a branch listing that does not contain `dotta-worktree` — the one branch every repository holding this ref has — is refused outright, because libgit2's filesystem refdb *skips* a ref it cannot open or parse rather than reporting it, so an unlistable `refs/heads` otherwise yields an empty list and a clean `GIT_ITEROVER`. A listing that lost only some of its refs while the anchor still reads stays Git's limit, stated as one at both headers rather than defended.
 

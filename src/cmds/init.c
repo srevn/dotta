@@ -75,7 +75,7 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
  *                           test — the row that keeps its "Run 'dotta init'"
  *                           true when only the branch is gone
  *   refs/dotta/epoch exists dotta's synced marker, in a namespace nothing else
- *                           writes. Presence alone: a malformed epoch is still
+ *                           writes. Presence alone: an unreadable epoch is still
  *                           dotta's, and `epoch_init` is what judges the payload
  *   no references at all    a bare `git init`. Untracked files are not history
  *                           and no step below touches them — the one that could,
@@ -312,11 +312,12 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     }
 
     /* The repository's epoch at refs/dotta/epoch, minted at the preset's strength.
-     * Idempotent — keeps an existing valid one; a malformed one is regenerated
-     * when the ciphertext census proves nothing depends on it, and surfaced as
-     * an error otherwise. Done unconditionally (not gated on encryption_enabled)
-     * so a later `dotta key set` finds the epoch ready, and so `dotta clone` of
-     * this repo can fetch it regardless of the cloner's config. */
+     * Idempotent — keeps an existing valid one; one that yields no epoch is
+     * regenerated when the ciphertext census proves the repository holds none,
+     * and surfaced as an error otherwise. Done unconditionally (not gated on
+     * encryption_enabled) so a later `dotta key set` finds the epoch ready, and
+     * so `dotta clone` of this repo can fetch it regardless of the cloner's
+     * config. */
     kdf_epoch_t epoch;
     bool epoch_repaired = false;
     err = epoch_init(
@@ -334,7 +335,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
     if (epoch_repaired) {
         output_info(
             out, OUTPUT_NORMAL,
-            "Repaired malformed repository epoch (no encrypted data depended on it)"
+            "Repaired an unreadable repository epoch"
         );
     }
 

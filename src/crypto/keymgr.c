@@ -778,11 +778,13 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
      * from it, and the refusal, which was about its ciphertext — the new one is
      * asked afresh. The old epoch's session file is not one of those things. It
      * is named by the epoch and shared by every checkout on it (crypto/session.h),
-     * and this keymgr has just stopped being one of them; the adopt that brings
-     * us here is taken only when no local ciphertext depended on the epoch
-     * replaced, so there is nothing left here that file's master could open.
-     * After the re-binding, `session_load` resolves the new epoch's path and
-     * the old file is out of reach anyway. */
+     * and this keymgr has just stopped being one of them. The one caller that
+     * can reach here holding a key is sync's adopt — its two siblings replace a
+     * ref that yields no epoch, which fails the dispatch load before any keymgr
+     * exists — and an adopt is taken only when no ciphertext in the repository
+     * was keyed by the epoch replaced, so there is nothing left here that file's
+     * master could open. After the re-binding, `session_load` resolves the new
+     * epoch's path and the old file is out of reach anyway. */
     evict_slot(km);
     clear_refusal(km);
     bind_epoch(km, epoch);

@@ -4,9 +4,9 @@
  * The process's prologue, in five stanzas: the privilege state every stanza below
  * reads; the limits a secret-bearing process wants, while root — where this run
  * holds any — has not been given away; who the invoker is, by the invoker rule,
- * the passwd entry copied before any other lookup can overwrite it, and the HOME
- * rule, normalised; the drop to that invoker where root was obtained for one,
- * and then the group list it left; and the environment the identity implies.
+ * the passwd entry read last so its fields outlive every other lookup, and the
+ * HOME rule, normalised; the drop to that invoker where root was obtained for
+ * one, and then the group list it left; and the environment the identity implies.
  * Every stanza runs on every run — only the transition is conditional. Written
  * once into file scope, read for the life of the process.
  */
@@ -16,6 +16,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <grp.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,7 +26,7 @@
 #include "base/error.h"
 #include "sys/filesystem.h"
 
-static identity_t id;
+static identity_t self;
 
 /**
  * The user a privilege tool names, when its variable names one this host knows.
@@ -62,13 +63,6 @@ static bool tool_invoker(uid_t *out) {
     return false;
 }
 
-/* Root's own home by the passwd database — /var/root on macOS, /root elsewhere;
- * never the literal. */
-static bool is_roots_home(const char *home) {
-    struct passwd *root = getpwuid(0);
-    return root && root->pw_dir && strcmp(home, root->pw_dir) == 0;
-}
-
 uid_t identity_invoker(uid_t ruid, uid_t euid) {
     uid_t named;
     /* The sentinel is refused here and not inside either arm above: one rule
@@ -78,8 +72,17 @@ uid_t identity_invoker(uid_t ruid, uid_t euid) {
     return ruid;
 }
 
-const char *identity_home(const char *env_home, bool sudoed, const char *pw_dir) {
-    if (env_home && *env_home && !(sudoed && is_roots_home(env_home))) {
+const char *identity_home(
+    const char *env_home, const char *roots_home, const char *pw_dir
+) {
+    /* Byte for byte, and neither normalised nor a prefix: the only rewrite this
+     * undoes is sudo's own, and sudo writes root's passwd directory verbatim. A
+     * trailing slash on it is a human's deliberate $HOME and is honoured. The
+     * three strings share one convention — NULL or empty names nothing, and
+     * roots_home names nothing on a run that obtained no root for a user, where
+     * there is no rewrite to undo. */
+    if (env_home && *env_home
+        && !(roots_home && *roots_home && strcmp(env_home, roots_home) == 0)) {
         return env_home;
     }
     return (pw_dir && *pw_dir) ? pw_dir : NULL;
@@ -99,23 +102,23 @@ const char *identity_home(const char *env_home, bool sudoed, const char *pw_dir)
  * run whether or not this is called (identity_init).
  */
 static error_t *drop_to_invoker(void) {
-    if (!id.name) {
+    if (!self.name) {
         return ERROR(
             ERR_PERMISSION, "Cannot run as uid %u: the user has no name",
-            (unsigned) id.uid
+            (unsigned) self.uid
         );
     }
 
-    if (initgroups(id.name, id.gid) != 0
-        || setregid(id.gid, (gid_t) -1) != 0 || setegid(id.gid) != 0
-        || setreuid(id.uid, (uid_t) -1) != 0 || seteuid(id.uid) != 0) {
+    if (initgroups(self.name, self.gid) != 0
+        || setregid(self.gid, (gid_t) -1) != 0 || setegid(self.gid) != 0
+        || setreuid(self.uid, (uid_t) -1) != 0 || seteuid(self.uid) != 0) {
         /* Coded by subsystem and not by errno, which is why error_from_errno is
          * not the producer here — base/error.h names this site: initgroups can
          * fail EAGAIN or EINVAL on Linux, and error_code_from_errno would call
          * a group-list failure ERR_FS. */
         return ERROR(
             ERR_PERMISSION, "Failed to run as %s (uid %u): %s",
-            id.name, (unsigned) id.uid, strerror(errno)
+            self.name, (unsigned) self.uid, strerror(errno)
         );
     }
 
@@ -125,7 +128,7 @@ static error_t *drop_to_invoker(void) {
 error_t *identity_init(void) {
     uid_t ruid = getuid();
     uid_t euid = geteuid();
-    id.privileged = (euid == 0);
+    self.privileged = (euid == 0);
 
     /* No core dump holds a key: the process writes none, from before anything
      * secret-bearing runs. The soft limit alone — a child of the run (a hook,
@@ -153,69 +156,78 @@ error_t *identity_init(void) {
      * could have handed it anyway. */
     struct rlimit memlock;
     if (getrlimit(RLIMIT_MEMLOCK, &memlock) == 0) {
-        if (id.privileged) memlock.rlim_max = RLIM_INFINITY;
+        if (self.privileged) memlock.rlim_max = RLIM_INFINITY;
         memlock.rlim_cur = memlock.rlim_max;
         (void) setrlimit(RLIMIT_MEMLOCK, &memlock);
     }
 
-    id.uid = identity_invoker(ruid, euid);
-    bool sudoed = id.privileged && id.uid != 0;
+    self.uid = identity_invoker(ruid, euid);
 
-    /* The passwd entry, copied before any other lookup: getpwuid answers from
-     * static storage the next lookup overwrites, and the HOME rule makes one.
-     * No entry is a container's bare uid — the group is the kernel's and the
-     * name stays NULL. */
-    struct passwd *pw = getpwuid(id.uid);
-    char *name = NULL;
-    char *pw_dir = NULL;
-    if (pw) {
-        id.gid = pw->pw_gid;
-        if (pw->pw_name && *pw->pw_name) {
-            name = strdup(pw->pw_name);
-            if (!name) return ERROR(ERR_MEMORY, "Failed to copy the user name");
+    /* Root's own home — /var/root on macOS, /root elsewhere, never the literal
+     * — read first and copied, because the invoker's entry below answers from
+     * the same static storage and the HOME rule needs both. Asked only under
+     * root obtained for a user, the one run where sudo could have written $HOME
+     * over it. A directory this buffer cannot hold truncates, the compare then
+     * fails, and $HOME is honoured — the answer the rule already gives where
+     * sudo wrote nothing. */
+    char roots_home[PATH_MAX] = "";
+    if (self.privileged && self.uid != 0) {
+        struct passwd *root = getpwuid(0);
+        if (root && root->pw_dir) {
+            snprintf(roots_home, sizeof(roots_home), "%s", root->pw_dir);
         }
-        if (pw->pw_dir && *pw->pw_dir) {
-            pw_dir = strdup(pw->pw_dir);
-            if (!pw_dir) {
-                free(name);
-                return ERROR(ERR_MEMORY, "Failed to copy the home directory");
+    }
+
+    /* The invoker's entry, and the last lookup this function makes, so its fields
+     * stand through the HOME rule below and nothing needs copying out. No entry
+     * is a container's bare uid — the group is the kernel's for this process
+     * and the name stays NULL. */
+    struct passwd *pw = getpwuid(self.uid);
+    if (pw) {
+        self.gid = pw->pw_gid;
+        if (pw->pw_name && *pw->pw_name) {
+            self.name = strdup(pw->pw_name);
+            if (!self.name) {
+                return ERROR(ERR_MEMORY, "Failed to copy the user name");
             }
         }
     } else {
-        id.gid = getgid();
+        self.gid = getgid();
     }
-    id.name = name;
 
-    const char *home = identity_home(getenv("HOME"), sudoed, pw_dir);
-    error_t *err = NULL;
+    const char *home = identity_home(
+        getenv("HOME"), roots_home, pw ? pw->pw_dir : NULL
+    );
     if (!home) {
-        err = ERROR(
+        return ERROR(
             ERR_FS, "Unable to determine the home directory of uid %u",
-            (unsigned) id.uid
+            (unsigned) self.uid
         );
-    } else if (home[0] != '/') {
-        err = ERROR(ERR_INVALID_ARG, "HOME is not an absolute path: '%s'", home);
-    } else {
-        char *normalized = NULL;
-        err = fs_normalize_path(home, &normalized);
-        id.home = normalized;
     }
-    free(pw_dir);
-    if (err) return err;
+    if (home[0] != '/') {
+        return ERROR(
+            ERR_INVALID_ARG, "The invoker's home directory is not absolute: '%s'",
+            home
+        );
+    }
 
-    /* The drop, before the groups are read: the list below is what the kernel
-     * checks the invoker's chown against, and it is the invoker's only after
-     * initgroups. */
-    if (sudoed) RETURN_IF_ERROR(drop_to_invoker());
+    char *normalized = NULL;
+    RETURN_IF_ERROR(fs_normalize_path(home, &normalized));
+    self.home = normalized;
+
+    /* The drop, where root was obtained for a user, and before the groups are
+     * read: the list below is what the kernel checks the invoker's chown against,
+     * and it is the invoker's only after initgroups. */
+    if (self.privileged && self.uid != 0) RETURN_IF_ERROR(drop_to_invoker());
 
     /* The kernel's supplementary list for this process. Sized by asking, never
      * by NGROUPS_MAX; a list that cannot be read is an empty one, and
      * identity_may_chown then answers no where the kernel might say yes. */
     int n = getgroups(0, NULL);
     gid_t *groups = n > 0 ? calloc((size_t) n, sizeof(*groups)) : NULL;
-    id.ngroups = groups ? getgroups(n, groups) : 0;
-    if (id.ngroups < 0) id.ngroups = 0;
-    id.groups = groups;
+    self.ngroups = groups ? getgroups(n, groups) : 0;
+    if (self.ngroups < 0) self.ngroups = 0;
+    self.groups = groups;
 
     /* The environment the identity implies, for libgit2 — which reads $HOME at
      * its init to find the global config — and for every child: a hook and a
@@ -229,14 +241,14 @@ error_t *identity_init(void) {
      * cannot name leaves them alone rather than writing a name it does not have.
      * The rules are a fixed point over their own publication: a nested dotta
      * reads back what this one wrote and answers with it. */
-    if (setenv("HOME", id.home, 1) != 0) {
-        return ERROR(ERR_MEMORY, "Failed to set HOME to '%s'", id.home);
+    if (setenv("HOME", self.home, 1) != 0) {
+        return ERROR(ERR_MEMORY, "Failed to set HOME to '%s'", self.home);
     }
-    if (id.name) {
-        if (setenv("USER", id.name, 1) != 0
-            || setenv("LOGNAME", id.name, 1) != 0) {
+    if (self.name) {
+        if (setenv("USER", self.name, 1) != 0
+            || setenv("LOGNAME", self.name, 1) != 0) {
             return ERROR(
-                ERR_MEMORY, "Failed to set USER and LOGNAME to '%s'", id.name
+                ERR_MEMORY, "Failed to set USER and LOGNAME to '%s'", self.name
             );
         }
     }
@@ -245,16 +257,17 @@ error_t *identity_init(void) {
 }
 
 const identity_t *identity(void) {
-    return &id;
+    return &self;
 }
 
-bool identity_raise_on_refusal(void) {
-    if ((errno != EACCES && errno != EPERM) || !id.privileged || id.uid == 0) {
+bool identity_raise_on_refusal(int refused) {
+    if ((refused != EACCES && refused != EPERM)
+        || !self.privileged || self.uid == 0) {
         return false;
     }
 
-    int refused = errno;
     if (seteuid(0) != 0) {
+        /* The caller reports its own refusal, not the raise's. */
         errno = refused;
         return false;
     }
@@ -265,20 +278,20 @@ bool identity_raise_on_refusal(void) {
 
 void identity_lower(void) {
     int saved = errno;
-    (void) setegid(id.gid);
-    (void) seteuid(id.uid);
+    (void) setegid(self.gid);
+    (void) seteuid(self.uid);
     errno = saved;
 }
 
 int identity_drop_child(void) {
-    if (!id.privileged || id.uid == 0) return 0;
+    if (!self.privileged || self.uid == 0) return 0;
 
     /* seteuid(0) first: from an unprivileged effective user, setuid changes the
      * effective id alone and leaves the saved root standing; privileged, setgid
      * and setuid set all three. The read-back is the one check a privilege boundary
      * keeps — a kernel that did not drop must not exec. */
-    if (seteuid(0) != 0 || setgid(id.gid) != 0 || setuid(id.uid) != 0) return -1;
-    if (getuid() != id.uid || geteuid() != id.uid) {
+    if (seteuid(0) != 0 || setgid(self.gid) != 0 || setuid(self.uid) != 0) return -1;
+    if (getuid() != self.uid || geteuid() != self.uid) {
         errno = EPERM;
         return -1;
     }
@@ -286,12 +299,13 @@ int identity_drop_child(void) {
     return 0;
 }
 
-bool identity_may_chown(const identity_t *idn, uid_t uid, gid_t gid) {
-    if (idn->privileged) return true;
-    if (uid != (uid_t) -1 && uid != idn->uid) return false;
-    if (gid == (gid_t) -1 || gid == idn->gid) return true;
-    for (int i = 0; i < idn->ngroups; i++) {
-        if (idn->groups[i] == gid) return true;
+bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid) {
+    if (id->privileged) return true;
+    if (uid != (uid_t) -1 && uid != id->uid) return false;
+    if (gid == (gid_t) -1 || gid == id->gid) return true;
+
+    for (int i = 0; i < id->ngroups; i++) {
+        if (id->groups[i] == gid) return true;
     }
 
     return false;

@@ -51,7 +51,7 @@ static inline error_t *validate_path(const char *path) {
  */
 int fs_lstat(const char *path, struct stat *st) {
     int rc = lstat(path, st);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = lstat(path, st);
         identity_lower();
     }
@@ -60,7 +60,7 @@ int fs_lstat(const char *path, struct stat *st) {
 
 int fs_stat(const char *path, struct stat *st) {
     int rc = stat(path, st);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = stat(path, st);
         identity_lower();
     }
@@ -69,7 +69,7 @@ int fs_stat(const char *path, struct stat *st) {
 
 int fs_open(const char *path, int flags, mode_t mode) {
     int fd = open(path, flags, mode);
-    if (fd < 0 && identity_raise_on_refusal()) {
+    if (fd < 0 && identity_raise_on_refusal(errno)) {
         fd = open(path, flags, mode);
         identity_lower();
     }
@@ -78,7 +78,7 @@ int fs_open(const char *path, int flags, mode_t mode) {
 
 DIR *fs_opendir(const char *path) {
     DIR *dir = opendir(path);
-    if (!dir && identity_raise_on_refusal()) {
+    if (!dir && identity_raise_on_refusal(errno)) {
         dir = opendir(path);
         identity_lower();
     }
@@ -87,7 +87,7 @@ DIR *fs_opendir(const char *path) {
 
 bool fs_eaccess(const char *path, int amode) {
     int rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = faccessat(AT_FDCWD, path, amode, AT_EACCESS);
         identity_lower();
     }
@@ -96,7 +96,7 @@ bool fs_eaccess(const char *path, int amode) {
 
 static int fs_mkdir(const char *path, mode_t mode) {
     int rc = mkdir(path, mode);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = mkdir(path, mode);
         identity_lower();
     }
@@ -105,7 +105,7 @@ static int fs_mkdir(const char *path, mode_t mode) {
 
 static int fs_rmdir(const char *path) {
     int rc = rmdir(path);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = rmdir(path);
         identity_lower();
     }
@@ -114,7 +114,7 @@ static int fs_rmdir(const char *path) {
 
 static int fs_unlink(const char *path) {
     int rc = unlink(path);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = unlink(path);
         identity_lower();
     }
@@ -123,7 +123,7 @@ static int fs_unlink(const char *path) {
 
 static int fs_rename(const char *from, const char *to) {
     int rc = rename(from, to);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = rename(from, to);
         identity_lower();
     }
@@ -132,7 +132,7 @@ static int fs_rename(const char *from, const char *to) {
 
 static int fs_symlink(const char *target, const char *linkpath) {
     int rc = symlink(target, linkpath);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = symlink(target, linkpath);
         identity_lower();
     }
@@ -141,7 +141,7 @@ static int fs_symlink(const char *target, const char *linkpath) {
 
 static ssize_t fs_readlink(const char *path, char *buf, size_t size) {
     ssize_t len = readlink(path, buf, size);
-    if (len < 0 && identity_raise_on_refusal()) {
+    if (len < 0 && identity_raise_on_refusal(errno)) {
         len = readlink(path, buf, size);
         identity_lower();
     }
@@ -150,7 +150,7 @@ static ssize_t fs_readlink(const char *path, char *buf, size_t size) {
 
 static int fs_chmod(const char *path, mode_t mode) {
     int rc = chmod(path, mode);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = chmod(path, mode);
         identity_lower();
     }
@@ -159,7 +159,7 @@ static int fs_chmod(const char *path, mode_t mode) {
 
 static int fs_fchmod(int fd, mode_t mode) {
     int rc = fchmod(fd, mode);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = fchmod(fd, mode);
         identity_lower();
     }
@@ -168,7 +168,7 @@ static int fs_fchmod(int fd, mode_t mode) {
 
 static int fs_fchown(int fd, uid_t uid, gid_t gid) {
     int rc = fchown(fd, uid, gid);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = fchown(fd, uid, gid);
         identity_lower();
     }
@@ -177,18 +177,20 @@ static int fs_fchown(int fd, uid_t uid, gid_t gid) {
 
 static int fs_lchown(const char *path, uid_t uid, gid_t gid) {
     int rc = lchown(path, uid, gid);
-    if (rc < 0 && identity_raise_on_refusal()) {
+    if (rc < 0 && identity_raise_on_refusal(errno)) {
         rc = lchown(path, uid, gid);
         identity_lower();
     }
     return rc;
 }
 
-/* A failed mkstemp leaves its last candidate where the Xs were, and glibc refuses
- * a template without them: the second try gets its six back. */
+/* The template ends in exactly six Xs — mkstemp's own requirement, and what the
+ * arithmetic below reads. A failed mkstemp leaves its last candidate where the
+ * Xs were, and glibc refuses a template without them: the second try gets its
+ * six back. */
 static int fs_mkstemp(char *tmpl) {
     int fd = mkstemp(tmpl);
-    if (fd < 0 && identity_raise_on_refusal()) {
+    if (fd < 0 && identity_raise_on_refusal(errno)) {
         memset(tmpl + strlen(tmpl) - 6, 'X', 6);
         fd = mkstemp(tmpl);
         identity_lower();
@@ -198,7 +200,7 @@ static int fs_mkstemp(char *tmpl) {
 
 static char *fs_realpath(const char *path, char *resolved) {
     char *out = realpath(path, resolved);
-    if (!out && identity_raise_on_refusal()) {
+    if (!out && identity_raise_on_refusal(errno)) {
         out = realpath(path, resolved);
         identity_lower();
     }

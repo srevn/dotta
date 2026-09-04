@@ -27,11 +27,12 @@
  * beside an effective user that is not root (`sudo -u alice`, a shim that did
  * not elevate) is not consulted: the run is its effective user, and nothing warns.
  *
- * The group is the passwd entry's primary group — the durable fact — and the
- * supplementary list is the kernel's for this process, sized by asking (16 on
- * macOS, up to 65536 on Linux, so never an NGROUPS_MAX array). A name is the
- * passwd entry's, and NULL when the database has none (a container's bare uid):
- * the readers cope, each in its own words.
+ * The group is the passwd entry's primary group — the durable fact — or, where
+ * the database has no entry at all (the container's bare uid above), the kernel's
+ * for this process; and the supplementary list is the kernel's, sized by asking
+ * (16 on macOS, up to 65536 on Linux, so never an NGROUPS_MAX array). A name is
+ * the passwd entry's, and NULL when the database has none (a container's bare
+ * uid): the readers cope, each in its own words.
  *
  * HOME
  * ----
@@ -63,6 +64,13 @@
  * session cache, a temp worktree — is then made as the invoker, and root is taken
  * back for one syscall at a time where the invoker is refused
  * (identity_raise_on_refusal / identity_lower: sys/filesystem's second try).
+ *
+ * That root is held *for* someone is privileged beside an invoker who is not
+ * root, and the pair never moves: privileged records how the process started,
+ * not what the process is now. So the same question reads before the drop — where
+ * it is the reason to make one — and after it, where it is the reason seteuid(0)
+ * is still permitted.
+ *
  * The environment the children read is the identity's whether or not this run
  * dropped (HOME above); sudo's own variables stay, so a hook may tell. A child
  * of the run drops for good before its exec (identity_drop_child): hooks, scripts,
@@ -73,10 +81,12 @@
  * otherwise — consistent, and stated.
  *
  * A run that holds no root says so where a refusal root would lift is reported
- * (cmds/add, cmds/update, apply's two preview blocks): the remedy is named —
- * sudo — and never rendered. The invocation is the user's own and needs no spelling
- * back to them, and what sudo does to their environment on the way is sudo's to
- * document, not dotta's. privileged is the whole of what a reader needs there.
+ * (cmds/add, cmds/update, apply's two preview blocks, status's [unreadable] hint):
+ * the remedy is named — sudo — and never rendered. The invocation is the user's
+ * own and needs no spelling back to them, and what sudo does to their environment
+ * on the way is sudo's to document, not dotta's. privileged is the whole of what
+ * a reader needs there — status's own notes name the remedy once more in the
+ * help, where there is no run in hand to read.
  *
  * Readers
  * -------
@@ -146,21 +156,27 @@ const identity_t *identity(void);
 /**
  * Take root back for one syscall the invoker was refused
  *
- * Reads errno first: true iff it is EACCES or EPERM and the run holds root for
- * a user, in which case the effective user is now 0 — and the effective group,
- * so what the call creates is root's, as sudo would have made it. The caller
- * repeats its call and lowers at once (identity_lower), so the window is one
- * syscall wide and never spans a call into libgit2, SQLite, the keymgr or a fork.
- * On false nothing changed and errno is still the refused call's.
+ * True iff the refusal is EACCES or EPERM and the run holds root for a user, in
+ * which case the effective user is now 0 — and the effective group, so what the
+ * call creates is root's, as sudo would have made it. The caller repeats its
+ * call and lowers at once (identity_lower), so the window is one syscall wide
+ * and never spans a call into libgit2, SQLite, the keymgr or a fork. On false
+ * nothing changed and errno is still the refused call's.
  *
+ * @param refused The errno the refused call left
  * @return true iff the effective identity is root until identity_lower
  */
-bool identity_raise_on_refusal(void);
+bool identity_raise_on_refusal(int refused);
 
 /**
  * The invoker's effective identity again, after a raise
  *
  * errno is preserved: it is the second call's, which the caller reports.
+ *
+ * Neither call is checked, and a check would be the design defending itself:
+ * the effective user is 0 because the raise said so, and from there setegid takes
+ * any group and seteuid takes the real uid the drop already set. A failure here
+ * is a state the raise's own success excludes.
  */
 void identity_lower(void);
 
@@ -201,16 +217,28 @@ uid_t identity_invoker(uid_t ruid, uid_t euid);
 /**
  * The HOME rule: which directory is the invoker's home
  *
- * $HOME as given, unless it is unset or empty, or `sudoed` and it is root's own
- * home by the passwd database — then the invoker's passwd directory. Returns
- * one of its inputs, or NULL when neither names a directory; the caller normalises.
+ * $HOME as given, unless it names nothing or it is the home sudo would have written
+ * over it — `-H`, `-i` and always_set_home rewrite $HOME to root's, and that is
+ * sudo's doing, not the user's. Then the invoker's passwd directory.
  *
- * @param env_home $HOME (may be NULL)
- * @param sudoed Root is held and a user is behind it (privileged, uid != 0)
- * @param pw_dir The invoker's passwd directory (may be NULL)
- * @return env_home, pw_dir, or NULL
+ * Compared byte for byte, as sudo writes it: sudo copies root's passwd directory
+ * verbatim, so a spelling sudo would not have written — a trailing slash, a doubled
+ * one — is a human's deliberate $HOME and is honoured. Every parameter names
+ * nothing when it is NULL or empty, and roots_home names nothing on every run
+ * that did not obtain root for a user: there is no rewrite to undo.
+ *
+ * A total function of its three strings: the passwd database is read by the caller,
+ * which is the one place both entries can be held at once.
+ *
+ * @param env_home $HOME
+ * @param roots_home Root's own home by the passwd database
+ * @param pw_dir The invoker's passwd directory
+ * @return env_home, pw_dir, or NULL when neither names a directory; the caller
+ *         normalises
  */
-const char *identity_home(const char *env_home, bool sudoed, const char *pw_dir);
+const char *identity_home(
+    const char *env_home, const char *roots_home, const char *pw_dir
+);
 
 /**
  * May this identity set the pair without root?

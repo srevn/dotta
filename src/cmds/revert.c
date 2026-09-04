@@ -441,7 +441,7 @@ static char *build_revert_commit_message(
     }
 
     /* Generate message using template system */
-    char oid_str[GIT_OID_HEXSZ + 1];
+    char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
     /* Build context for commit message */

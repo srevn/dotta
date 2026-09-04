@@ -125,8 +125,10 @@ error_t *identity_init(void) {
     /* No core dump holds a key: the process writes none, from before anything
      * secret-bearing runs and before the drop, root or not. The soft limit alone
      * — a child of the run (a hook, the editor) inherits it and may raise it
-     * back for its own crashes; the secrets are this process's, never a child's
-     * (the passphrase variable is unset once read). Best effort. */
+     * back for its own crashes; the secrets are this process's, never a child's:
+     * the master never leaves this address space, and the passphrase variable
+     * is unset by the read, or stripped from the environment a hook or a bootstrap
+     * script is built (sys/passphrase.h). Best effort. */
     struct rlimit core;
     if (getrlimit(RLIMIT_CORE, &core) == 0) {
         core.rlim_cur = 0;

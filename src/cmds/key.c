@@ -509,7 +509,9 @@ const args_command_t spec_key = {
         "  DOTTA_ENCRYPTION_PASSPHRASE, when set, is read instead of\n"
         "  prompting — by 'key set' and by every command that obtains a\n"
         "  passphrase (add, update, apply, diff, show, export, revert). It is\n"
-        "  unset once read, so a child of the run does not inherit it.\n",
+        "  unset the moment it is read, and a run answered from the cache\n"
+        "  never reads it. Hooks and bootstrap scripts never see it either\n"
+        "  way: they run with every DOTTA_* variable stripped.\n",
     .examples           =
         "  %s key set               # Cache passphrase for the session\n"
         "  %s key                   # Show cache state and config\n"

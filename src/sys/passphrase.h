@@ -87,10 +87,15 @@ error_t *passphrase_prompt(
  * Read the passphrase from DOTTA_ENCRYPTION_PASSPHRASE.
  *
  * Intended for automation contexts where an interactive prompt is unacceptable.
- * The returned mapping is NUL-terminated. The variable is unset once read, so a
- * child of the run does not inherit it; the trade-off the variable makes (it is
- * visible to ps(1) until then) is the user's to accept, and this function prints
- * nothing about it.
+ * The returned mapping is NUL-terminated. The variable is unset the moment it
+ * is read, so nothing this run execs afterwards inherits it; a run answered from
+ * a cache never reads it, and for that run it stays set. The second case is covered
+ * elsewhere, not here: the two children that run scripts — a hook, a bootstrap
+ * — are handed an environment with every DOTTA_* variable stripped (utils/hooks,
+ * utils/bootstrap), read or unread, and the rest (`dotta git`, the editor) inherit
+ * exactly what the invoker's own shell already held. The trade-off the variable
+ * makes (it is visible to ps(1) until the read) is the user's to accept, and
+ * this function prints nothing about it.
  *
  * @param out_passphrase  The passphrase's own mapping. Caller owns; release
  *                        with secure_free(p, *out_len + 1).

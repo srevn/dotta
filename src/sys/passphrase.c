@@ -312,12 +312,14 @@ error_t *passphrase_prompt(
  * Reads from DOTTA_ENCRYPTION_PASSPHRASE if set.
  *
  * After copying the passphrase into its own mapping, the env var is unset via
- * `unsetenv` so subprocesses spawned by dotta do not inherit it. The original
- * `getenv` string is libc-owned and cannot be wiped — `unsetenv` is the closest
- * available approximation to scrubbing it (the libc may relink the environ entry,
- * but recent glibc/macOS leave only a small residue and the visible env loses
- * the variable). The underlying "env-var passphrases are visible to ps(1)"
- * trade-off is the user's choice to accept.
+ * `unsetenv`, so nothing this run execs afterwards inherits it — the header has
+ * the rest: a run answered from a cache never reads it and so never unsets it,
+ * and the children that run scripts never see it either way. The original `getenv`
+ * string is libc-owned and cannot be wiped — `unsetenv` is the closest available
+ * approximation to scrubbing it (the libc may relink the environ entry, but recent
+ * glibc/macOS leave only a small residue and the visible env loses the variable).
+ * The underlying "env-var passphrases are visible to ps(1)" trade-off is the
+ * user's choice to accept.
  *
  * @param out_passphrase Passphrase (caller must free and zero)
  * @param out_len Passphrase length
@@ -343,11 +345,12 @@ error_t *passphrase_from_env(
 
     memcpy(passphrase, env_passphrase, len + 1);
 
-    /* Drop the env-var so child processes don't inherit it. The `getenv` pointer
-     * is invalidated by `unsetenv` per POSIX, so we MUST have completed `memcpy`
-     * above before this call. Failure is non-fatal — the copy in `passphrase`
-     * is what we hand back to the caller; the env-var residue is a defense-in-depth
-     * concern (the user already accepted the env-var trade-off). */
+    /* Drop the env-var so nothing this run execs afterwards inherits it. The
+     * `getenv` pointer is invalidated by `unsetenv` per POSIX, so we MUST have
+     * completed `memcpy` above before this call. Failure is non-fatal — the copy
+     * in `passphrase` is what we hand back to the caller; the env-var residue
+     * is a defense-in-depth concern (the user already accepted the env-var
+     * trade-off). */
     (void) unsetenv("DOTTA_ENCRYPTION_PASSPHRASE");
 
     *out_passphrase = passphrase;

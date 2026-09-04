@@ -278,9 +278,20 @@ static error_t *walk_commits(
     /* Sort by time (newest first) */
     git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL | GIT_SORT_TIME);
 
-    /* Walk commits */
-    git_oid oid;
-    while (git_revwalk_next(&oid, walker) == 0) {
+    /* Walk commits. GIT_ITEROVER ends the history; a negative code is a walk
+     * that failed, and a history it could not finish must not read as a whole
+     * one — the callers report an absence in it as fact. */
+    for (;;) {
+        git_oid oid;
+        git_err = git_revwalk_next(&oid, walker);
+        if (git_err == GIT_ITEROVER) {
+            break;
+        }
+        if (git_err < 0) {
+            err = error_from_git(git_err);
+            goto cleanup;
+        }
+
         /* Early termination for MAP mode */
         if (ctx->mode == WALK_MODE_MAP && ctx->files_found >= ctx->files_needed) {
             break;  /* All files found! */

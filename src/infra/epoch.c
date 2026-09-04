@@ -882,8 +882,20 @@ static error_t *walk_ciphertext(
             goto cleanup;
         }
 
-        git_oid commit_oid;
-        while (git_revwalk_next(&commit_oid, walker) == 0) {
+        for (;;) {
+            /* Classified, not compared: GIT_ITEROVER is the branch walked out,
+             * and a negative code is a walk that ended early — which has proved
+             * no absence, and an absence is what both callers act on. */
+            git_oid commit_oid;
+            git_err = git_revwalk_next(&commit_oid, walker);
+            if (git_err == GIT_ITEROVER) {
+                break;
+            }
+            if (git_err < 0) {
+                err = error_from_git(git_err);
+                goto cleanup;
+            }
+
             git_commit *commit = NULL;
             git_err = git_commit_lookup(&commit, repo, &commit_oid);
             if (git_err < 0) {

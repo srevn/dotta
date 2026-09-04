@@ -8,6 +8,18 @@
  * - Convert libgit2 errors to dotta errors
  * - Manage libgit2 object lifecycles
  * - No business logic (just git operations)
+ *
+ * Converting libgit2's errors includes its iterators, the ones easy to miss:
+ * `git_branch_next`, `git_revwalk_next` and `git_rebase_next` each return 0,
+ * GIT_ITEROVER at the end, or a negative code, and a loop testing only for 0
+ * cannot tell an enumeration that finished from one that gave up. Every iteration
+ * here classifies all three.
+ *
+ * That is not a proof of completeness, and no caller should read it as one: a
+ * listing here is what libgit2 could read. Its filesystem refdb clears the error
+ * and skips any ref it cannot open or parse, so an unreadable `refs/heads` gives
+ * an empty list and a clean GIT_ITEROVER; on that backend the negative code these
+ * loops catch is an allocation failure. An absence must be proved elsewhere.
  */
 
 #ifndef DOTTA_GITOPS_H
@@ -146,8 +158,12 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
 /**
  * List all local branches
  *
+ * Best-effort by libgit2's rule (see the header): a ref it cannot open or parse
+ * is skipped, so a short list is not an error and an empty array is a repository
+ * with no branches OR a refs directory that would not open.
+ *
  * @param repo Repository (must not be NULL)
- * @param out String array of branch names (must not be NULL)
+ * @param out String array of branch names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
@@ -157,6 +173,10 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
  *
  * Returns branch names (without <remote>/ prefix) for all remote tracking
  * references. Filters out special refs (HEAD, dotta-worktree).
+ *
+ * Best-effort in two ways, not one: libgit2 skips a ref it cannot read (see the
+ * header), and so does this — a ref whose name will not resolve is skipped rather
+ * than raised, because the rest of the enumeration is still good.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)

@@ -322,7 +322,23 @@ error_t *gitops_list_branches(
     git_reference *ref = NULL;
     git_branch_t branch_type;
 
-    while (git_branch_next(&ref, &branch_type, iter) == 0) {
+    for (;;) {
+        /* The iterator's own code is classified, not compared: GIT_ITEROVER is
+         * the refs enumerated, and a negative one is an enumeration that never
+         * finished — which must not read as a repository with fewer branches.
+         * `ref` is written only on success, so neither arm frees it. */
+        err = git_branch_next(&ref, &branch_type, iter);
+        if (err == GIT_ITEROVER) {
+            break;
+        }
+        if (err < 0) {
+            git_branch_iterator_free(iter);
+            string_array_free(branches);
+            return error_wrap(
+                error_from_git(err), "Failed to get next branch"
+            );
+        }
+
         const char *name = NULL;
         err = git_branch_name(&name, ref);
         if (err < 0) {
@@ -385,7 +401,23 @@ error_t *gitops_list_remote_tracking(
     git_reference *ref = NULL;
     git_branch_t branch_type;
 
-    while (git_branch_next(&ref, &branch_type, iter) == 0) {
+    for (;;) {
+        /* Classified, not compared — and unlike the skip below, never survivable:
+         * one unreadable ref leaves the rest of the enumeration intact, while
+         * an iterator that failed leaves no way to know what it had yet to reach.
+         * `ref` is written only on success, so neither arm frees it. */
+        err = git_branch_next(&ref, &branch_type, iter);
+        if (err == GIT_ITEROVER) {
+            break;
+        }
+        if (err < 0) {
+            git_branch_iterator_free(iter);
+            string_array_free(branches);
+            return error_wrap(
+                error_from_git(err), "Failed to get next remote branch"
+            );
+        }
+
         const char *name = NULL;
         err = git_branch_name(&name, ref);
         if (err < 0) {

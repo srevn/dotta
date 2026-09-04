@@ -509,7 +509,9 @@ cleanup:
 
 bool session_clear(const kdf_epoch_t *epoch) {
     char *cache_path = NULL;
-    if (resolve_cache_path(epoch, &cache_path) != NULL) {
+    error_t *err = resolve_cache_path(epoch, &cache_path);
+    if (err) {
+        error_free(err);
         return false;
     }
 

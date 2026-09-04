@@ -111,6 +111,11 @@ error_t *session_load(
  * the unlink is what guarantees the file is no longer loadable, and any failure
  * of the overwrite is silent. Nothing to do when there is no file.
  *
+ * `false` is "this removed nothing", not "nothing was there": the file may have
+ * been absent, or the path — the one allocation on the way in — may not have
+ * been buildable. Telling those apart would cost the caller a signature it has
+ * no use for on a run already out of memory.
+ *
  * @param epoch The epoch whose file to remove (non-NULL)
  * @return true iff a file was there and is gone
  */

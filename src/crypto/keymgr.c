@@ -290,7 +290,8 @@ static bool witness_same(const keymgr_witness_t *a, const keymgr_witness_t *b) {
  */
 typedef struct {
     const keymgr_witness_t *in_hand;  /* tried first; skipped if presented */
-    size_t tried;                     /* witnesses decrypted, the in-hand too */
+    size_t tried;                     /* witnesses decrypted, the in-hand too;
+                                       * the count the refusal is worded by */
     keymgr_proof_t *proof;            /* the master under trial */
 } keymgr_trial_t;
 
@@ -341,15 +342,15 @@ static error_t *witness_exists(
 
 /**
  * Argon2 under the epoch, then the witnesses in order: the blob in hand, then
- * whatever the source presents. One that opens fills the proof; none wipes it,
- * and the root names what refused it — the blob in hand when it was the only
- * ciphertext tried (a single sealed file, which may be tampered), else the
- * repository. With nothing to open at all the master is taken as given: the caller
- * confirmed it, or the environment asserted it. `source` is the root's subject:
+ * whatever the source presents. One that opens fills the proof; none wipes it
+ * and refuses the run, worded by how much there was to open — against a lone
+ * ciphertext a miss decides nothing, against several it is the passphrase's.
+ * With nothing to open at all the master is taken as given: the caller confirmed
+ * it, or the environment asserted it. `subject` is what the refusal is about:
  * "The passphrase" or "DOTTA_ENCRYPTION_PASSPHRASE".
  */
 static error_t *derive_and_check(
-    keymgr *km, const char *source, const char *passphrase,
+    keymgr *km, const char *subject, const char *passphrase,
     size_t passphrase_len, const keymgr_witness_t *in_hand,
     keymgr_proof_t *out
 ) {
@@ -395,16 +396,25 @@ static error_t *derive_and_check(
      * every row after this one re-issues the same refusal — and a key is what
      * settles it. The cipher's code is for a held master that one blob refuses;
      * that is the blob's fault, and the reader that tells the two apart (the
-     * workspace's fault) reads the code. */
-    if (in_hand && trial.tried == 1) {
+     * workspace's fault) reads the code.
+     *
+     * The refusal names no binding. It stands for the run — the source showed
+     * the master every ciphertext of this epoch the repository holds, so what
+     * one row met is what all of them meet — and a fact about the run cannot
+     * name one of its rows; the caller's own wrap names the row that asked
+     * (infra/content). What does vary is how much there was to open, and against
+     * a single ciphertext a miss is undecidable: a wrong passphrase and a damaged
+     * file are the same "no". */
+    if (trial.tried == 1) {
         err = ERROR(
-            ERR_LOCKED, "%s does not open '%s:%s'",
-            source, in_hand->profile, in_hand->storage_path
+            ERR_LOCKED,
+            "%s does not open the one encrypted file it was tried against, "
+            "which may itself be damaged", subject
         );
     } else {
         err = ERROR(
             ERR_LOCKED, "%s opens none of this repository's encrypted files",
-            source
+            subject
         );
     }
 
@@ -543,7 +553,7 @@ static error_t *prompt_and_confirm(keymgr *km, keymgr_proof_t *out) {
  * The ladder's user half: the environment, then the prompt — OBTAIN only. The
  * fresh master it yields is verified before it is returned, and every refusal
  * is recorded for the run. The run is left without a master either way, and the
- * code says so: no source in reach, nothing read, a confirm that never matched,
+ * code says so: no passphrase in reach, nothing read, a confirm that never matched,
  * a passphrase that opened nothing — ERR_LOCKED, a key would settle it; a
  * derivation or a witness walk that failed on its own keeps the failure's code.
  * Nothing here installs or persists — the callers keep what verified.

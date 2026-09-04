@@ -30,7 +30,7 @@
  * nothing is wiped and never kept, and the row that asked reads the refusal.
  * With no ciphertext in the repository there is nothing to open: a typed passphrase
  * is confirmed by typing it twice, one from the environment is taken as given
- * (an explicit source is the automation's own assertion). The binding of the
+ * (setting the variable is the automation's own assertion). The binding of the
  * witness a kept master opened is the proof's (`keymgr_witness`). A master a
  * cache handed back is not re-verified: a blob it does not open is that blob's
  * fault, and the slot stays.

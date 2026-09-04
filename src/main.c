@@ -167,23 +167,27 @@ static error_t *open_run(
             kdf_epoch_t epoch;
             err = epoch_load(run->repo, &epoch);
             if (err) {
-                if (err->code == ERR_NOT_FOUND) {
-                    /* Restoration leads. Minting a fresh epoch is safe only on
-                     * a repository that holds no encrypted files, and `dotta
-                     * init` is what decides that — so the user never has to answer
-                     * it before acting. */
-                    err = error_wrap(
-                        err,
-                        "Encryption is enabled but this repository has no epoch "
-                        "(%s); every encrypted file is sealed under it\n"
-                        "  - Restore it: dotta git fetch origin "
-                        "'refs/dotta/*:refs/dotta/*'\n"
-                        "  - Or mint a fresh one with 'dotta init', which refuses "
-                        "if any encrypted file would be orphaned\n"
-                        "  - Or set encryption.enabled = false to work without "
-                        "encryption for now", EPOCH_REF
-                    );
-                }
+                /* Restoration leads, and it leads for both faults: a ref that
+                 * is gone and one that stands and yields no epoch differ in one
+                 * word and in nothing else (epoch.h). Minting a fresh epoch is
+                 * safe only on a repository that holds no encrypted files, and
+                 * `dotta init` is what decides that — so the user never has to
+                 * answer it before acting. The fetch carries a '+': an epoch
+                 * commit has no parents, so restoring over a ref that is present
+                 * but damaged is rejected as non-fast-forward without it. */
+                err = error_wrap(
+                    err,
+                    "Encryption is enabled but this repository's epoch (%s) %s; "
+                    "every encrypted file is sealed under it\n"
+                    "  - Restore it: dotta git fetch origin "
+                    "'+refs/dotta/*:refs/dotta/*'\n"
+                    "  - Or mint a fresh one with 'dotta init', which refuses "
+                    "if any encrypted file would be orphaned\n"
+                    "  - Or set encryption.enabled = false to work without "
+                    "encryption for now",
+                    EPOCH_REF,
+                    err->code == ERR_NOT_FOUND ? "is missing" : "cannot be read"
+                );
                 goto done;
             }
 

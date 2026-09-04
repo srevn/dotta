@@ -296,7 +296,7 @@ error_t *epoch_init(
                 "on it\n\n"
                 "Minting a new one would seal every encrypted file in this "
                 "repository away permanently. Restore the ref instead:\n"
-                "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
+                "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
             );
@@ -327,7 +327,7 @@ error_t *epoch_init(
                 "on it\n\n"
                 "Minting a new one would seal every encrypted file in this "
                 "repository away permanently. Restore the ref instead:\n"
-                "  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'\n"
+                "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
             );

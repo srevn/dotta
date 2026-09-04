@@ -214,11 +214,11 @@ $ dotta init --strength paranoid
 Error: Repository epoch 'refs/dotta/epoch' is missing and encrypted files depend on it
 
 Minting a new one would seal every encrypted file in this repository away permanently. Restore the ref instead:
-  dotta git fetch origin 'refs/dotta/*:refs/dotta/*'
+  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'
 or copy it from a machine that still has this repository.
 ```
 
-That refusal is the safety net for the accident this procedure resembles — a deleted or lost epoch ref, where the remedy is to restore it, not to mint. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
+That refusal is the safety net for the accident this procedure resembles — a deleted or lost epoch ref, where the remedy is to restore it, not to mint. The refspec is forced (`+`) because an epoch commit is an orphan: over a ref that is present but damaged, a plain fetch is rejected as non-fast-forward and restores nothing. `dotta remove` needs no key and works either way. Naming a `--strength` that an existing epoch does not match is refused rather than silently ignored, and an existing valid epoch is always preserved.
 
 ## Security Properties
 

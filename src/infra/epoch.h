@@ -143,6 +143,17 @@ error_t *epoch_init(
  * blob, an entry is not a blob, a blob is the wrong size, or the pair is out of
  * range — each indicating tampering or a partial / format-broken commit.
  *
+ * A third code reaches callers and needs no type to tell it apart: ERR_GIT, from
+ * an object libgit2 will not load, says exactly what ERR_CRYPTO says — the ref
+ * stands and yields no epoch — differing only in the mechanism that got there.
+ * ERR_NOT_FOUND is the statement about the ref, made deliberately at one site;
+ * everything else is that one fact, and every consumer may treat them as one.
+ * All three do: `epoch_init` asks whether there is a ref to delete before it
+ * mints, the reconcile's divergent branch asks whether it got an epoch, and the
+ * dispatcher picks between two first lines. What none of them may read into
+ * ERR_CRYPTO is that the bytes are certainly malformed rather than merely
+ * unavailable.
+ *
  * @param repo Repository (must not be NULL)
  * @param out  The epoch (must not be NULL; zeroed on failure)
  * @return Error or NULL on success

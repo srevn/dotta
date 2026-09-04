@@ -68,7 +68,10 @@ static bool is_roots_home(const char *home) {
 
 uid_t identity_invoker(uid_t ruid, uid_t euid) {
     uid_t named;
-    if (euid == 0 && tool_invoker(&named)) return named;
+    /* The sentinel is refused here and not inside either arm above: one rule
+     * about the answer, and both variables can reach it — a decimal SUDO_UID
+     * within uid_t, or a DOAS_USER whose passwd entry names it. */
+    if (euid == 0 && tool_invoker(&named) && named != (uid_t) -1) return named;
     return ruid;
 }
 

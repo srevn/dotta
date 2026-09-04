@@ -22,9 +22,10 @@
  * SUDO_UID as sudo writes it (decimal, whole, a user this host can name), else
  * DOAS_USER as doas writes it (a name — OpenBSD's tool, common on FreeBSD, sets
  * no uid variable). Anything else names nobody — a shim's 99999, a hand-set
- * variable — and the run is real root's own. A tool's variable beside an effective
- * user that is not root (`sudo -u alice`, a shim that did not elevate) is not
- * consulted: the run is its effective user, and nothing warns.
+ * variable, and (uid_t) -1 whichever variable produced it, because that value
+ * is a sentinel and not a user — and the run is real root's own. A tool's variable
+ * beside an effective user that is not root (`sudo -u alice`, a shim that did
+ * not elevate) is not consulted: the run is its effective user, and nothing warns.
  *
  * The group is the passwd entry's primary group — the durable fact — and the
  * supplementary list is the kernel's for this process, sized by asking (16 on
@@ -168,9 +169,17 @@ int identity_drop_child(void);
  * checked against the passwd database. A variable that names nobody leaves the
  * real user, which under sudo is root: the run is real root's own.
  *
+ * Never (uid_t) -1, whichever variable spoke and whatever this host's passwd
+ * database names: that value is the no-change sentinel — setreuid, seteuid and
+ * chown read it as "leave this id alone", and identity_may_chown below reads it
+ * as "no owner asked for". An invoker holding it is a drop that sets nothing
+ * while reporting itself made, and a chown rule that cannot tell the invoker's
+ * own id from a caller asking for no change. It is refused at the one return
+ * that could yield it, so no reader of identity_t has to.
+ *
  * @param ruid The real user (getuid)
  * @param euid The effective user (geteuid)
- * @return The invoker's uid
+ * @return The invoker's uid, never (uid_t) -1
  */
 uid_t identity_invoker(uid_t ruid, uid_t euid);
 

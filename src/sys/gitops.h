@@ -811,17 +811,40 @@ error_t *gitops_resolve_remote_branch_oid(
  * Git allows up to 255 chars per component, but we use conservative limits to
  * prevent silent failures with libgit2 operations.
  *
+ * A branch name goes through gitops_branch_refname, which carries Git's branch
+ * rule; this is for the other shapes.
+ *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer
  * @param format Printf-style format string (must not be NULL)
  * @param ... Format arguments
  * @return Error or NULL on success
- *
- * Example:
- *   char refname[256];
- *   error_t *err = gitops_build_refname(refname, sizeof(refname), "refs/heads/%s", branch);
  */
-error_t *gitops_build_refname(char *buffer, size_t buffer_size, const char *format, ...);
+error_t *gitops_build_refname(
+    char *buffer, size_t buffer_size, const char *format, ...
+);
+
+/**
+ * A branch name to its reference, or Git's refusal
+ *
+ * The one place a branch name becomes `refs/heads/<name>`. Git's branch rule
+ * first (git_branch_name_is_valid: the reference rule on the joined name, plus
+ * the two shapes only the branch rule refuses — a leading '-' and the word HEAD,
+ * valid references git itself will not make branches of), then the join, sized
+ * to the buffer by gitops_build_refname, whose own reference check the branch
+ * rule subsumes. Every lookup, creator and mover of a branch builds its ref here,
+ * so a name Git refuses is refused wherever it first touches Git — add's prepare,
+ * enable's loop, a filter's refusal path — and no branch git cannot name is ever
+ * made (before this, `add -- -x` and `add HEAD` made two).
+ *
+ * @param buffer Output buffer for the reference name (must not be NULL)
+ * @param buffer_size Size of output buffer
+ * @param name Branch name (must not be NULL)
+ * @return NULL, or ERR_INVALID_ARG naming the name; the builder's length refusal
+ */
+error_t *gitops_branch_refname(
+    char *buffer, size_t buffer_size, const char *name
+);
 
 /**
  * Get repository index

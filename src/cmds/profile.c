@@ -848,6 +848,19 @@ static error_t *profile_enable(
             continue;
         }
 
+        /* dotta's own branch is not a profile. Enable is the one verb whose effect
+         * on that name Git does not already refuse — add and remove
+         * --delete-profile meet its checked-out protection — so the one that
+         * refuses it: a row for it would put a branch of bookkeeping in the view.
+         * Fatal, not a skip: a CLI input error, like a bad --target. */
+        if (strcmp(profile, "dotta-worktree") == 0) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "'dotta-worktree' is dotta's own branch, not a profile"
+            );
+            goto cleanup;
+        }
+
         /* Check if profile exists */
         if (!profile_exists(repo, profile)) {
             output_warning(

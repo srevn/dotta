@@ -33,15 +33,11 @@ error_t *upstream_analyze_profile(
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = gitops_build_refname(
-        local_refname, sizeof(local_refname), "refs/heads/%s",
-        profile_name
+    err = gitops_branch_refname(
+        local_refname, sizeof(local_refname), profile_name
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid profile name '%s'",
-            profile_name
-        );
+        return err;
     }
 
     err = gitops_build_refname(
@@ -249,15 +245,11 @@ error_t *upstream_create_tracking_branch(
 
     /* Create local branch pointing to the same commit */
     char local_refname[DOTTA_REFNAME_MAX];
-    err = gitops_build_refname(
-        local_refname, sizeof(local_refname), "refs/heads/%s",
-        branch_name
+    err = gitops_branch_refname(
+        local_refname, sizeof(local_refname), branch_name
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid branch name '%s'",
-            branch_name
-        );
+        return err;
     }
 
     return gitops_create_reference(repo, local_refname, &target_oid, false);

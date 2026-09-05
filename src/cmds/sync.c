@@ -174,15 +174,11 @@ static error_t *pull_branch_ff(
     char remote_refname[DOTTA_REFNAME_MAX];
     error_t *err;
 
-    err = gitops_build_refname(
-        local_refname, sizeof(local_refname), "refs/heads/%s",
-        branch_name
+    err = gitops_branch_refname(
+        local_refname, sizeof(local_refname), branch_name
     );
     if (err) {
-        return error_wrap(
-            err, "Invalid branch name '%s'",
-            branch_name
-        );
+        return err;
     }
 
     err = gitops_build_refname(
@@ -191,8 +187,8 @@ static error_t *pull_branch_ff(
     );
     if (err) {
         return error_wrap(
-            err, "Invalid remote/branch name '%s/%s'",
-            remote_name, branch_name
+            err, "Invalid remote/branch name '%s/%s'", remote_name,
+            branch_name
         );
     }
 

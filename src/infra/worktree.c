@@ -157,9 +157,7 @@ static void cleanup_orphaned_worktrees(git_repository *repo) {
 
         /* Step 2: Delete temporary branch (refs/heads/{name}) */
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", name
-        );
+        error_t *err_build = gitops_branch_refname(refname, sizeof(refname), name);
         if (!err_build) {
             git_reference *ref = NULL;
             if (git_reference_lookup(&ref, repo, refname) == 0) {
@@ -259,10 +257,7 @@ cleanup:
     return err;
 }
 
-error_t *worktree_checkout_branch(
-    worktree_handle_t *wt,
-    const char *branch_name
-) {
+error_t *worktree_checkout_branch(worktree_handle_t *wt, const char *branch_name) {
     CHECK_NULL(wt);
     CHECK_NULL(branch_name);
 
@@ -272,11 +267,9 @@ error_t *worktree_checkout_branch(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", branch_name
-    );
+    error_t *err = gitops_branch_refname(refname, sizeof(refname), branch_name);
     if (err) {
-        return error_wrap(err, "Invalid branch name '%s'", branch_name);
+        return err;
     }
 
     /* Resolve branch to commit object */
@@ -316,10 +309,7 @@ error_t *worktree_checkout_branch(
     return NULL;
 }
 
-error_t *worktree_create_orphan(
-    worktree_handle_t *wt,
-    const char *branch_name
-) {
+error_t *worktree_create_orphan(worktree_handle_t *wt, const char *branch_name) {
     CHECK_NULL(wt);
     CHECK_NULL(branch_name);
 
@@ -329,11 +319,9 @@ error_t *worktree_create_orphan(
 
     /* Build reference name */
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_build_refname(
-        refname, sizeof(refname), "refs/heads/%s", branch_name
-    );
+    error_t *err_build = gitops_branch_refname(refname, sizeof(refname), branch_name);
     if (err_build) {
-        return error_wrap(err_build, "Invalid branch name '%s'", branch_name);
+        return err_build;
     }
 
     /* Set HEAD to new orphan branch (doesn't exist yet) */
@@ -398,8 +386,8 @@ void worktree_cleanup(worktree_handle_t **wt_ptr) {
     /* Step 3: Delete the temporary worktree branch from main repo */
     if (wt->name && wt->main_repo) {
         char refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", wt->name
+        error_t *err_build = gitops_branch_refname(
+            refname, sizeof(refname), wt->name
         );
         if (!err_build) {
             git_reference *ref = NULL;
@@ -503,10 +491,8 @@ error_t *worktree_unstage_file(worktree_handle_t *wt, const char *path) {
 }
 
 error_t *worktree_commit(
-    worktree_handle_t *wt,
-    const char *branch_name,
-    const char *message,
-    git_oid *out_oid
+    worktree_handle_t *wt, const char *branch_name,
+    const char *message, git_oid *out_oid
 ) {
     CHECK_NULL(wt);
     CHECK_NULL(branch_name);
@@ -543,9 +529,7 @@ error_t *worktree_commit(
         return err;
     }
 
-    if (out_oid) {
-        git_oid_cpy(out_oid, &commit_oid);
-    }
+    if (out_oid) git_oid_cpy(out_oid, &commit_oid);
 
     return NULL;
 }

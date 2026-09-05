@@ -1291,8 +1291,8 @@ static error_t *display_remote_status(
 
             /* Get local commit info */
             char local_ref[DOTTA_REFNAME_MAX];
-            error_t *local_ref_err = gitops_build_refname(
-                local_ref, sizeof(local_ref), "refs/heads/%s", profile
+            error_t *local_ref_err = gitops_branch_refname(
+                local_ref, sizeof(local_ref), profile
             );
             git_commit *local_commit = NULL;
             error_t *commit_err = local_ref_err ? local_ref_err

@@ -271,8 +271,8 @@ static error_t *list_profiles(
         /* Verbose: Add last commit info (uses branch name, not profile tree) */
         if (verbose) {
             char refname[DOTTA_REFNAME_MAX];
-            error_t *ref_err = gitops_build_refname(
-                refname, sizeof(refname), "refs/heads/%s", profile
+            error_t *ref_err = gitops_branch_refname(
+                refname, sizeof(refname), profile
             );
             if (!ref_err) {
                 git_commit *last_commit = NULL;

@@ -912,11 +912,8 @@ static error_t *walk_ciphertext(
         walk.branch = branch;
 
         char refname[DOTTA_REFNAME_MAX];
-        err = gitops_build_refname(
-            refname, sizeof(refname), "refs/heads/%s", branch
-        );
+        err = gitops_branch_refname(refname, sizeof(refname), branch);
         if (err) {
-            err = error_wrap(err, "Invalid branch name '%s'", branch);
             goto cleanup;
         }
 

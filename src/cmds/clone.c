@@ -81,26 +81,18 @@ static error_t *fetch_profiles(
             continue;
         }
 
-        /* Create local tracking branch if it doesn't already exist */
-        bool already_exists = profile_exists(repo, profile);
-        if (already_exists) {
-            /* Branch already exists (e.g., from git_clone) - skip creation */
-            local_count++;
-        } else {
-            /* Create new local tracking branch */
-            err = upstream_create_tracking_branch(
-                repo, remote_name, profile
+        /* The local branch: created at the remote's commit, or already here (e.g.,
+         * from git_clone) and left where it stands */
+        err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
+                profile, error_message(err)
             );
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
-                    profile, error_message(err)
-                );
-                error_free(err);
-                continue;
-            }
-            local_count++;
+            error_free(err);
+            continue;
         }
+        local_count++;
 
         /* Add to fetched names array if provided */
         if (fetched_profiles) {

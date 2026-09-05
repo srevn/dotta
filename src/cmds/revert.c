@@ -157,8 +157,12 @@ static error_t *discover_file(
         return err;
     }
 
-    /* Fast path: If profile specified, check only that profile */
+    /* Fast path: If profile specified, check only that profile — which must be
+     * here */
     if (profile_hint) {
+        err = profile_require(repo, profile_hint);
+        if (err) return err;
+
         git_tree *tree = NULL;
         err = gitops_load_branch_tree(repo, profile_hint, &tree, NULL);
         if (err) {

@@ -624,13 +624,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         }
 
         /* Profile specified - show commit from that profile */
-        bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
+        err = profile_require(repo, profile);
         if (err) goto cleanup;
-        if (!exists) {
-            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", profile);
-            goto cleanup;
-        }
 
         err = show_commit(repo, opts->commit, profile, out);
         goto cleanup;
@@ -651,13 +646,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     if (opts->profile) {
         /* Profile specified - show from that profile */
-        bool exists = false;
-        err = gitops_branch_exists(repo, opts->profile, &exists);
+        err = profile_require(repo, opts->profile);
         if (err) goto cleanup;
-        if (!exists) {
-            err = ERROR(ERR_NOT_FOUND, "Profile '%s' not found", opts->profile);
-            goto cleanup;
-        }
 
         err = show_file(ctx, opts->profile, search_path, opts->commit);
         goto cleanup;

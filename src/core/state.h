@@ -465,6 +465,11 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
  * for commands that need to conditionally write the record based on whether a
  * profile is enabled.
  *
+ * Answers from the row cache, and a load that fails reads as "not enabled". No
+ * reader can see that today: the cache is loaded before any of them runs (the
+ * mount table's build, or the command's own row read) and none reads after a
+ * mutation. The same holds for state_peek_profile_target.
+ *
  * @param state State (must not be NULL)
  * @param profile Profile name to check (must not be NULL)
  * @return true if profile is enabled, false otherwise

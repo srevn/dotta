@@ -80,17 +80,9 @@ static error_t *bootstrap_create_template(
     CHECK_NULL(repo);
     CHECK_NULL(profile);
 
-    /* Check if profile exists */
-    bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &exists);
+    error_t *err = profile_require(repo, profile);
     if (err) {
-        return error_wrap(err, "Failed to check if profile exists");
-    }
-
-    if (!exists) {
-        return ERROR(
-            ERR_NOT_FOUND, "Profile '%s' does not exist", profile
-        );
+        return err;
     }
 
     /* Check if script already exists in Git */
@@ -163,7 +155,7 @@ static error_t *bootstrap_edit(
     if (!bootstrap_exists(repo, profile)) {
         err = bootstrap_create_template(repo, profile);
         if (err) {
-            return error_wrap(err, "Failed to create bootstrap template");
+            return err;
         }
         output_success(
             out, OUTPUT_NORMAL,
@@ -372,13 +364,18 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     /* Resolve profile names — all branches produce string_array_t (name-only).
      * Bootstrap only needs profile names, not Git trees. */
     if (opts->profile_count > 0) {
-        /* Explicit profiles: validate branch existence */
-        err = profile_resolve_filter(
-            repo, opts->profiles, opts->profile_count, true, &profiles
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve profiles");
+        /* Explicit profiles: each must be here — a script asked for by a name
+         * that is not a profile is a typo, not a skip */
+        profiles = string_array_new(opts->profile_count);
+        if (!profiles) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate profiles");
             goto cleanup;
+        }
+        for (size_t i = 0; i < opts->profile_count; i++) {
+            err = profile_require(repo, opts->profiles[i]);
+            if (err) goto cleanup;
+            err = string_array_push(profiles, opts->profiles[i]);
+            if (err) goto cleanup;
         }
     } else if (opts->all_profiles) {
         /* List all local profile names (lightweight, no ref resolution) */

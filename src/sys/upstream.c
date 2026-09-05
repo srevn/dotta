@@ -203,9 +203,9 @@ error_t *upstream_discover_branches(
 }
 
 /**
- * Create local tracking branch from remote
+ * Make a remote branch local, or leave the local one where it stands
  */
-error_t *upstream_create_tracking_branch(
+error_t *upstream_ensure_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name
@@ -213,6 +213,11 @@ error_t *upstream_create_tracking_branch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
+
+    /* Already here: a fetch never moves a local branch. */
+    bool exists = false;
+    RETURN_IF_ERROR(gitops_branch_exists(repo, branch_name, &exists));
+    if (exists) return NULL;
 
     /* A name Git's ref namespace cannot hold beside the ones already here. The
      * remote cannot ship a colliding pair — Git forbids it there too — so the

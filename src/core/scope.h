@@ -18,8 +18,8 @@
  *   enabled — persistent enabled profile names, always non-NULL, may be empty.
  *             The same set the dispatcher built the view over (ctx->run.manifest),
  *             validated against the branches — the set the CLI filter is checked
- *             against, and the one the receipts attribute to (sync). The
- *             workspace does not read it: its profile set is the view's own
+ *             against, and the one the receipts attribute to (sync). The workspace
+ *             does not read it: its profile set is the view's own
  *             (manifest_profiles), the same names by construction.
  *   active  — display/hook face of the scope. Equal to the CLI filter
  *             names when one was given, else equal to enabled. "What the user
@@ -32,17 +32,17 @@
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
  * sync.c ("use enabled, not active, for workspace_load") is enforced by
- * construction: the workspace never takes a profile list — the view it joins
- * is built over the state's rows, and its profile set is the view's. A CLI
- * filter narrows what a command touches, never what it loads.
+ * construction: the workspace never takes a profile list — the view it joins is
+ * built over the state's rows, and its profile set is the view's. A CLI filter
+ * narrows what a command touches, never what it loads.
  *
  * Lifetime and ownership
  * ----------------------
  * scope_t is command-scoped and immutable after scope_build returns. All
  * CLI-derived inputs are deep-copied; the caller may free its inputs immediately
  * after scope_build returns. scope_t is entirely self-contained, and nothing
- * borrows from it past its life — the workspace and the scope are freed in
- * any order.
+ * borrows from it past its life — the workspace and the scope are freed in any
+ * order.
  *
  * Empty-enabled policy
  * --------------------
@@ -87,9 +87,7 @@ typedef struct scope scope_t;
  * Aggregated build inputs.
  *
  * A command-agnostic view of the three CLI-derived filter dimensions. All array
- * fields may be NULL when the corresponding count is zero. Config-derived behavior
- * (strict_mode) is read from the config handle passed separately to scope_build,
- * keeping this struct a pure CLI bundle.
+ * fields may be NULL when the corresponding count is zero.
  *
  * Ownership: borrowed. scope_build deep-copies everything it needs; the caller
  * may free the backing arrays immediately after scope_build returns.
@@ -109,9 +107,10 @@ typedef struct scope_inputs {
  * Steps performed (in order):
  *   1. Resolve enabled profile names from state (catches ERR_NOT_FOUND and converts
  *      to empty set — see "Empty-enabled policy" above).
- *   2. If in->profile_count > 0, resolve and validate the CLI filter against
- *      the enabled set (error if any filter name is not enabled). Strictness of
- *      the filter resolution is read from config->strict_mode.
+ *   2. If in->profile_count > 0, check every CLI filter name against the enabled
+ *      set: one not in it is refused, whether it is a disabled profile (the hint
+ *      names `profile enable`) or no profile here at all (the hint names the
+ *      listing and the fetch). A filter never narrows in silence.
  *   3. If in->file_count > 0, build the pathspec consuming the caller-supplied
  *      mount table.
  *   4. If in->exclude_count > 0, compile patterns into a borrowed-arena gitignore
@@ -120,7 +119,6 @@ typedef struct scope_inputs {
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
- * @param config Configuration (must not be NULL, read for strict_mode)
  * @param mounts Per-machine mount table covering enabled profiles (must not be
  *               NULL; arena-borrowed; consumed by pathspec_create only — scope_t
  *               does not store it)
@@ -134,7 +132,6 @@ error_t *scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,
-    const config_t *config,
     const mount_table_t *mounts,
     arena_t *arena,
     scope_t **out
@@ -153,8 +150,8 @@ void scope_free(scope_t *s);
  * Persistent enabled set — the view's scope.
  *
  * The enabled profiles, validated against the branches, in precedence order.
- * Never the filter. Always non-NULL; the array may be empty (an empty view is
- * a valid state).
+ * Never the filter. Always non-NULL; the array may be empty (an empty view is a
+ * valid state).
  *
  * The returned pointer is borrowed from scope_t and valid until scope_free.
  */
@@ -234,11 +231,11 @@ bool scope_accepts_path(
  * Uses gitignore semantics via base/gitignore: `!`-negation, directory walk-up
  * (so `-e 'build/'` matches files under `build/`), anchoring, and `**` recursive
  * globs, evaluated on the mount-relative path (`mount_strip_label`): `-e
- * '.cache/x/'` names `~/.cache/x`, as it would in `.dottaignore`. A
- * directory-only pattern (`build/`) matches the directory itself only for
- * PATH_KIND_DIRECTORY — the kind is what makes `-e 'dir/'` mean "leave that
- * directory alone" for the directory as well as its contents. NULL storage_path
- * or no exclude patterns returns false.
+ * '.cache/x/'` names `~/.cache/x`, as it would in `.dottaignore`. A directory-only
+ * pattern (`build/`) matches the directory itself only for PATH_KIND_DIRECTORY
+ * — the kind is what makes `-e 'dir/'` mean "leave that directory alone" for
+ * the directory as well as its contents. NULL storage_path or no exclude patterns
+ * returns false.
  */
 bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind

@@ -1265,8 +1265,12 @@ static error_t *delete_profile_branch(
         output_set_verbosity(out, OUTPUT_QUIET);
     }
 
-    /* Check if profile exists */
-    if (!profile_exists(repo, opts->profile)) {
+    /* Is the profile here? Git's answer or Git's error: an unreadable ref is
+     * not an absence, and --force must not read one as "already gone". */
+    bool exists = false;
+    err = gitops_branch_exists(repo, opts->profile, &exists);
+    if (err) goto cleanup;
+    if (!exists) {
         if (!opts->force) {
             err = ERROR(
                 ERR_NOT_FOUND, "Profile '%s' does not exist\n"

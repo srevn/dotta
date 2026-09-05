@@ -189,8 +189,8 @@ static error_t *profile_list(
         goto cleanup;
     }
 
-    /* Get all local branches */
-    err = gitops_list_branches(repo, &all_branches);
+    /* Every profile here */
+    err = profile_list_all_local(repo, &all_branches);
     if (err) {
         err = error_wrap(err, "Failed to list branches");
         goto cleanup;
@@ -205,11 +205,6 @@ static error_t *profile_list(
 
     for (size_t i = 0; i < all_branches->count; i++) {
         const char *profile = all_branches->items[i];
-
-        /* Skip dotta-worktree */
-        if (strcmp(profile, "dotta-worktree") == 0) {
-            continue;
-        }
 
         /* Check if enabled */
         bool is_enabled = false;
@@ -440,32 +435,26 @@ static error_t *profile_fetch(
                 continue;
             }
 
-            /* Create local tracking branch if needed */
-            bool already_exists = profile_exists(repo, branch_name);
-            if (already_exists) {
-                /* Branch already exists - fetch updated the remote ref */
+            /* The local branch: created at the remote's commit, or already
+             * here and left where it stands (the fetch moved the remote ref;
+             * sync moves the branch) */
+            fetch_err = upstream_ensure_tracking_branch(
+                repo, remote_name, branch_name
+            );
+            if (fetch_err) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {red}✗{reset} Failed to create local branch %s: %s\n",
+                    branch_name, error_message(fetch_err)
+                );
+                error_free(fetch_err);
+                failed_count++;
+            } else {
                 fetched_count++;
                 output_styled(
-                    out, OUTPUT_VERBOSE, "  {green}✓{reset} Updated %s\n",
+                    out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
                     branch_name
                 );
-            } else {
-                fetch_err = upstream_create_tracking_branch(repo, remote_name, branch_name);
-                if (fetch_err) {
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} Failed to create local branch %s: %s\n",
-                        branch_name, error_message(fetch_err)
-                    );
-                    error_free(fetch_err);
-                    failed_count++;
-                } else {
-                    fetched_count++;
-                    output_styled(
-                        out, OUTPUT_VERBOSE, "  {green}✓{reset} Fetched %s\n",
-                        branch_name
-                    );
-                }
             }
         }
     } else {
@@ -535,15 +524,6 @@ static error_t *profile_fetch(
         for (size_t i = 0; i < opts->profile_count; i++) {
             const char *profile = opts->profiles[i];
 
-            /* Check if already exists locally */
-            bool already_exists = profile_exists(repo, profile);
-            if (already_exists) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "  %s already exists locally (updating...)",
-                    profile
-                );
-            }
-
             error_t *fetch_err = gitops_fetch_branch(repo, remote_name, profile, xfer);
             if (fetch_err) {
                 output_styled(
@@ -556,32 +536,27 @@ static error_t *profile_fetch(
                 continue;
             }
 
-            /* Create/update local tracking branch (skip if already exists) */
-            if (already_exists) {
-                /* Branch already exists - consider this a successful fetch/update */
+            /* The local branch: created at the remote's commit, or already
+             * here and left where it stands (the fetch moved the remote ref;
+             * sync moves the branch) */
+            fetch_err = upstream_ensure_tracking_branch(
+                repo, remote_name, profile
+            );
+            if (fetch_err) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {red}✗{reset} Failed to create local branch %s: %s\n",
+                    profile, error_message(fetch_err)
+                );
+                error_free(fetch_err);
+                failed_count++;
+            } else {
                 fetched_count++;
                 output_styled(
-                    out, OUTPUT_VERBOSE, "  {green}✓{reset} Updated %s\n",
+                    out, OUTPUT_VERBOSE,
+                    "  {green}✓{reset} Fetched %s\n",
                     profile
                 );
-            } else {
-                fetch_err = upstream_create_tracking_branch(repo, remote_name, profile);
-                if (fetch_err) {
-                    output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  {red}✗{reset} Failed to create local branch %s: %s\n",
-                        profile, error_message(fetch_err)
-                    );
-                    error_free(fetch_err);
-                    failed_count++;
-                } else {
-                    fetched_count++;
-                    output_styled(
-                        out, OUTPUT_VERBOSE,
-                        "  {green}✓{reset} Fetched %s\n",
-                        profile
-                    );
-                }
             }
         }
     }
@@ -734,21 +709,18 @@ static error_t *profile_enable(
     }
 
     if (opts->all_profiles) {
-        /* Enable all local profiles */
-        err = gitops_list_branches(repo, &all_branches);
+        /* Enable every profile here */
+        err = profile_list_all_local(repo, &all_branches);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
             goto cleanup;
         }
 
         for (size_t i = 0; i < all_branches->count; i++) {
-            const char *profile = all_branches->items[i];
-            if (strcmp(profile, "dotta-worktree") != 0) {
-                err = string_array_push(to_enable, profile);
-                if (err) {
-                    err = error_wrap(err, "Failed to add profile to enable list");
-                    goto cleanup;
-                }
+            err = string_array_push(to_enable, all_branches->items[i]);
+            if (err) {
+                err = error_wrap(err, "Failed to add profile to enable list");
+                goto cleanup;
             }
         }
     } else {
@@ -861,14 +833,19 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        /* Check if profile exists */
-        if (!profile_exists(repo, profile)) {
+        /* Is the profile here? Git's answer or Git's error: an unreadable ref
+         * is not an absence, and read as one it sent the user to fetch a profile
+         * that was here. */
+        bool exists = false;
+        err = gitops_branch_exists(repo, profile, &exists);
+        if (err) goto cleanup;
+        if (!exists) {
             output_warning(
-                out, OUTPUT_NORMAL, "Profile '%s' does not exist locally",
-                profile
+                out, OUTPUT_NORMAL, "Profile '%s' doesn't exist locally", profile
             );
             output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile fetch %s' first",
+                out, OUTPUT_NORMAL, "Run 'dotta profile list' for the local "
+                "profiles, or 'dotta profile fetch %s' to bring it from the remote",
                 profile
             );
             not_found++;
@@ -1657,7 +1634,10 @@ static error_t *profile_validate(
     for (size_t i = 0; i < enabled->count; i++) {
         const char *profile = enabled->items[i];
 
-        if (!profile_exists(repo, profile)) {
+        bool exists = false;
+        err = gitops_branch_exists(repo, profile, &exists);
+        if (err) goto cleanup;
+        if (!exists) {
             err = string_array_push(missing, profile);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to missing list");
@@ -1729,7 +1709,10 @@ static error_t *profile_validate(
 
         void *known = hashmap_get(probed, profile);
         if (!known) {
-            known = profile_exists(repo, profile) ? (void *) 1 : (void *) 2;
+            bool exists = false;
+            err = gitops_branch_exists(repo, profile, &exists);
+            if (err) goto cleanup;
+            known = exists ? (void *) 1 : (void *) 2;
             err = hashmap_set(probed, profile, known);
             if (!err && known == (void *) 2) err = string_array_push(deleted, profile);
             if (err) {

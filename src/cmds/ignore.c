@@ -908,12 +908,8 @@ static error_t *test_path_ignore(
 
     /* If specific profile requested, test only that one */
     if (specific_profile) {
-        if (!profile_exists(repo, specific_profile)) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Profile '%s' does not exist", specific_profile
-            );
-            goto cleanup;
-        }
+        err = profile_require(repo, specific_profile);
+        if (err) goto cleanup;
 
         const gitignore_ruleset_t *rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, specific_profile, &rules);
@@ -1147,14 +1143,18 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     }
 
     /* Verify the scope branch exists once, up front, so edit/modify start with
-     * a guaranteed-present branch. Error message mirrors the original per-function
-     * wording. */
-    bool branch_exists = false;
-    error_t *err = gitops_branch_exists(repo, scope.branch_name, &branch_exists);
-    if (!err && !branch_exists) {
-        err = opts->profile
-            ? ERROR(ERR_INVALID_ARG, "Profile '%s' does not exist", opts->profile)
-            : ERROR(ERR_INTERNAL, "dotta-worktree does not exist. Run 'dotta init'.");
+     * a guaranteed-present branch: the profile named, or dotta's own. */
+    error_t *err = NULL;
+    if (opts->profile) {
+        err = profile_require(repo, opts->profile);
+    } else {
+        bool branch_exists = false;
+        err = gitops_branch_exists(repo, scope.branch_name, &branch_exists);
+        if (!err && !branch_exists) {
+            err = ERROR(
+                ERR_INTERNAL, "dotta-worktree does not exist. Run 'dotta init'."
+            );
+        }
     }
 
     if (!err) {

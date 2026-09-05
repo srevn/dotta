@@ -1549,7 +1549,6 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
     const mount_table_t *mounts = ctx->run.mounts;
-    const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
     error_t *err = NULL;
@@ -1570,7 +1569,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
         .file_count    = opts->file_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 

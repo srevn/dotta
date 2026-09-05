@@ -153,8 +153,8 @@ void ignore_rules_free(ignore_rules_t *rules);
  * (baseline/builtin + config + CLI, no per-profile layer).
  *
  * A non-existent profile branch is not an error: the profile layer simply
- * contributes no rules. Callers that need "profile exists" semantics check with
- * `profile_exists` first.
+ * contributes no rules. Callers that need "profile exists" semantics ask
+ * `profile_require` first.
  *
  * @param rules   Builder (must not be NULL)
  * @param profile Profile name (may be NULL or "")

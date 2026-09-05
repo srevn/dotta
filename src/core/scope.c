@@ -4,7 +4,6 @@
 
 #include "core/scope.h"
 
-#include <config.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,9 +28,9 @@
  * for full `!`-negation, directory walk-up, and anchoring semantics — the same
  * engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
- * The mount table is supplied by the caller (typically `ctx->run.mounts`) and consumed
- * by pathspec_create only. scope_t does not store it — per-machine topology has
- * process scope, not per-scope_build scope.
+ * The mount table is supplied by the caller (typically `ctx->run.mounts`) and
+ * consumed by pathspec_create only. scope_t does not store it — per-machine
+ * topology has process scope, not per-scope_build scope.
  */
 struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
@@ -115,7 +114,6 @@ error_t *scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,
-    const config_t *config,
     const mount_table_t *mounts,
     arena_t *arena,
     scope_t **out
@@ -123,7 +121,6 @@ error_t *scope_build(
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(in);
-    CHECK_NULL(config);
     CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -141,18 +138,35 @@ error_t *scope_build(
     err = resolve_enabled_lenient(repo, state, &s->enabled);
     if (err) goto fail;
 
-    /* 2. Resolve and validate CLI filter, if any. */
+    /* 2. The CLI filter: every name must be enabled here. That is the one question
+     *    — the enabled set was checked against the branches on the way in, so a
+     *    name in it is a branch, and a name not in it is refused whether it is
+     *    a disabled profile or a typo: a filter that narrowed to nothing would
+     *    touch nothing and say nothing. The refusal tells the two apart by asking
+     *    the refusing verb, one lookup paid only here: when it does not refuse,
+     *    the branch is here and the fact is that it is not enabled. */
     if (in->profile_count > 0) {
-        err = profile_resolve_filter(
-            repo, in->profiles, in->profile_count, config->strict_mode, &s->filter
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to resolve filter profiles");
+        s->filter = string_array_new(in->profile_count);
+        if (!s->filter) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate filter profiles");
             goto fail;
         }
 
-        err = profile_validate_filter(s->enabled, s->filter);
-        if (err) goto fail;  /* validate_filter returns a user-facing message */
+        for (size_t i = 0; i < in->profile_count; i++) {
+            const char *name = in->profiles[i];
+            if (!string_array_contains(s->enabled, name)) {
+                err = profile_require(repo, name);
+                if (!err) {
+                    err = ERROR(
+                        ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
+                        "Hint: Run 'dotta profile enable %s' first", name, name
+                    );
+                }
+                goto fail;
+            }
+            err = string_array_push(s->filter, name);
+            if (err) goto fail;
+        }
     }
 
     /* 3. Derive active pointer — used by scope_active accessor. Valid as long

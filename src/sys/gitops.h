@@ -113,6 +113,12 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 /**
  * Check if branch exists
  *
+ * The one singular a listing cannot replace (see the header): the ref resolves,
+ * or it is absent. Anything else — a loose ref that will not open, one whose
+ * bytes are not an OID — is the error, never an absence, and every caller
+ * propagates it: a bool that read it as "no" once sent the user to fetch a profile
+ * that was here.
+ *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
  * @param exists Output boolean (must not be NULL)

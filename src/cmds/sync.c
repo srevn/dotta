@@ -1641,7 +1641,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .profile_count = opts->profile_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 

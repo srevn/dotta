@@ -103,30 +103,6 @@ error_t *profile_detect(
 void profile_order(string_array_t *names);
 
 /**
- * Resolve CLI profile names for operation filtering
- *
- * Lightweight validation of CLI profile arguments: checks that each name
- * corresponds to an existing branch without resolving Git refs or loading profile
- * objects. Returns validated names as a string array.
- *
- * Use this when opts->profiles != NULL && opts->profile_count > 0.
- *
- * @param repo Repository (must not be NULL)
- * @param cli_profiles CLI profile arguments (must not be NULL)
- * @param cli_count Number of CLI profiles (must be > 0)
- * @param strict_mode If true, error on non-existent profiles; if false, skip them
- * @param out Validated profile names (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_resolve_filter(
-    git_repository *repo,
-    char *const *cli_profiles,
-    size_t cli_count,
-    bool strict_mode,
-    string_array_t **out
-);
-
-/**
  * Resolve enabled profile names from state database
  *
  * Lightweight name-only resolution: reads enabled profiles from state, validates
@@ -184,22 +160,6 @@ error_t *profile_build_mount_table(
 );
 
 /**
- * Validate that filter profiles are enabled
- *
- * Ensures CLI filter only references profiles that are actually enabled in the
- * workspace. This prevents confusing behavior where user filters to a disabled
- * profile.
- *
- * @param enabled_profiles Enabled profile names from state (must not be NULL)
- * @param filter CLI filter profile names (NULL = no filter)
- * @return Error if any filter profile is not enabled, NULL on success
- */
-error_t *profile_validate_filter(
-    const string_array_t *enabled_profiles,
-    const string_array_t *filter
-);
-
-/**
  * List all local profile branch names
  *
  * Returns names of all local branches except 'dotta-worktree'. Iterates Git refs
@@ -215,13 +175,33 @@ error_t *profile_list_all_local(
 );
 
 /**
- * Check if profile exists
+ * Is there a profile of this name here, or refuse
+ *
+ * The refusing shape of gitops_branch_exists, for the verbs whose only use of
+ * the answer is to stop: NULL iff the branch is here; the lookup's own error
+ * when Git could not say — an unreadable or corrupt loose ref is an error, never
+ * an absence (a bool that read it as "no" sent the user to fetch a profile that
+ * was here, let --force delete nothing and call it done, and had validate --fix
+ * offer to disable a healthy profile); otherwise ERR_NOT_FOUND with one message,
+ * naming both ways out, because no verb can tell a typo from a profile not yet
+ * fetched:
+ *
+ *     Profile '<name>' doesn't exist locally Hint: Run 'dotta profile list' for
+ *     the local profiles, or 'dotta profile fetch <name>' to bring it from the
+ *     remote
+ *
+ * Readers: ignore (--test, and the edit), bootstrap (the explicit names, and
+ * --edit's template), show, export, list (a profile's files; an explicit profile's
+ * history), revert (the -p fast path), and scope's filter on its refusal path.
+ * A verb that acts on both answers — add (checkout or create), enable's skip,
+ * remove's --force arm, validate's probe, the view's build — asks
+ * gitops_branch_exists itself and reads the bool.
  *
  * @param repo Repository (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @return true if profile branch exists
+ * @param name Profile name (must not be NULL)
+ * @return NULL when the branch is here; else the refusal, or Git's error
  */
-bool profile_exists(git_repository *repo, const char *profile);
+error_t *profile_require(git_repository *repo, const char *name);
 
 /**
  * Is this path inside a profile branch dotta's own bookkeeping?

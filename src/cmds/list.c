@@ -125,9 +125,9 @@ static error_t *list_profiles(
 
     bool verbose = output_is_verbose(out);
 
-    /* Get all branches */
+    /* Every profile here */
     string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
+    error_t *err = profile_list_all_local(repo, &branches);
     if (err) {
         return error_wrap(err, "Failed to list branches");
     }
@@ -160,9 +160,6 @@ static error_t *list_profiles(
     if (verbose || show_remote) {
         for (size_t i = 0; i < branches->count; i++) {
             const char *bname = branches->items[i];
-            if (strcmp(bname, "dotta-worktree") == 0) {
-                continue;
-            }
             size_t len = strlen(bname);
             if (len > max_name_len) {
                 max_name_len = len;
@@ -194,9 +191,6 @@ static error_t *list_profiles(
 
         for (size_t i = 0; i < branches->count; i++) {
             const char *bname = branches->items[i];
-            if (strcmp(bname, "dotta-worktree") == 0) {
-                continue;
-            }
 
             profile_stats_t stats = { 0 };
             err = profile_get_stats(repo, bname, &stats);
@@ -235,11 +229,6 @@ static error_t *list_profiles(
     /* List profiles */
     for (size_t i = 0; i < branches->count; i++) {
         const char *profile = branches->items[i];
-
-        /* Skip dotta-worktree branch */
-        if (strcmp(profile, "dotta-worktree") == 0) {
-            continue;
-        }
 
         bool is_enabled = state && state_has_profile(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
@@ -368,8 +357,11 @@ static error_t *list_files(
     /* One branch read serves the whole listing: the file walk, the verbose
      * per-entry lookups and commit map, and the metadata (the directory count
      * when the file list is empty). */
+    error_t *err = profile_require(repo, opts->profile);
+    if (err) return err;
+
     git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
+    err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);
     if (err) {
         return error_wrap(
             err, "Failed to list files in profile '%s'", opts->profile
@@ -650,13 +642,18 @@ static error_t *list_file_history(
         profile = row->profile;
     }
 
-    /* Verify profile exists and check if file is in current tree (fast pre-check).
-     * This validates the profile early and gives a clear hint for typos/deleted
-     * files before the expensive O(total_commits) history walk. */
+    /* An explicit profile must be here (one the view named is, by construction);
+     * then a fast pre-check of the current tree, so a deleted file gets its word
+     * before the expensive O(total_commits) history walk. */
+    if (opts->profile) {
+        err = profile_require(repo, opts->profile);
+        if (err) return err;
+    }
+
     git_tree *tree = NULL;
     err = gitops_load_branch_tree(repo, profile, &tree, NULL);
     if (err) {
-        return error_wrap(err, "Profile '%s' not found", profile);
+        return error_wrap(err, "Failed to load profile '%s'", profile);
     }
 
     git_tree_entry *check = NULL;

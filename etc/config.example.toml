@@ -26,10 +26,8 @@ repo_dir = "~/.local/share/dotta/repo"
 
 # Strict Mode
 # Refuse where the repository's state would otherwise be proceeded past:
-#   - Profile resolution: When true, fail on a named profile that does not exist; when false, skip it
 #   - Sync with uncommitted changes: When true, block sync; when false, warn and prompt for confirmation
 #
-# When false, dotta allows more flexibility with user confirmation for risky operations.
 # Default: false
 strict_mode = false
 

@@ -28,21 +28,24 @@
 #define PROFILE_TREE_PATH_MAX 1024
 
 /**
- * Check if profile exists
+ * Is there a profile of this name here, or refuse
  */
-bool profile_exists(git_repository *repo, const char *profile) {
-    if (!repo || !profile) {
-        return false;
-    }
+error_t *profile_require(git_repository *repo, const char *name) {
+    CHECK_NULL(repo);
+    CHECK_NULL(name);
 
     bool exists = false;
-    error_t *err = gitops_branch_exists(repo, profile, &exists);
-    if (err) {
-        error_free(err);
-        return false;
+    RETURN_IF_ERROR(gitops_branch_exists(repo, name, &exists));
+    if (!exists) {
+        return ERROR(
+            ERR_NOT_FOUND, "Profile '%s' doesn't exist locally\n"
+            "Hint: Run 'dotta profile list' for the local profiles, or "
+            "'dotta profile fetch %s' to bring it from the remote",
+            name, name
+        );
     }
 
-    return exists;
+    return NULL;
 }
 
 /**
@@ -319,7 +322,11 @@ static error_t *validate_state_profiles(
     for (size_t i = 0; i < state_profiles->count; i++) {
         const char *profile = state_profiles->items[i];
 
-        if (profile_exists(repo, profile)) {
+        bool exists = false;
+        err = gitops_branch_exists(repo, profile, &exists);
+        if (err) goto cleanup;
+
+        if (exists) {
             err = string_array_push(valid, profile);
             if (err) goto cleanup;
         } else {
@@ -432,102 +439,6 @@ cleanup:
     string_array_free(state_profiles);
 
     return err;
-}
-
-/**
- * Resolve CLI profile names for operation filtering
- *
- * Lightweight validation: checks branch existence without resolving Git refs or
- * loading profile objects.
- */
-error_t *profile_resolve_filter(
-    git_repository *repo,
-    char *const *cli_profiles,
-    size_t cli_count,
-    bool strict_mode,
-    string_array_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(cli_profiles);
-    CHECK_NULL(out);
-
-    if (cli_count == 0) {
-        return ERROR(
-            ERR_INVALID_ARG, "CLI profile count cannot be zero"
-        );
-    }
-
-    error_t *err = NULL;
-    string_array_t *validated = string_array_new(cli_count);
-    if (!validated) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate validated profiles"
-        );
-    }
-
-    for (size_t i = 0; i < cli_count; i++) {
-        if (profile_exists(repo, cli_profiles[i])) {
-            err = string_array_push(validated, cli_profiles[i]);
-            if (err) {
-                string_array_free(validated);
-                return error_wrap(
-                    err, "Failed to add profile '%s'", cli_profiles[i]
-                );
-            }
-        } else if (strict_mode) {
-            string_array_free(validated);
-            return ERROR(
-                ERR_NOT_FOUND, "Profile not found: %s\n"
-                "Hint: Run 'dotta profile list' for available profiles",
-                cli_profiles[i]
-            );
-        }
-        /* Non-strict: skip non-existent profiles silently */
-    }
-
-    *out = validated;
-    return NULL;
-}
-
-/**
- * Validate that filter profiles are enabled
- *
- * Ensures CLI filter only references profiles that are actually enabled in the
- * workspace.
- */
-error_t *profile_validate_filter(
-    const string_array_t *enabled_profiles,
-    const string_array_t *filter
-) {
-    CHECK_NULL(enabled_profiles);
-
-    /* NULL filter is valid (no filter) */
-    if (!filter) {
-        return NULL;
-    }
-
-    /* Check each filter profile is in workspace */
-    for (size_t i = 0; i < filter->count; i++) {
-        const char *filter_name = filter->items[i];
-        bool found = false;
-
-        for (size_t j = 0; j < enabled_profiles->count; j++) {
-            if (strcmp(enabled_profiles->items[j], filter_name) == 0) {
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            return ERROR(
-                ERR_INVALID_ARG, "Profile '%s' is not enabled\n"
-                "Hint: Run 'dotta profile enable %s' first",
-                filter_name, filter_name
-            );
-        }
-    }
-
-    return NULL;
 }
 
 /**
@@ -982,8 +893,8 @@ error_t *profile_build_file_index(
         goto cleanup;
     }
 
-    /* Get all branches */
-    err = gitops_list_branches(repo, &all_branches);
+    /* Every profile here */
+    err = profile_list_all_local(repo, &all_branches);
     if (err) {
         err = error_wrap(err, "Failed to list branches");
         goto cleanup;
@@ -993,11 +904,7 @@ error_t *profile_build_file_index(
     for (size_t i = 0; i < all_branches->count; i++) {
         const char *branch_name = all_branches->items[i];
 
-        /* Skip excluded profile and dotta-worktree */
-        if (strcmp(branch_name, "dotta-worktree") == 0) {
-            continue;
-        }
-
+        /* Skip the excluded profile */
         if (exclude_profile && strcmp(branch_name, exclude_profile) == 0) {
             continue;
         }
@@ -1066,7 +973,7 @@ error_t *profile_discover_file(
      * branch for the specific file instead of building the full file index
      * (profile_build_file_index walks every tree, O(M×P)). */
     string_array_t *all_branches = NULL;
-    err = gitops_list_branches(repo, &all_branches);
+    err = profile_list_all_local(repo, &all_branches);
     if (err) {
         return error_wrap(
             err, "Failed to list branches for file discovery"
@@ -1081,10 +988,6 @@ error_t *profile_discover_file(
 
     for (size_t i = 0; i < all_branches->count; i++) {
         const char *branch = all_branches->items[i];
-
-        if (strcmp(branch, "dotta-worktree") == 0) {
-            continue;
-        }
 
         git_tree *tree = NULL;
         err = gitops_load_branch_tree(repo, branch, &tree, NULL);

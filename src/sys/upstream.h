@@ -116,10 +116,12 @@ error_t *upstream_discover_branches(
 );
 
 /**
- * Create local tracking branch from remote
+ * Make a remote branch local, or leave the local one where it stands
  *
- * Creates a local branch that tracks a remote branch, setting the local branch
- * to point at the same commit as the remote.
+ * A local branch of the name exists after the call. One already here is left as
+ * it is: a fetch moves the remote-tracking ref and never the local branch — merging
+ * the two is sync's, through sys/resolve — so the fetch sites ask nothing first
+ * and print one word, "Fetched". One absent is created at the remote's commit.
  *
  * Refuses with ERR_CONFLICT, naming both branches, when the local ref namespace
  * cannot hold the name beside one already there (`gitops_branch_blocker`) — the
@@ -131,7 +133,7 @@ error_t *upstream_discover_branches(
  * @param branch_name Branch name
  * @return Error or NULL on success
  */
-error_t *upstream_create_tracking_branch(
+error_t *upstream_ensure_tracking_branch(
     git_repository *repo,
     const char *remote_name,
     const char *branch_name

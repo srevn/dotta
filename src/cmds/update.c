@@ -1666,7 +1666,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_count    = opts->exclude_count,
     };
     err = scope_build(
-        repo, state, &scope_inputs, config, mounts, ctx->arena, &scope
+        repo, state, &scope_inputs, mounts, ctx->arena, &scope
     );
     if (err) goto cleanup;
 

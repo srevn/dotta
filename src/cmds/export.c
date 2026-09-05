@@ -55,6 +55,7 @@
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/metadata.h"
+#include "core/profiles.h"
 #include "infra/content.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -770,19 +771,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     char commit_suffix[16] = "";
 
     /* Export is local-only: no network IO, ever. The explicit porcelain for making
-     * a profile local already exists. */
-    bool exists = false;
-    err = gitops_branch_exists(repo, opts->profile, &exists);
+     * a profile local already exists, and the refusal names it. */
+    err = profile_require(repo, opts->profile);
     if (err) goto cleanup;
-    if (!exists) {
-        err = ERROR(
-            ERR_NOT_FOUND,
-            "Profile '%s' is not available locally\n"
-            "Hint: Fetch it first: dotta profile fetch %s",
-            opts->profile, opts->profile
-        );
-        goto cleanup;
-    }
 
     /* Load the tree (HEAD or historical commit). Metadata comes from the SAME
      * tree below, so historical exports get historical modes and encryption

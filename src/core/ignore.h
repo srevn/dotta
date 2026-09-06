@@ -4,7 +4,7 @@
  * Dotta composes four user-authored layers into a single gitignore ruleset per
  * operation:
  *
- *   1. Baseline `.dottaignore` on `dotta-worktree` (machine-local;
+ *   1. Baseline `.dottaignore` at `refs/dotta/baseline` (this machine's;
  *      seeded by `dotta init` / `dotta clone`, editable via `dotta ignore`).
  *      Falls back to compiled defaults when absent.
  *   2. Profile `.dottaignore` on the profile branch.
@@ -63,6 +63,22 @@
 typedef struct gitignore_ruleset gitignore_ruleset_t;
 
 /**
+ * The baseline's home: a ref of this machine's own.
+ *
+ * It stands beside the epoch in refs/dotta and differs from it in one way — the
+ * epoch syncs, the baseline never does. Sync's unit is a branch and the clone
+ * fetches branches and the epoch, so the ref is made by `dotta init` and `dotta
+ * clone` (once, with the defaults) and moved only by `dotta ignore`; no remote
+ * holds it, and the epoch's restore refspec names the epoch alone (infra/epoch.h)
+ * so a hand fetch cannot replace it with a remote's. Local by decision, not by
+ * accident: the profile's `.dottaignore` travels with the profile, the config's
+ * patterns stay with the machine, and the baseline sits between — the repository's
+ * layer by intent, this machine's for as long as sync's unit is a branch. The
+ * day that unit is a ref, this is the first to travel.
+ */
+#define BASELINE_REF "refs/dotta/baseline"
+
+/**
  * Layered-ruleset builder — command-scoped.
  *
  * Loads the common layers (baseline / builtin, config, CLI) once on construction
@@ -88,7 +104,7 @@ typedef struct ignore_rules ignore_rules_t;
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
     IGNORE_ORIGIN_BUILTIN,    /* Compiled defaults (fallback when baseline absent) */
-    IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore on dotta-worktree */
+    IGNORE_ORIGIN_BASELINE,   /* Baseline .dottaignore at BASELINE_REF */
     IGNORE_ORIGIN_PROFILE,    /* Profile .dottaignore on its branch */
     IGNORE_ORIGIN_CONFIG,     /* Config file patterns */
     IGNORE_ORIGIN_CLI         /* --exclude flags (highest priority) */
@@ -97,7 +113,7 @@ typedef enum {
 /**
  * Create the layered-ruleset builder.
  *
- * Loads the baseline `.dottaignore` from `dotta-worktree` (falling back to compiled
+ * Loads the baseline `.dottaignore` from BASELINE_REF (falling back to compiled
  * defaults when absent) and captures the config and CLI pattern arrays for
  * per-profile composition. Does not touch the profile branch until
  * `ignore_rules_for_profile` is called.
@@ -178,12 +194,12 @@ error_t *ignore_rules_for_profile(
 const char *ignore_origin_describe(ignore_origin_t origin);
 
 /**
- * Read a `.dottaignore` blob from a branch into a heap buffer.
+ * Read a `.dottaignore` blob from a ref into a heap buffer.
  *
  * Returns (*out_content = NULL, *out_size = 0) without error when any of the
  * following hold:
- *   - The branch does not exist
- *   - The branch has no `.dottaignore` at its tree root
+ *   - The ref does not exist
+ *   - Its tree has no `.dottaignore` at the root
  *   - The blob is empty
  *
  * Only I/O failures, malformed trees, OOM, or the 1 MB size cap produce an error.
@@ -192,36 +208,34 @@ const char *ignore_origin_describe(ignore_origin_t origin);
  * NUL-terminated buffer of `*out_size` bytes. The caller owns it.
  *
  * @param repo        Repository (must not be NULL)
- * @param branch      Short branch name (must not be NULL or empty)
+ * @param refname     Full reference name — BASELINE_REF, or a profile's through
+ *                    gitops_branch_refname (must not be NULL or empty)
  * @param out_content Output content (must not be NULL); NULL when absent
  * @param out_size    Output size in bytes (may be NULL)
  * @return Error or NULL on success
  */
 error_t *ignore_blob_read(
     git_repository *repo,
-    const char *branch,
+    const char *refname,
     char **out_content,
     size_t *out_size
 );
 
 /**
- * Write `content` as the `.dottaignore` blob on `branch`, creating a commit with
- * `commit_msg`.
+ * Write `content` as the `.dottaignore` blob on `refname`, creating a commit
+ * with `commit_msg`.
  *
- * One stage: open the branch, put the blob, commit — so a blob identical to the
- * branch's commits nothing (the stage's own rule), and the branch must exist
- * (ERR_NOT_FOUND otherwise; the callers verify it up front). Rejects writes above
- * the 1 MB cap up front — symmetric with `ignore_blob_read`, so an editor buffer
- * that somehow grew past the cap fails cleanly instead of committing a blob that
- * later refuses to load.
- *
- * When `branch` is the one the store's main worktree holds checked out — the
- * baseline's, until the anchor goes — the checked-out copy of `.dottaignore`
- * follows the commit, so the store's index and working copy never sit one tree
- * behind HEAD.
+ * One stage: open the ref, put the blob, commit — so a blob identical to the
+ * ref's commits nothing (the stage's own rule), and the ref must exist
+ * (ERR_NOT_FOUND otherwise; the callers verify it up front — the profile named,
+ * or the baseline `dotta init` seeded). Rejects writes above the 1 MB cap up
+ * front — symmetric with `ignore_blob_read`, so an editor buffer that somehow
+ * grew past the cap fails cleanly instead of committing a blob that later refuses
+ * to load.
  *
  * @param repo       Repository (must not be NULL)
- * @param branch     Short branch name (must not be NULL or empty)
+ * @param refname    Full reference name — BASELINE_REF, or a profile's through
+ *                   gitops_branch_refname (must not be NULL or empty)
  * @param content    Blob content (must not be NULL; may be empty)
  * @param size       Size in bytes (must be <= 1 MB)
  * @param commit_msg Commit message (must not be NULL)
@@ -229,33 +243,30 @@ error_t *ignore_blob_read(
  */
 error_t *ignore_blob_write(
     git_repository *repo,
-    const char *branch,
+    const char *refname,
     const char *content,
     size_t size,
     const char *commit_msg
 );
 
 /**
- * Seed the baseline `.dottaignore` on `dotta-worktree`.
+ * Seed the baseline `.dottaignore` at BASELINE_REF.
  *
- * Called by `dotta init` and `dotta clone` so every repo has a visible, editable
- * starting point for machine-local ignore extensions.
+ * Called by `dotta init` and `dotta clone` so every store has a visible, editable
+ * starting point for this machine's ignore extensions: the defaults, as a root
+ * commit on a ref that did not exist.
  *
- * Seed, not set: once the file is on the branch its content is the user's, and
- * `dotta ignore` is how it changes. `dotta init` is idempotent by re-running
- * its steps, and this step's idempotence is "already seeded → nothing to do" —
- * not "rewrite with the defaults", which is what `ignore_blob_write` does (it
- * no-ops only on *identical* content) and which silently discarded a customised
- * baseline on every re-init, blob and checked-out copy alike.
+ * Seed, not set: the ref's presence is the seed. It is made here and nowhere
+ * else, and once it stands its tree is the user's — a pattern removed, the file
+ * emptied, even the entry taken away by hand — and `dotta ignore` is how it
+ * changes. `dotta init` is idempotent by re-running its steps, and this step's
+ * idempotence is "the ref stands → nothing to do", never "rewrite with the
+ * defaults", which is what `ignore_blob_write` does (it no-ops only on *identical*
+ * content) and which once silently discarded a customised baseline on every
+ * re-init. A ref that appears between the look and the seed's commit — two inits
+ * racing — is refused by the stage, not seeded over.
  *
- * When nothing is seeded yet, a non-empty `.dottaignore` already at the repository
- * root is adopted rather than overwritten: that path is the baseline's own checkout
- * location, so a file there is the baseline the user wrote before dotta tracked it.
- *
- * The branch is the caller's to establish — `dotta init` and `dotta clone` both
- * create it a few steps above this call, and the write loads its tree either way.
- *
- * @param repo Repository (must not be NULL; must have dotta-worktree)
+ * @param repo Repository (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *ignore_seed_baseline(git_repository *repo);

@@ -461,16 +461,15 @@ static error_t *edit_content_via_editor(
 }
 
 /**
- * File-local scope for the two .dottaignore-editing surfaces: the baseline on
- * dotta-worktree, and any named profile branch.
+ * File-local scope for the two .dottaignore-editing surfaces: the baseline at
+ * its own ref, and any named profile branch.
  *
  * Captures everything that differs between the two so edit_dottaignore and
- * modify_dottaignore stay branch-agnostic. Constructed on the stack in cmd_ignore;
- * label strings for the profile case are heap-owned with matching cmd_ignore
- * lifetime.
+ * modify_dottaignore stay ref-agnostic. Constructed on the stack in cmd_ignore;
+ * the profile's refname and label live in that frame too.
  */
 typedef struct {
-    const char *branch_name;    /* "dotta-worktree" or profile name */
+    const char *refname;        /* BASELINE_REF or the profile's branch ref */
     const char *display_label;  /* "baseline" or "profile 'X'" */
     const char *default_seed;   /* default content / profile template */
 } dottaignore_scope_t;
@@ -478,9 +477,9 @@ typedef struct {
 /**
  * Edit a .dottaignore via external editor.
  *
- * Called with scope->branch_name already verified to exist (cmd_ignore hoists
- * that check). Loads existing content, delegates to the editor helper, commits
- * the result back to the same branch.
+ * Called with scope->refname already verified to exist (cmd_ignore hoists that
+ * check). Loads existing content, delegates to the editor helper, commits the
+ * result back to the same ref.
  */
 static error_t *edit_dottaignore(
     git_repository *repo,
@@ -493,7 +492,7 @@ static error_t *edit_dottaignore(
     char *existing_content = NULL;
     size_t existing_size = 0;
     error_t *err = ignore_blob_read(
-        repo, scope->branch_name, &existing_content, &existing_size
+        repo, scope->refname, &existing_content, &existing_size
     );
     if (err) {
         return error_wrap(
@@ -550,7 +549,7 @@ static error_t *edit_dottaignore(
     }
 
     err = ignore_blob_write(
-        repo, scope->branch_name, new_content, new_size, commit_msg
+        repo, scope->refname, new_content, new_size, commit_msg
     );
     free(commit_msg);
     free(new_content);
@@ -561,9 +560,6 @@ static error_t *edit_dottaignore(
         );
     }
 
-    /* INDEX and workdir are kept in sync by ignore_blob_write for the
-     * current-branch case — no explicit worktree sync needed here. */
-
     output_success(
         out, OUTPUT_NORMAL, "Updated %s .dottaignore", scope->display_label
     );
@@ -573,7 +569,7 @@ static error_t *edit_dottaignore(
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with scope->branch_name already verified to exist. Load existing content,
+ * Called with scope->refname already verified to exist. Load existing content,
  * apply add/remove transforms, commit the result if it actually changed.
  *
  * Ownership is linear: `owned` is the single buffer this function frees at every
@@ -597,7 +593,7 @@ static error_t *modify_dottaignore(
 
     char *owned = NULL;
     error_t *err = ignore_blob_read(
-        repo, scope->branch_name, &owned, NULL
+        repo, scope->refname, &owned, NULL
     );
     if (err) {
         return error_wrap(
@@ -712,7 +708,7 @@ static error_t *modify_dottaignore(
     }
 
     err = ignore_blob_write(
-        repo, scope->branch_name,
+        repo, scope->refname,
         owned, strlen(owned), commit_msg
     );
 
@@ -724,9 +720,6 @@ static error_t *modify_dottaignore(
             err, "Failed to update %s .dottaignore", scope->display_label
         );
     }
-
-    /* INDEX and workdir are kept in sync by ignore_blob_write for the
-     * current-branch case — no explicit worktree sync needed here. */
 
     if (total_added > 0) {
         output_success(
@@ -1120,52 +1113,63 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         return test_path_ignore(ctx, opts->test_path, opts->profile);
     }
 
-    /* Build the dottaignore_scope_t for edit / modify. Profile labels are
-     * heap-formatted here; lifetime matches this function frame. */
+    /* The scope for edit / modify: the file's home, its name on the screen, and
+     * what an editor opens on when the file is not there yet. Each arm establishes
+     * its home before naming it — the profile named must be here, the baseline's
+     * ref must stand — so edit and modify start on a ref that exists. The profile's
+     * refname and label live in this frame. */
+    char refname[DOTTA_REFNAME_MAX];
     char *profile_label = NULL;
     dottaignore_scope_t scope;
+    error_t *err = NULL;
     if (opts->profile) {
+        err = profile_require(repo, opts->profile);
+        if (err) {
+            return err;
+        }
+        err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
+        if (err) {
+            return err;
+        }
         profile_label = str_format("profile '%s'", opts->profile);
         if (!profile_label) {
             return ERROR(ERR_MEMORY, "Failed to format scope label");
         }
         scope = (dottaignore_scope_t){
-            .branch_name = opts->profile,
+            .refname = refname,
             .display_label = profile_label,
             .default_seed = ignore_profile_template(),
         };
     } else {
+        /* Seeded by `dotta init` and `dotta clone`; absent only by hand, and
+         * init is what puts it back. */
+        bool seeded = false;
+        err = gitops_reference_exists(repo, BASELINE_REF, &seeded);
+        if (err) {
+            return err;
+        }
+        if (!seeded) {
+            return ERROR(
+                ERR_NOT_FOUND,
+                "No baseline .dottaignore: '%s' does not exist\n"
+                "Run 'dotta init' to seed it with the default patterns",
+                BASELINE_REF
+            );
+        }
         scope = (dottaignore_scope_t){
-            .branch_name = "dotta-worktree",
+            .refname = BASELINE_REF,
             .display_label = "baseline",
             .default_seed = ignore_baseline_defaults(),
         };
     }
 
-    /* Verify the scope branch exists once, up front, so edit/modify start with
-     * a guaranteed-present branch: the profile named, or dotta's own. */
-    error_t *err = NULL;
-    if (opts->profile) {
-        err = profile_require(repo, opts->profile);
+    if (has_modify) {
+        err = modify_dottaignore(
+            repo, &scope, opts->add_patterns, opts->add_count,
+            opts->remove_patterns, opts->remove_count, out
+        );
     } else {
-        bool branch_exists = false;
-        err = gitops_branch_exists(repo, scope.branch_name, &branch_exists);
-        if (!err && !branch_exists) {
-            err = ERROR(
-                ERR_INTERNAL, "dotta-worktree does not exist. Run 'dotta init'."
-            );
-        }
-    }
-
-    if (!err) {
-        if (has_modify) {
-            err = modify_dottaignore(
-                repo, &scope, opts->add_patterns, opts->add_count,
-                opts->remove_patterns, opts->remove_count, out
-            );
-        } else {
-            err = edit_dottaignore(repo, &scope, out);
-        }
+        err = edit_dottaignore(repo, &scope, out);
     }
 
     free(profile_label);

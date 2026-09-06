@@ -79,8 +79,7 @@ static error_t *init_repository(const char *path, git_repository **out, bool *is
  *                           writes. Presence alone: an unreadable epoch is still
  *                           dotta's, and `epoch_init` is what judges the payload
  *   no references at all    a bare `git init`. Untracked files are not history
- *                           and no step below touches them — the one that could,
- *                           the `.dottaignore` seed, adopts rather than overwrites
+ *                           and no step below touches them
  *
  * Anything else holds a history dotta did not write. Warn-and-continue would be
  * worse than refusing: by the time a warning printed, HEAD would have moved. A
@@ -356,9 +355,8 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         goto cleanup;
     }
 
-    /* Baseline .dottaignore on dotta-worktree. Seeded once: a branch that already
-     * carries the file keeps whatever the user made of it, and an untracked one
-     * sitting at the repository root is adopted rather than overwritten. */
+    /* Baseline .dottaignore at its own ref. Seeded once: a ref that already stands
+     * keeps whatever the user made of it. */
     err = ignore_seed_baseline(repo);
     if (err) {
         err = error_wrap(err, "Failed to seed baseline .dottaignore");

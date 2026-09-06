@@ -124,8 +124,8 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
  * that will not open, one whose bytes are not an OID — is the error, never an
  * absence, and every caller propagates it: a bool that read it as "no" once sent
  * the user to fetch a profile that was here. One lookup answers it for any ref
- * (a branch, the epoch); a name outside refs/heads is the caller's to spell in
- * full.
+ * (a branch, the epoch, the baseline); a name outside refs/heads is the caller's
+ * to spell in full.
  *
  * @param repo Repository (must not be NULL)
  * @param refname Full reference name (must not be NULL or empty)

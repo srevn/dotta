@@ -78,9 +78,10 @@
  * Forced, because an epoch commit is a root: over a ref that is present but
  * unreadable a plain fetch is rejected as non-fast-forward and restores nothing.
  * Naming the one ref and not its namespace: a restore is of the epoch, and
- * refs/dotta is dotta's namespace, not the epoch's alone. The four refusals that
- * name the restore print it — main.c's dispatch, epoch_init's two arms, sync's
- * epoch_emit_damaged — as `dotta git fetch origin '<refspec>'`. */
+ * refs/dotta holds this machine's baseline beside it (core/ignore.h), which a
+ * glob would replace with a remote's. The four refusals that name the restore
+ * print it — main.c's dispatch, epoch_init's two arms, sync's epoch_emit_damaged
+ * — as `dotta git fetch origin '<refspec>'`. */
 #define EPOCH_RESTORE_REFSPEC "+" EPOCH_REF ":" EPOCH_REF
 
 /** Tree-entry names for the two blobs. */

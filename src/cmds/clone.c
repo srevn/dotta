@@ -655,15 +655,15 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         goto cleanup;
     }
 
-    /* Seed baseline .dottaignore on dotta-worktree with default patterns.
+    /* Seed the baseline .dottaignore at its own ref with the default patterns.
      *
-     * dotta-worktree is filtered from push/fetch (see upstream.c), so a cloned
-     * machine starts without one. Seeding here gives every repo the same visible,
-     * editable starting point that `dotta init` creates — and ensures the safety
-     * defaults are applied via the baseline path rather than only through the
-     * compiled fallback.
+     * The baseline is this machine's and never travels (core/ignore.h) — the
+     * clone fetched branches and the epoch — so a cloned machine starts without
+     * one. Seeding here gives every store the same visible, editable starting
+     * point that `dotta init` creates — and ensures the safety defaults are applied
+     * via the baseline path rather than only through the compiled fallback.
      *
-     * Seeded once: a branch that already carries the file is left alone. */
+     * Seeded once: a ref that already stands is left alone. */
     err = ignore_seed_baseline(repo);
     if (err) {
         err = error_wrap(err, "Failed to seed baseline .dottaignore");

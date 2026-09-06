@@ -551,11 +551,17 @@ error_t *fs_ensure_parent_dirs(const char *path);
  * Unlike fs_canonicalize_path() which uses realpath() and resolves all symlinks,
  * this function makes a path absolute while preserving symlink locations.
  *
- * Converts relative paths to absolute by prepending current working directory.
- * A pure string operation: the path need not exist — a command that names a file
- * dotta manages but the disk no longer has (apply to redeploy it, remove, revert,
- * show) resolves it like any other. Callers that need the path to exist check
- * that themselves (add does, with lexists).
+ * A relative path is the working directory's, spelled as the shell spells it:
+ * $PWD by pwd -L's rule (absolute, no `.` or `..` component, one device and inode
+ * with "."), getcwd's physical path when the shell set none or it has gone stale.
+ * Logical, because every root dotta spells is logical — HOME is the identity's,
+ * a target is what its binder typed — and a physical spelling names the same
+ * file under a string none of them match (macOS's /tmp is /private/tmp). A pure
+ * string operation past that one look: the path need not exist — a command that
+ * names a file dotta manages but the disk no longer has (apply to redeploy it,
+ * remove, revert, show) resolves it like any other. Callers that need the path
+ * to exist check that themselves (add does, with lexists); the argument's own
+ * `.` and `..` are kept for the caller's fs_normalize_path.
  *
  * This preserves symlink locations for storage path determination, preventing
  * accidental tracking of symlink targets at unintended locations.
@@ -564,6 +570,7 @@ error_t *fs_ensure_parent_dirs(const char *path);
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)
  *   mylink            -> /current/dir/mylink
  *   relative/path     -> /current/dir/relative/path
+ *   ./x, .            -> /current/dir/./x, /current/dir/.
  *
  * @param path Input path (must not be NULL, must not contain ~)
  * @param out Absolute path (caller frees, must not be NULL)

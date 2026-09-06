@@ -1259,6 +1259,23 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
 /**
  * Path operations
  */
+
+/* pwd -L's rule: $PWD is the working directory when it is absolute, carries no
+ * `.` or `..` component and names the directory the process is in (one device
+ * and inode with "."). It is carried as it stands, so a component the lexical
+ * fold would move is refused with it. */
+static bool pwd_is_here(const char *pwd) {
+    if (!pwd || pwd[0] != '/') return false;
+    for (const char *p = pwd; *p; p++) {
+        if (p[0] != '/' || p[1] != '.') continue;
+        if (p[2] == '\0' || p[2] == '/') return false;
+        if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
+    }
+    struct stat named, here;
+    return fs_stat(pwd, &named) == 0 && fs_stat(".", &here) == 0 &&
+           named.st_dev == here.st_dev && named.st_ino == here.st_ino;
+}
+
 error_t *fs_make_absolute(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
@@ -1272,10 +1289,16 @@ error_t *fs_make_absolute(const char *path, char **out) {
             return ERROR(ERR_MEMORY, "Failed to duplicate path");
         }
     } else {
-        /* Relative path - prepend current working directory */
-        char cwd[PATH_MAX];
-        if (getcwd(cwd, sizeof(cwd)) == NULL) {
-            return error_from_errno(errno, "Failed to get current directory");
+        /* A relative path is the working directory's, spelled as the shell spells
+         * it: $PWD by pwd -L's rule, getcwd's physical path when the shell set
+         * none or it has gone stale. */
+        char physical[PATH_MAX];
+        const char *cwd = getenv("PWD");
+        if (!pwd_is_here(cwd)) {
+            if (getcwd(physical, sizeof(physical)) == NULL) {
+                return error_from_errno(errno, "Failed to get current directory");
+            }
+            cwd = physical;
         }
 
         error_t *err = fs_path_join(cwd, path, &absolute);

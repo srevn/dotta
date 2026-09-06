@@ -25,8 +25,10 @@
  * tree — its custom/ paths — stands here. The target is part of the enablement,
  * not of the branch: bound by `enable --target` and `add --target`, moved in
  * place by `enable --target`, kept by an enable that names none, and gone with
- * the row when the profile is disabled. A row without one leaves that tree
- * unmounted; the build holds its claims (manifest_unbound).
+ * the row when the profile is disabled. A profile with custom/ paths is enabled
+ * only with a target; the one row without one that can exist is the profile a
+ * sync brought custom/ paths into after it was enabled here, and the build holds
+ * that tree's claims until it is bound (manifest_unbound).
  *
  * Database location: .git/dotta.db
  *

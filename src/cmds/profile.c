@@ -621,11 +621,14 @@ cleanup:
  * set as it stands at dispatch (the spec declares it; a set that will not build
  * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
- *      already-enabled, missing, and custom-without-target profiles. Emits
- *      per-profile warnings; produces to_enable_validated. An already-enabled
- *      profile named with a --target that differs from its row's is not a skip:
- *      it re-enters the validated set as a retarget, and `retarget` remembers
- *      which one (at most one — the --target-single-profile rule above).
+ *      the already-enabled, the missing, and the custom-bearing named without a
+ *      target: a profile with custom/ paths is enabled only with one, so such a
+ *      profile is skipped and told the flag, whatever the request shape, and a
+ *      run that enabled nothing is an error. Emits per-profile warnings; produces
+ *      to_enable_validated. An already-enabled profile named with a --target
+ *      that differs from its row's is not a skip: it re-enters the validated
+ *      set as a retarget, and `retarget` remembers which one (at most one — the
+ *      --target-single-profile rule above).
  *   2. Commit scope to state — state_enable_profile per target. The one call
  *      serves both kinds: a fresh enable inserts the row, a retarget runs the
  *      UPSERT arm state.h documents (target and timestamp move, position stays).
@@ -669,6 +672,7 @@ static error_t *profile_enable(
     const char *retarget = NULL;
     size_t already_enabled = 0;
     size_t not_found = 0;
+    size_t needs_target = 0;
 
     /* Phase 1: Gather & validate */
     err = state_get_profiles(state, &enabled);
@@ -775,13 +779,10 @@ static error_t *profile_enable(
         }
     }
 
-    /* Filter: already-enabled and missing-branch are non-fatal per-profile skips
-     * — unless the already-enabled profile came with a differing --target, which
-     * is a retarget and stays in the run's work. Custom-without-target is fatal
-     * — the profile exists but the user's input is incomplete, which is
-     * categorically different from "not found". Treating it as a per-profile
-     * skip previously leaked into the not_found tally and produced contradictory
-     * diagnostics. The surviving set lands in to_enable_validated. */
+    /* Filter: already-enabled, missing-branch and custom-without-target are
+     * per-profile skips, each with its own tally — unless the already-enabled
+     * profile came with a differing --target, which is a retarget and stays in
+     * the run's work. The surviving set lands in to_enable_validated. */
     to_enable_validated = string_array_new(0);
     if (!to_enable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create validated list");
@@ -843,32 +844,25 @@ static error_t *profile_enable(
             continue;
         }
 
-        /* Check if profile contains custom/ files */
+        /* A profile with custom/ paths is enabled only with a target: the binding
+         * is part of the enablement, and a row without one would hold every custom/
+         * claim while the screens said "enabled". Skipped and named with the
+         * flag, whatever the request shape; a run that enabled nothing ends in
+         * the error below. A tree Git cannot read is that error now, not a profile
+         * assumed to hold no custom/ paths. */
         bool has_custom = false;
         err = profile_has_custom_files(repo, profile, &has_custom);
-        if (err) {
-            /* Non-fatal: assume no custom files */
-            error_free(err);
-            err = NULL;
-        }
-
-        /* Fatal: the profile exists, but its custom/ files require a mount point
-         * the user didn't provide. Mirrors the --target-with-multiple-profiles
-         * check above — both are CLI-input errors, not per-profile skips. */
+        if (err) goto cleanup;
         if (has_custom && !opts->target) {
-            output_error(
-                out, "Profile '%s' contains custom/ files but --target not provided",
-                profile
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Profile '%s' holds custom/ paths and needs a target here", profile
             );
             output_hint(
-                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path/to/target",
-                profile
+                out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", profile
             );
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' requires --target", profile
-            );
-            goto cleanup;
+            needs_target++;
+            continue;
         }
 
         err = string_array_push(to_enable_validated, profile);
@@ -922,12 +916,22 @@ static error_t *profile_enable(
                 not_found, not_found == 1 ? "" : "s"
             );
         }
+        if (needs_target > 0) {
+            output_warning(
+                out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
+                needs_target, needs_target == 1 ? "" : "s",
+                needs_target == 1 ? "s" : ""
+            );
+        }
         /* Mirror the live-path terminal: if nothing would be enabled because
-         * every requested profile was missing, surface the same error a live
-         * run would produce. Idempotent cases (all already enabled) fall through
-         * to cleanup with err == NULL. */
-        if (to_enable_validated->count == 0 && not_found > 0) {
-            err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
+         * every requested profile was missing or needs a target, surface the
+         * same error a live run would produce. Idempotent cases (all already
+         * enabled) fall through to cleanup with err == NULL. */
+        if (to_enable_validated->count == 0 && (not_found > 0 || needs_target > 0)) {
+            err = ERROR(
+                not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
+                "No profiles were enabled"
+            );
         }
         goto cleanup;
     }
@@ -1042,13 +1046,24 @@ static error_t *profile_enable(
             not_found, not_found == 1 ? "" : "s"
         );
     }
+    if (needs_target > 0) {
+        output_warning(
+            out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
+            needs_target, needs_target == 1 ? "" : "s",
+            needs_target == 1 ? "s" : ""
+        );
+    }
 
     /* Terminal: error only if the user's inputs produced zero validated profiles
-     * AND at least one was genuinely missing. Pure idempotent cases (all
-     * already-enabled, or --all on an empty repo) fall through to cleanup with
-     * err == NULL. */
-    if (to_enable_validated->count == 0 && not_found > 0) {
-        err = ERROR(ERR_NOT_FOUND, "No profiles were enabled");
+     * AND at least one was genuinely missing or needs a target — the code names
+     * which, for the reader; every error exits the same. Pure idempotent cases
+     * (all already-enabled, or --all on an empty repo) fall through to cleanup
+     * with err == NULL. */
+    if (to_enable_validated->count == 0 && (not_found > 0 || needs_target > 0)) {
+        err = ERROR(
+            not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
+            "No profiles were enabled"
+        );
     }
 
 cleanup:

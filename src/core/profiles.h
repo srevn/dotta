@@ -283,8 +283,11 @@ error_t *profile_list_files(
 /**
  * Check if profile contains any custom/ files
  *
- * Loads profile and scans for files with custom/ prefix. Used by command layer
- * to validate --target requirement.
+ * The branch probe: does this profile hold a tree that needs a target here? A
+ * profile with custom/ paths is enabled only with one, and the three enable sites
+ * read this before the row is written — `profile enable` (the skip), clone (the
+ * skip), the interactive rows (the gate on space, and the mark). The probe reads
+ * the branch, so it answers for a set the build refuses too.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)

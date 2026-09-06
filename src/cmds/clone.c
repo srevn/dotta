@@ -167,10 +167,14 @@ static error_t *land_all_profiles(
 }
 
 /**
- * Initialize state with fetched profiles
+ * Initialize state with the profiles clone enables
+ *
+ * Creates the database whatever `profiles` holds, enables exactly the names given
+ * — the caller decided which fetched profiles this machine can place — and names
+ * them when there are any.
  *
  * @param repo Repository
- * @param profiles Profile names to set as enabled (must not be NULL)
+ * @param profiles Profile names to set as enabled (must not be NULL; may be empty)
  * @param out Output context
  * @return Error or NULL on success
  */
@@ -195,9 +199,9 @@ static error_t *initialize_state(
     /* Enable each profile individually, then build the view over the new set once.
      *
      * state_enable_profile is the membership primitive — clone calls it once
-     * per profile, always with target=NULL: a per-machine target is enable's to
-     * bind later, and a custom/-bearing profile's claims are simply held by the
-     * build (recorded on the view) until it is.
+     * per profile, always with target=NULL: the caller hands it only profiles
+     * without custom/ paths, so there is nothing to bind, and a per-machine target
+     * is enable's to give later.
      *
      * The view is computed, never stored: the build writes nothing and its result
      * is discarded. It is the tripwire that keeps clone from landing an enabled
@@ -233,23 +237,23 @@ static error_t *initialize_state(
 
     state_free(state);
 
-    /* Build profile list string */
-    char profiles_str[1024] = { 0 };
-    size_t offset = 0;
-    for (size_t i = 0; i < profiles->count && offset < sizeof(profiles_str) - 1; i++) {
+    /* The names enabled, when there are any: a run that enabled nothing said
+     * why per profile above, and has no list to print. */
+    if (profiles->count > 0) {
+        char profiles_str[1024] = { 0 };
+        size_t offset = 0;
+        for (size_t i = 0; i < profiles->count && offset < sizeof(profiles_str) - 1; i++) {
+            int written = snprintf(
+                profiles_str + offset, sizeof(profiles_str) - offset,
+                "%s%s", profiles->items[i], (i < profiles->count - 1) ? ", " : ""
+            );
+            if (written > 0) offset += written;
+        }
 
-        int written = snprintf(
-            profiles_str + offset, sizeof(profiles_str) - offset,
-            "%s%s", profiles->items[i], (i < profiles->count - 1) ? ", " : ""
+        output_success(
+            out, OUTPUT_NORMAL, "Initialized enabled profiles: %s", profiles_str
         );
-
-        if (written > 0) offset += written;
     }
-
-    output_success(
-        out, OUTPUT_NORMAL, "Initialized enabled profiles: %s",
-        profiles_str
-    );
 
     return NULL;
 }
@@ -322,6 +326,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     transfer_context_t *xfer = NULL;
     string_array_t *fetched_profiles = NULL;
     string_array_t *detected_profiles = NULL;
+    string_array_t to_enable STRING_ARRAY_AUTO = { 0 };
     string_array_t bootstrap_found STRING_ARRAY_AUTO = { 0 };
 
     if (opts->quiet) {
@@ -597,55 +602,40 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         string_array_free(remote_branches);
     }
 
-    /* Initialize state with fetched profiles.
-     *
-     * Profiles with custom/ files need a machine-specific --target to place those
-     * claims, and clone cannot take one (enable's --target names a single profile).
-     * They are enabled anyway: the build holds the unplaceable claims, status
-     * carries the health, and the warning below names the binding verb at the
-     * bootstrap moment — a warned-but-whole bootstrap instead of one that silently
-     * withholds the profile's home/ rows along with its custom/ ones. */
-    if (fetched_profiles->count > 0) {
-        for (size_t i = 0; i < fetched_profiles->count; i++) {
-            const char *profile = fetched_profiles->items[i];
-            bool has_custom = false;
-
-            error_t *check_err = profile_has_custom_files(repo, profile, &has_custom);
-            if (check_err) {
-                /* Cannot determine — enable it; the health surfaces speak if
-                 * its claims turn out unplaceable. */
-                error_free(check_err);
-                continue;
-            }
-
-            if (has_custom) {
-                output_warning(
-                    out, OUTPUT_NORMAL,
-                    "Profile '%s' has custom/ paths that need a deployment target",
-                    profile
-                );
-                output_hint(
-                    out, OUTPUT_NORMAL,
-                    "Run 'dotta profile enable %s --target /path' after setup",
-                    profile
-                );
-            }
+    /* The profiles to enable: every fetched one whose claims this machine can
+     * place. A profile with custom/ paths is enabled only with a target, and
+     * clone cannot take one (enable's --target names a single profile): it is
+     * left fetched and disabled, named here with the command that enables it. A
+     * tree Git cannot read fails the clone, as the build over it would. */
+    for (size_t i = 0; i < fetched_profiles->count; i++) {
+        const char *profile = fetched_profiles->items[i];
+        bool has_custom = false;
+        err = profile_has_custom_files(repo, profile, &has_custom);
+        if (err) goto cleanup;
+        if (has_custom) {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Profile '%s' holds custom/ paths and needs a target here; "
+                "not enabled", profile
+            );
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta profile enable %s --target /path' after setup", profile
+            );
+            continue;
         }
+        err = string_array_push(&to_enable, profile);
+        if (err) goto cleanup;
+    }
 
-        err = initialize_state(repo, ctx->arena, fetched_profiles, out);
-        if (err) {
-            err = error_wrap(err, "Failed to initialize state");
-            goto cleanup;
-        }
-    } else {
-        /* No profiles fetched - initialize empty state */
+    if (fetched_profiles->count == 0) {
         output_warning(out, OUTPUT_NORMAL, "No profiles were fetched");
-        string_array_t empty = { 0 };
-        err = initialize_state(repo, ctx->arena, &empty, out);
-        if (err) {
-            err = error_wrap(err, "Failed to initialize state");
-            goto cleanup;
-        }
+    }
+
+    err = initialize_state(repo, ctx->arena, &to_enable, out);
+    if (err) {
+        err = error_wrap(err, "Failed to initialize state");
+        goto cleanup;
     }
 
     /* Seed the baseline .dottaignore at its own ref with the default patterns.

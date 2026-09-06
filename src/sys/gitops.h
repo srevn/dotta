@@ -96,28 +96,6 @@ error_t *gitops_open_repository(git_repository **out, const char *path);
 void gitops_close_repository(git_repository *repo);
 
 /**
- * Discover repository starting from path
- *
- * Searches upward from start_path to find .git directory.
- *
- * @param out Repository path (must not be NULL, caller must free)
- * @param start_path Starting search path (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_discover_repository(char **out, const char *start_path);
-
-/**
- * Discover and open repository
- *
- * Convenience function combining discover + open.
- *
- * @param out Repository handle (must not be NULL)
- * @param start_path Starting search path (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
-
-/**
  * Check if a reference exists
  *
  * The singular: the ref resolves, or it is absent. Anything else — a loose ref

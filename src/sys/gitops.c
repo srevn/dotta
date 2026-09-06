@@ -92,43 +92,6 @@ void gitops_close_repository(git_repository *repo) {
     }
 }
 
-error_t *gitops_discover_repository(char **out, const char *start_path) {
-    CHECK_NULL(out);
-    CHECK_NULL(start_path);
-
-    git_buf buf = GIT_BUF_INIT;
-    int err = git_repository_discover(&buf, start_path, 0, NULL);
-    if (err < 0) {
-        git_buf_dispose(&buf);
-        return error_from_git(err);
-    }
-
-    *out = strdup(buf.ptr);
-    git_buf_dispose(&buf);
-
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate repository path");
-    }
-
-    return NULL;
-}
-
-error_t *gitops_discover_and_open(git_repository **out, const char *start_path) {
-    CHECK_NULL(out);
-    CHECK_NULL(start_path);
-
-    char *repo_path = NULL;
-    error_t *err = gitops_discover_repository(&repo_path, start_path);
-    if (err) {
-        return err;
-    }
-
-    err = gitops_open_repository(out, repo_path);
-    free(repo_path);
-
-    return err;
-}
-
 /**
  * Branch/Reference operations
  */

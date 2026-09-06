@@ -106,6 +106,11 @@ error_t *mount_validate_storage(const char *storage_path);
 /**
  * Validate a user-provided mount target (the `--target` argument).
  *
+ * The binders resolve first (path_input_normalize: tilde, relative, `.`, `..`),
+ * so the absolute path the row stores is what reaches this check; the syntactic
+ * rules below are the boundary's own and hold for a caller that did not (the
+ * interactive save's validate, on text a resolve refused).
+ *
  * Checks:
  *  - Absolute path (starts with '/')
  *  - Not the filesystem root '/' itself

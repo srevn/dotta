@@ -724,8 +724,10 @@ static error_t *create_commit(
  *            and the command arena)
  * @param mounts The command's table, which binds this profile's target whether
  *               the run brought one or state already held it (must not be NULL)
- * @param opts Command options — the profile added to and the deployment target
- *             for custom/ files, as create_commit reads them (must not be NULL)
+ * @param profile The profile added to (must not be NULL)
+ * @param target The binding the run brought, absolute, or NULL: written for a
+ *               new profile and an enabled one (the UPSERT keeps a row's own
+ *               for a NULL)
  * @param profile_was_new This add created the profile's branch: enable it here
  * @param added_files The files the walk listed, each with the capture's stat
  *                    (must not be NULL)
@@ -738,7 +740,8 @@ static error_t *create_commit(
 static error_t *update_manifest_after_add(
     const dotta_ctx_t *ctx,
     const mount_table_t *mounts,
-    const cmd_add_options_t *opts,
+    const char *profile,
+    const char *target,
     bool profile_was_new,
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
@@ -747,7 +750,7 @@ static error_t *update_manifest_after_add(
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(mounts);
-    CHECK_NULL(opts);
+    CHECK_NULL(profile);
     CHECK_NULL(added_files);
     CHECK_NULL(added_dirs);
     CHECK_NULL(retired);
@@ -771,11 +774,11 @@ static error_t *update_manifest_after_add(
      * state_free automatically rolls back this change. */
     bool enabled = true;
     if (profile_was_new) {
-        err = state_enable_profile(state, opts->profile, opts->target);
+        err = state_enable_profile(state, profile, target);
         if (err) {
             return error_wrap(err, "Failed to enable profile in state");
         }
-    } else if (!state_has_profile(state, opts->profile)) {
+    } else if (!state_has_profile(state, profile)) {
         /* Only an enabled profile has rows in the view, so the anchor pass has
          * no subject and a given target stays unbound (enable's business, when
          * the user gets there). The settle is not gated with them: the commit
@@ -787,8 +790,8 @@ static error_t *update_manifest_after_add(
             return NULL;
         }
         enabled = false;
-    } else if (opts->target) {
-        err = state_enable_profile(state, opts->profile, opts->target);
+    } else if (target) {
+        err = state_enable_profile(state, profile, target);
         if (err) {
             return error_wrap(err, "Failed to update deployment target for profile");
         }
@@ -843,7 +846,7 @@ static error_t *update_manifest_after_add(
         for (size_t i = 0; i < added_files->count; i++) {
             const add_path_t *path = added_files->items[i];
             const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-            if (!row || strcmp(row->profile, opts->profile) != 0) continue;
+            if (!row || strcmp(row->profile, profile) != 0) continue;
 
             error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
             if (anchor_err) {
@@ -853,7 +856,7 @@ static error_t *update_manifest_after_add(
             receipt->synced++;
 
             const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
-            if (was && was->deployed_at > 0 && strcmp(was->profile, opts->profile) != 0) {
+            if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
                 receipt->taken_over++;
             }
         }
@@ -867,7 +870,7 @@ static error_t *update_manifest_after_add(
         for (size_t i = 0; i < added_dirs->count; i++) {
             const add_path_t *path = added_dirs->items[i];
             const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
-            if (!row || strcmp(row->profile, opts->profile) != 0) continue;
+            if (!row || strcmp(row->profile, profile) != 0) continue;
 
             error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
             if (anchor_err) error_free(anchor_err);
@@ -893,7 +896,7 @@ static error_t *update_manifest_after_add(
         const char *fs_path = NULL;
 
         err = mount_resolve(
-            mounts, opts->profile, retired->items[i], ctx->arena, &outcome, &fs_path
+            mounts, profile, retired->items[i], ctx->arena, &outcome, &fs_path
         );
         if (err) {
             hashmap_free(anchor_index, NULL);
@@ -956,6 +959,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     bool committed = false;
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;   /* The command's table: see below */
+    const char *target = NULL;            /* --target, absolute: what the row stores */
 
     /* The ancestry pass's other half: the keys it retired, read by the record
      * write once the commit that drops them has landed. */
@@ -997,9 +1001,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
-    /* Validate deployment target if provided */
+    /* The target, when the run brought one: a filesystem-shaped argument —
+     * absolute, tilde, or relative to the working directory — resolved to the
+     * absolute path the row stores, then held to the target's rules. */
     if (opts->target) {
-        err = mount_validate_target(opts->target);
+        char *absolute = NULL;
+        err = path_input_normalize(opts->target, NULL, &absolute);
+        if (err) goto cleanup;
+        target = arena_strdup(ctx->arena, absolute);
+        free(absolute);
+        if (!target) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate the target");
+            goto cleanup;
+        }
+        err = mount_validate_target(target);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch
@@ -1009,7 +1024,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * moved the tree, the second for the one who has two. Binding a row that
          * has no target, or repeating its own, is fine. */
         const char *existing = state_peek_profile_target(state, opts->profile);
-        if (existing && strcmp(existing, opts->target) != 0) {
+        if (existing && strcmp(existing, target) != 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
                 "Profile '%s' is bound at %s, and a profile has one target\n"
@@ -1027,22 +1042,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * Two modes selected by --target:
      *
-     *   --target given: a single-mount table pairing opts->profile with
-     *     opts->target. Other enabled profiles' bindings are deliberately excluded
-     *     — narrows classification to "what would adding to THIS profile see?",
-     *     so a path under another profile's --target does NOT classify as that
-     *     profile's custom/ namespace. The narrow view also covers the
-     *     brand-new-profile case (no row in ctx->run.mounts yet) and the
-     *     existing-profile-same-target case (idempotent re-bind already verified
-     *     at the pre-flight check at the top of this function).
+     *   --target given: a single-mount table pairing opts->profile with the target.
+     *     Other enabled profiles' bindings are deliberately excluded — narrows
+     *     classification to "what would adding to THIS profile see?", so a path
+     *     under another profile's --target does NOT classify as that profile's
+     *     custom/ namespace. The narrow view also covers the brand-new-profile
+     *     case (no row in ctx->run.mounts yet) and the existing-profile-same-target
+     *     case (idempotent re-bind already verified at the pre-flight check at
+     *     the top of this function).
      *
      *   --target absent: borrow ctx->run.mounts. The full enabled set covers
      *     opts->profile's existing binding (if any) plus HOME and ROOT. Paths
      *     under opts->profile's stored target classify as custom/X correctly
      *     without re-deriving the binding. */
-    if (opts->target) {
+    if (target) {
         mount_table_t *local_mounts = NULL;
-        mount_t mount = { .profile = opts->profile, .target = opts->target };
+        mount_t mount = { .profile = opts->profile, .target = target };
         err = mount_table_build(ctx->arena, &mount, 1, &local_mounts);
         if (err) {
             err = error_wrap(err, "Failed to build mount table");
@@ -1213,7 +1228,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path - normalize it */
-            err = path_input_normalize(file, opts->target, &absolute);
+            err = path_input_normalize(file, target, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
@@ -1543,7 +1558,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     record_receipt_t record = { 0 };
 
     error_t *manifest_err = update_manifest_after_add(
-        ctx, mounts, opts, profile_was_new,
+        ctx, mounts, opts->profile, target, profile_was_new,
         &walk.files, &walk.directories, &ancestry_retired, &record
     );
     if (manifest_err) {
@@ -1813,7 +1828,7 @@ static const args_opt_t add_opts[] = {
     ARGS_STRING(
         "target",                    "<path>",
         cmd_add_options_t,           target,
-        "Declare a relocatable storage root"
+        "Bind the profile's custom/ tree at this directory"
     ),
     ARGS_STRING(
         "m message",                 "<msg>",
@@ -1864,9 +1879,14 @@ const args_command_t spec_add = {
         "   or: %s add [options] --profile <name> <file|dir>...",
     .description =
         "Import files or directories into a profile branch. The storage\n"
-        "prefix derives from the source path — home/ under $HOME, root/\n"
-        "otherwise — unless --target declares a relocatable root, in\n"
-        "which case files are stored as custom/<path-relative-to-root>.\n"
+        "prefix derives from the source path: home/ under $HOME, root/\n"
+        "otherwise, and custom/ under the profile's target.\n"
+        "\n"
+        "--target <dir> binds the profile's custom/ tree at that directory.\n"
+        "A profile has one target; 'dotta profile enable --target' moves it.\n"
+        "Paths are then read as the jail reads them: etc/foo and /etc/foo\n"
+        "both mean <target>/etc/foo.\n"
+        "\n"
         "Metadata (mode, owner) is captured outside HOME.\n",
     .notes       =
         "Exclude Patterns:\n"
@@ -1879,7 +1899,8 @@ const args_command_t spec_add = {
         "  %s add darwin ~/.config/nvim              # Directory\n"
         "  %s add global ~/.ssh/config -e '*.pub'    # With exclude\n"
         "  %s add global ~/.ssh/id_rsa --encrypt     # Force encryption\n"
-        "  %s add web /mnt/jails/web/nginx.conf --target /mnt/jails/web\n",
+        "  %s add web /mnt/jails/web/nginx.conf --target /mnt/jails/web\n"
+        "  cd /mnt/jails/web && %s add web --target . etc/nginx.conf\n",
     .epilogue    =
         "See also:\n"
         "  %s key set                 # Set encryption passphrase\n"

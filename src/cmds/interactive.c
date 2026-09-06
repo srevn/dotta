@@ -24,6 +24,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/gitops.h"
 
 /* --- Style macros --- */
@@ -755,7 +756,17 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
                 /* Empty Enter is a no-op; Esc is the cancel key. */
                 return INTERACTIVE_CONTINUE;
             }
-            char *captured = strdup(p->buffer);
+            /* The path as typed — absolute, tilde, or relative to the working
+             * directory, like a shell's — resolved to the absolute path the row
+             * stores. One that cannot be resolved is kept as typed, for
+             * plan_validate to refuse at save with the message, the way it refuses
+             * a bad path today. */
+            char *captured = NULL;
+            error_t *err = path_input_normalize(p->buffer, NULL, &captured);
+            if (err) {
+                error_free(err);
+                captured = strdup(p->buffer);
+            }
             if (!captured) {
                 return INTERACTIVE_CONTINUE;
             }
@@ -1048,6 +1059,7 @@ const args_command_t spec_interactive = {
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
         "  - Toggling on a custom/-bearing profile opens an inline target prompt\n"
+        "  - A relative target is resolved from this directory, like a shell's\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,

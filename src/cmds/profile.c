@@ -22,6 +22,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
@@ -664,6 +665,7 @@ static error_t *profile_enable(
     hashmap_t *seen_set = NULL;
     manifest_t *after = NULL;
     manifest_diff_stats_t *stats = NULL;
+    char *target = NULL;      /* --target, absolute: what the row stores */
     error_t *err = NULL;
 
     /* Phase 1 observations — tallied during the validation loop. retarget names
@@ -766,13 +768,16 @@ static error_t *profile_enable(
         goto cleanup;
     }
 
-    /* Fatal up-front: validate the prefix value itself. Validating inside the
-     * per-profile loop used to categorize a bad prefix as not_found, which
-     * mislabels a CLI input problem as a missing profile. With the
-     * --target-requires-single-profile rule above, a single validation here covers
-     * every path that can reach Phase 2. */
+    /* Fatal up-front: the target itself. A target is a filesystem-shaped argument
+     * — absolute, tilde, or relative to the working directory, the spelling
+     * completion offers — resolved to the absolute path the row stores and then
+     * held to the target's rules. Validating inside the per-profile loop used
+     * to categorize a bad target as not_found, which mislabels a CLI input problem
+     * as a missing profile. With the --target-requires-single-profile rule above,
+     * a single validation here covers every path that can reach Phase 2. */
     if (opts->target) {
-        err = mount_validate_target(opts->target);
+        err = path_input_normalize(opts->target, NULL, &target);
+        if (!err) err = mount_validate_target(target);
         if (err) {
             err = error_wrap(err, "Invalid --target value");
             goto cleanup;
@@ -806,9 +811,9 @@ static error_t *profile_enable(
              * verb's subject, and state_enable_profile's UPSERT arm updates it
              * in place. Only a differing value is work — the same target is an
              * idempotent re-run and stays the quiet skip below. */
-            if (opts->target) {
+            if (target) {
                 const char *current = state_peek_profile_target(state, profile);
-                if (!current || strcmp(current, opts->target) != 0) {
+                if (!current || strcmp(current, target) != 0) {
                     retarget = profile;
                     err = string_array_push(to_enable_validated, profile);
                     if (err) {
@@ -853,7 +858,7 @@ static error_t *profile_enable(
         bool has_custom = false;
         err = profile_has_custom_files(repo, profile, &has_custom);
         if (err) goto cleanup;
-        if (has_custom && !opts->target) {
+        if (has_custom && !target) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here", profile
@@ -945,7 +950,7 @@ static error_t *profile_enable(
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *profile = to_enable_validated->items[i];
 
-            err = state_enable_profile(state, profile, opts->target);
+            err = state_enable_profile(state, profile, target);
             if (err) {
                 err = error_wrap(
                     err, "Failed to enable profile '%s' in state", profile
@@ -1078,6 +1083,7 @@ cleanup:
     string_array_free(to_enable);
     string_array_free(all_branches);
     string_array_free(enabled);
+    free(target);
 
     return err;
 }
@@ -1953,7 +1959,7 @@ static const args_opt_t profile_enable_opts[] = {
     ARGS_STRING(
         "target",             "<path>",
         cmd_profile_options_t,target,
-        "Deployment target for profiles with custom/ files"
+        "Bind the profile's custom/ tree at this directory"
     ),
     ARGS_FLAG(
         "n dry-run",
@@ -1989,10 +1995,12 @@ static const args_command_t spec_profile_enable = {
         "  layering convention's order (global, the OS, then the hosts). 'dotta\n"
         "  profile reorder' moves them afterwards.\n"
         "\n"
-        "  --target <path> attaches a custom mount point for profiles that contain\n"
-        "  custom/ files (e.g. --target /mnt/jails/web). Only valid for a single\n"
-        "  profile per invocation. On an already-enabled profile it updates the\n"
-        "  binding in place; the claims re-resolve at the next apply.\n",
+        "  --target <path> binds the profile's custom/ tree at that directory\n"
+        "  (e.g. --target /mnt/jails/web; a relative path is read from the\n"
+        "  working directory). A profile with custom/ paths is enabled only\n"
+        "  with one, and one profile per invocation may take it. On an\n"
+        "  already-enabled profile it moves the binding in place; the claims\n"
+        "  re-resolve at the next apply.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_enable_opts,
     .init_defaults = profile_enable_defaults,

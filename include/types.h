@@ -81,7 +81,7 @@ typedef enum {
     WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
     WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* On filesystem in tracked directory, not in manifest */
-    WORKSPACE_STATE_RELEASED       /* File removed from Git externally, released from management */
+    WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires (core/workspace.h) */
 } workspace_state_t;
 
 /**

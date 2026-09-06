@@ -971,8 +971,10 @@ static void display_workspace_status(
                                     ? "what dotta put there is gone, another kind of "
                                     "path stands in its place; apply releases its "
                                     "entry, the path stays"
-                                    : "no longer in Git, or dotta never deployed it; "
-                                    "apply releases its entry, the path stays";
+                                    : "no longer in Git, dotta never deployed it, or "
+                                    "its record names this file under another "
+                                    "spelling of its path; apply releases its "
+                                    "entry, the path stays";
                                 break;
 
                             case CLEANUP_SKIPPED:

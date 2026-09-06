@@ -1542,14 +1542,19 @@ static void compute_orphan_authority(
  *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
  *     to prune, divergence permitting — and carries the relocation read: a BACKED
  *     orphan whose claim still has a row elsewhere in the view rides that row
- *     on the item, and the storage label picks the fate (cleanup_verdict);
- *     UNVERIFIED holds the orphan until Git answers — either kind: LOST would
- *     retire the record, BACKED would remove the copy, and neither is a guess
- *     to make about an empty directory any more than about a file. Held and not
- *     measured: no reader shows a bit beside UNVERIFIED, so a compare would only
- *     give the item a second reason for the one fate it already has. The probe
- *     raises nothing, so a lookup it could not make is this orphan's hold and
- *     never the load's — the rule the file analyzer takes for its own looks.
+ *     on the item, and the storage label picks the fate (cleanup_verdict).
+ *     Elsewhere is another file, by inode, never merely another string: a row
+ *     standing on the record's own file under another spelling of its path (a
+ *     target bound through a symlink, a HOME spelled two ways) makes the record
+ *     a stale key, RELEASED, so the one copy is never pruned as the old one —
+ *     apply adopts the row under its spelling and retires the key; UNVERIFIED
+ *     holds the orphan until Git answers — either kind: LOST would retire the
+ *     record, BACKED would remove the copy, and neither is a guess to make about
+ *     an empty directory any more than about a file. Held and not measured: no
+ *     reader shows a bit beside UNVERIFIED, so a compare would only give the
+ *     item a second reason for the one fate it already has. The probe raises
+ *     nothing, so a lookup it could not make is this orphan's hold and never
+ *     the load's — the rule the file analyzer takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
@@ -1567,8 +1572,9 @@ static void compute_orphan_authority(
  * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
  * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
- * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, or
- *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
+ * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, the row
+ *   stands on this file under another spelling of its path, or (with
+ *   DIVERGENCE_TYPE) another kind of path stands there; apply releases
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -1619,7 +1625,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
 
         /* The relocated claim's row, set only where the probe answers BACKED:
          * the record's own (profile, storage path) claim, still in the view,
-         * projected at a different filesystem path. See the read below. */
+         * standing at a different file. See the read below. */
         const manifest_row_t *row = NULL;
 
         /* Whether the copy can be measured at all: a directory against cleanup's
@@ -1694,18 +1700,16 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
             } else {
-                prunable = true;
-
                 /* The relocation read — BACKED only, which is what this arm is:
                  * a relocated orphan is an orphan whose claim still has a row.
                  * The record's own (profile, storage path) pair is asked of the
-                 * view; a row found here always projects elsewhere — the partition
-                 * orphaned this record precisely because no view row stands at
-                 * its filesystem path, this row included — so the claim deploys
-                 * at a new location now: a moved custom/ target, a different
-                 * $HOME. The item carries it (item->row non-NULL on an ORPHANED
-                 * item IS the relocation; the label picks the fate at
-                 * cleanup_verdict, and root/ never gets here — its projection
+                 * view; a row found here always projects to another string —
+                 * the partition orphaned this record precisely because no view
+                 * row stands at its filesystem path, this row included — so the
+                 * claim deploys at a new location now: a moved custom/ target,
+                 * a different $HOME. The item carries it (item->row non-NULL on
+                 * an ORPHANED item IS the relocation; the label picks the fate
+                 * at cleanup_verdict, and root/ never gets here — its projection
                  * is fixed). Strictly the record's own profile: a claim shadowed
                  * by another profile at its new home is not "relocated" — the
                  * copy here is simply no longer active — and the same-profile
@@ -1713,7 +1717,29 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * construction on every orphan (the profiles are equal). A LOST
                  * or unanswered probe carries nothing: the first releases, the
                  * second holds, and neither fate reads the row. */
-                row = manifest_lookup_storage(ws->manifest, storage_path, profile);
+                const manifest_row_t *claim =
+                    manifest_lookup_storage(ws->manifest, storage_path, profile);
+
+                /* Another string is not always another file: a target bound through
+                 * a symlink, a HOME spelled two ways across runs, and the row
+                 * stands on the very file the record names. Only the ancestors
+                 * can differ between two spellings of one path — the tail is
+                 * the claim's — so lstat on both compares the entry itself,
+                 * whatever its kind. One file: the record is a stale key, not a
+                 * copy left behind, and is released — the path stays, and apply's
+                 * adoption anchors the row under its own spelling as owned. Two
+                 * files, or a look that could not be made: the relocation stands,
+                 * and cleanup holds or prunes the copy as any other. */
+                struct stat at_claim;
+                if (claim && occupant != FS_OCCUPANT_UNKNOWN &&
+                    fs_lstat(claim->filesystem_path, &at_claim) == 0 &&
+                    at_claim.st_dev == orphan_stat.st_dev &&
+                    at_claim.st_ino == orphan_stat.st_ino) {
+                    item_state = WORKSPACE_STATE_RELEASED;
+                } else {
+                    prunable = true;
+                    row = claim;
+                }
             }
         }
 

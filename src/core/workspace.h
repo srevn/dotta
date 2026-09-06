@@ -141,10 +141,11 @@ typedef enum {
  *
  * One invariant, established at every fold and trusted downstream: `fault !=
  * NONE` iff the item carries DIVERGENCE_UNVERIFIED. Only DEPLOYED (both kinds)
- * and ORPHANED items can carry one — RELEASED is born of three answers that are
- * not looks, and UNDEPLOYED, DELETED and UNTRACKED of looks that answered. And
- * only a file row can be LOCKED: a directory seals no content, so every fault
- * it can carry comes from an errno.
+ * and ORPHANED items can carry one — RELEASED is born of answers, never of a
+ * failed look (three that are not looks, and the relocation read's inode compare,
+ * whose failure leaves the orphan where it stood), and UNDEPLOYED, DELETED and
+ * UNTRACKED of looks that answered. And only a file row can be LOCKED: a directory
+ * seals no content, so every fault it can carry comes from an errno.
  *
  * Readers: workspace_item_extract_display_info (the tag — [locked] / [unreadable]
  * / [unverified], the same word on both arms), status's two keys — Unverifiable's
@@ -206,9 +207,10 @@ typedef struct {
      * is set except for UNTRACKED items.
      *   row     the view's claim. NULL for an orphan (the view lacks the path)
      *           and for UNTRACKED — except a relocated orphan, where it is the
-     *           record's own claim's row at its new filesystem path (the orphan
-     *           analysis carried it: non-NULL on an ORPHANED item IS the
-     *           relocation, and the new location is printable from it).
+     *           record's own claim's row at another file (the orphan analysis
+     *           carried it, after comparing the two by inode, so two spellings
+     *           of one path never read as a move: non-NULL on an ORPHANED item
+     *           IS the relocation, and the new location is printable from it).
      *   anchor  the record — always the live snapshot record, the same pointer
      *           workspace_get_anchor returns: the writers patch it in place
      *           (workspace_anchor) or create it and backfill this field

@@ -42,13 +42,15 @@
  *
  * The walk is where the mount boundary is crossed: each path it collects is
  * classified there, once, through the command's table, and everything after reads
- * the name it needs — the capture and the commit message the storage path, the
- * record loop the filesystem path. A file's stat is the capture's
- * (add_file_to_stage's one look at the bytes it staged), so the record binds
- * the committed blob to it; a directory's stays unset, as apply records them.
+ * the name it needs — the capture the filesystem path, the commit message the
+ * storage path, and the record loop the storage path again, resolved back through
+ * the table to the location the view spells (the walk's path is the user's
+ * spelling, and the view's is not always the same string). A file's stat is the
+ * capture's (add_file_to_stage's one look at the bytes it staged), so the record
+ * binds the committed blob to it; a directory's stays unset, as apply records them.
  */
 typedef struct {
-    const char *fs_path;          /* Absolute, as walked (arena) */
+    const char *fs_path;          /* Absolute, as walked: the user's spelling (arena) */
     const char *storage_path;     /* Classified at collection (arena) */
     stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
 } add_path_t;
@@ -675,8 +677,8 @@ static error_t *create_commit(
  *      enabled skips the anchor pass (nothing to win) and the target UPSERT
  *      (enable's business), never the settle
  *   2. Build the mount table from the post-mutation row cache
- *   3. Build the view; anchor the rows this profile won; settle what the commit
- *      let go
+ *   3. Build the view; anchor the rows this profile won, each found at the location
+ *      the table gives its storage path; settle what the commit let go
  *   4. Commit transaction (state_save)
  *
  * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1 is
@@ -818,6 +820,13 @@ static error_t *update_manifest_after_add(
          * failures are non-fatal: disk is the just-committed blob, and the next
          * status's slow path confirms it.
          *
+         * A row is found at the location this profile gives the storage path —
+         * the view's own spelling, resolved through the table as the build resolved
+         * it — never at the walk's path, which is the user's spelling (a physical
+         * path, a shell with no $PWD) and joins the view by string only when
+         * the two happen to agree. An unbound claim has no location here and no
+         * row.
+         *
          * The record as it stands first, indexed by path, so a takeover is known
          * before the write that rewrites it. */
         anchor_t *anchors = NULL;
@@ -845,7 +854,23 @@ static error_t *update_manifest_after_add(
         time_t now = time(NULL);
         for (size_t i = 0; i < added_files->count; i++) {
             const add_path_t *path = added_files->items[i];
-            const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
+            mount_resolve_outcome_t outcome;
+            const char *at = NULL;
+
+            err = mount_resolve(
+                mounts, profile, path->storage_path, ctx->arena, &outcome, &at
+            );
+            if (err) {
+                hashmap_free(anchor_index, NULL);
+                manifest_free(manifest);
+                return error_wrap(
+                    err, "Failed to derive filesystem path from storage path: %s",
+                    path->storage_path
+                );
+            }
+            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+
+            const manifest_row_t *row = manifest_lookup(manifest, at);
             if (!row || strcmp(row->profile, profile) != 0) continue;
 
             error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
@@ -869,7 +894,23 @@ static error_t *update_manifest_after_add(
          * confirmation, as apply records them. */
         for (size_t i = 0; i < added_dirs->count; i++) {
             const add_path_t *path = added_dirs->items[i];
-            const manifest_row_t *row = manifest_lookup(manifest, path->fs_path);
+            mount_resolve_outcome_t outcome;
+            const char *at = NULL;
+
+            err = mount_resolve(
+                mounts, profile, path->storage_path, ctx->arena, &outcome, &at
+            );
+            if (err) {
+                hashmap_free(anchor_index, NULL);
+                manifest_free(manifest);
+                return error_wrap(
+                    err, "Failed to derive filesystem path from storage path: %s",
+                    path->storage_path
+                );
+            }
+            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+
+            const manifest_row_t *row = manifest_lookup(manifest, at);
             if (!row || strcmp(row->profile, profile) != 0) continue;
 
             error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
@@ -1179,10 +1220,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Process each input path */
+    /* Process each input path: the argument's location here, in the arena the
+     * walk keeps its listing in. */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file = opts->files[i];
-        char *absolute = NULL;
+        const char *fs_path = NULL;
 
         /* Check if input is a storage path */
         const mount_spec_t *spec = mount_spec_for_path(file);
@@ -1200,9 +1242,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             /* Its location here, through the table: home/ and root/ resolve for
              * every profile, custom/ through this one's binding — the row's, or
              * the flag's. A custom/ path with no binding names nothing on this
-             * machine, and the way to give it one is the flag. */
+             * machine, and the way to give it one is the flag. The table's answer
+             * is absolute and the arena's already. */
             mount_resolve_outcome_t outcome;
-            const char *fs_path = NULL;
             err = mount_resolve(
                 mounts, opts->profile, file, ctx->arena, &outcome, &fs_path
             );
@@ -1219,28 +1261,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 );
                 goto cleanup;
             }
-
-            /* Make absolute without following symlinks */
-            err = fs_make_absolute(fs_path, &absolute);
-            if (err) {
-                err = error_wrap(err, "Failed to resolve path '%s'", file);
-                goto cleanup;
-            }
         } else {
             /* Regular filesystem path - normalize it */
+            char *absolute = NULL;
             err = path_input_normalize(file, target, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
-        }
-
-        /* The walk keeps what it lists, so the path lives in the arena. */
-        const char *fs_path = arena_strdup(ctx->arena, absolute);
-        free(absolute);
-        if (!fs_path) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate path");
-            goto cleanup;
+            fs_path = arena_strdup(ctx->arena, absolute);
+            free(absolute);
+            if (!fs_path) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate path");
+                goto cleanup;
+            }
         }
 
         /* What stands at the path — the link itself for a symlink, a broken one

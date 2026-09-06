@@ -310,12 +310,12 @@ static error_t *sync_fetch_phase(
     );
     fflush(out->stream);
 
-    /* Build array of fetchable branch names.
-     *
-     * Only include profiles that have a remote tracking ref — these are known
-     * to exist (or have existed) on the remote. Local-only profiles (never pushed)
-     * have no tracking ref and would cause the entire batched fetch to fail with
-     * a "ref not found" error from the remote. */
+    /* The branches to ask for: the profiles the remote has been seen to hold —
+     * a remote-tracking ref stands for each — so a profile only this machine
+     * has (never pushed) is not asked for. Whether the ref stands is Git's answer
+     * or Git's error (gitops_reference_exists): a ref this run cannot read is
+     * not "never pushed", and read as that it left the profile out of the fetch
+     * without a word. */
     char **branch_names = malloc(profiles->count * sizeof(char *));
     if (!branch_names) {
         if (ephemeral) {
@@ -326,24 +326,32 @@ static error_t *sync_fetch_phase(
         return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
     }
 
+    error_t *err = NULL;
     size_t fetch_count = 0;
     for (size_t i = 0; i < profiles->count; i++) {
         char remote_refname[DOTTA_REFNAME_MAX];
-        error_t *err_build = gitops_build_refname(
+        err = gitops_build_refname(
             remote_refname, sizeof(remote_refname), "refs/remotes/%s/%s",
             remote_name, profiles->items[i]
         );
-        if (err_build) {
-            error_free(err_build);
-            continue;
-        }
+        if (err) break;
 
-        git_reference *ref = NULL;
-        int rc = git_reference_lookup(&ref, repo, remote_refname);
-        if (rc == 0) {
-            git_reference_free(ref);
+        bool tracked = false;
+        err = gitops_reference_exists(repo, remote_refname, &tracked);
+        if (err) break;
+
+        if (tracked) {
             branch_names[fetch_count++] = profiles->items[i];
         }
+    }
+    if (err) {
+        free(branch_names);
+        if (ephemeral) {
+            output_clear_line(out);
+        } else {
+            output_newline(out, OUTPUT_NORMAL);
+        }
+        return err;
     }
 
     /* Skip fetch entirely if no profiles have remote tracking refs */
@@ -359,7 +367,7 @@ static error_t *sync_fetch_phase(
 
     /* Perform batched fetch - single network operation for all branches */
     string_array_t fetch_arr = { .items = branch_names, .count = fetch_count };
-    error_t *err = gitops_fetch_branches(repo, remote_name, &fetch_arr, xfer);
+    err = gitops_fetch_branches(repo, remote_name, &fetch_arr, xfer);
     free(branch_names);
 
     /* Resolve the ephemeral fetch/progress line. Handles all cases:

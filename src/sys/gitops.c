@@ -6,6 +6,8 @@
 
 #include "sys/gitops.h"
 
+#include <dirent.h>
+#include <errno.h>
 #include <git2.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -16,6 +18,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/string.h"
+#include "sys/filesystem.h"
 #include "sys/identity.h"
 #include "sys/transfer.h"
 
@@ -284,68 +287,204 @@ error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
     return NULL;
 }
 
+/* What a walk of the loose store holds constant: the repository the lookups ask,
+ * where in every path beneath the namespace's directory the ref's name begins,
+ * how many components the namespace has, and the listing itself. */
+typedef struct {
+    git_repository *repo;
+    size_t refname_at;        /* "<namespace>/…" begins here in every path walked */
+    size_t depth;             /* the namespace's components: "refs/heads" has two */
+    string_array_t *names;    /* the names beneath it, as listed so far */
+} loose_walk_t;
+
+/*
+ * The loose store beneath a listing, read whole (the header). Git's own reading
+ * of a refs directory: a dot-entry is not a ref and neither is a `.lock` (a write
+ * in flight) — no valid name begins with the one or ends with the other; a
+ * directory is a namespace to enter; a regular file or a link is a ref. Every
+ * ref is looked up the way libgit2 reads one, whether or not the enumeration
+ * named it — one judge for the loose store, so a file the enumeration listed
+ * and one it dropped meet the same rule, and a name Git refuses (an editor's
+ * `work~`) refuses either way. The refusal is the listing's, in Git's words.
+ * What resolves is listed under the name libgit2 gives it — its normalized
+ * spelling, the enumeration's own, so a name readdir spells otherwise (decomposed,
+ * on a filesystem that stores it so) is found listed and never listed twice —
+ * unless the enumeration listed it. What vanished since the directory was read
+ * holds nothing, a dangling link included, and so does a link to a directory:
+ * libgit2 enters one (GIT_ITERATOR_DESCEND_SYMLINKS) and the walk does not, which
+ * is what keeps it finite with no depth count; what stands beneath a linked
+ * directory is the enumeration's reading, proved by nothing. A device or a fifo
+ * is nothing libgit2 would list. A directory that will not open, or an entry
+ * that will not stat, is the walk's own refusal, naming the directory. A namespace
+ * with no directory holds no loose refs.
+ *
+ * The cost is one open and one parse per loose ref — the read libgit2 made once
+ * already — and a scan of the listing per ref: tens of branches, well under a
+ * millisecond.
+ */
+static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
+    DIR *d = fs_opendir(dir);
+    if (!d) {
+        if (errno == ENOENT) {
+            return NULL;
+        }
+        return error_from_errno(errno, "Cannot read the refs under '%s'", dir);
+    }
+
+    /* errno cleared before every readdir: a NULL is the end, or the error it names */
+    error_t *err = NULL;
+    struct dirent *entry;
+    for (errno = 0; (entry = readdir(d)) != NULL; errno = 0) {
+        const char *name = entry->d_name;
+        if (name[0] == '.' || str_ends_with(name, ".lock")) {
+            continue;
+        }
+
+        char *path = str_format("%s/%s", dir, name);
+        if (!path) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate a ref path");
+            break;
+        }
+
+        switch (fs_lstat_occupant(path, NULL)) {
+            case FS_OCCUPANT_DIRECTORY:
+                err = walk_loose_refs(walk, path);
+                break;
+
+            case FS_OCCUPANT_REGULAR:
+            case FS_OCCUPANT_SYMLINK: {
+                git_reference *ref = NULL;
+                int rc = git_reference_lookup(
+                    &ref, walk->repo, path + walk->refname_at
+                );
+                if (rc == GIT_ENOTFOUND) {
+                    break;
+                }
+                if (rc < 0) {
+                    err = error_from_git(rc);
+                    break;
+                }
+                /* The namespace's components lead the name whatever their spelling
+                 * — normalization moves no '/' — and what follows them is the
+                 * name beneath it. */
+                const char *listed = git_reference_name(ref);
+                for (size_t depth = walk->depth; depth > 0; depth--) {
+                    listed = strchr(listed, '/') + 1;
+                }
+                if (!string_array_contains(walk->names, listed)) {
+                    err = string_array_push(walk->names, listed);
+                }
+                git_reference_free(ref);
+                break;
+            }
+
+            case FS_OCCUPANT_NONE:
+            case FS_OCCUPANT_OTHER:
+                break;
+
+            case FS_OCCUPANT_UNKNOWN:
+                err = error_from_errno(
+                    errno, "Cannot read the refs under '%s'", dir
+                );
+                break;
+        }
+
+        free(path);
+        if (err) {
+            break;
+        }
+    }
+
+    if (!err && errno != 0) {
+        err = error_from_errno(errno, "Cannot read the refs under '%s'", dir);
+    }
+    closedir(d);
+    return err;
+}
+
+error_t *gitops_list_refs(
+    git_repository *repo, const char *namespace, string_array_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(namespace);
+    CHECK_NULL(out);
+    CHECK_ARG(namespace[0] != '\0', "Reference namespace cannot be empty");
+
+    /* libgit2's enumeration under the namespace: the packed refs, loudly; the
+     * loose ones as far as it could read them. The glob walks the namespace's
+     * own directory and nothing beside it; a name is listed past "<namespace>/". */
+    char glob[DOTTA_REFNAME_MAX];
+    int written = snprintf(glob, sizeof(glob), "%s/*", namespace);
+    if (written < 0 || (size_t) written >= sizeof(glob)) {
+        return ERROR(
+            ERR_INVALID_ARG, "Reference namespace too long: '%s'", namespace
+        );
+    }
+
+    git_reference_iterator *iter = NULL;
+    int rc = git_reference_iterator_glob_new(&iter, repo, glob);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+    string_array_t *names = string_array_new(0);
+    if (!names) {
+        git_reference_iterator_free(iter);
+        return ERROR(ERR_MEMORY, "Failed to allocate the ref listing");
+    }
+
+    error_t *err = NULL;
+    for (;;) {
+        /* Classified, not compared: GIT_ITEROVER is the enumeration finished,
+         * and a negative code one that never did. */
+        const char *refname = NULL;
+        rc = git_reference_next_name(&refname, iter);
+        if (rc == GIT_ITEROVER) {
+            break;
+        }
+        if (rc < 0) {
+            err = error_from_git(rc);
+            break;
+        }
+        err = string_array_push(names, refname + strlen(namespace) + 1);
+        if (err) {
+            break;
+        }
+    }
+    git_reference_iterator_free(iter);
+
+    /* The loose store beneath it, read whole. */
+    char *dir = NULL;
+    if (!err) {
+        err = fs_path_join(git_repository_commondir(repo), namespace, &dir);
+    }
+    if (!err) {
+        loose_walk_t walk = {
+            .repo       = repo,
+            .refname_at = strlen(dir) - strlen(namespace),
+            .depth      = 1,
+            .names      = names,
+        };
+        for (const char *slash = strchr(namespace, '/'); slash;
+            slash = strchr(slash + 1, '/')) {
+            walk.depth++;
+        }
+        err = walk_loose_refs(&walk, dir);
+        free(dir);
+    }
+    if (err) {
+        string_array_free(names);
+        return err;
+    }
+
+    *out = names;
+    return NULL;
+}
+
 error_t *gitops_list_branches(git_repository *repo, string_array_t **out) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
-    git_branch_iterator *iter = NULL;
-    int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_LOCAL);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err), "Failed to create branch iterator"
-        );
-    }
-
-    string_array_t *branches = string_array_new(0);
-    if (!branches) {
-        git_branch_iterator_free(iter);
-        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
-    }
-
-    git_reference *ref = NULL;
-    git_branch_t branch_type;
-
-    for (;;) {
-        /* The iterator's own code is classified, not compared: GIT_ITEROVER is
-         * the refs enumerated, and a negative one is an enumeration that never
-         * finished — which must not read as a repository with fewer branches.
-         * `ref` is written only on success, so neither arm frees it. */
-        err = git_branch_next(&ref, &branch_type, iter);
-        if (err == GIT_ITEROVER) {
-            break;
-        }
-        if (err < 0) {
-            git_branch_iterator_free(iter);
-            string_array_free(branches);
-            return error_wrap(
-                error_from_git(err), "Failed to get next branch"
-            );
-        }
-
-        const char *name = NULL;
-        err = git_branch_name(&name, ref);
-        if (err < 0) {
-            git_reference_free(ref);
-            git_branch_iterator_free(iter);
-            string_array_free(branches);
-            return error_wrap(
-                error_from_git(err), "Failed to get branch name"
-            );
-        }
-
-        error_t *derr = string_array_push(branches, name);
-        git_reference_free(ref);
-        if (derr) {
-            git_branch_iterator_free(iter);
-            string_array_free(branches);
-            return derr;
-        }
-    }
-
-    git_branch_iterator_free(iter);
-
-    *out = branches;
-    return NULL;
+    return gitops_list_refs(repo, "refs/heads", out);
 }
 
 error_t *gitops_list_remote_tracking(
@@ -355,84 +494,26 @@ error_t *gitops_list_remote_tracking(
     CHECK_NULL(remote_name);
     CHECK_NULL(out);
 
-    /* Build prefix to strip: "<remote_name>/" */
-    char prefix[DOTTA_REFNAME_MAX];
-    int ret = snprintf(prefix, sizeof(prefix), "%s/", remote_name);
-
-    if (ret < 0 || (size_t) ret >= sizeof(prefix)) {
-        return ERROR(ERR_INVALID_ARG, "Remote name too long");
-    }
-    size_t prefix_len = (size_t) ret;
-
-    git_branch_iterator *iter = NULL;
-    int err = git_branch_iterator_new(&iter, repo, GIT_BRANCH_REMOTE);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to create remote branch iterator"
-        );
+    char namespace[DOTTA_REFNAME_MAX];
+    error_t *err = gitops_build_refname(
+        namespace, sizeof(namespace), "refs/remotes/%s", remote_name
+    );
+    if (err) {
+        return err;
     }
 
-    string_array_t *branches = string_array_new(0);
-    if (!branches) {
-        git_branch_iterator_free(iter);
-        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
+    string_array_t *names = NULL;
+    err = gitops_list_refs(repo, namespace, &names);
+    if (err) {
+        return err;
     }
 
-    git_reference *ref = NULL;
-    git_branch_t branch_type;
+    /* Under the remote's namespace and not branches of it: its symbolic HEAD,
+     * and the anchor — dotta's, never a profile. */
+    string_array_remove_value(names, "HEAD");
+    string_array_remove_value(names, "dotta-worktree");
 
-    for (;;) {
-        /* Classified, not compared — and unlike the skip below, never survivable:
-         * one unreadable ref leaves the rest of the enumeration intact, while
-         * an iterator that failed leaves no way to know what it had yet to reach.
-         * `ref` is written only on success, so neither arm frees it. */
-        err = git_branch_next(&ref, &branch_type, iter);
-        if (err == GIT_ITEROVER) {
-            break;
-        }
-        if (err < 0) {
-            git_branch_iterator_free(iter);
-            string_array_free(branches);
-            return error_wrap(
-                error_from_git(err), "Failed to get next remote branch"
-            );
-        }
-
-        const char *name = NULL;
-        err = git_branch_name(&name, ref);
-        if (err < 0) {
-            git_reference_free(ref);
-            continue;  /* Non-fatal: skip unreadable refs */
-        }
-
-        /* git_branch_name returns "origin/branch" for remote branches */
-        if (!str_starts_with(name, prefix)) {
-            git_reference_free(ref);
-            continue;  /* Different remote */
-        }
-
-        const char *branch_name = name + prefix_len;
-
-        /* Skip special refs */
-        if (strcmp(branch_name, "dotta-worktree") == 0 ||
-            strcmp(branch_name, "HEAD") == 0) {
-            git_reference_free(ref);
-            continue;
-        }
-
-        error_t *derr = string_array_push(branches, branch_name);
-        git_reference_free(ref);
-        if (derr) {
-            git_branch_iterator_free(iter);
-            string_array_free(branches);
-            return derr;
-        }
-    }
-
-    git_branch_iterator_free(iter);
-
-    *out = branches;
+    *out = names;
     return NULL;
 }
 

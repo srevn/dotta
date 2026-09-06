@@ -772,24 +772,16 @@ static int epoch_walk_cb(
 
 /*
  * Walk the full history of every local branch and present every ciphertext to
- * `fn` until it stops the walk. Lists branches via sys/gitops and skips the
- * local-only dotta-worktree anchor inline, so infra/epoch takes no core/
- * dependency; the revwalk speaks libgit2 directly the way sys/stats does.
- * Propagates any error so the caller can fail closed.
- *
- * Including the listing's own. Every asker here acts on an ABSENCE of ciphertext
- * — the licence to mint, to adopt, or to take a passphrase as given — and a branch
- * listing is not a proof of one: libgit2 skips a ref it cannot open or parse
- * rather than reporting it (sys/gitops.h), so a `refs/heads` it may traverse
- * but not read yields an EMPTY array and no error at all. The anchor is the proof
- * this module holds: dotta-worktree stands in every repository that reaches here
- * — `repo_open` refuses one without it, and `cmd_init` makes it before the first
- * census — and the walk already names it, to skip it. A listing without it did
- * not list this repository.
- *
- * That catches a listing that lost everything. One that lost a single unreadable
- * ref while the anchor still reads it cannot, and that limit stays libgit2's,
- * stated where the listing is made.
+ * `fn` until it stops the walk. Every asker here acts on an ABSENCE of ciphertext
+ * — the licence to mint, to adopt, or to take a passphrase as given — so the
+ * listing must be complete or an error, and sys/gitops's is (its header; listed
+ * there rather than through core/profiles, so infra/epoch takes no core/
+ * dependency). The walk holds no proof of its own: a listing's error fails it
+ * closed like any error of its own, returned bare — sync prints the census's
+ * cause as one line of its own (`epoch_reconcile`), and a wrap would stand where
+ * the cause should. The revwalk speaks libgit2 directly the way sys/stats does.
+ * The anchor is walked like any branch — one empty tree — until it goes; the
+ * epoch ref lives outside refs/heads and is never walked.
  */
 static error_t *walk_ciphertext(
     git_repository *repo, epoch_ciphertext_fn fn, void *payload
@@ -797,21 +789,7 @@ static error_t *walk_ciphertext(
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
-        return error_wrap(
-            err, "Failed to list local branches for the ciphertext walk"
-        );
-    }
-    if (!string_array_contains(branches, "dotta-worktree")) {
-        string_array_free(branches);
-        return ERROR(
-            ERR_GIT,
-            "This repository's branch listing came back without "
-            "'dotta-worktree', so it did not list this repository and nothing "
-            "can be concluded about the encrypted files it holds\n\n"
-            "Git skips a ref it cannot read instead of reporting it — check "
-            "that the refs under '%s' are readable.",
-            git_repository_path(repo)
-        );
+        return err;
     }
 
     hashmap_t *seen = hashmap_create(0);
@@ -829,13 +807,6 @@ static error_t *walk_ciphertext(
 
     for (size_t i = 0; i < branches->count && !walk.stopped; i++) {
         const char *branch = branches->items[i];
-
-        /* The anchor, whose presence in the listing was the proof above: an empty
-         * HEAD, never a profile branch, and nothing to walk. (The epoch ref lives
-         * outside refs/heads and is never walked here either.) */
-        if (strcmp(branch, "dotta-worktree") == 0) {
-            continue;
-        }
         walk.branch = branch;
 
         char refname[DOTTA_REFNAME_MAX];

@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "base/args.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
 #include "core/ignore.h"
@@ -119,19 +120,19 @@ static error_t *ensure_repository_adoptable(
         );
     }
 
-    /* Any reference at all is history this run did not write.
+    /* Any reference at all is history this run did not write, and the listing
+     * that says there is none is complete or an error (sys/gitops.h): a `refs`
+     * this run cannot read refuses here rather than being adopted over.
      * `git_repository_is_empty` answers a narrower question — it also requires
      * HEAD to name the configured initial branch, so `git init` followed by `git
      * checkout -b x` would fail it and be refused with nothing to lose. */
-    git_strarray refs = { 0 };
-    git_err = git_reference_list(&refs, repo);
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err), "Failed to list repository references"
-        );
+    string_array_t *refs = NULL;
+    err = gitops_list_refs(repo, "refs", &refs);
+    if (err) {
+        return error_wrap(err, "Failed to list repository references");
     }
-    size_t ref_count = refs.count;
-    git_strarray_dispose(&refs);
+    size_t ref_count = refs->count;
+    string_array_free(refs);
 
     if (ref_count == 0) {
         return NULL;

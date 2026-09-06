@@ -44,13 +44,11 @@
  * holds, and this module is what presents them (crypto/keymgr.h).
  *
  * Every asker of that walk acts on an ABSENCE of ciphertext — the licence to
- * mint, to adopt, or to take a passphrase as given — and a branch listing is
- * not a proof of one: Git skips a ref it cannot read rather than reporting it
- * (sys/gitops.h), so an unlistable `refs/heads` reads as a repository with no
- * branches. So the walk proves the listing is this repository's before walking
- * it, by the one branch every repository that reaches it holds — `dotta-worktree`
- * — and refuses a listing without it. That catches a listing that lost everything;
- * one that lost a single unreadable ref it cannot, and that limit stays Git's.
+ * mint, to adopt, or to take a passphrase as given — so the walk needs a branch
+ * listing that is complete or an error, and sys/gitops's is one (its header:
+ * libgit2 skips a loose ref it cannot read, and the listing reads the loose store
+ * itself to catch it). The walk holds no proof of its own; a listing's error
+ * fails the census closed like any error of the walk's.
  *
  * Layering — `infra/` depends on sys/gitops + sys/entropy + sys/transfer +
  * crypto/kdf (the epoch type, its encoding and its fingerprint) + crypto/keymgr

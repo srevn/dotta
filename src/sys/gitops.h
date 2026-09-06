@@ -10,16 +10,23 @@
  * - No business logic (just git operations)
  *
  * Converting libgit2's errors includes its iterators, the ones easy to miss:
- * `git_branch_next`, `git_revwalk_next` and `git_rebase_next` each return 0,
- * GIT_ITEROVER at the end, or a negative code, and a loop testing only for 0
+ * `git_reference_next_name`, `git_revwalk_next` and `git_rebase_next` each return
+ * 0, GIT_ITEROVER at the end, or a negative code, and a loop testing only for 0
  * cannot tell an enumeration that finished from one that gave up. Every iteration
  * here classifies all three.
  *
- * That is not a proof of completeness, and no caller should read it as one: a
- * listing here is what libgit2 could read. Its filesystem refdb clears the error
- * and skips any ref it cannot open or parse, so an unreadable `refs/heads` gives
- * an empty list and a clean GIT_ITEROVER; on that backend the negative code these
- * loops catch is an allocation failure. An absence must be proved elsewhere.
+ * For a ref listing that is necessary and not sufficient: libgit2's filesystem
+ * refdb reads `packed-refs` loudly and the loose store as far as it can — a ref
+ * file it cannot open or parse is skipped with the error cleared, a directory
+ * it cannot open is an empty one, and its walk of a directory stops at a link it
+ * cannot stat (refdb_fs.c `refdb_fs_backend__iterator_next`, `iter_load_paths`;
+ * iterator.c `filesystem_iterator_frame_push`) — so an unreadable `refs/heads`
+ * enumerates as nothing and ends GIT_ITEROVER. So every listing here reads the
+ * loose store itself and looks each ref file up (gitops_list_refs). A LISTING
+ * IS COMPLETE OR AN ERROR — Git's own words for the ref, the same a singular
+ * lookup says of it, or the walk's for a directory it could not read — and a
+ * caller acting on an absence in one (the census, the blocker, init's adoption
+ * test) holds no proof of its own.
  */
 
 #ifndef DOTTA_GITOPS_H
@@ -113,11 +120,10 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 /**
  * Check if branch exists
  *
- * The one singular a listing cannot replace (see the header): the ref resolves,
- * or it is absent. Anything else — a loose ref that will not open, one whose
- * bytes are not an OID — is the error, never an absence, and every caller
- * propagates it: a bool that read it as "no" once sent the user to fetch a profile
- * that was here.
+ * The singular: the ref resolves, or it is absent. Anything else — a loose ref
+ * that will not open, one whose bytes are not an OID — is the error, never an
+ * absence, and every caller propagates it: a bool that read it as "no" once sent
+ * the user to fetch a profile that was here.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
@@ -162,11 +168,36 @@ error_t *gitops_branch_blocker(
 error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
 
 /**
+ * List the references under a namespace
+ *
+ * The names beneath `namespace` — "refs/heads" lists a branch as "p", "refs"
+ * lists it as "heads/p" — complete or an error (the header). libgit2's enumeration
+ * under the namespace first; then the loose store beneath it, read whole, every
+ * ref file looked up: a refusal is the listing's, in Git's words, and a ref the
+ * enumeration did not name is appended under the name libgit2 gives it — one
+ * born since the enumeration read, one behind a directory this run reads through
+ * and libgit2 does not (a run that holds root), one past a dangling link, where
+ * libgit2's walk of the directory stops. Loose refs are named by their path, so
+ * a namespace with no directory holds no loose refs (a remote never fetched,
+ * every ref packed) and is not an error. Order is the enumeration's, the appended
+ * after it.
+ *
+ * gitops_list_branches and gitops_list_remote_tracking are this under their
+ * namespaces; init's adoption test asks it of "refs" whole.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param namespace The namespace, no trailing slash (must not be NULL or empty)
+ * @param out String array of names beneath it (must not be NULL, caller frees)
+ * @return Error or NULL on success
+ */
+error_t *gitops_list_refs(
+    git_repository *repo, const char *namespace, string_array_t **out
+);
+
+/**
  * List all local branches
  *
- * Best-effort by libgit2's rule (see the header): a ref it cannot open or parse
- * is skipped, so a short list is not an error and an empty array is a repository
- * with no branches OR a refs directory that would not open.
+ * Every branch under refs/heads by name, complete or an error (gitops_list_refs).
  *
  * @param repo Repository (must not be NULL)
  * @param out String array of branch names (must not be NULL, caller must free)
@@ -177,12 +208,9 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
 /**
  * List all remote tracking branches
  *
- * Returns branch names (without <remote>/ prefix) for all remote tracking
- * references. Filters out special refs (HEAD, dotta-worktree).
- *
- * Best-effort in two ways, not one: libgit2 skips a ref it cannot read (see the
- * header), and so does this — a ref whose name will not resolve is skipped rather
- * than raised, because the rest of the enumeration is still good.
+ * Every ref under refs/remotes/<remote> by name, complete or an error
+ * (gitops_list_refs), less the two that are not branches of the remote: `HEAD`,
+ * the remote's own symbolic HEAD, and the anchor, dotta's and never a profile.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)

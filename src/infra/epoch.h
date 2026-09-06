@@ -2,14 +2,16 @@
  * epoch.h - The repository's epoch: its Argon2id salt and parameters
  *
  * Owns the `refs/dotta/epoch` ref, a synced piece of repo-wide infrastructure
- * that sits alongside the local-only `dotta-worktree` branch and the user-data
- * profile branches.
+ * that sits alongside this machine's baseline (`refs/dotta/baseline`, never synced)
+ * and the user-data profile branches.
  *
- * The ref doubles as the repository identity marker: `dotta init` creates it
+ * The ref doubles as the remote's identity marker: `dotta init` creates it
  * unconditionally and `dotta sync` establishes it on every remote, so a remote
  * that does not advertise it is not a dotta repository. `dotta clone` gates on
- * exactly this; `repo_open` is the local-side counterpart (dotta-worktree branch
- * presence).
+ * exactly this. The local store's identity is a different fact — the declaration
+ * its maker wrote into its config (utils/repo.h) — because an absent epoch is a
+ * state the store must survive: `sync` adopts the remote's over it, and `init`
+ * mints over it once the census clears.
  *
  *     refs/dotta/epoch
  *       └── commit
@@ -114,7 +116,7 @@
  * (`*out_repaired` set — the caller renders the repair), an absent one is simply
  * a repository that has no epoch yet.
  *
- * Called by `cmd_init` after the dotta-worktree branch is established.
+ * Called by `cmd_init` once the store is declared its own (utils/repo.h).
  * Encryption-disabled installations still produce the ref so a future `dotta
  * key set` (or a clone fetching this remote) finds it ready.
  *

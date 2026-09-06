@@ -1,13 +1,34 @@
 /**
- * repo.h - Repository path resolution
+ * repo.h - The store: where it is, what makes it one, how it is opened
  *
- * Determines which dotta repository to use based on:
+ * dotta's store is a bare Git repository — one branch per profile under refs/heads,
+ * the epoch and this machine's baseline under refs/dotta, the record (`dotta.db`)
+ * at its root — that dotta made or took, and declared its own. Nothing is ever
+ * checked out: every write to a branch is a stage committed in memory (sys/stage),
+ * and HEAD is git's alone, written once by the init and never read (sys/gitops.h,
+ * gitops_init_repository).
+ *
+ * Where it is, this machine decides:
  * 1. DOTTA_REPO_DIR environment variable (highest priority)
  * 2. Config file setting (~/.config/dotta/config.toml)
  * 3. Default location: ~/.local/share/dotta/repo
  *
  * This is different from git's behavior - dotta uses a centralized repository,
  * not discovery from current working directory.
+ *
+ * What makes a directory the store is a fact its maker writes into the store's
+ * own config, the way git writes `core.bare`:
+ *
+ *     [dotta] store = true
+ *
+ * Nothing structural could carry it. The epoch is deletable by design (a change
+ * of strength is a new epoch) and its absence a state `sync` heals from the remote;
+ * the baseline is this machine's and re-seeded; the record is disposable (a fresh
+ * machine on a known store has none). A bare repository alone is any bare
+ * repository, and a mirror at DOTTA_REPO_DIR would be committed into. So the
+ * maker declares (repo_declare_store) and the opener reads the declaration
+ * (repo_is_store, repo_open): the local-side counterpart of the epoch's role on
+ * the remote side, where `dotta clone` gates on the ref being advertised.
  */
 
 #ifndef DOTTA_REPO_H
@@ -76,13 +97,51 @@ error_t *repo_create_target(
 );
 
 /**
- * Open dotta repository
+ * Declare the repository dotta's store
  *
- * Resolves the repository path and opens it, then holds dotta's own invariant:
- * HEAD on the `dotta-worktree` branch, recovered automatically when a manual
- * checkout moved it. This is the standard way to open a repository for dotta
- * commands — the pass-through (`dotta git`) is the one that deliberately does
- * not, taking only the path (`dotta_repo_mode_t` in include/runtime.h).
+ * Writes the marker (the header) into the repository's own config, and beside
+ * it `core.logAllRefUpdates = true`: a bare repository keeps no reflog by default,
+ * and `dotta git reflog <profile>` is a screen the store has always had. Written
+ * by the two makers on every path through — init over a fresh store, over one
+ * it takes (bare, no refs at all) and over its own again; clone over the store
+ * it just created — so a store is declared from birth and a repaired one is
+ * declared again. Idempotent.
+ *
+ * @param repo Repository (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *repo_declare_store(git_repository *repo);
+
+/**
+ * Is this repository declared dotta's store?
+ *
+ * The marker `repo_declare_store` writes, read at the LOCAL config level only —
+ * the store's own file, never the user's global config, where a `dotta.store`
+ * would declare every repository on the machine (pinned: the layered handle reads
+ * it through). Two callers, two uses of the answer: `repo_open` refuses on false;
+ * init takes the repository on true and looks at its refs on false.
+ *
+ * A store whose config file cannot be read is not "not a store": libgit2 drops
+ * the local level when the file will not open (a missing file still yields an
+ * empty level) and reports the drop as GIT_ENOTFOUND, and that one is returned
+ * as the error it is. A value that is not a boolean is Git's own error.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param out Output boolean (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *repo_is_store(git_repository *repo, bool *out);
+
+/**
+ * Open dotta's store
+ *
+ * Resolves the store's path, opens it, and reads its declaration (repo_is_store):
+ * a repository that does not carry one is somebody's — a project with a working
+ * tree, a mirror, the checked-out store an older dotta kept — and refused with
+ * ERR_NOT_FOUND naming the path, `dotta init` and DOTTA_REPO_DIR. This is the
+ * standard way to open the store for dotta commands — the pass-through (`dotta
+ * git`) is the one that deliberately does not, taking only the path
+ * (`dotta_repo_mode_t` in include/runtime.h).
  *
  * RESOLUTION ORDER:
  * 1. DOTTA_REPO_DIR environment variable
@@ -95,12 +154,18 @@ error_t *repo_create_target(
  * own failure is what gets classified, and only the one case that is genuinely
  * an absence is reworded:
  *
- * - ERR_NOT_FOUND — the path holds no git directory. Names the path, the hint
- *   to run 'dotta init', and DOTTA_REPO_DIR when the path came from it.
- * - ERR_GIT — a git directory is present but libgit2 could not read it (the same
- *   GIT_ENOTFOUND, told apart by the filesystem), or the open failed for its
- *   own reason — a config file that will not parse, a damaged object database —
- *   in which case libgit2's message is wrapped, not replaced.
+ * - ERR_NOT_FOUND — the path holds no repository: nothing there, an empty
+ *   directory, a directory of other things, a store a hand stripped of its HEAD
+ *   (which `dotta init` recreates with refs, epoch and record intact). Names
+ *   the path, the hint to run 'dotta init', and DOTTA_REPO_DIR when the path
+ *   came from it. The same code, its own words, for a repository that opened
+ *   and is not declared the store.
+ * - ERR_GIT — a repository is there and libgit2 could not read it (the same
+ *   GIT_ENOTFOUND, told apart by the filesystem: the store is the directory,
+ *   and its HEAD present or unstattable is a store dotta cannot look into), or
+ *   the open failed for its own reason — a config file that will not parse, a
+ *   damaged object database — in which case libgit2's message is wrapped, not
+ *   replaced.
  * - ERR_PERMISSION — the repository is owned by another user.
  *
  * OWNERSHIP:

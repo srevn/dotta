@@ -966,17 +966,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* dotta's own branch is not a profile: the stage would commit to it as to
-     * any other, where the checkout it replaced was refused by Git for the branch
-     * the main worktree holds. The rule `profile enable` states, stated here
-     * too, until the anchor goes; a refusal by name asks Git nothing. */
-    if (strcmp(opts->profile, "dotta-worktree") == 0) {
-        err = ERROR(
-            ERR_INVALID_ARG, "'dotta-worktree' is dotta's own branch, not a profile"
-        );
-        goto cleanup;
-    }
-
     /* The branch this add will write to: its stage is opened below when it is
      * there, an orphan's when it is not. Both answers are needed here, before
      * the command has any effect — a name Git's ref namespace cannot hold beside

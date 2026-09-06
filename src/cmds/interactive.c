@@ -24,6 +24,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "sys/gitops.h"
 
 /* --- Style macros --- */
 
@@ -195,7 +196,7 @@ static error_t *build_items(
     bool *used = NULL;
     size_t item_idx = 0;
 
-    err = profile_list_all_local(repo, &all_profiles);
+    err = gitops_list_branches(repo, &all_profiles);
     if (err) goto cleanup;
 
     if (all_profiles->count == 0) {

@@ -127,7 +127,7 @@ static error_t *list_profiles(
 
     /* Every profile here */
     string_array_t *branches = NULL;
-    error_t *err = profile_list_all_local(repo, &branches);
+    error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
         return error_wrap(err, "Failed to list branches");
     }

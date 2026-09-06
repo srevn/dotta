@@ -60,20 +60,23 @@ Claims are re-derived only with consent: the chain above a leaf rides that leaf'
 ## Repository Structure
 
 ```
-.git/
+<store>/                   # a bare Git repository, declared dotta's own in its config
+├── HEAD                   # git's, unborn, never read by dotta
 ├── refs/heads/
-│   ├── dotta-worktree     # Empty branch (worktree anchor)
 │   ├── global             # Profile branch
 │   ├── darwin             # Profile branch
-│   └── hosts/laptop       # Profile branch
-└── dotta.db               # State database (manifest + metadata)
+│   └── hosts/laptop       # Profile branch — one branch per profile, nothing else
+├── refs/dotta/
+│   ├── epoch              # the derivation epoch (synced)
+│   └── baseline           # the baseline .dottaignore (this machine's)
+└── dotta.db               # the record
 ```
 
-The main worktree always points to `dotta-worktree`, an empty branch. This prevents Git status pollution. All profile operations use temporary worktrees internally.
+Nothing is ever checked out. Every command reads the branches and writes commits to them, and the store is a bare repository: `git status` has nothing to say in it, and `HEAD` names an unborn branch dotta never reads. To look at a profile with your own tools: `dotta git worktree add <dir> <profile>`. What makes the directory dotta's store is the declaration `init` and `clone` write into its config (`dotta.store = true`); a repository without it is refused by every command, and `dotta init` takes an empty bare repository or refuses one with a working tree or a history it did not write.
 
 ## The view and the record
 
-Dotta stores only what it cannot recompute. What *should* stand at each path, and from which profile, is a pure function of Git, the enabled profiles and the machine's mount table — **the view** — and is computed from Git every time a command runs. What dotta *did* at a path — **the record** — is dotta's own and is the only per-path state it keeps, in `.git/dotta.db`.
+Dotta stores only what it cannot recompute. What *should* stand at each path, and from which profile, is a pure function of Git, the enabled profiles and the machine's mount table — **the view** — and is computed from Git every time a command runs. What dotta *did* at a path — **the record** — is dotta's own and is the only per-path state it keeps, in the store's `dotta.db`.
 
 The architecture mirrors Git's three-tree model:
 

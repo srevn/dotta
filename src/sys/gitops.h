@@ -55,8 +55,8 @@
  * when even those are unavailable.
  *
  * Used by every dotta path that creates a commit object — the stage's commit
- * (sys/stage), orphan-branch creation, the merge commit and the rebase. Caller
- * frees the returned signature via `git_signature_free`.
+ * (sys/stage), the merge commit and the rebase. Caller frees the returned signature
+ * via `git_signature_free`.
  *
  * @param out  Output signature (caller frees with git_signature_free)
  * @param repo Repository (must not be NULL)
@@ -85,6 +85,32 @@ error_t *gitops_get_signature(git_signature **out, git_repository *repo);
  * @return Error or NULL on success
  */
 error_t *gitops_open_repository(git_repository **out, const char *path);
+
+/**
+ * Create a bare repository at path, or open the one that stands there
+ *
+ * `git init --bare`, the path made as needed. dotta's store is bare (utils/repo.h):
+ * nothing is ever checked out, every write to a branch is a stage committed in
+ * memory (sys/stage), and a working tree was the layer beneath an anchor branch
+ * nothing reads any more. Over a repository that already stands the call is git's
+ * re-init — refs and config kept, only what is missing written back, HEAD among
+ * them — so a store a hand stripped of its HEAD is whole again; it does not make
+ * a repository with a working tree bare, and a caller that must know reads
+ * `git_repository_is_bare` on what it got.
+ *
+ * HEAD is written here once, `ref: refs/heads/<init.defaultBranch, else master>`,
+ * unborn — git's own fresh state — and nothing in dotta reads or writes it after.
+ * A symref a hand moves onto a profile makes that profile a GUI's current branch
+ * and costs dotta nothing. Garbage in the file stops `dotta git` with git's own
+ * words, and stops every commit too — libgit2 reads HEAD at each ref write to
+ * decide whether the HEAD reflog gets the entry, and fails on what it finds,
+ * naming the file — while every read runs; the file is the hand's to put back.
+ *
+ * @param out Repository handle (must not be NULL)
+ * @param path Repository path (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_init_repository(git_repository **out, const char *path);
 
 /**
  * Close repository and free resources
@@ -154,15 +180,6 @@ error_t *gitops_branch_blocker(
 );
 
 /**
- * Create orphan branch (no parent commits)
- *
- * @param repo Repository (must not be NULL)
- * @param name Branch name (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_create_orphan_branch(git_repository *repo, const char *name);
-
-/**
  * List the references under a namespace
  *
  * The names beneath `namespace` — "refs/heads" lists a branch as "p", "refs"
@@ -204,8 +221,9 @@ error_t *gitops_list_branches(git_repository *repo, string_array_t **out);
  * List all remote tracking branches
  *
  * Every ref under refs/remotes/<remote> by name, complete or an error
- * (gitops_list_refs), less the two that are not branches of the remote: `HEAD`,
- * the remote's own symbolic HEAD, and the anchor, dotta's and never a profile.
+ * (gitops_list_refs), less the one that is not a branch of the remote: `HEAD`,
+ * the remote's own symbolic HEAD, which `git clone` and `git remote set-head`
+ * record there.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (e.g., "origin") (must not be NULL)
@@ -219,39 +237,23 @@ error_t *gitops_list_remote_tracking(
 );
 
 /**
- * Delete branch
+ * Delete a branch
+ *
+ * The ref and its reflog. Refused, in dotta's words, when a linked worktree of
+ * the repository has the branch checked out (`dotta git worktree add`): a bare
+ * store checks nothing out itself, so a worktree is the one place a checkout of
+ * a profile can stand, and `git_reference_delete` would take the branch from
+ * under it without a word. Not refused for the branch HEAD names: HEAD is git's
+ * and unborn (gitops_init_repository), a hand may have pointed it at a profile,
+ * and git itself deletes that branch in a bare repository — `git_branch_delete`
+ * is the stricter one and is not used. Per-branch config another tool wrote
+ * (`branch.<name>.*`) is that tool's and stays; dotta writes none.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitops_delete_branch(git_repository *repo, const char *name);
-
-/**
- * Get current branch name
- *
- * @param repo Repository (must not be NULL)
- * @param out Branch name (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *gitops_current_branch(git_repository *repo, char **out);
-
-/**
- * Check if a branch is the currently checked-out branch (HEAD)
- *
- * Compares branch_name against the branch that HEAD references. Returns false
- * for detached HEAD state or bare repositories.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch to check (must not be NULL)
- * @param is_current Output: true if branch is current HEAD (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_is_current_branch(
-    git_repository *repo,
-    const char *branch_name,
-    bool *is_current
-);
 
 /**
  * Load tree from reference
@@ -439,18 +441,25 @@ error_t *gitops_resolve_commit_in_branch(
 typedef struct transfer_context_s transfer_context_t;
 
 /**
- * Clone repository from URL
+ * Fetch everything a remote has, under its own refspecs
  *
- * @param out Repository handle (must not be NULL)
- * @param url Remote URL (must not be NULL)
- * @param local_path Local path for clone (must not be NULL)
+ * `git fetch <remote>`: the refspec the remote was created with — every branch
+ * under refs/heads to refs/remotes/<remote>, for one `git_remote_create` made —
+ * and nothing else. Every branch the remote has lands as a remote-tracking ref;
+ * no local branch is made and HEAD is not touched; the refs under refs/dotta
+ * are not under the refspec and do not come (the epoch has its own fetch,
+ * infra/epoch). The clone's one round trip; a name the remote lacks is not an
+ * error of the fetch, so what landed is read afterwards
+ * (gitops_list_remote_tracking).
+ *
+ * @param repo Repository (must not be NULL)
+ * @param remote_name Remote name (e.g., "origin") (must not be NULL)
  * @param xfer Transfer context for credentials and progress (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *gitops_clone(
-    git_repository **out,
-    const char *url,
-    const char *local_path,
+error_t *gitops_fetch_remote(
+    git_repository *repo,
+    const char *remote_name,
     transfer_context_t *xfer
 );
 
@@ -549,8 +558,7 @@ error_t *gitops_delete_remote_branch(
  * refs/remotes/<remote>/), this is authoritative — it sees branches added to
  * the server since the last fetch — but requires network and credentials.
  *
- * Filters results to refs under refs/heads/, excluding dotta-worktree and empty
- * names.
+ * Filters results to refs under refs/heads/, excluding empty names.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (must not be NULL)
@@ -878,29 +886,6 @@ error_t *gitops_update_branch_reference(
     const char *branch_name,
     const git_oid *new_oid,
     const char *reflog_msg
-);
-
-/**
- * Synchronize working directory with current HEAD
- *
- * Updates the working directory and index to match HEAD. Use after modifying
- * the currently checked-out branch to ensure consistency.
- *
- * Strategy options:
- * - GIT_CHECKOUT_SAFE: Abort if local modifications conflict (recommended)
- * - GIT_CHECKOUT_FORCE: Overwrite all local modifications (use with caution)
- *
- * IMPORTANT: GIT_CHECKOUT_FORCE will destroy uncommitted changes without warning.
- * Only use when certain no user data can exist (e.g., immediately after creating
- * a new branch, or during dotta init).
- *
- * @param repo Repository (must not be NULL, must not be bare)
- * @param strategy Checkout strategy (GIT_CHECKOUT_SAFE recommended)
- * @return Error or NULL on success
- */
-error_t *gitops_sync_worktree(
-    git_repository *repo,
-    git_checkout_strategy_t strategy
 );
 
 #endif /* DOTTA_GITOPS_H */

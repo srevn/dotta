@@ -1,10 +1,16 @@
 /**
  * clone.c - Clone dotta repository implementation
  *
+ * The clone is init with a remote: the bare store made and declared (utils/repo.h),
+ * the remote added, one fetch of everything it has, the epoch taken as the identity
+ * gate, and the chosen profiles made local from what landed. No `git_clone`:
+ * that call creates a local branch for the remote's HEAD whatever was asked for,
+ * and dotta's store has no branch nobody asked for.
+ *
  * Smart profile management
  * - Auto-detects relevant profiles by default
- * - Fetches only detected/specified profiles
- * - Initializes state with fetched profiles
+ * - Makes only detected/specified profiles local
+ * - Initializes state with those profiles
  * - Supports hub mode (--all) for backup workflows
  */
 
@@ -33,28 +39,30 @@
 #include "utils/repo.h"
 
 /**
- * Fetch profiles and create local tracking branches
+ * Make the chosen profiles local
+ *
+ * The one fetch has run (gitops_fetch_remote): every branch the remote has stands
+ * under refs/remotes/<remote>. Each chosen name becomes a local branch at that
+ * commit; a name the remote does not have is warned about by name and skipped,
+ * so a `-p` typo costs one profile and not the clone.
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
- * @param profiles Array of profile names to fetch
+ * @param profiles Array of profile names to make local
  * @param count Number of profiles
  * @param out Output context for messages
- * @param cred_ctx Credential context
- * @param fetched_count Output: number successfully fetched (can be NULL)
- * @param fetched_profiles Optional: array to populate with successfully fetched
- *                         names (can be NULL)
+ * @param landed_count Output: number made local (can be NULL)
+ * @param landed Optional: array to populate with the names made local (can be NULL)
  * @return Error or NULL on success
  */
-static error_t *fetch_profiles(
+static error_t *land_profiles(
     git_repository *repo,
     const char *remote_name,
     char **profiles,
     size_t count,
     output_t *out,
-    transfer_context_t *xfer,
-    size_t *fetched_count,
-    string_array_t *fetched_profiles
+    size_t *landed_count,
+    string_array_t *landed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
@@ -66,23 +74,8 @@ static error_t *fetch_profiles(
     for (size_t i = 0; i < count; i++) {
         const char *profile = profiles[i];
 
-        if (output_is_tty(out)) {
-            output_info(out, OUTPUT_NORMAL, "  Fetching %s...", profile);
-        }
-
-        /* Fetch the profile branch */
-        err = gitops_fetch_branch(repo, remote_name, profile, xfer);
-        if (err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to fetch '%s': %s",
-                profile, error_message(err)
-            );
-            error_free(err);
-            continue;
-        }
-
-        /* The local branch: created at the remote's commit, or already here (e.g.,
-         * from git_clone) and left where it stands */
+        /* The local branch: created at the remote's commit, or already here (the
+         * same name given twice) and left where it stands */
         err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (err) {
             output_warning(
@@ -94,43 +87,41 @@ static error_t *fetch_profiles(
         }
         local_count++;
 
-        /* Add to fetched names array if provided */
-        if (fetched_profiles) {
-            string_array_push(fetched_profiles, profile);
+        /* Add to the landed names array if provided */
+        if (landed) {
+            string_array_push(landed, profile);
         }
     }
 
-    if (fetched_count) {
-        *fetched_count = local_count;
+    if (landed_count) {
+        *landed_count = local_count;
     }
 
     return NULL;
 }
 
 /**
- * Fetch all remote branches (hub mode)
+ * Make every remote branch local (hub mode)
  *
  * @param repo Repository
  * @param remote_name Remote name
  * @param out Output context
- * @param xfer Transfer context
- * @param fetched_profiles Output: fetched profile names array
+ * @param landed Output: the profile names made local
  * @return Error or NULL on success
  */
-static error_t *fetch_all_profiles(
+static error_t *land_all_profiles(
     git_repository *repo,
     const char *remote_name,
     output_t *out,
-    transfer_context_t *xfer,
-    string_array_t **fetched_profiles
+    string_array_t **landed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
-    CHECK_NULL(fetched_profiles);
+    CHECK_NULL(landed);
 
     output_section(out, OUTPUT_NORMAL, "Fetching all remote profiles");
 
-    /* List all remote tracking branches */
+    /* Every branch the one fetch brought */
     string_array_t *all_branches = NULL;
     error_t *err = gitops_list_remote_tracking(
         repo, remote_name, &all_branches
@@ -141,7 +132,7 @@ static error_t *fetch_all_profiles(
         );
     }
 
-    /* Create array for successfully fetched profiles */
+    /* Create array for the profiles made local */
     string_array_t *successful = string_array_new(0);
     if (!successful) {
         string_array_free(all_branches);
@@ -151,11 +142,11 @@ static error_t *fetch_all_profiles(
         );
     }
 
-    /* Fetch and create local branches */
+    /* Create local branches */
     size_t fetched_count = 0;
-    err = fetch_profiles(
+    err = land_profiles(
         repo, remote_name, all_branches->items, all_branches->count,
-        out, xfer, &fetched_count, successful
+        out, &fetched_count, successful
     );
 
     string_array_free(all_branches);
@@ -170,7 +161,7 @@ static error_t *fetch_all_profiles(
         fetched_count, fetched_count == 1 ? "" : "s"
     );
 
-    *fetched_profiles = successful;
+    *landed = successful;
 
     return NULL;
 }
@@ -266,8 +257,8 @@ static error_t *initialize_state(
 /**
  * Remove what a failed clone left behind.
  *
- * Clone's entire side-effect surface is the target directory (state DB and branches
- * live under .git/, the seeded .dottaignore in the workdir), so all-or-nothing
+ * Clone's entire side-effect surface is the target directory — the store is bare,
+ * so the record, the refs and the objects all live in it — so all-or-nothing
  * means one thing: after a fatal error, nothing dotta created remains. A
  * pre-existing (empty) target directory is kept and only emptied; a directory
  * the clone created is removed outright. Best-effort — the fatal error being
@@ -359,25 +350,62 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     err = transfer_context_create(&xfer_opts, &xfer);
     if (err) goto cleanup;
 
-    /* Track whether the target directory predates the clone (git_clone accepts
-     * an existing empty directory): rollback preserves a pre-existing directory
-     * and only empties it. */
+    /* The place the clone lands must be absent or an empty directory. What stands
+     * there is somebody's: a repository would be taken by the init below, and
+     * files beside a store the rollback empties would go with it. A directory
+     * that predates the clone is kept by the rollback and only emptied. */
     path_preexisted = fs_is_directory(local_path);
+    if (path_preexisted) {
+        switch (fs_directory_emptiness(local_path, NULL, NULL)) {
+            case FS_DIR_EMPTY:
+                break;
+            case FS_DIR_OCCUPIED:
+                err = ERROR(
+                    ERR_EXISTS, "'%s' exists and is not an empty directory",
+                    local_path
+                );
+                goto cleanup;
+            case FS_DIR_UNREADABLE:
+                err = ERROR(ERR_FS, "Cannot read '%s'", local_path);
+                goto cleanup;
+        }
+    }
 
-    /* Clone repository with progress reporting */
-    err = gitops_clone(&repo, opts->url, local_path, xfer);
+    /* The store: bare, declared dotta's from birth, with the remote it came from.
+     * Everything from here is the rollback's to undo. */
+    err = gitops_init_repository(&repo, local_path);
     if (err) {
-        err = error_wrap(err, "Failed to clone repository");
+        err = error_wrap(err, "Failed to create the repository");
         goto cleanup;
     }
     clone_landed = true;
 
+    err = repo_declare_store(repo);
+    if (err) goto cleanup;
+
+    git_remote *remote = NULL;
+    int git_err = git_remote_create(&remote, repo, "origin", opts->url);
+    if (git_err < 0) {
+        err = error_from_git(git_err);
+        goto cleanup;
+    }
+    git_remote_free(remote);
+
+    /* One fetch of everything the remote has, with progress: every branch lands
+     * as a remote-tracking ref, and the profile arms below read them from there.
+     * No local branch is made here — that is each arm's, for the names it chose. */
+    err = gitops_fetch_remote(repo, "origin", xfer);
+    if (err) {
+        err = error_wrap(err, "Failed to clone repository");
+        goto cleanup;
+    }
+
     /* Identity gate + epoch acquisition. refs/dotta/epoch is the one unconditional,
-     * synced dotta artifact (dotta-worktree never leaves the local repo), so a
-     * remote that does not advertise it is not a dotta repository — refuse before
-     * any local materialization below (state DB, dotta-worktree branch, baseline
-     * .dottaignore). The ref also carries the repository's epoch; without it,
-     * every encrypted blob is undecryptable. */
+     * synced dotta artifact — the fetch above does not carry it, the default
+     * refspec covers refs/heads alone — so a remote that does not advertise it
+     * is not a dotta repository: refuse before any local materialization below
+     * (the record, the local branches, the baseline). The ref also carries the
+     * repository's epoch; without it, every encrypted blob is undecryptable. */
     err = epoch_fetch(repo, "origin", xfer, NULL);
     if (err) {
         if (err->code == ERR_NOT_FOUND) {
@@ -450,9 +478,9 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         output_section(out, OUTPUT_NORMAL, "Fetching specified profiles");
 
         size_t fetched_count = 0;
-        err = fetch_profiles(
+        err = land_profiles(
             repo, "origin", opts->profiles, opts->profile_count,
-            out, xfer, &fetched_count, fetched_profiles
+            out, &fetched_count, fetched_profiles
         );
 
         if (err) {
@@ -473,7 +501,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     } else if (opts->fetch_all) {
         /* Hub mode - fetch all profiles */
         string_array_t *all_profiles = NULL;
-        err = fetch_all_profiles(repo, "origin", out, xfer, &all_profiles);
+        err = land_all_profiles(repo, "origin", out, &all_profiles);
 
         if (err) {
             output_error(
@@ -494,7 +522,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             out, OUTPUT_NORMAL, "Auto-detecting profiles for this system"
         );
 
-        /* List all remote tracking branches (available after clone) */
+        /* Every branch the one fetch brought */
         string_array_t *remote_branches = NULL;
         err = gitops_list_remote_tracking(repo, "origin", &remote_branches);
         if (err) {
@@ -527,11 +555,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             }
             output_newline(out, OUTPUT_NORMAL);
 
-            /* Fetch detected profiles */
+            /* Make the detected profiles local */
             size_t fetched_count = 0;
-            err = fetch_profiles(
+            err = land_profiles(
                 repo, "origin", detected_profiles->items, detected_profiles->count,
-                out, xfer, &fetched_count, fetched_profiles
+                out, &fetched_count, fetched_profiles
             );
             if (err) {
                 output_warning(
@@ -614,45 +642,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             err = error_wrap(err, "Failed to initialize state");
             goto cleanup;
         }
-    }
-
-    /* Create dotta-worktree branch if it doesn't exist */
-    bool worktree_exists;
-    err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
-    if (err) {
-        err = error_wrap(
-            err, "Failed to check for dotta-worktree branch"
-        );
-        goto cleanup;
-    }
-
-    if (!worktree_exists) {
-        output_info(out, OUTPUT_VERBOSE, "Creating dotta-worktree branch...");
-
-        err = gitops_create_orphan_branch(repo, "dotta-worktree");
-        if (err) {
-            err = error_wrap(
-                err, "Failed to create dotta-worktree branch"
-            );
-            goto cleanup;
-        }
-    }
-
-    /* Checkout dotta-worktree */
-    int git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
-    }
-
-    /* Clean working directory */
-    git_checkout_options checkout_opts;
-    git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
-    checkout_opts.checkout_strategy = GIT_CHECKOUT_FORCE;
-    git_err = git_checkout_head(repo, &checkout_opts);
-    if (git_err < 0) {
-        err = error_from_git(git_err);
-        goto cleanup;
     }
 
     /* Seed the baseline .dottaignore at its own ref with the default patterns.
@@ -795,10 +784,10 @@ cleanup:
         gitops_close_repository(repo);
     }
 
-    /* All-or-nothing: a fatal error after the clone landed must not leave a
-     * half-initialized repository that blocks the retry (git_clone refuses a
-     * non-empty directory). Runs after the repo handle is closed so nothing holds
-     * the directory open. */
+    /* All-or-nothing: a fatal error after the store landed must not leave a
+     * half-initialized repository that blocks the retry (the emptiness test above
+     * refuses a non-empty directory). Runs after the repo handle is closed so
+     * nothing holds the directory open. */
     if (err && clone_landed) {
         rollback_clone_dir(local_path, path_preexisted, out);
     }

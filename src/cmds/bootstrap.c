@@ -406,7 +406,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         }
     } else if (opts->all_profiles) {
         /* List all local profile names (lightweight, no ref resolution) */
-        err = profile_list_all_local(repo, &profiles);
+        err = gitops_list_branches(repo, &profiles);
         if (err) {
             err = error_wrap(err, "Failed to list all profiles");
             goto cleanup;

@@ -442,26 +442,6 @@ cleanup:
 }
 
 /**
- * List all local profile branch names (lightweight, no ref resolution)
- */
-error_t *profile_list_all_local(
-    git_repository *repo,
-    string_array_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (err) return err;
-
-    string_array_remove_value(branches, "dotta-worktree");
-
-    *out = branches;
-    return NULL;
-}
-
-/**
  * Is this path inside a profile branch dotta's own bookkeeping?
  */
 bool profile_is_repo_metadata(const char *storage_path) {
@@ -891,7 +871,7 @@ error_t *profile_build_file_index(
     }
 
     /* Every profile here */
-    err = profile_list_all_local(repo, &all_branches);
+    err = gitops_list_branches(repo, &all_branches);
     if (err) {
         err = error_wrap(err, "Failed to list branches");
         goto cleanup;
@@ -970,7 +950,7 @@ error_t *profile_discover_file(
      * branch for the specific file instead of building the full file index
      * (profile_build_file_index walks every tree, O(M×P)). */
     string_array_t *all_branches = NULL;
-    err = profile_list_all_local(repo, &all_branches);
+    err = gitops_list_branches(repo, &all_branches);
     if (err) {
         return error_wrap(
             err, "Failed to list branches for file discovery"

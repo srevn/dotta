@@ -190,7 +190,7 @@ static error_t *profile_list(
     }
 
     /* Every profile here */
-    err = profile_list_all_local(repo, &all_branches);
+    err = gitops_list_branches(repo, &all_branches);
     if (err) {
         err = error_wrap(err, "Failed to list branches");
         goto cleanup;
@@ -710,7 +710,7 @@ static error_t *profile_enable(
 
     if (opts->all_profiles) {
         /* Enable every profile here */
-        err = profile_list_all_local(repo, &all_branches);
+        err = gitops_list_branches(repo, &all_branches);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
             goto cleanup;
@@ -818,19 +818,6 @@ static error_t *profile_enable(
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);
             already_enabled++;
             continue;
-        }
-
-        /* dotta's own branch is not a profile. Enable and add refuse it by name
-         * — a row for it would put a branch of bookkeeping in the view, a commit
-         * to it would put user files on the anchor — where remove --delete-profile
-         * meets Git's checked-out protection. Fatal, not a skip: a CLI input
-         * error, like a bad --target. */
-        if (strcmp(profile, "dotta-worktree") == 0) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "'dotta-worktree' is dotta's own branch, not a profile"
-            );
-            goto cleanup;
         }
 
         /* Is the profile here? Git's answer or Git's error: an unreadable ref

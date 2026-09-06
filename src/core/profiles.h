@@ -160,21 +160,6 @@ error_t *profile_build_mount_table(
 );
 
 /**
- * List all local profile branch names
- *
- * Returns names of all local branches except 'dotta-worktree'. Iterates Git refs
- * and extracts branch names without resolving references or loading trees.
- *
- * @param repo Repository (must not be NULL)
- * @param out String array of branch names (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *profile_list_all_local(
-    git_repository *repo,
-    string_array_t **out
-);
-
-/**
  * Is there a profile of this name here, or refuse
  *
  * The refusing shape of gitops_branch_exists, for the verbs whose only use of

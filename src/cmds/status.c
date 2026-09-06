@@ -19,7 +19,6 @@
 #include "cmds/completion.h"
 #include "core/cleanup.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1127,7 +1126,7 @@ static error_t *display_remote_status(
 
     if (show_all_profiles) {
         /* Explicit request: show ALL local profiles (lightweight, no ref resolution) */
-        err = profile_list_all_local(repo, &all_local);
+        err = gitops_list_branches(repo, &all_local);
         if (err) {
             return error_wrap(err, "Failed to list all profiles");
         }

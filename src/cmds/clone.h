@@ -41,7 +41,8 @@ typedef struct {
 /**
  * Clone dotta repository
  *
- * Clones remote repository and sets up dotta-worktree branch.
+ * Makes the bare store, fetches the remote once, and makes the chosen profiles
+ * local (clone.c).
  *
  * The bootstrap that may follow never enters the clone's exit code: the repository
  * landed either way, so a script that failed is reported where it ran and again

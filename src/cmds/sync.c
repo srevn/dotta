@@ -221,10 +221,9 @@ static error_t *pull_branch_ff(
         return NULL;
     }
 
-    /* Check if fast-forward is possible by checking if local is ancestor of remote
-     * This is independent of where HEAD is currently pointing, which is important
-     * because we're always on dotta-worktree, not on the branch we're updating.
-     */
+    /* Check if fast-forward is possible by checking if local is ancestor of remote.
+     * A graph question about the two commits, independent of HEAD: the store
+     * checks nothing out, and the branch being moved is never the current one. */
     git_err = git_graph_descendant_of(repo, remote_oid, local_oid);
     if (git_err < 0) {
         git_reference_free(local_ref);
@@ -1607,28 +1606,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     const char *remote_name = NULL;
     const char *remote_url = NULL;
     transfer_context_t *xfer = NULL;
-    char *current_branch = NULL;
     char *profiles_str = NULL;
     char *remote_env = NULL;
-
-    /* Verify main worktree is on dotta-worktree branch */
-    err = gitops_current_branch(repo, &current_branch);
-    if (err) {
-        err = error_wrap(err, "Failed to get current branch");
-        goto cleanup;
-    }
-
-    if (strcmp(current_branch, "dotta-worktree") != 0) {
-        /* Create error before freeing current_branch to avoid use-after-free */
-        err = ERROR(
-            ERR_STATE_INVALID,
-            "Main worktree must be on 'dotta-worktree' branch (currently on '%s')\n"
-            "Hint: Run 'dotta git checkout dotta-worktree' to fix", current_branch
-        );
-        goto cleanup;
-    }
-    free(current_branch);
-    current_branch = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -2317,7 +2296,6 @@ cleanup:
      * dispatcher and sync opens no transaction of its own (the flush scopes its
      * own; nothing else writes). `before` is the dispatcher's view — not freed
      * here. */
-    if (current_branch) free(current_branch);
     manifest_free(after);
     if (ws) workspace_free(ws);
     if (xfer) transfer_context_free(xfer);

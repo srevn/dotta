@@ -92,12 +92,12 @@ typedef struct args_command args_command_t;
  * The split is not a saved open. Everything `repo_open` does past resolving the
  * path is dotta asserting its own model of the repository: libgit2's open, which
  * reads files of the user's that dotta itself commonly deploys (~/.gitconfig)
- * and can refuse over one of them, and then the snap of HEAD back to
- * `dotta-worktree`. The pass-through is what a user reaches for when that model
- * does not hold, so it cannot be gated on the model holding —
- * `repo_ensure_dotta_worktree`'s own refusal names `dotta git stash` as the way
- * out, and an opening pass-through would answer that remedy with the very error
- * the remedy is for.
+ * and can refuse over one of them, and then the store's own declaration
+ * (utils/repo.h). The pass-through is what a user reaches for when that model
+ * does not hold — `dotta git show global:home/.gitconfig` is the way back to
+ * the committed copy of the file that broke the open — so it cannot be gated on
+ * the model holding: an opening pass-through would answer that remedy with the
+ * very error the remedy is for.
  *
  * CREATE-style commands (init, clone) declare NONE and open the repository
  * themselves, because it does not exist before dispatch runs.

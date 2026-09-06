@@ -32,13 +32,13 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
         fprintf(stderr, "Error: No git command specified\n\n");
         fprintf(stderr, "Usage: dotta git <git-command> [args...]\n\n");
         fprintf(stderr, "Examples:\n");
-        fprintf(stderr, "  dotta git status\n");
-        fprintf(stderr, "  dotta git log --oneline\n");
-        fprintf(stderr, "  dotta git show HEAD:home/.bashrc\n");
-        fprintf(stderr, "  dotta git reflog\n");
+        fprintf(stderr, "  dotta git log global --oneline\n");
+        fprintf(stderr, "  dotta git show global:home/.bashrc\n");
+        fprintf(stderr, "  dotta git reflog global\n");
+        fprintf(stderr, "  dotta git remote -v\n");
         fprintf(stderr, "\n");
-        fprintf(stderr, "The git command will be executed in the dotta repository.\n");
-        fprintf(stderr, "All standard git commands and options are supported.\n");
+        fprintf(stderr, "The git command will be executed in the dotta repository,\n");
+        fprintf(stderr, "a bare one: name a profile where git would read HEAD.\n");
         return 1;
     }
 
@@ -147,12 +147,16 @@ const args_command_t spec_git = {
         "No interception or modification — all standard git commands and\n"
         "options are supported. Git's exit status is preserved verbatim\n"
         "so scripts depending on codes like 1 (diffs found) or 128\n"
-        "(fatal) continue to work under `dotta git`.\n",
+        "(fatal) continue to work under `dotta git`.\n"
+        "\n"
+        "The repository is bare: nothing is checked out, and HEAD names\n"
+        "no profile. Name the profile where git would read HEAD. To look\n"
+        "at one with your own tools: `%s git worktree add <dir> <profile>`.\n",
     .examples    =
-        "  %s git status\n"
-        "  %s git log --oneline\n"
-        "  %s git show HEAD:home/.bashrc\n"
-        "  %s git reflog\n",
+        "  %s git log global --oneline\n"
+        "  %s git show global:home/.bashrc\n"
+        "  %s git reflog global\n"
+        "  %s git remote -v\n",
     .payload     = &(const dotta_needs_t){ .repo = DOTTA_REPO_PATH },
     .dispatch    = git_dispatch,
     .passthrough = true,

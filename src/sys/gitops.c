@@ -86,6 +86,22 @@ error_t *gitops_open_repository(git_repository **out, const char *path) {
     return NULL;
 }
 
+error_t *gitops_init_repository(git_repository **out, const char *path) {
+    CHECK_NULL(out);
+    CHECK_NULL(path);
+
+    git_repository_init_options opts;
+    git_repository_init_options_init(&opts, GIT_REPOSITORY_INIT_OPTIONS_VERSION);
+    opts.flags = GIT_REPOSITORY_INIT_BARE | GIT_REPOSITORY_INIT_MKPATH;
+
+    int err = git_repository_init_ext(out, path, &opts);
+    if (err < 0) {
+        return error_from_git(err);
+    }
+
+    return NULL;
+}
+
 void gitops_close_repository(git_repository *repo) {
     if (repo) {
         git_repository_free(repo);
@@ -175,88 +191,6 @@ error_t *gitops_branch_blocker(
 
     string_array_free(branches);
     return err;
-}
-
-error_t *gitops_create_orphan_branch(git_repository *repo, const char *name) {
-    CHECK_NULL(repo);
-    CHECK_NULL(name);
-    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
-
-    /* The ref first: a name Git refuses is refused before any object is written */
-    char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_branch_refname(refname, sizeof(refname), name);
-    if (err_build) {
-        return err_build;
-    }
-
-    /* Create empty tree */
-    git_treebuilder *tb = NULL;
-    git_oid tree_oid;
-    int err;
-
-    err = git_treebuilder_new(&tb, repo, NULL);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to create tree builder for orphan branch '%s'", name
-        );
-    }
-
-    err = git_treebuilder_write(&tree_oid, tb);
-    git_treebuilder_free(tb);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to write empty tree for orphan branch '%s'", name
-        );
-    }
-
-    /* Get tree object */
-    git_tree *tree = NULL;
-    err = git_tree_lookup(&tree, repo, &tree_oid);
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to lookup tree for orphan branch '%s'", name
-        );
-    }
-
-    /* Get signature with fallback */
-    git_signature *sig = NULL;
-    error_t *sig_err = gitops_get_signature(&sig, repo);
-    if (sig_err) {
-        git_tree_free(tree);
-        return error_wrap(
-            sig_err, "Failed to get signature for orphan branch '%s'", name
-        );
-    }
-
-    /* Create orphan commit (no parents) */
-    git_oid commit_oid;
-    err = git_commit_create(
-        &commit_oid,
-        repo,
-        refname,  /* This creates the branch reference */
-        sig,
-        sig,
-        NULL,     /* encoding */
-        "Initialize empty branch",
-        tree,
-        0,        /* no parents = orphan */
-        NULL      /* no parent commits */
-    );
-
-    git_signature_free(sig);
-    git_tree_free(tree);
-
-    if (err < 0) {
-        return error_wrap(
-            error_from_git(err),
-            "Failed to create orphan commit for branch '%s'", name
-        );
-    }
-
-    return NULL;
 }
 
 /* What a walk of the loose store holds constant: the repository the lookups ask,
@@ -480,10 +414,8 @@ error_t *gitops_list_remote_tracking(
         return err;
     }
 
-    /* Under the remote's namespace and not branches of it: its symbolic HEAD,
-     * and the anchor — dotta's, never a profile. */
+    /* Under the remote's namespace and not a branch of it: its symbolic HEAD. */
     string_array_remove_value(names, "HEAD");
-    string_array_remove_value(names, "dotta-worktree");
 
     *out = names;
     return NULL;
@@ -494,13 +426,13 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(name);
     CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
-    git_reference *ref = NULL;
     char refname[DOTTA_REFNAME_MAX];
     error_t *err_build = gitops_branch_refname(refname, sizeof(refname), name);
     if (err_build) {
         return err_build;
     }
 
+    git_reference *ref = NULL;
     int err = git_reference_lookup(&ref, repo, refname);
     if (err < 0) {
         return error_wrap(
@@ -508,92 +440,25 @@ error_t *gitops_delete_branch(git_repository *repo, const char *name) {
         );
     }
 
-    err = git_branch_delete(ref);
+    /* A linked worktree's checkout is the one that must be asked (the header):
+     * the store itself checks nothing out, so a bare main repository is passed
+     * over by libgit2's walk of the worktrees and only a linked one can answer. */
+    if (git_branch_is_checked_out(ref)) {
+        git_reference_free(ref);
+        return ERROR(
+            ERR_CONFLICT,
+            "Branch '%s' is checked out in a worktree of the repository; "
+            "remove that worktree first (git worktree list)", name
+        );
+    }
+
+    err = git_reference_delete(ref);
     git_reference_free(ref);
     if (err < 0) {
         return error_wrap(
             error_from_git(err), "Failed to delete branch '%s'", name
         );
     }
-
-    return NULL;
-}
-
-error_t *gitops_current_branch(git_repository *repo, char **out) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    git_reference *head = NULL;
-    int err = git_repository_head(&head, repo);
-    if (err < 0) {
-        if (err == GIT_EUNBORNBRANCH) {
-            return ERROR(ERR_NOT_FOUND, "HEAD points to an unborn branch");
-        }
-        if (err == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "Repository has no HEAD reference");
-        }
-        return error_from_git(err);
-    }
-
-    /* git_branch_name fails for detached HEAD (reference is not a branch) */
-    const char *name = NULL;
-    err = git_branch_name(&name, head);
-    if (err < 0) {
-        git_reference_free(head);
-        return ERROR(ERR_NOT_FOUND, "HEAD is detached (not on any branch)");
-    }
-
-    *out = strdup(name);
-    git_reference_free(head);
-
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate branch name");
-    }
-
-    return NULL;
-}
-
-error_t *gitops_is_current_branch(
-    git_repository *repo, const char *branch_name, bool *is_current
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(branch_name);
-    CHECK_NULL(is_current);
-
-    /* Default to false */
-    *is_current = false;
-
-    /* Bare repositories have no working directory or checked-out branch */
-    if (git_repository_is_bare(repo)) {
-        return NULL;
-    }
-
-    /* Get HEAD reference */
-    git_reference *head = NULL;
-    int err = git_repository_head(&head, repo);
-    if (err < 0) {
-        if (err == GIT_EUNBORNBRANCH || err == GIT_ENOTFOUND) {
-            /* Unborn branch or no HEAD - not an error, just not current */
-            return NULL;
-        }
-        return error_from_git(err);
-    }
-
-    /* Get branch name from HEAD. git_branch_name returns GIT_ERROR (-1) with
-     * GIT_ERROR_INVALID when the reference is not a local branch (detached HEAD,
-     * direct commit ref, etc.). Any failure here means HEAD is not pointing to
-     * a named branch, so the branch we are checking is definitely not current. */
-    const char *current_name = NULL;
-    err = git_branch_name(&current_name, head);
-    if (err < 0) {
-        git_reference_free(head);
-        return NULL;
-    }
-
-    /* Compare branch names */
-    *is_current = (strcmp(current_name, branch_name) == 0);
-
-    git_reference_free(head);
 
     return NULL;
 }
@@ -745,36 +610,35 @@ error_t *gitops_get_commit(
 /**
  * Remote operations
  */
-error_t *gitops_clone(
-    git_repository **out, const char *url, const char *local_path,
-    transfer_context_t *xfer
+error_t *gitops_fetch_remote(
+    git_repository *repo, const char *remote_name, transfer_context_t *xfer
 ) {
-    CHECK_NULL(out);
-    CHECK_NULL(url);
-    CHECK_NULL(local_path);
+    CHECK_NULL(repo);
+    CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
+    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
-    git_clone_options opts;
-    git_clone_options_init(&opts, GIT_CLONE_OPTIONS_VERSION);
-
-    /* Skip the default-branch checkout: the sole caller (cmd_clone) establishes
-     * the workdir view itself by checking out dotta-worktree. Materializing the
-     * remote HEAD's tree here is discarded work and transiently lands profile
-     * (or foreign) files in the workdir. */
-    opts.checkout_opts.checkout_strategy = GIT_CHECKOUT_NONE;
-
-    transfer_configure_callbacks(
-        &opts.fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
-    );
-
-    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
-    int err = git_clone(out, url, local_path, &opts);
-    transfer_op_end(xfer, err);
-
+    git_remote *remote = NULL;
+    int err = git_remote_lookup(&remote, repo, remote_name);
     if (err < 0) {
         return error_from_git(err);
     }
 
+    git_fetch_options fetch_opts;
+    git_fetch_options_init(&fetch_opts, GIT_FETCH_OPTIONS_VERSION);
+    transfer_configure_callbacks(
+        &fetch_opts.callbacks, xfer, GIT_DIRECTION_FETCH
+    );
+
+    /* No refspecs given: the remote's own, as configured. */
+    transfer_op_begin(xfer, GIT_DIRECTION_FETCH);
+    err = git_remote_fetch(remote, NULL, &fetch_opts, NULL);
+    transfer_op_end(xfer, err);
+    git_remote_free(remote);
+
+    if (err < 0) {
+        return error_from_git(err);
+    }
     return NULL;
 }
 
@@ -1133,8 +997,7 @@ error_t *gitops_list_remote_branches(
 
         const char *branch_name = refname + prefix_len;
 
-        if (*branch_name == '\0' ||
-            strcmp(branch_name, "dotta-worktree") == 0) {
+        if (*branch_name == '\0') {
             continue;
         }
 
@@ -1951,45 +1814,6 @@ error_t *gitops_update_branch_reference(
     }
 
     git_reference_free(new_ref);
-    return NULL;
-}
-
-/**
- * Worktree operations
- */
-error_t *gitops_sync_worktree(
-    git_repository *repo, git_checkout_strategy_t strategy
-) {
-    CHECK_NULL(repo);
-
-    /* Bare repositories have no working directory to sync */
-    if (git_repository_is_bare(repo)) {
-        return NULL;
-    }
-
-    git_checkout_options opts;
-    git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
-    opts.checkout_strategy = strategy;
-
-    int err = git_checkout_head(repo, &opts);
-    if (err < 0) {
-        if (strategy == GIT_CHECKOUT_SAFE) {
-            /*
-             * SAFE checkout failed - likely due to local modifications. Provide
-             * a clear, actionable error message.
-             */
-            return ERROR(
-                ERR_CONFLICT,
-                "Working directory has local modifications that conflict with HEAD.\n"
-                "Your changes have been preserved. To resolve:\n"
-                "  git checkout .   Discard all local changes\n"
-                "  git stash        Save changes temporarily\n"
-                "  git diff         View what differs"
-            );
-        }
-        return error_from_git(err);
-    }
-
     return NULL;
 }
 

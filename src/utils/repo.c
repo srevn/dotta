@@ -1,13 +1,11 @@
 /**
- * repo.c - Repository path resolution implementation
+ * repo.c - The store: where it is, what makes it one, how it is opened
  */
 
 #include "utils/repo.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "base/error.h"
 #include "sys/filesystem.h"
@@ -86,9 +84,9 @@ error_t *repo_create_target(
         }
     }
 
-    /* The directory holding the repository, not the repository: `git_clone` refuses
-     * a non-empty target and `git_repository_init_ext` makes its own, so neither
-     * caller wants this to reach the leaf. */
+    /* The directory holding the repository, not the repository: the clone refuses
+     * a target that is not empty, and the init makes its own leaf
+     * (gitops_init_repository), so neither caller wants this to reach it. */
     err = fs_ensure_parent_dirs(path);
     if (err) {
         free(configured);
@@ -114,148 +112,69 @@ error_t *repo_create_target(
 }
 
 /**
- * Ensure repository HEAD points to dotta-worktree
- *
- * Dotta requires the main worktree to always be on the dotta-worktree branch.
- * If HEAD is on a different branch (e.g., user manually ran git checkout), this
- * function automatically switches back using the correct checkout sequence.
- *
- * Behavior:
- * - Already on dotta-worktree: no-op (fast path)
- * - Clean working directory: switch succeeds, info message emitted
- * - Dirty working directory: fails with clear error and fix instructions
- * - Bare repository: no-op (no working directory)
- *
- * @param repo Repository handle (must not be NULL)
- * @return Error or NULL on success
+ * Declare the repository dotta's store
  */
-static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
+error_t *repo_declare_store(git_repository *repo) {
     CHECK_NULL(repo);
 
-    /* Bare repositories have no working directory */
-    if (git_repository_is_bare(repo)) {
+    /* The layered handle writes at its write level, the repository's own file. */
+    git_config *config = NULL;
+    int rc = git_repository_config(&config, repo);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    rc = git_config_set_bool(config, "dotta.store", 1);
+    if (rc < 0) {
+        git_config_free(config);
+        return error_from_git(rc);
+    }
+
+    rc = git_config_set_bool(config, "core.logAllRefUpdates", 1);
+    git_config_free(config);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    return NULL;
+}
+
+/**
+ * Is this repository declared dotta's store?
+ */
+error_t *repo_is_store(git_repository *repo, bool *out) {
+    CHECK_NULL(repo);
+    CHECK_NULL(out);
+
+    git_config *config = NULL;
+    int rc = git_repository_config(&config, repo);
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    /* The repository's own level, cut out of the layered handle (the header). */
+    git_config *local = NULL;
+    rc = git_config_open_level(&local, config, GIT_CONFIG_LEVEL_LOCAL);
+    git_config_free(config);
+    if (rc == GIT_ENOTFOUND) {
+        return ERROR(ERR_GIT, "Cannot read the repository's config file");
+    }
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+
+    int declared = 0;
+    rc = git_config_get_bool(&declared, local, "dotta.store");
+    git_config_free(local);
+    if (rc == GIT_ENOTFOUND) {
+        *out = false;
         return NULL;
     }
-
-    error_t *err = NULL;
-
-    /* Verify dotta-worktree branch exists */
-    bool worktree_exists = false;
-    err = gitops_branch_exists(repo, "dotta-worktree", &worktree_exists);
-    if (err) {
-        return error_wrap(err, "Failed to check for dotta-worktree branch");
+    if (rc < 0) {
+        return error_from_git(rc);
     }
 
-    if (!worktree_exists) {
-        return ERROR(
-            ERR_NOT_FOUND,
-            "Repository is not initialized (dotta-worktree branch missing)\n"
-            "Run 'dotta init' to initialize the repository"
-        );
-    }
-
-    /* Fast path: check if already on dotta-worktree */
-    bool is_current = false;
-    err = gitops_is_current_branch(repo, "dotta-worktree", &is_current);
-    if (err) {
-        /*
-         * Non-fatal: could be detached HEAD state. Continue with recovery attempt.
-         */
-        error_free(err);
-        err = NULL;
-    }
-
-    if (is_current) {
-        /* Already on dotta-worktree - nothing to do */
-        return NULL;
-    }
-
-    /* Get current branch name for user messaging */
-    char *old_branch = NULL;
-    error_t *branch_err = gitops_current_branch(repo, &old_branch);
-    if (branch_err) {
-        /*
-         * Non-fatal: detached HEAD or other unusual state. Continue with recovery,
-         * use placeholder in message.
-         */
-        error_free(branch_err);
-        old_branch = NULL;
-    }
-
-    /*
-     * Checkout dotta-worktree using correct order of operations
-     *
-     * Order (checkout_tree -> set_head):
-     * 1. checkout_tree compares target tree vs current state
-     * 2. With SAFE mode, fails if local modifications exist
-     * 3. Updates both Index and Working Directory atomically
-     * 4. set_head just moves the pointer after state is updated
-     */
-    git_object *target_commit = NULL;
-    int git_err = git_revparse_single(
-        &target_commit, repo, "refs/heads/dotta-worktree"
-    );
-    if (git_err < 0) {
-        free(old_branch);
-        return error_from_git(git_err);
-    }
-
-    git_checkout_options checkout_opts;
-    git_checkout_options_init(&checkout_opts, GIT_CHECKOUT_OPTIONS_VERSION);
-    checkout_opts.checkout_strategy = GIT_CHECKOUT_SAFE;
-
-    git_err = git_checkout_tree(repo, target_commit, &checkout_opts);
-    git_object_free(target_commit);
-
-    if (git_err < 0) {
-        const char *branch_desc = old_branch ? old_branch : "detached HEAD";
-
-        if (git_err == GIT_ECONFLICT) {
-            err = ERROR(
-                ERR_CONFLICT,
-                "Cannot auto-recover to 'dotta-worktree' (currently on '%s')\n\n"
-                "Your working directory has modifications that prevent switching.\n"
-                "To resolve manually:\n"
-                "  dotta git stash          # Save your changes\n"
-                "  dotta git checkout dotta-worktree\n"
-                "  dotta git stash pop      # Restore changes (if needed)", branch_desc
-            );
-        } else {
-            err = error_wrap(
-                error_from_git(git_err),
-                "Failed to checkout dotta-worktree (was on '%s')", branch_desc
-            );
-        }
-
-        free(old_branch);
-        return err;
-    }
-
-    /* Move HEAD to dotta-worktree (state already updated) */
-    git_err = git_repository_set_head(repo, "refs/heads/dotta-worktree");
-    if (git_err < 0) {
-        free(old_branch);
-        return error_from_git(git_err);
-    }
-
-    /*
-     * Recovery may have deleted the process CWD (e.g., user was in a subdirectory
-     * that only existed on the old branch). Move to the repo workdir so subsequent
-     * operations (credential helpers, hooks) don't fail with invalid CWD.
-     */
-    const char *workdir = git_repository_workdir(repo);
-    if (workdir) {
-        (void) chdir(workdir);
-    }
-
-    /* Success - inform user about the automated recovery */
-    const char *branch_desc = old_branch ? old_branch : "detached HEAD";
-    fprintf(
-        stderr, "info: Recovered to 'dotta-worktree' (was on '%s')\n",
-        branch_desc
-    );
-    free(old_branch);
-
+    *out = declared != 0;
     return NULL;
 }
 
@@ -268,7 +187,7 @@ static error_t *repo_ensure_dotta_worktree(git_repository *repo) {
     "once:\n  sudo chown -R \"$(id -u):$(id -g)\" %s"
 
 /**
- * Open dotta repository
+ * Open dotta's store
  */
 error_t *repo_open(const config_t *config, git_repository **repo_out, char **path_out) {
     CHECK_NULL(config);
@@ -283,6 +202,14 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
     if (err) {
         return err;
     }
+
+    /* Where the path came from, when it did not come from the default — for the
+     * refusals below that send the user to 'dotta init' or to DOTTA_REPO_DIR.
+     * The reader config_get_repo_dir's priority 1 has, so the note cannot name
+     * an origin the resolution did not use. */
+    const char *env_repo = config_repo_dir_from_env();
+    const char *env_note = env_repo ? "\nDOTTA_REPO_DIR is set to: " : "";
+    const char *env_value = env_repo ? env_repo : "";
 
     /*
      * Open the repository, and let the open be the answer to whether one is there.
@@ -300,38 +227,34 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
 
         if (error_code(err) == ERR_NOT_FOUND) {
             /* Which of the two it is. libgit2 words them identically — "could
-             * not find repository at X" for an empty directory, for a .git it
+             * not find repository at X" for an empty directory, for a store it
              * cannot read, and for a path that is not there — so the filesystem
-             * is the one that can tell them apart, and the question to ask it
-             * is about the git directory rather than the directory holding it:
-             * an empty directory at the path is the absence of a repository,
-             * not an unreadable one. A path dotta cannot look into at all answers
-             * neither and reads as the absence; 'dotta init' then names the
-             * permission itself. */
-            char *git_dir = NULL;
-            error_t *join_err = fs_path_join(repo_path, ".git", &git_dir);
-            bool holds_repository = !join_err && fs_lexists(git_dir);
-            free(git_dir);
+             * is the one that can tell them apart. The store is the directory,
+             * and HEAD is the file whose absence is what makes libgit2 say so:
+             * gone, the directory holds no repository (nothing there, a directory
+             * of other things, a store a hand stripped of its HEAD, which 'dotta
+             * init' recreates with refs, epoch and record intact); present, or
+             * unstattable because the directory cannot be looked into, there is
+             * a repository here that could not be read, and the answer to an
+             * absence is the one answer that must not be offered for it. */
+            char *head = NULL;
+            error_t *join_err = fs_path_join(repo_path, "HEAD", &head);
+            bool absent = !join_err
+                && fs_lstat_occupant(head, NULL) == FS_OCCUPANT_NONE;
+            free(head);
             error_free(join_err);
 
-            /* Where the path came from, when it did not come from the default.
-             * The reader config_get_repo_dir's priority 1 has, so the note cannot
-             * name an origin the resolution did not use. */
-            const char *env_repo = config_repo_dir_from_env();
-            const char *env_note = env_repo ? "\nDOTTA_REPO_DIR is set to: " : "";
-            const char *env_value = env_repo ? env_repo : "";
-
-            if (holds_repository) {
-                answer = ERROR(
-                    ERR_GIT, "Cannot read the repository at: %s\n\n"
-                    "Check its ownership and permissions. " REPO_RECLAIM_HINT
-                    "%s%s", repo_path, repo_path, env_note, env_value
-                );
-            } else {
+            if (absent) {
                 answer = ERROR(
                     ERR_NOT_FOUND, "No dotta repository found at: %s\n\n"
                     "Run 'dotta init' to create a new repository%s%s",
                     repo_path, env_note, env_value
+                );
+            } else {
+                answer = ERROR(
+                    ERR_GIT, "Cannot read the repository at: %s\n\n"
+                    "Check its ownership and permissions. " REPO_RECLAIM_HINT
+                    "%s%s", repo_path, repo_path, env_note, env_value
                 );
             }
             error_free(err);
@@ -354,14 +277,27 @@ error_t *repo_open(const config_t *config, git_repository **repo_out, char **pat
     }
 
     /*
-     * Ensure HEAD points to dotta-worktree
-     *
-     * Dotta's invariant: HEAD must always be on dotta-worktree. If user manually
-     * checked out another branch (e.g., git checkout global), recover automatically
-     * before proceeding.
+     * Opened; is it dotta's? The store's own declaration (repo_is_store): a
+     * repository without one is somebody's — a project, a mirror, the store an
+     * older dotta kept checked out — and dotta writes into none of them. The
+     * remedy named is 'dotta init', which is the verb that decides: it takes a
+     * bare repository with no refs at all and refuses one with a working tree
+     * or a history, naming the true thing.
      */
-    err = repo_ensure_dotta_worktree(repo);
+    bool declared = false;
+    err = repo_is_store(repo, &declared);
     if (err) {
+        err = error_wrap(err, "Cannot open the repository at: %s", repo_path);
+        git_repository_free(repo);
+        free(repo_path);
+        return err;
+    }
+    if (!declared) {
+        err = ERROR(
+            ERR_NOT_FOUND, "The repository at %s is not a dotta store\n\n"
+            "Run 'dotta init' to make it one, or point DOTTA_REPO_DIR at your "
+            "store%s%s", repo_path, env_note, env_value
+        );
         git_repository_free(repo);
         free(repo_path);
         return err;

@@ -66,7 +66,7 @@ void completion_profiles(
     }
 
     string_array_t *branches = NULL;
-    error_t *err = profile_list_all_local(repo, &branches);
+    error_t *err = gitops_list_branches(repo, &branches);
     if (err) {
         error_free(err);
     } else {
@@ -267,7 +267,7 @@ void completion_refspecs(
             return;
         }
     } else {
-        error_t *err = profile_list_all_local(repo, &branches);
+        error_t *err = gitops_list_branches(repo, &branches);
         if (err) {
             error_free(err);  /* silent-failure model */
             return;

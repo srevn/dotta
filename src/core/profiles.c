@@ -203,9 +203,9 @@ error_t *profile_detect(
     /* Non-fatal: continue if gethostname() fails */
 
     /* The three steps above answer *which* names this machine layers; this is
-     * the order they layer in. Each step appends in branch-listing order, so
-     * the one sort is what makes the result precedence — the module's one answer,
-     * shared with every caller that already holds its set. */
+     * the order they are seeded in. Each step appends in branch-listing order,
+     * so the one sort is what makes the answer the convention's — the same sort
+     * every --all runs over its own set. */
     profile_order(profiles);
 
     /* Success */

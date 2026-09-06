@@ -19,7 +19,7 @@ hosts/laptop        # Per-machine overrides
 hosts/laptop/vpn    # Machine-specific variants
 ```
 
-Profiles support **hierarchical organization** for both OS-specific and host-specific configurations. Profiles are applied in **layered order**, with later profiles overriding earlier ones:
+Profiles support **hierarchical organization** for both OS-specific and host-specific configurations. Profiles are applied in **layered order**, with later-enabled profiles overriding earlier ones. The order is this machine's: `enable` appends, `reorder` moves, and `clone` seeds it by the layering convention:
 
 1. `global` - Universal base configuration
 2. `<os>` - OS base profile (darwin, linux, freebsd)

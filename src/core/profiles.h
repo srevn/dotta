@@ -4,7 +4,7 @@
  * Handles profile detection, name resolution, and branch-level queries. Pure
  * query module — no manifest types or construction.
  *
- * Profile precedence (lowest to highest):
+ * The layering convention, least specific first:
  * 1. global
  * 2. <os> (darwin, linux, freebsd) - base OS profile
  * 3. <os>/<variant> (darwin/name, freebsd/services) - OS sub-profiles (sorted
@@ -12,7 +12,12 @@
  * 4. hosts/<hostname> - host base profile
  * 5. hosts/<hostname>/<variant> - host sub-profiles (sorted alphabetically)
  *
- * Later profiles override earlier ones for conflicting files.
+ * The convention is a seed, not the precedence. Precedence is this machine's
+ * enabled order (enabled_profiles.position, core/state.h): later enabled wins,
+ * enable appends, reorder moves, and the repository knows nothing of it. The
+ * convention is the order a set the machine enumerated is enabled or run in —
+ * detection at clone, and every --all — because such a set has no other; named
+ * profiles keep the order they were typed in (profile_order).
  *
  * Hierarchical OS profiles:
  * - Base profile: <os> (e.g., darwin, freebsd)
@@ -49,8 +54,8 @@
  * Detect matching profile names from a list of available branches
  *
  * Pure name-based detection using system information (OS, hostname). Returns
- * names in precedence order. Always includes "global" first if present in the
- * available branches.
+ * names in the convention's order (profile_order). Always includes "global" first
+ * if present in the available branches.
  *
  * Detection order:
  * 1. "global" — always included if available
@@ -64,8 +69,8 @@
  *
  * @param available_branches List of branch names to match against (must not be
  *                           NULL)
- * @param out_profiles Matched profile names in precedence order (must not be
- *                     NULL, caller must free)
+ * @param out_profiles Matched profile names in the convention's order (must not
+ *                     be NULL, caller must free)
  * @return Error or NULL on success
  */
 error_t *profile_detect(
@@ -74,10 +79,7 @@ error_t *profile_detect(
 );
 
 /**
- * Order profile names by layering precedence — least specific first.
- *
- * Enabled order IS precedence, so any command that turns a *set* of profiles
- * into an enabled *list* is answering this question, and there is one answer:
+ * Order profile names by the layering convention — least specific first.
  *
  *     rank 0   "global"          the universal base
  *     rank 1   everything else   a base sorts before its own variants, because
@@ -86,14 +88,14 @@ error_t *profile_detect(
  *
  * Within a rank, byte order on the name. That is a total order on names alone:
  * it needs no machine, so a hub machine enabling every profile and a bare clone
- * enabling the three that match it agree on the relative order of the three —
- * which is the whole point, since a path two profiles both provide must deploy
- * the same bytes on both.
+ * enabling the three that match it seed the three in the same relative order.
  *
- * profile_detect selects *which* names this machine layers and returns them in
- * this order; a caller that already holds its set needs only the order. Selection
- * and ordering are separate questions and this is the second one, on its own,
- * so both kinds of caller can have it.
+ * The seed, and nothing after it. A set the machine enumerated has no order of
+ * its own, and this is the one it gets: profile_detect returns its answer in
+ * it, and every --all — profile enable, clone, bootstrap — sorts its set with
+ * it before the loop that enables or runs. A set the user typed keeps the order
+ * typed, and once a row exists its position is the machine's: enable appends,
+ * reorder moves, and no command sorts an enabled set again.
  *
  * Sorts in place. Stable is not required — the key is total on distinct names,
  * and branch names are distinct.

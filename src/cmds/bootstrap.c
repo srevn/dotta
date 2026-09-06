@@ -405,12 +405,16 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
             if (err) goto cleanup;
         }
     } else if (opts->all_profiles) {
-        /* List all local profile names (lightweight, no ref resolution) */
+        /* Every profile here, run in the convention's order: a set the machine
+         * enumerated has no other, and a base's script belongs before its
+         * variants'. Named profiles run in the order given; the enabled set below
+         * runs in the machine's. */
         err = gitops_list_branches(repo, &profiles);
         if (err) {
             err = error_wrap(err, "Failed to list all profiles");
             goto cleanup;
         }
+        profile_order(profiles);
     } else {
         /* Use enabled profiles from state */
         err = profile_resolve_enabled(repo, state, &profiles);

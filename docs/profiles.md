@@ -33,21 +33,28 @@ Enabling a profile populates the manifest with all of the profile's files (with 
 
 ## Layering and Precedence
 
-When multiple profiles contain the same file path, the profile with higher precedence wins. The order is:
+When multiple profiles contain the same file path, the profile enabled later wins. Precedence is this machine's enabled order, the one `dotta profile list` prints, and the repository knows nothing of it: the same two profiles can layer one way on one machine and the other way on another.
 
-1. `global`
-2. `<os>` (e.g., `darwin`, `linux`)
-3. `<os>/<variant>` (e.g., `darwin/work`, sorted alphabetically)
-4. `hosts/<hostname>` (e.g., `hosts/laptop`)
-5. `hosts/<hostname>/<variant>` (e.g., `hosts/laptop/vpn`, sorted alphabetically)
+The order is written like an fstab:
 
-Example: if both `global` and `darwin` contain `home/.bashrc`, the `darwin` version takes precedence.
+- `dotta profile enable <name>...` appends each profile above the ones already enabled, in the order given. Re-enabling a disabled profile puts it on top.
+- `dotta profile enable --all` and `dotta clone --all` enable every profile, and `dotta clone` enables the profiles it detects, in the layering convention's order, since a set the machine enumerated has no other. That is the seed, and nothing sorts an enabled set again:
+  1. `global`
+  2. `<os>` (e.g., `darwin`, `linux`)
+  3. `<os>/<variant>` (e.g., `darwin/work`, sorted alphabetically)
+  4. `hosts/<hostname>` (e.g., `hosts/laptop`)
+  5. `hosts/<hostname>/<variant>` (e.g., `hosts/laptop/vpn`, sorted alphabetically)
+- `dotta profile disable <name>` deletes the profile's line; the others keep their order.
+- `dotta profile reorder <name>...` names every enabled profile in the desired order.
 
-To change the order of enabled profiles:
+Example: a fresh clone that detected `global`, `darwin` and `hosts/laptop` has them in that order, so if both `global` and `darwin` contain `home/.bashrc`, the `darwin` version deploys. Disable `darwin` and enable it again, and it sits above `hosts/laptop`.
 
 ```bash
+# Name every enabled profile to set the whole order
 dotta profile reorder global darwin hosts/laptop
 ```
+
+An `<os>/<variant>` profile is detected on every machine of that OS; a per-machine variant is `hosts/<hostname>/<variant>`.
 
 ## Hierarchical Organization
 
@@ -102,7 +109,7 @@ When cloning, dotta auto-detects profiles that match the current system:
 - OS base and sub-profiles (e.g., `darwin`, `darwin/*`)
 - Host base and sub-profiles (e.g., `hosts/<hostname>`, `hosts/<hostname>/*`)
 
-These are automatically fetched and enabled. Override this with `--all` (fetch everything) or `--profile` (fetch specific ones).
+These are automatically fetched and enabled in the layering convention's order. Override this with `--all` (fetch everything, enabled in the same order) or `--profile` (fetch specific ones, enabled in the order given).
 
 ## Interactive Mode
 

@@ -189,7 +189,7 @@ They run as the invoker, never as root: `HOME`, `USER` and `LOGNAME` name the
 user who typed the command even when the run obtained root through `sudo`, and
 `HOME` is the directory dotta resolved and classified `home/` paths against.
 
-Scripts execute in profile layering order (global, then OS, then host). After cloning, dotta prompts to run detected bootstrap scripts (override with `--bootstrap` or `--no-bootstrap`).
+Scripts execute in the enabled profiles' layering order, bottom layer first (on a fresh clone: global, then the OS, then the host); `--all` runs every profile's script in the layering convention's order, and named profiles run in the order given. After cloning, dotta prompts to run detected bootstrap scripts (override with `--bootstrap` or `--no-bootstrap`).
 
 ## Custom Deployment Root
 

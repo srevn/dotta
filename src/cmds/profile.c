@@ -709,12 +709,16 @@ static error_t *profile_enable(
     }
 
     if (opts->all_profiles) {
-        /* Enable every profile here */
+        /* Enable every profile here, in the convention's order: a set the machine
+         * enumerated has no other, and the rows appended below take the order
+         * this list has. Named profiles keep the order typed; a row that exists
+         * keeps its slot. */
         err = gitops_list_branches(repo, &all_branches);
         if (err) {
             err = error_wrap(err, "Failed to list branches");
             goto cleanup;
         }
+        profile_order(all_branches);
 
         for (size_t i = 0; i < all_branches->count; i++) {
             err = string_array_push(to_enable, all_branches->items[i]);
@@ -1994,6 +1998,12 @@ static const args_command_t spec_profile_enable = {
     .usage         = "%s profile enable [options] [<name>...]",
     .description   =
         "Enables one or more profiles so that 'dotta apply' deploys their files.\n"
+        "\n"
+        "  A newly enabled profile is appended above the ones already enabled, and\n"
+        "  later wins where two profiles provide one path. Named profiles are\n"
+        "  appended in the order given; --all enables every local profile in the\n"
+        "  layering convention's order (global, the OS, then the hosts). 'dotta\n"
+        "  profile reorder' moves them afterwards.\n"
         "\n"
         "  --target <path> attaches a custom mount point for profiles that contain\n"
         "  custom/ files (e.g. --target /mnt/jails/web). Only valid for a single\n"

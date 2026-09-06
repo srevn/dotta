@@ -511,7 +511,11 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             error_free(err);
             err = NULL;
         } else {
-            /* Use all fetched profiles */
+            /* Every fetched profile, seeded in the convention's order: the remote's
+             * listing has none of its own, and initialize_state enables in the
+             * order this list has. Named profiles (-p) keep the order typed;
+             * detection sorts its own answer. */
+            profile_order(all_profiles);
             string_array_free(fetched_profiles);
             fetched_profiles = all_profiles;
         }

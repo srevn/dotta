@@ -1,7 +1,8 @@
 /**
  * add.h - Add files to profiles
  *
- * Adds files to git profile branches using temporary worktrees.
+ * Captures files onto a profile branch's stage (sys/stage) and commits it: nothing
+ * is checked out, nothing is written under $TMPDIR.
  */
 
 #ifndef DOTTA_CMD_ADD_H
@@ -38,8 +39,9 @@ typedef struct {
 /**
  * Add files to a profile
  *
- * Uses temporary worktree to safely add files to a profile branch. Creates the
- * profile branch if it doesn't exist.
+ * Stages every file onto the profile branch and commits once. Creates the profile
+ * branch if it doesn't exist; a re-add of what the profile already holds commits
+ * nothing and says so.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

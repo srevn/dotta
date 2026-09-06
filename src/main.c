@@ -397,8 +397,9 @@ static int run_spec(
  * and secure_free's wipe/munlock/munmap (needed by keymgr teardown). The kernel
  * reclaims the keymgr's mapping on process death and zeroes its pages before
  * reallocation, so master keys held in the now-dead keymgr cannot surface in
- * another process's memory. Worktrees are orphan-cleaned by worktree.c on the
- * next invocation, and SQLite WAL mode auto-rolls-back any in-flight transaction.
+ * another process's memory. A stage that never reached its commit is loose objects
+ * and no ref (sys/stage), and SQLite WAL mode auto-rolls-back any in-flight
+ * transaction.
  *
  * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4 §2.4.3. Reading
  * volatile sig_atomic_t is atomic by definition.

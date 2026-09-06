@@ -31,10 +31,9 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/string.h"
-#include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 
 /* Size cap on `.dottaignore` blobs — an ignore-specific policy guarding against
  * a runaway file pulled in from Git. The underlying gitignore engine already
@@ -388,10 +387,65 @@ error_t *ignore_blob_write(
         );
     }
 
-    return gitops_update_file(
-        repo, branch, ".dottaignore", content, size,
-        commit_msg, GIT_FILEMODE_BLOB, NULL
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch));
+
+    stage_t *stage = NULL;
+    RETURN_IF_ERROR(stage_open(repo, refname, &stage));
+
+    error_t *err = stage_put(
+        stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB
     );
+    if (err) {
+        stage_free(stage);
+        return err;
+    }
+
+    bool committed = false;
+    err = stage_commit(stage, commit_msg, &committed);
+    stage_free(stage);
+    if (err) {
+        return err;
+    }
+    if (!committed) {
+        /* The blob was the branch's already; a checked-out copy matches it */
+        return NULL;
+    }
+
+    /* The baseline's branch is the one the store's main worktree holds checked
+     * out, and a commit to it leaves that checkout's index and working copy one
+     * tree behind HEAD: a phantom deletion in `git status`, and a wall in front
+     * of `git checkout`. The checked-out copy of the one path follows the commit,
+     * as the checkout that stood here before the stage kept it. A profile branch
+     * is never checked out and skips this; the arm goes with the anchor. */
+    bool on_current = false;
+    err = gitops_is_current_branch(repo, branch, &on_current);
+    if (err) {
+        return error_wrap(
+            err, "Committed to '%s' but could not determine HEAD state to sync "
+            "the working directory", branch
+        );
+    }
+    if (on_current) {
+        char *paths[] = { ".dottaignore" };
+        git_checkout_options opts;
+        git_checkout_options_init(&opts, GIT_CHECKOUT_OPTIONS_VERSION);
+        opts.checkout_strategy = GIT_CHECKOUT_FORCE;
+        opts.paths.strings = paths;
+        opts.paths.count = 1;
+
+        int rc = git_checkout_head(repo, &opts);
+        if (rc < 0) {
+            return error_wrap(
+                error_from_git(rc),
+                "Committed to '%s' but failed to sync the working directory for "
+                "'.dottaignore'. Run 'dotta git checkout -- .dottaignore' to "
+                "reconcile", branch
+            );
+        }
+    }
+
+    return NULL;
 }
 
 error_t *ignore_rules_create(
@@ -592,36 +646,4 @@ error_t *ignore_seed_baseline(git_repository *repo) {
     buffer_free(&existing);
 
     return err;
-}
-
-error_t *ignore_seed_profile(worktree_handle_t *wt) {
-    CHECK_NULL(wt);
-
-    const char *wt_path = worktree_get_path(wt);
-    if (!wt_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    char *path = str_format("%s/.dottaignore", wt_path);
-    if (!path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate .dottaignore path");
-    }
-
-    buffer_t content = BUFFER_INIT;
-    error_t *err = buffer_append_string(&content, PROFILE_DOTTAIGNORE);
-    if (err) {
-        buffer_free(&content);
-        free(path);
-        return error_wrap(err, "Failed to populate .dottaignore buffer");
-    }
-
-    err = fs_write_file(path, &content);
-    buffer_free(&content);
-    free(path);
-    if (err) return error_wrap(err, "Failed to write .dottaignore");
-
-    err = worktree_stage_file(wt, ".dottaignore");
-    if (err) return error_wrap(err, "Failed to stage .dottaignore");
-
-    return NULL;
 }

@@ -23,6 +23,7 @@
 #include "sys/editor.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 #include "utils/bootstrap.h"
 
 /* Bootstrap script template */
@@ -93,37 +94,47 @@ static error_t *bootstrap_create_template(
         );
     }
 
+    /* The profile's stage: the script goes on it, executable, in one commit */
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_branch_refname(refname, sizeof(refname), profile);
+    if (err) {
+        return err;
+    }
+
+    stage_t *stage = NULL;
+    err = stage_open(repo, refname, &stage);
+    if (err) {
+        return error_wrap(err, "Failed to open profile '%s'", profile);
+    }
+
     /* Generate template content */
     char *content = str_format(BOOTSTRAP_TEMPLATE, profile, profile, profile);
     if (!content) {
+        stage_free(stage);
         return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
     }
-    size_t content_len = strlen(content);
 
-    /* Create commit */
+    err = stage_put(
+        stage, BOOTSTRAP_SCRIPT_NAME, content, strlen(content),
+        GIT_FILEMODE_BLOB_EXECUTABLE
+    );
+    free(content);
+    if (err) {
+        stage_free(stage);
+        return err;
+    }
+
     char *commit_message = str_format(
         "Add bootstrap script for %s profile", profile
     );
     if (!commit_message) {
-        free(content);
+        stage_free(stage);
         return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
-    /* Create bootstrap script in Git (atomic: blob + tree + commit) */
-    err = gitops_update_file(
-        repo,
-        profile,
-        BOOTSTRAP_SCRIPT_NAME,
-        content,
-        content_len,
-        commit_message,
-        GIT_FILEMODE_BLOB_EXECUTABLE,
-        NULL
-    );
-
-    free(content);
+    err = stage_commit(stage, commit_message, NULL);
     free(commit_message);
-
+    stage_free(stage);
     if (err) {
         return error_wrap(err, "Failed to commit bootstrap script");
     }
@@ -150,6 +161,7 @@ static error_t *bootstrap_edit(
     char *temp_path = NULL;
     buffer_t content_buf = BUFFER_INIT;
     char *commit_msg = NULL;
+    stage_t *stage = NULL;
 
     /* Create the script from the template if none exists yet. */
     if (!bootstrap_exists(repo, profile)) {
@@ -206,12 +218,26 @@ static error_t *bootstrap_edit(
         goto cleanup;
     }
 
-    bool was_modified = false;
-    err = gitops_update_file(
-        repo, profile, BOOTSTRAP_SCRIPT_NAME,
-        (const char *) content_buf.data, content_buf.size,
-        commit_msg, GIT_FILEMODE_BLOB_EXECUTABLE, &was_modified
+    /* The edited script onto the profile's stage; the stage commits only a tree
+     * that differs from the branch's, and says which. */
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_branch_refname(refname, sizeof(refname), profile);
+    if (err) goto cleanup;
+
+    err = stage_open(repo, refname, &stage);
+    if (err) {
+        err = error_wrap(err, "Failed to open profile '%s'", profile);
+        goto cleanup;
+    }
+
+    err = stage_put(
+        stage, BOOTSTRAP_SCRIPT_NAME, content_buf.data, content_buf.size,
+        GIT_FILEMODE_BLOB_EXECUTABLE
     );
+    if (err) goto cleanup;
+
+    bool was_modified = false;
+    err = stage_commit(stage, commit_msg, &was_modified);
     if (err) {
         err = error_wrap(err, "Failed to commit bootstrap script");
         goto cleanup;
@@ -240,6 +266,7 @@ cleanup:
     }
     buffer_free(&content_buf);
     free(commit_msg);
+    stage_free(stage);
     return err;
 }
 

@@ -40,7 +40,7 @@
  * libgit2's and SQLite's files. Those paths are the invoker's by construction —
  * the drop is what makes them so under sudo — and a refusal on one is a broken
  * installation to report, not a question about reach. Three primitives serve
- * both worlds (fs_create_dir, fs_remove_dir, fs_write_file: a temp worktree's
+ * both worlds (fs_create_dir, fs_remove_dir, fs_write_file: the temp scripts'
  * directory, init's repository) and carry the reach with them; on the invoker's
  * own paths it never fires.
  */

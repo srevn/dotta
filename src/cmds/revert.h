@@ -26,7 +26,7 @@ typedef struct {
     const char *file_path;      /* File path within profile (required) */
     const char *commit;         /* Commit reference (required) */
     const char *message;        /* Commit message (NULL = auto-generate) */
-    bool force;                 /* Skip confirmation and override conflicts */
+    bool force;                 /* Skip confirmation */
     bool dry_run;               /* Preview without making changes */
     bool verbose;               /* Print verbose output */
 

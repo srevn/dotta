@@ -97,8 +97,8 @@ typedef struct {
  *     and is always safe.
  *   - Direct callers must gate on a byte-truth flag (e.g.,
  *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
- *     invariant in `content_store_file_to_worktree`); a stale or wrong-blob flag
- *     silently misroutes.
+ *     invariant in `content_stage_file`); a stale or wrong-blob flag silently
+ *     misroutes.
  */
 
 /**

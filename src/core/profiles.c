@@ -567,7 +567,7 @@ static int tree_walk_callback(
  * List deployable files in a Git tree
  */
 error_t *profile_list_tree_files(
-    git_tree *tree,
+    const git_tree *tree,
     string_array_t **out
 ) {
     CHECK_NULL(tree);

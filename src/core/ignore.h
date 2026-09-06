@@ -57,11 +57,10 @@
 #include <stdbool.h>
 #include <types.h>
 
-/* Forward declarations — the full headers pull in plenty of machinery we do not
- * want every consumer of core/ignore.h to transitively include. Both types already
- * typedef identically elsewhere */
+/* Forward declaration — the full header pulls in plenty of machinery we do not
+ * want every consumer of core/ignore.h to transitively include. The type already
+ * typedefs identically there */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
-typedef struct worktree_handle worktree_handle_t;
 
 /**
  * Layered-ruleset builder — command-scoped.
@@ -209,13 +208,17 @@ error_t *ignore_blob_read(
  * Write `content` as the `.dottaignore` blob on `branch`, creating a commit with
  * `commit_msg`.
  *
- * Idempotent: no-ops (no commit) when the blob already matches HEAD. Rejects
- * writes above the 1 MB cap up front — symmetric with `ignore_blob_read`, so an
- * editor buffer that somehow grew past the cap fails cleanly instead of committing
- * a blob that later refuses to load.
+ * One stage: open the branch, put the blob, commit — so a blob identical to the
+ * branch's commits nothing (the stage's own rule), and the branch must exist
+ * (ERR_NOT_FOUND otherwise; the callers verify it up front). Rejects writes above
+ * the 1 MB cap up front — symmetric with `ignore_blob_read`, so an editor buffer
+ * that somehow grew past the cap fails cleanly instead of committing a blob that
+ * later refuses to load.
  *
- * When `branch` is the currently-checked-out branch, `gitops_update_file` keeps
- * the INDEX and workdir in sync — no follow-up sync needed.
+ * When `branch` is the one the store's main worktree holds checked out — the
+ * baseline's, until the anchor goes — the checked-out copy of `.dottaignore`
+ * follows the commit, so the store's index and working copy never sit one tree
+ * behind HEAD.
  *
  * @param repo       Repository (must not be NULL)
  * @param branch     Short branch name (must not be NULL or empty)
@@ -258,20 +261,6 @@ error_t *ignore_blob_write(
 error_t *ignore_seed_baseline(git_repository *repo);
 
 /**
- * Seed a new profile's `.dottaignore` by writing the template into the worktree
- * and staging it for the next commit.
- *
- * Called by `dotta add` when creating a new profile branch. The caller's normal
- * commit flow picks up the staged file — this primitive does not itself create
- * a commit.
- *
- * @param wt Worktree handle (must not be NULL; must be checked out on the new
- *           profile's branch)
- * @return Error or NULL on success
- */
-error_t *ignore_seed_profile(worktree_handle_t *wt);
-
-/**
  * Default baseline `.dottaignore` content.
  *
  * Used as the init/clone seed and as the implicit fallback when the baseline
@@ -285,8 +274,8 @@ const char *ignore_baseline_defaults(void);
  * Profile `.dottaignore` template.
  *
  * Minimal starter content documenting the layering model and baseline inheritance.
- * Used by `dotta add` when initialising a new profile branch and by `dotta ignore`
- * when seeding an editor session for an empty profile.
+ * Put on the stage by `dotta add` when it creates a profile branch, and used by
+ * `dotta ignore` when seeding an editor session for an empty profile.
  *
  * @return Static NUL-terminated string (never to be freed)
  */

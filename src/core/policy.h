@@ -97,11 +97,11 @@ typedef enum {
  *
  * Source of `previously_encrypted`:
  *   The caller computes this from byte truth — typically via content_classify
- *   (Git-side) or content_classify_path (worktree-side). For first-time adds
- *   with no prior bytes, the caller passes false. Policy never opens a metadata
- *   side-channel; bytes are the single authority for whether a file IS encrypted,
- *   and metadata.encrypted is itself a byte-derived cache (established at the
- *   write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore).
+ *   on the entry the profile already holds. For first-time adds with no prior
+ *   bytes, the caller passes false. Policy never opens a metadata side-channel;
+ *   bytes are the single authority for whether a file IS encrypted, and
+ *   metadata.encrypted is itself a byte-derived cache (established at the write
+ *   boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore).
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)

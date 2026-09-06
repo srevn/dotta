@@ -47,9 +47,9 @@
  * to "$USER@$HOSTNAME" via getenv / gethostname, defaulting to "dotta@localhost"
  * when even those are unavailable.
  *
- * Used by every dotta path that creates a commit object — orphan-branch creation,
- * profile commits, and the repository config ref. Caller frees the returned
- * signature via `git_signature_free`.
+ * Used by every dotta path that creates a commit object — the stage's commit
+ * (sys/stage), orphan-branch creation, the merge commit and the rebase. Caller
+ * frees the returned signature via `git_signature_free`.
  *
  * @param out  Output signature (caller frees with git_signature_free)
  * @param repo Repository (must not be NULL)
@@ -270,7 +270,7 @@ error_t *gitops_load_branch_tree(
  * @return Error or NULL on success
  */
 error_t *gitops_tree_walk(
-    git_tree *tree,
+    const git_tree *tree,
     git_treewalk_cb callback,
     void *payload
 );
@@ -363,24 +363,6 @@ error_t *gitops_read_blob_content(
 );
 
 /**
- * Create commit
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param tree Tree object (must not be NULL)
- * @param message Commit message (must not be NULL)
- * @param out Commit OID (can be NULL if not needed)
- * @return Error or NULL on success
- */
-error_t *gitops_create_commit(
-    git_repository *repo,
-    const char *branch_name,
-    git_tree *tree,
-    const char *message,
-    git_oid *out
-);
-
-/**
  * Get commit from reference
  *
  * @param repo Repository (must not be NULL)
@@ -428,136 +410,6 @@ error_t *gitops_resolve_commit_in_branch(
     const char *commit_ref,
     git_oid *out_oid,
     git_commit **out_commit
-);
-
-/**
- * Update or create a file in a Git branch with atomic commit
- *
- * This function provides atomic file updates to Git branches:
- * 1. Creates a blob from the provided content
- * 2. Updates the branch tree to reference the new blob
- * 3. Creates a commit with the specified message
- *
- * If the file already exists with identical content, no commit is created (no-op).
- * This avoids cluttering history with empty commits when nothing has changed.
- *
- * Path support:
- * - Supports files at any directory depth
- * - Creates intermediate directories as needed
- * - Preserves existing sibling entries at each level
- * - Detects file/directory conflicts (error if path component is a file)
- *
- * Path normalization:
- * - Leading slashes stripped: "/foo/bar" -> "foo/bar"
- * - Double slashes collapsed: "foo//bar" -> "foo/bar"
- * - Trailing slashes rejected (not a file path)
- *
- * Examples:
- * - Root level: "README.md", ".bootstrap"
- * - One level: ".dotta/metadata.json"
- * - Deep path: "home/.config/nvim/init.vim"
- *
- * File modes:
- * - GIT_FILEMODE_BLOB (0100644): Regular file
- * - GIT_FILEMODE_BLOB_EXECUTABLE (0100755): Executable file
- *
- * Index handling:
- * - When `branch_name` is NOT the currently-checked-out branch (the common case
- *   — dotta keeps HEAD on dotta-worktree while mutating profile branches), the
- *   repository's shared index is left alone on purpose. Touching it would corrupt
- *   the checked-out branch's staging area.
- * - When `branch_name` IS the current branch, the shared index is re-seeded from
- *   the new tree so a subsequent workdir sync (e.g. `gitops_sync_worktree` with
- *   GIT_CHECKOUT_SAFE) can proceed without seeing phantom modifications. The
- *   workdir itself is the caller's responsibility — this function does not write
- *   to disk.
- *
- * @param repo Repository (must not be NULL)
- * @param branch_name Branch name (must not be NULL)
- * @param file_path File path within branch (must not be NULL or empty)
- * @param content File content (must not be NULL)
- * @param content_size Size of content in bytes
- * @param commit_message Commit message (must not be NULL)
- * @param file_mode Git file mode (GIT_FILEMODE_BLOB or
- *                  GIT_FILEMODE_BLOB_EXECUTABLE)
- * @param was_modified Optional output: set to true if file was modified, false
- *                     if no-op (can be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_update_file(
-    git_repository *repo,
-    const char *branch_name,
-    const char *file_path,
-    const char *content,
-    size_t content_size,
-    const char *commit_message,
-    git_filemode_t file_mode,
-    bool *was_modified
-);
-
-/**
- * Describes one blob to set/replace in a tree update batch.
- *
- * The blob referenced by `blob_oid` MUST already exist in the repository's ODB.
- * Callers creating fresh content are responsible for writing the blob (e.g.
- * git_blob_create_from_buffer) before passing it in.
- */
-typedef struct {
-    const char *path;          /* Path within the tree (must not be empty) */
-    git_oid blob_oid;          /* Blob OID (must exist in repo ODB) */
-    git_filemode_t mode;       /* BLOB, BLOB_EXECUTABLE, or LINK */
-} gitops_tree_update_t;
-
-/**
- * Atomic multi-file tree update on a branch (HEAD-safe)
- *
- * Loads the current tree of `branch_name`, applies the requested `updates` (blob
- * replacements/insertions) and `removals` (path deletions), writes the resulting
- * tree, and creates a single commit with `message`.
- *
- * This operation is HEAD-safe: it never touches the repository's shared index
- * (.git/index), the worktree, or HEAD. Safe to call regardless of which branch
- * HEAD points at — in dotta this matters because HEAD always tracks
- * `dotta-worktree`, not the profile branches we mutate here.
- *
- * Mechanism: builds a standalone in-memory git_index, seeds it from the branch
- * HEAD tree, applies updates/removals, writes the resulting tree directly to
- * the ODB via git_index_write_tree_to, and delegates commit creation to
- * gitops_create_commit.
- *
- * git_index_add replaces entries at the same path, so updates that overlap existing
- * paths are "upserts" without needing an explicit remove-before-add.
- *
- * A removal naming a path the branch tree lacks is a hard error (nothing is
- * committed): the caller's model of the tree is wrong, and the mismatch surfaces
- * instead of silently no-op'ing.
- *
- * At least one update or removal is required. Supported modes are
- * GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE, and GIT_FILEMODE_LINK
- * (symlinks).
- *
- * No-op detection is the caller's responsibility: if all updates collapse to
- * the current tree, an empty-diff commit is still created.
- *
- * @param repo          Repository (must not be NULL)
- * @param branch_name   Target branch (must not be NULL, must exist)
- * @param updates       Update entries (may be NULL if update_count is 0)
- * @param update_count  Number of update entries
- * @param removals      Paths to remove (may be NULL if removal_count is 0)
- * @param removal_count Number of removal paths
- * @param message       Commit message (must not be NULL)
- * @param out_oid       New commit OID (may be NULL if not needed)
- * @return Error or NULL on success
- */
-error_t *gitops_commit_tree_updates_safe(
-    git_repository *repo,
-    const char *branch_name,
-    const gitops_tree_update_t *updates,
-    size_t update_count,
-    const char *const *removals,
-    size_t removal_count,
-    const char *message,
-    git_oid *out_oid
 );
 
 /* Forward declaration for transfer context */
@@ -851,33 +703,6 @@ error_t *gitops_build_refname(
 error_t *gitops_branch_refname(
     char *buffer, size_t buffer_size, const char *name
 );
-
-/**
- * Get repository index
- *
- * @param repo Repository (must not be NULL)
- * @param out Index object (must not be NULL, caller must free with git_index_free)
- * @return Error or NULL on success
- */
-error_t *gitops_get_index(git_repository *repo, git_index **out);
-
-/**
- * Add file to index
- *
- * @param index Index (must not be NULL)
- * @param path Path relative to repository root (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_index_add(git_index *index, const char *path);
-
-/**
- * Write index to disk and create tree
- *
- * @param index Index (must not be NULL)
- * @param out Tree OID (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *gitops_index_write_tree(git_index *index, git_oid *out);
 
 /**
  * Get tree from commit OID

@@ -30,27 +30,28 @@
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/mount.h"
-#include "infra/worktree.h"
 #include "sys/filesystem.h"
+#include "sys/gitops.h"
 #include "sys/identity.h"
+#include "sys/stage.h"
 #include "utils/commit.h"
 #include "utils/hooks.h"
 
 /**
- * Copy file from filesystem to worktree (with optional encryption)
+ * Capture a file from the filesystem onto the stage (with optional encryption)
  *
  * @param ctx Dispatch context (must not be NULL; supplies the key and the
  *            encryption policy)
+ * @param stage The profile's stage (must not be NULL)
  * @param previously_encrypted Whether the file's prior bytes (the branch's HEAD
  *                             blob) were encrypted — the caller's to source
- * @param out_was_encrypted Optional output - set to true if file was encrypted
- *                          (can be NULL)
- * @param out_stat Optional output - filled with stat data from source file (can
- *                 be NULL)
+ * @param out_was_encrypted Set to true if the file was encrypted (must not be NULL)
+ * @param out_stat The capture's stat: one lstat for a link, the fstat beside
+ *                 the bytes for a file (must not be NULL)
  */
-static error_t *copy_file_to_worktree(
+static error_t *capture_file(
     const dotta_ctx_t *ctx,
-    worktree_handle_t *wt,
+    stage_t *stage,
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
@@ -59,139 +60,83 @@ static error_t *copy_file_to_worktree(
     struct stat *out_stat
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(wt);
+    CHECK_NULL(stage);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
+    CHECK_NULL(out_was_encrypted);
+    CHECK_NULL(out_stat);
 
     keymgr *keymgr = ctx->run.keymgr;
 
-    /* Initialize all resources to NULL for goto cleanup */
-    char *dest_path = NULL;
-    char *parent = NULL;
-    char *target = NULL;
-    error_t *err = NULL;
-
-    const char *wt_path = worktree_get_path(wt);
-    if (!wt_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
-    dest_path = str_format("%s/%s", wt_path, storage_path);
-    if (!dest_path) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate destination path");
-        goto cleanup;
-    }
-
-    /* Create parent directory */
-    err = fs_get_parent_dir(dest_path, &parent);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = fs_create_dir(parent, true);
-    if (err) {
-        err = error_wrap(err, "Failed to create parent directory");
-        goto cleanup;
-    }
-
-    /* Remove existing file if present */
-    if (fs_lexists(dest_path)) {
-        err = fs_remove_file(dest_path);
-        if (err) {
-            err = error_wrap(err, "Failed to remove existing file");
-            goto cleanup;
-        }
-    }
-
-    /* Copy file (with optional encryption). One lstat decides the kind and is
-     * the stat a symlink capture keeps, so the kind and the triple come from
-     * the same observation. A regular file's authoritative stat is taken inside
-     * content_store_file_to_worktree, beside the bytes it reads. */
+    /* One lstat decides the kind and is the stat a symlink capture keeps, so
+     * the kind and the triple come from the same observation. A regular file's
+     * authoritative stat is taken inside content_stage_file, beside the bytes
+     * it reads. */
     struct stat src_stat;
     if (fs_lstat(filesystem_path, &src_stat) != 0) {
-        err = error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
-        goto cleanup;
+        return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
     }
 
     if (S_ISLNK(src_stat.st_mode)) {
-        /* Handle symlink - no encryption for symlinks */
-        err = fs_read_symlink(filesystem_path, &target);
+        /* Handle symlink — the entry is its target, never encrypted */
+        char *target = NULL;
+        error_t *err = fs_read_symlink(filesystem_path, &target);
         if (err) {
-            err = error_wrap(err, "Failed to read symlink");
-            goto cleanup;
+            return error_wrap(err, "Failed to read symlink");
         }
 
-        err = fs_create_symlink(target, dest_path, (uid_t) -1, (gid_t) -1);
+        err = stage_put(
+            stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
+        );
+        free(target);
         if (err) {
-            err = error_wrap(err, "Failed to create symlink");
-            goto cleanup;
+            return err;
         }
 
         /* The lstat above is the capture: metadata_capture_from_file detects
          * S_ISLNK from it. */
-        if (out_stat) {
-            *out_stat = src_stat;
-        }
-
-        /* Symlinks are never encrypted */
-        if (out_was_encrypted) {
-            *out_was_encrypted = false;
-        }
-    } else {
-        /* Handle regular file - determine encryption policy using centralized
-         * logic. previously_encrypted is the branch's flag for this path, the
-         * caller's to source (the walk reads it off the view row). */
-        bool should_encrypt = false;
-        err = encryption_policy_should_encrypt(
-            ctx->config,
-            storage_path,
-            ENCRYPTION_REQUEST_NONE,  /* update carries no encryption flags */
-            previously_encrypted,
-            &should_encrypt
-        );
-        if (err) {
-            goto cleanup;
-        }
-
-        /* Store file to worktree (handles read → encrypt → write) and capture
-         * the stat.
-         * ARCHITECTURE: the store's fstat of the descriptor it read is captured
-         * and propagated to caller for metadata operations — bytes and stat one
-         * inode by construction. */
-        struct stat file_stat;
-        err = content_store_file_to_worktree(
-            filesystem_path,
-            dest_path,
-            storage_path,
-            profile,
-            keymgr,
-            should_encrypt,
-            &file_stat
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to store file to worktree");
-            goto cleanup;
-        }
-
-        /* Propagate stat to caller if requested */
-        if (out_stat) {
-            memcpy(out_stat, &file_stat, sizeof(struct stat));
-        }
-
-        /* The store's write-time invariant: the bytes it wrote classify as the
-         * decision says (a plaintext that would not is refused there), so the
-         * decision is what the caller stamps. */
-        if (out_was_encrypted) {
-            *out_was_encrypted = should_encrypt;
-        }
+        *out_stat = src_stat;
+        *out_was_encrypted = false;
+        return NULL;
     }
 
-cleanup:
-    if (target) free(target);
-    if (parent) free(parent);
-    if (dest_path) free(dest_path);
+    /* Handle regular file - determine encryption policy using centralized logic.
+     * previously_encrypted is the branch's flag for this path, the caller's to
+     * source (the walk reads it off the view row). */
+    bool should_encrypt = false;
+    error_t *err = encryption_policy_should_encrypt(
+        ctx->config,
+        storage_path,
+        ENCRYPTION_REQUEST_NONE,  /* update carries no encryption flags */
+        previously_encrypted,
+        &should_encrypt
+    );
+    if (err) {
+        return err;
+    }
 
-    return err;
+    /* Capture onto the stage (read → encrypt → the entry) and take the stat.
+     * ARCHITECTURE: the capture's fstat of the descriptor it read is propagated
+     * to the caller for metadata operations — bytes and stat one inode by
+     * construction. */
+    err = content_stage_file(
+        stage,
+        filesystem_path,
+        storage_path,
+        profile,
+        keymgr,
+        should_encrypt,
+        out_stat
+    );
+    if (err) {
+        return err;
+    }
+
+    /* The capture's write-time invariant: the bytes it staged classify as the
+     * decision says (a plaintext that would not is refused there), so the decision
+     * is what the caller stamps. */
+    *out_was_encrypted = should_encrypt;
+    return NULL;
 }
 
 /**
@@ -218,22 +163,22 @@ typedef struct {
 /**
  * One path an update commit captured from disk
  *
- * A file's triple is the one the copy step took from the bytes it committed
- * (content_store_file_to_worktree's fstat of the fd it read), so the record binds
- * the blob to the stat that matched it — not to a later lstat that could see an
- * edit made since. A directory's is unset: a directory has no content confirmation,
- * and its record carries none.
+ * A file's triple is the one the capture took from the bytes it committed
+ * (content_stage_file's fstat of the fd it read), so the record binds the blob
+ * to the stat that matched it — not to a later lstat that could see an edit made
+ * since. A directory's is unset: a directory has no content confirmation, and
+ * its record carries none.
  */
 typedef struct {
     const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
-    stat_cache_t stat;              /* The copy's triple; STAT_CACHE_UNSET for a directory */
+    stat_cache_t stat;              /* The capture's triple; STAT_CACHE_UNSET for a directory */
 } update_capture_t;
 
 /**
  * What one profile's update commit did, path by path
  *
- * Filled by the walk that does the work — one writer per item: the copy + capture
- * for a file, the claim capture for a directory, the entry removal for a deletion,
+ * Filled by the walk that does the work — one writer per item: the capture for
+ * a file, the claim capture for a directory, the entry removal for a deletion,
  * the ancestry derivation for the chains it climbed, the prune for the directory
  * entries dropped as redundant — and read back by the commit message and by the
  * record loop (update_write_record), so both follow the commit and nothing else:
@@ -416,10 +361,10 @@ static error_t *filter_items_for_update(
 /**
  * Update a single profile with workspace items
  *
- * One walk, one writer per item, over one metadata load (the worktree file the
- * checkout materialized — the branch's own bytes). Each arm does its item's work
- * and fills the commit's bookkeeping beside it: copy + capture + stage for a
- * file, the claim capture for a directory, the entry removal for a deletion.
+ * One walk, one writer per item, over one metadata load (the sheet in the tree
+ * the stage opened at — the branch's own bytes). Each arm does its item's work
+ * and fills the commit's bookkeeping beside it: the capture onto the stage for
+ * a file, the claim capture for a directory, the entry removal for a deletion.
  * The chain rides the capture: after the walk, every captured leaf's ancestry
  * is re-derived into the same sheet — the content now comes from this machine,
  * and so does its way — and a named run hands in the profile's in-scope rows,
@@ -427,16 +372,14 @@ static error_t *filter_items_for_update(
  * The walk ends with the redundancy prune, one metadata save, and the commit.
  *
  * Success means committed or untouched: a walk that captured nothing and deleted
- * nothing saves nothing, stages nothing, commits nothing — the worktree stays
- * exactly as checked out. A mid-walk failure returns with the worktree dirty:
- * the executor stops the run there, and the temp worktree's checkout contract
- * (a scratch tree may always be discarded) keeps any later checkout safe
- * regardless.
+ * nothing saves nothing and commits nothing — the stage is freed by the caller
+ * as it was opened. A mid-walk failure returns with the stage part-edited: the
+ * executor stops the run there, and a stage that is never committed changes nothing
+ * in the repository.
  *
- * @param ctx Dispatch context (must not be NULL; the copy step reads the key
- *            and the encryption policy off it)
- * @param wt Worktree handle (must not be NULL, already checked out to profile
- *           branch)
+ * @param ctx Dispatch context (must not be NULL; the capture reads the key and
+ *            the encryption policy off it)
+ * @param stage The profile's stage, opened by the caller (must not be NULL)
  * @param profile Profile to update (must not be NULL)
  * @param items Array of workspace items to update (may be NULL when item_count
  *              is 0)
@@ -455,7 +398,7 @@ static error_t *filter_items_for_update(
  */
 static error_t *update_profile(
     const dotta_ctx_t *ctx,
-    worktree_handle_t *wt,
+    stage_t *stage,
     const char *profile,
     const workspace_item_t **items,
     size_t item_count,
@@ -466,12 +409,13 @@ static error_t *update_profile(
     size_t *out_processed
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(wt);
+    CHECK_NULL(stage);
     CHECK_NULL(profile);
     CHECK_NULL(opts);
     CHECK_NULL(commit);
     CHECK_NULL(out_processed);
 
+    git_repository *repo = ctx->run.repo;
     output_t *out = ctx->out;
 
     *out_processed = 0;
@@ -481,37 +425,17 @@ static error_t *update_profile(
         return NULL;
     }
 
-    const char *worktree_path = worktree_get_path(wt);
-    if (!worktree_path) {
-        return ERROR(ERR_INTERNAL, "Worktree path is NULL");
-    }
-
     /* Initialize all resources to NULL for goto cleanup */
-    git_index *index = NULL;
     metadata_t *metadata = NULL;
     char **storage_paths = NULL;
     char *message = NULL;
     error_t *err = NULL;
 
-    /* The one metadata load: the worktree file the checkout materialized — the
+    /* The one metadata load: the sheet in the tree the stage opened at — the
      * branch's own bytes — mutated as the walk goes, saved once. */
-    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_file_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-    }
-    err = metadata_load_from_file(metadata_file_path, &metadata);
-    free(metadata_file_path);
+    err = metadata_load_from_tree(repo, stage_tree(stage), profile, &metadata);
     if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No existing metadata - create new */
-            error_free(err);
-            err = metadata_create_empty(&metadata);
-            if (err) {
-                return err;
-            }
-        } else {
-            return error_wrap(err, "Failed to load existing metadata");
-        }
+        return error_wrap(err, "Failed to load existing metadata");
     }
 
     /* The capture list can hold every item; the walk fills it with the ones that
@@ -522,13 +446,6 @@ static error_t *update_profile(
             err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
             goto cleanup;
         }
-    }
-
-    /* Get worktree index for staging */
-    err = worktree_get_index(wt, &index);
-    if (err) {
-        err = error_wrap(err, "Failed to get worktree index");
-        goto cleanup;
     }
 
     size_t captured_file_count = 0;
@@ -547,10 +464,11 @@ static error_t *update_profile(
                         out, OUTPUT_VERBOSE, "  Removed: %s",
                         item->filesystem_path
                     );
-                    /* Remove from index (stage deletion) */
-                    int git_err = git_index_remove_bypath(index, item->storage_path);
-                    if (git_err < 0) {
-                        err = error_from_git(git_err);
+                    /* The entry leaves the stage: the row says the tree holds
+                     * it, so a path the stage lacks is the model's error, not a
+                     * no-op. */
+                    err = stage_remove(stage, item->storage_path);
+                    if (err) {
                         goto cleanup;
                     }
                     /* Remove metadata entry if it exists */
@@ -574,24 +492,24 @@ static error_t *update_profile(
                  * but cheaper (no fs read). */
                 bool previously_encrypted = item->row ? item->row->encrypted : false;
 
-                /* Copy to worktree and capture stat atomically */
-                struct stat copy_stat;
-                bool copy_encrypted = false;
-                err = copy_file_to_worktree(
-                    ctx, wt, item->filesystem_path, item->storage_path,
-                    profile, previously_encrypted, &copy_encrypted, &copy_stat
+                /* Capture onto the stage, and the stat beside it */
+                struct stat capture_stat;
+                bool capture_encrypted = false;
+                err = capture_file(
+                    ctx, stage, item->filesystem_path, item->storage_path,
+                    profile, previously_encrypted, &capture_encrypted, &capture_stat
                 );
                 if (err) {
-                    err = error_wrap(err, "Failed to copy '%s'", item->filesystem_path);
+                    err = error_wrap(err, "Failed to capture '%s'", item->filesystem_path);
                     goto cleanup;
                 }
 
-                /* Capture metadata from the copy's stat */
+                /* Capture metadata from the capture's stat */
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_file(
                     item->filesystem_path,
                     item->storage_path,
-                    &copy_stat,
+                    &capture_stat,
                     &meta_item
                 );
                 if (err) {
@@ -607,15 +525,15 @@ static error_t *update_profile(
                  * the standing claim: an item at the key is the replaced
                  * state's. */
                 if (meta_item) {
-                    /* Stamp the encrypted cache from the copy's byte truth (false
-                     * for a link — the copy never encrypts one) */
-                    meta_item->encrypted = copy_encrypted;
+                    /* Stamp the encrypted cache from the capture's byte truth
+                     * (false for a link — the capture never encrypts one) */
+                    meta_item->encrypted = capture_encrypted;
 
                     /* Say what the capture took before metadata_add_item takes
                      * it — the claim decides the shape. The fourth combination
                      * (no mode, no ownership) has no line: such an item does
                      * not exist. The ownership-only shape carries no encrypted
-                     * suffix by construction: it is a link's entry, and the copy
+                     * suffix by construction: it is a link's entry, and the capture
                      * never encrypts one. */
                     if (meta_item->mode != MODE_UNCLAIMED &&
                         (meta_item->owner || meta_item->group)) {
@@ -657,16 +575,9 @@ static error_t *update_profile(
                     metadata_remove_item(metadata, item->storage_path);
                 }
 
-                /* Stage file */
-                int git_err = git_index_add_bypath(index, item->storage_path);
-                if (git_err < 0) {
-                    err = error_from_git(git_err);
-                    goto cleanup;
-                }
-
                 commit->captured[commit->captured_count++] = (update_capture_t){
                     .item = item,
-                    .stat = stat_cache_from_stat(&copy_stat)
+                    .stat = stat_cache_from_stat(&capture_stat)
                 };
                 break;
             }
@@ -834,12 +745,12 @@ static error_t *update_profile(
 
     /* A profile whose walk captured nothing and deleted nothing, and whose
      * derivation moved nothing, has nothing to commit, and a no-commit profile
-     * leaves the worktree exactly as checked out: nothing saved, nothing staged.
-     * The prune is skipped with the save — imported redundancy rides whatever
-     * commit triggers the metadata rewrite, never drives one. The derivation is
-     * not redundancy: a chain re-derived under a captured leaf or a named path
-     * is the user's own word about the disk, and it drives the commit it needs
-     * — which is how the remedy for a rung the world moved under works at all. */
+     * leaves the stage as it was opened: nothing saved, nothing committed. The
+     * prune is skipped with the save — imported redundancy rides whatever commit
+     * triggers the metadata rewrite, never drives one. The derivation is not
+     * redundancy: a chain re-derived under a captured leaf or a named path is
+     * the user's own word about the disk, and it drives the commit it needs —
+     * which is how the remedy for a rung the world moved under works at all. */
     size_t path_count = commit->captured_count + commit->deleted.count +
         commit->claimed + commit->retired.count;
     if (path_count == 0) {
@@ -850,17 +761,16 @@ static error_t *update_profile(
      *
      * Catches the implicit-orphaning case (the DELETED branch above handles
      * explicit removals): file removals can leave a parent directory's metadata
-     * entry with nothing managed beneath it. That set is judged against the
-     * post-edit index (deletions removed, updates staged by the walk) for every
-     * path a tree can hold — never against metadata items, which omit unelevated
-     * symlinks — and against the sheet's own standing claims for the one path
-     * it cannot, an empty directory. Only entries that claim nothing of their
-     * own are pruned; a tracked claim carrying real attributes survives as the
-     * empty-dir intent it is. Without this, the view would keep claiming the
-     * orphaned entry indefinitely. The keys go on the commit's bookkeeping: the
-     * entry leaves the view by this commit, so its record is this verb's to
-     * retire. */
-    err = metadata_prune_directories(metadata, index, &commit->pruned);
+     * entry with nothing managed beneath it. That set is judged against the stage's
+     * index (deletions removed, captures put by the walk) for every path a tree
+     * can hold — never against metadata items, which omit unelevated symlinks —
+     * and against the sheet's own standing claims for the one path it cannot,
+     * an empty directory. Only entries that claim nothing of their own are pruned;
+     * a tracked claim carrying real attributes survives as the empty-dir intent
+     * it is. Without this, the view would keep claiming the orphaned entry
+     * indefinitely. The keys go on the commit's bookkeeping: the entry leaves
+     * the view by this commit, so its record is this verb's to retire. */
+    err = metadata_prune_directories(metadata, stage_index(stage), &commit->pruned);
     if (err) {
         err = error_wrap(err, "Failed to prune redundant directories");
         goto cleanup;
@@ -873,17 +783,10 @@ static error_t *update_profile(
         );
     }
 
-    /* Save metadata to worktree (single save for both files and directories) */
-    err = metadata_save_to_worktree(worktree_path, metadata);
+    /* The sheet onto the stage (single save for both files and directories) */
+    err = metadata_save_to_stage(stage, metadata);
     if (err) {
         err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
-
-    /* Stage metadata.json file (single stage operation) */
-    err = worktree_stage_file(wt, METADATA_FILE_PATH);
-    if (err) {
-        err = error_wrap(err, "Failed to stage metadata");
         goto cleanup;
     }
 
@@ -940,7 +843,7 @@ static error_t *update_profile(
     }
 
     /* Create commit */
-    err = worktree_commit(wt, profile, message, NULL);
+    err = stage_commit(stage, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -952,7 +855,6 @@ cleanup:
     /* Free resources in reverse order */
     if (message) free(message);
     if (storage_paths) free(storage_paths);
-    if (index) git_index_free(index);
     if (metadata) metadata_free(metadata);
 
     return err;
@@ -968,7 +870,7 @@ cleanup:
  * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
  * no record write. A modified or new file was captured FROM disk, so for the
  * row its profile won in the post-commit view the record advances to the
- * just-committed blob with the stat the copy took (the next status takes the
+ * just-committed blob with the stat the capture took (the next status takes the
  * fast path). A path the commit let go — a deleted item, a directory entry the
  * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
  * — left Git by this commit: with no row left at the path its record retires
@@ -1157,9 +1059,8 @@ cleanup:
 /**
  * Execute profile updates, in enabled-set order
  *
- * Creates a single shared worktree and reuses it for every profile update,
- * eliminating expensive worktree creation/destruction overhead. Each profile is
- * checked out into the same worktree before updating.
+ * One stage per profile visited: opened at the branch's tip, edited by the walk,
+ * committed once, freed — nothing is checked out anywhere.
  *
  * Profiles are walked in enabled-set order — the model's one canonical profile
  * order — so multi-profile runs commit, report, and (on a stop) strand in one
@@ -1177,9 +1078,8 @@ cleanup:
  * committed nothing — a walk that touched nothing, or a failure before its commit
  * — contributes no entry.
  *
- * @param ctx Dispatch context (must not be NULL; the run's repository carries
- *            the shared worktree, the copy step reads the key and the encryption
- *            policy)
+ * @param ctx Dispatch context (must not be NULL; the stages are opened on the
+ *            run's repository, the capture reads the key and the encryption policy)
  * @param enabled The enabled set, in order (must not be NULL)
  * @param update_items Pre-filtered items to update (may be NULL when update_count
  *                     is 0)
@@ -1227,16 +1127,9 @@ static error_t *update_execute_for_all_profiles(
         return NULL;
     }
 
-    worktree_handle_t *wt = NULL;
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
     error_t *err = NULL;
-
-    /* Create shared temporary worktree for all profile updates */
-    err = worktree_create_temp(repo, &wt);
-    if (err) {
-        return error_wrap(err, "Failed to create temporary worktree");
-    }
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one. */
@@ -1281,30 +1174,37 @@ static error_t *update_execute_for_all_profiles(
             profile
         );
 
-        /* Checkout profile branch in shared worktree */
-        err = worktree_checkout_branch(wt, profile);
+        /* The profile's stage: the branch as it stands now, the parent of the
+         * commit the walk makes. Its life is this iteration's. */
+        char refname[DOTTA_REFNAME_MAX];
+        err = gitops_branch_refname(refname, sizeof(refname), profile);
+        if (err) goto cleanup;
+
+        stage_t *stage = NULL;
+        err = stage_open(repo, refname, &stage);
         if (err) {
-            err = error_wrap(
-                err, "Failed to checkout profile '%s'",
-                profile
-            );
+            err = error_wrap(err, "Failed to open profile '%s'", profile);
             goto cleanup;
         }
 
-        /* Update this profile using shared worktree */
+        /* Update this profile on its stage */
         update_commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
-            ctx, wt, profile, (const workspace_item_t **) group.items,
+            ctx, stage, profile, (const workspace_item_t **) group.items,
             group.count, (const manifest_row_t **) rows.items, rows.count,
             opts, &bookkeeping, &processed
         );
+        stage_free(stage);
 
         /* The commit gate's own sum, read back off the bookkeeping the walk filled:
          * on a clean return, zero means the gate closed without a commit and
-         * anything else means one landed — a derivation-only commit carries no
-         * user item, so `processed` alone cannot say. Any error means no commit
-         * landed, whatever the bookkeeping holds. */
+         * anything else means the walk did its work and committed it — a
+         * derivation-only commit carries no user item, so `processed` alone cannot
+         * say. (A stage whose tree equals the one it opened commits nothing;
+         * only a capture re-read identical inside the load-to-open window makes
+         * one, and the record write is right for it either way.) Any error means
+         * no commit landed, whatever the bookkeeping holds. */
         size_t landed = bookkeeping.captured_count + bookkeeping.deleted.count +
             bookkeeping.claimed + bookkeeping.retired.count;
         if (!err && landed > 0) {
@@ -1346,7 +1246,6 @@ cleanup:
      * record for them either way */
     *out_commits = commits;
     *out_commit_count = commit_count;
-    if (wt) worktree_cleanup(&wt);
 
     return err;
 }
@@ -2022,7 +1921,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Execute profile updates, in enabled-set order. Filtered to operation scope.
-     * ctx->run.keymgr is borrowed by the copy step inside per-profile iteration.
+     * ctx->run.keymgr is borrowed by the capture inside per-profile iteration.
      * A dry run executes nothing: the sections above are its preview, and the
      * summary below is its one sentence. */
     update_commit_t *commits = NULL;

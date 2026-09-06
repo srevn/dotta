@@ -272,7 +272,7 @@ error_t *profile_get_stats(
  * @return Error or NULL on success
  */
 error_t *profile_list_tree_files(
-    git_tree *tree,
+    const git_tree *tree,
     string_array_t **out
 );
 

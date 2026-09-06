@@ -61,7 +61,7 @@
  * of a setuid tool run by the user, the one shape every syscall's rule and every
  * library are written for (getuid, access(2), libgit2's owner check all answer
  * for the invoker). Everything of dotta's own — the repository, the state, the
- * session cache, a temp worktree — is then made as the invoker, and root is taken
+ * session cache, a temp script — is then made as the invoker, and root is taken
  * back for one syscall at a time where the invoker is refused
  * (identity_raise_on_refusal / identity_lower: sys/filesystem's second try).
  *

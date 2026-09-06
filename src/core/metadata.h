@@ -116,6 +116,8 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#include "sys/stage.h"
+
 #define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
@@ -354,17 +356,17 @@ bool metadata_remove_item(
  * the tail of an ancestry whose leaf has just gone. Without this prune, the view
  * would keep claiming the entry indefinitely.
  *
- * Caller pattern: invoke after every index edit for the impending commit (additions
- * staged, deletions removed) and before the metadata blob is serialized for the
- * commit (worktree file or ODB blob alike), so the prune sees the commit's exact
- * tracked set and lands in the same commit as the triggering removals. The keys
- * pruned are appended to `pruned`, in item order: the entry leaves the view by
- * the verb's own commit, so the verb retires its record the way it does a path
- * it removed. Nothing appended means nothing was pruned (caller may use this to
- * skip a no-op rewrite).
+ * Caller pattern: invoke after every edit of the stage for the impending commit
+ * (additions put, deletions removed) and before the sheet is saved onto it, so
+ * the prune sees the commit's exact tracked set and lands in the same commit as
+ * the triggering removals. The keys pruned are appended to `pruned`, in item
+ * order: the entry leaves the view by the verb's own commit, so the verb retires
+ * its record the way it does a path it removed. Nothing appended means nothing
+ * was pruned (caller may use this to skip a no-op rewrite).
  *
  * @param metadata Metadata collection (must not be NULL; mutated in place)
- * @param index Post-edit worktree index (must not be NULL)
+ * @param index Post-edit index — the stage's, after every put and removal (must
+ *              not be NULL)
  * @param pruned Receives the keys pruned, appended (must not be NULL)
  * @return Error or NULL on success
  */
@@ -582,7 +584,7 @@ error_t *metadata_load_from_branch(
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,
-    git_tree *tree,
+    const git_tree *tree,
     const char *profile,
     metadata_t **out
 );
@@ -620,33 +622,21 @@ error_t *metadata_from_json(
 );
 
 /**
- * Load metadata from file path
+ * Save metadata to a stage
  *
- * Reads and parses metadata from a JSON file. Returns ERR_NOT_FOUND if file doesn't
- * exist. Rejects version mismatches with clear error message (no migration code).
+ * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
+ * the stage as a regular blob; the caller's commit carries it. The one writer
+ * of the sheet, for add, update, remove and revert alike. A sheet loaded and
+ * saved unchanged puts the blob the tree already holds (the serializer's
+ * byte-determinism), which is what lets the stage's commit see an untouched sheet
+ * as no change.
  *
- * @param file_path Path to metadata JSON file (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success
- */
-error_t *metadata_load_from_file(
-    const char *file_path,
-    metadata_t **out
-);
-
-/**
- * Save metadata to worktree
- *
- * Writes .dotta/metadata.json to a worktree directory. Creates the .dotta/
- * directory if it doesn't exist. The file should then be staged and committed
- * by the caller.
- *
- * @param worktree_path Path to worktree root (must not be NULL)
+ * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *metadata_save_to_worktree(
-    const char *worktree_path,
+error_t *metadata_save_to_stage(
+    stage_t *stage,
     const metadata_t *metadata
 );
 

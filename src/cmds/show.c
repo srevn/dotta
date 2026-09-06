@@ -116,8 +116,8 @@ static error_t *print_blob_content(
      *
      * The metadata-derived `encrypted` bool below is read for display only (the
      * "(encrypted)" annotation): it is byte-truth via the write-time invariant
-     * in `content_store_file_to_worktree`, but does not influence routing inside
-     * the content layer. */
+     * in `content_stage_file`, but does not influence routing inside the content
+     * layer. */
     bool encrypted = metadata_file_encrypted(metadata, storage_path);
 
     buffer_t content = BUFFER_INIT;

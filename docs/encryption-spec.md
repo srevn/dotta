@@ -298,15 +298,15 @@ The 14-byte header is the first input absorbed into the SIV scope. Any tampering
 
 Bytes are the single authoritative source for "is this blob encrypted?":
 
-- `CONTENT_PLAINTEXT` → copy bytes through to the worktree.
+- `CONTENT_PLAINTEXT` → copy bytes through to the filesystem.
 - `CONTENT_ENCRYPTED` → decrypt via `keymgr_decrypt`.
 - `CONTENT_UNSUPPORTED_VERSION` → `ERR_CRYPTO` with a version-skew diagnostic citing the unrecognized version byte; prevents deploying unrecognized ciphertext verbatim to the filesystem.
 
 ### Store refusal and write-time invariant
 
-Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_store_file_to_worktree` refuses them with `ERR_VALIDATION`:
+Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_stage_file` refuses them with `ERR_VALIDATION`:
 ```
-Cannot store '%s' as plaintext: its first bytes are dotta's cipher magic; add it with --encrypt, or change them
+Cannot capture '%s' as plaintext: its first bytes are dotta's cipher magic, so every reader would take it for ciphertext; add it with --encrypt, or change them
 ```
 This write-boundary invariant guarantees that any blob written as plaintext will never be misclassified as ciphertext upon subsequent reads.
 
@@ -682,7 +682,7 @@ Validation is performed at the boundary where parameters enter the system:
 | Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_rekey`, `keymgr_witness`, `keymgr_free` |
 | On-disk epoch session cache | `src/crypto/session` | `session_save`, `session_load`, `session_clear` |
 | Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `walk_ciphertext` |
-| Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_store_file_to_worktree` |
+| Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_stage_file` |
 | Memory protection | `src/base/secure` | `secure_alloc`, `secure_free`, `secure_wipe` |
 | Passphrase acquisition | `src/sys/passphrase` | `passphrase_prompt`, `passphrase_from_env` |
 | CSPRNG entropy | `src/sys/entropy` | `entropy_fill` |

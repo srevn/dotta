@@ -1445,7 +1445,7 @@ error_t *metadata_load_from_branch(
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,
-    git_tree *tree,
+    const git_tree *tree,
     const char *profile,
     metadata_t **out
 ) {
@@ -1501,109 +1501,27 @@ cleanup:
 }
 
 /**
- * Load metadata from file path
+ * Save metadata to a stage
  *
- * Reads and parses metadata from filesystem. Returns ERR_NOT_FOUND if file doesn't
- * exist.
+ * The sheet serialized, then put at .dotta/metadata.json as a regular blob.
  */
-error_t *metadata_load_from_file(
-    const char *file_path,
-    metadata_t **out
-) {
-    CHECK_NULL(file_path);
-    CHECK_NULL(out);
-
-    /* Check if file exists */
-    if (!fs_exists(file_path)) {
-        return ERROR(
-            ERR_NOT_FOUND, "Metadata file not found: %s",
-            file_path
-        );
-    }
-
-    /* Read file content */
-    buffer_t content = BUFFER_INIT;
-    error_t *err = fs_read_file(file_path, &content);
-    if (err) {
-        return error_wrap(err, "Failed to read metadata file");
-    }
-
-    /* Parse JSON - release buffer as null-terminated string */
-    char *json_str = NULL;
-    json_str = buffer_detach(&content);
-
-    metadata_t *metadata = NULL;
-    err = metadata_from_json(json_str, &metadata);
-    free(json_str);
-
-    if (err) {
-        return error_wrap(
-            err, "Failed to parse metadata from file: %s",
-            file_path
-        );
-    }
-
-    *out = metadata;
-    return NULL;
-}
-
-/**
- * Save metadata to worktree
- *
- * Writes metadata as JSON to .dotta/metadata.json in worktree. Creates .dotta/
- * directory if it doesn't exist.
- */
-error_t *metadata_save_to_worktree(
-    const char *worktree_path,
+error_t *metadata_save_to_stage(
+    stage_t *stage,
     const metadata_t *metadata
 ) {
-    CHECK_NULL(worktree_path);
+    CHECK_NULL(stage);
     CHECK_NULL(metadata);
 
-    error_t *err = NULL;
-    char *dotta_dir = NULL;
-    char *metadata_path = NULL;
-    buffer_t json_buf = BUFFER_INIT;
-
-    /* Build path to .dotta directory */
-    dotta_dir = str_format("%s/%s", worktree_path, METADATA_DIR);
-    if (!dotta_dir) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate .dotta directory path");
-        goto cleanup;
-    }
-
-    /* Create .dotta directory if it doesn't exist */
-    err = fs_create_dir(dotta_dir, true);  /* true = create parents */
+    buffer_t json = BUFFER_INIT;
+    error_t *err = metadata_to_json(metadata, &json);
     if (err) {
-        err = error_wrap(err, "Failed to create .dotta directory");
-        goto cleanup;
+        return error_wrap(err, "Failed to convert metadata to JSON");
     }
 
-    /* Build path to metadata.json */
-    metadata_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_path) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-        goto cleanup;
-    }
-
-    /* Convert metadata to JSON */
-    err = metadata_to_json(metadata, &json_buf);
-    if (err) {
-        err = error_wrap(err, "Failed to convert metadata to JSON");
-        goto cleanup;
-    }
-
-    /* Write to file */
-    err = fs_write_file(metadata_path, &json_buf);
-    if (err) {
-        err = error_wrap(err, "Failed to write metadata file");
-        goto cleanup;
-    }
-
-cleanup:
-    buffer_free(&json_buf);
-    if (metadata_path) free(metadata_path);
-    if (dotta_dir) free(dotta_dir);
+    err = stage_put(
+        stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB
+    );
+    buffer_free(&json);
 
     return err;
 }

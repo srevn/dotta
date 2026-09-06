@@ -47,6 +47,7 @@
 #include "infra/content.h"
 #include "sys/entropy.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 #include "sys/transfer.h"
 
 /* The local-ciphertext census (defined with the reconcile machinery below);
@@ -356,106 +357,32 @@ error_t *epoch_init(
     uint8_t params[KDF_PARAMS_SIZE];
     kdf_params_store(params, memory_mib, passes);
 
-    /* Write the two blobs. */
-    git_oid salt_oid;
-    int git_err = git_blob_create_from_buffer(
-        &salt_oid, repo, out->salt, KDF_SALT_SIZE
-    );
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to write salt blob"
+    /* The mint is a root commit on a ref nothing names: the two blobs on an
+     * orphan's stage, committed. The census and the delete above ran on an absent
+     * ref, and the stage refuses a ref that appeared since — at its open, and
+     * again at the commit — which is the immutability the epoch wants: a second
+     * commit on this ref would seal every blob away. The message is purely
+     * diagnostic; nothing in dotta parses it. */
+    stage_t *stage = NULL;
+    err = stage_orphan(repo, EPOCH_REF, &stage);
+    if (!err) {
+        err = stage_put(
+            stage, EPOCH_SALT_BLOB, out->salt, KDF_SALT_SIZE, GIT_FILEMODE_BLOB
         );
     }
-    git_oid params_oid;
-    git_err = git_blob_create_from_buffer(
-        &params_oid, repo, params, KDF_PARAMS_SIZE
-    );
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to write params blob"
+    if (!err) {
+        err = stage_put(
+            stage, EPOCH_PARAMS_BLOB, params, KDF_PARAMS_SIZE, GIT_FILEMODE_BLOB
         );
     }
-
-    /* Build a tree holding the two. */
-    git_treebuilder *tb = NULL;
-    git_err = git_treebuilder_new(&tb, repo, NULL);
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to create epoch tree builder"
-        );
+    if (!err) {
+        err = stage_commit(stage, "Initialize repository epoch", NULL);
     }
+    stage_free(stage);
 
-    git_err = git_treebuilder_insert(
-        NULL, tb, EPOCH_SALT_BLOB, &salt_oid, GIT_FILEMODE_BLOB
-    );
-    if (git_err == 0) {
-        git_err = git_treebuilder_insert(
-            NULL, tb, EPOCH_PARAMS_BLOB, &params_oid, GIT_FILEMODE_BLOB
-        );
-    }
-    if (git_err < 0) {
-        git_treebuilder_free(tb);
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to insert epoch blobs into tree"
-        );
-    }
-
-    git_oid tree_oid;
-    git_err = git_treebuilder_write(&tree_oid, tb);
-    git_treebuilder_free(tb);
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to write epoch tree"
-        );
-    }
-
-    git_tree *tree = NULL;
-    git_err = git_tree_lookup(&tree, repo, &tree_oid);
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to look up newly-written epoch tree"
-        );
-    }
-
-    /* Build a signature with the same fallback policy as orphan-branch creation,
-     * so a fresh machine without git config can still init. */
-    git_signature *sig = NULL;
-    error_t *sig_err = gitops_get_signature(&sig, repo);
-    if (sig_err) {
-        git_tree_free(tree);
-        return error_wrap(
-            sig_err, "Failed to get signature for epoch commit"
-        );
-    }
-
-    /* Orphan commit (no parents) writing directly to refs/dotta/epoch. The message
-     * is purely diagnostic; nothing in dotta parses it. */
-    git_oid commit_oid;
-    git_err = git_commit_create(
-        &commit_oid,
-        repo,
-        EPOCH_REF,
-        sig, sig,
-        NULL,                      /* encoding: default */
-        "Initialize repository epoch",
-        tree,
-        0, NULL                    /* no parents = orphan */
-    );
-
-    git_signature_free(sig);
-    git_tree_free(tree);
-
-    if (git_err < 0) {
-        return error_wrap(
-            error_from_git(git_err),
-            "Failed to commit epoch to '%s'", EPOCH_REF
-        );
+    if (err) {
+        memset(out, 0, sizeof(*out));
+        return error_wrap(err, "Failed to commit the epoch to '%s'", EPOCH_REF);
     }
 
     return NULL;

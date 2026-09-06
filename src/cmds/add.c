@@ -20,7 +20,6 @@
 #include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
@@ -30,9 +29,9 @@
 #include "infra/content.h"
 #include "infra/mount.h"
 #include "infra/path.h"
-#include "infra/worktree.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 #include "sys/identity.h"
 #include "sys/source.h"
 #include "utils/commit.h"
@@ -45,7 +44,7 @@
  * classified there, once, through the command's table, and everything after reads
  * the name it needs — the capture and the commit message the storage path, the
  * record loop the filesystem path. A file's stat is the capture's
- * (add_file_to_worktree's one look at the bytes it stored), so the record binds
+ * (add_file_to_stage's one look at the bytes it staged), so the record binds
  * the committed blob to it; a directory's stays unset, as apply records them.
  */
 typedef struct {
@@ -370,7 +369,7 @@ static void report_capture(
 }
 
 /**
- * Add single file to worktree and capture metadata
+ * Add single file to the stage and capture metadata
  *
  * Handles file storage, encryption, and metadata capture in a single operation.
  * Uses stat data from content layer to eliminate race conditions.
@@ -378,19 +377,19 @@ static void report_capture(
  * @param ctx Dispatch context (must not be NULL; reads ctx->run.keymgr for
  *            encryption — NULL when encryption is disabled — and ctx->config
  *            for the encryption policy)
- * @param wt Worktree handle
+ * @param stage The profile's stage (must not be NULL)
  * @param filesystem_path Source path on filesystem
  * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
  * @param opts Command options
  * @param metadata Metadata collection (captured entry will be added here)
  * @param out_stat The capture's stat triple — taken from the same stat as the
- *                 bytes stored, so the record can bind the committed blob to it
+ *                 bytes staged, so the record can bind the committed blob to it
  *                 (must not be NULL; set on every success)
  * @return Error or NULL on success
  */
-static error_t *add_file_to_worktree(
+static error_t *add_file_to_stage(
     const dotta_ctx_t *ctx,
-    worktree_handle_t *wt,
+    stage_t *stage,
     const char *filesystem_path,
     const char *storage_path,
     const cmd_add_options_t *opts,
@@ -398,13 +397,14 @@ static error_t *add_file_to_worktree(
     stat_cache_t *out_stat
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(wt);
+    CHECK_NULL(stage);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(opts);
     CHECK_NULL(metadata);
     CHECK_NULL(out_stat);
 
+    git_repository *repo = ctx->run.repo;
     keymgr *keymgr = ctx->run.keymgr;  /* NULL if encryption disabled */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
@@ -415,102 +415,68 @@ static error_t *add_file_to_worktree(
     metadata_item_t *item = NULL;  /* Will be created from captured metadata */
     struct stat file_stat;         /* Captured from content layer */
 
-    /* Build destination path in worktree */
-    const char *wt_path = worktree_get_path(wt);
-    char *dest_path = str_format("%s/%s", wt_path, storage_path);
-    if (!dest_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate destination path");
+    /* The entry the profile already holds at this path, if any: the stage was
+     * seeded from the branch's tree, so an entry here is the committed one —
+     * read here, before the capture's put overwrites it in place with the staged
+     * one. A first-time add finds none. */
+    const git_index_entry *prior = git_index_get_bypath(
+        stage_index(stage), storage_path, 0
+    );
+    if (prior && !opts->force) {
+        return ERROR(
+            ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
+            "Use --force to overwrite.", filesystem_path, storage_path,
+            opts->profile
+        );
     }
 
     /* Encryption policy priority-3 source: prior committed bytes.
      *
-     * Captured here so the sniff happens BEFORE the existing-file removal below
-     * — that removal would destroy the byte-truth source. The dotta worktree is
-     * checked out to the profile's HEAD upstream of this call, so when dest_path
-     * exists it holds the previously-committed bytes — the cheapest source of
-     * byte truth for priority-3. For first-time adds dest_path does not exist
-     * and the flag stays false; priorities 4/5 then decide. Only consumed in
-     * the regular-file branch below (symlinks carry no encryption state to
-     * maintain). */
+     * The prior entry's blob is the cheapest source of byte truth for priority-3
+     * — classified by its own header, never by a claim. A first-time add has no
+     * prior and the flag stays false; priorities 4/5 then decide. A blob that
+     * cannot be read is an error, not "not encrypted": a sniff that defaulted
+     * would flip the policy silently. Only consumed in the regular-file branch
+     * below (symlinks carry no encryption state to maintain). */
     bool previously_encrypted = false;
-
-    /* Handle existing files */
-    if (fs_lexists(dest_path)) {
-        if (!opts->force) {
-            error_t *exists_err = ERROR(
-                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
-                "Use --force to overwrite.", filesystem_path, storage_path,
-                opts->profile
-            );
-            free(dest_path);
-            return exists_err;
-        }
-
-        /* Sniff the prior committed bytes BEFORE removing them. Tolerate a
-         * transient I/O blip on dest_path: defaulting to "no prior encryption
-         * known" lets priorities 4/5 decide; the next dotta update will surface
-         * any divergence. */
+    if (prior) {
         content_kind_t prior_kind = CONTENT_PLAINTEXT;
-        error_t *classify_err = content_classify_path(dest_path, &prior_kind);
-        if (classify_err) {
-            error_free(classify_err);
-        } else {
-            previously_encrypted = (prior_kind != CONTENT_PLAINTEXT);
-        }
-
-        err = fs_remove_file(dest_path);
+        err = content_classify(repo, &prior->id, &prior_kind, NULL);
         if (err) {
-            error_t *wrapped = error_wrap(
-                err, "Failed to remove existing file '%s' in worktree",
-                dest_path
+            return error_wrap(
+                err, "Failed to classify the committed bytes of '%s'",
+                storage_path
             );
-            free(dest_path);
-            return wrapped;
         }
+        previously_encrypted = (prior_kind != CONTENT_PLAINTEXT);
     }
 
-    /* Create parent directory */
-    char *parent = NULL;
-    err = fs_get_parent_dir(dest_path, &parent);
-    if (err) {
-        free(dest_path);
-        return err;
-    }
-
-    err = fs_create_dir(parent, true);
-    free(parent);
-    if (err) {
-        free(dest_path);
-        return error_wrap(err, "Failed to create parent directory");
-    }
-
-    /* Copy file to worktree */
+    /* Capture onto the stage */
     if (fs_is_symlink(filesystem_path)) {
-        /* Handle symlink */
+        /* Handle symlink: the entry is the link's target, as its bytes */
         char *target = NULL;
         err = fs_read_symlink(filesystem_path, &target);
         if (err) {
-            free(dest_path);
             return error_wrap(
                 err, "Failed to read symlink '%s'",
                 filesystem_path
             );
         }
 
-        err = fs_create_symlink(target, dest_path, (uid_t) -1, (gid_t) -1);
+        err = stage_put(
+            stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
+        );
         free(target);
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to create symlink in worktree");
+            return err;
         }
 
         /* Capture the link's claim from its own lstat (the link's uid/gid, not
-         * the target's). The link was read and copied lines above, so a failed
-         * look here is a mid-add race — refused, the way the regular arm's store
+         * the target's). The link was read and staged lines above, so a failed
+         * look here is a mid-add race — refused, the way the regular arm's capture
          * fails on its equivalent. */
         struct stat link_stat;
         if (fs_lstat(filesystem_path, &link_stat) != 0) {
-            free(dest_path);
             return error_from_errno(
                 errno, "Failed to stat symlink '%s'", filesystem_path
             );
@@ -519,7 +485,6 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path, &link_stat, &item
         );
         if (err) {
-            free(dest_path);
             return error_wrap(
                 err, "Failed to capture symlink metadata for '%s'",
                 filesystem_path
@@ -538,10 +503,9 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path
         );
     } else {
-        /* Regular file. previously_encrypted was captured from prior committed
-         * bytes in the existing-file removal block above (force re-add) or stays
-         * false (first-time add); priority-3 in the encryption policy reads byte
-         * truth either way. */
+        /* Regular file. previously_encrypted was classified from the prior
+         * committed blob above (force re-add) or stays false (first-time add);
+         * priority-3 in the encryption policy reads byte truth either way. */
         bool should_encrypt = false;
         err = encryption_policy_should_encrypt(
             config,
@@ -555,17 +519,15 @@ static error_t *add_file_to_worktree(
          * the policy could not be determined would say the opposite of what
          * happened. */
         if (err) {
-            free(dest_path);
             return err;
         }
 
-        /* Store file to worktree (handles read → encrypt → write) and capture
-         * the stat.
-         * SECURITY: the stat is the fstat of the fd the store read — bytes and
-         * triple one inode by construction. */
-        err = content_store_file_to_worktree(
+        /* Capture onto the stage (read → encrypt → the entry) and take the stat.
+         * SECURITY: the stat is the fstat of the fd the capture read — bytes
+         * and triple one inode by construction. */
+        err = content_stage_file(
+            stage,
             filesystem_path,
-            dest_path,
             storage_path,
             opts->profile,
             keymgr,
@@ -573,8 +535,7 @@ static error_t *add_file_to_worktree(
             &file_stat
         );
         if (err) {
-            free(dest_path);
-            return error_wrap(err, "Failed to store file to worktree");
+            return err;
         }
 
         /* Capture metadata from file using stat data from content layer
@@ -583,7 +544,6 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path, &file_stat, &item
         );
         if (err) {
-            free(dest_path);
             return error_wrap(
                 err, "Failed to capture metadata for '%s'",
                 filesystem_path
@@ -591,10 +551,10 @@ static error_t *add_file_to_worktree(
         }
         *out_stat = stat_cache_from_stat(&file_stat);
 
-        /* The store's write-time invariant: the bytes it wrote classify as the
-         * decision says (a plaintext that would not is refused there), so the
-         * claim is stamped from the decision and every reader of the bytes agrees
-         * with it. */
+        /* The capture's write-time invariant: the bytes it staged classify as
+         * the decision says (a plaintext that would not is refused there), so
+         * the claim is stamped from the decision and every reader of the bytes
+         * agrees with it. */
         if (item) item->encrypted = should_encrypt;
 
         /* Verbose output */
@@ -609,16 +569,6 @@ static error_t *add_file_to_worktree(
             filesystem_path, storage_path
         );
     }
-
-    /* Stage file */
-    err = worktree_stage_file(wt, storage_path);
-    if (err) {
-        free(dest_path);
-        if (item) metadata_item_free(item);
-        return error_wrap(err, "Failed to stage file");
-    }
-
-    free(dest_path);
 
     /* Add metadata item to collection (NULL for home/ prefix symlinks) */
     if (item) {
@@ -638,26 +588,29 @@ static error_t *add_file_to_worktree(
 }
 
 /**
- * Create commit in worktree
+ * Commit the stage
  *
  * @param ctx Dispatch context (must not be NULL)
- * @param wt Worktree handle
+ * @param stage The profile's stage, every capture on it (must not be NULL)
  * @param opts Command options
  * @param added_files The files the walk listed, as captured (must not be NULL)
- * @param out_commit_oid Output for commit OID (optional, can be NULL)
+ * @param out_committed Whether a commit was made: false when the stage holds
+ *                      the branch's own tree, so a re-add of what the profile
+ *                      already holds moves nothing (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *create_commit(
     const dotta_ctx_t *ctx,
-    worktree_handle_t *wt,
+    stage_t *stage,
     const cmd_add_options_t *opts,
     const ptr_array_t *added_files,
-    git_oid *out_commit_oid
+    bool *out_committed
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(wt);
+    CHECK_NULL(stage);
     CHECK_NULL(opts);
     CHECK_NULL(added_files);
+    CHECK_NULL(out_committed);
 
     const config_t *config = ctx->config;
 
@@ -695,7 +648,7 @@ static error_t *create_commit(
     }
 
     /* Create commit */
-    err = worktree_commit(wt, opts->profile, message, out_commit_oid);
+    err = stage_commit(stage, message, out_committed);
     free(message);
 
     if (err) {
@@ -995,11 +948,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     ignore_rules_t *ignore_rules = NULL;
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
-    worktree_handle_t *wt = NULL;
+    stage_t *stage = NULL;
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
     size_t added_count = 0;
     bool profile_exists = false;
     bool profile_was_new = false;
+    bool committed = false;
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;   /* The command's table: see below */
 
@@ -1012,11 +966,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* The branch this add will write to: checked out below when it is there,
-     * created when it is not. Both answers are needed here, before the command
-     * has any effect — a name Git's ref namespace cannot hold beside the names
-     * already there is refused now, ahead of the pre-add hook and the worktree,
-     * because a refusal that has already run the user's hook is not a refusal.
+    /* dotta's own branch is not a profile: the stage would commit to it as to
+     * any other, where the checkout it replaced was refused by Git for the branch
+     * the main worktree holds. The rule `profile enable` states, stated here
+     * too, until the anchor goes; a refusal by name asks Git nothing. */
+    if (strcmp(opts->profile, "dotta-worktree") == 0) {
+        err = ERROR(
+            ERR_INVALID_ARG, "'dotta-worktree' is dotta's own branch, not a profile"
+        );
+        goto cleanup;
+    }
+
+    /* The branch this add will write to: its stage is opened below when it is
+     * there, an orphan's when it is not. Both answers are needed here, before
+     * the command has any effect — a name Git's ref namespace cannot hold beside
+     * the names already there is refused now, ahead of the pre-add hook and the
+     * stage, because a refusal that has already run the user's hook is not a
+     * refusal.
      *
      * A branch and any branch beneath it are exclusive, which is why a base profile
      * and its variants are (docs/profiles.md). libgit2 refuses at commit time
@@ -1142,32 +1108,33 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /* Create temporary worktree */
-    err = worktree_create_temp(repo, &wt);
-    if (err) {
-        err = error_wrap(err, "Failed to create temporary worktree");
-        goto cleanup;
-    }
+    /* The profile's stage, as the pre-flight above resolved it: the branch's
+     * tip and tree when it exists, the empty tree and a root commit-to-be when
+     * it does not. A branch that appeared or vanished since the pre-flight is
+     * refused by the open rather than silently taken the other way. */
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
+    if (err) goto cleanup;
 
-    /* Checkout or create the profile branch, as the pre-flight above resolved it */
     if (profile_exists) {
-        err = worktree_checkout_branch(wt, opts->profile);
+        err = stage_open(repo, refname, &stage);
     } else {
-        err = worktree_create_orphan(wt, opts->profile);
+        err = stage_orphan(repo, refname, &stage);
         profile_was_new = true;  /* Profile is newly created */
     }
 
     if (err) {
-        err = error_wrap(
-            err, "Failed to prepare profile branch '%s'",
-            opts->profile
-        );
+        err = error_wrap(err, "Failed to open profile '%s'", opts->profile);
         goto cleanup;
     }
 
-    /* Initialize .dottaignore for new profiles */
+    /* Initialize .dottaignore for new profiles: the template, put on the stage
+     * for the commit below */
     if (!profile_exists) {
-        err = ignore_seed_profile(wt);
+        const char *template = ignore_profile_template();
+        err = stage_put(
+            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB
+        );
         if (err) {
             err = error_wrap(
                 err, "Failed to initialize .dottaignore for profile '%s'",
@@ -1413,28 +1380,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Load or create metadata collection before processing files */
-    const char *worktree_path = worktree_get_path(wt);
-    char *metadata_file_path = str_format("%s/%s", worktree_path, METADATA_FILE_PATH);
-    if (!metadata_file_path) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate metadata file path");
-        goto cleanup;
-    }
-
-    err = metadata_load_from_file(metadata_file_path, &metadata);
-    free(metadata_file_path);
-
+    /* The profile's sheet, from the tree the stage opened at: the branch's own
+     * bytes, an empty sheet for a new profile (the loader's contract). Mutated
+     * as the walk goes, saved once. */
+    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
     if (err) {
-        if (err->code == ERR_NOT_FOUND) {
-            /* No existing metadata - create new */
-            error_free(err);
-            err = metadata_create_empty(&metadata);
-            if (err) goto cleanup;
-        } else {
-            /* Real error - propagate */
-            err = error_wrap(err, "Failed to load existing metadata");
-            goto cleanup;
-        }
+        err = error_wrap(err, "Failed to load existing metadata");
+        goto cleanup;
     }
 
     /* Single-pass: add files and capture metadata inline. Each capture's stat
@@ -1443,19 +1395,19 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     for (size_t i = 0; i < walk.files.count; i++) {
         add_path_t *path = walk.files.items[i];
 
-        /* Validate storage path: this is the write boundary into the worktree
-         * (and thence into Git). Establish the well-formed invariant here so
-         * downstream readers (manifest, sync, remove) can trust the bytes they
-         * read. */
+        /* Validate storage path: this is the write boundary into the stage (and
+         * thence into Git). Establish the well-formed invariant here so downstream
+         * readers (manifest, sync, remove) can trust the bytes they read. */
         err = mount_validate_storage(path->storage_path);
         if (err) goto cleanup;
 
-        /* Add file to worktree and capture metadata
-         * ARCHITECTURE: add_file_to_worktree handles both operations atomically,
+        /* Add file to the stage and capture metadata
+         * ARCHITECTURE: add_file_to_stage handles both operations atomically,
          * sharing stat() data between content and metadata layers to eliminate
          * TOCTOU */
-        err = add_file_to_worktree(
-            ctx, wt, path->fs_path, path->storage_path, opts, metadata, &path->stat
+        err = add_file_to_stage(
+            ctx, stage, path->fs_path, path->storage_path, opts, metadata,
+            &path->stat
         );
         if (err) {
             err = error_wrap(err, "Failed to add file '%s'", path->fs_path);
@@ -1569,17 +1521,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* Save metadata to worktree */
-    err = metadata_save_to_worktree(worktree_path, metadata);
+    /* The sheet onto the stage, beside the captures */
+    err = metadata_save_to_stage(stage, metadata);
     if (err) {
         err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
-
-    /* Stage metadata.json file */
-    err = worktree_stage_file(wt, METADATA_FILE_PATH);
-    if (err) {
-        err = error_wrap(err, "Failed to stage metadata");
         goto cleanup;
     }
 
@@ -1592,15 +1537,18 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* Create commit */
-    err = create_commit(ctx, wt, opts, &walk.files, NULL);
+    /* Create commit. A stage that holds the branch's own tree — every capture
+     * as the profile already had it, a --force re-add of identical bytes — commits
+     * nothing, and the summary says so. */
+    err = create_commit(ctx, stage, opts, &walk.files, &committed);
     if (err) goto cleanup;
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *
      * The files were captured from disk, so their record is anchored to the
-     * just-committed blob now rather than left for a later status to confirm.
-     * The view itself is computed at every load and needs no update.
+     * committed blob now rather than left for a later status to confirm — an
+     * ownership event whether or not Git moved, since the capture's stat is fresh
+     * either way. The view itself is computed at every load and needs no update.
      *
      * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
      * enables it). UX Decision: Creating a profile via 'add' should enable it
@@ -1648,16 +1596,25 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         record = (record_receipt_t){ 0 };
     }
 
-    /* Cleanup worktree before post-processing */
-    worktree_cleanup(&wt);
-
     /* Execute post-add hook */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Show summary on success */
     if ((added_count > 0 || dir_tracked_count > 0)) {
         /* Primary success message */
-        if (added_count > 0) {
+        if (!committed && added_count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Nothing changed in profile '%s' (%zu file%s already as captured)",
+                opts->profile, added_count, added_count == 1 ? "" : "s"
+            );
+        } else if (!committed) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Nothing changed in profile '%s' (%zu director%s already as tracked)",
+                opts->profile, dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+            );
+        } else if (added_count > 0) {
             output_success(
                 out, OUTPUT_NORMAL, "Added %zu file%s to profile '%s'",
                 added_count, added_count == 1 ? "" : "s",
@@ -1679,8 +1636,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
         }
 
-        /* Show directory tracking info only when files were also added */
-        if (added_count > 0 && dir_tracked_count > 0) {
+        /* Show directory tracking info only when files were also added — and
+         * only when the commit landed: under "Nothing changed" the directories
+         * were already tracked as claimed. */
+        if (committed && added_count > 0 && dir_tracked_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
                 dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
@@ -1755,7 +1714,7 @@ cleanup:
     ptr_array_deinit(&walk.directories);
     ptr_array_deinit(&walk.files);
     hashmap_free(walk.seen, NULL);
-    if (wt) worktree_cleanup(&wt);
+    stage_free(stage);
     source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);
 
@@ -1842,15 +1801,15 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
     error_t *err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
 
     /* A refusal the invoker met reading a source — the walk's opendir and lstat,
-     * the open behind the policy sniff and the copy (infra/content), the existence
-     * check — ends the add before anything durable is written: the temp worktree
-     * is removed on the error path and the commit is after the walk. The code
-     * is enough to say so without matching prose: ERR_PERMISSION is a refusal
-     * an identity met and never an answer dotta looked up (base/error.h),
-     * everything add reads is a source, and a read the kernel refuses is one a
-     * run that holds root reads through (sys/filesystem's second try) — EROFS
-     * and an immutable flag refuse writes, never reads, and code ERR_FS besides.
-     * So the one thing left to say is sudo. */
+     * the open behind the capture (infra/content), the existence check — ends
+     * the add before anything durable is written: the stage is in memory and
+     * the commit is after the walk. The code is enough to say so without matching
+     * prose: ERR_PERMISSION is a refusal an identity met and never an answer
+     * dotta looked up (base/error.h), everything add reads is a source, and a
+     * read the kernel refuses is one a run that holds root reads through
+     * (sys/filesystem's second try) — EROFS and an immutable flag refuse writes,
+     * never reads, and code ERR_FS besides. So the one thing left to say is
+     * sudo. */
     if (err && err->code == ERR_PERMISSION && !identity()->privileged) {
         err = error_wrap(err, "Only root can read it; re-run under sudo");
     }

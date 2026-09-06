@@ -15,7 +15,6 @@
 #include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
-#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
@@ -28,6 +27,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 #include "utils/commit.h"
@@ -204,24 +204,29 @@ static error_t *settle_let_go(
  * match it.
  *
  * The claims array starts as everything the branch holds, in branch order (the
- * tree's blobs, then the directory items); the arguments mark what they take,
- * and the array compacts to just that. The filesystem path is filled at compaction
- * — it is display and record plumbing, not resolution: when this machine cannot
- * project a claim, the storage path stands in and removal proceeds regardless.
+ * tree's blobs, then the directory items) — read from `tree`, the one the caller's
+ * stage opened at, so the claims, the sheet and the commit describe one tip;
+ * the arguments mark what they take, and the array compacts to just that. The
+ * filesystem path is filled at compaction — it is display and record plumbing,
+ * not resolution: when this machine cannot project a claim, the storage path
+ * stands in and removal proceeds regardless.
  *
  * The branch's metadata rides out through `metadata_out` for the commit's edit
- * — loaded once, where the directory claims are enumerated. NULL when the branch
- * has none; caller frees.
+ * — loaded once, where the directory claims are enumerated; an empty sheet when
+ * the branch carries none (the loader's contract). Caller frees.
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
  *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the compaction handles
  *            as "no filesystem path on this machine".
+ * @param tree The branch's tree as the stage opened it — the universe of claims
+ *            (must not be NULL)
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
  *            not free)
  */
 static error_t *resolve_removal_claims(
     const dotta_ctx_t *ctx,
+    const git_tree *tree,
     const char *profile,
     char **input_paths,
     size_t path_count,
@@ -231,6 +236,7 @@ static error_t *resolve_removal_claims(
     metadata_t **metadata_out
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(tree);
     CHECK_NULL(profile);
     CHECK_NULL(input_paths);
     CHECK_NULL(opts);
@@ -247,14 +253,14 @@ static error_t *resolve_removal_claims(
     string_array_t *profile_files = NULL;
     metadata_t *metadata = NULL;
 
-    /* The branch's claims: the tree's blobs, then the metadata's directory
+    /* The branch's claims, off the tree: its blobs, then the metadata's directory
      * claims. */
-    err = profile_list_files(repo, profile, &profile_files);
+    err = profile_list_tree_files(tree, &profile_files);
     if (err) {
         return error_wrap(err, "Failed to list files in profile");
     }
 
-    err = metadata_load_from_branch(repo, profile, &metadata);
+    err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         err = error_wrap(
             err, "Failed to load metadata for profile '%s'", profile
@@ -754,6 +760,7 @@ static error_t *remove_files_from_profile(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
+    stage_t *stage = NULL;                 /* the branch's tip, tree and index; the commit's */
     removal_claim_t *claims = NULL;        /* arena — the resolver's */
     size_t claim_count = 0;
     metadata_t *metadata = NULL;           /* the branch's, from the resolver (owned) */
@@ -761,7 +768,6 @@ static error_t *remove_files_from_profile(
     size_t multi_profile_count = 0;
     string_array_t *removed_paths = NULL;
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
-    buffer_t metadata_json = BUFFER_INIT;
     char *message = NULL;
     manifest_t *after = NULL;
     hashmap_t *anchor_index = NULL;
@@ -773,9 +779,22 @@ static error_t *remove_files_from_profile(
         output_set_verbosity(out, OUTPUT_QUIET);
     }
 
+    /* The branch's stage: the tip everything below reads — the claims, the sheet,
+     * the judge — and the parent the commit will have. The removal is pure tree
+     * surgery, so the stage is the whole of its Git side. */
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_branch_refname(refname, sizeof(refname), opts->profile);
+    if (err) goto cleanup;
+
+    err = stage_open(repo, refname, &stage);
+    if (err) {
+        err = error_wrap(err, "Failed to open profile '%s'", opts->profile);
+        goto cleanup;
+    }
+
     /* Resolve the arguments to the claims they remove */
     err = resolve_removal_claims(
-        ctx, opts->profile, opts->paths, opts->path_count, opts,
+        ctx, stage_tree(stage), opts->profile, opts->paths, opts->path_count, opts,
         &claims, &claim_count, &metadata
     );
     if (err) {
@@ -897,18 +916,14 @@ static error_t *remove_files_from_profile(
     err = hook_fire_pre(config, out, repo_path, &hook_inv);
     if (err) goto cleanup;
 
-    /* The plan, all in memory: which tree entries leave, and the metadata edit
+    /* The plan, on the stage: which tree entries leave, and the metadata edit
      * riding the same commit. A FILE claim is a tree entry; a DIRECTORY claim
      * has no tree entry — its whole Git footprint is its metadata item. Every
-     * FILE claim is in the branch tree (the resolver's universe is
-     * profile_list_files over this branch, and the branch cannot move between
-     * resolve and commit — one process, one command), so the primitive's
-     * missing-entry error cannot fire. */
-    size_t removed_files = 0, removed_dirs = 0;
-    size_t removal_count = 0, meta_edits = 0;
+     * FILE claim is in the stage's tree (the resolver's universe is that tree's
+     * own listing), so the stage's missing-entry error cannot fire. */
+    size_t removed_files = 0, removed_dirs = 0, meta_edits = 0;
     removed_paths = string_array_new(0);
-    const char **removals = arena_alloc(ctx->arena, claim_count * sizeof(const char *));
-    if (!removed_paths || !removals) {
+    if (!removed_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate removal plan");
         goto cleanup;
     }
@@ -917,7 +932,8 @@ static error_t *remove_files_from_profile(
         const removal_claim_t *claim = &claims[i];
 
         if (claim->kind == PATH_KIND_FILE) {
-            removals[removal_count++] = claim->storage_path;
+            err = stage_remove(stage, claim->storage_path);
+            if (err) goto cleanup;
             removed_files++;
         } else {
             removed_dirs++;
@@ -935,7 +951,7 @@ static error_t *remove_files_from_profile(
         output_info(out, OUTPUT_VERBOSE, "Removed: %s", claim->storage_path);
     }
 
-    /* Prune redundant directory entries against the post-edit index — the branch
+    /* Prune redundant directory entries against the stage's index — the branch
      * tree minus the removed file claims, the tree the impending commit will
      * record (the judge's own contract, metadata.h). Removing a file may leave
      * its parent directory metadata entry with nothing managed beneath it. The
@@ -944,68 +960,32 @@ static error_t *remove_files_from_profile(
      * answer it for the one path it cannot, an empty directory. Only entries
      * that claim nothing of their own are dropped; a tracked claim carrying real
      * attributes is preserved as the empty-dir intent it is. */
-    if (metadata) {
-        git_tree *branch_tree = NULL;
-        git_index *judge = NULL;
-        err = gitops_load_branch_tree(repo, opts->profile, &branch_tree, NULL);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to load tree of profile '%s'", opts->profile
-            );
-            goto cleanup;
-        }
-        int git_err = git_index_new(&judge);
-        if (git_err == 0) git_err = git_index_read_tree(judge, branch_tree);
-        for (size_t i = 0; git_err == 0 && i < removal_count; i++) {
-            git_err = git_index_remove(judge, removals[i], 0);
-        }
-        if (git_err < 0) {
-            git_index_free(judge);
-            git_tree_free(branch_tree);
-            err = error_from_git(git_err);
-            goto cleanup;
-        }
-        err = metadata_prune_directories(metadata, judge, &pruned_dirs);
-        git_index_free(judge);
-        git_tree_free(branch_tree);
-        if (err) {
-            err = error_wrap(err, "Failed to prune redundant directories");
-            goto cleanup;
-        }
-        if (pruned_dirs.count > 0) {
-            output_info(
-                out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
-                pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
-            );
-        }
+    err = metadata_prune_directories(metadata, stage_index(stage), &pruned_dirs);
+    if (err) {
+        err = error_wrap(err, "Failed to prune redundant directories");
+        goto cleanup;
+    }
+    if (pruned_dirs.count > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Pruned %zu redundant directory entr%s",
+            pruned_dirs.count, pruned_dirs.count == 1 ? "y" : "ies"
+        );
     }
 
-    /* The metadata blob, only when the collection actually changed — a removal
-     * that touched no items and pruned nothing keeps the branch's metadata.json
-     * byte-identical, so no rewrite is committed. */
-    gitops_tree_update_t meta_update;
-    size_t update_count = 0;
+    /* The sheet, only when the collection actually changed — a removal that touched
+     * no items and pruned nothing keeps the branch's metadata.json byte-identical,
+     * so no rewrite is staged. */
     if (meta_edits + pruned_dirs.count > 0) {
-        err = metadata_to_json(metadata, &metadata_json);
+        err = metadata_save_to_stage(stage, metadata);
         if (err) {
-            err = error_wrap(err, "Failed to serialize metadata");
+            err = error_wrap(err, "Failed to save metadata");
             goto cleanup;
         }
-        int git_err = git_blob_create_from_buffer(
-            &meta_update.blob_oid, repo, metadata_json.data, metadata_json.size
-        );
-        if (git_err < 0) {
-            err = error_from_git(git_err);
-            goto cleanup;
-        }
-        meta_update.path = METADATA_FILE_PATH;
-        meta_update.mode = GIT_FILEMODE_BLOB;
-        update_count = 1;
     }
 
     /* One atomic commit: the file claims leave the tree, metadata.json follows
-     * in the same tree write. HEAD-safe and all-or-nothing — any failure up to
-     * here leaves the repository byte-identical. */
+     * in the same tree write. All-or-nothing — any failure up to here leaves
+     * the repository byte-identical. */
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
@@ -1019,11 +999,7 @@ static error_t *remove_files_from_profile(
         err = ERROR(ERR_MEMORY, "Failed to build commit message");
         goto cleanup;
     }
-    err = gitops_commit_tree_updates_safe(
-        repo, opts->profile,
-        update_count > 0 ? &meta_update : NULL, update_count,
-        removals, removal_count, message, NULL
-    );
+    err = stage_commit(stage, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");
         goto cleanup;
@@ -1214,11 +1190,11 @@ cleanup:
     if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
     free(message);
-    buffer_free(&metadata_json);
     string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
     if (profile_index) hashmap_free(profile_index, string_array_free_cb);
     if (metadata) metadata_free(metadata);
+    stage_free(stage);
 
     return err;
 }

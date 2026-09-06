@@ -33,12 +33,12 @@
  *
  * Architectural placement:
  * - Layer: Infrastructure (src/infra/)
- * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops), crypto
- *   (cipher for the format's constants and header, keymgr for every encrypt and
- *   decrypt)
+ * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops, stage),
+ *   crypto (cipher for the format's constants and header, keymgr for every encrypt
+ *   and decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
  *   reads, policy's byte truth), commands (show, diff, export, revert, list;
- *   add and update through the store)
+ *   add and update through the capture)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -49,6 +49,7 @@
 #include <types.h>
 
 #include "infra/compare.h"
+#include "sys/stage.h"
 
 /* Forward declarations */
 typedef struct keymgr keymgr;
@@ -82,8 +83,8 @@ typedef enum {
  * Classify raw bytes by inspecting the cipher detection window.
  *
  * Pure computation; no I/O. Use when callers already have the bytes in hand (a
- * file just read from the worktree, an in-memory buffer from another layer) and
- * want to avoid a Git ODB round-trip.
+ * file just read from disk, an in-memory buffer from another layer) and want to
+ * avoid a Git ODB round-trip.
  *
  * NULL-safe: data == NULL OR size < CIPHER_DETECT_BYTES → PLAINTEXT.
  *
@@ -124,30 +125,6 @@ error_t *content_classify(
     const git_oid *blob_oid,
     content_kind_t *out_kind,
     uint8_t *out_epoch_fp
-);
-
-/**
- * Classify a filesystem path by sniffing its first bytes.
- *
- * Reads only the cipher detection window (6 bytes today). For large files this
- * is strictly cheaper than fs_read_file + content_classify_bytes — the former
- * materialises the whole content just to inspect a header.
- *
- * Symmetric with content_classify(repo, oid): same answer, different source.
- * Pick the form whose source is closest to the caller's data.
- *
- * @param fs_path Filesystem path (must not be NULL)
- * @param out_kind Output kind on success (must not be NULL)
- * @return Error or NULL on success
- *
- * Errors:
- * - ERR_NOT_FOUND: Path does not exist
- * - ERR_FS: I/O error opening or reading
- * - ERR_INVALID_ARG: Required arguments are NULL
- */
-error_t *content_classify_path(
-    const char *fs_path,
-    content_kind_t *out_kind
 );
 
 /**
@@ -335,56 +312,60 @@ error_t *content_cache_get_from_blob_oid(
 void content_cache_free(content_cache_t *cache);
 
 /**
- * Store file to worktree with optional encryption
+ * Capture a regular file onto a stage, encrypting it or not
  *
- * High-level helper that combines: read file → encrypt (if needed) → write to
- * worktree. This encapsulates the common pattern used in add/update commands.
+ * The capture add and update share: read the file → encrypt (if asked) → the
+ * entry at `storage_path` on the stage, with the mode the file's own stat says.
  *
  * Process:
  * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
  *    and the stored bytes are one inode by construction
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
- *    c. Write encrypted content to worktree path
+ *    c. Stage the ciphertext
  * 3. If should_encrypt=false: refuse a plaintext whose first bytes are the cipher
- *    magic, else write the plaintext to the worktree path
+ *    magic, else stage the plaintext
  *
- * This is a convenience wrapper — the caller still decides policy via
- * should_encrypt; use encryption_policy_should_encrypt() to compute it.
+ * The entry's mode is Git's reading of the fstat: executable iff the owner's
+ * execute bit is set (index.c's git_index__create_mode), regular otherwise.
+ * Symlinks are the caller's own put (a link's bytes are its target); this capture
+ * refuses everything but a regular file. The caller still decides policy via
+ * should_encrypt; use encryption_policy_should_encrypt() to compute it. Encryption
+ * asked with no key in reach is refused before the file is read.
  *
- * Write-time invariant: the bytes stored classify (content_classify_bytes) as
+ * Write-time invariant: the bytes staged classify (content_classify_bytes) as
  * `should_encrypt` says — ENCRYPTED iff true. An encrypt writes the magic, and
  * a plaintext that would read as ciphertext is refused, so the caller stamps
  * metadata.encrypted from `should_encrypt` and every reader, which classifies
- * the bytes, agrees with the stamp for any blob this store wrote. The one collision
- * the model has — a plaintext file whose first six bytes happen to be `"DOTTA"
- * || CIPHER_VERSION` — is therefore refused here with its way out (--encrypt,
- * or change the bytes), never stored under a claim every reader would contradict.
+ * the bytes, agrees with the stamp for any blob this capture wrote. The one
+ * collision the model has — a plaintext file whose first six bytes happen to be
+ * `"DOTTA" || CIPHER_VERSION` — is therefore refused here with its way out
+ * (--encrypt, or change the bytes), never staged under a claim every reader would
+ * contradict.
  *
+ * @param stage The stage the entry goes on (must not be NULL)
  * @param filesystem_path Path to source file on filesystem (must not be NULL)
- * @param worktree_path Destination path in worktree (must not be NULL)
- * @param storage_path Storage path in profile (must not be NULL, used as AAD
- *                     for encryption)
+ * @param storage_path Storage path in profile (must not be NULL; the entry's
+ *                     path, and the AAD for encryption)
  * @param profile Profile name (for key derivation, must not be NULL)
  * @param keymgr Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false =
  *                       plaintext)
  * @param out_stat The capture's stat: the fstat of the descriptor whose bytes
- *                 were stored (optional, can be NULL; filled only when the look
- *                 reached a regular file's fd)
+ *                 were staged (must not be NULL; set on every success)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_IO: Failed to read source file
- * - ERR_VALIDATION: A plaintext store whose bytes would classify as ciphertext
+ * - ERR_VALIDATION: A plaintext capture whose bytes would classify as ciphertext
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
  * - ERR_CRYPTO: Encryption failed
- * - ERR_IO: Failed to write worktree file
- * - ERR_INVALID_ARG: Required arguments are NULL
+ * - ERR_CONFLICT: The stage refused the entry (a file/directory collision)
+ * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a regular file
  */
-error_t *content_store_file_to_worktree(
+error_t *content_stage_file(
+    stage_t *stage,
     const char *filesystem_path,
-    const char *worktree_path,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,

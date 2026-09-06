@@ -129,48 +129,6 @@ error_t *content_classify(
     return err;
 }
 
-error_t *content_classify_path(
-    const char *fs_path,
-    content_kind_t *out_kind
-) {
-    CHECK_NULL(fs_path);
-    CHECK_NULL(out_kind);
-
-    /* Read only the cipher detection window. For files on the order of megabytes
-     * this is materially cheaper than fs_read_file + classify — we never inflate
-     * past the header. EINTR loop covers signals on slow filesystems (NFS,
-     * FUSE). */
-    int fd = fs_open(fs_path, O_RDONLY | O_CLOEXEC, 0);
-    if (fd < 0) {
-        int saved_errno = errno;
-        if (saved_errno == ENOENT) {
-            return ERROR(ERR_NOT_FOUND, "File not found: %s", fs_path);
-        }
-        return error_from_errno(saved_errno, "Failed to open '%s'", fs_path);
-    }
-
-    uint8_t header[CIPHER_DETECT_BYTES];
-    size_t got = 0;
-    while (got < sizeof(header)) {
-        ssize_t r = read(fd, header + got, sizeof(header) - got);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            int saved_errno = errno;
-            close(fd);
-            return error_from_errno(
-                saved_errno, "Failed to read '%s'", fs_path
-            );
-        }
-        if (r == 0) break;  /* EOF before window filled — short file */
-        got += (size_t) r;
-    }
-    close(fd);
-
-    *out_kind = content_classify_bytes(header, got);
-
-    return NULL;
-}
-
 size_t content_estimated_plaintext_size(
     content_kind_t kind, size_t blob_size
 ) {
@@ -510,21 +468,22 @@ void content_cache_free(content_cache_t *cache) {
     free(cache);
 }
 
-error_t *content_store_file_to_worktree(
+error_t *content_stage_file(
+    stage_t *stage,
     const char *filesystem_path,
-    const char *worktree_path,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
     struct stat *out_stat
 ) {
+    CHECK_NULL(stage);
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(worktree_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
+    CHECK_NULL(out_stat);
 
-    /* Step 1: One look — open the descriptor whose bytes will be stored
+    /* Step 1: One look — open the descriptor whose bytes will be staged
      *
      * The reported stat is the fstat of that fd, so the stat and the bytes are
      * one inode by construction; the old shape (lstat, then a path re-open inside
@@ -565,17 +524,29 @@ error_t *content_store_file_to_worktree(
 
         return ERROR(
             ERR_INVALID_ARG,
-            "Cannot store '%s': it is a %s, not a regular file.\n\n"
+            "Cannot capture '%s': it is a %s, not a regular file.\n\n"
             "Dotta only manages regular configuration files.\n"
             "Symlinks and special files are not supported.",
             filesystem_path, type
         );
     }
 
-    /* The capture's stat: the fd's own, taken beside the bytes read below */
-    if (out_stat) {
-        memcpy(out_stat, &st, sizeof(struct stat));
+    /* The capture's twin of the read's locked root: no key is in reach because
+     * the feature is off. Refused before the bytes are read — nothing to wipe. */
+    if (should_encrypt && !keymgr) {
+        close(fd);
+        return error_wrap(
+            ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
+            "Cannot encrypt '%s'", storage_path
+        );
     }
+
+    /* The capture's stat: the fd's own, taken beside the bytes read below. The
+     * entry's mode is Git's reading of it — executable iff the owner's execute
+     * bit is set (libgit2's git_index__create_mode), regular otherwise. */
+    memcpy(out_stat, &st, sizeof(struct stat));
+    git_filemode_t mode = (st.st_mode & S_IXUSR)
+        ? GIT_FILEMODE_BLOB_EXECUTABLE : GIT_FILEMODE_BLOB;
 
     /* Step 2: Read the descriptor to EOF
      *
@@ -590,32 +561,22 @@ error_t *content_store_file_to_worktree(
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 3: Encrypt if requested; else refuse a plaintext that would read as
-     * ciphertext.
+    /* Step 3: The entry — the ciphertext when encryption was asked, else the
+     * plaintext, unless it would read as ciphertext.
      *
      * Every reader classifies the stored bytes by their magic (content_classify:
      * bytes win over any external claim), so this is the one boundary where the
      * claim and the bytes are made to agree: an encrypt writes the magic, and a
-     * plaintext whose first bytes already are the magic is refused — stored, it
+     * plaintext whose first bytes already are the magic is refused — staged, it
      * would be stamped plaintext by the caller and read as ciphertext by every
      * reader after, and no key would open it. With the refusal, `should_encrypt`
-     * is the byte truth. */
-    const uint8_t *bytes = (const uint8_t *) content.data;
-    buffer_t *data_to_write = &content;  /* Default: write plaintext */
-    buffer_t ciphertext = BUFFER_INIT;
-
+     * is the byte truth. The blob is the stage's to write, so the plaintext's
+     * lifetime ends in this frame, whichever arm ran. */
     if (should_encrypt) {
-        if (!keymgr) {
-            /* The store's twin of the read's locked root: no key is in reach
-             * because the feature is off. */
-            if (content.data) secure_wipe(content.data, content.size);
-            buffer_free(&content);
-            err = ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED);
-            return error_wrap(err, "Cannot encrypt '%s'", storage_path);
-        }
-
+        buffer_t ciphertext = BUFFER_INIT;
         err = keymgr_encrypt(
-            keymgr, profile, storage_path, bytes, content.size, &ciphertext
+            keymgr, profile, storage_path, (const uint8_t *) content.data,
+            content.size, &ciphertext
         );
         if (err) {
             if (content.data) secure_wipe(content.data, content.size);
@@ -623,43 +584,27 @@ error_t *content_store_file_to_worktree(
             return error_wrap(err, "Failed to encrypt '%s'", storage_path);
         }
 
-        /* Use encrypted data for writing */
-        data_to_write = &ciphertext;
-    } else if (content_classify_bytes(bytes, content.size) != CONTENT_PLAINTEXT) {
+        err = stage_put(
+            stage, storage_path, ciphertext.data, ciphertext.size, mode
+        );
+        buffer_free(&ciphertext);
+    } else if (content_classify_bytes((const uint8_t *) content.data, content.size)
+        != CONTENT_PLAINTEXT) {
         if (content.data) secure_wipe(content.data, content.size);
         buffer_free(&content);
         return ERROR(
             ERR_VALIDATION,
-            "Cannot store '%s' as plaintext: its first bytes are dotta's cipher "
-            "magic, so every reader would take it for ciphertext; add it with "
-            "--encrypt, or change them", filesystem_path
+            "Cannot capture '%s' as plaintext: its first bytes are dotta's "
+            "cipher magic, so every reader would take it for ciphertext; add it "
+            "with --encrypt, or change them", filesystem_path
         );
+    } else {
+        err = stage_put(stage, storage_path, content.data, content.size, mode);
     }
-
-    /* Step 4: Write to worktree with original mode
-     * CRITICAL: Use source file's mode so git commits with correct permissions.
-     * This ensures git mode matches metadata mode, preventing spurious MODE
-     * diffs. */
-    err = fs_write_file_raw(
-        worktree_path,
-        (const unsigned char *) data_to_write->data,
-        data_to_write->size,
-        st.st_mode, /* Preserve source mode */
-        -1,         /* Don't change ownership */
-        -1,         /* Don't change ownership */
-        NULL
-    );
 
     /* Cleanup (secure: plaintext may contain sensitive data) */
     if (content.data) secure_wipe(content.data, content.size);
     buffer_free(&content);
-    buffer_free(&ciphertext);
 
-    if (err) {
-        return error_wrap(
-            err, "Failed to write to worktree '%s'", worktree_path
-        );
-    }
-
-    return NULL;
+    return err;
 }

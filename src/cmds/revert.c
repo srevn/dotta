@@ -28,6 +28,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/stage.h"
 #include "sys/stats.h"
 #include "utils/commit.h"
 
@@ -374,52 +375,6 @@ static error_t *show_diff_preview(
 }
 
 /**
- * Verify profile branch HEAD hasn't moved since we last read it
- *
- * Dotta uses atomic commits to orphan branches — there is no staging area or
- * working directory for profile branches (HEAD always points to dotta-worktree).
- * The traditional "uncommitted changes" check does not apply. Instead, this
- * verifies that no concurrent operation has modified the branch between showing
- * the preview and performing the revert.
- *
- * @param repo Repository (must not be NULL)
- * @param profile Profile branch to check (must not be NULL)
- * @param expected_oid Expected HEAD OID (must not be NULL)
- * @return Error if branch was modified, NULL if unchanged
- */
-static error_t *verify_branch_unchanged(
-    git_repository *repo,
-    const char *profile,
-    const git_oid *expected_oid
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profile);
-    CHECK_NULL(expected_oid);
-
-    git_oid current_oid;
-    git_commit *commit = NULL;
-    error_t *err = gitops_resolve_commit_in_branch(
-        repo, profile, "HEAD", &current_oid, &commit
-    );
-    if (commit) git_commit_free(commit);
-    if (err) return error_wrap(err, "Failed to verify branch state");
-
-    if (!git_oid_equal(&current_oid, expected_oid)) {
-        char expected_str[8], current_str[8];
-        git_oid_tostr(expected_str, sizeof(expected_str), expected_oid);
-        git_oid_tostr(current_str, sizeof(current_str), &current_oid);
-        return ERROR(
-            ERR_CONFLICT,
-            "Profile '%s' was modified concurrently (expected %s, now %s)\n"
-            "Another operation changed the branch since the preview.",
-            profile, expected_str, current_str
-        );
-    }
-
-    return NULL;
-}
-
-/**
  * Build commit message for revert operation
  *
  * Uses custom message if provided, otherwise generates from template system.
@@ -505,6 +460,11 @@ static error_t *load_metadata_from_commit(
  * the target's metadata entry; the encrypted bit is stamped from the restored
  * blob's own bytes (the write-boundary invariant — see policy.h).
  *
+ * The stage is the caller's, opened at the tip the preview showed: the current
+ * sheet is read from its tree, the target blob and the merged sheet are put on
+ * it, and its commit is refused if the branch moved since — the check the preview's
+ * promise needs, made by the commit itself rather than by a second look at the tip.
+ *
  * The function handles:
  * - Files that exist in both current and target (normal revert)
  * - Files deleted from HEAD (restore from history)
@@ -514,12 +474,14 @@ static error_t *load_metadata_from_commit(
  */
 static error_t *revert_file_in_branch(
     const dotta_ctx_t *ctx,
+    stage_t *stage,
     const char *profile,
     const char *file_path,
     const git_oid *target_commit_oid,
     const char *commit_message
 ) {
     CHECK_NULL(ctx);
+    CHECK_NULL(stage);
     CHECK_NULL(profile);
     CHECK_NULL(file_path);
     CHECK_NULL(target_commit_oid);
@@ -534,9 +496,7 @@ static error_t *revert_file_in_branch(
     git_tree_entry *target_entry = NULL;
     metadata_t *target_metadata = NULL;
     metadata_item_t *meta_to_restore = NULL;
-    git_commit *head_commit = NULL;
     metadata_t *current_metadata = NULL;
-    buffer_t metadata_json_buf = BUFFER_INIT;
     char *msg = NULL;
     git_oid target_blob_oid_copy;
     git_filemode_t target_mode = 0;
@@ -659,27 +619,18 @@ static error_t *revert_file_in_branch(
     metadata_free(target_metadata);
     target_metadata = NULL;
 
-    /* PHASE 2: Load Current HEAD Metadata */
+    /* PHASE 2: Load the current metadata — the sheet in the tree the stage opened
+     * at, the tip the preview showed */
 
-    git_oid head_oid;
-    err = gitops_resolve_commit_in_branch(
-        repo, profile, "HEAD", &head_oid, &head_commit
+    err = metadata_load_from_tree(
+        repo, stage_tree(stage), profile, &current_metadata
     );
-    if (err) {
-        err = error_wrap(
-            err, "Failed to resolve HEAD of profile '%s'", profile
-        );
-        goto cleanup;
-    }
-
-    /* Load current metadata */
-    err = load_metadata_from_commit(repo, head_commit, profile, &current_metadata);
     if (err) {
         err = error_wrap(err, "Failed to load current metadata");
         goto cleanup;
     }
 
-    /* PHASE 3: Merge target metadata item, serialize, stage blob */
+    /* PHASE 3: Merge the target metadata item, and stage the file and the sheet */
 
     /* Merge the target state's claim: an item to restore upserts over the standing
      * one. */
@@ -695,21 +646,16 @@ static error_t *revert_file_in_branch(
         metadata_remove_item(current_metadata, file_path);
     }
 
-    /* Serialize updated metadata to JSON */
-    err = metadata_to_json(current_metadata, &metadata_json_buf);
+    /* The target's blob at the path — an object the ODB already holds, so the
+     * entry is put by id — and the merged sheet beside it */
+    err = stage_put_blob(stage, file_path, &target_blob_oid_copy, target_mode);
     if (err) {
-        err = error_wrap(err, "Failed to serialize metadata");
         goto cleanup;
     }
 
-    /* Create metadata blob in ODB and replace index entry */
-    git_oid metadata_blob_oid;
-    ret = git_blob_create_from_buffer(
-        &metadata_blob_oid, repo,
-        metadata_json_buf.data, metadata_json_buf.size
-    );
-    if (ret < 0) {
-        err = error_from_git(ret);
+    err = metadata_save_to_stage(stage, current_metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to save metadata");
         goto cleanup;
     }
 
@@ -724,18 +670,9 @@ static error_t *revert_file_in_branch(
         goto cleanup;
     }
 
-    /* Create commit (handles signature and parent lookup internally) */
-    gitops_tree_update_t updates[2];
-    updates[0].path = file_path;
-    updates[0].mode = target_mode;
-    git_oid_cpy(&updates[0].blob_oid, &target_blob_oid_copy);
-    updates[1].path = METADATA_FILE_PATH;
-    updates[1].mode = GIT_FILEMODE_BLOB;
-    git_oid_cpy(&updates[1].blob_oid, &metadata_blob_oid);
-
-    err = gitops_commit_tree_updates_safe(
-        repo, profile, updates, 2, NULL, 0, msg, NULL
-    );
+    /* One commit, parented on the tip the preview showed; a branch another writer
+     * moved since is refused here */
+    err = stage_commit(stage, msg, NULL);
 
 cleanup:
     if (target_commit) git_commit_free(target_commit);
@@ -743,9 +680,7 @@ cleanup:
     if (target_entry) git_tree_entry_free(target_entry);
     if (target_metadata) metadata_free(target_metadata);
     if (meta_to_restore) metadata_item_free(meta_to_restore);
-    if (head_commit) git_commit_free(head_commit);
     if (current_metadata) metadata_free(current_metadata);
-    buffer_free(&metadata_json_buf);
     if (msg) free(msg);
 
     return err;
@@ -768,11 +703,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     error_t *err = NULL;
     const char *profile = NULL;
     const char *resolved_path = NULL;
-    git_oid current_oid = { { 0 } };
     git_oid target_oid = { { 0 } };
-    git_commit *current_commit = NULL;
     git_commit *target_commit = NULL;
-    git_tree *current_tree = NULL;
+    stage_t *stage = NULL;
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
@@ -818,11 +751,19 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     );
     if (err) goto cleanup;
 
-    /* Step 4: Get current HEAD commit for comparison */
-    err = gitops_resolve_commit_in_branch(
-        repo, profile, "HEAD", &current_oid, &current_commit
-    );
+    /* Step 4: The branch's stage — its tip is the current state the preview
+     * compares against and the parent the revert's commit will have, so a branch
+     * that moves between the preview and the commit is refused at the commit,
+     * --force or not: what the user confirmed is what is reverted. */
+    char refname[DOTTA_REFNAME_MAX];
+    err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) goto cleanup;
+
+    err = stage_open(repo, refname, &stage);
+    if (err) {
+        err = error_wrap(err, "Failed to open profile '%s'", profile);
+        goto cleanup;
+    }
 
     /* Step 5: Prepare for revert - two distinct workflows based on file state */
     const git_oid *current_blob_oid = NULL;
@@ -844,26 +785,22 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         /*
          * Workflow B: Reverting Existing File File exists in current HEAD - perform
          * standard revert workflow. Extract trees and entries for blob comparison
-         * and diff preview.
+         * and diff preview; the current tree is the stage's.
          */
         output_print(
             out, OUTPUT_VERBOSE,
             "File exists in HEAD, extracting trees for comparison\n"
         );
 
-        int ret = git_commit_tree(&current_tree, current_commit);
+        int ret = git_commit_tree(&target_tree, target_commit);
         if (ret < 0) {
             err = error_from_git(ret);
             goto cleanup;
         }
 
-        ret = git_commit_tree(&target_tree, target_commit);
-        if (ret < 0) {
-            err = error_from_git(ret);
-            goto cleanup;
-        }
-
-        ret = git_tree_entry_bypath(&current_entry, current_tree, resolved_path);
+        ret = git_tree_entry_bypath(
+            &current_entry, stage_tree(stage), resolved_path
+        );
         if (ret < 0) {
             if (ret == GIT_ENOTFOUND) {
                 err = ERROR(
@@ -959,15 +896,13 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Free tree entries and trees after preview (no longer needed) */
+    /* Free tree entries and the target tree after preview (no longer needed) */
     git_tree_entry_free(target_entry);
     target_entry = NULL;
     git_tree_entry_free(current_entry);
     current_entry = NULL;
     git_tree_free(target_tree);
     target_tree = NULL;
-    git_tree_free(current_tree);
-    current_tree = NULL;
 
     /* Step 7: Early exit for dry-run (preview shown, no changes to make) */
     if (opts->dry_run) {
@@ -984,21 +919,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Free current_commit (no longer needed) */
-    git_commit_free(current_commit);
-    current_commit = NULL;
-
-    /* Verify branch hasn't been modified concurrently since preview */
-    if (!opts->force) {
-        err = verify_branch_unchanged(repo, profile, &current_oid);
-        if (err) goto cleanup;
-    }
-
     output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
 
-    /* Perform revert */
+    /* Perform revert on the stage opened at the preview's tip */
     err = revert_file_in_branch(
         ctx,
+        stage,
         profile,
         resolved_path,
         &target_oid,
@@ -1037,9 +963,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 cleanup:
     if (current_entry) git_tree_entry_free(current_entry);
     if (target_entry) git_tree_entry_free(target_entry);
-    if (current_tree) git_tree_free(current_tree);
     if (target_tree) git_tree_free(target_tree);
-    if (current_commit) git_commit_free(current_commit);
+    stage_free(stage);
     if (target_commit) git_commit_free(target_commit);
     /* Don't return error if user aborted */
     if (user_aborted) return NULL;
@@ -1190,7 +1115,7 @@ static const args_opt_t revert_opts[] = {
     ARGS_FLAG(
         "f force",
         cmd_revert_options_t,force,
-        "Skip confirmation and override conflicts"
+        "Skip confirmation prompt"
     ),
     ARGS_FLAG(
         "n dry-run",

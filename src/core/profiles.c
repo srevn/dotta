@@ -722,16 +722,13 @@ error_t *profile_get_stats(
     out->total_size = data.total_size;
 
     /* The directories: the branch's own metadata, the same source the view's
-     * claim routine reads. No metadata.json is no claim, not a failure — every
-     * other load error is real and propagates. */
+     * claim routine reads. A tree without a sheet loads as an empty one — no
+     * claim, so nothing counted below — and every load error is real and
+     * propagates. */
     metadata_t *metadata = NULL;
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         git_tree_free(tree);
-        if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
-            return NULL;
-        }
         return error_wrap(
             err, "Failed to load metadata for profile '%s'", profile
         );

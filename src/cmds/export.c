@@ -812,16 +812,17 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         }
     }
 
+    /* A tree without a sheet loads as an empty one; an error is a sheet that
+     * would not load, and the export says so and materializes the tree's own
+     * filemodes rather than refuse. */
     err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
     if (err) {
-        if (err->code != ERR_NOT_FOUND) {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Metadata unreadable for profile '%s' (%s); "
-                "falling back to git filemodes",
-                opts->profile, error_message(err)
-            );
-        }
+        output_warning(
+            out, OUTPUT_NORMAL,
+            "Metadata unreadable for profile '%s' (%s); "
+            "falling back to git filemodes",
+            opts->profile, error_message(err)
+        );
         error_free(err);
         err = metadata_create_empty(&metadata);
         if (err) goto cleanup;

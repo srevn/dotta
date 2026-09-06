@@ -1459,23 +1459,16 @@ static void compute_orphan_authority(
     if (kind == PATH_KIND_DIRECTORY) {
         /* A directory is claimed by metadata, not by the tree. Lazy-load the
          * tree's metadata.json on the first directory question for this profile,
-         * under the same stored-only-on-success rule as the tree; a tree without
-         * one stores an empty collection, because "no metadata" is a settled
-         * answer (no directory is backed), not a failure to look. */
+         * under the same stored-only-on-success rule as the tree. A tree without
+         * one loads as an empty collection — "no metadata" is a settled answer
+         * (no directory is backed), not a failure to look — so every error here
+         * is a failure to look. */
         if (!entry->metadata) {
             metadata_t *metadata = NULL;
             error_t *err = metadata_load_from_tree(repo, entry->tree, profile, &metadata);
             if (err) {
-                if (err->code != ERR_NOT_FOUND) {
-                    error_free(err);
-                    return;                     /* UNVERIFIED */
-                }
                 error_free(err);
-                err = metadata_create_empty(&metadata);
-                if (err) {
-                    error_free(err);
-                    return;                     /* UNVERIFIED */
-                }
+                return;                         /* UNVERIFIED */
             }
             entry->metadata = metadata;         /* Ownership transfers to the cache */
         }

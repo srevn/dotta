@@ -389,7 +389,7 @@ static error_t *list_files(
             repo, tree, opts->profile, &empty_meta
         );
         if (meta_err) {
-            error_free(meta_err);  /* no metadata: no claims to count */
+            error_free(meta_err);  /* an unreadable sheet: no claims to count */
         } else {
             size_t item_count = 0;
             const metadata_item_t *const *items = metadata_items(empty_meta, &item_count);

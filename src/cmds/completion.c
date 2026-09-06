@@ -190,7 +190,7 @@ void completion_directories(
     metadata_t *metadata = NULL;
     error_t *err = metadata_load_from_branch(repo, branch, &metadata);
     if (err) {
-        error_free(err);  /* not a branch, or no metadata: nothing to offer */
+        error_free(err);  /* not a branch, or an unreadable sheet: nothing to offer */
         return;
     }
 

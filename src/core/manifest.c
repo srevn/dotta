@@ -743,23 +743,18 @@ error_t *manifest_build(
         /* Load this profile's metadata.json from the tree we just opened (avoid
          * a second ref/commit/tree walk). Per-profile lookup is the correctness
          * boundary for attribution: each profile claims its own files and
-         * directories via its own metadata, never via a cross-profile merge.
-         * ERR_NOT_FOUND here means "no metadata blob in this tree" — normal for
-         * old or freshly created profiles, and the claim routine degrades
-         * gracefully (Git-derived defaults stand, no directories). */
+         * directories via its own metadata, never via a cross-profile merge. A
+         * tree without a sheet loads as an empty one (Git-derived defaults stand,
+         * no directories); every error is a sheet that would not load, and the
+         * build fails whole rather than read it as "no claims". */
         metadata_t *profile_metadata = NULL;
         err = metadata_load_from_tree(repo, tree, profile, &profile_metadata);
         if (err) {
-            if (err->code != ERR_NOT_FOUND) {
-                git_tree_free(tree);
-                err = error_wrap(
-                    err, "Failed to load metadata for profile '%s'", profile
-                );
-                goto cleanup;
-            }
-            error_free(err);
-            err = NULL;
-            profile_metadata = NULL;
+            git_tree_free(tree);
+            err = error_wrap(
+                err, "Failed to load metadata for profile '%s'", profile
+            );
+            goto cleanup;
         }
 
         err = manifest_claim_tree(

@@ -1411,9 +1411,9 @@ cleanup:
  *
  * Composed: the branch's tree via gitops_load_branch_tree (which accepts both
  * commit-backed branches and orphan refs pointing directly at a tree), then
- * metadata_load_from_tree. ERR_NOT_FOUND still means "no metadata file in the
- * branch"; a missing branch is the tree loader's failure (ERR_GIT), no longer
- * folded into the same code.
+ * metadata_load_from_tree. A branch without a sheet loads as an empty one, as
+ * the tree loader says; a missing branch is the tree loader's failure (ERR_GIT),
+ * never a sheet with nothing in it.
  */
 error_t *metadata_load_from_branch(
     git_repository *repo,
@@ -1438,14 +1438,10 @@ error_t *metadata_load_from_branch(
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree. This is useful for loading metadata
- * from historical commits or arbitrary tree objects.
- *
- * @param repo Repository (must not be NULL)
- * @param tree Git tree to load from (must not be NULL)
- * @param profile Profile name for error messages (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist in tree)
+ * Loads metadata.json from a specific Git tree — a branch tip or a historical
+ * commit's tree alike. A tree without the entry holds an empty sheet: the
+ * absent-entry arm is the one producer of that answer, so no reader folds a
+ * not-found into a collection of its own.
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,
@@ -1463,17 +1459,15 @@ error_t *metadata_load_from_tree(
     char *json_str = NULL;
     metadata_t *metadata = NULL;
 
-    /* Look for .dotta/metadata.json (use bypath for nested paths) */
+    /* Look for .dotta/metadata.json (use bypath for nested paths). No entry is
+     * a sheet claiming nothing — the settled answer every reader wants — and
+     * only a lookup that failed to look is an error. */
     int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
+    if (git_err == GIT_ENOTFOUND) {
+        return metadata_create_empty(out);
+    }
     if (git_err < 0) {
-        if (git_err == GIT_ENOTFOUND) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Metadata file not found in profile: %s",
-                profile
-            );
-        } else {
-            err = error_from_git(git_err);
-        }
+        err = error_from_git(git_err);
         goto cleanup;
     }
 

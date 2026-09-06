@@ -466,8 +466,8 @@ static char *build_revert_commit_message(
  * Load metadata from a specific commit
  *
  * Composed: the commit's tree via git_commit_tree, then metadata_load_from_tree.
- * If metadata.json doesn't exist in the commit, returns empty metadata (graceful
- * fallback for old commits or commits without metadata).
+ * A commit without a sheet loads as an empty one (the tree loader's contract),
+ * so a revert to a state before any claim was written retires what stands.
  *
  * @param repo Repository (must not be NULL)
  * @param commit Commit to load from (must not be NULL)
@@ -494,13 +494,6 @@ static error_t *load_metadata_from_commit(
 
     error_t *err = metadata_load_from_tree(repo, tree, profile, out);
     git_tree_free(tree);
-
-    if (err && err->code == ERR_NOT_FOUND) {
-        /* No metadata in this commit - return empty metadata (graceful fallback) */
-        error_free(err);
-        return metadata_create_empty(out);
-    }
-
     return err;
 }
 

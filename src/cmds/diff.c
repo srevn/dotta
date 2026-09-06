@@ -1092,10 +1092,11 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 4: Load metadata from that historical tree */
+    /* Step 4: Load metadata from that historical tree. A tree without a sheet
+     * loads as an empty one; a sheet that would not load is folded into one too,
+     * and the historical rows read Git's defaults. */
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
-        /* Graceful: if no metadata in commit, use empty metadata */
         error_free(err);
         err = metadata_create_empty(&metadata);
         if (err) goto cleanup;

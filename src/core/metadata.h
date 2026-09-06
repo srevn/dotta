@@ -379,9 +379,9 @@ error_t *metadata_prune_directories(
  *
  * A key that is absent, held as a directory, or held unstamped answers false.
  *
- * The reader takes no such flag: `content_get_from_blob_oid` classifies the
- * blob's own bytes and never cross-checks an external claim (infra/content.h).
- * This answers "was it stamped encrypted", for a metadata consumer.
+ * The reader takes no such flag: `content_get_from_blob_oid` classifies the blob's
+ * own bytes and never cross-checks an external claim (infra/content.h). This
+ * answers "was it stamped encrypted", for a metadata consumer.
  *
  * Note: the view carries the flag on its rows (manifest_row_t.encrypted, projected
  * from this metadata at build); workspace-backed operations read it there.
@@ -544,14 +544,15 @@ error_t *metadata_capture_ancestors(
 /**
  * Load metadata from profile branch
  *
- * Reads .dotta/metadata.json from the specified branch. If the file doesn't exist,
- * returns ERR_NOT_FOUND (not a fatal error). Rejects version mismatches with
- * clear error message (no migration code).
+ * Reads .dotta/metadata.json from the branch's tip, under the tree loader's
+ * contract: a branch without a sheet loads as an empty one. A branch that cannot
+ * be read is the error the tree loader raises (ERR_GIT), never an empty sheet.
+ * Rejects version mismatches with a clear error message (no migration code).
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist)
+ * @return Error or NULL on success
  */
 error_t *metadata_load_from_branch(
     git_repository *repo,
@@ -562,14 +563,22 @@ error_t *metadata_load_from_branch(
 /**
  * Load metadata from a Git tree
  *
- * Loads metadata.json from a specific Git tree. This is useful for loading metadata
- * from historical commits or arbitrary tree objects.
+ * Loads metadata.json from a specific Git tree — a branch tip or a historical
+ * commit's tree alike.
+ *
+ * A tree without a sheet holds an empty sheet. The absent entry is a settled
+ * answer (nothing claimed), not a failure to look, and this loader is its one
+ * producer: a reader receives a collection on every success and never folds a
+ * not-found into one of its own. Every error is real — a lookup that failed, an
+ * unreadable blob, a document the parser refuses (a version mismatch, a duplicate
+ * key) — and a reader that folds one into an empty sheet is reading a corrupt
+ * sheet as "no claims".
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
  * @param profile Profile name for error messages (must not be NULL)
  * @param out Metadata (must not be NULL, caller must free with metadata_free)
- * @return Error or NULL on success (ERR_NOT_FOUND if file doesn't exist in tree)
+ * @return Error or NULL on success
  */
 error_t *metadata_load_from_tree(
     git_repository *repo,

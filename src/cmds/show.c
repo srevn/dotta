@@ -285,11 +285,11 @@ static error_t *show_file(
         }
     }
 
-    /* Step 2: Load metadata from that same tree for encryption-state validation */
+    /* Step 2: Load metadata from that same tree for encryption-state validation.
+     * A tree without a sheet loads as an empty one; a sheet that would not load
+     * is folded into one too, and validated against nothing. */
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
-        /* Non-fatal: metadata file might not exist yet (new profile) */
-        /* Create empty metadata for validation (won't have file entries) */
         error_free(err);
         err = metadata_create_empty(&metadata);
         if (err) {

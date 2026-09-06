@@ -256,25 +256,17 @@ static error_t *resolve_removal_claims(
 
     err = metadata_load_from_branch(repo, profile, &metadata);
     if (err) {
-        if (err->code != ERR_NOT_FOUND) {
-            err = error_wrap(
-                err, "Failed to load metadata for profile '%s'", profile
-            );
-            goto cleanup;
-        }
-        /* No metadata file: no directory claims */
-        error_free(err);
-        err = NULL;
+        err = error_wrap(
+            err, "Failed to load metadata for profile '%s'", profile
+        );
+        goto cleanup;
     }
 
     size_t item_count = 0;
     size_t dir_count = 0;
-    const metadata_item_t *const *items = NULL;
-    if (metadata) {
-        items = metadata_items(metadata, &item_count);
-        for (size_t i = 0; i < item_count; i++) {
-            if (items[i]->kind == PATH_KIND_DIRECTORY) dir_count++;
-        }
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i]->kind == PATH_KIND_DIRECTORY) dir_count++;
     }
 
     removal_claim_t *claims = NULL;
@@ -1502,9 +1494,9 @@ static error_t *delete_profile_branch(
     /* The hook universe: the tree's blobs, then the branch metadata's directory
      * claims — the same both-kind universe the file-removal subcommand passes
      * to its hooks. Same-profile rule as the claims universe: a key the tree
-     * holds as a blob is the blob's, the stale item is skipped. Metadata that
-     * will not load (or does not exist) degrades to the files-only universe —
-     * the deletion does not refuse over it. */
+     * holds as a blob is the blob's, the stale item is skipped. A branch without
+     * a sheet has no directory claims; a sheet that will not load degrades to
+     * the files-only universe — the deletion does not refuse over it. */
     hook_storage = string_array_new(0);
     if (hook_storage) {
         for (size_t i = 0; i < files->count; i++) {

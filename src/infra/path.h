@@ -101,11 +101,12 @@ error_t *path_input_resolve(
  * with `--target /tmp/web` — is recognised as inside without being re-prepended
  * to nonsense.
  *
- * Pairs with path_input_resolve. This function stops at the absolute filesystem
- * path; path_input_resolve continues through mount classification to a storage
- * path. Callers that walk directories (need filesystem paths to opendir / stat)
- * use this; callers that query Git data (need storage paths) use the resolver.
- * The output is fed into mount_classify per-file when the storage path is needed.
+ * Pairs with path_input_resolve, whose filesystem arm is this function with no
+ * root: it stops at the absolute filesystem path, the resolver continues through
+ * mount classification to a storage path. Callers that walk directories (need
+ * filesystem paths to opendir / stat) use this; callers that query Git data (need
+ * storage paths) use the resolver. The output is fed into mount_classify per-file
+ * when the storage path is needed.
  *
  * Storage-path inputs ("home/", "root/", "custom/") are not handled here — those
  * are validated and consumed via mount_validate_storage + mount_resolve at the

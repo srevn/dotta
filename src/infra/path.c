@@ -202,22 +202,24 @@ error_t *path_input_normalize(
         if (err) goto cleanup;
         to_absolute = expanded;
     } else if (has_target) {
-        /* Re-root: prepend target_root unless input is already inside it (raw
-         * or canonical surface form). Uniform compose for relative ("etc/foo")
-         * and host-absolute ("/etc/foo") — the leading '/' of an absolute input
-         * doubles as the join separator, so absolute uses an empty separator
+        /* Re-root: prepend target_root unless the input is the shell's — spelled
+         * from here (`./x`, `../x`, a dotfile's `.x`), the way the resolver reads
+         * a leading '.' (input_is_relative): the file in front of the user,
+         * wherever they stand — or already inside the target (raw or canonical
+         * surface form). Uniform compose for a bare relative path ("etc/foo")
+         * and a host-absolute one ("/etc/foo") — the leading '/' of an absolute
+         * input doubles as the join separator, so absolute uses an empty separator
          * and relative an explicit "/".
          *
          *   etc/foo                   -> <target>/etc/foo
          *   /etc/foo                  -> <target>/etc/foo
+         *   ./x, ../x, .x             -> the working directory's (not composed)
          *   /<target>/etc/foo         -> /<target>/etc/foo (already inside)
          *   /<target-canonical>/.../X -> /<target-canonical>/.../X
          *                                (canonical alias inside) */
-        bool already_inside =
-            path_under_dir(input, target_root) ||
-            path_under_dir(input, target_canonical);
-
-        if (!already_inside) {
+        if (input[0] != '.' &&
+            !path_under_dir(input, target_root) &&
+            !path_under_dir(input, target_canonical)) {
             const char *separator = (input[0] == '/') ? "" : "/";
             composed = str_format(
                 "%s%s%s", target_root, separator, input
@@ -241,12 +243,11 @@ error_t *path_input_normalize(
 
     /* Post-condition: when target_root applies, the normalized output must remain
      * inside it. Lexical `..` resolution can move an already-inside path back
-     * outside (e.g., `/jail/../etc/secret`
-     * -> `/etc/secret`), and a relative `../foo` joined to `/jail`
-     * normalizes to `/foo`. One uniform check catches every traversal escape —
-     * no per-shape pre-validation needed in the compose step. Tilde inputs are
-     * exempt: HOME is its own namespace, never required to live inside
-     * target_root. */
+     * outside (e.g., `/jail/../etc/secret` -> `/etc/secret`), and a path spelled
+     * from here resolves wherever the user stands — `./x` typed outside the target,
+     * or `../x` walked out of it. One uniform check catches every escape — no
+     * per-shape pre-validation needed in the compose step. Tilde inputs are exempt:
+     * HOME is its own namespace, never required to live inside target_root. */
     if (has_target && !is_tilde) {
         if (!path_under_dir(*out, target_root) &&
             !path_under_dir(*out, target_canonical)) {

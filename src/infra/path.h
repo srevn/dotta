@@ -71,12 +71,14 @@ error_t *path_input_resolve(
  * Normalize a CLI filesystem-path argument to an absolute path, optionally
  * re-rooted under `target_root`.
  *
- * When `target_root` is non-NULL, it acts as a virtual root: every typed path
- * is resolved as if the user were operating inside that directory (chroot-style).
+ * When `target_root` is non-NULL, it acts as a virtual root: a typed path is
+ * resolved as if the user were operating inside that directory (chroot-style).
  * Generalises any "operate within this tree" usage — chroots, container overlays,
- * fakeroot trees, vendor directories, staging areas, project subroots. Tilde
- * paths bypass the re-rooting: `~/X` always lands under $HOME, since HOME is
- * its own namespace.
+ * fakeroot trees, vendor directories, staging areas, project subroots. Two
+ * spellings are the shell's and never re-rooted: a tilde path (`~/X` always lands
+ * under $HOME, its own namespace) and a path spelled from here — `./x`, `../x`,
+ * a dotfile's `.x` — which is the file in front of the user, wherever they stand,
+ * and must land inside the target to be taken. A bare relative path is the jail's.
  *
  * Compose model (target_root="/jail", canonical="/private/jail"):
  *   ~/file                  -> $HOME/file       (tilde bypass)
@@ -88,6 +90,11 @@ error_t *path_input_resolve(
  *                                                form)
  *   /jail/../etc/secret     -> ERROR            (escapes after `..`
  *                                                resolution)
+ *   cd /jail/etc/sub; ./dotted -> /jail/etc/sub/dotted   (from here)
+ *   cd /jail/etc/sub; ../x     -> /jail/etc/x            (from here, still inside)
+ *   cd /jail;         .        -> /jail                  (the target: a root)
+ *   cd ~;             ./foo    -> ERROR                  (from here, outside the target)
+ *   cd /jail/etc;     etc/foo  -> /jail/etc/foo          (bare: the jail's)
  *
  * Without `target_root`:
  *   ~/file                  -> $HOME/file
@@ -115,9 +122,9 @@ error_t *path_input_resolve(
  *
  * @param input        User-provided path (filesystem or tilde; must
  *                     not be NULL)
- * @param target_root  Optional virtual root that re-roots every
- *                     non-tilde input. NULL or empty disables re-rooting; relative
- *                     inputs then resolve via the actual CWD.
+ * @param target_root  Optional virtual root that re-roots every input not the
+ *                     shell's (tilde, or spelled from here). NULL or empty disables
+ *                     re-rooting; relative inputs then resolve via the actual CWD.
  * @param out          Normalized absolute path (caller must free,
  *                     must not be NULL)
  * @return Error or NULL on success

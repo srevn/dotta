@@ -1885,7 +1885,8 @@ const args_command_t spec_add = {
         "--target <dir> binds the profile's custom/ tree at that directory.\n"
         "A profile has one target; 'dotta profile enable --target' moves it.\n"
         "Paths are then read as the jail reads them: etc/foo and /etc/foo\n"
-        "both mean <target>/etc/foo.\n"
+        "both mean <target>/etc/foo. A path spelled from here (./x, ../x)\n"
+        "is read where you stand.\n"
         "\n"
         "Metadata (mode, owner) is captured outside HOME.\n",
     .notes       =

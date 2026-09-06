@@ -28,9 +28,9 @@
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/upstream.h"
@@ -491,16 +491,34 @@ bool completion_commits_at(
  * Filesystem paths under a relocatable root
  */
 bool completion_paths_under(FILE *out, const char *root, const char *current) {
-    /* Mirrors path_input_normalize (infra/path.c): no root, a tilde token, or a
-     * token already inside the root — the path is what the shell sees. */
-    if (root == NULL || root[0] == '\0' || current[0] == '~') return false;
+    /* Mirrors path_input_normalize (infra/path.c): no root, a tilde token, a
+     * token spelled from here, or a token already inside the root — the path is
+     * what the shell sees. */
+    if (root == NULL || root[0] == '\0' || current[0] == '~' || current[0] == '.') {
+        return false;
+    }
 
-    size_t root_len = strlen(root);
-    while (root_len > 0 && root[root_len - 1] == '/') root_len--;
-    if (root_len == 0) return false;   /* `--target /` re-roots nothing */
+    /* The root as the command reads it — absolute, or relative to the working
+     * directory the shell completes in — so the "already inside" check reads a
+     * relative root against an absolute token. A root the command will refuse
+     * has nothing to offer under it. */
+    char *absolute = NULL;
+    error_t *err = path_input_normalize(root, NULL, &absolute);
+    if (err) {
+        error_free(err);
+        return false;
+    }
 
-    if (strncmp(current, root, root_len) == 0 &&
+    size_t root_len = strlen(absolute);
+    while (root_len > 0 && absolute[root_len - 1] == '/') root_len--;
+    if (root_len == 0) {
+        free(absolute);
+        return false;   /* `--target /` re-roots nothing */
+    }
+
+    if (strncmp(current, absolute, root_len) == 0 &&
         (current[root_len] == '\0' || current[root_len] == '/')) {
+        free(absolute);
         return false;
     }
 
@@ -515,11 +533,14 @@ bool completion_paths_under(FILE *out, const char *root, const char *current) {
     const char *name = slash ? slash + 1 : rel;
     size_t name_len = strlen(name);
 
-    char *dir = str_format("%.*s/%.*s", (int) root_len, root, (int) dir_len, rel);
+    char *dir = str_format(
+        "%.*s/%.*s", (int) root_len, absolute, (int) dir_len, rel
+    );
+    free(absolute);
     if (dir == NULL) return true;
 
     string_array_t *entries = NULL;
-    error_t *err = fs_list_dir(dir, &entries);
+    err = fs_list_dir(dir, &entries);
     if (err) {
         error_free(err);   /* nothing under there: the root applies, nothing to offer */
         free(dir);

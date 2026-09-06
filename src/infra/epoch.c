@@ -399,18 +399,17 @@ error_t *epoch_push(
     /* Skip the network round-trip when the local ref does not exist — `dotta
      * init` populates it but a `dotta sync` on a freshly-cloned encryption-disabled
      * repo may not have one yet. */
-    git_reference *local_ref = NULL;
-    int git_err = git_reference_lookup(&local_ref, repo, EPOCH_REF);
-    if (git_err == GIT_ENOTFOUND) {
+    bool exists = false;
+    error_t *err = gitops_reference_exists(repo, EPOCH_REF, &exists);
+    if (err) {
+        return err;
+    }
+    if (!exists) {
         return NULL;
     }
-    if (git_err < 0) {
-        return error_from_git(git_err);
-    }
-    git_reference_free(local_ref);
 
     git_remote *remote = NULL;
-    git_err = git_remote_lookup(&remote, repo, remote_name);
+    int git_err = git_remote_lookup(&remote, repo, remote_name);
     if (git_err < 0) {
         return error_from_git(git_err);
     }

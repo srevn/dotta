@@ -132,6 +132,29 @@ error_t *gitops_discover_and_open(git_repository **out, const char *start_path) 
 /**
  * Branch/Reference operations
  */
+error_t *gitops_reference_exists(
+    git_repository *repo, const char *refname, bool *exists
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(refname);
+    CHECK_NULL(exists);
+    CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
+
+    git_reference *ref = NULL;
+    int rc = git_reference_lookup(&ref, repo, refname);
+    if (rc == GIT_ENOTFOUND) {
+        *exists = false;
+        return NULL;
+    }
+    if (rc < 0) {
+        return error_from_git(rc);
+    }
+    git_reference_free(ref);
+
+    *exists = true;
+    return NULL;
+}
+
 error_t *gitops_branch_exists(
     git_repository *repo, const char *name, bool *exists
 ) {
@@ -140,27 +163,13 @@ error_t *gitops_branch_exists(
     CHECK_NULL(exists);
     CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
-    git_reference *ref = NULL;
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_branch_refname(refname, sizeof(refname), name);
-    if (err_build) {
-        return err_build;
+    error_t *err = gitops_branch_refname(refname, sizeof(refname), name);
+    if (err) {
+        return err;
     }
 
-    int err = git_reference_lookup(&ref, repo, refname);
-    if (err == GIT_ENOTFOUND) {
-        *exists = false;
-        return NULL;
-    }
-
-    if (err < 0) {
-        return error_from_git(err);
-    }
-
-    git_reference_free(ref);
-
-    *exists = true;
-    return NULL;
+    return gitops_reference_exists(repo, refname, exists);
 }
 
 error_t *gitops_branch_blocker(

@@ -118,12 +118,29 @@ error_t *gitops_discover_repository(char **out, const char *start_path);
 error_t *gitops_discover_and_open(git_repository **out, const char *start_path);
 
 /**
- * Check if branch exists
+ * Check if a reference exists
  *
  * The singular: the ref resolves, or it is absent. Anything else — a loose ref
  * that will not open, one whose bytes are not an OID — is the error, never an
  * absence, and every caller propagates it: a bool that read it as "no" once sent
- * the user to fetch a profile that was here.
+ * the user to fetch a profile that was here. One lookup answers it for any ref
+ * (a branch, the epoch); a name outside refs/heads is the caller's to spell in
+ * full.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param refname Full reference name (must not be NULL or empty)
+ * @param exists Output boolean (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitops_reference_exists(
+    git_repository *repo, const char *refname, bool *exists
+);
+
+/**
+ * Check if branch exists
+ *
+ * gitops_reference_exists of refs/heads/<name>, the name through the branch rule
+ * (gitops_branch_refname) on the way.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name (must not be NULL)

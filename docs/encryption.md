@@ -214,7 +214,7 @@ $ dotta init --strength paranoid
 Error: Repository epoch 'refs/dotta/epoch' is missing and encrypted files may be sealed under it
 
 Minting a new one would seal them away permanently. Restore the ref instead:
-  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'
+  dotta git fetch origin '+refs/dotta/epoch:refs/dotta/epoch'
 or copy it from a machine that still has this repository.
 ```
 

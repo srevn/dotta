@@ -306,7 +306,7 @@ error_t *epoch_init(
                 "be sealed under it\n\n"
                 "Minting a new one would seal them away permanently. Restore "
                 "the ref instead:\n"
-                "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
+                "  dotta git fetch origin '" EPOCH_RESTORE_REFSPEC "'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
             );
@@ -337,7 +337,7 @@ error_t *epoch_init(
                 "sealed under it\n\n"
                 "Minting a new one would seal them away permanently. Restore "
                 "the ref instead:\n"
-                "  dotta git fetch origin '+refs/dotta/*:refs/dotta/*'\n"
+                "  dotta git fetch origin '" EPOCH_RESTORE_REFSPEC "'\n"
                 "or copy it from a machine that still has this repository.",
                 EPOCH_REF
             );

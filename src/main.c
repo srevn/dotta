@@ -172,15 +172,14 @@ static error_t *open_run(
                  * word and in nothing else (epoch.h). Minting a fresh epoch is
                  * safe only on a repository that holds no encrypted files, and
                  * `dotta init` is what decides that — so the user never has to
-                 * answer it before acting. The fetch carries a '+': an epoch
-                 * commit has no parents, so restoring over a ref that is present
-                 * but damaged is rejected as non-fast-forward without it. */
+                 * answer it before acting. The fetch is the epoch's own restore
+                 * refspec (epoch.h), forced and naming the one ref. */
                 err = error_wrap(
                     err,
                     "Encryption is enabled but this repository's epoch (%s) %s; "
                     "every encrypted file is sealed under it\n"
                     "  - Restore it: dotta git fetch origin "
-                    "'+refs/dotta/*:refs/dotta/*'\n"
+                    "'" EPOCH_RESTORE_REFSPEC "'\n"
                     "  - Or mint a fresh one with 'dotta init', which refuses "
                     "if any encrypted file would be orphaned\n"
                     "  - Or set encryption.enabled = false to work without "

@@ -1385,11 +1385,8 @@ static void epoch_emit_conflict(output_t *out) {
  * finding from the conflict and so a different remedy — none of that one's three
  * hints fit a ref that is merely unreadable, where the salt blob is often intact
  * and one fetch away from whole. This is `epoch_init`'s refusal over the identical
- * state, said by the other verb.
- *
- * The refspec is forced, because an epoch commit is an orphan: over a ref that
- * is present but unreadable a plain fetch is rejected as non-fast-forward and
- * restores nothing.
+ * state, said by the other verb. The fetch is the epoch's own restore refspec
+ * (epoch.h), forced and naming the one ref.
  */
 static void epoch_emit_damaged(output_t *out) {
     output_warning(
@@ -1401,7 +1398,7 @@ static void epoch_emit_damaged(output_t *out) {
     output_hint(
         out, OUTPUT_NORMAL,
         "Restore the ref rather than replacing it: dotta git fetch origin "
-        "'+refs/dotta/*:refs/dotta/*'"
+        "'" EPOCH_RESTORE_REFSPEC "'"
     );
 }
 

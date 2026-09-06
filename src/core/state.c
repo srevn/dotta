@@ -1043,11 +1043,11 @@ error_t *state_disable_profile(
 /**
  * Reorder enabled profiles to match a new precedence order
  *
- * Reorder-only contract: every name in `profiles` must already be a row in
- * enabled_profiles. Additions and removals belong to the membership primitives
- * (state_enable_profile / state_disable_profile). A name not currently enabled
- * returns ERR_INVALID_ARG and leaves the table untouched — closing the silent
- * (custom-profile, NULL-target) trap at the write boundary.
+ * `profiles` is the enabled set, permuted: every name must be a row, and the
+ * list must be as long as the table — the rewrite below re-inserts exactly the
+ * names given, so a shorter list would delete the rows it left out. Additions
+ * and removals belong to the membership primitives (state_enable_profile /
+ * state_disable_profile). Both refusals leave the table untouched.
  *
  * Per-row state (the target) is read from the row cache and preserved across
  * the DELETE + re-INSERT rewrite. Only the position column changes meaning per
@@ -1088,8 +1088,7 @@ error_t *state_reorder_profiles(
     /* Precondition: every name in `profiles` must already be enabled. Reorder
      * permutes membership; it never adds or removes rows. A name missing from
      * the cache means the caller wants to add a profile — they should call
-     * state_enable_profile first, which is the only primitive that can record a
-     * target for custom/-bearing profiles. */
+     * state_enable_profile first. */
     for (size_t i = 0; i < profiles->count; i++) {
         if (!find_profile_entry(state, profiles->items[i])) {
             return ERROR(
@@ -1099,6 +1098,20 @@ error_t *state_reorder_profiles(
                 profiles->items[i]
             );
         }
+    }
+
+    /* ...and every row must be named: the rewrite re-inserts exactly the names
+     * given, so a shorter list would delete the rows it left out. Every name a
+     * row, the counts equal, and UNIQUE(name) refusing a name twice at the
+     * re-insert make the list the enabled set, permuted. */
+    if (profiles->count != state->profile_entry_count) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "state_reorder_profiles: %zu names for %zu enabled profiles "
+            "(reorder permutes the enabled set; use state_disable_profile to "
+            "remove a profile)",
+            profiles->count, state->profile_entry_count
+        );
     }
 
     /* Delete all existing rows under the caller's transaction. On failure, SQL

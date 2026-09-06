@@ -1371,7 +1371,10 @@ cleanup:
 /**
  * Profile reorder subcommand
  *
- * Changes the order of enabled profiles, which affects layering precedence.
+ * Rewrites this machine's order, which is the precedence: the user names every
+ * enabled profile once, in the order wanted. Three checks make the list the enabled
+ * set permuted — no name twice, every name enabled, the counts equal — and the
+ * state's own boundary refuses the same (state_reorder_profiles).
  */
 static error_t *profile_reorder(
     const dotta_ctx_t *ctx,
@@ -1413,16 +1416,6 @@ static error_t *profile_reorder(
         goto cleanup;
     }
 
-    /* Edge case: single profile */
-    if (current_enabled->count == 1) {
-        if (!opts->quiet) {
-            output_info(
-                out, OUTPUT_NORMAL, "Only one enabled profile, nothing to reorder"
-            );
-        }
-        goto cleanup;  /* Success, but no-op */
-    }
-
     /* Validation 1: Check for duplicates in new order */
     for (size_t i = 0; i < opts->profile_count; i++) {
         for (size_t j = i + 1; j < opts->profile_count; j++) {
@@ -1439,14 +1432,7 @@ static error_t *profile_reorder(
 
     /* Validation 2: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
-        bool is_enabled = false;
-        for (size_t j = 0; j < current_enabled->count; j++) {
-            if (strcmp(opts->profiles[i], current_enabled->items[j]) == 0) {
-                is_enabled = true;
-                break;
-            }
-        }
-        if (!is_enabled) {
+        if (!string_array_contains(current_enabled, opts->profiles[i])) {
             err = ERROR(
                 ERR_VALIDATION, "Profile '%s' is not enabled\n"
                 "Hint: Only enabled profiles can be reordered."
@@ -1457,7 +1443,9 @@ static error_t *profile_reorder(
         }
     }
 
-    /* Validation 3: Profile count must match */
+    /* Validation 3: Profile count must match. With no name twice and every name
+     * enabled, equal counts make the named set the enabled set — nothing is left
+     * to check for. */
     if (opts->profile_count != current_enabled->count) {
         err = ERROR(
             ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
@@ -1465,25 +1453,6 @@ static error_t *profile_reorder(
             current_enabled->count, opts->profile_count
         );
         goto cleanup;
-    }
-
-    /* Validation 4: All currently enabled profiles must be included */
-    for (size_t i = 0; i < current_enabled->count; i++) {
-        const char *enabled_profile = current_enabled->items[i];
-        bool found = false;
-        for (size_t j = 0; j < opts->profile_count; j++) {
-            if (strcmp(opts->profiles[j], enabled_profile) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            err = ERROR(
-                ERR_VALIDATION, "Missing enabled profile '%s' from reorder list\n"
-                "Hint: All enabled profiles must be included", enabled_profile
-            );
-            goto cleanup;
-        }
     }
 
     /* Check if order actually changed (idempotency) */

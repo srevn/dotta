@@ -411,38 +411,34 @@ error_t *state_disable_profile(
  * column reflects the order of `profiles`. Per-row state (the target) is preserved
  * across the rewrite — only precedence changes.
  *
- * REORDER-ONLY CONTRACT:
- *   Reorder permutes membership; it does not add or remove rows. Every name in
- *   `profiles` MUST already be a row in enabled_profiles, and the set of names
- *   MUST equal the current enabled set (any caller passing a different set is a
- *   bug — the function rejects unknown names at the boundary but does not
- *   synthesize the inverse "rows you forgot to include" check; that's the caller's
- *   responsibility).
- *
- *   Additions belong to state_enable_profile. Removals belong to
- *   state_disable_profile. A name not currently enabled returns ERR_INVALID_ARG
- *   and leaves the table untouched — closing the silent (custom-profile,
- *   NULL-target) trap at the write boundary.
+ * `profiles` is the enabled set, permuted — every enabled name once, and nothing
+ * else — and the boundary refuses anything less: a name that is not a row
+ * (ERR_INVALID_ARG) and a list shorter than the table (ERR_INVALID_ARG), because
+ * the rewrite re-inserts exactly the names given and a shorter list would delete
+ * the rows it left out; a name twice fails the re-insert on UNIQUE(name). Additions
+ * belong to state_enable_profile, removals to state_disable_profile. The table
+ * is untouched on every refusal.
  *
  * Direct callers:
- *   - profile reorder: user-driven precedence change.
+ *   - profile reorder: the user's whole order, validated there — every enabled
+ *                      name once.
  *   - interactive save: persists the new order after the TUI's own diff has already
  *                       applied additions/removals via the membership primitives.
  *
  * Preconditions:
  *   - state MUST have an active write transaction.
- *   - profiles MUST NOT be NULL. profiles->count may be 0 (vacuous reorder).
- *   - Every name in profiles MUST already be in the row cache.
+ *   - profiles MUST NOT be NULL. profiles->count may be 0 (vacuous reorder of
+ *     an empty table).
  *
  * Postconditions:
  *   - enabled_profiles rows hold positions 0..N-1 in the order given.
- *   - target preserved on every retained row.
+ *   - target preserved on every row.
  *   - enabled_at timestamp refreshed for every row.
  *   - Row cache invalidated; next peek reloads.
  *   - Transaction remains open (caller commits).
  *
  * @param state State (must not be NULL)
- * @param profiles Profile names in desired order (must not be NULL)
+ * @param profiles The enabled names in the desired order (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_reorder_profiles(state_t *state, const string_array_t *profiles);

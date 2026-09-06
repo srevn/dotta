@@ -685,18 +685,18 @@ static error_t *create_commit(
  * fail together (automatic rollback on error).
  *
  * A new branch's enabled_profiles row can pre-exist only as a leftover of a branch
- * deleted behind it. state_enable_profile is an UPSERT — the row is re-bound to
- * this add's target and keeps its position — and whatever records the old branch
- * left are orphans the next load reads, since the new HEAD does not have them.
+ * deleted behind it. state_enable_profile is an UPSERT — the row keeps its
+ * position, takes this add's target when it brings one and keeps the leftover's
+ * otherwise — and whatever records the old branch left are orphans the next load
+ * reads, since the new HEAD does not have them.
  *
  * Target Update (existing profile):
  *   When adding custom/ files to an already-enabled profile, the target must be
  *   stored in state BEFORE the view is built — the same target-before-build
- *   ordering as the new profile's enable. Only done when target is non-NULL to
- *   avoid clearing an existing target when adding home/ or root/ files. cmd_add's
- *   pre-flight has already refused the case where target differs from any existing
- *   binding, so reaching the UPSERT means either no prior binding or an idempotent
- *   re-bind to the same value.
+ *   ordering as the new profile's enable. Written only when the run brought one;
+ *   the pre-flight refused a differing value, so the UPSERT binds an unbound
+ *   row or repeats an equal one (a NULL would clear nothing either way: the UPSERT
+ *   keeps the row's target for one).
  *
  * Ownership:
  *   Captured rows get deployed_at = time(NULL) because ADD captures files and
@@ -1002,19 +1002,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = mount_validate_target(opts->target);
         if (err) goto cleanup;
 
-        /* Pre-flight: refuse silent re-targeting. If the profile is already enabled
-         * with a different target, fail BEFORE the Git commit so the user does
-         * not end up with a wasted commit + stale binding. Setting a target on
-         * a profile that previously had none is fine. */
+        /* Refuse a silent move, before the commit it would have shaped. A branch
+         * has one custom/ namespace, so a profile holds one relocatable tree:
+         * enable is the verb that moves it, in place, and a second tree is a
+         * second profile. Both ways out are named — the first for the user who
+         * moved the tree, the second for the one who has two. Binding a row that
+         * has no target, or repeating its own, is fine. */
         const char *existing = state_peek_profile_target(state, opts->profile);
-        if (existing && existing[0] != '\0' && strcmp(existing, opts->target) != 0) {
+        if (existing && strcmp(existing, opts->target) != 0) {
             err = ERROR(
                 ERR_INVALID_ARG,
-                "Profile '%s' already has deployment target '%s'.\n"
-                "Cannot change target via 'dotta add'. To re-target:\n"
-                "  dotta profile disable %s\n"
-                "  dotta profile enable %s --target %s",
-                opts->profile, existing, opts->profile, opts->profile, opts->target
+                "Profile '%s' is bound at %s, and a profile has one target\n"
+                "  dotta profile enable %s --target %s    moves it; "
+                "the next apply relocates its paths\n"
+                "  dotta add <profile> --target %s <path>    "
+                "a second tree is a second profile",
+                opts->profile, existing, opts->profile, opts->target, opts->target
             );
             goto cleanup;
         }
@@ -1169,22 +1172,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Check if input is a storage path */
         const mount_spec_t *spec = mount_spec_for_path(file);
         if (spec) {
-
-            /* per_profile labels (custom/) require --target. Pre-validate at
-             * the call site so the user gets the directive "pass --target" message
-             * rather than mount_resolve's generic "no deployment target for
-             * profile" surface. */
-            if (spec->per_profile) {
-                if (!opts->target || opts->target[0] == '\0') {
-                    err = ERROR(
-                        ERR_INVALID_ARG, "Storage path '%s' requires --target flag\n"
-                        "Usage: dotta add -p %s --target /path/to/target %s",
-                        file, opts->profile, file
-                    );
-                    goto cleanup;
-                }
-            }
-
             /* CLI input is the write boundary for storage-path arguments. Validate
              * the syntactic shape here so mount_resolve below can trust its input
              * — establishes the invariant once and downstream readers (manifest
@@ -1195,12 +1182,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Convert storage path to filesystem path via the mount table. For
-             * home/ and root/ the profile is ignored; for custom/ the per-profile
-             * target binding is consulted. The earlier spec->per_profile
-             * precondition above (--target check) guarantees the lookup binds —
-             * surface a contract violation via ERR_INTERNAL if a future change
-             * weakens that invariant. */
+            /* Its location here, through the table: home/ and root/ resolve for
+             * every profile, custom/ through this one's binding — the row's, or
+             * the flag's. A custom/ path with no binding names nothing on this
+             * machine, and the way to give it one is the flag. */
             mount_resolve_outcome_t outcome;
             const char *fs_path = NULL;
             err = mount_resolve(
@@ -1210,11 +1195,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
             }
-            if (outcome != MOUNT_RESOLVE_BOUND) {
+            if (outcome == MOUNT_RESOLVE_UNBOUND) {
                 err = ERROR(
-                    ERR_INTERNAL,
-                    "mount_resolve unexpectedly UNBOUND for '%s' "
-                    "after --target precondition", file
+                    ERR_INVALID_ARG,
+                    "'%s' has no location for '%s' on this machine\n"
+                    "  dotta add %s --target /path %s",
+                    file, opts->profile, opts->profile, file
                 );
                 goto cleanup;
             }
@@ -1686,14 +1672,25 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
             output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
         } else {
-            /* Existing disabled profile - original behavior */
+            /* Existing disabled profile: the tree is shaped, no row holds a
+             * binding, and the hint names what enable will accept — the target
+             * as the user typed it, when the run brought one. */
             output_info(
                 out, OUTPUT_NORMAL, "Profile not enabled - manifest not updated"
             );
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to activate and deploy",
-                opts->profile
-            );
+            if (opts->target) {
+                output_hint(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta profile enable %s --target %s' to deploy it here",
+                    opts->profile, opts->target
+                );
+            } else {
+                output_hint(
+                    out, OUTPUT_NORMAL,
+                    "Run 'dotta profile enable %s' to activate and deploy",
+                    opts->profile
+                );
+            }
         }
     }
 

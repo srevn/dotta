@@ -791,7 +791,7 @@ static error_t *load_profile_entries(state_t *state) {
         }
 
         const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
-        const char *prefix_db = (const char *) sqlite3_column_text(stmt, 1);
+        const char *target_db = (const char *) sqlite3_column_text(stmt, 1);
 
         if (!name_db) {
             err = ERROR(ERR_STATE_INVALID, "Profile name is NULL");
@@ -804,9 +804,9 @@ static error_t *load_profile_entries(state_t *state) {
          * otherwise leak its successful allocations. */
         state_profile_entry_t *row = &entries[i];
         row->name = strdup(name_db);
-        row->target = prefix_db ? strdup(prefix_db) : NULL;
+        row->target = target_db ? strdup(target_db) : NULL;
 
-        if (!row->name || (prefix_db && !row->target)) {
+        if (!row->name || (target_db && !row->target)) {
             free(row->name);
             free(row->target);
             err = ERROR(ERR_MEMORY, "Failed to copy enabled profile row");
@@ -974,12 +974,16 @@ error_t *state_enable_profile(
      * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table MAX returns
      * NULL and the COALESCE drops to 0, matching the 0-based position assignment
      * used by state_reorder_profiles. On UPSERT conflict (profile already enabled)
-     * the position is kept — only the target and the timestamp move. */
+     * the position is kept and the timestamp moves; the target moves only when
+     * one is given — `COALESCE(?2, target)` keeps the row's own for a NULL, so
+     * no enable can unbind, and the one way a row loses its target is the DELETE
+     * in state_disable_profile. */
     const char *sql =
         "INSERT INTO enabled_profiles (name, target, enabled_at, position) "
         "VALUES (?1, ?2, ?3, "
         "  (SELECT COALESCE(MAX(position) + 1, 0) FROM enabled_profiles)) "
-        "ON CONFLICT(name) DO UPDATE SET target = ?2, enabled_at = ?3";
+        "ON CONFLICT(name) DO UPDATE SET "
+        "  target = COALESCE(?2, target), enabled_at = ?3";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);

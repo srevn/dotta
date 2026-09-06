@@ -496,13 +496,12 @@ static error_t *plan_classify(
             plan->needs_enable[i] = true;
             continue;
         }
-        /* Retained: re-enable only when the user changed the target in-session.
-         * Strict equality, NULL == NULL counts as same. */
+        /* Retained: re-enable only when the pending target names something the
+         * row does not hold. A NULL can change nothing — the UPSERT keeps the
+         * row's target for one (state_enable_profile), and no key unbinds. */
         const char *a = it->target;
         const char *b = persisted_target;
-        bool same_target = (a == NULL && b == NULL) ||
-            (a != NULL && b != NULL && strcmp(a, b) == 0);
-        plan->needs_enable[i] = !same_target;
+        plan->needs_enable[i] = a != NULL && (b == NULL || strcmp(a, b) != 0);
     }
 
     return NULL;

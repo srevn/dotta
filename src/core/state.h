@@ -18,6 +18,16 @@
  * Everything else — what should stand at a path, from whom — is computed from
  * Git at every load (core/manifest.h) and never stored.
  *
+ * The enabled set is this machine's mount table, one line of fstab per row: the
+ * name is what is mounted (the branch — the repository is the device, and knows
+ * nothing of where any machine mounts it), the position is the mount order (later
+ * mounts stack on top: later wins), and the target is where the profile's own
+ * tree — its custom/ paths — stands here. The target is part of the enablement,
+ * not of the branch: bound by `enable --target` and `add --target`, moved in
+ * place by `enable --target`, kept by an enable that names none, and gone with
+ * the row when the profile is disabled. A row without one leaves that tree
+ * unmounted; the build holds its claims (manifest_unbound).
+ *
  * Database location: .git/dotta.db
  *
  * Schema:
@@ -242,7 +252,7 @@ typedef struct {
  */
 typedef struct {
     char *name;              /* Profile name (owned) */
-    char *target;            /* Deployment target for custom/ files (owned); NULL when unset */
+    char *target;            /* Where the profile's custom/ tree stands here (owned); NULL when unbound */
 } state_profile_entry_t;
 
 /**
@@ -356,10 +366,13 @@ bool state_locked(const state_t *state);
 void state_free(state_t *state);
 
 /**
- * Enable profile with optional deployment target
+ * Enable, or re-enable with a binding
  *
- * If profile already enabled, updates its target (UPSERT behavior). Position
- * assigned automatically as MAX(position) + 1 for new profiles.
+ * A new name appends a row at the end of the order; an enabled name keeps its
+ * position (UPSERT). `target` binds the profile's custom/ tree here; NULL (or
+ * empty) names no target and keeps the one the row has — the only way a row loses
+ * its target is state_disable_profile. The callers validate a target before it
+ * reaches this write (mount_validate_target, at the binders).
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
@@ -367,13 +380,13 @@ void state_free(state_t *state);
  *
  * Postconditions:
  *   - Profile added to enabled_profiles or existing entry updated
- *   - target column set to the supplied value (or NULL if not provided)
+ *   - target column set when one is given; otherwise unchanged (NULL on a new row)
  *   - enabled_at timestamp updated to current time
  *   - Transaction remains open (caller commits)
  *
  * @param state State handle (must not be NULL, must have active transaction)
  * @param profile Profile name (must not be NULL)
- * @param target Deployment target or NULL for home/root profiles
+ * @param target The binding to write, or NULL to keep the row's
  * @return Error or NULL on success
  */
 error_t *state_enable_profile(
@@ -385,7 +398,9 @@ error_t *state_enable_profile(
 /**
  * Disable profile
  *
- * Removes profile from enabled_profiles table.
+ * Removes profile from enabled_profiles table — the line whole, target included:
+ * nothing remembers a disabled profile's binding, and the caller that wants to
+ * say what was forgotten reads it before this call.
  *
  * Preconditions:
  *   - state MUST have active transaction

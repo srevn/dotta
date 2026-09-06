@@ -8,10 +8,12 @@
 #include "cmds/profile.h"
 
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
@@ -24,6 +26,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
 
@@ -227,7 +230,9 @@ static error_t *profile_list(
         }
     }
 
-    /* Print enabled profiles */
+    /* Print enabled profiles: the name, what the branch holds, and the binding
+     * beside the name when the row has one — the thing is never printed without
+     * the where. */
     if (enabled_profiles->count > 0) {
         output_section(out, OUTPUT_NORMAL, "Enabled profiles (in layering order)");
         for (size_t i = 0; i < enabled_profiles->count; i++) {
@@ -238,7 +243,7 @@ static error_t *profile_list(
             /* Name what the branch holds if we could read it, otherwise say so */
             if (stats_err) {
                 output_styled(
-                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)\n",
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
                     i + 1, profile
                 );
                 error_free(stats_err);
@@ -249,17 +254,27 @@ static error_t *profile_list(
                     counts, sizeof(counts)
                 );
                 output_styled(
-                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)\n",
+                    out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)",
                     i + 1, profile, counts
                 );
             }
+
+            const char *target = state_peek_profile_target(state, profile);
+            if (target) {
+                char shown[PATH_MAX];
+                output_format_path(target, identity()->home, shown, sizeof(shown));
+                output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+            }
+            output_newline(out, OUTPUT_NORMAL);
         }
     } else {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles");
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
     }
 
-    /* Print available (disabled) profiles */
+    /* Print available (disabled) profiles, marking the ones a target enables: a
+     * profile with custom/ paths is enabled only with one, so this is the mark
+     * on exactly the profile clone and --all left here. */
     if (available->count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available->count; i++) {
@@ -270,7 +285,7 @@ static error_t *profile_list(
             /* Name what the branch holds if we could read it, otherwise say so */
             if (stats_err) {
                 output_styled(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)\n",
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)",
                     profile
                 );
                 error_free(stats_err);
@@ -281,10 +296,14 @@ static error_t *profile_list(
                     counts, sizeof(counts)
                 );
                 output_styled(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)\n",
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)",
                     profile, counts
                 );
+                if (stats.has_custom) {
+                    output_styled(out, OUTPUT_NORMAL, " {dim}(custom){reset}");
+                }
             }
+            output_newline(out, OUTPUT_NORMAL);
         }
     }
 
@@ -1093,20 +1112,23 @@ cleanup:
  *
  * Five-phase flow, the mirror of profile_enable's:
  *   1. Gather & validate — filter requested profiles to those actually enabled;
- *      emit not-enabled diagnostics up front.
+ *      emit not-enabled diagnostics up front. Read the bindings the deletes will
+ *      forget: the one fact disable destroys that the user cannot recompute,
+ *      copied before the row cache they borrow from dies.
  *   2. The view before — manifest_build over the enabled set as it stands. It
  *      feeds the receipt only: a set that will not build is warned about and
  *      the disable lands without one.
  *   3. Commit scope to state — state_disable_profile per validated target;
- *      enabled_profiles is now authoritative for the target set. Nothing else
- *      is written: what the next apply prunes or releases is derivable — the
- *      disabled profile's records are no longer in the view, and the orphan
- *      analysis asks Git about each.
+ *      enabled_profiles is now authoritative for the target set, the line gone
+ *      whole, target included. Nothing else is written: what the next apply prunes
+ *      or releases is derivable — the disabled profile's records are no longer
+ *      in the view, and the orphan analysis asks Git about each.
  *   4. The view after — manifest_build over the post-disable set; manifest_diff
  *      attributes the transition to the disabled profiles, so loss-side stats
  *      (reassigned / orphans.owned / orphans.observed) land in the right slot.
  *   5. Per-profile feedback — iterate the validated targets to preserve the
- *      existing per-profile UX.
+ *      existing per-profile UX; a forgotten target is named with the way back,
+ *      so `disable --all` then `enable --all` is a copy-paste per line.
  */
 static error_t *profile_disable(
     const dotta_ctx_t *ctx,
@@ -1224,6 +1246,29 @@ static error_t *profile_disable(
         }
     }
 
+    /* The bindings the deletes forget, spelled as the screens print them — arena
+     * copies, because Phase 3's first delete retires the row cache the peek borrows
+     * from. NULL where the row had none. */
+    const char **forgotten = arena_calloc(
+        ctx->arena, to_disable_validated->count, sizeof(*forgotten)
+    );
+    if (!forgotten) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate the forgotten targets");
+        goto cleanup;
+    }
+    for (size_t i = 0; i < to_disable_validated->count; i++) {
+        const char *bound =
+            state_peek_profile_target(state, to_disable_validated->items[i]);
+        if (!bound) continue;
+        char shown[PATH_MAX];
+        output_format_path(bound, identity()->home, shown, sizeof(shown));
+        forgotten[i] = arena_strdup(ctx->arena, shown);
+        if (!forgotten[i]) {
+            err = ERROR(ERR_MEMORY, "Failed to copy a forgotten target");
+            goto cleanup;
+        }
+    }
+
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
      * owns its complete UX below — the live-path summary is unreachable on this
      * branch (goto cleanup bypasses it). */
@@ -1240,9 +1285,14 @@ static error_t *profile_disable(
             );
             for (size_t i = 0; i < to_disable_validated->count; i++) {
                 output_print(
-                    out, OUTPUT_NORMAL, "  - %s\n",
-                    to_disable_validated->items[i]
+                    out, OUTPUT_NORMAL, "  - %s", to_disable_validated->items[i]
                 );
+                if (forgotten[i]) {
+                    output_print(
+                        out, OUTPUT_NORMAL, " (forgets target %s)", forgotten[i]
+                    );
+                }
+                output_newline(out, OUTPUT_NORMAL);
             }
             output_newline(out, OUTPUT_NORMAL);
             output_info(
@@ -1326,15 +1376,22 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 5: Per-profile feedback (no stats when the receipt was skipped) */
+        /* Phase 5: Per-profile feedback (no stats when the receipt was skipped).
+         * The target the row carried went with it; the line says so and names
+         * the command that puts it back. */
         for (size_t i = 0; i < to_disable_validated->count; i++) {
+            const char *name = to_disable_validated->items[i];
             output_styled(
-                out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n",
-                to_disable_validated->items[i]
+                out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
             );
-            print_manifest_disable_stats(
-                out, to_disable_validated->items[i], stats ? &stats[i] : NULL
-            );
+            print_manifest_disable_stats(out, name, stats ? &stats[i] : NULL);
+            if (forgotten[i]) {
+                output_print(
+                    out, OUTPUT_NORMAL,
+                    "  Forgot target %s (dotta profile enable %s --target %s "
+                    "restores it)\n", forgotten[i], name, forgotten[i]
+                );
+            }
         }
 
         err = state_save(state);
@@ -2061,6 +2118,11 @@ static const args_command_t spec_profile_disable = {
     .name          = "profile disable",
     .summary       = "Disable profiles, mark for removal on next apply",
     .usage         = "%s profile disable [options] [<name>...]",
+    .description   =
+        "Disables one or more profiles; the next 'dotta apply' removes what they\n"
+        "deployed. A disabled profile's target goes with its row — nothing\n"
+        "remembers it — and the receipt names the target it forgets with the\n"
+        "command that restores it.\n",
     .opts_size     = sizeof(cmd_profile_options_t),
     .opts          = profile_disable_opts,
     .init_defaults = profile_disable_defaults,

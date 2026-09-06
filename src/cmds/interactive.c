@@ -8,6 +8,7 @@
 
 #include "cmds/interactive.h"
 
+#include <limits.h>
 #include <runtime.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -19,6 +20,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/output.h"
 #include "base/terminal.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
@@ -26,6 +28,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 
 /* --- Style macros --- */
 
@@ -663,7 +666,9 @@ static void row_render(const view_t *view, size_t i) {
     );
 
     if (it->enabled && it->has_custom && it->target) {
-        fprintf(stdout, " " UI_DIM "→ %s" UI_RESET, it->target);
+        char shown[PATH_MAX];
+        output_format_path(it->target, identity()->home, shown, sizeof(shown));
+        fprintf(stdout, " " UI_DIM "→ %s" UI_RESET, shown);
     } else if (!it->enabled && it->has_custom) {
         fprintf(stdout, " " UI_DIM "(custom)" UI_RESET);
     }

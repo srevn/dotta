@@ -388,6 +388,28 @@ void output_format_counts(
 );
 
 /**
+ * Spell a filesystem path the way the shell prints it: `~` for a leading `home`
+ *
+ * `home` itself reads as `~`, a path beneath it as `~/<rest>`, and every other
+ * path as it is — a sibling of `home` with the same leading bytes is not beneath
+ * it, so the match stops at a component boundary. Pure string work: `home` is
+ * passed in because the base layer reads no identity, and the four screens that
+ * print a bound target (profile list, status, the interactive rows, disable's
+ * receipt) pass the invoker's. PATH_MAX bytes hold any path the table validated.
+ *
+ * @param path Absolute path to spell (must not be NULL)
+ * @param home The directory `~` stands for (must not be NULL; no trailing slash)
+ * @param buffer Output buffer for the spelling
+ * @param buffer_size Size of output buffer
+ */
+void output_format_path(
+    const char *path,
+    const char *home,
+    char *buffer,
+    size_t buffer_size
+);
+
+/**
  * Prompt user for confirmation
  *
  * Displays a yes/no prompt and waits for user input. Handles input buffer clearing

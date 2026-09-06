@@ -31,6 +31,8 @@
  * Display enabled profiles and last deployment info
  *
  * @param out Output context (must not be NULL)
+ * @param state The enabled rows: the binding printed beside a bound profile's
+ *              name, the thing never printed without the where
  * @param profiles Enabled profile names (must not be NULL)
  * @param ws Workspace the view and the record come from: the per-profile
  *           last-deployed timestamp and the verbose per-profile counts are folded
@@ -42,6 +44,7 @@
  */
 static void display_enabled_profiles(
     output_t *out,
+    const state_t *state,
     const string_array_t *profiles,
     const workspace_t *ws,
     manifest_unbound_t unbound
@@ -64,8 +67,14 @@ static void display_enabled_profiles(
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
 
-        /* Format profile name */
+        /* Format profile name, and the binding when the row has one */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
+        const char *target = state_peek_profile_target(state, profile);
+        if (target) {
+            char shown[PATH_MAX];
+            output_format_path(target, identity()->home, shown, sizeof(shown));
+            output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
+        }
 
         /* One walk of the view per profile: the latest ownership event among
          * the rows the profile owns now — the honest set for an enabled-profiles
@@ -1457,7 +1466,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     }
 
     /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(out, scope_active(scope), ws, manifest_unbound(manifest));
+    display_enabled_profiles(
+        out, state, scope_active(scope), ws, manifest_unbound(manifest)
+    );
 
     /* The whole view, on request — before the verdict and the sections that name
      * only what diverged from it */

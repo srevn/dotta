@@ -205,4 +205,4 @@ dotta profile enable jail/web --target /mnt/jails/web
 
 Files are stored as `custom/<path>` and deployed under the specified target. Custom target requires exactly one profile per operation.
 
-A profile with `custom/` paths is enabled only with a target. `dotta clone` and `dotta profile enable --all` leave such a profile disabled and name the command.
+A profile with `custom/` paths is enabled only with a target. `dotta clone` and `dotta profile enable --all` leave such a profile disabled and name the command; `dotta profile list` marks it `(custom)`, and prints a bound profile's target beside its name.

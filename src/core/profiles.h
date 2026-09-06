@@ -223,6 +223,7 @@ typedef struct {
     size_t file_count;       /* Content blobs in the tree (bookkeeping excluded) */
     size_t directory_count;  /* Tracked directories the branch metadata claims */
     size_t total_size;       /* Bytes of those blobs */
+    bool has_custom;         /* A custom/ tree at the top — paths a target places here */
 } profile_stats_t;
 
 /**
@@ -231,7 +232,8 @@ typedef struct {
  * One walk of the branch tree — each content blob counted and its size taken
  * from the object header, nothing inflated — then the branch metadata's DIRECTORY
  * items. A branch with no metadata.json claims no directories; that absence is
- * not a failure.
+ * not a failure. The custom/ probe (profile_has_custom_files) is answered from
+ * the same tree, so a listing that marks such a profile reads the branch once.
  *
  * Performance: O(files + directories), one tree walk and one metadata load.
  *

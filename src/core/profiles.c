@@ -701,6 +701,11 @@ error_t *profile_get_stats(
     out->file_count = data.file_count;
     out->total_size = data.total_size;
 
+    /* The custom/ tree, by its top-level entry — the probe profile_has_custom_files
+     * makes, answered here from the tree already in hand. */
+    const git_tree_entry *custom = git_tree_entry_byname(tree, "custom");
+    out->has_custom = custom && git_tree_entry_type(custom) == GIT_OBJECT_TREE;
+
     /* The directories: the branch's own metadata, the same source the view's
      * claim routine reads. A tree without a sheet loads as an empty one — no
      * claim, so nothing counted below — and every load error is real and

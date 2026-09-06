@@ -808,6 +808,23 @@ void output_format_counts(
         snprintf(buffer, buffer_size, "empty");
 }
 
+void output_format_path(
+    const char *path,
+    const char *home,
+    char *buffer,
+    size_t buffer_size
+) {
+    if (!buffer || buffer_size == 0) return;
+
+    size_t home_len = strlen(home);
+    if (strncmp(path, home, home_len) == 0 &&
+        (path[home_len] == '\0' || path[home_len] == '/')) {
+        snprintf(buffer, buffer_size, "~%s", path + home_len);
+    } else {
+        snprintf(buffer, buffer_size, "%s", path);
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * User Confirmation Prompts
  * ═══════════════════════════════════════════════════════════════════ */

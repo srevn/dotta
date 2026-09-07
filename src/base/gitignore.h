@@ -9,6 +9,11 @@
  *   - `**` recursive globs via base/wildmatch
  *   - exact match attribution via per-rule origin tags
  *
+ * Two entry points over one scan: `gitignore_eval` is the whole grammar — the
+ * rules at the path, then at every ancestor of it, until one decides;
+ * `gitignore_eval_rung` is that scan at one rung alone, for a caller that owns
+ * the walk itself.
+ *
  * Lifetime: the ruleset is arena-backed. All memory (rule array, pattern copies)
  * lives until arena_destroy; there is no separate free.
  *
@@ -96,19 +101,19 @@ error_t *gitignore_ruleset_append_patterns(
 /**
  * Evaluate `path` against the ruleset.
  *
- * `path` is relative to the ruleset's root — the directory the rules were
- * written for, as a `.gitignore`'s are relative to the directory it sits in.
- * The walk-up below visits every ancestor of `path`, so an absolute path is
- * evaluated against the filesystem root with the whole ancestry taking part,
- * which is never what a caller wants. Leading and trailing slashes are
- * stripped for gitignore parity, and a trailing slash is treated as a
- * directory hint. `is_dir` distinguishes files from directories for
- * directory-only rules.
+ * `path` is relative to the ruleset's root — the directory the rules were written
+ * for, as a `.gitignore`'s are relative to the directory it sits in. The walk-up
+ * below visits every ancestor of `path`, so an absolute path is evaluated against
+ * the filesystem root with the whole ancestry taking part, which is never what
+ * a caller wants. Leading and trailing slashes are stripped for gitignore parity,
+ * and a trailing slash is treated as a directory hint. `is_dir` distinguishes
+ * files from directories for directory-only rules.
  *
  * Semantics mirror gitignore exactly: rules are scanned in reverse insertion
  * order (last-match-wins). If no rule matches at the given path, the evaluator
  * walks up one directory at a time, re-scanning at each parent (with is_dir=true),
- * which is what makes `cache/` match `cache/file.txt`.
+ * which is what makes `cache/` match `cache/file.txt`. Each of those scans is
+ * one gitignore_eval_rung; this is the walk over it.
  *
  * Never fails. Always populates every field of *out; decided=false means no rule
  * matched (caller treats as not-ignored). `pattern` is the winning rule's source
@@ -121,6 +126,36 @@ error_t *gitignore_ruleset_append_patterns(
  * @param out     Match result (must not be NULL)
  */
 void gitignore_eval(
+    const gitignore_ruleset_t *ruleset,
+    const char *path,
+    bool is_dir,
+    gitignore_match_t *out
+);
+
+/**
+ * Evaluate `path` at this rung only.
+ *
+ * The rules in reverse, the first to match decides, and no ancestor is consulted
+ * — the scan `gitignore_eval` runs at every rung of a path, exposed for a caller
+ * that owns the walk itself. The walk is not always the ruleset's to make:
+ * infra/pathspec has to match a location and a storage path under one ordered
+ * set of rules, so the rungs of the two interleave and neither can carry a walk
+ * of its own. Until that reader lands, gitignore_eval is the only one.
+ *
+ * `path` is a rung: a leading slash is shed (a location subject carries one,
+ * and an anchored rule reads the rule's own, not the subject's), and a trailing
+ * slash is not read as a directory hint — say so with `is_dir`. A path that is
+ * empty, or nothing but slashes, decides nothing.
+ *
+ * Never fails, and allocates nothing: no copy, no walk. Always populates every
+ * field of *out, on the same terms as gitignore_eval.
+ *
+ * @param ruleset Ruleset (can be NULL: undecided)
+ * @param path    One rung, relative to the ruleset's root (can be NULL: undecided)
+ * @param is_dir  True if the rung refers to a directory
+ * @param out     Match result (must not be NULL)
+ */
+void gitignore_eval_rung(
     const gitignore_ruleset_t *ruleset,
     const char *path,
     bool is_dir,

@@ -533,36 +533,15 @@ void gitignore_eval(
     if (len == 0)
         goto cleanup;
 
+    /* The walk: the scan at this rung, then at each parent, until one decides. */
     while (true) {
-        char *slash = strrchr(p, '/');
-        const char *basename = slash ? slash + 1 : p;
-
-        for (size_t i = set->count; i > 0; --i) {
-            const gitignore_rule_t *r = &set->rules[i - 1];
-
-            if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
-                continue;
-
-            bool matched;
-            if (r->flags & GITIGNORE_FLAG_MATCH_ALL) {
-                matched = true;
-            } else if (r->flags & GITIGNORE_FLAG_FULLPATH) {
-                matched = wildmatch(r->pattern, p, WM_PATHNAME) == WM_MATCH;
-            } else {
-                matched = wildmatch(r->pattern, basename, 0) == WM_MATCH;
-            }
-
-            if (matched) {
-                out->decided = true;
-                out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
-                out->origin = r->origin;
-                out->pattern = r->source;
-                goto cleanup;
-            }
-        }
+        gitignore_eval_rung(set, p, is_dir, out);
+        if (out->decided)
+            break;
 
         /* Walk up one directory. Single-component paths terminate the scan (matches
          * the basename == path check in libgit2's git_ignore_path_is_ignored). */
+        char *slash = strrchr(p, '/');
         if (!slash)
             break;
         *slash = '\0';
@@ -571,6 +550,59 @@ void gitignore_eval(
 
 cleanup:
     free(heap);
+}
+
+void gitignore_eval_rung(
+    const gitignore_ruleset_t *set,
+    const char *path,
+    bool is_dir,
+    gitignore_match_t *out
+) {
+    if (!out)
+        return;
+
+    out->decided = false;
+    out->ignored = false;
+    out->origin = 0;
+    out->pattern = NULL;
+
+    if (!set || !path)
+        return;
+
+    /* A leading slash is the subject's, not a rule's anchor: shed it by moving
+     * the pointer. Nothing else is normalized here — a rung has no trailing slash
+     * to read, and the caller says is_dir. */
+    while (*path == '/')
+        path++;
+    if (*path == '\0')
+        return;
+
+    const char *slash = strrchr(path, '/');
+    const char *basename = slash ? slash + 1 : path;
+
+    for (size_t i = set->count; i > 0; --i) {
+        const gitignore_rule_t *r = &set->rules[i - 1];
+
+        if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
+            continue;
+
+        bool matched;
+        if (r->flags & GITIGNORE_FLAG_MATCH_ALL) {
+            matched = true;
+        } else if (r->flags & GITIGNORE_FLAG_FULLPATH) {
+            matched = wildmatch(r->pattern, path, WM_PATHNAME) == WM_MATCH;
+        } else {
+            matched = wildmatch(r->pattern, basename, 0) == WM_MATCH;
+        }
+
+        if (matched) {
+            out->decided = true;
+            out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
+            out->origin = r->origin;
+            out->pattern = r->source;
+            return;
+        }
+    }
 }
 
 bool gitignore_is_ignored(

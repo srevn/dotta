@@ -189,7 +189,10 @@ typedef enum dotta_crypto_mode {
  * over the state's rows and `$HOME` — for classifying the command's input
  * (`path_input_resolve`, `scope_build`). Requires `state`. A command that reads
  * a CLI path declares it; the view does not need it — the builder derives its
- * own table from the rows it reads.
+ * own table from the rows it reads. Every location the run spells — a row's, a
+ * record's, a classified argument's — is the physical spelling as far as the
+ * table knows its roots (`infra/mount.h`), whichever spelling the binder or the
+ * user typed; the rows keep the binder's for the screens.
  *
  * crypto
  * ------

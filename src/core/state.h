@@ -192,7 +192,7 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  */
 typedef struct anchor {
     /* Identity — the row's, at the last write */
-    char *filesystem_path;    /* Deployed path (PRIMARY KEY) */
+    char *filesystem_path;    /* Deployed path (PRIMARY KEY): the physical spelling */
     char *storage_path;       /* Path in profile (home/.bashrc) */
     char *profile;            /* Profile whose row dotta reconciled the path against */
 

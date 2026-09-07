@@ -21,6 +21,25 @@
  * row cache), then consulted many times; a value — the topology at the instant
  * it was built — for the arena's lifetime.
  *
+ * A location — where a claim stands on this machine: the key the view's rows,
+ * the record and every screen share — is the physical spelling as far as the
+ * table knows its roots. A mount is known by the spelling its binder typed (HOME
+ * as the identity spells it), read through every enclosing alias the table holds,
+ * and by what it reaches as realpath spells it; both views spell a location from
+ * the physical, whichever spelling reached them. So one file has one location
+ * for every alias a binder declared — a root's two spellings, a root beneath
+ * another root's alias, a claim beneath a root's alias — and a root is a root
+ * under any of them. A tail is Git's and is joined as written: a link
+ * inside one that no binding names is an entry, as `~/.config -> ~/dotfiles/config`
+ * must stay, and two claims through and around it are two claims. A bind mount
+ * or a firmlink is two physicals for one directory: the binders' compare
+ * (mount_same_target) reads the inode, this table the spelling.
+ *
+ * The root directory is spelled "" in the table — the one spelling that joins a
+ * tail with one slash and encloses every absolute path at depth zero: the
+ * sentinel's, and HOME's when HOME is "/" (a container's bare uid) or reaches
+ * it through a link.
+ *
  * Two views over the same data:
  *   - Forward (filesystem -> storage): mount_classify picks the
  *     longest-matching target (tightest container wins, same semantic as filesystem
@@ -113,11 +132,11 @@ error_t *mount_validate_storage(const char *storage_path);
  *
  * Checks:
  *  - Absolute path (starts with '/')
- *  - Not the filesystem root '/' itself
  *  - No "..", ".", or empty component
  *  - No "//" (consecutive slashes)
  *  - No trailing slash
  *  - Resolves via realpath() and refers to an existing directory
+ *  - Not the filesystem root '/', under any spelling that reaches it
  *
  * Filesystem access is required for the existence + directory checks.
  *
@@ -129,10 +148,11 @@ error_t *mount_validate_target(const char *target);
 /**
  * Do two target spellings name one directory?
  *
- * The table reads a target's raw and canonical forms as one mount, so two spellings
- * of one directory classify alike; the binders ask the same of a target typed
- * against the row's, so an alias of the row's own directory is never written as
- * a move. A move re-keys every record under the profile — the relocation read
+ * The table keys a location by the physical spelling, so two spellings of one
+ * directory classify alike and key alike; the binders ask the same of a target
+ * typed against the row's, so an alias of the row's own directory is never written
+ * as a move — the row keeps the spelling its binder typed, the one the screens
+ * print. A move re-keys every record under the profile — the relocation read
  * (core/workspace) meets one file under two keys and releases the old — and one
  * that changes only the row's spelling buys that churn for nothing. A spelling
  * that stands is named by its directory: the two are one when they have one device
@@ -192,16 +212,17 @@ typedef struct {
 /**
  * Build a mount table from a flat array of mounts.
  *
- * Each mount in the table is a symlink-aware equivalence class: internally it
- * caches both the user-supplied target and its realpath-canonical sibling (when
- * distinct), so forward classification matches a path against either surface
- * form. Backward resolution (mount_resolve) returns the raw target the user typed.
+ * Each mount is known by two spellings — its binder's, read through every enclosing
+ * alias the table holds, and the physical, what it reaches as realpath spells
+ * it (the spelling itself when realpath agrees, or cannot answer) — so a path
+ * typed through either classifies under it, and the location either view spells
+ * is the physical: one key per file for every alias a binder declared (the "Mount
+ * table" paragraph above).
  *
  * The table is augmented internally with:
- *   - A HOME mount whose target is $HOME (captured from getenv at build time,
- *     expanded into its raw + canonical pair). Catches
- *     symlinks like macOS's /tmp -> /private/tmp on the classification
- *     side without leaking a separate row into the table.
+ *   - A HOME mount whose target is the invoker's home (sys/identity), in both
+ *     spellings, so a symlinked HOME (macOS's /tmp -> /private/tmp) is one root
+ *     under either without leaking a separate row into the table.
  *   - A ROOT mount whose target is the empty string (universal fallback for
  *     absolute paths that match no other mount).
  *
@@ -215,12 +236,10 @@ typedef struct {
  *   - Output is allocated entirely from `arena`, every string included: the table
  *     borrows nothing from `mounts`, so it is a value for the arena's lifetime
  *     — readable after the rows it was built from have moved.
- *   - $HOME is captured into the arena at build time, immune to later setenv
+ *   - The home is copied into the arena at build time, immune to later setenv
  *     mutations.
  *
  * Errors:
- *   - ERR_FS  if HOME cannot be resolved (env unset and passwd lookup
- *             fails).
  *   - ERR_MEMORY on arena allocation failure.
  *
  * @param arena       Arena for the table and its internal storage
@@ -257,10 +276,13 @@ typedef enum {
 /**
  * Classify an absolute filesystem path into a storage path.
  *
- * Picks the longest-matching mount target (tightest container wins). Each entry
- * contributes up to two surface forms (raw + realpath-canonical); a path matching
- * either form is considered to belong to that mount. Ties on equal target length
- * are broken by declaration order (stable, earlier wins).
+ * The path is first spelled physically as far as the table knows — every declared
+ * alias above its entry resolved, a root typed through its link read as the
+ * directory the binding names — and then the deepest mount enclosing that spelling
+ * wins (tightest container). Ties at equal depth — two mounts at one directory
+ * — are broken by declaration order (stable, earlier wins). The typed spelling
+ * never leaves this call: a path typed physically, through the binder's spelling,
+ * or through an enclosing root's alias classifies the same.
  *
  * The empty-target ROOT mount has length 0, so it always loses to any non-empty
  * match and serves as the universal fallback when no other mount contains the path.
@@ -304,6 +326,13 @@ error_t *mount_classify(
  *   home/X   -> $HOME/X                  (profile may be NULL)
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
+ *
+ * The location is the physical spelling as far as the table knows: the mount's
+ * physical, "/", the tail, and a declared alias inside the tail — a target some
+ * profile is bound at through a link inside this mount — respelled through what
+ * it reaches, so a claim captured through that link keys with the target's own
+ * claims. A claim at the alias's own spelling is the entry there, the link, and
+ * stands as joined.
  *
  * Absence is NULL, as every lookup in the tree answers it (manifest_lookup,
  * state_peek_profile_target, hashmap_get): `*out_location` is NULL when the claim

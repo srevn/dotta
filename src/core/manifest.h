@@ -99,7 +99,7 @@ typedef struct anchor anchor_t;
  */
 typedef struct manifest_row {
     /* Identity */
-    char *filesystem_path;      /* Deployed path (/home/user/.bashrc) */
+    char *filesystem_path;      /* Deployed path (/home/user/.bashrc): physical spelling */
     char *storage_path;         /* Path in profile (home/.bashrc) */
     char *profile;              /* Winning profile */
 

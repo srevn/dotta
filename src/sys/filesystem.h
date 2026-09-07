@@ -554,14 +554,16 @@ error_t *fs_ensure_parent_dirs(const char *path);
  * A relative path is the working directory's, spelled as the shell spells it:
  * $PWD by pwd -L's rule (absolute, no `.` or `..` component, one device and inode
  * with "."), getcwd's physical path when the shell set none or it has gone stale.
- * Logical, because every root dotta spells is logical — HOME is the identity's,
- * a target is what its binder typed — and a physical spelling names the same
- * file under a string none of them match (macOS's /tmp is /private/tmp). A pure
- * string operation past that one look: the path need not exist — a command that
- * names a file dotta manages but the disk no longer has (apply to redeploy it,
- * remove, revert, show) resolves it like any other. Callers that need the path
- * to exist check that themselves (add does, with lexists); the argument's own
- * `.` and `..` are kept for the caller's fs_normalize_path.
+ * Logical, because a path names the entry it is reached through: a link in the
+ * working directory's path (`~/.config`) stays the entry it is, as an absolute
+ * argument typed through it does. The roots the mount table knows are matched
+ * by their spellings and spelled physically there, whichever reached them
+ * (infra/mount.h). A pure string operation past that one look: the path need
+ * not exist — a command that names a file dotta manages but the disk no longer
+ * has (apply to redeploy it, remove, revert, show) resolves it like any other.
+ * Callers that need the path to exist check that themselves (add does, with
+ * lexists); the argument's own `.` and `..` are kept for the caller's
+ * fs_normalize_path.
  *
  * This preserves symlink locations for storage path determination, preventing
  * accidental tracking of symlink targets at unintended locations.

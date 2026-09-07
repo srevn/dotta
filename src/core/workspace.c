@@ -1720,16 +1720,18 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 const manifest_row_t *claim =
                     manifest_lookup_storage(ws->manifest, storage_path, profile);
 
-                /* Another string is not always another file: a target bound through
-                 * a symlink, a HOME spelled two ways across runs, and the row
-                 * stands on the very file the record names. Only the ancestors
-                 * can differ between two spellings of one path — the tail is
-                 * the claim's — so lstat on both compares the entry itself,
-                 * whatever its kind. One file: the record is a stale key, not a
-                 * copy left behind, and is released — the path stays, and apply's
-                 * adoption anchors the row under its own spelling as owned. Two
-                 * files, or a look that could not be made: the relocation stands,
-                 * and cleanup holds or prunes the copy as any other. */
+                /* Another string is not always another file: a record written
+                 * under a spelling the table no longer keys by (a root that was
+                 * moved physically with a link left behind, a record from before
+                 * locations were physical), and the row stands on the very file
+                 * the record names. Only the ancestors can differ between two
+                 * spellings of one path — the tail is the claim's — so lstat on
+                 * both compares the entry itself, whatever its kind. One file:
+                 * the record is a stale key, not a copy left behind, and is
+                 * released — the path stays, and apply's adoption anchors the
+                 * row under its own spelling as owned. Two files, or a look that
+                 * could not be made: the relocation stands, and cleanup holds
+                 * or prunes the copy as any other. */
                 struct stat at_claim;
                 if (claim && occupant != FS_OCCUPANT_UNKNOWN &&
                     fs_lstat(claim->filesystem_path, &at_claim) == 0 &&

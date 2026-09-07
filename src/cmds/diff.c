@@ -1236,21 +1236,30 @@ static error_t *build_diff_pathspec(
  * set via scope_enabled — hiding commits behind the CLI filter would make
  * legitimately-referenceable commits unreachable. The path filter is derived
  * from scope_paths (raw CLI positional args, never narrowed).
+ *
+ * @param ctx Dispatch context (must not be NULL; reads the repository and the
+ *            output)
+ * @param commit1_ref The older commit (must not be NULL)
+ * @param commit2_ref The newer commit (must not be NULL)
+ * @param scope Operation scope (must not be NULL)
+ * @param opts Command options (must not be NULL)
+ * @return Error or NULL on success
  */
 static error_t *diff_commits(
-    git_repository *repo,
+    const dotta_ctx_t *ctx,
     const char *commit1_ref,
     const char *commit2_ref,
     const scope_t *scope,
-    const cmd_diff_options_t *opts,
-    output_t *out
+    const cmd_diff_options_t *opts
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(ctx);
     CHECK_NULL(commit1_ref);
     CHECK_NULL(commit2_ref);
     CHECK_NULL(scope);
     CHECK_NULL(opts);
-    CHECK_NULL(out);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
 
     const string_array_t *profiles = scope_enabled(scope);
     const pathspec_t *file_filter = scope_paths(scope);
@@ -1586,7 +1595,7 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
     switch (opts->mode) {
         case DIFF_COMMIT_TO_COMMIT:
             /* Diff two commits — historical mode, path filter only */
-            err = diff_commits(repo, opts->commit1, opts->commit2, scope, opts, out);
+            err = diff_commits(ctx, opts->commit1, opts->commit2, scope, opts);
             goto cleanup;
 
         case DIFF_COMMIT_TO_WORKSPACE:

@@ -1517,7 +1517,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             const add_path_t *path = chains[b]->items[i];
 
             err = metadata_capture_ancestors(
-                metadata, path->storage_path, path->fs_path,
+                metadata, mounts, opts->profile, path->storage_path, ctx->arena,
                 &ancestors_captured, &ancestry_retired
             );
             if (err) goto cleanup;

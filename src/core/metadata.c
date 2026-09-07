@@ -785,26 +785,27 @@ error_t *metadata_capture_from_directory(
 /**
  * Author, refresh or retire the derived claim at one rung of a chain
  *
- * One component, under both its names, already truncated by the climb below.
- * The rule is metadata.h's own, read one level up: an item exists iff it claims
- * something, so a rung the disk answers "directory" for claims its attributes,
- * a rung it answers anything else for retires the claim that said otherwise,
- * and a rung it does not answer at all leaves the sheet exactly as it found it.
+ * One component, spelled by the climb below and standing where its own name
+ * resolves. The rule is metadata.h's own, read one level up: an item exists iff
+ * it claims something, so a rung the disk answers "directory" for claims its
+ * attributes, a rung it answers anything else for retires the claim that said
+ * otherwise, and a rung it does not answer at all leaves the sheet exactly as
+ * it found it.
  *
  * `tracked` is false throughout: this rule authors derivations, never intent.
  *
  * @param metadata Collection to author into (must not be NULL; mutated)
+ * @param mounts The table the rung's name resolves through (must not be NULL)
+ * @param profile The rung's profile, for a custom/ name (must not be NULL)
  * @param storage_path The rung's key (must not be NULL)
- * @param filesystem_path The rung on disk (must not be NULL)
+ * @param arena Arena the rung's location is spelled into (must not be NULL)
  * @param captured Incremented when the rung's claim moved (must not be NULL)
  * @param retired Receives the key when the rung's claim goes (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *capture_ancestor(
-    metadata_t *metadata,
-    const char *storage_path,
-    const char *filesystem_path,
-    size_t *captured,
+    metadata_t *metadata, const mount_table_t *mounts, const char *profile,
+    const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
 ) {
     /* Two standing items are not a derivation's to touch. A tracked claim is
@@ -815,6 +816,23 @@ static error_t *capture_ancestor(
      * authorities. */
     const metadata_item_t *held = metadata_lookup(metadata, storage_path);
     if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
+        return NULL;
+    }
+
+    /* Where the rung stands is where its own name resolves, never the leaf's
+     * location cut short: a declared alias — a target some profile is bound at
+     * through a link inside this mount — is respelled beneath itself and not at
+     * itself, so `home/link` is the link and `home/link/sub` the directory that
+     * link names. The two are one rung apart and one respell apart, which is
+     * exactly what arithmetic over a shared tail cannot see. */
+    const char *filesystem_path = NULL;
+    RETURN_IF_ERROR(
+        mount_resolve(mounts, profile, storage_path, arena, &filesystem_path)
+    );
+
+    /* A rung this machine cannot place — an unbound custom/ name — has no answer
+     * to give, the same silence as a rung nothing stands at. */
+    if (!filesystem_path) {
         return NULL;
     }
 
@@ -886,75 +904,51 @@ static error_t *capture_ancestor(
  * The climb: this names every rung, capture_ancestor decides each one.
  */
 error_t *metadata_capture_ancestors(
-    metadata_t *metadata,
-    const char *storage_path,
-    const char *filesystem_path,
-    size_t *captured,
+    metadata_t *metadata, const mount_table_t *mounts, const char *profile,
+    const char *storage_path, arena_t *arena, size_t *captured,
     string_array_t *retired
 ) {
     CHECK_NULL(metadata);
+    CHECK_NULL(mounts);
+    CHECK_NULL(profile);
     CHECK_NULL(storage_path);
-    CHECK_NULL(filesystem_path);
+    CHECK_NULL(arena);
     CHECK_NULL(captured);
     CHECK_NULL(retired);
 
-    const char *tail = mount_strip_label(storage_path);
-    size_t tail_len = strlen(tail);
-    size_t fs_len = strlen(filesystem_path);
-
-    /* The one fact the climb rests on: both names end in the same bytes. A storage
-     * path is its label plus the mount-relative tail, a filesystem path its mount
-     * target plus that same tail, so truncating each at a matching offset names
-     * one ancestor twice. Checked once, here, where the pair enters the module
-     * — every rung below trusts it. */
-    if (tail == storage_path || fs_len <= tail_len ||
-        strcmp(filesystem_path + (fs_len - tail_len), tail) != 0) {
-        return ERROR(
-            ERR_INTERNAL,
-            "Storage path '%s' and filesystem path '%s' are not one path under "
-            "two names", storage_path, filesystem_path
-        );
-    }
-
-    /* One rung per separator in the tail. The mount root is excluded by where
-     * the scan starts and the leaf by where it ends — arithmetic, not a special
-     * case — so a path directly beneath a mount root climbs nowhere. */
-    const char *first = strchr(tail, '/');
+    /* One rung per separator in the mount-relative tail. The mount root is excluded
+     * by where the scan starts and the leaf by where it ends — arithmetic, not
+     * a special case — so a path directly beneath a mount root climbs nowhere. */
+    const char *first = strchr(mount_strip_label(storage_path), '/');
     if (!first) {
         return NULL;
     }
 
-    char *sp = strdup(storage_path);
-    char *fp = strdup(filesystem_path);
-    if (!sp || !fp) {
-        free(sp);
-        free(fp);
-        return ERROR(ERR_MEMORY, "Failed to copy path for the ancestry climb");
+    /* Every rung is a prefix of the leaf's own name, so one copy spells them
+     * all: each separator truncates it in place and is restored before the next
+     * one extends past it. The scan reads the caller's string, which is never
+     * written, so the cut is an offset into it. */
+    char *rung = strdup(storage_path);
+    if (!rung) {
+        return ERROR(
+            ERR_MEMORY, "Failed to copy path for the ancestry climb"
+        );
     }
-
-    /* Where the shared tail begins in each name. The scan itself reads `tail`,
-     * which is the caller's and never written; the copies carry the truncation,
-     * undone before the next rung extends past it. */
-    size_t sp_root = (size_t) (tail - storage_path);
-    size_t fp_root = fs_len - tail_len;
 
     error_t *err = NULL;
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
-        size_t cut = (size_t) (sep - tail);
+        size_t cut = (size_t) (sep - storage_path);
 
-        sp[sp_root + cut] = '\0';
-        fp[fp_root + cut] = '\0';
-
-        err = capture_ancestor(metadata, sp, fp, captured, retired);
-
-        sp[sp_root + cut] = '/';
-        fp[fp_root + cut] = '/';
+        rung[cut] = '\0';
+        err = capture_ancestor(
+            metadata, mounts, profile, rung, arena, captured, retired
+        );
+        rung[cut] = '/';
 
         if (err) break;
     }
 
-    free(sp);
-    free(fp);
+    free(rung);
 
     return err;
 }

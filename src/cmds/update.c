@@ -710,7 +710,7 @@ static error_t *update_profile(
         const workspace_item_t *item = commit->captured[i].item;
 
         err = metadata_capture_ancestors(
-            metadata, item->storage_path, item->filesystem_path,
+            metadata, ctx->run.mounts, profile, item->storage_path, ctx->arena,
             &commit->claimed, &commit->retired
         );
         if (err) goto cleanup;
@@ -724,7 +724,7 @@ static error_t *update_profile(
      * climbs twice for free: the derivation counts only differences. */
     for (size_t i = 0; i < row_count; i++) {
         err = metadata_capture_ancestors(
-            metadata, rows[i]->storage_path, rows[i]->filesystem_path,
+            metadata, ctx->run.mounts, profile, rows[i]->storage_path, ctx->arena,
             &commit->claimed, &commit->retired
         );
         if (err) goto cleanup;

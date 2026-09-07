@@ -116,6 +116,7 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#include "infra/mount.h"
 #include "sys/stage.h"
 
 #define METADATA_VERSION 6
@@ -495,14 +496,12 @@ error_t *metadata_capture_from_directory(
  * is never a key — a target is not a path any profile claims — and neither is
  * the leaf, which is its own capture's business.
  *
- * The two spellings of the one path are the whole input. A storage path is its
- * label plus the mount-relative tail; the filesystem path is its mount target
- * plus that same tail, the very bytes, whichever direction the pair was derived
- * in (mount_classify hands the tail out of the filesystem path, mount_resolve
- * joins a target to it). So the tail's own separators name every ancestor twice,
- * once in each namespace, at the same offset from each end — no mount table, no
- * arena, no allocation beyond one scratch copy of each name. A pair that does
- * not hold that is not two names for one path, and is refused.
+ * The name is the whole input, and every rung stands where its own name resolves
+ * (mount_resolve, under `profile`'s bindings): the chain's own separators spell
+ * every ancestor, and the table says where each one of them is. A location cut
+ * short would not do — a declared alias is respelled beneath itself and not at
+ * itself, so `home/link` is the link and `home/link/sub` the directory that link
+ * names, two rungs at two places no shared tail relates.
  *
  * Per rung, root-first:
  *   - a tracked claim standing at the key is the walk's own word and is left
@@ -515,21 +514,24 @@ error_t *metadata_capture_from_directory(
  *   - anything else on disk -> the derivation claims no directory here, so a
  *     standing ancestor claim is retired (the sheet's own producer rule) and
  *     its key appended to `retired`
- *   - nothing there, or nothing this host could see or name -> the rung has no
- *     answer, and no answer is not an answer of "no": nothing authored, nothing
- *     retired
+ *   - no location here (an unbound custom/ name), nothing there, or nothing this
+ *     host could see or name -> the rung has no answer, and no answer is not an
+ *     answer of "no": nothing authored, nothing retired
  *
  * The two outs are shaped by what a caller can do with them, not by symmetry: a
  * claim authored has no consequence beyond the sheet, so its count is the whole
  * report, while a claim retired leaves the view by the caller's commit and its
  * record behind — and only the key names that.
  *
- * Idempotent, and total over the chain: no rung stops the climb. O(depth) lstats
- * per call; the callers pay it once per captured leaf.
+ * Idempotent, and total over the chain: no rung stops the climb. O(depth) resolves
+ * and lstats per call; the callers pay it once per captured leaf.
  *
  * @param metadata Collection to author into (must not be NULL; mutated)
+ * @param mounts The table these names were made under, so that a rung resolves
+ *               back to where the leaf was read (must not be NULL)
+ * @param profile Profile whose chain this is, for a custom/ rung (must not be NULL)
  * @param storage_path Leaf's storage path, label-first (must not be NULL)
- * @param filesystem_path The same leaf under its other name (must not be NULL)
+ * @param arena Arena the rungs' locations are spelled into (must not be NULL)
  * @param captured Count of rungs whose claim this call authored or changed, added
  *                 to (must not be NULL)
  * @param retired Keys this call retired, appended (must not be NULL)
@@ -537,8 +539,10 @@ error_t *metadata_capture_from_directory(
  */
 error_t *metadata_capture_ancestors(
     metadata_t *metadata,
+    const mount_table_t *mounts,
+    const char *profile,
     const char *storage_path,
-    const char *filesystem_path,
+    arena_t *arena,
     size_t *captured,
     string_array_t *retired
 );

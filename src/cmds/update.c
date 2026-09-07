@@ -868,19 +868,20 @@ cleanup:
  * follows each one. The view is computed, so nothing projects; what update writes
  * is the one thing only it knows about the paths it committed — read off each
  * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
- * no record write. A modified or new file was captured FROM disk, so for the
- * row its profile won in the post-commit view the record advances to the
- * just-committed blob with the stat the capture took (the next status takes the
- * fast path). A path the commit let go — a deleted item, a directory entry the
- * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
- * — left Git by this commit: with no row left at the path its record retires
- * (nothing backs it now); with a lower profile's row at the path it is a fallback
- * — the record stays and reads [reassigned] until apply deploys it. The rule
- * "anchor only the rows this profile won" is the same one add applies: a higher
- * profile's row is its own, and its record is its own. Both kinds: a directory's
- * claim (mode, ownership) is captured from disk exactly as add captures it, so
- * the capture owns the directory the same way — the ownership the orphan gate
- * asks for on scope exit — with no stat triple, a directory having no content
+ * no record write. A modified or new file was captured FROM disk, so where the
+ * capture's own claim won its location in the post-commit view the record advances
+ * to the just-committed blob with the stat the capture took (the next status
+ * takes the fast path). A path the commit let go — a deleted item, a directory
+ * entry the walk's prune dropped as redundant, or an ancestor claim the derivation
+ * dropped — left Git by this commit: with no row left at the path its record
+ * retires (nothing backs it now); with a lower profile's row at the path it is
+ * a fallback — the record stays and reads [reassigned] until apply deploys it.
+ * The rule "anchor only the row that IS the captured claim" is the same one add
+ * applies (core/manifest.h's manifest_is_claim): a row another profile won is
+ * its own, and so is one a second claim of this very profile won. Both kinds: a
+ * directory's claim (mode, ownership) is captured from disk exactly as add captures
+ * it, so the capture owns the directory the same way — the ownership the orphan
+ * gate asks for on scope exit — with no stat triple, a directory having no content
  * to confirm.
  *
  * Algorithm:
@@ -968,7 +969,9 @@ static error_t *update_write_record(
             const manifest_row_t *row = manifest_lookup(
                 manifest, capture->item->filesystem_path
             );
-            if (!row || strcmp(row->profile, commit->profile) != 0) continue;
+            if (!manifest_is_claim(row, commit->profile, capture->item->storage_path)) {
+                continue;
+            }
 
             err = state_anchor(
                 state, row,

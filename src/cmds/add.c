@@ -673,7 +673,8 @@ static error_t *create_commit(
  * record is anchored to the just-committed blob with the stat the capture took,
  * and the next status hits the fast path; the directories it tracked are anchored
  * by the same rule — captured, so dotta's. The view is computed, so nothing
- * projects; one build over the enabled set says which rows this profile won.
+ * projects; one build over the enabled set says which of this add's own claims
+ * won their locations.
  *
  * Algorithm:
  *   1. Scope. A new profile is enabled here with its deployment target — creating
@@ -682,7 +683,7 @@ static error_t *create_commit(
  *      enabled skips the anchor pass (nothing to win) and the target UPSERT
  *      (enable's business), never the settle
  *   2. Build the mount table from the post-mutation row cache
- *   3. Build the view; anchor the rows this profile won, each found at the location
+ *   3. Build the view; anchor each captured claim's own row, found at the location
  *      the table gives its storage path; settle what the commit let go
  *   4. Commit transaction (state_save)
  *
@@ -817,13 +818,16 @@ static error_t *update_manifest_after_add(
 
     hashmap_t *anchor_index = NULL;   /* Built with the anchor pass it serves */
     if (enabled) {
-        /* Anchor only the rows this profile won: if this profile has lower
-         * precedence than existing enabled profiles, some files are another
-         * profile's rows (receipt->synced < added_files). Those correctly receive
-         * no anchor — the row is the winner's and so is its record, and the
-         * capture's stat would misattribute to the winner's blob_oid. Write
-         * failures are non-fatal: disk is the just-committed blob, and the next
-         * status's slow path confirms it.
+        /* Anchor only the rows this add's own claims won: the row standing at a
+         * captured claim's location is anchored iff it IS that claim, both halves
+         * (core/manifest.h's manifest_is_claim). It is another's whenever a
+         * higher-precedence profile owns the location — and also when a second
+         * claim of this very profile does, which a machine whose roots kept two
+         * names apart can commit and a sync can bring here. Either way the row
+         * is someone else's word and so is its record, and the capture's stat
+         * would certify a blob these bytes are not (receipt->synced < added_files).
+         * Write failures are non-fatal: disk is the just-committed blob, and
+         * the next status's slow path confirms it.
          *
          * A row is found at the location this profile gives the storage path —
          * the view's own spelling, resolved through the table as the build resolved
@@ -873,7 +877,7 @@ static error_t *update_manifest_after_add(
             if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!row || strcmp(row->profile, profile) != 0) continue;
+            if (!manifest_is_claim(row, profile, path->storage_path)) continue;
 
             error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
             if (anchor_err) {
@@ -910,7 +914,7 @@ static error_t *update_manifest_after_add(
             if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!row || strcmp(row->profile, profile) != 0) continue;
+            if (!manifest_is_claim(row, profile, path->storage_path)) continue;
 
             error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
             if (anchor_err) error_free(anchor_err);

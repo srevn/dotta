@@ -208,15 +208,11 @@ static error_t *build_items(
         goto cleanup;
     }
 
-    /* First-run case: a handle whose underlying DB doesn't exist yields an empty
-     * enabled set, not an error. Save via 'w' lazily creates .git/dotta.db in
-     * state_begin. */
+    /* First-run case: a handle whose underlying DB doesn't exist holds a load
+     * of zero rows, which is the correct empty enabled set rather than a failure
+     * to absorb. Save via 'w' lazily creates .git/dotta.db in state_begin. */
     err = state_get_profiles(deploy_state, &state_profiles);
-    if (err) {
-        error_free(err);
-        err = NULL;
-        state_profiles = NULL;
-    }
+    if (err) goto cleanup;
 
     /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
      * the "not found" NULL return. */
@@ -431,20 +427,15 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
 
 /* Phase: classify diff against the persisted set BEFORE any mutation.
  *
- * state_peek_profiles returns borrowed pointers into the row cache. The first
- * state_enable/disable call invalidates the cache and frees the underlying strings.
- * Both needs_enable (additions plus retained rows whose target was edited
- * in-session) and removal_names must be decided here, while the borrows are live.
- * Removal names are arena-strdup'd so they survive the invalidation. */
+ * state_peek_profiles lends the row cache. The first state_enable/disable call
+ * re-reads it and frees the strings this slice points at. Both needs_enable
+ * (additions plus retained rows whose target was edited in-session) and
+ * removal_names must be decided here, while the borrows are live. Removal names
+ * are arena-strdup'd so they survive the re-read. */
 static error_t *plan_classify(
     arena_t *arena, state_t *deploy_state, plan_t *plan
 ) {
-    const state_profile_entry_t *persisted = NULL;
-    size_t persisted_count = 0;
-    error_t *err = state_peek_profiles(
-        deploy_state, &persisted, &persisted_count
-    );
-    if (err) return err;
+    state_profiles_t persisted = state_peek_profiles(deploy_state);
 
     if (plan->new_order.count > 0) {
         plan->needs_enable = arena_calloc(
@@ -454,9 +445,9 @@ static error_t *plan_classify(
             return ERROR(ERR_MEMORY, "Failed to allocate enable flags");
         }
     }
-    if (persisted_count > 0) {
+    if (persisted.count > 0) {
         plan->removal_names = arena_calloc(
-            arena, persisted_count, sizeof(*plan->removal_names)
+            arena, persisted.count, sizeof(*plan->removal_names)
         );
         if (!plan->removal_names) {
             return ERROR(ERR_MEMORY, "Failed to allocate removal scratch");
@@ -465,8 +456,8 @@ static error_t *plan_classify(
 
     /* Walk persisted; nested linear scan beats a hashmap on these tiny sets
      * (typically < 10 profiles). */
-    for (size_t i = 0; i < persisted_count; i++) {
-        const char *p_name = persisted[i].name;
+    for (size_t i = 0; i < persisted.count; i++) {
+        const char *p_name = persisted.entries[i].name;
         bool retained = false;
         for (size_t j = 0; j < plan->new_order.count; j++) {
             if (strcmp(plan->new_order.items[j], p_name) == 0) {
@@ -489,10 +480,10 @@ static error_t *plan_classify(
         item_t *it = plan->new_order_items[i];
         bool was_enabled = false;
         const char *persisted_target = NULL;
-        for (size_t j = 0; j < persisted_count; j++) {
-            if (strcmp(persisted[j].name, it->name) == 0) {
+        for (size_t j = 0; j < persisted.count; j++) {
+            if (strcmp(persisted.entries[j].name, it->name) == 0) {
                 was_enabled = true;
-                persisted_target = persisted[j].target;
+                persisted_target = persisted.entries[j].target;
                 break;
             }
         }

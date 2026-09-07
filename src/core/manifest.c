@@ -676,32 +676,27 @@ error_t *manifest_build(
     /* The enabled set, in position order. Borrowed from the row cache for the
      * loop only: every name a row keeps is duplicated below, so the view never
      * depends on the cache's lifetime. */
-    const state_profile_entry_t *profiles = NULL;
-    size_t profile_count = 0;
-    error_t *err = state_peek_profiles(state, &profiles, &profile_count);
-    if (err) {
-        return error_wrap(err, "Failed to read enabled profiles");
-    }
+    state_profiles_t profiles = state_peek_profiles(state);
 
     /* The topology the same rows describe — each profile's target, and this
      * machine's $HOME — built here, from the rows of this instant, so a custom/
      * path always resolves under the target the row it came from carries. */
     mount_table_t *mounts = NULL;
-    err = profile_build_mount_table(state, arena, &mounts);
+    error_t *err = profile_build_mount_table(state, arena, &mounts);
     if (err) {
         return error_wrap(err, "Failed to build mount table");
     }
 
     manifest_t *manifest = NULL;
-    err = manifest_allocate(arena, 64, 128, profile_count, &manifest);
+    err = manifest_allocate(arena, 64, 128, profiles.count, &manifest);
     if (err) return err;
 
     /* Process each profile in order (later profiles override earlier) */
-    for (size_t i = 0; i < profile_count; i++) {
+    for (size_t i = 0; i < profiles.count; i++) {
         /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
          * arena outlives the view (it backs every per-row string the walk writes),
          * so the view never depends on the state's row cache. */
-        const char *profile = arena_strdup(arena, profiles[i].name);
+        const char *profile = arena_strdup(arena, profiles.entries[i].name);
         if (!profile) {
             err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
             goto cleanup;

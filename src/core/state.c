@@ -42,11 +42,13 @@
  * - Prepared statements cached (eliminate preparation overhead)
  *
  * Row cache invariant:
- *   The cache is the materialized view of enabled_profiles. It is populated ONLY
- *   by lazy load_profile_entries(). Shape mutations (add / remove / bulk replace)
- *   call invalidate_profile_entries() — never optimistically update the in-memory
- *   layout — so that a subsequent rollback cannot leave the cache out of sync
- *   with the DB.
+ *   The cache is the materialized view of enabled_profiles, and it has one state:
+ *   loaded. load_profile_entries() re-reads it whole at every boundary where
+ *   the table becomes this handle's — the handle's open, a transaction taken,
+ *   each shape mutation, a rollback — so every reader of it is a plain read of
+ *   the table as this handle last saw it under its lock. Mutations re-read rather
+ *   than patch the in-memory layout, so a rollback cannot leave the cache out
+ *   of sync with the DB.
  */
 struct state {
     /* Database connection */
@@ -56,10 +58,9 @@ struct state {
     /* Transaction state */
     bool in_transaction;                    /* BEGIN IMMEDIATE executed */
 
-    /* Cached enabled_profiles rows (loaded lazily, position-ordered) */
+    /* The enabled_profiles rows, position-ordered (see the invariant above) */
     state_profile_entry_t *profile_entries; /* NULL when the load found zero rows */
     size_t profile_entry_count;             /* Rows in profile_entries */
-    bool profile_entries_loaded;            /* The load happened — zero rows is a valid load */
 
     /* Prepared statements (initialized once, reused) */
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
@@ -705,14 +706,12 @@ static error_t *prepare_statements(state_t *state) {
 }
 
 /**
- * Free the row cache and mark it unloaded
+ * Free the row cache
  *
- * Safe to call repeatedly. Invoked by shape-mutating paths (state_enable_profile,
- * state_disable_profile, state_reorder_profiles) and by state_rollback /
- * state_free. The cache must never outlive the last committed DB state it was
- * built from.
+ * Safe to call repeatedly. The first act of every load, and state_free's last:
+ * nothing else frees the cache, because nothing else leaves it unloaded.
  */
-static void invalidate_profile_entries(state_t *state) {
+static void free_profile_entries(state_t *state) {
     for (size_t i = 0; i < state->profile_entry_count; i++) {
         free(state->profile_entries[i].name);
         free(state->profile_entries[i].target);
@@ -720,30 +719,26 @@ static void invalidate_profile_entries(state_t *state) {
     free(state->profile_entries);
     state->profile_entries = NULL;
     state->profile_entry_count = 0;
-    state->profile_entries_loaded = false;
 }
 
 /**
- * Load the enabled_profiles row cache
+ * Read the enabled_profiles rows into the cache
  *
- * Lazy loader: performs one SELECT over enabled_profiles and materializes every
- * row (name, target) into the cache. Rows are ordered by position to match the
- * user's precedence order.
+ * One SELECT over enabled_profiles, every row (name, target) materialized, ordered
+ * by position to match the user's precedence order. Called at every boundary
+ * where the table becomes this handle's, and answering every per-profile question
+ * thereafter as a linear peek over the cache — no per-question SQL.
  *
- * One load answers every per-profile question thereafter as a linear peek over
- * the cache — no per-question SQL.
+ * A handle with no database is a load of zero rows: a repository that has never
+ * been written has no enabled profile, which is an answer and not a special case.
+ * A read that fails leaves the cache empty and says so to its caller.
  */
 static error_t *load_profile_entries(state_t *state) {
     CHECK_NULL(state);
 
-    /* Already loaded — return immediately. Must precede the db check: state_load()
-     * on a repository without .git/dotta.db allocates a handle with db==NULL
-     * and pre-marks the cache as loaded (zero rows), a valid view of "no enabled
-     * profiles". Lazy promotion via state_begin() opens the DB without disturbing
-     * this cached view; mutations invalidate it on their own. */
-    if (state->profile_entries_loaded) return NULL;
+    free_profile_entries(state);
 
-    CHECK_NULL(state->db);
+    if (!state->db) return NULL;
 
     /* Probe the row count first so we can allocate exactly once. */
     sqlite3_stmt *count_stmt = NULL;
@@ -833,13 +828,12 @@ static error_t *load_profile_entries(state_t *state) {
 
     state->profile_entries = entries;
     state->profile_entry_count = i;
-    state->profile_entries_loaded = true;
 
     return NULL;
 }
 
 /**
- * Linear lookup into the row cache (caller guarantees load)
+ * Linear lookup into the row cache
  *
  * Row count is bounded by the user's enabled-profile list (typically < 10), so
  * the linear scan is faster than a hash lookup and fits comfortably in L1.
@@ -857,23 +851,15 @@ static const state_profile_entry_t *find_profile_entry(
 }
 
 /**
- * Peek the cached enabled_profiles rows
+ * The enabled_profiles rows, in position order
  */
-error_t *state_peek_profiles(
-    const state_t *state,
-    const state_profile_entry_t **out_entries,
-    size_t *out_count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(out_entries);
-    CHECK_NULL(out_count);
+state_profiles_t state_peek_profiles(const state_t *state) {
+    if (!state) return (state_profiles_t){ 0 };
 
-    error_t *err = load_profile_entries((state_t *) state);
-    if (err) return err;
-
-    *out_entries = state->profile_entries;
-    *out_count = state->profile_entry_count;
-    return NULL;
+    return (state_profiles_t){
+        .entries = state->profile_entries,
+        .count = state->profile_entry_count,
+    };
 }
 
 /**
@@ -884,12 +870,6 @@ const char *state_peek_profile_target(
     const char *profile
 ) {
     if (!state || !profile) return NULL;
-
-    error_t *err = load_profile_entries((state_t *) state);
-    if (err) {
-        error_free(err);
-        return NULL;
-    }
 
     const state_profile_entry_t *entry = find_profile_entry(state, profile);
     return entry ? entry->target : NULL;
@@ -908,16 +888,13 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
     CHECK_NULL(state);
     CHECK_NULL(out);
 
-    error_t *err = load_profile_entries((state_t *) state);
-    if (err) return err;
-
     string_array_t *copy = string_array_new(0);
     if (!copy) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
     for (size_t i = 0; i < state->profile_entry_count; i++) {
-        err = string_array_push(copy, state->profile_entries[i].name);
+        error_t *err = string_array_push(copy, state->profile_entries[i].name);
         if (err) {
             string_array_free(copy);
             return err;
@@ -941,12 +918,6 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
  */
 bool state_has_profile(const state_t *state, const char *profile) {
     if (!state || !profile) {
-        return false;
-    }
-
-    error_t *err = load_profile_entries((state_t *) state);
-    if (err) {
-        error_free(err);
         return false;
     }
 
@@ -1007,8 +978,7 @@ error_t *state_enable_profile(
         return sqlite_error(state->db, "Failed to enable profile");
     }
 
-    invalidate_profile_entries(state);
-    return NULL;
+    return load_profile_entries(state);
 }
 
 /**
@@ -1039,9 +1009,8 @@ error_t *state_disable_profile(
         return sqlite_error(state->db, "Failed to disable profile");
     }
 
-    invalidate_profile_entries(state);
     /* Not an error if profile wasn't enabled (DELETE with 0 rows affected is OK) */
-    return NULL;
+    return load_profile_entries(state);
 }
 
 /**
@@ -1081,14 +1050,6 @@ error_t *state_reorder_profiles(
         );
     }
 
-    /* Ensure the row cache is populated — we read every row from it to verify
-     * the in-cache precondition and to preserve the target across DELETE +
-     * re-INSERT. */
-    error_t *err = load_profile_entries(state);
-    if (err) {
-        return error_wrap(err, "Failed to load profile row cache");
-    }
-
     /* Precondition: every name in `profiles` must already be enabled. Reorder
      * permutes membership; it never adds or removes rows. A name missing from
      * the cache means the caller wants to add a profile — they should call
@@ -1123,7 +1084,7 @@ error_t *state_reorder_profiles(
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "DELETE FROM enabled_profiles;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
-        err = ERROR(
+        error_t *err = ERROR(
             ERR_STATE_INVALID, "Failed to clear profiles: %s",
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
@@ -1172,10 +1133,8 @@ error_t *state_reorder_profiles(
         }
     }
 
-    /* SQL now reflects the new order. Invalidate so the next peek reloads fresh
-     * rows in the new position order. */
-    invalidate_profile_entries(state);
-    return NULL;
+    /* SQL now reflects the new order; re-read so the cache does too. */
+    return load_profile_entries(state);
 }
 
 /**
@@ -1212,8 +1171,7 @@ error_t *state_load(git_repository *repo, state_t **out) {
      * state->db stays NULL while state->db_path is retained so a later
      * state_begin() can lazily create the DB — honoring the READ → scoped-write
      * contract advertised by dotta_state_mode (runtime.h::dotta_state_mode_t).
-     * Reads short-circuit through load_profile_entries on the
-     * profile_entries_loaded flag set below; zero rows is the correct view of a
+     * The load below then reads zero rows, which is the correct view of a
      * never-initialized state. */
     state = calloc(1, sizeof(state_t));
     if (!state) {
@@ -1227,7 +1185,6 @@ error_t *state_load(git_repository *repo, state_t **out) {
     state->in_transaction = false;
     state->profile_entries = NULL;
     state->profile_entry_count = 0;
-    state->profile_entries_loaded = (db == NULL);
 
     if (db) {
         /* Prepare statements only when a live connection exists. On lazy promotion,
@@ -1235,12 +1192,17 @@ error_t *state_load(git_repository *repo, state_t **out) {
          * BEGIN IMMEDIATE. */
         err = prepare_statements(state);
         if (err) {
-            sqlite3_close(state->db);
-            state->db = NULL;
-            free(state->db_path);
-            free(state);
+            state_free(state);
             return err;
         }
+    }
+
+    /* The row cache, with the handle: this is where enabled_profiles becomes
+     * this handle's, so every reader of it downstream is a plain read. */
+    err = load_profile_entries(state);
+    if (err) {
+        state_free(state);
+        return err;
     }
 
     *out = state;
@@ -1290,14 +1252,14 @@ error_t *state_open(git_repository *repo, state_t **out) {
     state->in_transaction = false;
     state->profile_entries = NULL;
     state->profile_entry_count = 0;
-    state->profile_entries_loaded = false;
 
-    /* Prepare statements */
+    /* Prepare statements. Every failure from here on disposes of the handle the
+     * one way a handle is disposed of: state_free finalizes, checkpoints, closes
+     * and frees whatever this far got built, and rolls the transaction back once
+     * there is one. */
     err = prepare_statements(state);
     if (err) {
-        sqlite3_close(db);
-        free(db_path);
-        free(state);
+        state_free(state);
         return err;
     }
 
@@ -1311,14 +1273,19 @@ error_t *state_open(git_repository *repo, state_t **out) {
             errmsg ? errmsg : sqlite3_errstr(rc)
         );
         sqlite3_free(errmsg);
-        finalize_statements(state);
-        sqlite3_close(db);
-        free(db_path);
-        free(state);
+        state_free(state);
         return err;
     }
 
     state->in_transaction = true;
+
+    /* The row cache, inside the lock: the rows this handle answers from are the
+     * transaction's own snapshot. state_free rolls the transaction back. */
+    err = load_profile_entries(state);
+    if (err) {
+        state_free(state);
+        return err;
+    }
 
     *out = state;
     return NULL;
@@ -1375,13 +1342,7 @@ error_t *state_begin(state_t *state) {
      * this handle with state->db == NULL but state->db_path populated. Create
      * the DB on first write attempt to honor the READ → scoped-write contract
      * documented in runtime.h::dotta_state_mode_t — matching state_open()'s create
-     * semantics, just deferred to the moment of actual mutation.
-     *
-     * The profile_entries_loaded=true cached zero-row view (set by state_load's
-     * empty branch) remains accurate against the freshly-created empty schema;
-     * the first mutating call (state_reorder_profiles / state_enable_profile /
-     * state_disable_profile) invalidates the cache on its own per the existing
-     * discipline. */
+     * semantics, just deferred to the moment of actual mutation. */
     if (!state->db) {
         if (!state->db_path) {
             return ERROR(
@@ -1415,6 +1376,18 @@ error_t *state_begin(state_t *state) {
     }
 
     state->in_transaction = true;
+
+    /* Re-read inside the new lock: a handle open since before the lock was taken
+     * holds rows another process may have committed since, and this transaction's
+     * readers must see its own snapshot. Unlike rollback's own read, this one
+     * has a channel — the transaction the caller never got is rolled back, and
+     * the failure is returned. */
+    error_t *err = load_profile_entries(state);
+    if (err) {
+        state_rollback(state);
+        return err;
+    }
+
     return NULL;
 }
 
@@ -1447,11 +1420,11 @@ error_t *state_commit(state_t *state) {
 /**
  * Roll back a transaction started by state_begin()
  *
- * Invalidates the row cache defensively: mutation paths already invalidate before
- * returning, so the cache should be consistent with the DB heading into rollback
- * — but any future author who forgets the discipline would otherwise leave a
- * stale cache behind. Invalidation is O(row_count) and the next peek repopulates
- * from the rolled-back DB state.
+ * Re-reads the row cache from the rolled-back table: a mutation inside the
+ * transaction left it holding rows the database no longer has. This is the one
+ * read of that table with no channel to report on — rollback is void and its
+ * callers are unwinding — so a read that fails leaves the cache empty, which is
+ * what every caller here already has: none reads the state again.
  */
 void state_rollback(state_t *state) {
     if (!state || !state->db || !state->in_transaction) {
@@ -1460,7 +1433,9 @@ void state_rollback(state_t *state) {
 
     sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
     state->in_transaction = false;
-    invalidate_profile_entries(state);
+
+    error_t *err = load_profile_entries(state);
+    if (err) error_free(err);
 }
 
 /**
@@ -1503,7 +1478,7 @@ void state_free(state_t *state) {
     }
 
     free(state->db_path);
-    invalidate_profile_entries(state);
+    free_profile_entries(state);
     free(state);
 }
 

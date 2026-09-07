@@ -250,28 +250,23 @@ error_t *profile_build_mount_table(
 
     *out = NULL;
 
-    const state_profile_entry_t *entries = NULL;
-    size_t count = 0;
-    error_t *err = state_peek_profiles(state, &entries, &count);
-    if (err) {
-        return error_wrap(err, "Failed to read enabled profiles");
-    }
+    state_profiles_t rows = state_peek_profiles(state);
 
     mount_t *mounts = NULL;
-    if (count > 0) {
-        mounts = arena_calloc(arena, count, sizeof(*mounts));
+    if (rows.count > 0) {
+        mounts = arena_calloc(arena, rows.count, sizeof(*mounts));
         if (!mounts) {
             return ERROR(ERR_MEMORY, "Failed to allocate mounts");
         }
-        for (size_t i = 0; i < count; i++) {
+        for (size_t i = 0; i < rows.count; i++) {
             mounts[i] = (mount_t){
-                .profile = entries[i].name,
-                .target = entries[i].target
+                .profile = rows.entries[i].name,
+                .target = rows.entries[i].target
             };
         }
     }
 
-    return mount_table_build(arena, mounts, count, out);
+    return mount_table_build(arena, mounts, rows.count, out);
 }
 
 /**

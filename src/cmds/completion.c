@@ -52,15 +52,9 @@ void completion_profiles(
     if (repo == NULL) return;
 
     if (set == COMPLETION_ENABLED) {
-        const state_profile_entry_t *rows = NULL;
-        size_t count = 0;
-        error_t *err = state_peek_profiles(state, &rows, &count);
-        if (err) {
-            error_free(err);
-            return;
-        }
-        for (size_t i = 0; i < count; i++) {
-            fprintf(out, "%s\tEnabled profile\n", rows[i].name);
+        state_profiles_t rows = state_peek_profiles(state);
+        for (size_t i = 0; i < rows.count; i++) {
+            fprintf(out, "%s\tEnabled profile\n", rows.entries[i].name);
         }
         return;
     }
@@ -420,19 +414,13 @@ static void commits_emit(
 
     /* None named, or none of them a branch (a positional handed in as a guess
      * may be a path): the enabled histories stand in. */
-    const state_profile_entry_t *rows = NULL;
-    size_t count = 0;
-    error_t *err = state_peek_profiles(state, &rows, &count);
-    if (err) {
-        error_free(err);
-        return;
-    }
-    const char **enabled = arena_calloc(ctx->arena, count, sizeof(*enabled));
+    state_profiles_t rows = state_peek_profiles(state);
+    const char **enabled = arena_calloc(ctx->arena, rows.count, sizeof(*enabled));
     if (enabled == NULL) return;
-    for (size_t i = 0; i < count; i++) {
-        enabled[i] = rows[i].name;
+    for (size_t i = 0; i < rows.count; i++) {
+        enabled[i] = rows.entries[i].name;
     }
-    commits_walk(repo, out, prefix, enabled, count);
+    commits_walk(repo, out, prefix, enabled, rows.count);
 }
 
 /**

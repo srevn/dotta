@@ -1185,26 +1185,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Initialize .dottaignore for new profiles: the template, put on the stage
-     * for the commit below */
-    if (!profile_exists) {
-        const char *template = ignore_profile_template();
-        err = stage_put(
-            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB
-        );
-        if (err) {
-            err = error_wrap(
-                err, "Failed to initialize .dottaignore for profile '%s'",
-                opts->profile
-            );
-            goto cleanup;
-        }
-        output_info(
-            out, OUTPUT_VERBOSE, "Created .dottaignore for profile '%s'",
-            opts->profile
-        );
-    }
-
     /* Resolve the profile-specific ruleset. Safe for both paths: existing profile
      * → loads the profile's `.dottaignore`; new profile → branch doesn't exist
      * yet, builder treats that as "no profile layer" and the common layers still
@@ -1547,6 +1527,30 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_info(
             out, OUTPUT_VERBOSE, "Captured %zu ancestor director%s",
             ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
+        );
+    }
+
+    /* A new profile's .dottaignore: the template, on the stage beside the sheet
+     * — the two documents this commit carries that no capture wrote. Here rather
+     * than at the orphan's open, where the add has decided nothing yet: stage_put
+     * writes the blob to the object database at once, so a refusal between the
+     * two — a path that is not there, an argument the rules exclude, an unreadable
+     * file — would leave it there for a profile that was never created. */
+    if (!profile_exists) {
+        const char *template = ignore_profile_template();
+        err = stage_put(
+            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB
+        );
+        if (err) {
+            err = error_wrap(
+                err, "Failed to initialize .dottaignore for profile '%s'",
+                opts->profile
+            );
+            goto cleanup;
+        }
+        output_info(
+            out, OUTPUT_VERBOSE, "Created .dottaignore for profile '%s'",
+            opts->profile
         );
     }
 

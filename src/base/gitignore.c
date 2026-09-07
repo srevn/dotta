@@ -28,6 +28,9 @@
  *  - Walk-up is inlined into gitignore_eval, mirroring the outer
  *    git_ignore_path_is_ignored so parent-directory matching works when callers
  *    pass is_dir=false against a nested file.
+ *  - A negation after a bare "*" stands, as git reads it: libgit2's "*" shortcut
+ *    carries no wildcard flag, so its negation filter drops `!keep` after `*`
+ *    and diverges from gitignore's "nothing but keep" idiom.
  */
 
 #include "base/gitignore.h"
@@ -253,9 +256,9 @@ static error_t *parse_one_rule(
     if (length == 0)
         return NULL;
 
-    /* The rule as written — from the line's first byte (the `!` and the
-     * anchor slash included) to the end of the trimmed body — kept for the
-     * verdict's report. */
+    /* The rule as written — from the line's first byte (the `!` and the anchor
+     * slash included) to the end of the trimmed body — kept for the verdict's
+     * report. */
     char *source = arena_strndup(arena, line, (size_t) (pattern + length - line));
     if (!source)
         return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
@@ -326,6 +329,13 @@ static bool negation_has_effect(
 ) {
     for (size_t i = 0; i < set->count; i++) {
         const gitignore_rule_t *rule = &set->rules[i];
+
+        /* A bare `*` matches every path, so every negation after it stands: `*`
+         * then `!keep` is gitignore's idiom for "nothing but keep", and git reads
+         * it so. libgit2 does not — its `*` shortcut carries no wildcard flag,
+         * so the basename heuristic below runs on it and drops the negation. */
+        if (rule->flags & GITIGNORE_FLAG_MATCH_ALL)
+            return true;
 
         if (!(rule->flags & GITIGNORE_FLAG_HASWILD)) {
             if (does_negate_pattern(rule, neg))

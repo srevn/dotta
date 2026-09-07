@@ -522,11 +522,12 @@ error_t *content_stage_file(
             S_ISCHR(st.st_mode) ? "character device" :
             S_ISBLK(st.st_mode) ? "block device" : "special file";
 
+        /* This capture's own requirement, not a product rule: a symlink is the
+         * caller's put (the header), and the walk lists one as a leaf; what cannot
+         * be captured at all is a special file. */
         return ERROR(
             ERR_INVALID_ARG,
-            "Cannot capture '%s': it is a %s, not a regular file.\n\n"
-            "Dotta only manages regular configuration files.\n"
-            "Symlinks and special files are not supported.",
+            "Cannot capture '%s': it is a %s, not a regular file.",
             filesystem_path, type
         );
     }

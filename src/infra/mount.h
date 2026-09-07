@@ -298,36 +298,25 @@ error_t *mount_classify(
 );
 
 /**
- * Outcome of mount_resolve. Encodes "did the (kind, profile) lookup find a
- * binding?" as data so callers don't pattern-match on a NULL pointer.
- *
- * BOUND   — `*out_fs` is set to an arena-borrowed filesystem path.
- * UNBOUND — the lookup hit a `custom/` profile that has no --target on this host
- *           (e.g., a clone before the user has configured a target). `*out_fs`
- *           is unspecified; callers must not read it. HOME and ROOT lookups never
- *           produce UNBOUND — those entries are unconditional in every well-formed
- *           mount table.
- */
-typedef enum {
-    MOUNT_RESOLVE_BOUND,
-    MOUNT_RESOLVE_UNBOUND,
-} mount_resolve_outcome_t;
-
-/**
- * Convert a storage path to a filesystem path using a profile's mount.
+ * Where a claim stands on this machine: a storage path through a profile's mount.
  *
  * Resolution table:
  *   home/X   -> $HOME/X                  (profile may be NULL)
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
  *
- * Outcome contract:
- *   - MOUNT_RESOLVE_BOUND: `*out_fs` is set to an arena-borrowed filesystem path.
- *     The pointer's lifetime tracks `arena`; callers do not free it.
- *   - MOUNT_RESOLVE_UNBOUND: `*out_fs` is unspecified. Callers branch on the
- *     outcome — the manifest's claim routine skips the claim and records it on
- *     the view (manifest_unbound, the health channel); user-facing contexts fall
- *     back to a display spelling (remove.c) or let a hint stand in (ignore.c).
+ * Absence is NULL, as every lookup in the tree answers it (manifest_lookup,
+ * state_peek_profile_target, hashmap_get): `*out_location` is NULL when the claim
+ * is `custom/` and the profile has no target on this machine — a clone before
+ * the target is chosen, a sync that pulled another machine's claims — and the
+ * callers read it as the fact it is: the manifest's claim routine skips
+ * the claim and records it on the view (manifest_unbound, the health channel);
+ * user-facing contexts fall back to a display spelling (remove.c) or let a hint
+ * stand in (ignore.c). HOME and ROOT lookups always answer — those entries are
+ * unconditional in every well-formed mount table. `*out_location` is NULL on
+ * entry, so it is NULL after an error too.
+ *
+ * Errors:
  *   - ERR_INTERNAL when `storage_path` lacks a known label (the input boundary
  *     is supposed to validate before reaching here; this guards against contract
  *     drift).
@@ -336,10 +325,9 @@ typedef enum {
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)
  * @param storage_path Storage-format path (must not be NULL, validated)
- * @param arena        Arena that owns `*out_fs` allocation when BOUND
- * @param outcome      Receives the lookup outcome (must not be NULL)
- * @param out_fs       Arena-borrowed filesystem path when BOUND; unspecified
- *                     when UNBOUND. (must not be NULL)
+ * @param arena        Arena that owns the location
+ * @param out_location Arena-borrowed filesystem path; NULL for a custom/ claim
+ *                     the profile cannot place here (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *mount_resolve(
@@ -347,8 +335,7 @@ error_t *mount_resolve(
     const char *profile,
     const char *storage_path,
     arena_t *arena,
-    mount_resolve_outcome_t *outcome,
-    const char **out_fs
+    const char **out_location
 );
 
 #endif /* DOTTA_MOUNT_H */

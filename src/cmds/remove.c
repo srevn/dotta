@@ -217,8 +217,8 @@ static error_t *settle_let_go(
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
  *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
- *            (custom/X) surface MOUNT_RESOLVE_UNBOUND, which the compaction handles
- *            as "no filesystem path on this machine".
+ *            (custom/X) resolve to no location, which the compaction handles as
+ *            "no filesystem path on this machine".
  * @param tree The branch's tree as the stage opened it — the universe of claims
  *            (must not be NULL)
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
@@ -379,27 +379,20 @@ static error_t *resolve_removal_claims(
     }
 
     /* Compact to the taken claims and fill their filesystem paths — the path as
-     * this profile deploys the claim, for display and the hook context. UNBOUND
-     * fires when the profile has no --target on this machine; genuine resolve
-     * errors (malformed storage, OOM) are non-fatal here too — the storage path
-     * serves as fallback either way, and downstream consumers handle it gracefully:
+     * this profile deploys the claim, for display and the hook context. No location
+     * when the profile has no --target on this machine; genuine resolve errors
+     * (malformed storage, OOM) are non-fatal here too — the storage path serves
+     * as fallback either way, and downstream consumers handle it gracefully:
      * state lookups return "not found", display shows storage format. */
     size_t taken_count = 0;
     for (size_t j = 0; j < claim_count; j++) {
         if (!taken[j]) continue;
 
-        mount_resolve_outcome_t outcome;
         const char *fs_path = NULL;
         error_t *resolve_err = mount_resolve(
-            mounts, profile, claims[j].storage_path, ctx->arena,
-            &outcome, &fs_path
+            mounts, profile, claims[j].storage_path, ctx->arena, &fs_path
         );
-        if (resolve_err) {
-            error_free(resolve_err);
-            fs_path = NULL;
-        } else if (outcome == MOUNT_RESOLVE_UNBOUND) {
-            fs_path = NULL;
-        }
+        if (resolve_err) error_free(resolve_err);
 
         claims[j].filesystem_path = fs_path ? fs_path : claims[j].storage_path;
         claims[taken_count++] = claims[j];
@@ -1064,17 +1057,15 @@ static error_t *remove_files_from_profile(
         const string_array_t *let_go[] = { removed_paths, &pruned_dirs };
         for (size_t b = 0; !record_err && b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
-                mount_resolve_outcome_t outcome;
                 const char *fs_path = NULL;
                 error_t *resolve_err = mount_resolve(
-                    mounts, opts->profile, let_go[b]->items[i], ctx->arena,
-                    &outcome, &fs_path
+                    mounts, opts->profile, let_go[b]->items[i], ctx->arena, &fs_path
                 );
                 if (resolve_err) {
                     error_free(resolve_err);
                     continue;
                 }
-                if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+                if (!fs_path) continue;
                 const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
                 if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
                 candidates[candidate_count++] = (removal_candidate_t){
@@ -1508,32 +1499,21 @@ static error_t *delete_profile_branch(
      *
      * Borrows the run's mount table. HOME and ROOT are always present, so home/
      * and root/ paths resolve unconditionally. CUSTOM paths resolve only when
-     * the profile is enabled with a binding; otherwise MOUNT_RESOLVE_UNBOUND
-     * fires and the loop substitutes the storage path as the user-visible
-     * fallback. */
+     * the profile is enabled with a binding; otherwise, and on a resolve that
+     * fails (allocation failure or malformed input — non-fatal here), the loop
+     * substitutes the storage path so the hook sees a meaningful name. */
     if (hook_storage) {
         hook_fs_paths = string_array_new(0);
         if (hook_fs_paths) {
             for (size_t i = 0; i < hook_storage->count; i++) {
-                mount_resolve_outcome_t outcome;
                 const char *fs_path = NULL;
                 error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, hook_storage->items[i], ctx->arena,
-                    &outcome, &fs_path
+                    mounts, opts->profile, hook_storage->items[i], ctx->arena, &fs_path
                 );
-                if (conv_err) {
-                    error_free(conv_err);
-                    /* Fall back to storage path (allocation failure or malformed
-                     * input — non-fatal here). */
-                    string_array_push(hook_fs_paths, hook_storage->items[i]);
-                } else if (outcome == MOUNT_RESOLVE_BOUND) {
-                    string_array_push(hook_fs_paths, fs_path);
-                } else {
-                    /* UNBOUND: custom/ profile without binding on this host.
-                     * Fall back to storage path so the hook sees a meaningful
-                     * name. */
-                    string_array_push(hook_fs_paths, hook_storage->items[i]);
-                }
+                if (conv_err) error_free(conv_err);
+                string_array_push(
+                    hook_fs_paths, fs_path ? fs_path : hook_storage->items[i]
+                );
             }
         }
     }

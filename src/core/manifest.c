@@ -79,8 +79,8 @@ struct manifest {
  * - manifest: borrowed, caller retains ownership
  * - profile: arena-backed name every row of this profile borrows
  * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
- *          entries; a missing binding (MOUNT_RESOLVE_UNBOUND) contributes no
- *          row and is recorded on the view (manifest_note_unbound)
+ *          entries; a missing binding (no location) contributes no row and is
+ *          recorded on the view (manifest_note_unbound)
  * - metadata: borrowed (per-profile, reloaded for each profile in the outer build
  *             loop), can be NULL (profile lacks metadata.json)
  * - arena: borrowed, must not be NULL; per-row strings + spine growth allocations
@@ -391,22 +391,20 @@ static int manifest_claim_blob(
 
     /* Convert storage path to filesystem path against the mount table.
      *
-     * MOUNT_RESOLVE_UNBOUND fires when storage_path is custom/... and ctx->profile
-     * has no target binding on this machine — a normal lifecycle stage in a shared
-     * repository (a clone before the target is chosen, a sync that pulled another
-     * machine's custom/ claims, a revert that recommitted one), not corruption:
-     * no local precondition can bind what another machine adds to the branch.
-     * The claim contributes no row — nothing on this machine can place it — and
-     * is recorded on the view (manifest_unbound) so the health consumers surface
-     * it; it is never dropped in silence. Record-safe by construction: a record
-     * can only exist where a binding existed at write time, so no anchor ever
-     * joins a skipped claim and no orphan can be manufactured here. Genuine errors
+     * No location when storage_path is custom/... and ctx->profile has no target
+     * binding on this machine — a normal lifecycle stage in a shared repository
+     * (a clone before the target is chosen, a sync that pulled another machine's
+     * custom/ claims, a revert that recommitted one), not corruption: no local
+     * precondition can bind what another machine adds to the branch. The claim
+     * contributes no row — nothing on this machine can place it — and is recorded
+     * on the view (manifest_unbound) so the health consumers surface it; it is
+     * never dropped in silence. Record-safe by construction: a record can only
+     * exist where a binding existed at write time, so no anchor ever joins a
+     * skipped claim and no orphan can be manufactured here. Genuine errors
      * (malformed path, OOM) propagate via the err branch. */
-    mount_resolve_outcome_t outcome;
     const char *filesystem_path = NULL;
     err = mount_resolve(
-        ctx->mounts, ctx->profile, storage_path, ctx->arena,
-        &outcome, &filesystem_path
+        ctx->mounts, ctx->profile, storage_path, ctx->arena, &filesystem_path
     );
     if (err) {
         ctx->error = error_wrap(
@@ -415,7 +413,7 @@ static int manifest_claim_blob(
         );
         return -1;
     }
-    if (outcome == MOUNT_RESOLVE_UNBOUND) {
+    if (!filesystem_path) {
         ctx->error = manifest_note_unbound(
             ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
         );
@@ -541,11 +539,8 @@ static error_t *manifest_claim_tree(
         if (item->kind != PATH_KIND_DIRECTORY) continue;
 
         /* Resolve before claiming so the error path claims nothing. */
-        mount_resolve_outcome_t outcome;
         const char *filesystem_path = NULL;
-        err = mount_resolve(
-            mounts, profile, item->key, arena, &outcome, &filesystem_path
-        );
+        err = mount_resolve(mounts, profile, item->key, arena, &filesystem_path);
         if (err) {
             err = error_wrap(
                 err, "Failed to derive filesystem path from storage path: %s",
@@ -553,7 +548,7 @@ static error_t *manifest_claim_tree(
             );
             break;
         }
-        if (outcome == MOUNT_RESOLVE_UNBOUND) {
+        if (!filesystem_path) {
             /* The blob side's degrade contract, DIRECTORY kind: recorded, not
              * placed. The item's key is the metadata's, freed with it — the note
              * keeps an arena copy. The note itself dedups the stale-item case

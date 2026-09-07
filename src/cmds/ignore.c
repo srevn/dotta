@@ -827,13 +827,10 @@ static error_t *test_path_ignore(
         /* Its location, for the source check and the kind: a custom/ path binds
          * only through a profile with a target — without one, the hint stands
          * in for the kind and the source tree is not asked. */
-        mount_resolve_outcome_t bound;
-        const char *resolved = NULL;
         err = mount_resolve(
-            mounts, specific_profile, storage_path, ctx->arena, &bound, &resolved
+            mounts, specific_profile, storage_path, ctx->arena, &fs_path
         );
         if (err) return err;
-        if (bound == MOUNT_RESOLVE_BOUND) fs_path = resolved;
     } else {
         char *absolute = NULL;
         err = path_input_normalize(input, NULL, &absolute);

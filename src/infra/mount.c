@@ -692,14 +692,14 @@ error_t *mount_resolve(
     const char *profile,
     const char *storage_path,
     arena_t *arena,
-    mount_resolve_outcome_t *outcome,
-    const char **out_fs
+    const char **out_location
 ) {
     CHECK_NULL(table);
     CHECK_NULL(storage_path);
     CHECK_NULL(arena);
-    CHECK_NULL(outcome);
-    CHECK_NULL(out_fs);
+    CHECK_NULL(out_location);
+
+    *out_location = NULL;
 
     /* Storage paths arriving here are validated at their write boundary —
      * metadata.json parse (metadata.c), Git tree commit (add.c, update.c validate
@@ -716,22 +716,13 @@ error_t *mount_resolve(
         );
     }
 
+    /* Only CUSTOM lookups can miss here: HOME and ROOT entries are unconditional
+     * (mount_table_build adds them every time). A CUSTOM miss means the profile
+     * has no --target on this machine — e.g., a clone before the user has
+     * configured a target — and the answer is the absence itself; malformed-input
+     * failures surface as ERR_INTERNAL above. */
     const mount_entry_t *entry = find_entry_for(table, kind, profile);
-    if (!entry) {
-        /* Only CUSTOM lookups can miss here: HOME and ROOT entries are
-         * unconditional (mount_table_build adds them every time). A CUSTOM miss
-         * means the profile has no --target on this machine — e.g., a clone before
-         * the user has configured a target. Surface as UNBOUND so callers branch
-         * on outcome rather than pattern-matching on a NULL pointer;
-         * malformed-input failures still surface as ERR_INTERNAL above. */
-        *outcome = MOUNT_RESOLVE_UNBOUND;
-        return NULL;
-    }
+    if (!entry) return NULL;
 
-    error_t *err = join_target_with_tail(arena, entry->target_raw, tail, out_fs);
-    if (err) return err;
-
-    *outcome = MOUNT_RESOLVE_BOUND;
-
-    return NULL;
+    return join_target_with_tail(arena, entry->target_raw, tail, out_location);
 }

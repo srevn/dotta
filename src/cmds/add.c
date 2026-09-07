@@ -854,12 +854,9 @@ static error_t *update_manifest_after_add(
         time_t now = time(NULL);
         for (size_t i = 0; i < added_files->count; i++) {
             const add_path_t *path = added_files->items[i];
-            mount_resolve_outcome_t outcome;
             const char *at = NULL;
 
-            err = mount_resolve(
-                mounts, profile, path->storage_path, ctx->arena, &outcome, &at
-            );
+            err = mount_resolve(mounts, profile, path->storage_path, ctx->arena, &at);
             if (err) {
                 hashmap_free(anchor_index, NULL);
                 manifest_free(manifest);
@@ -868,7 +865,7 @@ static error_t *update_manifest_after_add(
                     path->storage_path
                 );
             }
-            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+            if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
             if (!row || strcmp(row->profile, profile) != 0) continue;
@@ -894,12 +891,9 @@ static error_t *update_manifest_after_add(
          * confirmation, as apply records them. */
         for (size_t i = 0; i < added_dirs->count; i++) {
             const add_path_t *path = added_dirs->items[i];
-            mount_resolve_outcome_t outcome;
             const char *at = NULL;
 
-            err = mount_resolve(
-                mounts, profile, path->storage_path, ctx->arena, &outcome, &at
-            );
+            err = mount_resolve(mounts, profile, path->storage_path, ctx->arena, &at);
             if (err) {
                 hashmap_free(anchor_index, NULL);
                 manifest_free(manifest);
@@ -908,7 +902,7 @@ static error_t *update_manifest_after_add(
                     path->storage_path
                 );
             }
-            if (outcome == MOUNT_RESOLVE_UNBOUND) continue;
+            if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
             if (!row || strcmp(row->profile, profile) != 0) continue;
@@ -933,12 +927,9 @@ static error_t *update_manifest_after_add(
      * record — the retire is this profile's word about its own claim, never about
      * the path — and an unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
-        mount_resolve_outcome_t outcome;
         const char *fs_path = NULL;
 
-        err = mount_resolve(
-            mounts, profile, retired->items[i], ctx->arena, &outcome, &fs_path
-        );
+        err = mount_resolve(mounts, profile, retired->items[i], ctx->arena, &fs_path);
         if (err) {
             hashmap_free(anchor_index, NULL);
             manifest_free(manifest);
@@ -947,9 +938,7 @@ static error_t *update_manifest_after_add(
                 retired->items[i]
             );
         }
-        if (outcome == MOUNT_RESOLVE_UNBOUND || manifest_lookup(manifest, fs_path)) {
-            continue;
-        }
+        if (!fs_path || manifest_lookup(manifest, fs_path)) continue;
 
         error_t *retire_err = state_retire_anchor(state, fs_path);
         if (retire_err) error_free(retire_err);
@@ -1255,20 +1244,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * the flag's. A custom/ path with no binding names nothing on this
              * machine, and the way to give it one is the flag. The table's answer
              * is absolute and the arena's already. */
-            mount_resolve_outcome_t outcome;
-            err = mount_resolve(
-                mounts, opts->profile, file, ctx->arena, &outcome, &fs_path
-            );
+            err = mount_resolve(mounts, opts->profile, file, ctx->arena, &fs_path);
             if (err) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
             }
-            if (outcome == MOUNT_RESOLVE_UNBOUND) {
+            if (!fs_path) {
                 err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' has no location for '%s' on this machine\n"
-                    "  dotta add %s --target /path %s",
-                    file, opts->profile, opts->profile, file
+                    ERR_INVALID_ARG, "'%s' has no location for '%s' on this machine\n"
+                    "  dotta add %s --target /path %s", file, opts->profile,
+                    opts->profile, file
                 );
                 goto cleanup;
             }

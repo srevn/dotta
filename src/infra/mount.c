@@ -269,6 +269,14 @@ error_t *mount_validate_target(const char *target) {
     return NULL;
 }
 
+bool mount_same_target(const char *a, const char *b) {
+    if (strcmp(a, b) == 0) return true;
+
+    struct stat at_a, at_b;
+    return fs_stat(a, &at_a) == 0 && fs_stat(b, &at_b) == 0 &&
+           at_a.st_dev == at_b.st_dev && at_a.st_ino == at_b.st_ino;
+}
+
 /**
  * One mount entry — a symlink-aware equivalence class for one mount. Both views
  * (forward classify, backward resolve) walk this same array.

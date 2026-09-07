@@ -500,12 +500,13 @@ static error_t *plan_classify(
             plan->needs_enable[i] = true;
             continue;
         }
-        /* Retained: re-enable only when the pending target names something the
-         * row does not hold. A NULL can change nothing — the UPSERT keeps the
-         * row's target for one (state_enable_profile), and no key unbinds. */
-        const char *a = it->target;
-        const char *b = persisted_target;
-        plan->needs_enable[i] = a != NULL && (b == NULL || strcmp(a, b) != 0);
+        /* Retained: re-enable only when the pending target names a directory
+         * the row does not hold — the row's own under another spelling is the
+         * same binding (mount_same_target), and the row keeps its spelling. A
+         * NULL can change nothing — the UPSERT keeps the row's target for one
+         * (state_enable_profile), and no key unbinds. */
+        plan->needs_enable[i] = it->target != NULL && (persisted_target == NULL ||
+            !mount_same_target(persisted_target, it->target));
     }
 
     return NULL;

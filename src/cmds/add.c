@@ -1063,9 +1063,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * enable is the verb that moves it, in place, and a second tree is a
          * second profile. Both ways out are named — the first for the user who
          * moved the tree, the second for the one who has two. Binding a row that
-         * has no target, or repeating its own, is fine. */
+         * has no target is fine, and so is naming the row's own directory, under
+         * its spelling or another (mount_same_target): the row's is the binding
+         * — the table below, the UPSERT after the commit and the record's join
+         * through the view all spell it the row's way — so the flag takes the
+         * row's spelling here, and the arguments re-root under it. */
         const char *existing = state_peek_profile_target(state, opts->profile);
-        if (existing && strcmp(existing, target) != 0) {
+        if (existing && !mount_same_target(existing, target)) {
             err = ERROR(
                 ERR_INVALID_ARG,
                 "Profile '%s' is bound at %s, and a profile has one target\n"
@@ -1076,6 +1080,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 opts->profile, existing, opts->profile, opts->target, opts->target
             );
             goto cleanup;
+        }
+        if (existing) {
+            target = arena_strdup(ctx->arena, existing);
+            if (!target) {
+                err = ERROR(ERR_MEMORY, "Failed to allocate the target");
+                goto cleanup;
+            }
         }
     }
 

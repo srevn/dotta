@@ -828,11 +828,12 @@ static error_t *profile_enable(
         if (hashmap_has(enabled_set, profile)) {
             /* --target on an enabled profile is a retarget: the binding is the
              * verb's subject, and state_enable_profile's UPSERT arm updates it
-             * in place. Only a differing value is work — the same target is an
-             * idempotent re-run and stays the quiet skip below. */
+             * in place. Only another directory is work — the row's own, under
+             * its spelling or another (mount_same_target), is an idempotent re-run
+             * and stays the quiet skip below, the row's spelling kept. */
             if (target) {
                 const char *current = state_peek_profile_target(state, profile);
-                if (!current || strcmp(current, target) != 0) {
+                if (!current || !mount_same_target(current, target)) {
                     retarget = profile;
                     err = string_array_push(to_enable_validated, profile);
                     if (err) {

@@ -127,6 +127,26 @@ error_t *mount_validate_storage(const char *storage_path);
 error_t *mount_validate_target(const char *target);
 
 /**
+ * Do two target spellings name one directory?
+ *
+ * The table reads a target's raw and canonical forms as one mount, so two spellings
+ * of one directory classify alike; the binders ask the same of a target typed
+ * against the row's, so an alias of the row's own directory is never written as
+ * a move. A move re-keys every record under the profile — the relocation read
+ * (core/workspace) meets one file under two keys and releases the old — and one
+ * that changes only the row's spelling buys that churn for nothing. A spelling
+ * that stands is named by its directory: the two are one when they have one device
+ * and inode, through a symlink standing at either (a target is validated through
+ * realpath, so a link there is the directory it reaches). One that does not stand
+ * — a stale row, its directory gone — is named by its spelling, and a differing
+ * one is a move.
+ *
+ * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
+ * classify.
+ */
+bool mount_same_target(const char *a, const char *b);
+
+/**
  * Return the mount-relative path: a pointer past the storage label.
  *
  * The subject every user-authored pattern is evaluated against. A pattern — in

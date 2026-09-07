@@ -227,6 +227,10 @@ static error_t *collect_tree(
         return err;
     }
 
+    /* "/" is the one directory whose spelling ends in its separator: a child
+     * beneath it is joined with none. */
+    const char *separator = dir_fs[1] ? "/" : "";
+
     struct dirent *entry;
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
@@ -237,8 +241,9 @@ static error_t *collect_tree(
             continue;
         }
 
-        const char *child_fs =
-            arena_str_format(arena, "%s/%s", dir_fs, entry->d_name);
+        const char *child_fs = arena_str_format(
+            arena, "%s%s%s", dir_fs, separator, entry->d_name
+        );
         if (!child_fs) {
             closedir(dir);
             return ERROR(ERR_MEMORY, "Failed to allocate path");

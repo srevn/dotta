@@ -84,49 +84,45 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path) {
 }
 
 /**
- * Reject `..`, `.`, and empty components in a slash-delimited path.
+ * Reject `.` and `..` components in a slash-delimited path.
  *
  * Pure rule check shared by mount_validate_storage and mount_validate_target.
- * `components` is the substring to tokenize (storage paths start at byte 0; targets
+ * `components` is the substring to walk (storage paths start at byte 0; targets
  * start at byte 1 to skip the leading '/'); `display_path` is the original
  * user-visible string used only in error messages — separated so each caller
  * surfaces the form the user typed, not its tail.
  *
- * No filesystem access; no arena. Heap-strdups for tokenization, frees before
- * return.
+ * A component is `.` or `..` by its first bytes and whatever ends it, so the
+ * walk reads neither a length nor a token. An empty component — the one a `//`
+ * or a trailing `/` leaves — is neither, and passes here exactly as it passed
+ * the tokenizer that used to skip it; both callers refuse those two shapes on
+ * their own, in their own words.
+ *
+ * No filesystem access, no allocation: the tail is walked in place.
  */
 static error_t *validate_path_components(
     const char *components,
     const char *display_path
 ) {
-    char *path_copy = strdup(components);
-    if (!path_copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
-    }
-
-    error_t *err = NULL;
-    char *saveptr = NULL;
-    char *component = strtok_r(path_copy, "/", &saveptr);
-    while (component != NULL) {
-        if (strcmp(component, "..") == 0) {
-            err = ERROR(
+    for (const char *comp = components; comp != NULL;) {
+        if (comp[0] == '.' && comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
+            return ERROR(
                 ERR_INVALID_ARG, "Path traversal not allowed "
                 "(component '..' in '%s')", display_path
             );
-            break;
         }
-        if (strcmp(component, ".") == 0) {
-            err = ERROR(
+        if (comp[0] == '.' && (comp[1] == '/' || comp[1] == '\0')) {
+            return ERROR(
                 ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
                 display_path
             );
-            break;
         }
-        component = strtok_r(NULL, "/", &saveptr);
-    }
-    free(path_copy);
 
-    return err;
+        const char *slash = strchr(comp, '/');
+        comp = slash ? slash + 1 : NULL;
+    }
+
+    return NULL;
 }
 
 error_t *mount_validate_storage(const char *storage_path) {

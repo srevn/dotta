@@ -16,7 +16,8 @@
 #include "infra/path.h"
 
 /* The ascent's copy of a subject: the stack covers the common case, the heap
- * the rest, so a long path is walked and never silently skipped. */
+ * the rest, so a long path is walked and never silently skipped. The same constant
+ * and the same reason as base/gitignore.c's own ascent. */
 #define PATH_STACK_BUFFER 4096
 
 /* One compiled input. `text` is what the coverage line prints — the input as
@@ -27,17 +28,17 @@
  * attribution share; a location rule keeps its anchor there, the rung past which
  * it reads; a storage rule keeps none. Every byte is the arena's. */
 typedef struct {
-    const char *text;
-    path_key_t key;
+    const char *text;                /* the input as typed: what a coverage line prints */
+    path_key_t key;                  /* the vocabulary its subject is read in */
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
     const char *prefix;              /* an exact entry's spelling, or a location rule's anchor; NULL for a storage rule */
-    size_t prefix_len;
+    size_t prefix_len;               /* strlen(prefix), hoisted for the beneath test */
 } entry_t;
 
 struct pathspec {
     entry_t *entries;                /* insertion order; exact duplicates collapsed */
-    size_t count;
-    size_t rules;                    /* how many are rules: the program runs only when some are */
+    size_t count;                    /* how many entries, both tiers */
+    size_t rule_count;               /* how many of them are rules: the program runs only when some are */
 };
 
 /* --- Compile ---------------------------------------------------------- */
@@ -100,10 +101,15 @@ static error_t *compile_rule(
             );
         }
 
-        const char *head = head_len > 0 ? arena_strndup(arena, body, head_len)
-                           : body[0] == '/' ? "/" : ".";
-        if (!head) {
-            return ERROR(ERR_MEMORY, "Failed to allocate the pattern's anchor");
+        /* A wildcard in the first component leaves no head, and the first byte
+         * says where the pattern is rooted — the guard above has already refused
+         * every byte but these two there. Only the arm that allocates can fail. */
+        const char *head = body[0] == '/' ? "/" : ".";
+        if (head_len > 0) {
+            head = arena_strndup(arena, body, head_len);
+            if (!head) {
+                return ERROR(ERR_MEMORY, "Failed to allocate the pattern's anchor");
+            }
         }
 
         path_input_t anchor;
@@ -159,10 +165,7 @@ static bool listed(const pathspec_t *spec, const entry_t *entry) {
 }
 
 error_t *pathspec_create(
-    char *const *inputs,
-    size_t count,
-    const mount_table_t *table,
-    arena_t *arena,
+    char *const *inputs, size_t count, const mount_table_t *table, arena_t *arena,
     pathspec_t **out
 ) {
     CHECK_NULL(table);
@@ -191,7 +194,7 @@ error_t *pathspec_create(
 
         if (strpbrk(input, "*?[")) {
             RETURN_IF_ERROR(compile_rule(table, input, arena, &entry));
-            spec->rules++;
+            spec->rule_count++;
         } else {
             /* An exact entry in the key the input names, one per key however
              * many inputs spell it. */
@@ -264,7 +267,7 @@ static const char *rule_subject(const entry_t *e, const char *rung) {
 typedef struct {
     char *rung;                      /* the current rung: the copy, shortened in place; NULL when absent or spent */
     char *heap;                      /* the copy when it outgrew the stack */
-    char stack[PATH_STACK_BUFFER];
+    char stack[PATH_STACK_BUFFER];   /* where it fits, which is nearly always */
 } rungs_t;
 
 /* The copy, or false when it cannot be made: the ascent is then abandoned and
@@ -308,17 +311,17 @@ static void rungs_close(rungs_t *r) {
 
 /* What the program answers at one rung. */
 typedef enum {
-    VERDICT_NONE,                    /* no rule matched: the rung above decides, or none does */
-    VERDICT_OUT,                     /* a negation matched: not in scope */
-    VERDICT_IN                       /* a rule matched: in scope */
+    VERDICT_NONE,               /* no rule matched: the rung above decides, or none does */
+    VERDICT_OUT,                /* a negation matched: not in scope */
+    VERDICT_IN                  /* a rule matched: in scope */
 } verdict_t;
 
-/* The program at one rung: the rules in reverse insertion order, each read at
- * the rung of its own vocabulary, and the first to match decides. */
-static verdict_t program_at(
-    const pathspec_t *spec,
-    const char *location,
-    const char *storage_path,
+/* The scan at one rung: the rules in reverse insertion order, each read at the
+ * rung of its own vocabulary, and the first to match decides. The ruleset's own
+ * scan (base/gitignore.c) is this over one subject; the walk is the caller's
+ * there as it is here. */
+static verdict_t scan_rung(
+    const pathspec_t *spec, const char *location, const char *storage_path,
     bool is_dir
 ) {
     for (size_t i = spec->count; i > 0; --i) {
@@ -331,13 +334,12 @@ static verdict_t program_at(
             return gitignore_rule_negated(e->rule) ? VERDICT_OUT : VERDICT_IN;
         }
     }
+
     return VERDICT_NONE;
 }
 
 bool pathspec_matches(
-    const pathspec_t *spec,
-    const char *location,
-    const char *storage_path,
+    const pathspec_t *spec, const char *location, const char *storage_path,
     path_kind_t kind
 ) {
     /* NULL pathspec matches all (no filter applied). */
@@ -351,31 +353,34 @@ bool pathspec_matches(
             return true;
         }
     }
-    if (spec->rules == 0) return false;
+    if (spec->rule_count == 0) return false;
 
-    /* The program: at the leaf as given, then up the rungs until one decides.
-     * The two subjects climb together — rung k of each is one directory as far
-     * as the tail goes — and both copies are made or neither: a vocabulary still
-     * climbing while the other could not would let a positive rule in one select
-     * what a negation in the other would have excluded. */
-    verdict_t verdict = program_at(spec, location, storage_path, kind == PATH_KIND_DIRECTORY);
-    if (verdict == VERDICT_NONE) {
-        rungs_t l, s;
-        bool copied = rungs_open(&l, location);
-        copied = rungs_open(&s, storage_path) && copied;    /* both opened, so both close */
-        if (copied) {
-            while (verdict == VERDICT_NONE) {
-                bool up_l = rungs_up(&l);
-                bool up_s = rungs_up(&s);
-                if (!up_l && !up_s) {
-                    break;
-                }
-                verdict = program_at(spec, l.rung, s.rung, true);
-            }
+    /* The leaf as given: most subjects decide there, and nothing is copied. */
+    verdict_t verdict = scan_rung(
+        spec, location, storage_path, kind == PATH_KIND_DIRECTORY
+    );
+    if (verdict != VERDICT_NONE) return verdict == VERDICT_IN;
+
+    /* Up the rungs. The two subjects climb together — rung k of each is one
+     * directory as far as the tail goes — and both copies are made or neither:
+     * a vocabulary still climbing while the other could not would let a positive
+     * rule in one select what a negation in the other would have excluded. Each
+     * open is named on its own line, so neither is skipped by a short circuit
+     * and both are closed. */
+    rungs_t l, s;
+    bool opened_l = rungs_open(&l, location);
+    bool opened_s = rungs_open(&s, storage_path);
+    while (opened_l && opened_s && verdict == VERDICT_NONE) {
+        bool up_l = rungs_up(&l);
+        bool up_s = rungs_up(&s);
+        if (!up_l && !up_s) {
+            break;
         }
-        rungs_close(&l);
-        rungs_close(&s);
+        verdict = scan_rung(spec, l.rung, s.rung, true);
     }
+    rungs_close(&l);
+    rungs_close(&s);
+
     return verdict == VERDICT_IN;
 }
 

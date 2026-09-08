@@ -21,9 +21,10 @@
  *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
  *     profiles the rows came from, in precedence order), manifest_mounts (the
  *     table the rows were placed by, lent), manifest_lookup (by filesystem path,
- *     O(1)) and manifest_lookup_storage (by storage path, linear); and
- *     manifest_diff, the per-profile delta between two views that the
- *     scope-changing verbs and sync print their receipts from.
+ *     O(1)), manifest_lookup_storage (by claim — a storage path under one profile,
+ *     linear) and manifest_holders (how many rows hold a name, and the one when
+ *     one does); and manifest_diff, the per-profile delta between two views that
+ *     the scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -420,27 +421,57 @@ const manifest_row_t *manifest_lookup(
 );
 
 /**
- * Look up a row by storage path
+ * Look up a row by its claim: the storage path under one profile
  *
- * Linear scan — the callers ask once per command (list, show) or once per BACKED
- * orphan (the workspace's relocation read, each of which already cost a Git tree
- * probe; a lazy per-profile storage index inside the orphan pass's authority
- * cache is the upgrade if a profile-wide re-target ever makes the scan show up).
- * Since precedence is resolved, each storage path under home/ and root/ maps to
- * exactly one row; under custom/ two profiles with distinct targets may share a
- * storage path, and the first match is returned — the profile filter is how a
- * caller that means one claim names it.
+ * A name keys within one profile (infra/mount.h): the pair (profile, storage
+ * path) names at most one row — under home/ and root/ precedence leaves one row
+ * per name, and under custom/ one profile has one target — so the lookup is exact.
+ * `profile` is required; a NULL profile names no row, the API's own return
+ * convention, since a pointer-returning lookup has no CHECK_NULL to refuse with.
+ * A caller with no profile in hand asks manifest_holders: the first of several
+ * rows holding a name was never an answer.
+ *
+ * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
+ * read, each of which already cost a Git tree probe; a lazy per-profile storage
+ * index inside the orphan pass's authority cache is the upgrade if a profile-wide
+ * re-target ever makes the scan show up).
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param storage_path Storage path to look up, e.g. "home/.bashrc" (NULL returns
  *                     NULL)
- * @param profile Only rows of this profile match; NULL matches any
- * @return Borrowed row pointer, or NULL if no row has the storage path
+ * @param profile The claim's profile (NULL names no row)
+ * @return Borrowed row pointer, or NULL when the profile holds no row at the name
  */
 const manifest_row_t *manifest_lookup_storage(
     const manifest_t *manifest,
     const char *storage_path,
     const char *profile
+);
+
+/**
+ * How many rows hold this name, and the row when one does
+ *
+ * A name keys within one profile (infra/mount.h): under custom/ two profiles at
+ * two targets hold one name for two files, and under home/ or root/ precedence
+ * leaves one. The count is the caller's admission question — none, one, more —
+ * and `*out_row` is the row iff exactly one holds the name: the claim a caller
+ * without a profile may act on. It is NULL when none does and NULL when more
+ * than one does — the first of several was the arbitrary answer this replaces
+ * (show and list without -p read it, and answered one profile's file for
+ * another's), and it has no reader; a caller that must name each holder walks
+ * manifest_rows. Readers: show and list without a profile.
+ *
+ * Linear scan, once per command.
+ *
+ * @param manifest Manifest (NULL yields 0)
+ * @param storage_path Storage path, e.g. "custom/etc/foo" (NULL yields 0)
+ * @param out_row Receives the one holder, or NULL (must not be NULL)
+ * @return How many rows hold the name
+ */
+size_t manifest_holders(
+    const manifest_t *manifest,
+    const char *storage_path,
+    const manifest_row_t **out_row
 );
 
 /**

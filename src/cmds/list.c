@@ -623,23 +623,49 @@ static error_t *list_file_history(
     const char *profile = opts->profile;
 
     if (!profile) {
-        /* The view over the enabled set: precedence resolved, so the storage
-         * path names one row and that row's profile is the owner. The row is
-         * the arena's; only the index is released here. */
+        /* The owner is the view's: the enabled set at HEAD, precedence resolved.
+         * A name keys within one profile, so the view may hold it once (home/,
+         * root/, or one binding), or once per binding under custom/ — and then
+         * no profile is the answer, and each holder is named with the location
+         * that tells them apart. The rows are the arena's; only the index is
+         * released here. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
-        const manifest_row_t *row = manifest_lookup_storage(manifest, storage_path, NULL);
-        manifest_free(manifest);
-        if (!row) {
+        const manifest_row_t *row = NULL;
+        size_t holders = manifest_holders(manifest, storage_path, &row);
+        if (holders == 0) {
+            manifest_free(manifest);
             return ERROR(
                 ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
                 "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
                 storage_path, opts->file_path
             );
         }
+        if (holders > 1) {
+            output_print(
+                out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
+                storage_path, holders
+            );
+            manifest_rows_t rows = manifest_rows(manifest);
+            for (size_t i = 0; i < rows.count; i++) {
+                const manifest_row_t *held = rows.entries[i];
+                if (strcmp(held->storage_path, storage_path) != 0) continue;
+                output_print(
+                    out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
+                    held->filesystem_path
+                );
+            }
+            output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
+            output_hintline(
+                out, OUTPUT_NORMAL, "  dotta list -p <profile> %s", storage_path
+            );
+            manifest_free(manifest);
+            return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", storage_path);
+        }
         profile = row->profile;
+        manifest_free(manifest);
     }
 
     /* An explicit profile must be here (one the view named is, by construction);

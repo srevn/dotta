@@ -341,8 +341,8 @@ error_t *profile_build_file_index(
  * Branch scan, O(M×D) where D = path depth: each branch's HEAD tree is asked
  * for the one path. Returns ALL profiles containing the file, enabled or not —
  * revert's question. A caller that wants the owning profile among the enabled
- * set asks the view instead (manifest_lookup_storage on a manifest_build over
- * the enabled profiles — list, show).
+ * set asks the view instead (manifest_holders on a manifest_build over the enabled
+ * profiles — list, show).
  *
  * The storage_path must already be resolved (use path_input_resolve() first).
  *

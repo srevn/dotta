@@ -665,17 +665,42 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* Discover owning profile via the view: the enabled set at HEAD with precedence
-     * resolved, so the storage path names at most one row */
+    /* The owning profile is the view's: the enabled set at HEAD with precedence
+     * resolved. A name keys within one profile, so the view may hold it once
+     * (home/, root/, or one binding), or once per binding under custom/ — and
+     * then no profile is the answer, and each holder is named with the location
+     * that tells them apart. */
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
-    const manifest_row_t *row = manifest_lookup_storage(manifest, search_path, NULL);
-    if (!row) {
+    const manifest_row_t *row = NULL;
+    size_t holders = manifest_holders(manifest, search_path, &row);
+    if (holders == 0) {
         err = ERROR(
             ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
             opts->file_path
         );
+        goto cleanup;
+    }
+    if (holders > 1) {
+        output_print(
+            out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n", search_path,
+            holders
+        );
+        manifest_rows_t rows = manifest_rows(manifest);
+        for (size_t i = 0; i < rows.count; i++) {
+            const manifest_row_t *held = rows.entries[i];
+            if (strcmp(held->storage_path, search_path) != 0) continue;
+            output_print(
+                out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
+                held->filesystem_path
+            );
+        }
+        output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
+        output_hintline(
+            out, OUTPUT_NORMAL, "  dotta show -p <profile> %s", search_path
+        );
+        err = ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", search_path);
         goto cleanup;
     }
 

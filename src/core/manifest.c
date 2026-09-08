@@ -878,24 +878,46 @@ const manifest_row_t *manifest_lookup(
 }
 
 /**
- * Look up a row by storage path
+ * Look up a row by its claim
  */
 const manifest_row_t *manifest_lookup_storage(
     const manifest_t *manifest,
     const char *storage_path,
     const char *profile
 ) {
-    if (!manifest || !storage_path) return NULL;
+    if (!manifest || !storage_path || !profile) return NULL;
 
     for (size_t i = 0; i < manifest->count; i++) {
-        if (profile && strcmp(manifest->rows[i]->profile, profile) != 0) {
-            continue;
-        }
-        if (strcmp(manifest->rows[i]->storage_path, storage_path) == 0) {
-            return manifest->rows[i];
+        const manifest_row_t *row = manifest->rows[i];
+        if (strcmp(row->profile, profile) == 0 &&
+            strcmp(row->storage_path, storage_path) == 0) {
+            return row;
         }
     }
     return NULL;
+}
+
+/**
+ * How many rows hold this name, and the row when one does
+ */
+size_t manifest_holders(
+    const manifest_t *manifest,
+    const char *storage_path,
+    const manifest_row_t **out_row
+) {
+    *out_row = NULL;
+    if (!manifest || !storage_path) return 0;
+
+    size_t count = 0;
+    const manifest_row_t *held = NULL;
+    for (size_t i = 0; i < manifest->count; i++) {
+        if (strcmp(manifest->rows[i]->storage_path, storage_path) == 0) {
+            held = manifest->rows[i];
+            count++;
+        }
+    }
+    if (count == 1) *out_row = held;
+    return count;
 }
 
 /**

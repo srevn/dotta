@@ -16,8 +16,8 @@
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
  * The pathspec is opaque. Callers that need to enumerate the compiled entries
- * (e.g. building a libgit2 git_strarray, validating coverage) use the indexed
- * accessors below; the internal layout is private to pathspec.c.
+ * (diff's coverage answers) use the indexed accessors below; the internal layout
+ * is private to pathspec.c.
  */
 
 #ifndef DOTTA_PATHSPEC_H

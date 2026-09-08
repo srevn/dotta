@@ -4,7 +4,6 @@
 
 #include "cmds/diff.h"
 
-#include <assert.h>
 #include <config.h>
 #include <git2.h>
 #include <stdio.h>
@@ -1174,59 +1173,43 @@ cleanup:
 }
 
 /**
- * Build a git_strarray pathspec from a path filter
+ * Select one delta of a commit range under the path filter
  *
- * Flattens the pathspec's exact paths and glob patterns into a single
- * borrowed-pointer array suitable for libgit2's diff pathspec field.
+ * libgit2's notify callback, called for every delta before it is inserted into
+ * the diff (an unmodified pair never reaches it): 0 keeps the delta, a positive
+ * return drops it, a negative one cancels the diff. The one matcher every other
+ * filter site reads decides here too, so a commit range and the workspace read
+ * one filter alike — a pattern is anchored where gitignore anchors it, and `*`
+ * stops at a slash. Handing libgit2 the entries as its own pathspec read them
+ * by fnmatch instead, where `home/<star>.lua` reached `home/dir/b.lua`.
  *
- * Memory ownership:
- *   - The returned strings array is heap-allocated; the caller frees
- *     opts->pathspec.strings after the diff operation completes.
- *   - Individual string pointers borrow from the filter and remain valid for
- *     the filter's lifetime; the filter MUST outlive the diff operation.
+ * Installed only when a filter was given: the diff under none holds every delta,
+ * the repository's own files included, and prints as it always has. Under a filter
+ * those files are out — the sheet has no row for a filter to name — and every
+ * selected delta is a managed path.
  *
- * Behaviour:
- *   - NULL filter or empty filter: no-op (libgit2 treats unset pathspec as "match
- *     all").
- *   - Allocation failure: returns ERR_MEMORY; opts->pathspec is left untouched.
+ * One path per delta: a tree-to-tree diff finds no renames, and libgit2 spells
+ * both sides of every delta from one string, so the new side names the old as well.
  *
- * @param filter Path filter (can be NULL)
- * @param opts   Diff options to populate (must not be NULL)
- * @return Error or NULL on success
+ * @param diff     The diff so far (unread)
+ * @param delta    The delta about to be inserted
+ * @param matched  libgit2's own pathspec match (none is set; unread)
+ * @param payload  The path filter (pathspec_t; never NULL here)
+ * @return 0 to keep the delta, 1 to drop it
  */
-static error_t *build_diff_pathspec(
-    const pathspec_t *filter,
-    git_diff_options *opts
+static int select_delta(
+    const git_diff *diff, const git_diff_delta *delta, const char *matched,
+    void *payload
 ) {
-    if (!opts) return NULL;
+    (void) diff;
+    (void) matched;
+    const pathspec_t *filter = payload;
+    const char *path = delta->new_file.path;
 
-    size_t total = pathspec_count(filter);
-    if (total == 0) return NULL;
-
-    char **strings = calloc(total, sizeof(*strings));
-    if (!strings) {
-        return ERROR(ERR_MEMORY, "Failed to allocate memory for diff pathspec");
+    if (!mount_spec_for_path(path)) {
+        return 1;
     }
-
-    size_t index = 0;
-
-    size_t exact_count = pathspec_exact_count(filter);
-    for (size_t i = 0; i < exact_count; i++) {
-        strings[index++] = (char *) pathspec_exact_at(filter, i);
-    }
-
-    size_t glob_count = pathspec_glob_count(filter);
-    for (size_t i = 0; i < glob_count; i++) {
-        strings[index++] = (char *) pathspec_glob_at(filter, i);
-    }
-
-    /* Structural invariant: pathspec_count == exact_count + glob_count. Held by
-     * pathspec_create; the pathspec is immutable thereafter. */
-    assert(index == total);
-
-    opts->pathspec.strings = strings;
-    opts->pathspec.count = total;
-    return NULL;
+    return pathspec_matches(filter, path, PATH_KIND_FILE) ? 0 : 1;
 }
 
 /**
@@ -1235,7 +1218,9 @@ static error_t *build_diff_pathspec(
  * Type-enforced invariant: historical commit search walks the persistent enabled
  * set via scope_enabled — hiding commits behind the CLI filter would make
  * legitimately-referenceable commits unreachable. The path filter is derived
- * from scope_paths (raw CLI positional args, never narrowed).
+ * from scope_paths (raw CLI positional args, never narrowed) and applied delta
+ * by delta as the diff is generated (select_delta), so the diff printed — names,
+ * stats, patch — is the selection and nothing else.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository and the
  *            output)
@@ -1335,21 +1320,16 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
-    /* Generate diff with file filtering options */
+    /* Generate the diff, the filter selecting each delta on its way in. The filter
+     * is borrowed for the call: libgit2 reads the payload only while generating. */
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
-    err = build_diff_pathspec(file_filter, &diff_opts);
-    if (err) {
-        goto cleanup;
+    if (file_filter) {
+        diff_opts.notify_cb = select_delta;
+        diff_opts.payload = (void *) file_filter;
     }
 
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
-
-    /* Free pathspec strings if they were allocated */
-    if (diff_opts.pathspec.strings) {
-        free(diff_opts.pathspec.strings);
-    }
-
     if (err) {
         err = error_wrap(err, "Failed to generate diff");
         goto cleanup;
@@ -1569,8 +1549,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *   scope_enabled — the persistent enabled set (the CLI filter's bound,
      *                   historical-mode branch resolution search).
      *   scope_active  — diff display face.
-     *   scope_paths   — CLI positional file filter (threaded into
-     *                   historical modes and diff_workspace).
+     *   scope_paths   — CLI positional file filter (the range arm's delta
+     *                   selection, the coverage answers, diff_workspace).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,

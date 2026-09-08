@@ -25,10 +25,10 @@
  *             names when one was given, else equal to enabled. "What the user
  *             asked for, not the underlying world."
  *   paths   — the CLI-derived path filter (NULL when no positional args).
- *             Exposed for the historical diff paths that thread a raw pathspec_t
- *             through libgit2 pathspec APIs and have no profile or exclude
- *             semantics to honor. In-workspace sites should prefer
- *             scope_accepts_path.
+ *             Exposed for diff's historical arms, which select a commit range
+ *             delta by delta and answer the filter's coverage themselves, and
+ *             have no profile or exclude semantics to honor. In-workspace sites
+ *             should prefer scope_accepts_path.
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
  * sync.c ("use enabled, not active, for workspace_load") is enforced by
@@ -175,9 +175,9 @@ const string_array_t *scope_active(const scope_t *s);
 /**
  * Raw path filter (NULL when no positional file args were given).
  *
- * Consumers that need to enumerate the compiled entries (e.g. diff's historical
- * modes flattening the filter into a libgit2 git_strarray, filter-coverage
- * validation) use this with the pathspec indexed accessors (pathspec_count /
+ * Consumers that read the filter itself — diff's historical arms (a commit range
+ * selected delta by delta, the coverage answers over the compiled entries) and
+ * apply's count line — use this with the pathspec accessors (pathspec_count /
  * pathspec_exact_at / pathspec_glob_at / pathspec_glob_matches_at). Per-iteration
  * path-vs-filter checks should use scope_accepts_path instead.
  *

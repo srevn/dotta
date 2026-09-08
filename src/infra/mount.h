@@ -27,10 +27,14 @@
  * table knows its roots. A mount is known by the spelling its binder typed (HOME
  * as the identity spells it), read through every enclosing alias the table holds,
  * and by what it reaches as realpath spells it; both views spell a location from
- * the physical, whichever spelling reached them. So one file has one location
- * for every alias a binder declared — a root's two spellings, a root beneath
- * another root's alias, a claim beneath a root's alias — and a root is a root
- * under any of them. A tail is Git's and is joined as written: a link
+ * the physical, whichever spelling reached them. A binding realpath cannot answer
+ * — its directory gone since it was bound — is known by that one spelling, which
+ * is as far as the table can say it reaches and is the very location a claim
+ * beneath it resolves to, so name and resolve place one location there too. So
+ * one file has one location for every alias a binder declared — a root's two
+ * spellings, a root beneath another root's alias, a claim beneath a root's alias
+ * — and a root is a root under any of them. A tail is Git's and is joined as
+ * written: a link
  * inside one that no binding names is a leaf of its own, as `~/.config ->
  * ~/dotfiles/config` must stay, and two claims through and around it are two
  * claims. A bind mount or a firmlink is two physicals for one directory: the
@@ -266,10 +270,10 @@ typedef struct {
  *
  * Each mount is known by two spellings — its binder's, read through every enclosing
  * alias the table holds, and the physical, what it reaches as realpath spells
- * it (the spelling itself when realpath agrees, or cannot answer) — so a path
- * typed through either classifies under it, and the location either view spells
- * is the physical: one key per file for every alias a binder declared (the "Mount
- * table" paragraph above).
+ * it (the settled spelling itself when realpath agrees, or cannot answer) — so
+ * a path typed through either classifies under it, and the location either view
+ * spells is the physical: one key per file for every alias a binder declared
+ * (the "Mount table" paragraph above).
  *
  * The table is augmented internally with:
  *   - A HOME mount whose target is the invoker's home (sys/identity), in both

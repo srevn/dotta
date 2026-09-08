@@ -283,10 +283,13 @@ bool mount_same_target(const char *a, const char *b) {
  *           target typed `~/link` under a HOME that is itself a link is known
  *           as `<HOME's physical>/link`, which is how a path read through HOME
  *           meets it (mount_table_build).
- * - physical: what it reaches, as realpath spells it — the spelling itself when
- *           realpath agrees or cannot answer (a target gone since it was bound).
- *           An alias is a mount whose spelling is not its physical; the sentinel
- *           and a mount bound under no link are not one.
+ * - physical: what it reaches, as realpath spells it — and, when realpath cannot
+ *           answer (a target gone since it was bound, EACCES), the entry's own
+ *           settled spelling, which is as far as the table knows it reaches.
+ *           NULL between the two, inside mount_table_build alone: the alias rounds
+ *           read it that way, and no reader outside the build meets one. An alias
+ *           is a mount whose spelling is not its physical; the sentinel and a
+ *           mount bound under no link are not one.
  * - kind:   mount kind for this entry's storage label.
  * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
  *           namespace. For CUSTOM mounts, the owning profile name — always set,
@@ -322,37 +325,50 @@ static const char *table_spelling(arena_t *arena, const char *path) {
 }
 
 /**
- * Where a spelling reaches, as realpath spells it, or the spelling itself.
+ * Where a spelling reaches, as realpath spells it, or NULL when realpath cannot
+ * answer — a target deleted since it was bound, EACCES.
  *
- * Best-effort: a spelling realpath cannot answer (a target deleted since it was
- * bound, EACCES) reaches itself, and the mount is no alias — its claims key under
- * the spelling, and have no files. A root spelled "" is asked for as "/", the
- * one spelling of it realpath takes. NULL on arena exhaustion, as table_spelling
- * beside it answers that.
+ * The entry's physical is then settled from its own spelling, once the rounds
+ * have read every declared alias above it through (mount_table_build): that is
+ * as far as the table can say it reaches, and it is the same reading a claim
+ * beneath the binding gets (mount_resolve), so name and resolve place one location.
+ * Handing the spelling back here instead would settle it before the rounds and
+ * make the entry look like a non-alias to them — the alias test is the two fields
+ * — so a binding under a declared link would be resolved through the link and
+ * named through HOME.
+ *
+ * A root spelled "" is asked for as "/", the one spelling of it realpath takes.
+ * ERR_MEMORY on arena exhaustion — the one failure that is not "cannot answer".
  */
-static const char *physical_spelling(arena_t *arena, const char *spelling) {
+static error_t *physical_spelling(
+    arena_t *arena, const char *spelling, const char **out
+) {
+    *out = NULL;
+
     char *resolved = NULL;
     error_t *err = fs_canonicalize_path(*spelling ? spelling : "/", &resolved);
     if (err) {
         error_free(err);
-        return spelling;
+        return NULL;
     }
 
-    const char *physical = table_spelling(arena, resolved);
+    *out = table_spelling(arena, resolved);
     free(resolved);
 
-    return physical;
+    return *out
+        ? NULL : ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
 }
 
 /**
  * Is this mount known by two spellings?
  *
- * The sentinel, a mount bound under no link, and one realpath could not answer
- * (physical_spelling hands the spelling back) all have one spelling for one
- * directory: none of them takes part in spelling a path physically.
+ * The sentinel and a mount bound under no link have one spelling for one directory.
+ * So has one whose physical is not known yet: nothing may be read through a
+ * spelling whose destination the table does not have, and inside mount_table_build
+ * that entry is the rounds' subject, never their source.
  */
 static bool mount_is_alias(const mount_entry_t *m) {
-    return strcmp(m->spelling, m->physical) != 0;
+    return m->physical && strcmp(m->spelling, m->physical) != 0;
 }
 
 /**
@@ -521,8 +537,7 @@ static const mount_spec_t *deepest_root(
 }
 
 error_t *mount_table_build(
-    arena_t *arena, const mount_t *mounts, size_t mount_count,
-    mount_table_t **out
+    arena_t *arena, const mount_t *mounts, size_t mount_count, mount_table_t **out
 ) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
@@ -575,10 +590,9 @@ error_t *mount_table_build(
         if (!spelling) {
             return ERROR(ERR_MEMORY, "Failed to copy path into arena");
         }
-        const char *physical = physical_spelling(arena, spelling);
-        if (!physical) {
-            return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
-        }
+        const char *physical = NULL;
+        error_t *err = physical_spelling(arena, spelling, &physical);
+        if (err) return err;
 
         /* The name is copied like the target: the table keeps nothing of the
          * caller's past the call, so it stands for the arena's lifetime whatever
@@ -604,10 +618,9 @@ error_t *mount_table_build(
     if (!home) {
         return ERROR(ERR_MEMORY, "Failed to copy path into arena");
     }
-    const char *home_physical = physical_spelling(arena, home);
-    if (!home_physical) {
-        return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
-    }
+    const char *home_physical = NULL;
+    error_t *err = physical_spelling(arena, home, &home_physical);
+    if (err) return err;
 
     entries[n++] = (mount_entry_t){
         .spelling = home, .physical = home_physical, .kind = MOUNT_HOME,
@@ -623,18 +636,25 @@ error_t *mount_table_build(
     table->entries = entries;
     table->entry_count = n;
 
-    /* The spellings, read through every enclosing alias: each alias read through
-     * the table, once per custom — a round settles the outermost unresolved alias
-     * of every chain, and no chain is longer than the table. An entry that has
-     * been read all the way through to its own physical is no longer an alias
-     * and falls out of the later rounds on its own. */
+    /* The spellings, read through every enclosing alias: each spelling read through
+     * the table, once per custom — a round settles the outermost unresolved entry
+     * of every chain, and no chain of entries is longer than the table. Every
+     * custom is asked: a spelling with no declared alias above it is already
+     * its own answer, and one whose physical realpath could not give is exactly
+     * the entry that must not be skipped — it is no alias, so a guard on that
+     * test would exclude the one class this pass exists for. */
     for (size_t round = 0; round < custom_count; round++) {
         for (size_t i = 0; i < custom_count; i++) {
-            mount_entry_t *m = &entries[i];
-            if (!mount_is_alias(m)) continue;
-            error_t *err = spell_ancestors(table, arena, &m->spelling);
+            err = spell_ancestors(table, arena, &entries[i].spelling);
             if (err) return err;
         }
+    }
+
+    /* Where a binding realpath could not answer reaches, as far as the table
+     * knows: its own settled spelling. Asked after the rounds, whose alias test
+     * reads the physicals — and past this line no reader meets an unknown one. */
+    for (size_t i = 0; i < n; i++) {
+        if (!entries[i].physical) entries[i].physical = entries[i].spelling;
     }
 
     *out = table;

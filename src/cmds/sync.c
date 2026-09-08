@@ -2241,21 +2241,26 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         /* The hint's standing half: what the record already disagreed with the
          * view about, whichever sync or scope change left it there. Read off
-         * the view the Git phase produced and the two facts anchor_t's doc states,
-         * no disk and no second workspace load: a record whose path the view
-         * lacks is an orphan apply prunes, releases or reclaims; a record whose
-         * confirmed kind and content are not the row's is stale, or was never
-         * confirmed; an owned file record under another profile is a reassignment
-         * apply has not acknowledged (a directory's record keeps whoever made
-         * it — reassignment is a file's fact, derived in the file analyzer and
-         * acknowledged over files.clean); and a row with no record is undeployed,
-         * or was never observed. Mode, owner and group are claims the record
-         * copies, not facts it confirms, and say nothing here: a pulled metadata
-         * change is the block's to report, once.
+         * the view the Git phase produced and the two facts anchor_t's doc states
+         * — no disk and no second workspace load, so the answer does not move
+         * with --force. Each arm claims apply has work, so each names the apply
+         * that takes the claim away: a record whose path the view lacks is an
+         * orphan apply prunes, releases or reclaims; one whose confirmed kind
+         * and content are not the row's is stale, and apply deploys the row; an
+         * owned record naming a profile the row does not is a handover apply
+         * acknowledges (core/workspace.h's rule, which is also what keeps a derived
+         * claim out of it); and a row the record cannot vouch for is work apply
+         * has not done. Vouching differs by kind because apply's answer does —
+         * a file needs an OWNED record, since apply adopts a path it merely
+         * observed and says so; a directory needs only a record, since apply
+         * never adopts one: an absent row has none, and one already standing is
+         * settled by any load's observation. Mode, owner and group are claims
+         * the record copies, not facts it confirms, and say nothing here: a pulled
+         * metadata change is the block's to report, once.
          *
          * The record's paths are unique and so are the view's, so the records
-         * that found a row count the rows that have one. */
-        size_t recorded = 0;
+         * that vouch for a row count the rows that have one. */
+        size_t vouched = 0;
         for (size_t i = 0; i < anchor_count; i++) {
             const anchor_t *anchor = &anchors[i];
             const manifest_row_t *row = manifest_lookup(after, anchor->filesystem_path);
@@ -2264,17 +2269,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                 apply_pending = true;
                 continue;
             }
-            recorded++;
+
+            if (row->type == PATH_TYPE_DIRECTORY || anchor->deployed_at > 0) vouched++;
 
             if (anchor->type != row->type ||
-                !git_oid_equal(&anchor->blob_oid, &row->blob_oid)) {
-                apply_pending = true;
-            } else if (row->type != PATH_TYPE_DIRECTORY && anchor->deployed_at > 0 &&
-                strcmp(anchor->profile, row->profile) != 0) {
+                !git_oid_equal(&anchor->blob_oid, &row->blob_oid) ||
+                workspace_reassigned(row, anchor)) {
                 apply_pending = true;
             }
         }
-        if (recorded < manifest_rows(after).count) {
+        if (vouched < manifest_rows(after).count) {
             apply_pending = true;
         }
     }

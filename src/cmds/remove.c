@@ -332,10 +332,12 @@ static error_t *resolve_removal_claims(
         const char *input_path = input_paths[i];
         const char *storage_path = NULL;
 
-        /* The name the machine-wide table gives the argument (file need not exist;
-         * the location match over the profile's own claims is the next commit's
-         * answer) */
-        err = path_input_classify(mounts, input_path, ctx->arena, &storage_path);
+        /* The name this profile's own roots give the argument (file need not
+         * exist; the location match over the profile's own claims is the next
+         * commit's answer) */
+        err = path_input_classify(
+            mounts, profile, input_path, ctx->arena, &storage_path
+        );
         if (err) {
             if (!opts->force) {
                 goto cleanup;

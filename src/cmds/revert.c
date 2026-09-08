@@ -152,10 +152,12 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* The name the machine-wide table gives the argument (file need not exist;
+    /* The name the asker's own roots give the argument (file need not exist;
      * the claim standing at a location, in the branch that holds it, is the next
-     * commit's answer). */
-    err = path_input_classify(mounts, file_path, arena, &storage_path);
+     * commit's answer). With no -p the asker is nobody, so the shared roots name
+     * it and a claim a bound profile holds under custom/ is a clean miss — the
+     * branch search is what closes that. */
+    err = path_input_classify(mounts, profile_hint, file_path, arena, &storage_path);
     if (err) {
         return err;
     }

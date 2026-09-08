@@ -5,7 +5,9 @@
  * and a storage path keys within one (infra/mount.h). The resolver answers in
  * the one the user named and manufactures neither from the other: what a profile
  * calls a location is a claim standing in a branch, and a command asks the branch
- * (core/manifest.h, the view by location; core/profiles.h).
+ * (core/manifest.h, the view by location; core/profiles.h). The one exception
+ * is path_input_classify below, the former resolver, which still manufactures a
+ * name from a location for the verbs that have no branch reader yet.
  *
  * The single chokepoint for input-shape dispatch; the topology primitives
  * (mount_locate, mount_resolve, mount_table_build) live one layer down in
@@ -121,17 +123,22 @@ error_t *path_input_resolve(
 error_t *path_input_normalize(const char *input, char **out);
 
 /**
- * The resolver's former answer: a filesystem argument classified with no asker.
+ * The resolver's former answer: a filesystem argument named through its roots.
  *
- * The name a machine-wide table gives a location — the deepest binding of any
- * profile — which is wrong once two profiles are bound: one profile's name is
- * not another's. Kept under its own name for the verbs that still ask it (show
- * -p, list -p, revert, export, remove) until the claim is found where
- * it stands, in the branch that holds it (core/profiles.h — the next commit);
- * deleted with that landing. Not a reader for new code. A storage shape is the
- * name as typed; a root is refused as it always was ("is a mount root").
+ * The name the asker's own roots give a location (infra/mount.h mount_name) —
+ * which is the last rung of the question, not the question: the claim standing
+ * there, in the branch that holds it, is what a verb actually wants. Kept under
+ * its own name for the verbs that still ask it (show -p, list -p, revert, export,
+ * remove) until the claim is found where it stands (core/profiles.h); deleted
+ * with that landing. Not a reader for new code. A storage shape is the name as
+ * typed; a root is refused as it always was ("is a mount root").
+ *
+ * `profile` is the asker: with none, the location is named through HOME and `/`
+ * alone, so a claim a bound profile holds under `custom/` is not found — a clean
+ * miss until the search reads the branches.
  *
  * @param table       Mount table (must not be NULL)
+ * @param profile     The asker, or NULL for the shared roots alone
  * @param input       User-provided path string (must not be NULL)
  * @param arena       Arena that owns the returned storage path
  * @param out_storage Arena-borrowed storage path on success; NULL after an error
@@ -140,6 +147,7 @@ error_t *path_input_normalize(const char *input, char **out);
  */
 error_t *path_input_classify(
     const mount_table_t *table,
+    const char *profile,
     const char *input,
     arena_t *arena,
     const char **out_storage

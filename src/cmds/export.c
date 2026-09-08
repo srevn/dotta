@@ -170,19 +170,19 @@ static const char *path_basename(const char *path) {
  * The mount vocabulary is the authority for the content namespace: everything a
  * profile deploys lives under home/, root/, or custom/. Anything else at branch
  * root (.dotta/, .bootstrap, README, ...) is profile machinery and never part
- * of an export. Bare labels ("home") name the whole subtree. Iterates until
- * mount_spec_for_kind returns NULL so a future fourth label is covered without
- * an edit here.
+ * of an export. Bare labels ("home") name the whole subtree. Walks the label
+ * set by its published bound (MOUNT_KIND_COUNT) so a future fourth label is covered
+ * without an edit here.
  */
 static bool storage_namespace_contains(const char *path) {
-    for (mount_kind_t kind = MOUNT_HOME; ; kind = (mount_kind_t) (kind + 1)) {
-        const mount_spec_t *spec = mount_spec_for_kind(kind);
-        if (!spec) break;
+    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
+        const char *label = mount_spec_for_kind(kind)->label;
 
-        size_t len = strlen(spec->label);
-        if (strncmp(path, spec->label, len) != 0) continue;
+        size_t len = strlen(label);
+        if (strncmp(path, label, len) != 0) continue;
         if (path[len] == '\0' || path[len] == '/') return true;
     }
+
     return false;
 }
 
@@ -829,14 +829,15 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     if (opts->file_path) {
-        /* Resolve the CLI path to storage form — the name the machine-wide table
-         * gives it (path_input_classify; the profile's own claim at a location
-         * is the next commit's answer). On resolution failure fall back to the
-         * raw input — the tree lookup below is the final authority (mirrors show),
-         * and a bare label (`export global home`) reaches it this way. */
+        /* Resolve the CLI path to storage form — the name this profile's own
+         * roots give it (path_input_classify; the claim standing at the location,
+         * in the branch that holds it, is the next commit's answer). On resolution
+         * failure fall back to the raw input — the tree lookup below is the final
+         * authority (mirrors show), and a bare label (`export global home`) reaches
+         * it this way. */
         const char *converted = NULL;
         error_t *conv_err = path_input_classify(
-            mounts, opts->file_path, arena, &converted
+            mounts, opts->profile, opts->file_path, arena, &converted
         );
         const char *storage = conv_err ? opts->file_path : converted;
         if (conv_err) error_free(conv_err);

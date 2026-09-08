@@ -633,14 +633,15 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     CHECK_NULL(opts->file_path);
 
     if (opts->profile) {
-        /* Profile specified - show from that profile, under the name the
-         * machine-wide table gives the argument (path_input_classify; the profile's
-         * own claim at a location is the next commit's answer). On a refusal,
-         * fall back to the original input — it may be a partial-match pattern
-         * the resolver rejects but the tree lookup below accepts. */
+        /* Profile specified - show from that profile, under the name that profile's
+         * own roots give the argument (path_input_classify; the claim standing
+         * at the location, in the branch that holds it, is the next commit's
+         * answer). On a refusal, fall back to the original input — it may be a
+         * partial-match pattern the resolver rejects but the tree lookup below
+         * accepts. */
         const char *converted = NULL;
         error_t *convert_err = path_input_classify(
-            mounts, opts->file_path, ctx->arena, &converted
+            mounts, opts->profile, opts->file_path, ctx->arena, &converted
         );
         const char *search_path = convert_err ? opts->file_path : converted;
         if (convert_err) error_free(convert_err);

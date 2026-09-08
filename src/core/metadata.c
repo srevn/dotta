@@ -836,6 +836,26 @@ static error_t *capture_ancestor(
         return NULL;
     }
 
+    /* A rung standing at one of this profile's own roots is the root, not a
+     * directory inside it: the tree there is its label's, and a claim would say
+     * the profile passes *through* a directory it in fact starts at. The cost
+     * is not sheet noise — the row makes the profile's own deployment target
+     * one of its managed paths (status prints it `[ancestor]`), and deploy's
+     * ancestors pass creates it with the claim's mode and ownership on a machine
+     * where it is absent. Either spelling answers: a rung of a chain through a
+     * declared alias resolves to the link standing there (mount_resolve's stated
+     * exception), which is the binder's own spelling when the binder is the asker.
+     * Asker-keyed, and that is the point — another profile's target is an ordinary
+     * directory in this one's namespace, and this profile tracks the chain through
+     * it.
+     *
+     * The guard authors nothing and retires nothing: a claim already standing
+     * at a root from an older table is the sheet's business
+     * (metadata_prune_directories), not a migration's. */
+    if (mount_root(mounts, profile, filesystem_path)) {
+        return NULL;
+    }
+
     struct stat st;
     fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &st);
 

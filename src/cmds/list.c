@@ -616,11 +616,11 @@ static error_t *list_file_history(
     error_t *err = NULL;
 
     if (profile) {
-        /* Explicit profile: the name the machine-wide table gives the argument
-         * (path_input_classify; the profile's own claim at a location is the
-         * next commit's answer). */
+        /* Explicit profile: the name that profile's own roots give the argument
+         * (path_input_classify; the claim standing at the location, in the branch
+         * that holds it, is the next commit's answer). */
         err = path_input_classify(
-            mounts, opts->file_path, ctx->arena, &storage_path
+            mounts, profile, opts->file_path, ctx->arena, &storage_path
         );
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);

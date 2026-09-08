@@ -41,32 +41,39 @@
 /**
  * One path the walk collected, under both its names
  *
- * The walk is where the mount boundary is crossed: each path it collects is
- * classified there, once, through the command's table, and everything after reads
- * the name it needs — the capture the filesystem path, the commit message the
- * storage path, and the record loop the storage path again, resolved back through
- * the table to the location the view spells (the walk's path is the user's
- * spelling, and the view's is not always the same string). A file's stat is the
- * capture's (add_file_to_stage's one look at the bytes it staged), so the record
- * binds the committed blob to it; a directory's stays unset, as apply records them.
+ * The walk is where the mount boundary is crossed: each path it collects is named
+ * there, once, through the command's table and this profile's own roots, and
+ * everything after reads the name it needs — the capture the filesystem path,
+ * the commit message the storage path, and the record loop the storage path again,
+ * resolved back through the table to the location the view spells. The walk's
+ * path is that location already — every argument is located and every directory
+ * it enters is — so the resolve is a round-trip over one string. A file's stat
+ * is the capture's (add_file_to_stage's one look at the bytes it staged), so
+ * the record binds the committed blob to it; a directory's stays unset, as apply
+ * records them.
  */
 typedef struct {
-    const char *fs_path;          /* Absolute, as walked: the user's spelling (arena) */
-    const char *storage_path;     /* Classified at collection (arena) */
+    const char *fs_path;          /* Where it stands: the location (arena) */
+    const char *storage_path;     /* Named at collection, through this profile (arena) */
     stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
 } add_path_t;
 
 /**
  * The walk: what every frame reads, and the two lists it fills
  *
- * `seen` holds every filesystem path the walk passed so far, so overlapping CLI
- * arguments (~/.config and ~/.config/fish) list each path once: a directory already
- * walked is skipped with its subtree, a file already listed is not listed again.
- * Keys borrow the arena strings the lists hold.
+ * `seen` holds every location the walk passed so far, so overlapping CLI arguments
+ * (~/.config and ~/.config/fish) list each path once: a directory already walked
+ * is skipped with its subtree, a file already listed is not listed again. The
+ * key is the location, so two spellings of one argument — `~/x` beside its
+ * physical, tab-completion beside `find`'s output — are one key for every alias
+ * the table knows; a link no binding names is two, as two claims through and
+ * around it are two claims (infra/mount.h). Keys borrow the arena strings the
+ * lists hold.
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
     const mount_table_t *mounts;         /* The command's table (see cmd_add) */
+    const char *profile;                 /* The asker: whose roots name what is found */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
     hashmap_t *seen;                     /* Filesystem path -> walked (borrowed keys) */
@@ -173,10 +180,7 @@ static bool inside_target(
  * @return Error or NULL on success
  */
 static error_t *spell_argument(
-    const char *input,
-    const char *target,
-    const char *target_physical,
-    char **out
+    const char *input, const char *target, const char *target_physical, char **out
 ) {
     /* The shell's own reading: no target to read the argument as, a tilde path,
      * or an empty argument — no path in any grammar, and the normalizer is the
@@ -240,11 +244,8 @@ static error_t *spell_argument(
  * named. The gitignore evaluator never fails — its verdict is applied directly.
  */
 static bool is_excluded(
-    const add_walk_t *walk,
-    const char *fs_path,
-    const char *storage_path,
-    bool is_directory,
-    gitignore_match_t *out_match
+    const add_walk_t *walk, const char *fs_path, const char *storage_path,
+    bool is_directory, gitignore_match_t *out_match
 ) {
     gitignore_eval(
         walk->rules, mount_strip_label(storage_path), is_directory, out_match
@@ -261,8 +262,8 @@ static bool is_excluded(
         if (err) {
             output_warning(
                 walk->ctx->out, OUTPUT_VERBOSE,
-                "Source .gitignore check failed for %s: %s",
-                fs_path, error_message(err)
+                "Source .gitignore check failed for %s: %s", fs_path,
+                error_message(err)
             );
             error_free(err);
             return false;
@@ -277,9 +278,7 @@ static bool is_excluded(
  * List `fs_path` under both names. The item is the arena's; the list borrows it.
  */
 static error_t *list_path(
-    arena_t *arena,
-    ptr_array_t *list,
-    const char *fs_path,
+    arena_t *arena, ptr_array_t *list, const char *fs_path,
     const char *storage_path
 ) {
     add_path_t *path = arena_calloc(arena, 1, sizeof(*path));
@@ -296,24 +295,26 @@ static error_t *list_path(
 /**
  * Collect a directory tree into the walk.
  *
- * `dir_storage` is the directory's own storage path, NULL when it is a mount
- * root ($HOME, "/", a --target): a root has no name in the storage namespace
- * and is not listed; its descendants are. Every other directory walked into is
- * listed — the walk is the sole source of directory tracking — and so is every
- * non-excluded non-directory child. Symlinks are never followed: a symlink to a
- * directory is an entry like any other.
+ * `dir_fs` is a location, and so is every path this frame joins beneath it: the
+ * argument arm located what it began at, and a directory child is read through
+ * the table before the walk enters it. `dir_storage` is the directory's own name
+ * in this profile's namespace, NULL when it is one of the profile's own roots
+ * ($HOME, "/", its target): a root has no name, and is not listed; its descendants
+ * are. Every other directory walked into is listed — the walk is the sole source
+ * of directory tracking — and so is every non-excluded non-directory child.
+ * Symlinks are never followed: a symlink to a directory is an entry like any other.
  *
- * Each child is classified here, once; the recursion receives both names and
- * never classifies again. A child that is itself a mount root (a --target nested
- * in the tree being walked) is walked through unlisted when it is a directory,
- * and skipped otherwise: nothing in the namespace names it.
+ * Each child is named here, once, through the walking profile's own roots; the
+ * recursion receives both names and never names it again. Another profile's target
+ * is an ordinary directory here — the walk lists it and enters it, and what it
+ * finds beneath is named portably (infra/mount.h). A child that is one of *this*
+ * profile's roots is walked through unlisted when it is a directory, and skipped
+ * otherwise: nothing in the namespace names it.
  *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
 static error_t *collect_tree(
-    add_walk_t *walk,
-    const char *dir_fs,
-    const char *dir_storage
+    add_walk_t *walk, const char *dir_fs, const char *dir_storage
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(dir_fs);
@@ -346,8 +347,7 @@ static error_t *collect_tree(
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
         /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             errno = 0;  /* Clear before next readdir() */
             continue;
         }
@@ -371,23 +371,37 @@ static error_t *collect_tree(
         }
         bool is_dir = S_ISDIR(st.st_mode);
 
-        /* The crossing: the child's storage name, or ROOT when it is a mount
-         * root — not a name in the namespace, so neither excludable nor listed. */
-        mount_classify_outcome_t outcome;
-        const char *child_storage = NULL;
-        err = mount_classify(
-            walk->mounts, child_fs, arena, &outcome, &child_storage, NULL
-        );
-        if (err) {
-            closedir(dir);
-            return error_wrap(err, "Failed to classify '%s'", child_fs);
+        /* Where the child stands. A directory is the directory it is: one met
+         * at a binder's own spelling — a root reached through a link no binding
+         * names — is read through to the physical, so this frame's join and every
+         * one below it is a location, which is what the namer's input must be.
+         * A leaf keeps the spelling it stands under: the very link a binding is
+         * declared through is a claim of the link (mount_locate's stated
+         * exception), and the walk does not follow one. */
+        if (is_dir) {
+            const char *joined = child_fs;
+            err = mount_locate(walk->mounts, joined, arena, &child_fs);
+            if (err) {
+                closedir(dir);
+                return error_wrap(err, "Failed to locate '%s'", joined);
+            }
         }
 
-        if (outcome == MOUNT_CLASSIFY_ROOT && !is_dir) {
-            /* A symlink standing at a mount root (a --target the user reaches
-             * through a symlink): the walk does not follow symlinks, and the
-             * root itself has no name. */
-            output_info(out, OUTPUT_VERBOSE, "Skipped mount root: %s", child_fs);
+        /* The crossing: what this profile calls the child, or nothing when it
+         * is one of the profile's own roots — no name in the namespace, so neither
+         * excludable nor listed. */
+        const char *child_storage = NULL;
+        err = mount_name(walk->mounts, walk->profile, child_fs, arena, &child_storage);
+        if (err) {
+            closedir(dir);
+            return error_wrap(err, "Failed to name '%s'", child_fs);
+        }
+
+        if (!child_storage && !is_dir) {
+            /* A symlink standing at one of this profile's own roots: $HOME itself
+             * when HOME is a link, or its target reached through one. The walk
+             * does not follow symlinks, and the root itself has no name. */
+            output_info(out, OUTPUT_VERBOSE, "Skipped root: %s", child_fs);
             errno = 0;
             continue;
         }
@@ -463,9 +477,7 @@ static error_t *collect_tree(
  * @param item The capture's claim (must not be NULL)
  */
 static void report_capture(
-    output_t *out,
-    const char *what,
-    const char *filesystem_path,
+    output_t *out, const char *what, const char *filesystem_path,
     const metadata_item_t *item
 ) {
     if (item->mode != MODE_UNCLAIMED && item->owner) {
@@ -1220,18 +1232,18 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Two modes selected by --target:
      *
      *   --target given: a single-mount table pairing opts->profile with the target.
-     *     Other enabled profiles' bindings are deliberately excluded — narrows
-     *     classification to "what would adding to THIS profile see?", so a path
-     *     under another profile's --target does NOT classify as that profile's
-     *     custom/ namespace. The narrow view also covers the brand-new-profile
-     *     case (no row in ctx->run.mounts yet) and the existing-profile-same-target
-     *     case (idempotent re-bind already verified at the pre-flight check at
-     *     the top of this function).
+     *     It is the overlay, and that is the whole of its reason: the flag's
+     *     target may be in no row at all (a brand-new profile, a disabled one),
+     *     and where a row exists it is this same target (the idempotent re-bind
+     *     the pre-flight at the top of this function already verified). Other
+     *     profiles' bindings are absent, and that changes nothing — a name is
+     *     the asker's own roots' and no other profile's target is one of them
+     *     (infra/mount.h mount_name).
      *
      *   --target absent: borrow ctx->run.mounts. The full enabled set covers
      *     opts->profile's existing binding (if any) plus HOME and ROOT. Paths
-     *     under opts->profile's stored target classify as custom/X correctly
-     *     without re-deriving the binding. */
+     *     under opts->profile's stored target are named custom/X correctly without
+     *     re-deriving the binding. */
     if (target) {
         mount_table_t *local_mounts = NULL;
         mount_t mount = { .profile = opts->profile, .target = target };
@@ -1328,6 +1340,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * once, under both names: the CLI argument crosses the mount boundary here,
      * and what the walk finds beneath it crosses in the walk. */
     walk.mounts = mounts;
+    walk.profile = opts->profile;
     walk.rules = profile_rules;
     walk.source_filter = source_filter;
     walk.seen = hashmap_borrow(0);
@@ -1375,17 +1388,19 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path — as add reads it: the target's when one
-             * stands (spell_argument), the shell's when none does. */
+             * stands (spell_argument), the shell's when none does — then located,
+             * so the walk begins at where the spelling stands and everything it
+             * joins beneath is a location too. */
             char *absolute = NULL;
             err = spell_argument(file, target, target_physical, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
-            fs_path = arena_strdup(ctx->arena, absolute);
+            err = mount_locate(mounts, absolute, ctx->arena, &fs_path);
             free(absolute);
-            if (!fs_path) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate path");
+            if (err) {
+                err = error_wrap(err, "Failed to locate '%s'", file);
                 goto cleanup;
             }
         }
@@ -1424,15 +1439,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 break;
         }
 
-        /* The argument's storage name — NULL for a mount root ($HOME, "/", the
-         * --target), which has none. */
-        mount_classify_outcome_t outcome;
+        /* What this profile calls the argument — NULL for one of its own roots
+         * ($HOME, "/", its target), which has no name. */
         const char *storage_path = NULL;
-        err = mount_classify(
-            mounts, fs_path, ctx->arena, &outcome, &storage_path, NULL
-        );
+        err = mount_name(mounts, opts->profile, fs_path, ctx->arena, &storage_path);
         if (err) {
-            err = error_wrap(err, "Failed to classify '%s'", file);
+            err = error_wrap(err, "Failed to name '%s'", file);
             goto cleanup;
         }
 
@@ -1486,19 +1498,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 files_found, files_found == 1 ? "" : "s",
                 dirs_found, dirs_found == 1 ? "y" : "ies", fs_path
             );
+        } else if (!storage_path) {
+            /* One of this profile's own roots, standing as something other than
+             * a directory: $HOME itself when HOME is a symlink, its target reached
+             * through one, or the profile's own name for its own target (`add q
+             * home/jail/link`, which resolves back to the link). A root has no
+             * name, and the walk does not follow symlinks. */
+            char noun[MOUNT_NOUN_MAX];
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "'%s' is %s and cannot be added itself; name what is inside it",
+                file, mount_root_describe(
+                mount_root(mounts, opts->profile, fs_path), opts->profile,
+                noun, sizeof(noun)
+                )
+            );
+            goto cleanup;
         } else {
-            if (outcome == MOUNT_CLASSIFY_ROOT) {
-                /* A symlink standing at a mount root: $HOME itself when HOME is
-                 * a symlink, or a --target reached through one. The root has no
-                 * name, and the walk does not follow symlinks. */
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' is a mount root and cannot be added itself; "
-                    "name what is inside it", file
-                );
-                goto cleanup;
-            }
-
             /* List it, unless a walk already did. */
             if (hashmap_has(walk.seen, fs_path)) continue;
             err = hashmap_set(walk.seen, fs_path, (void *) 1);

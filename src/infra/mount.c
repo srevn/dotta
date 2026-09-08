@@ -7,6 +7,7 @@
 #include "infra/mount.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -19,21 +20,21 @@
 /**
  * Per-kind behavioral attributes — the single source of truth.
  *
- * Indexed by `mount_kind_t`; designated initializers keep the row order in lockstep
- * with the enum ordinals. Adding a fourth kind is one row here plus a matching
- * enum entry; every consumer that asks "does this kind track ownership?" etc.
- * reads spec attributes — no switches to update.
+ * Indexed by `mount_kind_t` and sized by the arity the header publishes, so the
+ * enum declares the label set once and the array's extent is that declaration
+ * rather than a second one that happens to agree. Designated initializers keep
+ * the row order in lockstep with the ordinals. Adding a fourth kind is one row
+ * here plus a matching enum entry; every consumer that asks "does this kind track
+ * ownership?" etc. reads spec attributes — no switches to update.
  */
-static const mount_spec_t SPECS[] = {
-    [MOUNT_HOME] =   { "home",   "HOME",              false, false },
-    [MOUNT_ROOT] =   { "root",   "root",              false, true  },
-    [MOUNT_CUSTOM] = { "custom", "deployment target", true,  true  },
+static const mount_spec_t SPECS[MOUNT_KIND_COUNT] = {
+    [MOUNT_HOME] =   { "home",   "your home directory",   false, false },
+    [MOUNT_ROOT] =   { "root",   "the filesystem root",   false, true  },
+    [MOUNT_CUSTOM] = { "custom", "the deployment target", true,  true  },
 };
 
-#define SPECS_COUNT (sizeof(SPECS) / sizeof(SPECS[0]))
-
 const mount_spec_t *mount_spec_for_kind(mount_kind_t kind) {
-    if ((unsigned int) kind >= SPECS_COUNT) return NULL;
+    if ((unsigned int) kind >= MOUNT_KIND_COUNT) return NULL;
     return &SPECS[kind];
 }
 
@@ -57,7 +58,7 @@ static bool mount_decode_label(
 ) {
     if (!storage_path) return false;
 
-    for (size_t i = 0; i < SPECS_COUNT; i++) {
+    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
         const char *label = SPECS[i].label;
         size_t label_len = strlen(label);
 
@@ -181,7 +182,7 @@ error_t *mount_validate_target(const char *target) {
     if (target[0] != '/') {
         return ERROR(
             ERR_INVALID_ARG,
-            "Mount target must be absolute path (got '%s')\n"
+            "Target must be absolute path (got '%s')\n"
             "Example: --target /mnt/jails/web", target
         );
     }
@@ -189,13 +190,13 @@ error_t *mount_validate_target(const char *target) {
     /* 2. No path traversal or redundant components */
     if (strstr(target, "//") != NULL) {
         return ERROR(
-            ERR_INVALID_ARG, "Mount target contains '//': '%s'",
+            ERR_INVALID_ARG, "Target contains '//': '%s'",
             target
         );
     }
 
     /* 3. Validate each component (catches . and .. at any position). Skip the
-     *    leading '/' — mount targets are always absolute. */
+     *    leading '/' — a target is always absolute. */
     error_t *comp_err = validate_path_components(target + 1, target);
     if (comp_err) {
         return error_wrap(
@@ -209,7 +210,7 @@ error_t *mount_validate_target(const char *target) {
     if (len > 1 && target[len - 1] == '/') {
         return ERROR(
             ERR_INVALID_ARG,
-            "Mount target must not end with slash: '%s'\n"
+            "Target must not end with slash: '%s'\n"
             "Use: %.*s", target, (int) (len - 1), target
         );
     }
@@ -222,12 +223,12 @@ error_t *mount_validate_target(const char *target) {
             error_free(resolve_err);
             return ERROR(
                 ERR_INVALID_ARG,
-                "Mount target directory does not exist: '%s'\n"
+                "Target directory does not exist: '%s'\n"
                 "Create it first: mkdir -p '%s'", target, target
             );
         }
         return error_wrap(
-            resolve_err, "Cannot resolve mount target '%s'", target
+            resolve_err, "Cannot resolve target '%s'", target
         );
     }
 
@@ -239,7 +240,7 @@ error_t *mount_validate_target(const char *target) {
         free(resolved);
         return ERROR(
             ERR_INVALID_ARG,
-            "Mount target '%s' cannot be the filesystem root '/'\n"
+            "Target '%s' cannot be the filesystem root '/'\n"
             "Choose a specific directory: --target /mnt/jails/web", target
         );
     }
@@ -249,14 +250,14 @@ error_t *mount_validate_target(const char *target) {
     if (fs_stat(resolved, &st) != 0) {
         free(resolved);
         return ERROR(
-            ERR_INVALID_ARG, "Cannot stat mount target: %s",
+            ERR_INVALID_ARG, "Cannot stat target: %s",
             strerror(errno)
         );
     }
     if (!S_ISDIR(st.st_mode)) {
         free(resolved);
         return ERROR(
-            ERR_INVALID_ARG, "Mount target must be a directory: '%s'",
+            ERR_INVALID_ARG, "Target must be a directory: '%s'",
             target
         );
     }
@@ -287,8 +288,11 @@ bool mount_same_target(const char *a, const char *b) {
  *           An alias is a mount whose spelling is not its physical; the sentinel
  *           and a mount bound under no link are not one.
  * - kind:   mount kind for this entry's storage label.
- * - profile: NULL for static mounts (HOME, ROOT). For CUSTOM mounts, the owning
- *           profile name; participates in profile-keyed backward resolution.
+ * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
+ *           namespace. For CUSTOM mounts, the owning profile name — always set,
+ *           mount_table_build refusing a binding that names none; it keys the
+ *           backward resolution and narrows the forward one to the asker's own
+ *           roots (deepest_root).
  *
  * Every string is the arena's — copied at build — so the table borrows nothing
  * and stands for the arena's lifetime; the sentinel's two are the literal "",
@@ -437,36 +441,83 @@ static error_t *spell_ancestors(
 }
 
 /**
- * The deepest mount a physically spelled path is under, and the tail past it.
+ * The deepest root of `profile` the location stands under, and the tail past it.
  *
- * Tightest container wins; at equal depth — two mounts at one directory — the
- * earlier entry (stable: the customs in position order, then HOME, then the
- * sentinel). `*out_tail` is empty when the path is the mount's root itself, and
- * is written only when a mount matched. Returns NULL when none does; with the
- * sentinel present, this only happens for a malformed table.
+ * A namespace is one profile's: the shared roots (HOME, the sentinel, both
+ * profile-less) and its own binding; another profile's target is skipped before
+ * it can win. Tightest container wins. At an equal depth two of the asker's own
+ * roots stand at one directory, and the more specific statement takes it — a
+ * binding over the shared roots, and the sentinel over a HOME that is "/": `~/.rc`
+ * under a binding at $HOME is `custom/.rc`, and a capture at `/etc/x` on a machine
+ * whose HOME is "/" (a container's bare uid, or a HOME that reaches "/" through
+ * a link) is `root/etc/x`, the reading that means the same directory on every
+ * other machine. Those are the only two ties there are: mount_validate_target
+ * refuses "/", so a binding never meets the sentinel, and one profile has one
+ * binding.
+ *
+ * A location is matched against the root's physical, which is what every location
+ * is spelled as — and, when the location *is* the binder's own spelling, against
+ * that. Two questions hand over such a spelling: a walk joins `<parent
+ * location>/<name>` for a leaf without locating, and mount_resolve answers a
+ * claim of a declared alias's own spelling with that spelling. Both leave at
+ * most the last component unresolved (mount_table_build reads every enclosing
+ * alias through, and so do locate and resolve), so exact equality is the whole
+ * test and no prefix match over a spelling is owed.
+ *
+ * The spelling branch yields the end-of-string pointer, which is deeper than
+ * any enclosing root's tail — so a root reached by its binder's spelling beats
+ * HOME and the sentinel exactly as reaching it by its physical does. It is also
+ * the empty tail, so the branch can only ever answer "the root itself": a *name*
+ * is composed beneath a physical alone, which is what lets mount_resolve place
+ * one back at the location it was composed from.
+ *
+ * `*out_tail` is empty when the location is the root itself, and is written only
+ * when an entry matched — NULL when none did, which with the sentinel present
+ * means only a malformed table or a location that is not absolute.
  */
-static const mount_entry_t *deepest_mount(
-    const mount_table_t *table, const char *physical, const char **out_tail
+static const mount_spec_t *deepest_root(
+    const mount_table_t *table, const char *profile, const char *location,
+    const char **out_tail
 ) {
     const mount_entry_t *winner = NULL;
     const char *deepest = NULL;
 
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
-        const char *tail = tail_under_root(physical, m->physical);
+
+        /* A binding is a profile's (mount_t); an entry with none — HOME, the
+         * sentinel — is every namespace's. */
+        if (m->profile && (!profile || strcmp(m->profile, profile) != 0)) {
+            continue;
+        }
+
+        const char *tail = tail_under_root(location, m->physical);
+        if (!tail && strcmp(location, m->spelling) == 0) {
+            /* The root itself, by its binder's own spelling. */
+            tail = location + strlen(location);
+        }
         if (!tail) continue;
-        /* Every tail points into `physical` at its root's length, so pointer
-         * order is depth order: the later one stands under the longer root. An
-         * equal one is two mounts at one directory, and the earlier entry keeps
-         * it. */
-        if (winner && tail <= deepest) continue;
+
+        /* Every tail points into `location` at its root's length, so pointer
+         * order is depth order. The tie reads as the incumbent's veto and holds
+         * under any entry order: it keeps an equal depth when it is the binding
+         * — the more specific statement — or when the challenger is HOME, which
+         * the portable name outranks. */
+        if (winner && tail < deepest) continue;
+        if (winner && tail == deepest &&
+            (winner->kind == MOUNT_CUSTOM || m->kind == MOUNT_HOME)) {
+            continue;
+        }
+
         winner = m;
         deepest = tail;
     }
 
-    if (winner) *out_tail = deepest;
+    if (!winner) return NULL;
 
-    return winner;
+    *out_tail = deepest;
+
+    return mount_spec_for_kind(winner->kind);
 }
 
 error_t *mount_table_build(
@@ -481,9 +532,20 @@ error_t *mount_table_build(
 
     /* Count CUSTOM mounts: input mounts with a non-empty target. Drop those with
      * NULL/empty target — they were dead weight in the prior architecture (their
-     * profile-only entries served no observable purpose). */
+     * profile-only entries served no observable purpose).
+     *
+     * The profile is required by the type's contract and not by the entry's fate,
+     * so it is checked whatever the target: a nameless binding would be a root
+     * of every namespace, which is the machine-wide name this module does not
+     * produce (infra/mount.h mount_t). Establishing it here is what lets
+     * deepest_root and find_entry read `m->profile` as a fact. */
     size_t custom_count = 0;
     for (size_t i = 0; i < mount_count; i++) {
+        if (!mounts[i].profile) {
+            return ERROR(
+                ERR_INVALID_ARG, "A binding names its profile (entry %zu)", i
+            );
+        }
         if (mounts[i].target && mounts[i].target[0] != '\0') custom_count++;
     }
 
@@ -500,10 +562,10 @@ error_t *mount_table_build(
         return ERROR(ERR_MEMORY, "Failed to allocate mount entries");
     }
 
-    /* Populate: customs first (input order — stable tiebreak in the classifier),
-     * then HOME, then ROOT sentinel. Each mount is spelled as its binder typed
-     * it and as realpath reads it; the enclosing aliases are read below, once
-     * every spelling is in. */
+    /* Populate: customs first (input order), then HOME, then ROOT sentinel. Each
+     * mount is spelled as its binder typed it and as realpath reads it; the
+     * enclosing aliases are read below, once every spelling is in. No reader
+     * depends on this order — deepest_root breaks its ties on the kinds. */
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
         const char *raw = mounts[i].target;
@@ -620,57 +682,53 @@ error_t *mount_locate(
     return NULL;
 }
 
-error_t *mount_classify(
-    const mount_table_t *table, const char *fs_path, arena_t *arena,
-    mount_classify_outcome_t *outcome, const char **out_storage,
-    const mount_spec_t **out_spec
+error_t *mount_name(
+    const mount_table_t *table, const char *profile, const char *location,
+    arena_t *arena, const char **out_storage
 ) {
     CHECK_NULL(table);
-    CHECK_NULL(fs_path);
+    CHECK_NULL(location);
     CHECK_NULL(arena);
-    CHECK_NULL(outcome);
     CHECK_NULL(out_storage);
 
-    /* Where the spelling stands; a location is its own answer, so a caller that
-     * already holds one loses nothing by asking again. */
-    const char *location = NULL;
-    error_t *err = mount_locate(table, fs_path, arena, &location);
-    if (err) return err;
+    *out_storage = NULL;
 
-    /* The mount, in physical space. */
     const char *tail = NULL;
-    const mount_entry_t *winner = deepest_mount(table, location, &tail);
-    if (!winner) {
-        return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
+    const mount_spec_t *root = deepest_root(table, profile, location, &tail);
+    if (!root) {
+        return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
     }
 
-    /* The spec is the vocabulary view of the winning mount: its label string
-     * (used to format the storage path) plus the per_profile and tracks_ownership
-     * attributes that callers consume. Expose it in both outcomes so a single
-     * call answers "what kind of mount matched?" without forcing the caller through
-     * a second lookup. */
-    const mount_spec_t *spec = mount_spec_for_kind(winner->kind);
-    if (out_spec) *out_spec = spec;
+    /* A root has no name: the answer is the absence, already written. */
+    if (*tail == '\0') return NULL;
 
-    if (*tail == '\0') {
-        /* Path equals the winning mount root exactly. No storage-path encoding
-         * exists for the mount root itself. Surface as ROOT; callers walking a
-         * directory tree treat this as "skip this entry, descendants appear
-         * separately"; callers expecting a file translate ROOT into their own
-         * error. */
-        *outcome = MOUNT_CLASSIFY_ROOT;
-        *out_storage = NULL;
-        return NULL;
-    }
-
-    const char *result = arena_str_format(arena, "%s/%s", spec->label, tail);
-    if (!result) {
+    *out_storage = arena_str_format(arena, "%s/%s", root->label, tail);
+    if (!*out_storage) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
-    *out_storage = result;
-    *outcome = MOUNT_CLASSIFY_TAIL;
 
     return NULL;
+}
+
+const mount_spec_t *mount_root(
+    const mount_table_t *table, const char *profile, const char *location
+) {
+    const char *tail = NULL;
+    const mount_spec_t *root = deepest_root(table, profile, location, &tail);
+
+    return root && *tail == '\0' ? root : NULL;
+}
+
+const char *mount_root_describe(
+    const mount_spec_t *root, const char *profile, char *buf, size_t size
+) {
+    if (root->per_profile) {
+        snprintf(buf, size, "%s of profile '%s'", root->noun, profile);
+    } else {
+        snprintf(buf, size, "%s", root->noun);
+    }
+
+    return buf;
 }
 
 /**
@@ -678,9 +736,10 @@ error_t *mount_classify(
  *
  * Profile-less kinds (per_profile == false: HOME, ROOT) contribute exactly one
  * entry; the first kind match wins. Profile-keyed kinds (per_profile == true:
- * CUSTOM) require a non-NULL caller profile that equals the entry's stored profile;
- * a NULL on either side defensively excludes the match. Returns NULL when no
- * entry satisfies the query.
+ * CUSTOM) require a caller profile equal to the entry's stored one — which every
+ * CUSTOM entry has, mount_table_build refusing a binding that names none — so a
+ * NULL caller profile places no custom/ claim. Returns NULL when no entry satisfies
+ * the query.
  *
  * Sole consumer today is mount_resolve.
  */
@@ -694,7 +753,7 @@ static const mount_entry_t *find_entry(
         const mount_entry_t *m = &table->entries[i];
         if (m->kind != kind) continue;
         if (!spec->per_profile) return m;
-        if (profile && m->profile && strcmp(m->profile, profile) == 0) {
+        if (profile && strcmp(m->profile, profile) == 0) {
             return m;
         }
     }

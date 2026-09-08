@@ -14,12 +14,13 @@
  * belongs to. Storage paths are stable across machines; the per-machine filesystem
  * location of a label is decided by the mount table below.
  *
- * Mount table
- * -----------
- * Per-machine topology that maps storage labels to filesystem paths and back.
- * Built at the boundary where the binding source is in scope (CLI options, state
- * row cache), then consulted many times; a value — the topology at the instant
- * it was built — for the arena's lifetime.
+ * The table
+ * ---------
+ * The machine's topology: its roots — the invoker's HOME, `/`, and one target
+ * per binding — each by the spelling its binder typed and by the physical spelling
+ * realpath gives it. Built at the boundary where the binding source is in scope
+ * (CLI options, state row cache), then consulted many times; a value — the topology
+ * at the instant it was built — for the arena's lifetime.
  *
  * A location — where a claim stands on this machine: the key the view's rows,
  * the record and every screen share — is the physical spelling as far as the
@@ -40,15 +41,38 @@
  * sentinel's, and HOME's when HOME is "/" (a container's bare uid) or reaches
  * it through a link.
  *
- * Three questions over the same data:
+ * One table, two readings
+ * -----------------------
+ * The machine's — where a spelling stands (mount_locate) and where a claim stands
+ * (mount_resolve) — reads every entry, whoever asks: an alias is a spelling of
+ * a directory for everyone, and a claim beneath another profile's declared link
+ * keys with that link's own claims. The namespace's — what a profile would call
+ * a location (mount_name) and whether a location is one of its roots (mount_root)
+ * — reads the asker's own entries alone: its target if it is bound, HOME, `/`,
+ * and no other profile's target. That is why the asker is a parameter and not a
+ * table of its own: locate must see every binding, and name must see one.
+ *
+ * A namespace is one profile's view over the table. N profiles may claim one
+ * location under N names; the view layers them by precedence (core/manifest),
+ * and within one profile the view keeps one. Nothing is exclusive: a binding
+ * says where a profile's names resolve, not who owns the files there.
+ *
+ * Four questions over the same data:
  *   - Where a spelling stands (filesystem -> location): mount_locate, the
  *     physical spelling as far as the table knows its roots — asked once per
- *     argument, never per child, and the forward view's first step.
- *   - Forward (filesystem -> storage): mount_classify locates, then picks the
- *     longest-matching target (tightest container wins, same semantic as filesystem
- *     mount points or URL routers).
- *   - Backward (profile + storage -> filesystem): mount_resolve looks
- *     up the per-profile target.
+ *     argument and once per directory a walk enters, never per child, and no
+ *     other question's first step.
+ *   - What a profile would call a location it holds no claim at (location ->
+ *     storage): mount_name, beneath the deepest of that profile's own roots;
+ *     nothing at a root itself. The fuller question — a claim of the profile
+ *     standing at or above the location, and only then this — is core/manifest.h's
+ *     manifest_name, whose last rung this is.
+ *   - Whether a location is one of a profile's roots: mount_root, the walkers'
+ *     and the climb's question, and the one place either spelling of a root
+ *     answers.
+ *   - Where a profile's claim stands (profile + storage -> filesystem):
+ *     mount_resolve. A name is composed beneath a root's physical alone, so
+ *     resolving one places it back at the very location it was composed from.
  *
  * SECURITY CRITICAL: All conversions validate against path traversal.
  */
@@ -70,14 +94,22 @@ typedef enum {
 } mount_kind_t;
 
 /**
+ * The kinds' arity, for a walk over the labels (cmds/export.c) and for an array
+ * with one slot per kind. A macro, not an enumerator, for the reason
+ * WORKSPACE_ROUTE_COUNT is one (core/workspace.h): a switch over the kinds must
+ * not have to name a sentinel.
+ */
+#define MOUNT_KIND_COUNT (MOUNT_CUSTOM + 1)
+
+/**
  * Behavioral attributes for a mount kind.
  *
  * The kind names *what the storage label is*; the spec carries *what the label
- * implies*. Single source of truth for label/display strings and for the per-kind
- * invariants every consumer ultimately asks for: "is resolution profile-keyed?"
- * and "do files of this kind carry ownership metadata?". Adding a fourth kind
- * is one row in the internal SPECS table; consumers read attributes directly
- * without growing a switch.
+ * implies*. Single source of truth for the label string, for the noun a screen
+ * calls the root by, and for the per-kind invariants every consumer ultimately
+ * asks for: "is resolution profile-keyed?" and "do files of this kind carry
+ * ownership metadata?". Adding a fourth kind is one row in the internal SPECS
+ * table; consumers read attributes directly without growing a switch.
  *
  * Stable storage: SPECS rows live in static data, so the pointers returned by
  * `mount_spec_for_kind` and `mount_spec_for_path` are valid for the process
@@ -85,7 +117,9 @@ typedef enum {
  */
 typedef struct mount_spec {
     const char *label;            /* Storage-label string ("home", "root", "custom") */
-    const char *display;          /* Human-readable display name */
+    const char *noun;             /* The root's word for a screen — a complete noun
+                                   * phrase; a per_profile root takes " of profile
+                                   * '<name>'" after it (mount_root_describe) */
     bool per_profile;             /* True iff resolution is profile-keyed (CUSTOM) */
     bool tracks_ownership;        /* True iff files of this kind carry ownership metadata */
 } mount_spec_t;
@@ -138,7 +172,7 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path);
 error_t *mount_validate_storage(const char *storage_path);
 
 /**
- * Validate a user-provided mount target (the `--target` argument).
+ * Validate a user-provided deployment target (the `--target` argument).
  *
  * The binders resolve first (path_input_normalize: tilde, relative, `.`, `..`),
  * so the absolute path the row stores is what reaches this check; the syntactic
@@ -155,7 +189,7 @@ error_t *mount_validate_storage(const char *storage_path);
  *
  * Filesystem access is required for the existence + directory checks.
  *
- * @param target Mount target to validate (must not be NULL)
+ * @param target Deployment target to validate (must not be NULL)
  * @return Error or NULL when valid
  */
 error_t *mount_validate_target(const char *target);
@@ -209,13 +243,16 @@ const char *mount_strip_label(const char *storage_path);
 typedef struct mount_table mount_table_t;
 
 /**
- * A single mount: profile <-> deployment-target pairing.
+ * A single mount: the profile <-> deployment-target pairing.
  *
  * POD value type passed by callers to `mount_table_build`. Both fields are borrowed
  * for the call only — the table copies what it keeps.
  *
- * - profile: Profile name (NULL for callers that have only target strings, no
- *   profile names — e.g. one-shot internal scratch use).
+ * - profile: the owning profile's name; required, whatever the target. A binding
+ *   is a profile's: an entry with no profile would be a root of every namespace
+ *   (mount_name and mount_root read a NULL profile as "the shared roots — HOME
+ *   and `/`"), which is the machine-wide name this module does not produce.
+ *   mount_table_build refuses one.
  * - target: Absolute filesystem path with no trailing slash. NULL or empty
  *   contributes no mount; the entry is dropped at build time.
  */
@@ -241,11 +278,13 @@ typedef struct {
  *   - A ROOT mount whose target is the empty string (universal fallback for
  *     absolute paths that match no other mount).
  *
- * Mounts with NULL or empty `target` contribute nothing — they are filtered at
- * build time. (The previous binding-table architecture recorded such entries to
- * distinguish "profile not in table" from "profile in table but no target on
- * this machine"; both cases were indistinguishable at every call site, so the
- * entries were dead.)
+ * A mount with no profile is refused (ERR_INVALID_ARG): a binding is a profile's,
+ * and the invariant is established here so the readers need no per-read check
+ * (mount_t above). Mounts with NULL or empty `target` contribute nothing — they
+ * are filtered at build time. (The previous binding-table architecture recorded
+ * such entries to distinguish "profile not in table" from "profile in table but
+ * no target on this machine"; both cases were indistinguishable at every call
+ * site, so the entries were dead.)
  *
  * Lifetime:
  *   - Output is allocated entirely from `arena`, every string included: the table
@@ -255,6 +294,7 @@ typedef struct {
  *     mutations.
  *
  * Errors:
+ *   - ERR_INVALID_ARG when a mount names no profile.
  *   - ERR_MEMORY on arena allocation failure.
  *
  * @param arena       Arena for the table and its internal storage
@@ -284,15 +324,18 @@ error_t *mount_table_build(
  *
  * Pure string work over the table — no stat, no realpath — so the spelling need
  * not exist (show, revert, remove, a filter for a path not yet deployed), and
- * it is asked once per argument, never per child: a child joined beneath a location
- * is a location, the walkers' rule. Every location the table produces — a
- * resolve's, a row's, a child joined beneath one — is its own answer, which is
- * what makes a location a key the resolver's answer and the view's rows share
- * by strcmp. The one exception is stated here, not hidden: a claim of the very
- * link a binding is declared through (a stranger's `home/jail/link`) stands at
- * the link (mount_resolve), and that spelling, located, is the binding's directory
- * — the row is reached beneath its parent and by its name, never by its own
- * spelling.
+ * it is asked once per argument and once per directory a walk enters, never per
+ * child: a child joined beneath a location is a location, the walkers' rule,
+ * and a directory that is a binder's own spelling is the one join that is not —
+ * read through here, so the walk goes on inside it under the physical. Every
+ * location the table produces — a resolve's, a row's, a child joined beneath
+ * one — is its own answer, which is what makes a location a key the resolver's
+ * answer and the view's rows share by strcmp. The one exception is stated here,
+ * not hidden: a claim of the very link a binding is declared through (a stranger's
+ * `home/jail/link`) stands at the link (mount_resolve), and that spelling, located,
+ * is the binding's directory — the row is reached beneath its parent and by its
+ * name, never by its own spelling, and a walk that meets the link offers it as
+ * the leaf it is rather than asking here.
  *
  * `fs_path` is absolute and lexically normalized (path_input_normalize); the
  * fold is established there, not re-checked here. The answer is the arena's, or
@@ -300,7 +343,9 @@ error_t *mount_table_build(
  * every caller locates through a table its own arena built.
  *
  * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
- * key an argument is matched by; mount_classify, whose first step this is.
+ * key an argument is matched by; add's argument arm and every directory its walk
+ * descends into (cmds/add.c); `ignore --test`'s filesystem arm (cmds/ignore.c).
+ * The namer does not locate — its input is a location, and this is what makes one.
  *
  * @param table        Mount table (must not be NULL)
  * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)
@@ -317,67 +362,121 @@ error_t *mount_locate(
 );
 
 /**
- * Outcome of mount_classify. Encodes "did the path land under a mount, or did
- * it equal a mount root exactly?" as data so callers don't catch ERR_INVALID_ARG
- * as control flow.
+ * What `profile` would call a location it holds no claim at.
  *
- * TAIL — `*out_storage` is set to an arena-borrowed storage path ("home/X",
- *        "root/X", "custom/X") for the path's tail under the winning mount.
- * ROOT — `fs_path` exactly equals a mount target ($HOME, /, or a --target). No
- *        storage-path encoding exists for the mount root itself; `*out_storage`
- *        is NULL. `*out_kind` (if requested) still receives the matched kind.
- *        Walker callers treat this as "skip this entry, descendants appear
- *        separately."
- */
-typedef enum {
-    MOUNT_CLASSIFY_TAIL,
-    MOUNT_CLASSIFY_ROOT,
-} mount_classify_outcome_t;
-
-/**
- * Classify an absolute filesystem path into a storage path.
+ * "<label>/<tail>" beneath the deepest of the profile's own roots — its target,
+ * HOME, `/` — or NULL when the location *is* that root: a root has no canonical
+ * name, and the tree standing there is its label's. Another profile's target is
+ * invisible here (the "One table, two readings" paragraph above). At a tie —
+ * two of the profile's own roots at one directory — a binding wins, because it
+ * is the
+ * more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`);
+ * between HOME and `/` at one directory the portable name wins (a HOME of "/"
+ * yields to the sentinel, so `/etc/x` is `root/etc/x` — `home/` there would name
+ * the whole filesystem on every other machine). A NULL `profile` names through
+ * HOME and `/` alone: a profile with no binding on this machine, or no profile
+ * at all.
  *
- * The path is located first (mount_locate: every declared alias above its entry
- * resolved, a root's own spelling read as the directory the binding names — and
- * a located path is its own answer), and then the deepest mount enclosing the
- * location wins (tightest container). Ties at equal depth — two mounts at one
- * directory — are broken by declaration order (stable, earlier wins). The typed
- * spelling never leaves this call: a path typed physically, through the binder's
- * spelling, or through an enclosing root's alias classifies the same.
+ * `location` is a location — mount_locate's answer — or the one spelling that
+ * is not: one whose *last component* is a declared alias's own, which is what a
+ * walk's join at a leaf and mount_resolve's answer at such a claim both produce.
+ * Nothing above the last component is ever left unresolved, so mount_root's
+ * either-spelling test is exact equality. Nothing is respelled here: locate is
+ * asked once per argument and once per directory a walk enters, and the walkers
+ * join.
  *
- * The empty-target ROOT mount has length 0, so it always loses to any non-empty
- * match and serves as the universal fallback when no other mount contains the path.
+ * A name is composed beneath a root's *physical* — the last component's spelling
+ * can only answer "the root itself", which has no name — so mount_resolve places
+ * an answer of this one back at the very location it was composed from.
  *
- * Outcome contract:
- *   - MOUNT_CLASSIFY_TAIL: `*out_storage` is set to an arena-borrowed storage
- *     path. Lifetime tracks `arena`; callers do not free it.
- *   - MOUNT_CLASSIFY_ROOT: `fs_path` equals a mount target exactly; `*out_storage`
- *     is NULL. The matched spec (if `out_spec != NULL`) is still written so callers
- *     can decide on label vocabulary without re-classifying. Caller decides whether
- *     to treat this as an error or a skip.
- *   - ERR_INTERNAL when no entry matched (only possible on a malformed mount
- *     table — the ROOT sentinel always wins in well-formed tables).
+ * This is the *last* rung of the question a command actually asks. A claim of
+ * the profile standing at or above the location outranks every root, and
+ * core/manifest.h's manifest_name is the whole ascent with this at its end.
+ *
+ * The answer is the arena's. NULL is a root, and mount_root names which.
+ *
+ * Errors:
+ *   - ERR_INTERNAL when no root encloses the location — a malformed table, or a
+ *     `location` that is not absolute. The sentinel encloses every absolute path
+ *     at depth zero and belongs to every namespace, so a well-formed table always
+ *     answers.
  *   - ERR_MEMORY on arena allocation failure.
  *
+ * Readers: add's argument arm and its walk (cmds/add.c), `ignore --test`'s
+ * per-profile subject (cmds/ignore.c), and the interim resolver the five `-p`
+ * verbs share (infra/path.h path_input_classify).
+ *
  * @param table       Mount table (must not be NULL)
- * @param fs_path     Absolute path to classify (must not be NULL)
- * @param arena       Arena that owns `*out_storage` allocation when TAIL
- * @param outcome     Receives the classification outcome (must not be NULL)
- * @param out_storage Arena-borrowed storage path when TAIL; NULL when ROOT (must
- *                    not be NULL)
- * @param out_spec    Optional: receives a borrowed pointer to the winning
- *                    mount's spec (vocabulary attributes — label string,
- *                    tracks_ownership, per_profile). Populated in both TAIL and
- *                    ROOT outcomes. Pass NULL when only the storage path is needed.
+ * @param profile     The asker, or NULL for the shared roots alone
+ * @param location    Absolute location (must not be NULL)
+ * @param arena       Arena that owns `*out_storage`
+ * @param out_storage Arena-borrowed storage path, NULL at a root (must not be
+ *                    NULL; NULL after an error)
  * @return Error or NULL on success
  */
-error_t *mount_classify(
+error_t *mount_name(
     const mount_table_t *table,
-    const char *fs_path,
+    const char *profile,
+    const char *location,
     arena_t *arena,
-    mount_classify_outcome_t *outcome,
-    const char **out_storage,
-    const mount_spec_t **out_spec
+    const char **out_storage
+);
+
+/**
+ * The root of `profile` standing exactly at `location`, or NULL when none does.
+ *
+ * By either spelling — the physical, or the binder's own — because the two
+ * questions that reach it hand over a spelling locate would have read through:
+ * a walk joins `<parent location>/<name>` for a leaf without locating, and
+ * mount_resolve answers a claim of a declared alias's own spelling with that
+ * spelling (its own stated exception). Both leave at most the last component
+ * unresolved, so exact equality is the whole test. An argument is located before
+ * it gets here, and a located root's spelling is its physical.
+ *
+ * A root met from above is entered unlisted and its children are named from
+ * `->label`; a symlink standing at one is skipped; a claim the climb would author
+ * at one is not authored (core/metadata.c). Asked once per directory entry and
+ * once per chain rung. Never fails, allocates nothing; `table` and `location`
+ * must not be NULL, `profile` may be — a NULL asker meets the shared roots (HOME,
+ * `/`) alone, so the answer is never a per_profile spec.
+ *
+ * Readers: the climb's root guard (core/metadata.c capture_ancestor), add's
+ * argument-arm refusal (cmds/add.c) and `ignore --test`'s root lines
+ * (cmds/ignore.c).
+ */
+const mount_spec_t *mount_root(
+    const mount_table_t *table,
+    const char *profile,
+    const char *location
+);
+
+/* The longest sentence mount_root_describe renders: "the deployment target" (20),
+ * " of profile '" (13), a profile name (a branch name — 255 bytes at git's limit),
+ * the closing quote and the terminator. */
+#define MOUNT_NOUN_MAX 320
+
+/**
+ * A root's noun for a screen, rendered into `buf` and returned: "your home
+ * directory", "the filesystem root", "the deployment target of profile 'web'".
+ *
+ * `root` is the spec mount_root answered and must not be NULL; the caller has
+ * just had mount_name answer NULL for the same table, asker and location, which
+ * is the same find over the same data — an invariant, not a hope. `profile` is
+ * read only for a per_profile root, and a per_profile root can only have been
+ * found by the profile that owns it, so it is non-NULL exactly when it is read.
+ *
+ * Returns `buf`, so the noun stands inside the message it belongs to rather than
+ * in a statement of its own: three verbs print this sentence and would otherwise
+ * spell it three ways — the message that a location has no name is the same message
+ * whether a pattern, an argument or a search asked.
+ *
+ * Truncates rather than fails: a screen noun, not a key.
+ */
+const char *mount_root_describe(
+    const mount_spec_t *root,
+    const char *profile,
+    char *buf,
+    size_t size
 );
 
 /**

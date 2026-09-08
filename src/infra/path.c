@@ -13,15 +13,16 @@
  *                            add, the binders' --target, ignore --test, the
  *                            completion)
  *
- * and the former resolver, path_input_classify — a location named with no asker
- * — kept for the query verbs until a claim is found where it stands.
+ * and the former resolver, path_input_classify — a location named through the
+ * asker's own roots — kept for the query verbs until a claim is found where it
+ * stands.
  *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the normalizer, then asks
  * the table where the spelling stands. The topology (mount_spec_for_path,
- * mount_validate_storage, mount_locate, mount_classify) and the filesystem
- * primitives (fs_expand_tilde, fs_make_absolute, fs_normalize_path) are delegated
- * to the layers below.
+ * mount_validate_storage, mount_locate, mount_name) and the filesystem primitives
+ * (fs_expand_tilde, fs_make_absolute, fs_normalize_path) are delegated to the
+ * layers below.
  */
 
 #include "infra/path.h"
@@ -147,8 +148,8 @@ error_t *path_input_normalize(const char *input, char **out) {
 }
 
 error_t *path_input_classify(
-    const mount_table_t *table, const char *input, arena_t *arena,
-    const char **out_storage
+    const mount_table_t *table, const char *profile, const char *input,
+    arena_t *arena, const char **out_storage
 ) {
     CHECK_NULL(table);
     CHECK_NULL(input);
@@ -166,19 +167,18 @@ error_t *path_input_classify(
         return NULL;
     }
 
-    /* The machine-wide name: mount_classify produces a well-formed storage path
-     * by construction — the label is one of three compile-time constants, and
-     * the tail is a located path past a validated target — so its output is not
-     * re-validated. A located input is its own location, so the classify's own
-     * locate is a no-op over it. */
-    mount_classify_outcome_t outcome;
-    err = mount_classify(table, arg.location, arena, &outcome, out_storage, NULL);
+    /* The name the asker's own roots give it: mount_name produces a well-formed
+     * storage path by construction — the label is one of three compile-time
+     * constants, and the tail is a located path past a validated target — so
+     * its output is not re-validated. The resolver located, and the namer does
+     * not locate. */
+    err = mount_name(table, profile, arg.location, arena, out_storage);
     if (err) return err;
 
-    if (outcome == MOUNT_CLASSIFY_ROOT) {
-        /* The input is a classification root itself ($HOME, /, or a --target).
-         * No storage-path encoding exists for the root; the verbs that ask this
-         * function take a claim, and a root holds none. */
+    if (!*out_storage) {
+        /* The input is a root of that namespace itself ($HOME, /, or the asker's
+         * own target). A root has no name; the verbs that ask this function take
+         * a claim, and a root holds none. */
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' is a mount root and has no storage representation", input

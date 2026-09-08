@@ -781,11 +781,17 @@ static bool source_gitignore_matches(
  *
  * The argument is resolved the way `add` resolves its arguments — a storage path
  * is the subject as typed; a filesystem path (absolute, tilde, relative) is
- * normalized and classified through the mount table — and the rules are evaluated
- * on the mount-relative path, exactly as the walk would evaluate them. The path
- * need not exist: a trailing slash on one that does not is the directory hint,
- * so directory-only patterns (`cache/`) can be tested. The source tree's
- * `.gitignore` is asked on the filesystem path, when the argument has one.
+ * normalized and located — and the rules are evaluated on the mount-relative
+ * path, exactly as the walk would evaluate them. The path need not exist: a
+ * trailing slash on one that does not is the directory hint, so directory-only
+ * patterns (`cache/`) can be tested. The source tree's `.gitignore` is asked on
+ * the filesystem path, when the argument has one.
+ *
+ * A location has no subject of its own: what a profile calls it is that profile's
+ * own roots' answer (infra/mount.h mount_name), so each arm below names its own
+ * and the all-profiles loop names one per profile — which is the whole point of
+ * asking `--test` before an `add`. A storage argument is the contract itself
+ * and stands for every profile alike.
  */
 static error_t *test_path_ignore(
     const dotta_ctx_t *ctx,
@@ -837,29 +843,19 @@ static error_t *test_path_ignore(
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", input);
         }
-        fs_path = arena_strdup(ctx->arena, absolute);
-        free(absolute);
-        if (!fs_path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
 
-        mount_classify_outcome_t outcome;
-        err = mount_classify(
-            mounts, fs_path, ctx->arena, &outcome, &storage_path, NULL
-        );
+        /* Where the spelling stands: the subjects below are named from a location,
+         * as the walk names what it finds (infra/mount.h). */
+        err = mount_locate(mounts, absolute, ctx->arena, &fs_path);
+        free(absolute);
         if (err) return err;
-        if (outcome == MOUNT_CLASSIFY_ROOT) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "%s is a mount root: it has no name for a pattern to match",
-                test_path
-            );
-            return NULL;
-        }
     }
 
-    /* What the patterns see. */
-    const char *subject = mount_strip_label(storage_path);
+    /* What the patterns see, when the user named it. A storage argument is the
+     * contract itself, so its subject is the name as typed and stands for every
+     * profile alike; a location is named by the asker's own roots, one profile
+     * at a time, and each arm below names its own. */
+    const char *typed = mount_strip_label(storage_path);   /* NULL for a location */
 
     bool path_exists = fs_path && fs_exists(fs_path);
     bool is_directory = path_exists ? fs_is_directory(fs_path) : trailing_slash;
@@ -867,10 +863,29 @@ static error_t *test_path_ignore(
     if (!path_exists) {
         output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
     }
-    output_info(
-        out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s",
-        test_path, subject, is_directory ? " (a directory)" : ""
-    );
+
+    if (typed) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s",
+            test_path, typed, is_directory ? " (a directory)" : ""
+        );
+    } else {
+        /* A location the asker holds no name for — one of its own roots — has
+         * no subject, and no pattern can match it. With no profile named these
+         * are the shared roots, HOME and `/`, which are every profile's; a
+         * binding's target is one profile's alone and is answered in that profile's
+         * own line below. */
+        const mount_spec_t *root = mount_root(mounts, specific_profile, fs_path);
+        if (root) {
+            char noun[MOUNT_NOUN_MAX];
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'%s' is %s: it has no name for a pattern to match", test_path,
+                mount_root_describe(root, specific_profile, noun, sizeof(noun))
+            );
+            return NULL;
+        }
+    }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
      * test invocation so the discovered repo handle is reused across the
@@ -909,6 +924,21 @@ static error_t *test_path_ignore(
                 specific_profile
             );
             goto cleanup;
+        }
+
+        /* What the patterns see here: the argument as typed, or the name this
+         * arm's asker gives the location. The root above already answered for a
+         * root of that namespace, so the name stands. */
+        const char *subject = typed;
+        if (!subject) {
+            const char *name = NULL;
+            err = mount_name(mounts, specific_profile, fs_path, ctx->arena, &name);
+            if (err) goto cleanup;
+            subject = mount_strip_label(name);
+            output_info(
+                out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s", test_path,
+                subject, is_directory ? " (a directory)" : ""
+            );
         }
 
         gitignore_match_t match;
@@ -973,6 +1003,21 @@ static error_t *test_path_ignore(
             goto cleanup;
         }
 
+        /* What the patterns see here: the argument as typed, or the name this
+         * arm's asker gives the location. The root above already answered for a
+         * root of that namespace, so the name stands. */
+        const char *subject = typed;
+        if (!subject) {
+            const char *name = NULL;
+            err = mount_name(mounts, specific_profile, fs_path, ctx->arena, &name);
+            if (err) goto cleanup;
+            subject = mount_strip_label(name);
+            output_info(
+                out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s", test_path,
+                subject, is_directory ? " (a directory)" : ""
+            );
+        }
+
         gitignore_match_t match;
         gitignore_eval(rules, subject, is_directory, &match);
 
@@ -1013,6 +1058,36 @@ static error_t *test_path_ignore(
                 err, "Failed to load ignore rules for profile '%s'", profile
             );
             goto cleanup;
+        }
+
+        /* What the patterns see for this profile. Each iteration names its own:
+         * a subject carried across them would be non-NULL after the first and
+         * silently skip every later profile's ask. */
+        const char *subject = typed;
+        if (!subject) {
+            const char *name = NULL;
+            err = mount_name(mounts, profile, fs_path, ctx->arena, &name);
+            if (err) goto cleanup;
+            if (!name) {
+                /* The one root the pre-arm block could not refuse: this profile's
+                 * own target, which is nobody else's. */
+                char noun[MOUNT_NOUN_MAX];
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Profile '%s': '%s' is %s, and has no name to match", profile,
+                    test_path,
+                    mount_root_describe(
+                    mount_root(mounts, profile, fs_path), profile, noun,
+                    sizeof(noun)
+                    )
+                );
+                continue;
+            }
+            subject = mount_strip_label(name);
+            output_info(
+                out, OUTPUT_VERBOSE, "Matching '%s' as '%s' for profile '%s'%s",
+                test_path, subject, profile, is_directory ? " (a directory)" : ""
+            );
         }
 
         gitignore_match_t match;

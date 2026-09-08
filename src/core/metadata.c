@@ -821,9 +821,9 @@ static error_t *capture_ancestor(
 
     /* Where the rung stands is where its own name resolves, never the leaf's
      * location cut short: a declared alias — a target some profile is bound at
-     * through a link inside this mount — is respelled beneath itself and not at
-     * itself, so `home/link` is the link and `home/link/sub` the directory that
-     * link names. The two are one rung apart and one respell apart, which is
+     * through a link inside this mount — is read through beneath itself and not
+     * at itself, so `home/link` is the link and `home/link/sub` the directory
+     * that link names. The two are one rung apart and one link apart, which is
      * exactly what arithmetic over a shared tail cannot see. */
     const char *filesystem_path = NULL;
     RETURN_IF_ERROR(

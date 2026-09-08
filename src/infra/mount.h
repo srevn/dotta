@@ -30,18 +30,21 @@
  * for every alias a binder declared — a root's two spellings, a root beneath
  * another root's alias, a claim beneath a root's alias — and a root is a root
  * under any of them. A tail is Git's and is joined as written: a link
- * inside one that no binding names is an entry, as `~/.config -> ~/dotfiles/config`
- * must stay, and two claims through and around it are two claims. A bind mount
- * or a firmlink is two physicals for one directory: the binders' compare
- * (mount_same_target) reads the inode, this table the spelling.
+ * inside one that no binding names is a leaf of its own, as `~/.config ->
+ * ~/dotfiles/config` must stay, and two claims through and around it are two
+ * claims. A bind mount or a firmlink is two physicals for one directory: the
+ * binders' compare (mount_same_target) reads the inode, this table the spelling.
  *
  * The root directory is spelled "" in the table — the one spelling that joins a
  * tail with one slash and encloses every absolute path at depth zero: the
  * sentinel's, and HOME's when HOME is "/" (a container's bare uid) or reaches
  * it through a link.
  *
- * Two views over the same data:
- *   - Forward (filesystem -> storage): mount_classify picks the
+ * Three questions over the same data:
+ *   - Where a spelling stands (filesystem -> location): mount_locate, the
+ *     physical spelling as far as the table knows its roots — asked once per
+ *     argument, never per child, and the forward view's first step.
+ *   - Forward (filesystem -> storage): mount_classify locates, then picks the
  *     longest-matching target (tightest container wins, same semantic as filesystem
  *     mount points or URL routers).
  *   - Backward (profile + storage -> filesystem): mount_resolve looks
@@ -256,6 +259,53 @@ error_t *mount_table_build(
 );
 
 /**
+ * Where a filesystem spelling stands on this machine: its location.
+ *
+ * The physical spelling as far as the table knows its roots. Every declared alias
+ * above the final component is read through what it reaches, the deepest first,
+ * again until none does; and a spelling that is a root's own — as its binder
+ * typed it, or that spelling read through the aliases above it — is the directory
+ * the binding names, whoever asks: `~/jail/link` where q is bound through the
+ * link is q's target, and HOME typed as the identity spells it is HOME's physical
+ * however many links stand above it (`/tmp -> /private/tmp`). A spelling through
+ * a link no binding names is left as written: a tail is Git's.
+ *
+ * Pure string work over the table — no stat, no realpath — so the spelling need
+ * not exist (show, revert, remove, a filter for a path not yet deployed), and
+ * it is asked once per argument, never per child: a child joined beneath a location
+ * is a location, the walkers' rule. Every location the table produces — a
+ * resolve's, a row's, a child joined beneath one — is its own answer, which is
+ * what makes a location a key the resolver's answer and the view's rows share
+ * by strcmp. The one exception is stated here, not hidden: a claim of the very
+ * link a binding is declared through (a stranger's `home/jail/link`) stands at
+ * the link (mount_resolve), and that spelling, located, is the binding's directory
+ * — the row is reached beneath its parent and by its name, never by its own
+ * spelling.
+ *
+ * `fs_path` is absolute and lexically normalized (path_input_normalize); the
+ * fold is established there, not re-checked here. The answer is the arena's, or
+ * the table's own when the spelling is a root's — both outlive the call, and
+ * every caller locates through a table its own arena built.
+ *
+ * Readers: mount_classify, whose first step this is. The resolver's filesystem
+ * arm (infra/path) reads it directly once an argument is matched by location
+ * rather than by the name a machine-wide table gives it.
+ *
+ * @param table        Mount table (must not be NULL)
+ * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)
+ * @param arena        Arena that owns `*out_location`
+ * @param out_location Arena-borrowed location (must not be NULL; NULL after an
+ *                     error)
+ * @return Error or NULL on success
+ */
+error_t *mount_locate(
+    const mount_table_t *table,
+    const char *fs_path,
+    arena_t *arena,
+    const char **out_location
+);
+
+/**
  * Outcome of mount_classify. Encodes "did the path land under a mount, or did
  * it equal a mount root exactly?" as data so callers don't catch ERR_INVALID_ARG
  * as control flow.
@@ -276,13 +326,13 @@ typedef enum {
 /**
  * Classify an absolute filesystem path into a storage path.
  *
- * The path is first spelled physically as far as the table knows — every declared
- * alias above its entry resolved, a root typed through its link read as the
- * directory the binding names — and then the deepest mount enclosing that spelling
- * wins (tightest container). Ties at equal depth — two mounts at one directory
- * — are broken by declaration order (stable, earlier wins). The typed spelling
- * never leaves this call: a path typed physically, through the binder's spelling,
- * or through an enclosing root's alias classifies the same.
+ * The path is located first (mount_locate: every declared alias above its entry
+ * resolved, a root's own spelling read as the directory the binding names — and
+ * a located path is its own answer), and then the deepest mount enclosing the
+ * location wins (tightest container). Ties at equal depth — two mounts at one
+ * directory — are broken by declaration order (stable, earlier wins). The typed
+ * spelling never leaves this call: a path typed physically, through the binder's
+ * spelling, or through an enclosing root's alias classifies the same.
  *
  * The empty-target ROOT mount has length 0, so it always loses to any non-empty
  * match and serves as the universal fallback when no other mount contains the path.
@@ -329,10 +379,10 @@ error_t *mount_classify(
  *
  * The location is the physical spelling as far as the table knows: the mount's
  * physical, "/", the tail, and a declared alias inside the tail — a target some
- * profile is bound at through a link inside this mount — respelled through what
- * it reaches, so a claim captured through that link keys with the target's own
- * claims. A claim at the alias's own spelling is the entry there, the link, and
- * stands as joined.
+ * profile is bound at through a link inside this mount — read through what it
+ * reaches, so a claim captured through that link keys with the target's own claims.
+ * A claim at the alias's own spelling is the link standing there, and stands as
+ * joined.
  *
  * Absence is NULL, as every lookup in the tree answers it (manifest_lookup,
  * state_peek_profile_target, hashmap_get): `*out_location` is NULL when the claim

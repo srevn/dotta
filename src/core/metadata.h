@@ -499,9 +499,9 @@ error_t *metadata_capture_from_directory(
  * The name is the whole input, and every rung stands where its own name resolves
  * (mount_resolve, under `profile`'s bindings): the chain's own separators spell
  * every ancestor, and the table says where each one of them is. A location cut
- * short would not do — a declared alias is respelled beneath itself and not at
- * itself, so `home/link` is the link and `home/link/sub` the directory that link
- * names, two rungs at two places no shared tail relates.
+ * short would not do — a declared alias is read through beneath itself and not
+ * at itself, so `home/link` is the link and `home/link/sub` the directory that
+ * link names, two rungs at two places no shared tail relates.
  *
  * Per rung, root-first:
  *   - a tracked claim standing at the key is the walk's own word and is left

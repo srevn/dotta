@@ -53,9 +53,7 @@ const mount_spec_t *mount_spec_for_kind(mount_kind_t kind) {
  * edit here.
  */
 static bool mount_decode_label(
-    const char *storage_path,
-    mount_kind_t *out_kind,
-    const char **out_tail
+    const char *storage_path, mount_kind_t *out_kind, const char **out_tail
 ) {
     if (!storage_path) return false;
 
@@ -101,8 +99,7 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path) {
  * No filesystem access, no allocation: the tail is walked in place.
  */
 static error_t *validate_path_components(
-    const char *components,
-    const char *display_path
+    const char *components, const char *display_path
 ) {
     for (const char *comp = components; comp != NULL;) {
         if (comp[0] == '.' && comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
@@ -271,9 +268,9 @@ error_t *mount_validate_target(const char *target) {
 bool mount_same_target(const char *a, const char *b) {
     if (strcmp(a, b) == 0) return true;
 
-    struct stat at_a, at_b;
-    return fs_stat(a, &at_a) == 0 && fs_stat(b, &at_b) == 0 &&
-           at_a.st_dev == at_b.st_dev && at_a.st_ino == at_b.st_ino;
+    struct stat st_a, st_b;
+    return fs_stat(a, &st_a) == 0 && fs_stat(b, &st_b) == 0 &&
+           st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino;
 }
 
 /**
@@ -283,8 +280,8 @@ bool mount_same_target(const char *a, const char *b) {
  * - spelling: as its binder typed it — HOME as the identity spells it, "" for a
  *           root at "/" — read through every enclosing alias the table knows: a
  *           target typed `~/link` under a HOME that is itself a link is known
- *           as `<HOME's physical>/link`, which is how a path respelled through
- *           HOME meets it (mount_table_build).
+ *           as `<HOME's physical>/link`, which is how a path read through HOME
+ *           meets it (mount_table_build).
  * - physical: what it reaches, as realpath spells it — the spelling itself when
  *           realpath agrees or cannot answer (a target gone since it was bound).
  *           An alias is a mount whose spelling is not its physical; the sentinel
@@ -294,18 +291,19 @@ bool mount_same_target(const char *a, const char *b) {
  *           profile name; participates in profile-keyed backward resolution.
  *
  * Every string is the arena's — copied at build — so the table borrows nothing
- * and stands for the arena's lifetime.
+ * and stands for the arena's lifetime; the sentinel's two are the literal "",
+ * which outlives every arena.
  */
 typedef struct {
-    const char *spelling;
-    const char *physical;
-    mount_kind_t kind;
-    const char *profile;
+    const char *spelling;    /* As its binder typed it, enclosing aliases resolved */
+    const char *physical;    /* What it reaches, as realpath spells it */
+    mount_kind_t kind;       /* The storage label paths under it take */
+    const char *profile;     /* The binding's owner; NULL for HOME and ROOT */
 } mount_entry_t;
 
 struct mount_table {
-    mount_entry_t *entries;
-    size_t entry_count;
+    mount_entry_t *entries;    /* Customs in position order, then HOME, then ROOT */
+    size_t entry_count;        /* The customs that named a target, plus those two */
 };
 
 /**
@@ -324,88 +322,111 @@ static const char *table_spelling(arena_t *arena, const char *path) {
  *
  * Best-effort: a spelling realpath cannot answer (a target deleted since it was
  * bound, EACCES) reaches itself, and the mount is no alias — its claims key under
- * the spelling, and have no files.
+ * the spelling, and have no files. A root spelled "" is asked for as "/", the
+ * one spelling of it realpath takes. NULL on arena exhaustion, as table_spelling
+ * beside it answers that.
  */
-static error_t *physical_of(
-    arena_t *arena,
-    const char *spelling,
-    const char **out
-) {
+static const char *physical_spelling(arena_t *arena, const char *spelling) {
     char *resolved = NULL;
     error_t *err = fs_canonicalize_path(*spelling ? spelling : "/", &resolved);
     if (err) {
         error_free(err);
-        *out = spelling;
-        return NULL;
-    }
-    *out = table_spelling(arena, resolved);
-    free(resolved);
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
+        return spelling;
     }
 
-    return NULL;
+    const char *physical = table_spelling(arena, resolved);
+    free(resolved);
+
+    return physical;
 }
 
 /**
- * Return the relative part of `absolute` after stripping `target`, with
- * path-component boundary verification.
+ * Is this mount known by two spellings?
  *
- *   /home/user matches /home/user/.bashrc /home/user does NOT match
+ * The sentinel, a mount bound under no link, and one realpath could not answer
+ * (physical_spelling hands the spelling back) all have one spelling for one
+ * directory: none of them takes part in spelling a path physically.
+ */
+static bool mount_is_alias(const mount_entry_t *m) {
+    return strcmp(m->spelling, m->physical) != 0;
+}
+
+/**
+ * The tail of `absolute` past `root`, on a component boundary.
+ *
+ *   /home/user encloses /home/user/.bashrc; it does NOT enclose
  *   /home/username/.bashrc
  *
- * Returns NULL when `target` doesn't match or boundary fails. Returns a pointer
- * into `absolute` otherwise — empty string when they match exactly, the relative
- * tail otherwise. The root's "" matches every absolute path at depth zero.
+ * `root` is any of the table's — a mount's spelling or its physical, HOME, or
+ * the sentinel's "" — never a `--target` as such, so the parameter is named for
+ * what the table calls it. Returns NULL when `root` does not enclose `absolute`
+ * or the boundary fails; otherwise a pointer into `absolute` — the empty string
+ * when the two name one directory, the tail past it otherwise. The root's ""
+ * encloses every absolute path at depth zero, and only those: a relative path's
+ * first byte is no boundary.
  */
-static const char *relative_after_target(
-    const char *absolute,
-    const char *target
-) {
-    size_t target_len = strlen(target);
-    if (strncmp(absolute, target, target_len) != 0) return NULL;
+static const char *tail_under_root(const char *absolute, const char *root) {
+    size_t root_len = strlen(root);
+    if (strncmp(absolute, root, root_len) != 0) return NULL;
 
     /* Boundary: next character must be '/' or '\0'. */
-    char boundary = absolute[target_len];
+    char boundary = absolute[root_len];
     if (boundary != '/' && boundary != '\0') return NULL;
 
-    const char *relative = absolute + target_len;
-    if (*relative == '/') relative++;
+    const char *tail = absolute + root_len;
+    if (*tail == '/') tail++;
 
-    return relative;  /* "" on exact match, non-empty otherwise */
+    return tail;  /* "" when the two name one directory, non-empty otherwise */
 }
 
 /**
- * The physical spelling of a path above its entry, as far as the table knows.
+ * The deepest alias enclosing the path with something beneath it, and the tail
+ * past its spelling. NULL when none does, and `*out_tail` is then untouched.
  *
- * A declared alias enclosing the path with something beneath it is respelled
- * through its physical, the deepest first, again until none does. The entry is
- * never respelled: a path that is an alias's own spelling names the entry there
- * — the link — not the directory it reaches, so a claim of the link stays a claim
- * of the link. A path spelled physically, or through a link no binding names,
- * is left as it is: `*path` is replaced only when respelled, by an arena string.
- * Every respell moves one declared link into the physical prefix and adds none
- * — a physical has no link in it — so it ends.
+ * A path that is an alias's own spelling is not enclosed by it — the tail must
+ * be non-empty, which is how the final component stays out of the pass below.
  */
-static error_t *respell_above_entry(
-    const mount_table_t *table,
-    arena_t *arena,
-    const char **path
+static const mount_entry_t *deepest_alias(
+    const mount_table_t *table, const char *path, const char **out_tail
+) {
+    const mount_entry_t *alias = NULL;
+    const char *deepest = NULL;
+
+    for (size_t i = 0; i < table->entry_count; i++) {
+        const mount_entry_t *m = &table->entries[i];
+        if (!mount_is_alias(m)) continue;
+        const char *tail = tail_under_root(path, m->spelling);
+        if (!tail || *tail == '\0') continue;
+        /* Every tail points into `path` at its spelling's length, so pointer
+         * order is depth order: the later one stands under the longer spelling. */
+        if (alias && tail <= deepest) continue;
+        alias = m;
+        deepest = tail;
+    }
+
+    if (alias) *out_tail = deepest;
+
+    return alias;
+}
+
+/**
+ * A path's ancestors spelled physically, as far as the table knows them.
+ *
+ * A declared alias enclosing the path with something beneath it is read through
+ * what it reaches, the deepest first, again until none does. The final component
+ * is never rewritten: a path that is an alias's own spelling names the link
+ * standing there, not the directory it reaches, so a claim of the link stays a
+ * claim of the link. A path spelled physically, or one through a link no binding
+ * names, is left as it is: `*path` is replaced only when an ancestor was read
+ * through, by an arena string. Every pass moves one declared link into the physical
+ * prefix and adds none — a physical has no link in it — so it ends.
+ */
+static error_t *spell_ancestors(
+    const mount_table_t *table, arena_t *arena, const char **path
 ) {
     for (;;) {
-        const mount_entry_t *alias = NULL;
         const char *tail = NULL;
-        for (size_t i = 0; i < table->entry_count; i++) {
-            const mount_entry_t *m = &table->entries[i];
-            if (strcmp(m->spelling, m->physical) == 0) continue;
-            const char *t = relative_after_target(*path, m->spelling);
-            if (!t || *t == '\0') continue;
-            /* Both tails point into *path: the later one is the deeper alias. */
-            if (!alias || t > tail) {
-                alias = m;
-                tail = t;
-            }
-        }
+        const mount_entry_t *alias = deepest_alias(table, *path, &tail);
         if (!alias) return NULL;
 
         *path = arena_str_format(arena, "%s/%s", alias->physical, tail);
@@ -420,35 +441,36 @@ static error_t *respell_above_entry(
  *
  * Tightest container wins; at equal depth — two mounts at one directory — the
  * earlier entry (stable: the customs in position order, then HOME, then the
- * sentinel). `*out_tail` is empty when the path is the mount's root itself. Returns
- * NULL when no entry matches; with the sentinel present, this only happens for
- * a malformed table.
+ * sentinel). `*out_tail` is empty when the path is the mount's root itself, and
+ * is written only when a mount matched. Returns NULL when none does; with the
+ * sentinel present, this only happens for a malformed table.
  */
 static const mount_entry_t *deepest_mount(
-    const mount_table_t *table,
-    const char *physical,
-    const char **out_tail
+    const mount_table_t *table, const char *physical, const char **out_tail
 ) {
     const mount_entry_t *winner = NULL;
+    const char *deepest = NULL;
 
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
-        const char *tail = relative_after_target(physical, m->physical);
+        const char *tail = tail_under_root(physical, m->physical);
         if (!tail) continue;
-        /* Both tails point into `physical`: the later one is the deeper root. */
-        if (!winner || tail > *out_tail) {
-            winner = m;
-            *out_tail = tail;
-        }
+        /* Every tail points into `physical` at its root's length, so pointer
+         * order is depth order: the later one stands under the longer root. An
+         * equal one is two mounts at one directory, and the earlier entry keeps
+         * it. */
+        if (winner && tail <= deepest) continue;
+        winner = m;
+        deepest = tail;
     }
+
+    if (winner) *out_tail = deepest;
 
     return winner;
 }
 
 error_t *mount_table_build(
-    arena_t *arena,
-    const mount_t *mounts,
-    size_t mount_count,
+    arena_t *arena, const mount_t *mounts, size_t mount_count,
     mount_table_t **out
 ) {
     CHECK_NULL(arena);
@@ -483,7 +505,6 @@ error_t *mount_table_build(
      * it and as realpath reads it; the enclosing aliases are read below, once
      * every spelling is in. */
     size_t n = 0;
-    error_t *err = NULL;
     for (size_t i = 0; i < mount_count; i++) {
         const char *raw = mounts[i].target;
         if (!raw || raw[0] == '\0') continue;
@@ -492,9 +513,10 @@ error_t *mount_table_build(
         if (!spelling) {
             return ERROR(ERR_MEMORY, "Failed to copy path into arena");
         }
-        const char *physical = NULL;
-        err = physical_of(arena, spelling, &physical);
-        if (err) return err;
+        const char *physical = physical_spelling(arena, spelling);
+        if (!physical) {
+            return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
+        }
 
         /* The name is copied like the target: the table keeps nothing of the
          * caller's past the call, so it stands for the arena's lifetime whatever
@@ -508,9 +530,7 @@ error_t *mount_table_build(
         }
 
         entries[n++] = (mount_entry_t){
-            .spelling = spelling,
-            .physical = physical,
-            .kind = MOUNT_CUSTOM,
+            .spelling = spelling, .physical = physical, .kind = MOUNT_CUSTOM,
             .profile = profile,
         };
     }
@@ -522,35 +542,35 @@ error_t *mount_table_build(
     if (!home) {
         return ERROR(ERR_MEMORY, "Failed to copy path into arena");
     }
-    const char *home_physical = NULL;
-    err = physical_of(arena, home, &home_physical);
-    if (err) return err;
+    const char *home_physical = physical_spelling(arena, home);
+    if (!home_physical) {
+        return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
+    }
 
     entries[n++] = (mount_entry_t){
-        .spelling = home,
-        .physical = home_physical,
-        .kind = MOUNT_HOME,
+        .spelling = home, .physical = home_physical, .kind = MOUNT_HOME,
         .profile = NULL,
     };
+    /* The sentinel: "" encloses every absolute path at depth zero and joins a
+     * tail with one slash, so the fallback needs no case of its own anywhere.
+     * Its two spellings are literals, not the arena's. */
     entries[n++] = (mount_entry_t){
-        .spelling = "",
-        .physical = "",
-        .kind = MOUNT_ROOT,
-        .profile = NULL,
+        .spelling = "", .physical = "", .kind = MOUNT_ROOT, .profile = NULL,
     };
 
     table->entries = entries;
     table->entry_count = n;
 
-    /* The spellings, read through every enclosing alias: each alias respelled
-     * over the table, once per custom — a round settles the outermost unresolved
-     * alias of every chain, and no chain is longer than the table. A mount realpath
-     * could not answer is no alias, and is left. */
+    /* The spellings, read through every enclosing alias: each alias read through
+     * the table, once per custom — a round settles the outermost unresolved alias
+     * of every chain, and no chain is longer than the table. An entry that has
+     * been read all the way through to its own physical is no longer an alias
+     * and falls out of the later rounds on its own. */
     for (size_t round = 0; round < custom_count; round++) {
         for (size_t i = 0; i < custom_count; i++) {
             mount_entry_t *m = &entries[i];
-            if (strcmp(m->spelling, m->physical) == 0) continue;
-            err = respell_above_entry(table, arena, &m->spelling);
+            if (!mount_is_alias(m)) continue;
+            error_t *err = spell_ancestors(table, arena, &m->spelling);
             if (err) return err;
         }
     }
@@ -560,12 +580,49 @@ error_t *mount_table_build(
     return NULL;
 }
 
+error_t *mount_locate(
+    const mount_table_t *table, const char *fs_path, arena_t *arena,
+    const char **out_location
+) {
+    CHECK_NULL(table);
+    CHECK_NULL(fs_path);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_location);
+
+    *out_location = NULL;
+
+    /* The typed spelling, its declared aliases resolved above its final component.
+     * The copy is the answer's lifetime: a spelling nothing was read through is
+     * handed back as the arena's, like one that was. */
+    const char *location = arena_strdup(arena, fs_path);
+    if (!location) {
+        return ERROR(ERR_MEMORY, "Failed to copy path into arena");
+    }
+    error_t *err = spell_ancestors(table, arena, &location);
+    if (err) return err;
+
+    /* A root's own spelling — a target typed through the link its binder declared,
+     * HOME as the identity spells it under links no binding names — is what the
+     * ancestor pass leaves to the final component, and is the directory the binding
+     * names: every binding of that directory stands there for the tie, and a
+     * row keyed beneath the physical is reached from it. */
+    for (size_t i = 0; i < table->entry_count; i++) {
+        if (strcmp(table->entries[i].spelling, location) == 0) {
+            /* Two bindings at one directory share a physical, so the first match
+             * answers for both. */
+            location = table->entries[i].physical;
+            break;
+        }
+    }
+
+    *out_location = location;
+
+    return NULL;
+}
+
 error_t *mount_classify(
-    const mount_table_t *table,
-    const char *fs_path,
-    arena_t *arena,
-    mount_classify_outcome_t *outcome,
-    const char **out_storage,
+    const mount_table_t *table, const char *fs_path, arena_t *arena,
+    mount_classify_outcome_t *outcome, const char **out_storage,
     const mount_spec_t **out_spec
 ) {
     CHECK_NULL(table);
@@ -574,28 +631,15 @@ error_t *mount_classify(
     CHECK_NULL(outcome);
     CHECK_NULL(out_storage);
 
-    /* The physical spelling, as far as the table knows: the typed path, its
-     * declared aliases resolved above the entry. */
-    const char *physical = arena_strdup(arena, fs_path);
-    if (!physical) {
-        return ERROR(ERR_MEMORY, "Failed to copy path into arena");
-    }
-    error_t *err = respell_above_entry(table, arena, &physical);
+    /* Where the spelling stands; a location is its own answer, so a caller that
+     * already holds one loses nothing by asking again. */
+    const char *location = NULL;
+    error_t *err = mount_locate(table, fs_path, arena, &location);
     if (err) return err;
-
-    /* A root typed through its link — the settled path is an alias's own spelling,
-     * which the respell leaves to the entry — is, to a query, the directory the
-     * binding names: every binding of that directory stands there for the tie. */
-    for (size_t i = 0; i < table->entry_count; i++) {
-        if (strcmp(table->entries[i].spelling, physical) == 0) {
-            physical = table->entries[i].physical;
-            break;
-        }
-    }
 
     /* The mount, in physical space. */
     const char *tail = NULL;
-    const mount_entry_t *winner = deepest_mount(table, physical, &tail);
+    const mount_entry_t *winner = deepest_mount(table, location, &tail);
     if (!winner) {
         return ERROR(ERR_INTERNAL, "No mount matched: %s", fs_path);
     }
@@ -640,10 +684,8 @@ error_t *mount_classify(
  *
  * Sole consumer today is mount_resolve.
  */
-static const mount_entry_t *find_entry_for(
-    const mount_table_t *table,
-    mount_kind_t kind,
-    const char *profile
+static const mount_entry_t *find_entry(
+    const mount_table_t *table, mount_kind_t kind, const char *profile
 ) {
     const mount_spec_t *spec = mount_spec_for_kind(kind);
     if (!spec) return NULL;
@@ -661,11 +703,8 @@ static const mount_entry_t *find_entry_for(
 }
 
 error_t *mount_resolve(
-    const mount_table_t *table,
-    const char *profile,
-    const char *storage_path,
-    arena_t *arena,
-    const char **out_location
+    const mount_table_t *table, const char *profile, const char *storage_path,
+    arena_t *arena, const char **out_location
 ) {
     CHECK_NULL(table);
     CHECK_NULL(storage_path);
@@ -694,7 +733,7 @@ error_t *mount_resolve(
      * has no --target on this machine — e.g., a clone before the user has
      * configured a target — and the answer is the absence itself; malformed-input
      * failures surface as ERR_INTERNAL above. */
-    const mount_entry_t *entry = find_entry_for(table, kind, profile);
+    const mount_entry_t *entry = find_entry(table, kind, profile);
     if (!entry) return NULL;
 
     /* The join: the mount's physical, "/", the tail. Uniform across the three
@@ -713,8 +752,8 @@ error_t *mount_resolve(
     /* A claim beneath a declared alias — a target some profile is bound at through
      * a link inside this mount — stands where the link reaches, so p's home/link/x
      * and q's custom/x are one key; a claim at the alias's own spelling is the
-     * entry there, the link, and stands as joined. */
-    error_t *err = respell_above_entry(table, arena, &location);
+     * link standing there, and stands as joined. */
+    error_t *err = spell_ancestors(table, arena, &location);
     if (err) return err;
     *out_location = location;
 

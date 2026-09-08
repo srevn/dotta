@@ -66,7 +66,7 @@ static bool should_show_item_for_direction(
                (item->state == WORKSPACE_STATE_DEPLOYED &&
                ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
                DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
-               DIVERGENCE_UNVERIFIED)) || workspace_item_reassigned(item)));
+               DIVERGENCE_UNVERIFIED)) || workspace_reassigned(item->row, item->anchor)));
     }
 
     if (direction == DIFF_DOWNSTREAM) {
@@ -198,7 +198,7 @@ static const char *get_status_message_from_item(
 
     /* Profile reassignment with no content/metadata divergence. Only reachable
      * via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
-    if (workspace_item_reassigned(item)) {
+    if (workspace_reassigned(item->row, item->anchor)) {
         return "profile reassigned (acknowledged by apply)";
     }
 
@@ -265,7 +265,7 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
-    } else if (workspace_item_reassigned(item) &&
+    } else if (workspace_reassigned(item->row, item->anchor) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         status_color = OUTPUT_COLOR_CYAN;
     }
@@ -303,7 +303,7 @@ static error_t *show_file_diff_from_workspace(
      * blob-family ENCRYPTION bit does not demote a pure handover: it is about
      * how Git stores the blob, not a difference between Git and disk, so it neither
      * costs the handover its colour above nor leaves any bytes to render here. */
-    if (workspace_item_reassigned(item) &&
+    if (workspace_reassigned(item->row, item->anchor) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         return NULL;
     }

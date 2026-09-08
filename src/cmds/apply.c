@@ -1922,7 +1922,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * answer at its path), so the preview must not promise it. */
             if (item->displaced != WORKSPACE_DISPLACED_NONE) continue;
 
-            if (workspace_item_reassigned(item)) {
+            if (workspace_reassigned(item->row, item->anchor)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
@@ -2014,12 +2014,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             !manifest_is_claim(file, anchor->profile, anchor->storage_path);
         if (!adopt && !acknowledge) continue;
 
-        /* Which half of the claim moved, read before the write below rewrites
-         * the record it is read from. Only the profile half is the reassignment
-         * the receipt counts: a name flip within one profile is bookkeeping the
-         * user did not ask for and cannot act on from this screen, and counting
-         * it would make the run's line disagree with the preview's. */
-        bool reassigns = acknowledge && strcmp(anchor->profile, file->profile) != 0;
+        /* The handover the receipt counts, read before the write below rewrites
+         * the record it is read from. Only the profile half is that fact, which
+         * is the predicate's half: a name flip within one profile is bookkeeping
+         * the user did not ask for and cannot act on from this screen, and counting
+         * it would make the run's line disagree with the preview's, which reads
+         * the same rule off the item. */
+        bool reassigns = workspace_reassigned(file, anchor);
 
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's blob on every route a
@@ -2081,9 +2082,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
 
-        /* The file loop's counter, same derivation and same reason it is read
+        /* The file loop's counter, the same rule and the same reason it is read
          * here: the write below rewrites the record it reads. */
-        bool reassigns = strcmp(anchor->profile, dir->profile) != 0;
+        bool reassigns = workspace_reassigned(dir, anchor);
 
         if (!opts->dry_run) {
             error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
@@ -2244,7 +2245,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
             const workspace_item_t *item = kinds[k]->entries[i].item;
 
-            if (item && workspace_item_reassigned(item)) {
+            if (item && workspace_reassigned(item->row, item->anchor)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
@@ -2599,7 +2600,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
                 const workspace_item_t *item = o->verdict->item;
-                bool acknowledges = item && workspace_item_reassigned(item);
+                bool acknowledges = item && workspace_reassigned(item->row, item->anchor);
 
                 error_t *anchor_err = workspace_anchor(ws, file, &o->stat, now);
                 if (anchor_err) {
@@ -2625,7 +2626,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 bool made = deploy_convergence(o->verdict->occupant) != DEPLOY_CONVERGE_FIX;
 
                 const workspace_item_t *item = o->verdict->item;
-                bool acknowledges = item && workspace_item_reassigned(item);
+                bool acknowledges = item && workspace_reassigned(item->row, item->anchor);
 
                 if (!made && !acknowledges) continue;
 

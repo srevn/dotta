@@ -648,11 +648,9 @@ static error_t *analyze_file_divergence(
      * fast path, and absence reads UNDEPLOYED. */
     const anchor_t *anchor = workspace_get_anchor(ws, fs_path);
 
-    /* Reassignment, for the add-or-not decision below (see the doc above): an
-     * owned record under a profile other than the row's — the same expression
-     * as workspace_item_reassigned, its inputs in hand. */
-    bool profile_changed = anchor && anchor->deployed_at > 0 &&
-        strcmp(anchor->profile, profile) != 0;
+    /* A pending handover, for the add-or-not decision below (see the doc above):
+     * the rule read over the pair this analysis already holds. */
+    bool profile_changed = workspace_reassigned(row, anchor);
 
     /* The blob-family verdict (see the doc above): is the blob Git holds for
      * this row stored plaintext where the auto-encrypt policy claims the path?
@@ -1740,10 +1738,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * is fixed). Strictly the record's own profile: a claim shadowed
                  * by another profile at its new home is not "relocated" — the
                  * copy here is simply no longer active — and the same-profile
-                 * rule is what keeps workspace_item_reassigned false by
-                 * construction on every orphan (the profiles are equal). A LOST
-                 * or unanswered probe carries nothing: the first releases, the
-                 * second holds, and neither fate reads the row. */
+                 * rule is what keeps workspace_reassigned false by construction
+                 * on every orphan (the profiles are equal). A LOST or unanswered
+                 * probe carries nothing: the first releases, the second holds,
+                 * and neither fate reads the row. */
                 const manifest_row_t *claim =
                     manifest_lookup_storage(ws->manifest, storage_path, profile);
 
@@ -1871,7 +1869,7 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
             case WORKSPACE_STATE_DEPLOYED:
                 if (item->divergence != DIVERGENCE_NONE ||
-                    workspace_item_reassigned(item)) {
+                    workspace_reassigned(item->row, item->anchor)) {
                     has_warnings = true;
                 }
                 break;
@@ -2262,14 +2260,12 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * file analyzer makes. */
         const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
-        /* Reassignment, for the add-or-not decision at the bottom: an owned record
-         * under a profile other than the row's — the same expression as
-         * workspace_item_reassigned, its inputs in hand, the derivation the file
-         * analyzer makes at its own pairing. One rule, both kinds: a pending
-         * handover is apply's to acknowledge whatever the row's kind — of the
-         * two directory classes, only the tracked one gets this far (below). */
-        bool profile_changed = anchor && anchor->deployed_at > 0 &&
-            strcmp(anchor->profile, row->profile) != 0;
+        /* A pending handover, for the add-or-not decision at the bottom: the
+         * rule the file analyzer reads at its own pairing. One rule, both kinds
+         * — and the rule asks the row's class itself, so a derived claim answers
+         * false here whatever its record says, and the tracked gate below is
+         * about everything else this loop measures. */
+        bool profile_changed = workspace_reassigned(row, anchor);
 
         /* Stat directory to get current metadata
          *
@@ -2392,9 +2388,10 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * create the path as, never what to make of the one this machine already
          * has — asserting them here would let a ~/.ssh captured at a careless
          * 0755 loosen a correct 0700 elsewhere, a regression caused by the fix.
-         * The handover tail goes with them: a claim nobody made carries no intent
-         * to acknowledge, and the record keeps the profile dotta actually deployed
-         * under, which is what a record is for. */
+         * The handover tail is the rule's own: a claim nobody made carries no
+         * intent to acknowledge, so workspace_reassigned answers false for a
+         * derived claim wherever it is asked, and the record keeps the profile
+         * dotta actually deployed under, which is what a record is for. */
         if (!row->tracked) continue;
 
         /* One rule, three analyzers: the row's mode is total (claim or floor)
@@ -3011,8 +3008,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_CAPTURE;
     }
 
-    return workspace_item_reassigned(item) ? WORKSPACE_ROUTE_REASSIGNED
-                                           : WORKSPACE_ROUTE_CLEAN;
+    return workspace_reassigned(item->row, item->anchor) ? WORKSPACE_ROUTE_REASSIGNED
+                                                         : WORKSPACE_ROUTE_CLEAN;
 }
 
 /**
@@ -3085,7 +3082,7 @@ bool workspace_item_extract_display_info(
              * still names the profile that deployed the copy, and apply's redeploy
              * from the new owner is what acknowledges it — the same pair the
              * DEPLOYED arm prints. */
-            if (workspace_item_reassigned(item)) {
+            if (workspace_reassigned(item->row, item->anchor)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
@@ -3210,7 +3207,7 @@ bool workspace_item_extract_display_info(
              * Added after divergence tags as secondary information. Color only
              * set for pure reassignment (sole tag) to avoid overriding
              * severity-based colors from divergence. */
-            if (workspace_item_reassigned(item)) {
+            if (workspace_reassigned(item->row, item->anchor)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }

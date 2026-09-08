@@ -547,6 +547,13 @@ void manifest_free(manifest_t *manifest);
  * Counters describe the two views and the record; they do NOT verify disk matches
  * anything. Verification is workspace divergence analysis (status/diff/apply).
  * Both kinds count.
+ *
+ * `reassigned` here is this transition's own delta — a path `before` held under
+ * one profile that `after` gives another — and not the standing fact the screens
+ * name by the same word: a record dotta owns naming a profile the row does not
+ * is workspace_reassigned (core/workspace.h), true from whenever it began until
+ * apply acknowledges it. Both appear in sync's receipt, twenty lines apart,
+ * answering different questions.
  */
 typedef struct {
     const char *profile;         /* Profile name (borrowed from the profiles filter) */

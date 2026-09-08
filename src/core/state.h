@@ -196,7 +196,9 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  * stat); the claim — profile, storage path, mode, owner, group — is an ownership
  * event's to change. They are what an orphan (a record whose path no active row
  * names) is measured against, and an owned record whose profile ≠ the active
- * row's profile is a reassignment apply has not acknowledged.
+ * row's profile is a reassignment apply has not acknowledged — on a file row
+ * and on a directory the profile manages, never on a derived ancestor claim nobody
+ * made (core/workspace.h workspace_reassigned).
  */
 typedef struct anchor {
     /* Identity — the row's, at the last write */
@@ -575,7 +577,8 @@ const char *state_peek_profile_target(
  * and indexes it by path; the verbs that need one record by path (remove) load
  * it the same way and index it themselves rather than growing a point read for
  * one caller; manifest_diff reads it to tell a departed row with a record from
- * one without.
+ * one without; and sync's apply hint walks it against the view the Git phase
+ * produced, with no workspace and no disk (cmds/sync.c).
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

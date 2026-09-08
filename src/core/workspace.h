@@ -243,23 +243,52 @@ typedef struct {
 } workspace_item_t;
 
 /**
- * A pending handover: the record dotta owns names a different profile than the
- * row's
+ * A pending handover: the record dotta owns names a profile the row does not
+ *
+ * The join over its two subjects — a view row and the record at its path — since
+ * that is what every caller holds; an item-shaped caller passes item->row and
+ * item->anchor. NULL on either side is no handover: an orphan item carries no
+ * row, and a path dotta has no record of has nothing to hand over.
  *
  * Reads the LIVE record — after apply acknowledges (workspace_anchor rewrites
  * the record under the row's profile) the same read honestly answers false, so
  * a consumer that wants the load-time fact reads before the run's ownership events
- * rewrite it (apply's collection does). Kind-blind: one rule for both kinds.
+ * rewrite it (apply's collection does).
+ *
+ * Only an owned record qualifies: an observed or confirmed record dotta never
+ * deployed names the row the path was first seen under, not a deployer, and apply
+ * adopts such a path rather than acknowledging it.
+ *
+ * Both kinds — and of a directory's two classes, the tracked one alone. A handover
+ * is a question about managing the path, which core/manifest.h asks of tracked
+ * claims alone: a derived ancestor claim carries no intent to acknowledge, deploy's
+ * plan drops such a row before scope and the directory analyzer stops at the
+ * same line, so nothing would ever discharge one. The clause lives in the rule
+ * and not at the callers because most callers stand inside a loop that has already
+ * settled the row's kind and class, and the ones that do not cannot see that
+ * they need it. A file row's `tracked` is a don't-care, so the kind gates the read.
+ *
  * Orphans: false by construction — a relocated orphan's row is carried only when
  * its profile equals the record's (the strict same-profile rule of the relocation
- * read), so no reader needs an orphan guard. Only an owned record qualifies: an
- * observed or confirmed record dotta never deployed names the row the path was
- * first seen under, not a deployer, and apply adopts such a path rather than
- * acknowledging it.
+ * read), so no reader needs an orphan guard.
+ *
+ * Readers: both divergence analyzers, which emit an item for a clean row that
+ * carries this; the display tags and the route table; diff's filter and its
+ * "acknowledged by apply" line (cmds/diff.c); apply's collection and its two
+ * acknowledgement loops, the writers that move the record onto the row's profile
+ * (cmds/apply.c); and sync's apply hint, which asks it of the record against
+ * the view with no workspace at all (cmds/sync.c). A record's WRITER asks the
+ * whole claim — profile and storage path both — which is manifest_is_claim; this
+ * is the half the screens name and the receipts count. Not manifest_diff_stats_t's
+ * `reassigned`, which counts one transition's own delta between two views; this
+ * is the record against the view, standing from whenever it began.
  */
-static inline bool workspace_item_reassigned(const workspace_item_t *item) {
-    return item->row && item->anchor && item->anchor->deployed_at > 0 &&
-           strcmp(item->anchor->profile, item->row->profile) != 0;
+static inline bool workspace_reassigned(
+    const manifest_row_t *row, const anchor_t *anchor
+) {
+    return row && anchor && anchor->deployed_at > 0 &&
+           (row->type != PATH_TYPE_DIRECTORY || row->tracked) &&
+           strcmp(anchor->profile, row->profile) != 0;
 }
 
 /**
@@ -564,9 +593,9 @@ workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
  * hashmap lookup. Every item the analysis produced is indexed — a row with a
  * state other than DEPLOYED, a divergence bit, or a reassignment (a clean row
  * whose owned record names another profile has an item whose sources derive it
- * — workspace_item_reassigned); a row with none of the three has no item, and
- * this returns NULL — a clean row beneath a squatter included, since what read
- * clean was the squatter's target and the squatter's own row is the work
+ * — workspace_reassigned); a row with none of the three has no item, and this
+ * returns NULL — a clean row beneath a squatter included, since what read clean
+ * was the squatter's target and the squatter's own row is the work
  * (workspace_displaced_t).
  *
  * This function enables preflight to efficiently query workspace data instead

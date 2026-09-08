@@ -185,8 +185,8 @@ typedef enum dotta_crypto_mode {
  *
  * mounts
  * ------
- * This machine's topology over the enabled set — `profile_build_mount_table`
- * over the state's rows and `$HOME` — for locating the command's input
+ * This machine's topology over the enabled set — `manifest_mount_table` over
+ * the state's rows and `$HOME` — for locating the command's input
  * (`path_input_resolve`, `scope_build`). Requires `state`. A command that reads
  * a CLI path declares it. A command that declares the view as well borrows the
  * view's table — `manifest_mounts`, the one the builder derived from the rows

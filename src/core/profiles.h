@@ -48,7 +48,6 @@
 
 #include "base/hashmap.h"
 #include "core/state.h"
-#include "infra/mount.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -123,42 +122,6 @@ error_t *profile_resolve_enabled(
     git_repository *repo,
     const state_t *state,
     string_array_t **out
-);
-
-/**
- * Build a per-machine mount table from state
- *
- * Materializes the profile→target bindings recorded in enabled_profiles into a
- * mount_table_t handle, augmented internally with HOME and the empty-prefix root
- * sentinel. The handle is the single downstream entry point for both
- * filesystem→storage classification and profile-keyed storage→filesystem
- * resolution.
- *
- * Single mode: every enabled profile contributes a binding (full row-cache scan
- * in position order). The mount table is per-machine topology, not a CLI artifact
- * — narrowing happens at the operation level (scope filters, profile predicates),
- * never on the topology view.
- *
- * Lifetime contract:
- *   - The returned handle is allocated entirely from `arena`, every string
- *     included: the row cache is read for the call only, so the table stands
- *     across the enabled_profiles mutations that invalidate the cache — it is
- *     the topology at the instant it was built.
- *
- * Failure modes:
- *   - A state with no database has no rows and yields the bare table (HOME +
- *     root sentinel); a row read that fails on an opened database propagates.
- *   - Arena allocation failure surfaces as ERR_MEMORY.
- *
- * @param state State handle (must not be NULL; borrowed, not freed)
- * @param arena Arena backing the handle (must not be NULL; outlives handle)
- * @param out Output handle (must not be NULL; lifetime tracks arena)
- * @return Error or NULL on success
- */
-error_t *profile_build_mount_table(
-    const state_t *state,
-    arena_t *arena,
-    mount_table_t **out
 );
 
 /**

@@ -34,7 +34,6 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "core/metadata.h"
-#include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
@@ -692,6 +691,46 @@ static error_t *manifest_allocate(
 }
 
 /**
+ * The table the enabled rows describe
+ *
+ * State-aware adapter that materializes enabled_profiles' (name, target) rows
+ * into mount_t entries and delegates the augmentation (HOME, canonical HOME,
+ * root sentinel) to mount_table_build. The one derivation of this machine's
+ * topology from the rows: manifest_build runs it below before it places a row,
+ * and the dispatcher runs it alone for a command that declares `mounts` without
+ * the view, so the two read one value from one instant's rows.
+ */
+error_t *manifest_mount_table(
+    const state_t *state,
+    arena_t *arena,
+    mount_table_t **out
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    state_profiles_t rows = state_peek_profiles(state);
+
+    mount_t *mounts = NULL;
+    if (rows.count > 0) {
+        mounts = arena_calloc(arena, rows.count, sizeof(*mounts));
+        if (!mounts) {
+            return ERROR(ERR_MEMORY, "Failed to allocate mounts");
+        }
+        for (size_t i = 0; i < rows.count; i++) {
+            mounts[i] = (mount_t){
+                .profile = rows.entries[i].name,
+                .target = rows.entries[i].target
+            };
+        }
+    }
+
+    return mount_table_build(arena, mounts, rows.count, out);
+}
+
+/**
  * Build the manifest over the enabled set
  */
 error_t *manifest_build(
@@ -716,7 +755,7 @@ error_t *manifest_build(
      * machine's $HOME — built here, from the rows of this instant, so a custom/
      * path always resolves under the target the row it came from carries. */
     mount_table_t *mounts = NULL;
-    error_t *err = profile_build_mount_table(state, arena, &mounts);
+    error_t *err = manifest_mount_table(state, arena, &mounts);
     if (err) {
         return error_wrap(err, "Failed to build mount table");
     }

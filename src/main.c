@@ -40,7 +40,6 @@
 #include "cmds/sync.h"
 #include "cmds/update.h"
 #include "core/manifest.h"
-#include "core/profiles.h"
 #include "core/state.h"
 #include "crypto/keymgr.h"
 #include "infra/content.h"
@@ -235,7 +234,7 @@ static error_t *open_run(
             run->mounts = manifest_mounts(run->manifest);
         } else {
             mount_table_t *mounts = NULL;
-            err = profile_build_mount_table(run->state, arena, &mounts);
+            err = manifest_mount_table(run->state, arena, &mounts);
             if (err) goto done;
             run->mounts = mounts;
         }

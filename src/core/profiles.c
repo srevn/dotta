@@ -11,7 +11,6 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
-#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -219,54 +218,6 @@ cleanup:
     string_array_free(profiles);
 
     return err;
-}
-
-/**
- * Build a per-machine mount table from state
- *
- * State-aware adapter that materializes enabled_profiles' (name, target) rows
- * into mount_t entries and delegates the augmentation (HOME, canonical HOME,
- * root sentinel) to mount_table_build. Single chokepoint for "what does the mount
- * table look like for this command?".
- *
- * Name and target are read from the state row cache for the call only — the table
- * copies every string it keeps — so the handle is a value: the topology the rows
- * described at the instant it was built, readable for the arena's lifetime whatever
- * enabled_profiles mutation follows.
- *
- * A state with no database has no rows and yields the bare table (HOME and the
- * root sentinel). A row read that fails on an opened database is an error and
- * propagates: a bare table in its place would classify every input as home/ or
- * root/ and resolve no custom/ path, silently.
- */
-error_t *profile_build_mount_table(
-    const state_t *state,
-    arena_t *arena,
-    mount_table_t **out
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    *out = NULL;
-
-    state_profiles_t rows = state_peek_profiles(state);
-
-    mount_t *mounts = NULL;
-    if (rows.count > 0) {
-        mounts = arena_calloc(arena, rows.count, sizeof(*mounts));
-        if (!mounts) {
-            return ERROR(ERR_MEMORY, "Failed to allocate mounts");
-        }
-        for (size_t i = 0; i < rows.count; i++) {
-            mounts[i] = (mount_t){
-                .profile = rows.entries[i].name,
-                .target = rows.entries[i].target
-            };
-        }
-    }
-
-    return mount_table_build(arena, mounts, rows.count, out);
 }
 
 /**

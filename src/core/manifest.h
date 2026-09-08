@@ -7,7 +7,10 @@
  * and never stored — Git × the state's rows × this machine's $HOME → rows is a
  * pure function; the enabled set and each profile's target are read from the
  * state handle's row cache (core/state.h), the mount table is derived from them
- * inside the build, and nothing here writes. Surface is two-fold:
+ * inside the build, and nothing here writes. Surface is two-fold — builders and
+ * readers — with one function beside them: manifest_mount_table, the build's
+ * own table derivation on its own, for a command that needs this machine's topology
+ * without a view (include/runtime.h).
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
@@ -228,11 +231,11 @@ typedef struct manifest manifest_t;
  * alive per iteration (loaded, walked, freed).
  *
  * The mount table custom/ paths resolve under is built here, from the same rows
- * (profile_build_mount_table): a re-target is in the next build because the next
- * build reads the rows. A custom/ claim whose profile has no target binding on
- * this machine — a normal lifecycle stage in a shared repository — contributes
- * no row and is recorded on the view (manifest_unbound); the health consumers
- * surface it, and the build stays total over importable content.
+ * (manifest_mount_table): a re-target is in the next build because the next build
+ * reads the rows. A custom/ claim whose profile has no target binding on this
+ * machine — a normal lifecycle stage in a shared repository — contributes no
+ * row and is recorded on the view (manifest_unbound); the health consumers surface
+ * it, and the build stays total over importable content.
  *
  * A profile whose branch does not exist contributes no rows; the scope layer
  * already warns about the dead branch on every run, and the workspace reads that
@@ -375,6 +378,44 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * @return Borrowed table, never NULL for a built view
  */
 const mount_table_t *manifest_mounts(const manifest_t *manifest);
+
+/**
+ * The table the enabled rows describe
+ *
+ * The same derivation manifest_build runs before it places a row — each enabled
+ * profile's (name, target) from the state's row cache, augmented with this
+ * machine's $HOME and the empty-prefix root sentinel (infra/mount.h) — offered
+ * without a view, for a command that declares `mounts` and not `manifest`
+ * (include/runtime.h). A command declaring both reads manifest_mounts instead
+ * and gets the view's own: one build, one value, and the arguments it locates
+ * read the topology its rows were placed by. Rule 1, never cache a cache.
+ *
+ * The derivation stays the builder's, never a parameter of it: a re-target is
+ * in the next view because the next build reads the rows again, and a caller
+ * handed the table would have to remember to rebuild it after every mutation
+ * that moves one — silently placing a custom/ row under yesterday's target when
+ * it forgot.
+ *
+ * Name and target are read from the row cache for the call only — the table copies
+ * every string it keeps — so the handle is a value: the topology the rows described
+ * at the instant it was built, readable for the arena's lifetime whatever
+ * enabled_profiles mutation follows.
+ *
+ * A state with no database has no rows and yields the bare table (HOME and the
+ * root sentinel). A row read that fails on an opened database is an error and
+ * propagates: a bare table in its place would classify every input as home/ or
+ * root/ and resolve no custom/ path, silently.
+ *
+ * @param state State handle (must not be NULL; borrowed, not freed)
+ * @param arena Arena backing the handle (must not be NULL; outlives the handle)
+ * @param out Output handle (must not be NULL; lifetime tracks arena)
+ * @return Error or NULL on success
+ */
+error_t *manifest_mount_table(
+    const state_t *state,
+    arena_t *arena,
+    mount_table_t **out
+);
 
 /**
  * One claim the build could not place: its profile has no deployment target on

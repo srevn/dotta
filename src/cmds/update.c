@@ -291,8 +291,11 @@ static error_t *filter_items_for_update(
     for (size_t i = 0; i < all.count; i++) {
         const workspace_item_t *item = all.entries[i];
 
-        /* The scope triplet, on the storage path (canonical matching) */
-        if (!scope_accepts_path(scope, item->storage_path, item->item_kind)) {
+        /* The scope triplet: the path filter reads both names, the exclude the
+         * mount-relative one. */
+        if (!scope_accepts_path(
+            scope, item->filesystem_path, item->storage_path, item->item_kind
+            )) {
             continue;
         }
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
@@ -1796,8 +1799,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 continue;
             }
             if (!scope_accepts_entry(
-                scope, row->profile, row->storage_path,
-                path_type_kind(row->type)
+                scope, row->profile,
+                row->filesystem_path, row->storage_path, path_type_kind(row->type)
                 )) {
                 continue;
             }

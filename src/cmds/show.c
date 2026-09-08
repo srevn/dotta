@@ -566,8 +566,6 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     error_t *err = NULL;
     string_array_t *profiles = NULL;
     manifest_t *manifest = NULL;
-    const char *converted = NULL;
-    const char *found_profile = NULL;
 
     /* Handle SHOW_COMMIT mode */
     if (opts->mode == SHOW_COMMIT) {
@@ -634,18 +632,19 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    /* Resolve file path to storage format (common to both explicit and implicit
-     * paths). On resolution failure, fall back to the original input — it may
-     * be a partial-match pattern that path_input_resolve rejects but the search
-     * below accepts. */
-    error_t *convert_err = path_input_resolve(
-        mounts, opts->file_path, ctx->arena, &converted
-    );
-    const char *search_path = convert_err ? opts->file_path : converted;
-    if (convert_err) error_free(convert_err);
-
     if (opts->profile) {
-        /* Profile specified - show from that profile */
+        /* Profile specified - show from that profile, under the name the
+         * machine-wide table gives the argument (path_input_classify; the profile's
+         * own claim at a location is the next commit's answer). On a refusal,
+         * fall back to the original input — it may be a partial-match pattern
+         * the resolver rejects but the tree lookup below accepts. */
+        const char *converted = NULL;
+        error_t *convert_err = path_input_classify(
+            mounts, opts->file_path, ctx->arena, &converted
+        );
+        const char *search_path = convert_err ? opts->file_path : converted;
+        if (convert_err) error_free(convert_err);
+
         err = profile_require(repo, opts->profile);
         if (err) goto cleanup;
 
@@ -666,56 +665,73 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     }
 
     /* The owning profile is the view's: the enabled set at HEAD with precedence
-     * resolved. A name keys within one profile, so the view may hold it once
-     * (home/, root/, or one binding), or once per binding under custom/ — and
-     * then no profile is the answer, and each holder is named with the location
-     * that tells them apart. */
+     * resolved, asked in the key the argument names — through the table the view's
+     * rows were placed by, so the two read one topology. A location is one row,
+     * the winner standing there whatever its name. A name keys within one profile,
+     * so the view may hold it once (home/, root/, or one binding), or once per
+     * binding under custom/ — and then no profile is the answer, and each holder
+     * is named with the location that tells them apart. An argument the resolver
+     * refuses is read as a name, the fallback the tree lookup has always been
+     * given. */
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
+    path_input_t arg;
+    error_t *convert_err = path_input_resolve(
+        manifest_mounts(manifest), opts->file_path, ctx->arena, &arg
+    );
+    if (convert_err) {
+        error_free(convert_err);
+        arg = (path_input_t){
+            .key = PATH_KEY_STORAGE, .storage_path = opts->file_path
+        };
+    }
+
     const manifest_row_t *row = NULL;
-    size_t holders = manifest_holders(manifest, search_path, &row);
-    if (holders == 0) {
+    if (arg.key == PATH_KEY_LOCATION) {
+        row = manifest_lookup(manifest, arg.location);
+    } else {
+        size_t holders = manifest_holders(manifest, arg.storage_path, &row);
+        if (holders > 1) {
+            output_print(
+                out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
+                arg.storage_path, holders
+            );
+            manifest_rows_t rows = manifest_rows(manifest);
+            for (size_t i = 0; i < rows.count; i++) {
+                const manifest_row_t *held = rows.entries[i];
+                if (strcmp(held->storage_path, arg.storage_path) != 0) continue;
+                output_print(
+                    out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
+                    held->filesystem_path
+                );
+            }
+            output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
+            output_hintline(
+                out, OUTPUT_NORMAL, "  dotta show -p <profile> %s", arg.storage_path
+            );
+            err = ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", arg.storage_path);
+            goto cleanup;
+        }
+    }
+    if (!row) {
         err = ERROR(
             ERR_NOT_FOUND, "File '%s' not found in enabled profiles",
             opts->file_path
         );
         goto cleanup;
     }
-    if (holders > 1) {
-        output_print(
-            out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n", search_path,
-            holders
-        );
-        manifest_rows_t rows = manifest_rows(manifest);
-        for (size_t i = 0; i < rows.count; i++) {
-            const manifest_row_t *held = rows.entries[i];
-            if (strcmp(held->storage_path, search_path) != 0) continue;
-            output_print(
-                out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
-                held->filesystem_path
-            );
-        }
-        output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
-        output_hintline(
-            out, OUTPUT_NORMAL, "  dotta show -p <profile> %s", search_path
-        );
-        err = ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", search_path);
-        goto cleanup;
-    }
-
-    found_profile = row->profile;
 
     /* Show the file */
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        found_profile
+        row->profile
     );
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        search_path
+        row->storage_path
     );
-    err = show_file(ctx, found_profile, search_path, NULL);
+    err = show_file(ctx, row->profile, row->storage_path, NULL);
 
 cleanup:
     manifest_free(manifest);

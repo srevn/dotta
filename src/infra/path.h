@@ -1,12 +1,14 @@
 /**
- * path.h - User-input path resolution
+ * path.h - The key a CLI path argument names
  *
- * Façade over mount_classify and the filesystem helpers that converts flexible
- * CLI path arguments (storage labels, absolute, tilde, relative) into a canonical
- * storage path.
+ * A location keys across profiles — the view's rows, the record, every screen —
+ * and a storage path keys within one (infra/mount.h). The resolver answers in
+ * the one the user named and manufactures neither from the other: what a profile
+ * calls a location is a claim standing in a branch, and a command asks the branch
+ * (core/manifest.h, the view by location; core/profiles.h).
  *
- * The single chokepoint for input-shape dispatch; topology primitives
- * (mount_classify, mount_resolve, mount_table_build) live one layer down in
+ * The single chokepoint for input-shape dispatch; the topology primitives
+ * (mount_locate, mount_resolve, mount_table_build) live one layer down in
  * infra/mount.
  */
 
@@ -18,53 +20,74 @@
 #include "infra/mount.h"
 
 /**
- * Resolve flexible user input to a canonical storage path.
+ * The key an argument names.
+ */
+typedef enum {
+    PATH_KEY_LOCATION,          /* a filesystem shape: absolute, tilde, relative */
+    PATH_KEY_STORAGE,           /* a storage shape: home/…, root/…, custom/… */
+} path_key_t;
+
+/**
+ * A CLI path argument, read: the key, and the one name it is in.
  *
- * Accepted input formats:
- *   1. Absolute paths:  /path/to/file
- *   2. Tilde paths:     ~/path/to/file
- *   3. Relative paths:  ./path, ../path, .dotfile, path/to/file
- *                       (resolved via the current working directory)
- *   4. Storage paths:   home/..., root/..., custom/...
+ * A sum type, spelled the way C spells one: the tag says which member is set,
+ * and the member keeps its vocabulary at the use site — a reader that switches
+ * on the key reads `location` in one arm and `storage_path` in the other, and
+ * no second pointer promises to be NULL. Both are the arena's.
+ */
+typedef struct {
+    path_key_t key;
+    union {
+        const char *location;       /* PATH_KEY_LOCATION: absolute, normalized, located */
+        const char *storage_path;   /* PATH_KEY_STORAGE: validated, the directory spelling shed */
+    };
+} path_input_t;
+
+/**
+ * Read a CLI path argument: the shape dispatch, and nothing else.
  *
- * Notes on relative paths:
- *   Paths starting with '.' are treated as relative, including dotfiles like
- *   '.bashrc'. This allows convenient shorthand: typing '.bashrc' in $HOME resolves
- *   to 'home/.bashrc'. For single-component paths without '.', use explicit './'
- *   to indicate relative-path intent.
+ * A storage shape is validated and kept as typed, its trailing slash shed (the
+ * UI's listings print directory claims slash-marked, and the filesystem arm sheds
+ * its own inside the normalizer; the two surface forms resolve alike). A filesystem
+ * shape is normalized (path_input_normalize: tilde, the working directory,
+ * `.`/`..`/`//` folded) and located (mount_locate): the answer is where the
+ * spelling stands, physical as far as the table knows its roots. No profile, no
+ * name, no stat: the argument need not exist, and a root is a location like any
+ * other — the verb that cannot take one refuses it in its own words. A bare name
+ * is refused: add's grammar reads one as the jail's or the working directory's
+ * (cmds/add.c spell_argument); the resolver does not, because its callers' first
+ * positional may be a profile.
  *
- * Pattern-based: the file need not exist on disk. Used by show / revert / remove
- * / filter commands that query Git data, not the filesystem.
+ *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (physical, under a symlinked HOME)
+ *   ./config    (in /etc)     -> LOCATION  /etc/config
+ *   .bashrc     (in $HOME)    -> LOCATION  $HOME/.bashrc
+ *   ~/link/x    (q bound at ~/link -> ~/real)
+ *                             -> LOCATION  $HOME/real/x     (the alias above it read through)
+ *   ~/link      (q bound so)  -> LOCATION  $HOME/real       (a binder's spelling is the binding's)
+ *   ~                         -> LOCATION  $HOME            (a root is a location; the verb decides)
+ *   home/.config/nvim/        -> STORAGE   home/.config/nvim
+ *   home/../x                 -> refused   (mount_validate_storage)
+ *   config                    -> refused   (neither shape)
  *
- * Filesystem-path inputs are classified against `table` (longest match wins),
- * so users can specify /mnt/jail/etc/nginx.conf and have it correctly become
- * custom/etc/nginx.conf when /mnt/jail is bound. Callers without state-derived
- * mounts pass a zero-decl mount table — HOME and the root sentinel are always
- * present internally.
+ * `*out` is zeroed on entry: after an error it is no answer, and a reader that
+ * ignores the error meets a NULL rather than a stale string — the zeroed key is
+ * PATH_KEY_LOCATION, whose member is then NULL.
  *
- * Examples:
- *   ~/.bashrc                   -> home/.bashrc
- *   ./config (in $HOME)         -> home/config
- *   ./config (in /etc)          -> root/etc/config
- *   .bashrc (in $HOME)          -> home/.bashrc
- *   ../file (in $HOME/project)  -> home/file
- *   home/.bashrc                -> validated and returned as-is
- *   home/.config/nvim/          -> home/.config/nvim (directory spelling shed)
- *   /etc/hosts                  -> root/etc/hosts
- *   /mnt/jail/etc/nginx.conf    -> custom/etc/nginx.conf (when /mnt/jail in table)
- *   config (no slash)           -> ERROR: ambiguous (use ./config)
+ * Readers: the pathspec's exact entries and the anchors of its filesystem-shaped
+ * rules (infra/pathspec); show and list without a profile (the view by location,
+ * a name by its holders); path_input_classify.
  *
- * @param table       Mount table (must not be NULL)
- * @param input       User-provided path string (must not be NULL)
- * @param arena       Arena that owns the returned storage path
- * @param out_storage Arena-borrowed storage path on success (must not be NULL)
+ * @param table Mount table (must not be NULL)
+ * @param input User-provided path string (must not be NULL)
+ * @param arena Arena that owns the answer's string
+ * @param out   The key and its name (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *path_input_resolve(
     const mount_table_t *table,
     const char *input,
     arena_t *arena,
-    const char **out_storage
+    path_input_t *out
 );
 
 /**
@@ -83,7 +106,7 @@ error_t *path_input_resolve(
  *   ./a/../b/    -> $CWD/b
  *
  * The filesystem arm of path_input_resolve is this function followed by
- * mount_classify; the commands that read a filesystem spelling and walk it (add),
+ * mount_locate; the commands that read a filesystem spelling and walk it (add),
  * bind it (the binders' --target), test it (ignore --test) or complete beneath
  * it (the completion's root) call it directly. Storage-path inputs ("home/",
  * "root/", "custom/") are not this function's — they are validated and placed
@@ -96,5 +119,30 @@ error_t *path_input_resolve(
  * @return Error or NULL on success
  */
 error_t *path_input_normalize(const char *input, char **out);
+
+/**
+ * The resolver's former answer: a filesystem argument classified with no asker.
+ *
+ * The name a machine-wide table gives a location — the deepest binding of any
+ * profile — which is wrong once two profiles are bound: one profile's name is
+ * not another's. Kept under its own name for the verbs that still ask it (show
+ * -p, list -p, revert, export, remove) until the claim is found where
+ * it stands, in the branch that holds it (core/profiles.h — the next commit);
+ * deleted with that landing. Not a reader for new code. A storage shape is the
+ * name as typed; a root is refused as it always was ("is a mount root").
+ *
+ * @param table       Mount table (must not be NULL)
+ * @param input       User-provided path string (must not be NULL)
+ * @param arena       Arena that owns the returned storage path
+ * @param out_storage Arena-borrowed storage path on success; NULL after an error
+ *                    (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *path_input_classify(
+    const mount_table_t *table,
+    const char *input,
+    arena_t *arena,
+    const char **out_storage
+);
 
 #endif /* DOTTA_PATH_H */

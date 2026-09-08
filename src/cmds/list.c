@@ -609,62 +609,81 @@ static error_t *list_file_history(
 
     bool verbose = output_is_verbose(out);
 
-    /* Resolve input path to storage format (handles absolute, tilde, relative,
-     * and storage paths). File need not exist on disk. */
-    const char *storage_path = NULL;
-    error_t *err = path_input_resolve(
-        mounts, opts->file_path, ctx->arena, &storage_path
-    );
-    if (err) {
-        return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
-    }
-
-    /* Resolve owning profile: explicit from user or implicit via manifest */
+    /* The claim to list: the profile and the storage path, from the argument.
+     * The file need not exist on disk. */
     const char *profile = opts->profile;
+    const char *storage_path = NULL;
+    error_t *err = NULL;
 
-    if (!profile) {
-        /* The owner is the view's: the enabled set at HEAD, precedence resolved.
-         * A name keys within one profile, so the view may hold it once (home/,
-         * root/, or one binding), or once per binding under custom/ — and then
-         * no profile is the answer, and each holder is named with the location
-         * that tells them apart. The rows are the arena's; only the index is
-         * released here. */
+    if (profile) {
+        /* Explicit profile: the name the machine-wide table gives the argument
+         * (path_input_classify; the profile's own claim at a location is the
+         * next commit's answer). */
+        err = path_input_classify(
+            mounts, opts->file_path, ctx->arena, &storage_path
+        );
+        if (err) {
+            return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
+        }
+    } else {
+        /* The owner is the view's: the enabled set at HEAD, precedence resolved,
+         * asked in the key the argument names — through the table the view's
+         * rows were placed by, so the two read one topology. A location is one
+         * row, the winner standing there whatever its name. A name keys within
+         * one profile, so the view may hold it once (home/, root/, or one binding),
+         * or once per binding under custom/ — and then no profile is the answer,
+         * and each holder is named with the location that tells them apart. The
+         * rows are the arena's; only the index is released here. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
+        path_input_t arg;
+        err = path_input_resolve(
+            manifest_mounts(manifest), opts->file_path, ctx->arena, &arg
+        );
+        if (err) {
+            manifest_free(manifest);
+            return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
+        }
+
         const manifest_row_t *row = NULL;
-        size_t holders = manifest_holders(manifest, storage_path, &row);
-        if (holders == 0) {
+        if (arg.key == PATH_KEY_LOCATION) {
+            row = manifest_lookup(manifest, arg.location);
+        } else {
+            size_t holders = manifest_holders(manifest, arg.storage_path, &row);
+            if (holders > 1) {
+                output_print(
+                    out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
+                    arg.storage_path, holders
+                );
+                manifest_rows_t rows = manifest_rows(manifest);
+                for (size_t i = 0; i < rows.count; i++) {
+                    const manifest_row_t *held = rows.entries[i];
+                    if (strcmp(held->storage_path, arg.storage_path) != 0) continue;
+                    output_print(
+                        out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
+                        held->filesystem_path
+                    );
+                }
+                output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
+                output_hintline(
+                    out, OUTPUT_NORMAL, "  dotta list -p <profile> %s", arg.storage_path
+                );
+                manifest_free(manifest);
+                return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", arg.storage_path);
+            }
+        }
+        if (!row) {
             manifest_free(manifest);
             return ERROR(
                 ERR_NOT_FOUND, "File '%s' not found in enabled profiles\n"
                 "Hint: Use 'dotta list -p <profile> %s' to specify a profile",
-                storage_path, opts->file_path
+                opts->file_path, opts->file_path
             );
-        }
-        if (holders > 1) {
-            output_print(
-                out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n",
-                storage_path, holders
-            );
-            manifest_rows_t rows = manifest_rows(manifest);
-            for (size_t i = 0; i < rows.count; i++) {
-                const manifest_row_t *held = rows.entries[i];
-                if (strcmp(held->storage_path, storage_path) != 0) continue;
-                output_print(
-                    out, OUTPUT_NORMAL, "  • %s  (%s)\n", held->profile,
-                    held->filesystem_path
-                );
-            }
-            output_hint(out, OUTPUT_NORMAL, "Specify -p <profile> to disambiguate:");
-            output_hintline(
-                out, OUTPUT_NORMAL, "  dotta list -p <profile> %s", storage_path
-            );
-            manifest_free(manifest);
-            return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", storage_path);
         }
         profile = row->profile;
+        storage_path = row->storage_path;
         manifest_free(manifest);
     }
 

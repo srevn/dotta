@@ -287,9 +287,8 @@ error_t *mount_table_build(
  * the table's own when the spelling is a root's — both outlive the call, and
  * every caller locates through a table its own arena built.
  *
- * Readers: mount_classify, whose first step this is. The resolver's filesystem
- * arm (infra/path) reads it directly once an argument is matched by location
- * rather than by the name a machine-wide table gives it.
+ * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
+ * key an argument is matched by; mount_classify, whose first step this is.
  *
  * @param table        Mount table (must not be NULL)
  * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)

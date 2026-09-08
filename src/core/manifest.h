@@ -360,7 +360,8 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * topology it was placed by reads it here rather than building a second table
  * from the same rows, so the arguments it locates and the rows it selects read
  * one value. Readers: the dispatcher (`run.mounts` for a command that declares
- * the view, include/runtime.h).
+ * the view, include/runtime.h); show and list without a profile, which build
+ * the view themselves and locate the argument through its table.
  *
  * Pure value return — no allocation, no error path.
  *

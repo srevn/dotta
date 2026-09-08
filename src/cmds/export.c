@@ -829,11 +829,13 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     if (opts->file_path) {
-        /* Resolve the CLI path to storage form. On resolution failure fall back
-         * to the raw input — the tree lookup below is the final authority (mirrors
-         * show). */
+        /* Resolve the CLI path to storage form — the name the machine-wide table
+         * gives it (path_input_classify; the profile's own claim at a location
+         * is the next commit's answer). On resolution failure fall back to the
+         * raw input — the tree lookup below is the final authority (mirrors show),
+         * and a bare label (`export global home`) reaches it this way. */
         const char *converted = NULL;
-        error_t *conv_err = path_input_resolve(
+        error_t *conv_err = path_input_classify(
             mounts, opts->file_path, arena, &converted
         );
         const char *storage = conv_err ? opts->file_path : converted;

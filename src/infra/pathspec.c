@@ -19,15 +19,18 @@
  * the rest, so a long path is walked and never silently skipped. */
 #define PATH_STACK_BUFFER 4096
 
-/* One compiled input. `text` is what the coverage line prints — the entry as
- * compiled: the storage path, or the pattern in its storage-space form. An exact
- * entry keeps its storage path in `prefix`, its length hoisted, for the beneath
- * test the matcher and the attribution share; a rule keeps the parsed rule and
- * no prefix. Every byte is the arena's. */
+/* One compiled input. `text` is what the coverage line prints — the input as
+ * typed, since a location rule is an anchor and a tail and has no one compiled
+ * string. `key` is the vocabulary its subject is read in, decided by the input's
+ * shape and never by an asker. An exact entry keeps the spelling it names in
+ * `prefix`, its length hoisted, for the beneath test the matcher and the
+ * attribution share; a location rule keeps its anchor there, the rung past which
+ * it reads; a storage rule keeps none. Every byte is the arena's. */
 typedef struct {
     const char *text;
+    path_key_t key;
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
-    const char *prefix;              /* an exact entry's storage path; NULL for a rule */
+    const char *prefix;              /* an exact entry's spelling, or a location rule's anchor; NULL for a storage rule */
     size_t prefix_len;
 } entry_t;
 
@@ -39,56 +42,92 @@ struct pathspec {
 
 /* --- Compile ---------------------------------------------------------- */
 
-/* A rule: the pattern in its storage-space form, parsed alone.
+/* A location as an entry's prefix. The root is spelled "" as the table spells
+ * it: the one prefix every absolute path is beneath at depth zero (str_path_beneath
+ * reads the leading slash alone), and the one a rule anchored there reads past
+ * with the same arithmetic as any other anchor. */
+static void prefix_location(entry_t *e, const char *location) {
+    e->prefix = strcmp(location, "/") == 0 ? "" : location;
+    e->prefix_len = strlen(e->prefix);
+}
+
+/* A rule, parsed alone in the vocabulary its shape names.
  *
  * A slash-bearing glob speaks one of two vocabularies. Storage space — a label
- * prefix, or a leading `<star><star>`/`<star>` component — compiles as-is. A
- * filesystem shape (absolute, tilde, relative dot) is the exact arm's vocabulary
- * wearing a glob tail: the whole input rides through the same resolver
- * (metacharacters are ordinary characters to the mount table) and compiles in
- * its storage form; gitignore's directory-only marker (a trailing '/') is
- * semantics, not directory spelling, so it is re-applied after the resolver sheds
- * it. Anything else — a bare `conf<star>/x` could mean either vocabulary — is
- * refused toward the self-announcing spellings. */
+ * prefix, or a leading `<star><star>`/`<star>` component — compiles as typed. A
+ * filesystem shape (absolute, tilde, relative dot) is an anchor and a tail: the
+ * components before the first that holds a metacharacter are a directory spelling,
+ * resolved to its location and compared literally, and the rest is the pattern,
+ * rooted there as a .gitignore is rooted in its directory — a leading slash on
+ * the tail so gitignore anchors it. The split is what keeps filesystem bytes
+ * out of pattern syntax: what HOME, the working directory or an alias inserts
+ * is never read as a class or a wildcard, while what the user typed past the
+ * split is, as a shell would read it. A wildcard in the first component leaves
+ * no head: under `/` the anchor is the root, and under `.` the working directory
+ * — the resolver's own reading of a leading dot, so `.<star>/x` typed from HOME
+ * is the dotdirs' x there — while `~<star>/x` is no tilde path and is refused;
+ * anything else — a bare `conf<star>/x` could mean either vocabulary — is refused
+ * toward the self-announcing spellings. The shape is read past a leading '!',
+ * so a negated rule is a rule in either vocabulary. */
 static error_t *compile_rule(
-    const mount_table_t *table,
-    const char *input,
-    arena_t *arena,
-    entry_t *out
+    const mount_table_t *table, const char *input, arena_t *arena, entry_t *out
 ) {
-    const char *pattern = NULL;
+    bool negated = input[0] == '!';
+    const char *body = input + (negated ? 1 : 0);
+    const char *line = input; /* what gitignore parses: the input, or the anchored tail */
 
-    if (strchr(input, '/') != NULL &&
-        mount_spec_for_path(input) == NULL &&
-        !str_starts_with(input, "**/") &&
-        !str_starts_with(input, "*/")) {
-        if (input[0] != '/' && input[0] != '~' && input[0] != '.') {
+    *out = (entry_t){ .key = PATH_KEY_STORAGE };
+
+    if (strchr(body, '/') != NULL &&
+        mount_spec_for_path(body) == NULL &&
+        !str_starts_with(body, "**/") &&
+        !str_starts_with(body, "*/")) {
+        /* The tail starts at the component holding the first metacharacter; the
+         * head is what stands before that component's slash — or, when nothing
+         * does, the root or the working directory the first byte names. */
+        const char *tail = strpbrk(body, "*?[");
+        while (tail > body && tail[-1] != '/') tail--;
+        size_t head_len = (size_t) (tail - body);
+        if (head_len > 0) head_len--;
+
+        if ((body[0] != '/' && body[0] != '~' && body[0] != '.') ||
+            (head_len == 0 && body[0] == '~')) {
             return ERROR(
                 ERR_INVALID_ARG,
                 "Glob pattern '%s' must be basename-only, storage format, "
                 "or a filesystem path (absolute, ~/, ./)\n"
-                "Examples: '*.vim', 'home/nvim/*.lua', '~/.config/*.conf'",
-                input
+                "Examples: '*.vim', 'home/nvim/*.lua', '~/.config/*.conf'", input
             );
         }
 
-        const char *resolved = NULL;
-        error_t *err = path_input_resolve(table, input, arena, &resolved);
+        const char *head = head_len > 0 ? arena_strndup(arena, body, head_len)
+                           : body[0] == '/' ? "/" : ".";
+        if (!head) {
+            return ERROR(ERR_MEMORY, "Failed to allocate the pattern's anchor");
+        }
+
+        path_input_t anchor;
+        error_t *err = path_input_resolve(table, head, arena, &anchor);
         if (err) {
             return error_wrap(err, "Invalid glob pattern '%s'", input);
         }
-        pattern = input[strlen(input) - 1] == '/'
-                  ? arena_str_format(arena, "%s/", resolved)
-                  : resolved;
-    } else {
-        pattern = arena_strdup(arena, input);
-    }
-    if (!pattern) {
-        return ERROR(ERR_MEMORY, "Failed to allocate pattern");
+        if (anchor.key != PATH_KEY_LOCATION) {
+            return ERROR(
+                ERR_INTERNAL, "Glob pattern '%s': the anchor '%s' is not a location",
+                input, head
+            );
+        }
+
+        line = arena_str_format(arena, "%s/%s", negated ? "!" : "", tail);
+        if (!line) {
+            return ERROR(ERR_MEMORY, "Failed to allocate pattern");
+        }
+        out->key = PATH_KEY_LOCATION;
+        prefix_location(out, anchor.location);
     }
 
     gitignore_rule_t *rule = NULL;
-    error_t *err = gitignore_rule_parse(arena, pattern, &rule);
+    error_t *err = gitignore_rule_parse(arena, line, &rule);
     if (err) {
         return error_wrap(err, "Failed to compile glob pattern '%s'", input);
     }
@@ -101,17 +140,18 @@ static error_t *compile_rule(
         );
     }
 
-    *out = (entry_t){ .text = pattern, .rule = rule };
+    out->rule = rule;
     return NULL;
 }
 
-/* Is the storage path already an exact entry? Two spellings of one path — a tilde
- * form beside its absolute — are one entry, as the count and the coverage lines
- * read them. */
-static bool listed(const pathspec_t *spec, const char *storage_path) {
+/* Is the key already an exact entry? Two spellings of one location — a tilde
+ * form beside its absolute, the binder's spelling beside the physical — are one
+ * entry, as the count and the coverage lines read them; a name beside a location
+ * is two, since they are two keys. A rule's anchor is no entry. */
+static bool listed(const pathspec_t *spec, const entry_t *entry) {
     for (size_t i = 0; i < spec->count; i++) {
         const entry_t *e = &spec->entries[i];
-        if (e->prefix && strcmp(e->prefix, storage_path) == 0) {
+        if (!e->rule && e->key == entry->key && strcmp(e->prefix, entry->prefix) == 0) {
             return true;
         }
     }
@@ -153,21 +193,29 @@ error_t *pathspec_create(
             RETURN_IF_ERROR(compile_rule(table, input, arena, &entry));
             spec->rules++;
         } else {
-            /* An exact path: resolved through the table, one entry per storage
-             * path however many inputs spell it. */
-            const char *resolved = NULL;
-            error_t *err = path_input_resolve(table, input, arena, &resolved);
+            /* An exact entry in the key the input names, one per key however
+             * many inputs spell it. */
+            path_input_t arg;
+            error_t *err = path_input_resolve(table, input, arena, &arg);
             if (err) {
                 return error_wrap(err, "Invalid path '%s'", input);
             }
-            if (listed(spec, resolved)) {
+            entry.key = arg.key;
+            if (arg.key == PATH_KEY_LOCATION) {
+                prefix_location(&entry, arg.location);
+            } else {
+                entry.prefix = arg.storage_path;
+                entry.prefix_len = strlen(arg.storage_path);
+            }
+            if (listed(spec, &entry)) {
                 continue;
             }
-            entry = (entry_t){
-                .text = resolved, .prefix = resolved, .prefix_len = strlen(resolved)
-            };
         }
 
+        entry.text = arena_strdup(arena, input);
+        if (!entry.text) {
+            return ERROR(ERR_MEMORY, "Failed to copy the input");
+        }
         spec->entries[spec->count++] = entry;
     }
 
@@ -177,19 +225,44 @@ error_t *pathspec_create(
 
 /* --- Match ------------------------------------------------------------ */
 
+/* The subject an entry reads: the one in its own vocabulary, or NULL when the
+ * caller has no name of that kind for the path. */
+static const char *own_subject(
+    const entry_t *e, const char *location, const char *storage_path
+) {
+    return e->key == PATH_KEY_LOCATION ? location : storage_path;
+}
+
 /* Is the subject the exact entry, or beneath it? The one test both tiers of readers
- * share — the matcher and the coverage attribution. */
-static bool exact_covers(const entry_t *e, const char *storage_path) {
-    return strcmp(storage_path, e->prefix) == 0 ||
-           str_path_beneath(storage_path, e->prefix, e->prefix_len);
+ * share — the matcher and the coverage attribution. The root's "" equals nothing
+ * and encloses every absolute path. */
+static bool exact_covers(const entry_t *e, const char *subject) {
+    return strcmp(subject, e->prefix) == 0 ||
+           str_path_beneath(subject, e->prefix, e->prefix_len);
+}
+
+/* What a rule reads at a rung of its own subject: a storage rule the rung itself;
+ * a location rule the rung past its anchor — the pattern is rooted there — and
+ * nothing at or above the anchor. */
+static const char *rule_subject(const entry_t *e, const char *rung) {
+    if (!rung) {
+        return NULL;
+    }
+    if (e->key == PATH_KEY_STORAGE) {
+        return rung;
+    }
+    return str_path_beneath(rung, e->prefix, e->prefix_len)
+           ? rung + e->prefix_len + 1
+           : NULL;
 }
 
 /* One subject's rungs above the leaf, deepest first: a copy of the subject,
  * shortened in place at each parent separator. The leaf is read from the subject
  * as given — most subjects decide there — so the copy is made only for an ascent,
- * on the stack where it fits and on the heap past it. */
+ * on the stack where it fits and on the heap past it. A subject the caller has
+ * none of stays absent: no rung, and nothing to copy. */
 typedef struct {
-    char *rung;                      /* the current rung: the copy, shortened in place */
+    char *rung;                      /* the current rung: the copy, shortened in place; NULL when absent or spent */
     char *heap;                      /* the copy when it outgrew the stack */
     char stack[PATH_STACK_BUFFER];
 } rungs_t;
@@ -197,9 +270,13 @@ typedef struct {
 /* The copy, or false when it cannot be made: the ascent is then abandoned and
  * the answer stays the leaf's. Close in either case. */
 static bool rungs_open(rungs_t *r, const char *subject) {
-    size_t n = strlen(subject);
-
     r->heap = NULL;
+    r->rung = NULL;
+    if (!subject) {
+        return true;
+    }
+
+    size_t n = strlen(subject);
     r->rung = n < sizeof(r->stack) ? r->stack : (r->heap = malloc(n + 1));
     if (!r->rung) {
         return false;
@@ -208,12 +285,17 @@ static bool rungs_open(rungs_t *r, const char *subject) {
     return true;
 }
 
-/* Up one rung. False past the last: the parent of a single component is no rung
+/* Up one rung. False past the last, and the subject is then spent — no rule reads
+ * it at a rung above: the parent of a single component is no rung
  * (str_path_parent_len answers 0 — the label of a storage path), and neither is
  * the root of an absolute one (1 — "/" is nothing a rule reads). */
 static bool rungs_up(rungs_t *r) {
+    if (!r->rung) {
+        return false;
+    }
     size_t n = str_path_parent_len(r->rung);
     if (n <= 1) {
+        r->rung = NULL;
         return false;
     }
     r->rung[n] = '\0';
@@ -231,14 +313,21 @@ typedef enum {
     VERDICT_IN                       /* a rule matched: in scope */
 } verdict_t;
 
-/* The program at one rung: the rules in reverse insertion order, and the first
- * to match decides. */
+/* The program at one rung: the rules in reverse insertion order, each read at
+ * the rung of its own vocabulary, and the first to match decides. */
 static verdict_t program_at(
-    const pathspec_t *spec, const char *rung, bool is_dir
+    const pathspec_t *spec,
+    const char *location,
+    const char *storage_path,
+    bool is_dir
 ) {
     for (size_t i = spec->count; i > 0; --i) {
         const entry_t *e = &spec->entries[i - 1];
-        if (e->rule && gitignore_rule_matches(e->rule, rung, is_dir)) {
+        if (!e->rule) {
+            continue;
+        }
+        const char *subject = rule_subject(e, own_subject(e, location, storage_path));
+        if (subject && gitignore_rule_matches(e->rule, subject, is_dir)) {
             return gitignore_rule_negated(e->rule) ? VERDICT_OUT : VERDICT_IN;
         }
     }
@@ -246,31 +335,46 @@ static verdict_t program_at(
 }
 
 bool pathspec_matches(
-    const pathspec_t *spec, const char *storage_path, path_kind_t kind
+    const pathspec_t *spec,
+    const char *location,
+    const char *storage_path,
+    path_kind_t kind
 ) {
     /* NULL pathspec matches all (no filter applied). */
     if (!spec) return true;
-    if (!storage_path) return false;
 
-    /* The exact tier: the path, or one beneath an entry. */
+    /* The exact tier: the path, or one beneath an entry, in the entry's own key. */
     for (size_t i = 0; i < spec->count; i++) {
         const entry_t *e = &spec->entries[i];
-        if (e->prefix && exact_covers(e, storage_path)) {
+        const char *subject = own_subject(e, location, storage_path);
+        if (!e->rule && subject && exact_covers(e, subject)) {
             return true;
         }
     }
     if (spec->rules == 0) return false;
 
-    /* The program: at the leaf as given, then up the rungs until one decides. */
-    verdict_t verdict = program_at(spec, storage_path, kind == PATH_KIND_DIRECTORY);
+    /* The program: at the leaf as given, then up the rungs until one decides.
+     * The two subjects climb together — rung k of each is one directory as far
+     * as the tail goes — and both copies are made or neither: a vocabulary still
+     * climbing while the other could not would let a positive rule in one select
+     * what a negation in the other would have excluded. */
+    verdict_t verdict = program_at(spec, location, storage_path, kind == PATH_KIND_DIRECTORY);
     if (verdict == VERDICT_NONE) {
-        rungs_t rungs;
-        if (rungs_open(&rungs, storage_path)) {
-            while (verdict == VERDICT_NONE && rungs_up(&rungs)) {
-                verdict = program_at(spec, rungs.rung, true);
+        rungs_t l, s;
+        bool copied = rungs_open(&l, location);
+        copied = rungs_open(&s, storage_path) && copied;    /* both opened, so both close */
+        if (copied) {
+            while (verdict == VERDICT_NONE) {
+                bool up_l = rungs_up(&l);
+                bool up_s = rungs_up(&s);
+                if (!up_l && !up_s) {
+                    break;
+                }
+                verdict = program_at(spec, l.rung, s.rung, true);
             }
         }
-        rungs_close(&rungs);
+        rungs_close(&l);
+        rungs_close(&s);
     }
     return verdict == VERDICT_IN;
 }
@@ -287,26 +391,34 @@ pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i) {
 }
 
 bool pathspec_entry_matches_at(
-    const pathspec_t *spec, size_t i, const char *storage_path, path_kind_t kind
+    const pathspec_t *spec,
+    size_t i,
+    const char *location,
+    const char *storage_path,
+    path_kind_t kind
 ) {
-    if (!spec || !storage_path) return false;
+    if (!spec) return false;
     assert(i < spec->count);
     const entry_t *e = &spec->entries[i];
+    const char *subject = own_subject(e, location, storage_path);
+    if (!subject) return false;
 
     if (!e->rule) {
-        return exact_covers(e, storage_path);
+        return exact_covers(e, subject);
     }
 
     /* The rule at the leaf, then at every rung above it; a match either way is
      * the entry doing something to the subject. */
-    if (gitignore_rule_matches(e->rule, storage_path, kind == PATH_KIND_DIRECTORY)) {
+    const char *leaf = rule_subject(e, subject);
+    if (leaf && gitignore_rule_matches(e->rule, leaf, kind == PATH_KIND_DIRECTORY)) {
         return true;
     }
     bool matched = false;
     rungs_t rungs;
-    if (rungs_open(&rungs, storage_path)) {
+    if (rungs_open(&rungs, subject)) {
         while (!matched && rungs_up(&rungs)) {
-            matched = gitignore_rule_matches(e->rule, rungs.rung, true);
+            const char *rung = rule_subject(e, rungs.rung);
+            matched = rung && gitignore_rule_matches(e->rule, rung, true);
         }
     }
     rungs_close(&rungs);

@@ -1,20 +1,25 @@
 /**
- * path.c - User-input path resolution
+ * path.c - The key a CLI path argument names
  *
- * Two views over flexible CLI path arguments:
+ * Two readings of a flexible CLI path argument:
  *
- *   path_input_resolve    - filesystem path -> canonical storage path
- *                           (commands that query Git data: show, revert, remove,
- *                           list, filter)
+ *   path_input_resolve    - the key the input names: a location (a filesystem
+ *                           shape, normalized and located) or a storage path
+ *                           (validated, as typed) — the pathspec, show and list
+ *                           without a profile, path_input_classify
  *
  *   path_input_normalize  - filesystem path -> absolute filesystem path
  *                           (the commands that walk, bind or test a spelling:
  *                            add, the binders' --target, ignore --test, the
  *                            completion)
  *
+ * and the former resolver, path_input_classify — a location named with no asker
+ * — kept for the query verbs until a claim is found where it stands.
+ *
  * One dispatch: the resolver reads the storage label itself and hands every
- * filesystem spelling (absolute, tilde, relative) to the normalizer, then
- * classifies what comes back. Topology lookups (mount_classify) and filesystem
+ * filesystem spelling (absolute, tilde, relative) to the normalizer, then asks
+ * the table where the spelling stands. The topology (mount_spec_for_path,
+ * mount_validate_storage, mount_locate, mount_classify) and the filesystem
  * primitives (fs_expand_tilde, fs_make_absolute, fs_normalize_path) are delegated
  * to the layers below.
  */
@@ -30,75 +35,60 @@
 #include "sys/filesystem.h"
 
 /**
- * Test whether an input string looks like a relative path.
+ * Does the input spell a filesystem path?
  *
- * Relative:    ./foo, ../bar, .hidden, paths with / not starting with a label
- * NOT relative: absolute (/...), tilde (~...), storage paths (home/...)
+ * Absolute (`/x`), tilde (`~/x`), or relative to the working directory — `./x`,
+ * `../x`, a dotfile's `.x`, `a/b`. A bare single component is neither shape and
+ * is refused by the one caller: `./X` says which was meant, and the resolver's
+ * callers may read a bare word as a profile.
+ *
+ * Asked once the storage label is ruled out (path_input_resolve's first arm has
+ * returned for every `home/`, `root/` and `custom/` spelling), so no label test
+ * is needed here.
  */
-static bool input_is_relative(const char *input) {
-    if (!input || input[0] == '\0') return false;
-    if (input[0] == '.') return true;
-    if (input[0] == '/' || input[0] == '~') return false;
-    if (mount_spec_for_path(input)) return false;
-    /* Contains slash but not a storage label — treat as relative. */
-    if (strchr(input, '/') != NULL) return true;
-    /* Single component without slash — ambiguous, not relative. User should use
-     * ./X for clarity. */
-    return false;
+static bool input_is_filesystem_shape(const char *input) {
+    if (input[0] == '/' || input[0] == '~' || input[0] == '.') return true;
+    return strchr(input, '/') != NULL;
 }
 
 error_t *path_input_resolve(
-    const mount_table_t *table,
-    const char *input,
-    arena_t *arena,
-    const char **out_storage
+    const mount_table_t *table, const char *input, arena_t *arena, path_input_t *out
 ) {
     CHECK_NULL(table);
     CHECK_NULL(input);
     CHECK_NULL(arena);
-    CHECK_NULL(out_storage);
+    CHECK_NULL(out);
 
-    *out_storage = NULL;
-
-    error_t *err = NULL;
-    char *normalized = NULL;
+    *out = (path_input_t){ 0 };
 
     if (input[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* Case 1: Storage path — shed the directory spelling, validate, arena-copy.
-     * A trailing '/' is the same path spelled as a directory — the UI's own
-     * listings print directory claims slash-marked — and the filesystem case
-     * below sheds its own inside fs_normalize_path; shedding here keeps the two
-     * surface forms resolving alike. */
+    /* A storage shape — shed the directory spelling, validate, arena-copy. A
+     * trailing '/' is the same path spelled as a directory — the UI's own listings
+     * print directory claims slash-marked — and the filesystem arm below sheds
+     * its own inside fs_normalize_path; shedding here keeps the two surface forms
+     * resolving alike. */
     if (mount_spec_for_path(input)) {
         size_t len = strlen(input);
         while (len > 0 && input[len - 1] == '/') len--;
-        const char *copy = arena_strndup(arena, input, len);
-        if (!copy) {
+        const char *storage = arena_strndup(arena, input, len);
+        if (!storage) {
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
-        err = mount_validate_storage(copy);
+        error_t *err = mount_validate_storage(storage);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);
         }
-        *out_storage = copy;
+        out->key = PATH_KEY_STORAGE;
+        out->storage_path = storage;
         return NULL;
     }
 
-    /* Case 2: Filesystem path — absolute, tilde, or relative to the working
-     * directory — through the normalizer: one arm for the three spellings, with
-     * `.`, `..` and the directory spelling folded there. Each mount entry carries
-     * up to two surface forms (raw and realpath-canonical), so a canonical input
-     * (find's output, a working directory spelled physically) classifies against
-     * a raw-stored target without any canonicalization here. */
-    if (input[0] == '/' || input[0] == '~' || input_is_relative(input)) {
-        err = path_input_normalize(input, &normalized);
-        if (err) return err;
-    }
-    /* Case 3: Ambiguous — single-component with no slash and no leading . */
-    else {
+    /* A bare name — a single component with no slash and no leading '.' — is
+     * neither shape: the resolver's callers may read it as a profile. */
+    if (!input_is_filesystem_shape(input)) {
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
@@ -107,32 +97,24 @@ error_t *path_input_resolve(
         );
     }
 
-    /* mount_classify produces a well-formed storage path by construction: the
-     * label is one of three compile-time constants ("home", "root", "custom"),
-     * and the tail is the result of relative_after_target which strips a validated
-     * mount target from a normalized absolute path. Re-validating the classifier's
-     * own output is theater. */
-    mount_classify_outcome_t outcome;
-    err = mount_classify(table, normalized, arena, &outcome, out_storage, NULL);
-    if (err) goto cleanup;
+    /* A filesystem shape — absolute, tilde, or relative to the working directory
+     * — through the normalizer (one arm for the three spellings, with `.`, `..`
+     * and the directory spelling folded there), then located: where the spelling
+     * stands, physical as far as the table knows its roots, so the answer keys
+     * with the view's rows by strcmp whichever spelling was typed. */
+    char *normalized = NULL;
+    error_t *err = path_input_normalize(input, &normalized);
+    if (err) return err;
 
-    if (outcome == MOUNT_CLASSIFY_ROOT) {
-        /* User input matched a classification root exactly ($HOME, /, or a CUSTOM
-         * target). No storage-path encoding exists for the root itself — surface
-         * to the caller as an explicit error rather than the internal
-         * MOUNT_CLASSIFY_ROOT signal. */
-        err = ERROR(
-            ERR_INVALID_ARG,
-            "Path '%s' is a mount root and has no storage representation",
-            input
-        );
-        *out_storage = NULL;
-    }
-
-cleanup:
+    const char *location = NULL;
+    err = mount_locate(table, normalized, arena, &location);
     free(normalized);
+    if (err) return err;
 
-    return err;
+    out->key = PATH_KEY_LOCATION;
+    out->location = location;
+
+    return NULL;
 }
 
 error_t *path_input_normalize(const char *input, char **out) {
@@ -162,4 +144,46 @@ error_t *path_input_normalize(const char *input, char **out) {
     free(absolute);
 
     return err;
+}
+
+error_t *path_input_classify(
+    const mount_table_t *table, const char *input, arena_t *arena,
+    const char **out_storage
+) {
+    CHECK_NULL(table);
+    CHECK_NULL(input);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_storage);
+
+    *out_storage = NULL;
+
+    path_input_t arg;
+    error_t *err = path_input_resolve(table, input, arena, &arg);
+    if (err) return err;
+
+    if (arg.key == PATH_KEY_STORAGE) {
+        *out_storage = arg.storage_path;
+        return NULL;
+    }
+
+    /* The machine-wide name: mount_classify produces a well-formed storage path
+     * by construction — the label is one of three compile-time constants, and
+     * the tail is a located path past a validated target — so its output is not
+     * re-validated. A located input is its own location, so the classify's own
+     * locate is a no-op over it. */
+    mount_classify_outcome_t outcome;
+    err = mount_classify(table, arg.location, arena, &outcome, out_storage, NULL);
+    if (err) return err;
+
+    if (outcome == MOUNT_CLASSIFY_ROOT) {
+        /* The input is a classification root itself ($HOME, /, or a --target).
+         * No storage-path encoding exists for the root; the verbs that ask this
+         * function take a claim, and a root holds none. */
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Path '%s' is a mount root and has no storage representation", input
+        );
+    }
+
+    return NULL;
 }

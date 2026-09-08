@@ -224,13 +224,12 @@ static error_t *open_run(
         if (err) goto done;
     }
 
-    /* The mount table — the topology at dispatch, for classifying the command's
+    /* The mount table — the topology at dispatch, for locating the command's
      * input. A command that declares the view borrows the view's: the table its
      * rows were placed by, built inside the build from the same rows
-     * (manifest_mounts), so the arguments the command classifies and the rows
-     * it selects read one value rather than two builds of it. A command that
-     * declares mounts alone gets its own build. Either way the arena's; nothing
-     * to close. */
+     * (manifest_mounts), so the arguments the command locates and the rows it
+     * selects read one value rather than two builds of it. A command that declares
+     * mounts alone gets its own build. Either way the arena's; nothing to close. */
     if (needs->mounts) {
         if (needs->manifest) {
             run->mounts = manifest_mounts(run->manifest);

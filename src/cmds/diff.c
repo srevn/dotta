@@ -402,7 +402,9 @@ static error_t *present_diffs_for_direction(
         }
 
         /* Filter 2: Check file filter (user-specified files) */
-        if (!scope_accepts_path(scope, item->storage_path, PATH_KIND_FILE)) {
+        if (!scope_accepts_path(
+            scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
+            )) {
             continue;
         }
 
@@ -727,7 +729,7 @@ static error_t *compare_tree_files_to_filesystem(
         const char *storage_path = entry->storage_path;
 
         /* Check file filter */
-        if (!pathspec_matches(file_filter, storage_path, PATH_KIND_FILE)) {
+        if (!pathspec_matches(file_filter, fs_path, storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -881,10 +883,11 @@ cleanup:
  *
  * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
  * by whether it matches at any rung, either polarity — against the file slice's
- * storage paths. Outputs a warning for each entry that matches nothing — which
- * likely indicates a typo — plus the list hint as the warnings' remedy. An entry
- * that covers only tracked directories is answered for what it is instead: managed,
- * just with no content to diff.
+ * rows, each by both its names (the entry reads the one in its own vocabulary).
+ * Outputs a warning for each entry that matches nothing — which likely indicates
+ * a typo — plus the list hint as the warnings' remedy. An entry that covers only
+ * tracked directories is answered for what it is instead: managed, just with no
+ * content to diff.
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
@@ -919,16 +922,19 @@ static size_t validate_filter_paths(
     for (size_t e = 0; e < count; e++) {
         bool found = false;
         for (size_t i = 0; i < files.count && !found; i++) {
+            const manifest_row_t *row = files.entries[i];
             found = pathspec_entry_matches_at(
-                file_filter, e, files.entries[i]->storage_path, PATH_KIND_FILE
+                file_filter, e, row->filesystem_path, row->storage_path,
+                PATH_KIND_FILE
             );
         }
         if (found) continue;
 
         bool tracked_dir = false;
         for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
+            const manifest_row_t *row = directories.entries[i];
             tracked_dir = pathspec_entry_matches_at(
-                file_filter, e, directories.entries[i]->storage_path,
+                file_filter, e, row->filesystem_path, row->storage_path,
                 PATH_KIND_DIRECTORY
             );
         }
@@ -1140,15 +1146,36 @@ cleanup:
 }
 
 /**
+ * The selection of a commit range: what select_delta reads and what it leaves
+ *
+ * The filter, and what a delta's location is resolved through — the profile the
+ * range belongs to and this machine's table, under which a past tree's names
+ * are placed where the binding stands now, as the commit-to-workspace arm places
+ * them (manifest_build_tree). A resolve that fails cancels the diff and is kept
+ * here, the error libgit2's wrapped cancel is replaced with.
+ */
+typedef struct {
+    const pathspec_t *filter;       /* never NULL: the callback is installed under a filter alone */
+    const mount_table_t *mounts;
+    const char *profile;
+    arena_t *arena;                 /* the locations' lifetime: the command's */
+    error_t *err;                   /* a resolve that failed; NULL until one does */
+} delta_select_t;
+
+/**
  * Select one delta of a commit range under the path filter
  *
  * libgit2's notify callback, called for every delta before it is inserted into
  * the diff (an unmodified pair never reaches it): 0 keeps the delta, a positive
  * return drops it, a negative one cancels the diff. The one matcher every other
- * filter site reads decides here too, so a commit range and the workspace read
- * one filter alike — a pattern is anchored where gitignore anchors it, and `*`
- * stops at a slash. Handing libgit2 the entries as its own pathspec read them
- * by fnmatch instead, where `home/<star>.lua` reached `home/dir/b.lua`.
+ * filter site reads decides here too, by both of the delta's names — its storage
+ * path, and the location the profile's binding gives it, NULL for a claim this
+ * machine cannot place, which a storage-shaped entry alone then selects — so a
+ * commit range and the workspace read one filter alike: a location filter selects
+ * the deltas standing beneath it whatever label they carry, a pattern is anchored
+ * where gitignore anchors it, and `*` stops at a slash. Handing libgit2 the entries
+ * as its own pathspec read them by fnmatch instead, where `home/<star>.lua` reached
+ * `home/dir/b.lua`.
  *
  * Installed only when a filter was given: the diff under none holds every delta,
  * the repository's own files included, and prints as it always has. Under a filter
@@ -1161,8 +1188,8 @@ cleanup:
  * @param diff     The diff so far (unread)
  * @param delta    The delta about to be inserted
  * @param matched  libgit2's own pathspec match (none is set; unread)
- * @param payload  The path filter (pathspec_t; never NULL here)
- * @return 0 to keep the delta, 1 to drop it
+ * @param payload  The selection (delta_select_t)
+ * @return 0 to keep the delta, 1 to drop it, -1 to cancel the diff
  */
 static int select_delta(
     const git_diff *diff, const git_diff_delta *delta, const char *matched,
@@ -1170,13 +1197,19 @@ static int select_delta(
 ) {
     (void) diff;
     (void) matched;
-    const pathspec_t *filter = payload;
+    delta_select_t *sel = payload;
     const char *path = delta->new_file.path;
 
     if (!mount_spec_for_path(path)) {
         return 1;
     }
-    return pathspec_matches(filter, path, PATH_KIND_FILE) ? 0 : 1;
+
+    const char *location = NULL;
+    sel->err = mount_resolve(sel->mounts, sel->profile, path, sel->arena, &location);
+    if (sel->err) {
+        return -1;
+    }
+    return pathspec_matches(sel->filter, location, path, PATH_KIND_FILE) ? 0 : 1;
 }
 
 /**
@@ -1186,11 +1219,12 @@ static int select_delta(
  * set via scope_enabled — hiding commits behind the CLI filter would make
  * legitimately-referenceable commits unreachable. The path filter is derived
  * from scope_paths (raw CLI positional args, never narrowed) and applied delta
- * by delta as the diff is generated (select_delta), so the diff printed — names,
- * stats, patch — is the selection and nothing else.
+ * by delta as the diff is generated (select_delta, each delta by both its names
+ * under this machine's table), so the diff printed — names, stats, patch — is
+ * the selection and nothing else.
  *
- * @param ctx Dispatch context (must not be NULL; reads the repository and the
- *            output)
+ * @param ctx Dispatch context (must not be NULL; reads the repository, this
+ *            machine's mount table, the command arena and the output)
  * @param commit1_ref The older commit (must not be NULL)
  * @param commit2_ref The newer commit (must not be NULL)
  * @param scope Operation scope (must not be NULL)
@@ -1211,6 +1245,8 @@ static error_t *diff_commits(
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
+    const mount_table_t *mounts = ctx->run.mounts;
+    arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
     const string_array_t *profiles = scope_enabled(scope);
@@ -1287,17 +1323,27 @@ static error_t *diff_commits(
         goto cleanup;
     }
 
-    /* Generate the diff, the filter selecting each delta on its way in. The filter
-     * is borrowed for the call: libgit2 reads the payload only while generating. */
+    /* Generate the diff, the filter selecting each delta on its way in. The
+     * selection is borrowed for the call: libgit2 reads the payload only while
+     * generating. A resolve that failed cancelled the diff, and its own error
+     * replaces the cancel libgit2 reports. */
+    delta_select_t selection = {
+        .filter = file_filter, .mounts = mounts, .profile = profile1_name,
+        .arena  = arena
+    };
     git_diff_options diff_opts;
     git_diff_options_init(&diff_opts, GIT_DIFF_OPTIONS_VERSION);
     if (file_filter) {
         diff_opts.notify_cb = select_delta;
-        diff_opts.payload = (void *) file_filter;
+        diff_opts.payload = &selection;
     }
 
     err = gitops_diff_trees(repo, tree1, tree2, &diff_opts, &diff);
     if (err) {
+        if (selection.err) {
+            error_free(err);
+            err = selection.err;
+        }
         err = error_wrap(err, "Failed to generate diff");
         goto cleanup;
     }

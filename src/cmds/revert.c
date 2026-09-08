@@ -152,8 +152,10 @@ static error_t *discover_file(
     /* Initialize output flag */
     *found_in_history = false;
 
-    /* Resolve input path to storage format (file need not exist) */
-    err = path_input_resolve(mounts, file_path, arena, &storage_path);
+    /* The name the machine-wide table gives the argument (file need not exist;
+     * the claim standing at a location, in the branch that holds it, is the next
+     * commit's answer). */
+    err = path_input_classify(mounts, file_path, arena, &storage_path);
     if (err) {
         return err;
     }

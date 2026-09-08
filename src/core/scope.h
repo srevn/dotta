@@ -24,11 +24,14 @@
  *   active  — display/hook face of the scope. Equal to the CLI filter
  *             names when one was given, else equal to enabled. "What the user
  *             asked for, not the underlying world."
- *   paths   — the CLI-derived path filter (NULL when no positional args).
- *             Exposed for diff's historical arms, which select a commit range
- *             delta by delta and answer the filter's coverage themselves, and
- *             have no profile or exclude semantics to honor. In-workspace sites
- *             should prefer scope_accepts_path.
+ *   paths   — the CLI-derived path filter (NULL when no positional args), one
+ *             matcher over the two keys a managed path has: its location and
+ *             its storage path (infra/pathspec). Exposed for diff's historical
+ *             arms, which select a commit range delta by delta and answer the
+ *             filter's coverage themselves (pathspec_entry_at,
+ *             pathspec_entry_matches_at), and for apply's count line
+ *             (pathspec_count); neither has a profile or exclude semantics to
+ *             honor. In-workspace sites should prefer scope_accepts_path.
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
  * sync.c ("use enabled, not active, for workspace_load") is enforced by
@@ -120,8 +123,8 @@ typedef struct scope_inputs {
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param mounts Per-machine mount table covering enabled profiles (must not be
- *               NULL; arena-borrowed; consumed by pathspec_create only — scope_t
- *               does not store it)
+ *               NULL; arena-borrowed; consumed by pathspec_create only, to locate
+ *               the filesystem shapes — scope_t does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
  *               and the path filter; must outlive the returned scope (must not
  *               be NULL)
@@ -210,15 +213,21 @@ bool scope_accepts_profile(const scope_t *s, const char *profile);
 /**
  * Path dimension check.
  *
- * When no path filter was built, any non-NULL storage_path matches (matches
- * pathspec_matches semantics). NULL storage_path returns false.
+ * Both names of the subject: a filter entry reads the one in its own vocabulary
+ * — a filesystem shape the location, a storage shape or a bare pattern the name
+ * (pathspec_matches). When no path filter was built, every subject matches. A
+ * name the caller does not have is NULL and is read by no entry of that vocabulary;
+ * a subject with neither name matches nothing under a filter.
  *
  * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a tracked
  * directory even when a file currently squats it on disk. State file rows are
  * always PATH_KIND_FILE; workspace items carry item_kind.
  */
 bool scope_accepts_path(
-    const scope_t *s, const char *storage_path, path_kind_t kind
+    const scope_t *s,
+    const char *filesystem_path,
+    const char *storage_path,
+    path_kind_t kind
 );
 
 /**
@@ -245,8 +254,8 @@ bool scope_is_excluded(
  * Combined per-iteration check.
  *
  * Equivalent to:
- *     scope_accepts_profile(s, profile) && scope_accepts_path(s, storage_path,
- *         kind) && !scope_is_excluded(s, storage_path, kind)
+ *     scope_accepts_profile(s, profile) && scope_accepts_path(s, filesystem_path,
+ *         storage_path, kind) && !scope_is_excluded(s, storage_path, kind)
  *
  * Use at sites that do not need by-reason granularity. Sites that count or report
  * exclusion reasons separately should use the three granular predicates above.
@@ -254,6 +263,7 @@ bool scope_is_excluded(
 bool scope_accepts_entry(
     const scope_t *s,
     const char *profile,
+    const char *filesystem_path,
     const char *storage_path,
     path_kind_t kind
 );

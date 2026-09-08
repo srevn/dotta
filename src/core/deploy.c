@@ -222,7 +222,8 @@ static bool beneath_squatted_directory(
     const manifest_row_t *row = workspace_lookup(ws, dir);
 
     return row->tracked && scope_accepts_entry(
-        scope, row->profile, row->storage_path, PATH_KIND_DIRECTORY
+        scope, row->profile,
+        row->filesystem_path, row->storage_path, PATH_KIND_DIRECTORY
     );
 }
 
@@ -265,7 +266,9 @@ error_t *deploy_plan_build(
         if (!row->tracked) continue;
 
         if (!scope_accepts_profile(scope, row->profile) ||
-            !scope_accepts_path(scope, row->storage_path, PATH_KIND_DIRECTORY)) {
+            !scope_accepts_path(
+            scope, row->filesystem_path, row->storage_path, PATH_KIND_DIRECTORY
+            )) {
             continue;                        /* out of scope: invisible */
         }
 
@@ -287,7 +290,9 @@ error_t *deploy_plan_build(
         const manifest_row_t *row = files.entries[i];
 
         if (!scope_accepts_profile(scope, row->profile) ||
-            !scope_accepts_path(scope, row->storage_path, PATH_KIND_FILE)) {
+            !scope_accepts_path(
+            scope, row->filesystem_path, row->storage_path, PATH_KIND_FILE
+            )) {
             continue;
         }
 

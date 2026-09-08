@@ -97,7 +97,9 @@ error_t *cleanup_plan_build(
          * planner applies. Profile / path dimensions reject silently — the orphan
          * is outside the user's declared operation scope. */
         if (!scope_accepts_profile(scope, item->profile) ||
-            !scope_accepts_path(scope, item->storage_path, item->item_kind)) {
+            !scope_accepts_path(
+            scope, item->filesystem_path, item->storage_path, item->item_kind
+            )) {
             continue;
         }
 

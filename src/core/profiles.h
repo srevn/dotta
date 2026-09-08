@@ -344,7 +344,7 @@ error_t *profile_build_file_index(
  * set asks the view instead (manifest_holders on a manifest_build over the enabled
  * profiles — list, show).
  *
- * The storage_path must already be resolved (use path_input_resolve() first).
+ * The storage_path must already be resolved (use path_input_classify() first).
  *
  * @param repo Repository (must not be NULL)
  * @param storage_path Storage path (e.g., "home/.bashrc")

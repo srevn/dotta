@@ -52,9 +52,7 @@ struct scope {
  * that boundary.
  */
 static error_t *resolve_enabled_lenient(
-    git_repository *repo,
-    const state_t *state,
-    string_array_t **out_enabled
+    git_repository *repo, const state_t *state, string_array_t **out_enabled
 ) {
     error_t *err = profile_resolve_enabled(repo, state, out_enabled);
     if (!err) return NULL;
@@ -68,6 +66,7 @@ static error_t *resolve_enabled_lenient(
     if (!*out_enabled) {
         return ERROR(ERR_MEMORY, "Failed to allocate empty enabled array");
     }
+
     return NULL;
 }
 
@@ -85,9 +84,7 @@ static error_t *resolve_enabled_lenient(
  * touches the arena only when patterns exist.
  */
 static error_t *compile_excludes(
-    char *const *patterns,
-    size_t count,
-    arena_t *arena,
+    char *const *patterns, size_t count, arena_t *arena,
     gitignore_ruleset_t **out_rules
 ) {
     *out_rules = NULL;
@@ -111,12 +108,8 @@ static error_t *compile_excludes(
 }
 
 error_t *scope_build(
-    git_repository *repo,
-    const state_t *state,
-    const scope_inputs_t *in,
-    const mount_table_t *mounts,
-    arena_t *arena,
-    scope_t **out
+    git_repository *repo, const state_t *state, const scope_inputs_t *in,
+    const mount_table_t *mounts, arena_t *arena, scope_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
@@ -173,13 +166,11 @@ error_t *scope_build(
      *    as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build path filter consuming the caller-supplied mount table — no
-     *    intermediate prefix-array round-trip. The mount table is borrowed for
-     *    this call only; scope_t does not store it. */
+    /* 4. Build path filter consuming the caller-supplied mount table — its
+     *    filesystem shapes located through it, no intermediate round-trip. The
+     *    mount table is borrowed for this call only; scope_t does not store it. */
     if (in->file_count > 0) {
-        err = pathspec_create(
-            in->files, in->file_count, mounts, arena, &s->paths
-        );
+        err = pathspec_create(in->files, in->file_count, mounts, arena, &s->paths);
         if (err) {
             err = error_wrap(err, "Failed to build path filter");
             goto fail;
@@ -254,9 +245,10 @@ bool scope_accepts_profile(const scope_t *s, const char *profile) {
 }
 
 bool scope_accepts_path(
-    const scope_t *s, const char *storage_path, path_kind_t kind
+    const scope_t *s, const char *filesystem_path, const char *storage_path,
+    path_kind_t kind
 ) {
-    return pathspec_matches(s->paths, storage_path, kind);
+    return pathspec_matches(s->paths, filesystem_path, storage_path, kind);
 }
 
 bool scope_is_excluded(
@@ -269,12 +261,10 @@ bool scope_is_excluded(
 }
 
 bool scope_accepts_entry(
-    const scope_t *s,
-    const char *profile,
-    const char *storage_path,
-    path_kind_t kind
+    const scope_t *s, const char *profile, const char *filesystem_path,
+    const char *storage_path, path_kind_t kind
 ) {
     return scope_accepts_profile(s, profile)
-           && scope_accepts_path(s, storage_path, kind)
+           && scope_accepts_path(s, filesystem_path, storage_path, kind)
            && !scope_is_excluded(s, storage_path, kind);
 }

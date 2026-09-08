@@ -1687,6 +1687,44 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* Its sibling: the names a profile holds for a location it also names
+     * otherwise. These have a location and are in no bucket either — one name
+     * of the group stands there and deploys, and the rest are in the branch and
+     * in no row. Same loop shape; the locations are counted apart from the names
+     * because a group of three at one location is one path, not three. */
+    {
+        manifest_unkept_t unkept = manifest_unkept(manifest);
+        const manifest_unkept_claim_t *first = NULL;
+        for (size_t i = 0; i < unkept.count;) {
+            const char *profile = unkept.entries[i].profile;
+            size_t n = 0;
+            size_t locations = 0;
+            const char *last = NULL;
+            while (i + n < unkept.count &&
+                strcmp(unkept.entries[i + n].profile, profile) == 0) {
+                const char *at = unkept.entries[i + n].filesystem_path;
+                if (!last || strcmp(at, last) != 0) locations++;
+                last = at;
+                n++;
+            }
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Profile '%s': %zu name%s not kept at %zu location%s",
+                profile, n, n == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+            );
+            if (!first) first = &unkept.entries[i];
+            i += n;
+        }
+        if (first) {
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
+                "would take; a directory name takes everything beneath it",
+                first->profile, first->storage_path
+            );
+        }
+    }
+
     /* PLAN: decide once what deploy will do, from (workspace, scope).
      *
      * Every later consumer — preview, adoption, preflight, the prompt, execution

@@ -382,7 +382,14 @@ static error_t *list_files(
          * of the tracked ones keeps "nothing" honest for a branch that tracks
          * only them. An ancestor claim is not the branch's to count: the profile
          * passes through the directory on the way to something beneath it and
-         * manages nothing there. */
+         * manages nothing there.
+         *
+         * The tree-versus-blob rule the two other readers of this sheet make
+         * (core/manifest.c manifest_holds_blob, core/profiles.c profile_get_stats)
+         * is not asked here and cannot be owed: a stale item is one the tree
+         * holds a blob at, and a blob at a directory item's key is a content
+         * path, so this arm — reached only where the branch has no content blobs
+         * at all — can never meet one. */
         size_t dir_count = 0;
         metadata_t *empty_meta = NULL;
         error_t *meta_err = metadata_load_from_tree(

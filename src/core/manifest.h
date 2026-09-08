@@ -12,6 +12,42 @@
  * own table derivation on its own, for a command that needs this machine's topology
  * without a view (include/runtime.h).
  *
+ * The view has two layers. A **contribution** is one profile's claims placed
+ * under this machine's topology: its tree's blobs and its sheet's directory items,
+ * one row per location *within the profile*, with what this machine cannot place
+ * recorded beside it (manifest_unbound) and what the profile names twice recorded
+ * against the name it kept (manifest_unkept). A contribution is what one branch
+ * says about this machine, precedence aside. The **index** is precedence over
+ * settled contributions: one winning row per location, a later profile's explicit
+ * claim taking a held location and a derived one only filling an empty one.
+ *
+ * Everything that asks *who wins* reads the index — manifest_lookup, manifest_rows,
+ * manifest_lookup_storage, manifest_holders, manifest_diff: deployment, the
+ * record's join, the workspace, every screen. Everything that asks *what does
+ * this profile call this location* reads that profile's own contribution —
+ * manifest_lookup_claim, manifest_name: a location P lost to a higher profile
+ * is still named by what P holds.
+ *
+ * Within one profile, at one location: an explicit claim (a blob of any type, a
+ * `tracked` directory item) outranks a derived one whichever arrives first, and
+ * nothing is recorded — the derived row named nothing; a DIRECTORY item whose
+ * own name the tree holds a blob at is stale metadata and claims nothing, a path
+ * being a tree or a blob and the tree the content authority; and two explicit
+ * names are decided when the contribution is whole — **the name the profile would
+ * give the location fresh** stands (manifest_name), and every other is recorded
+ * against it.
+ *
+ * Two things a claim can fail to become, and the health channel says both. A
+ * claim this machine cannot place has no location: manifest_unbound, the repair
+ * a `--target`. A claim the view did not **keep** has one, and another name of
+ * the same profile stands there: manifest_unkept, the repair a `remove`. Both
+ * are claims the branch holds and the view has no row for, for two different
+ * reasons; a claim precedence hides is neither — it is **overridden**, the normal
+ * shape of layering, and no health question at all. A name the view did not keep
+ * is in the branch and in no row: no screen, no filter and no record join meets
+ * it, and `remove` — which reads the branch, not the view — is the one verb that
+ * can still name it.
+ *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
  *     — the historical-diff path (cmd_diff) — and is the same per-profile step
@@ -27,22 +63,25 @@
  *     include/runtime.h); a command that moves Git or the enabled set builds
  *     the post-mutation view itself.
  *
- *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
- *     profiles the rows came from, in precedence order), manifest_mounts (the
- *     table the rows were placed by, lent), manifest_lookup (by filesystem path,
- *     O(1)), manifest_lookup_storage (by claim — a storage path under one profile,
- *     linear) and manifest_holders (how many rows hold a name, and the one when
- *     one does); and manifest_diff, the per-profile delta between two views that
- *     the scope-changing verbs and sync print their receipts from.
+ *   - Readers: manifest_rows (every winning row, both kinds, unordered),
+ *     manifest_profiles (the profiles the rows came from, in precedence order),
+ *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
+ *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
+ *     path under one profile, linear), manifest_holders (how many rows hold a
+ *     name, and the one when one does), manifest_lookup_claim and manifest_name
+ *     (one profile's own contribution, whoever won the location); and
+ *     manifest_diff, the per-profile delta between two views that the
+ *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
  *     inputs give the same rows on every machine
  *   - Computed, never stored: every load builds it; nothing invalidates it because
  *     nothing is held past its lifetime
- *   - Precedence-aware: one row per path, the winner's kind — later profiles
- *     override earlier, except that a derived directory claim only ever fills
- *     an empty slot (manifest_row_t's `tracked`)
+ *   - Precedence-aware over settled contributions — a profile's claims are placed
+ *     whole before any of them is compared with another's: one row per path,
+ *     the winner's kind, later profiles overriding earlier, except that a derived
+ *     directory claim only ever fills an empty slot (manifest_row_t's `tracked`)
  *
  * Workflow:
  *   Commands → manifest_build → rows → workspace / deploy / cleanup
@@ -56,6 +95,7 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#include "base/hashmap.h"
 #include "infra/mount.h"
 
 /* manifest_build reads the enabled set from the state handle and manifest_diff
@@ -147,6 +187,23 @@ static inline bool manifest_is_claim(
 ) {
     return row && strcmp(row->profile, profile) == 0 &&
            strcmp(row->storage_path, storage_path) == 0;
+}
+
+/**
+ * Is the row an ancestor claim — a directory derived from the chain above a managed
+ * path, never named by anyone?
+ *
+ * The one kind of row that is not a naming authority: the namer skips it, the
+ * walkers compose past it, a contribution lets an explicit claim of the same
+ * profile take its slot, the index lets it fill an empty location and never take
+ * a held one, and a search reads it as "the profile holds a subtree beneath here"
+ * — one of possibly several chains, never a name (manifest_lookup_claim's note).
+ * False on every other kind, where `tracked` is false and nothing reads it.
+ *
+ * Readers: manifest_name, the two claim passes and the layering (core/manifest.c).
+ */
+static inline bool manifest_is_derived(const manifest_row_t *row) {
+    return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
 }
 
 /**
@@ -250,16 +307,23 @@ typedef struct manifest manifest_t;
  * lookup and metadata that will not parse — those stay retryable errors, never
  * silent omissions.
  *
- * Per profile, in order: the tree's blobs are claimed first, then the DIRECTORY
- * items of its metadata.json. A blob and a DIRECTORY item of the same profile
- * at one path is stale metadata — a path is a tree or a blob — and the tree is
- * the content authority: the directory claim finds its own profile's row and
- * yields. Across profiles the later (higher) claim replaces the slot whatever
- * its kind, so the view holds one row per path, the winner's kind. A profile
- * without metadata.json contributes no directories and is skipped, not an error.
+ * Per profile, in order: the tree's blobs are placed first, then the DIRECTORY
+ * items of its metadata.json, into that profile's own contribution — the
+ * within-profile rule (the two layers, above): an explicit claim outranks a derived
+ * one, a DIRECTORY item whose own name the tree holds a blob at is stale metadata
+ * and claims nothing, and two explicit names at one location are decided when
+ * the contribution is whole, the fresh name kept and every other recorded
+ * (manifest_unkept). Only then does precedence run: across profiles the later
+ * (higher) claim takes the location whatever its kind, a derived one filling an
+ * empty location alone, so the view holds one row per path, the winner's kind.
+ * A profile without metadata.json contributes no directories and is skipped,
+ * not an error.
  *
  * Row order is unspecified; consumers that need parent-before-child sort their
- * own pointer arrays (the workspace does). The oracle is a set.
+ * own pointer arrays (the workspace does). The oracle is a set. What order there
+ * is is each contribution's claim order, the contributions in precedence order
+ * — so a path a higher profile overrides sits at the winner's place, not the
+ * loser's.
  *
  * Memory:
  *   - rows, per-row strings, the profile names (duplicated once per profile)
@@ -311,6 +375,10 @@ error_t *manifest_build(
  * place. Any mount table is acceptable, including one with no binding for
  * `profile`.
  *
+ * One contribution, settled and layered like any other, so a tree view answers
+ * manifest_lookup_claim and manifest_name for `profile` exactly as an enabled
+ * view answers them for one of its own.
+ *
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
  *
@@ -335,13 +403,17 @@ error_t *manifest_build_tree(
 );
 
 /**
- * Every row of the view, both kinds, unordered
+ * Every winning row of the view, both kinds, unordered
+ *
+ * The index's rows — what stands at each managed location. A name a profile did
+ * not keep and a claim a higher profile overrode are both absent: the first is
+ * manifest_unkept's, the second is layering, and neither is a row.
  *
  * Pure value return — no allocation, no error path. The slice aliases the view's
  * own storage and is valid for the arena's lifetime.
  *
  * @param manifest Manifest (NULL returns an empty slice)
- * @return Borrowed slice over every row
+ * @return Borrowed slice over every winning row
  */
 manifest_rows_t manifest_rows(const manifest_t *manifest);
 
@@ -447,15 +519,57 @@ typedef struct {
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
  * so one profile's claims are contiguous and consumers aggregate in a single
- * pass without sorting. Each (profile, storage path) is recorded once: a stale
- * DIRECTORY item at an unbound blob's storage path contributes no second entry,
- * mirroring the bound path's content-authority rule. Empty on every build whose
- * claims all placed — the common case, costing nothing.
+ * pass without sorting. Each (profile, storage path) is recorded once, the dedup
+ * by name: a stale DIRECTORY item at an unbound blob's storage path contributes
+ * no second entry, which is the same test the bound path makes of the same pair
+ * (a path is a tree or a blob, and the tree is the content authority). Empty on
+ * every build whose claims all placed — the common case, costing nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
  */
 manifest_unbound_t manifest_unbound(const manifest_t *manifest);
+
+/**
+ * One name a profile holds for a location it also names otherwise, recorded against
+ * the name it kept.
+ *
+ * Strings are the build arena's; no row pointer — the entry says what this
+ * profile's branch holds, and the index may point elsewhere. The name is in the
+ * branch and in no row: `remove` is the one verb that can still take it, which
+ * is why that is the repair.
+ */
+typedef struct {
+    const char *profile;
+    const char *storage_path;      /* the name that was not kept */
+    path_kind_t kind;              /* its kind (a screen prints it with a suffix) */
+    const char *kept;              /* the name the contribution kept at this location */
+    const char *filesystem_path;   /* the location every name of the group resolves to */
+} manifest_unkept_claim_t;
+
+/**
+ * Bound carrier for the view's second health slice, the manifest_rows_t idiom.
+ */
+typedef struct {
+    const manifest_unkept_claim_t *entries;
+    size_t count;
+} manifest_unkept_t;
+
+/**
+ * The names the profiles hold for locations they also name otherwise
+ *
+ * Pure value return — no allocation, no error path. Grouped by profile in build
+ * order, a location's entries contiguous and bytewise by name, so one linear
+ * walk counts both names and locations without sorting. Each (profile, name)
+ * appears once — a name resolves to one location under one profile, and a name
+ * the tree and the sheet both carry is settled before the contest by the
+ * content-authority rule. Empty on every build whose profiles each name their
+ * locations once, which is every branch this machine authored alone.
+ *
+ * @param manifest Manifest (NULL returns an empty slice)
+ * @return Borrowed slice over the recorded names, valid for the arena's lifetime
+ */
+manifest_unkept_t manifest_unkept(const manifest_t *manifest);
 
 /**
  * Look up a row by filesystem path
@@ -482,6 +596,12 @@ const manifest_row_t *manifest_lookup(
  * convention, since a pointer-returning lookup has no CHECK_NULL to refuse with.
  * A caller with no profile in hand asks manifest_holders: the first of several
  * rows holding a name was never an answer.
+ *
+ * The winners, like every reader of the index: this asks whether a claim *wins*
+ * somewhere, and a claim precedence overrode — or a name the profile did not
+ * keep — wins nowhere and answers NULL. That is exactly what the workspace's
+ * relocation read wants: a claim standing under another profile is not "relocated",
+ * the copy at the old location is simply no longer active.
  *
  * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
  * read, each of which already cost a Git tree probe; a lazy per-profile storage
@@ -513,6 +633,9 @@ const manifest_row_t *manifest_lookup_storage(
  * another's), and it has no reader; a caller that must name each holder walks
  * manifest_rows. Readers: show and list without a profile.
  *
+ * The winners, like manifest_lookup_storage beside it: a name that wins nowhere
+ * is held by nobody here.
+ *
  * Linear scan, once per command.
  *
  * @param manifest Manifest (NULL yields 0)
@@ -527,7 +650,93 @@ size_t manifest_holders(
 );
 
 /**
- * Free a manifest — the heap index only; rows are the arena's
+ * The row `profile` holds at `filesystem_path` in its own contribution — the
+ * claim it placed there, whether or not it wins the location in the index.
+ *
+ * The authority rule's one source. NULL when the profile is not in the view,
+ * holds nothing there, or is NULL — the API's own return convention, a
+ * pointer-returning lookup having no CHECK_NULL to refuse with. O(P) over the
+ * profiles to find the contribution, then O(1): P is the enabled set, and a caller
+ * that asks once per directory entry pays a handful of strcmp.
+ *
+ * A DIRECTORY row with `tracked == false` here says the profile holds a subtree
+ * beneath this location; its `storage_path` is one of the chains its own names
+ * run through, not a unique identity for that subtree — a profile bound after
+ * some of its files were captured legitimately derives two. A caller that wants
+ * the subtree reads the rows beneath the location.
+ *
+ * Readers: manifest_name (core/manifest.c).
+ */
+const manifest_row_t *manifest_lookup_claim(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *filesystem_path
+);
+
+/**
+ * A claim a verb has admitted in this command and not yet committed — add's
+ * listing, read by the namer as an authority exactly as a committed claim is.
+ *
+ * `kind` is the whole reason this is a value and not a string: a claim at the
+ * location names it whatever it is, but only a DIRECTORY names what lies beneath
+ * it. A pending FILE above a location composes nothing — a name beneath a blob
+ * is a tree entry the stage refuses — so the ascent climbs past it exactly as
+ * it climbs past a committed blob row. A pending DIRECTORY is a claim the command
+ * made (an argument, or a directory its walk entered): a verb that would admit
+ * a derived claim has no business naming through it.
+ *
+ * A location a verb entered without claiming (a root met from above) is stored
+ * with a NULL value: hashmap_has says walked, hashmap_get says claimed.
+ */
+typedef struct {
+    const char *storage_path;
+    path_kind_t kind;
+} manifest_pending_claim_t;
+
+/**
+ * What `profile` calls `location` under this view
+ *
+ * A pending claim there (`pending`: location → manifest_pending_claim_t, the
+ * claims a verb has admitted in this command and not yet committed; NULL for
+ * every other reader); else the explicit claim standing there; else composed
+ * beneath the nearest authority above it — a pending directory claim, or a tracked
+ * directory row of the profile, the claim asked before the root at every rung;
+ * else what the profile's own roots make of it (infra/mount.h mount_name), which
+ * is NULL when the location is one of them. An ancestor claim is never an
+ * authority, and nothing composes beneath a blob. The profile's own contribution
+ * is read, never the index: a location it lost to a higher profile is still named
+ * by what it holds. `profile` may be NULL — the shared roots alone, as mount_name
+ * reads it.
+ *
+ * This is the rule the view itself runs when a profile names one location twice:
+ * the name this answers *fresh* is the one the contribution keeps, and every
+ * other is manifest_unkept's.
+ *
+ * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
+ *
+ * @param manifest Manifest (must not be NULL)
+ * @param profile The asker, or NULL for the shared roots alone
+ * @param location Absolute location (must not be NULL)
+ * @param pending The command's uncommitted claims, or NULL
+ * @param arena Arena that owns `*out_storage` (must not be NULL)
+ * @param out_storage Arena-backed storage path, NULL at a root (must not be NULL;
+ *                    NULL after an error)
+ * @return Error or NULL on success
+ */
+error_t *manifest_name(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *location,
+    const hashmap_t *pending,
+    arena_t *arena,
+    const char **out_storage
+);
+
+/**
+ * Free a manifest — the heap indexes only; rows are the arena's
+ *
+ * The view's own index and each contribution's. A build that failed partway has
+ * as many contributions as it registered, so this frees exactly what it made.
  *
  * No-op on NULL.
  */
@@ -563,7 +772,7 @@ typedef struct {
 
     /* Gain-side, subsets of claimed (the remainder was unchanged) */
     size_t added;                /* … whose path `before` did not have */
-    size_t updated;              /* … whose path `before` had, with blob, type or mode moved */
+    size_t updated;              /* … whose path `before` had, with blob, type, mode or class moved */
 
     /* Loss-side */
     size_t reassigned;           /* Paths `before` had under this profile that `after` gives another */
@@ -585,9 +794,9 @@ typedef struct {
  *
  * Attribution (for a profile P in `profiles`):
  *   - every row of `after` under P: claimed; added if `before` has no row at
- *     the path; updated if it has one whose blob, type or mode differs (owner/group
- *     travel with a metadata commit rare enough to ride on the workspace's verdict
- *     instead)
+ *     the path; updated if it has one whose blob, type, mode or `tracked` class
+ *     differs (owner/group travel with a metadata commit rare enough to ride on
+ *     the workspace's verdict instead)
  *   - every row of `before` under P whose path `after` gives another profile:
  *     reassigned
  *   - every row of `before` under P whose path `after` lacks, with a record at

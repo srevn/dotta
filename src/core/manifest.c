@@ -2,25 +2,32 @@
  * manifest.c - Manifest module implementation
  *
  * The precedence oracle: manifest_build (every enabled profile, in precedence
- * order) and manifest_build_tree (one tree) share one per-profile claim routine
- * that produces manifest_row_t rows directly. There is no persistence step and
- * no bridge type: the view is computed into the caller's arena and read through
- * the accessors below.
+ * order) and manifest_build_tree (one tree) share one per-profile step,
+ * manifest_contribute, that produces manifest_row_t rows directly. There is no
+ * persistence step and no bridge type: the view is computed into the caller's
+ * arena and read through the accessors below.
  *
  * Key patterns:
- *   - Precedence by claim: manifest_claim is the one find-or-append-and-reset
- *     primitive. A later (higher) explicit claim on a path replaces the slot
- *     whatever its kind; a derived one — an ancestor claim, the directory item
- *     a traversal authored — fills an empty slot and never takes a held one.
- *     The view holds one row per path.
+ *   - Two layers, built in two moves (core/manifest.h): manifest_contribute places
+ *     one profile's claims whole into that profile's own contribution — one row
+ *     per location within it, the within-profile rule settled by manifest_settle
+ *     — and manifest_layer then runs precedence over the settled contributions,
+ *     once, into the view's index. Nothing published is ever rewritten: a row
+ *     that loses a location keeps its own row and simply leaves the slice, which
+ *     is what lets a lower profile's claim be read after a higher one wins
+ *     (manifest_lookup_claim) and what makes an index the one thing that says
+ *     who stands where.
  *   - Blob OID Extraction: the tree walker reads blob_oid, type and the Git-derived
  *     mode from each borrowed tree entry for O(1) content identity.
- *   - Metadata Integration: the per-profile claim routine loads the sheet of
- *     the tree it is claiming — no caller supplies one — and the walker attributes
- *     it onto each row during the tree walk (single profile per row, no
- *     cross-profile merge — storage_path collisions across profiles with distinct
- *     target values are kept apart); the same sheet's DIRECTORY items are claimed
- *     after the walk.
+ *   - Metadata Integration: the per-profile step loads the sheet of the tree it
+ *     is reading — no caller supplies one — and the walker attributes it onto
+ *     each row during the tree walk (single profile per row, no cross-profile
+ *     merge — storage_path collisions across profiles with distinct target values
+ *     are kept apart); the same sheet's DIRECTORY items are placed after the walk.
+ *   - One naming rule, one body: manifest_ascend is what the settle asks for
+ *     the fresh name of a contested location and what manifest_name answers callers
+ *     with, so the name the view keeps and the name the namer gives are the same
+ *     answer by construction.
  *   - Diff, not delta-tracking: what a scope transition or a sync did to the
  *     view is read off two views (manifest_diff), never recorded while it happened.
  */
@@ -31,69 +38,103 @@
 #include <string.h>
 
 #include "base/arena.h"
+#include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/string.h"
 #include "core/metadata.h"
 #include "core/state.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
 
 /**
+ * One profile's claims, placed under the topology, precedence aside
+ *
+ * One row per location within the profile, and its own index over them. `rows`
+ * is allocated once at the step's tail, sized exactly from the index, and nothing
+ * on it is ever rewritten: a name that lost the location and a derived claim an
+ * explicit one retook stay in the arena and simply leave the slice.
+ *
+ * The index is heap-allocated and released by manifest_free with the view's own;
+ * its keys borrow the arena-backed location each row carries.
+ */
+typedef struct {
+    const char *profile;           /* Arena-backed; the same pointer every row of it carries */
+    manifest_row_t **rows;         /* The rows standing, in claim order (arena, exact) */
+    size_t count;                  /* Rows standing */
+    hashmap_t *index;              /* location → the row standing there, heap-allocated */
+} contribution_t;
+
+/**
  * Manifest — the precedence oracle's product
  *
- * A pointer spine over rows allocated one by one from the caller's arena, and a
- * path index over them. Rows are stable from the moment they are allocated —
- * only the spine is ever reallocated — so the index stores row pointers directly
- * and manifest_rows hands the spine out as the public slice.
+ * The contributions, in precedence order, and the index precedence leaves over
+ * them. Rows are allocated one by one from the caller's arena and are stable
+ * from the moment they are allocated, so both indexes store row pointers directly.
+ * Each spine — a contribution's and the view's — is cut once, exactly, from what
+ * its index points at; there is no growth and no reallocation, and manifest_rows
+ * hands the view's out as the public slice.
  *
- * Spine growth uses arena_calloc + memcpy (abandon-and-realloc): the old chunk
- * is left to the arena (released at arena_destroy). The index is heap-allocated
- * and released by manifest_free; its keys borrow each row's arena-backed
- * filesystem_path.
+ * profiles[i] names contributions[i]: one array is the public projection of the
+ * other, kept beside it because manifest_profiles owes a contiguous array of names.
  */
 struct manifest {
-    manifest_row_t **rows;         /* arena-backed pointer spine, abandon-and-realloc growth */
+    contribution_t *contributions; /* One per profile, in precedence order (arena) */
+    const char **profiles;         /* Their names, the public projection (arena) */
+    size_t profile_count;          /* Both arrays' count */
+
+    manifest_row_t **rows;         /* The winners, cut once at layering (arena, exact) */
     size_t count;                  /* Rows in the spine */
-    size_t capacity;               /* Spine slots allocated */
-    hashmap_t *index;              /* fs_path → manifest_row_t *, heap-allocated */
-    const char **profiles;         /* The profiles the rows came from, in precedence order (arena) */
-    size_t profile_count;          /* Profiles listed */
+    hashmap_t *index;              /* location → the winning row, heap-allocated */
+
     const mount_table_t *mounts;   /* The table the rows were placed by: the build's own, or a tree view's caller's */
 
-    /* The health slice: claims the build could not place (no target binding),
-     * grouped by profile in build order. Flat arena array, abandon-and-realloc
-     * growth like the spine; empty on the common all-bound build (no allocation
-     * until the first note). */
+    /* The two health slices: claims the build could not place (no target binding)
+     * and names a profile did not keep (it names the location otherwise), both
+     * grouped by profile in build order. Flat arena arrays, abandon-and-realloc
+     * growth; empty on the common build (no allocation until the first note). */
     manifest_unbound_claim_t *unbound;
     size_t unbound_count;
     size_t unbound_capacity;
+    manifest_unkept_claim_t *unkept;
+    size_t unkept_count;
+    size_t unkept_capacity;
 };
 
 /**
  * Context for the blob-claim tree-walk callback
  *
- * Passed to gitops_tree_walk() to populate a manifest directly during tree
+ * Passed to gitops_tree_walk() to place one profile's blobs directly during tree
  * traversal, eliminating O(N×D) two-pass overhead. The callback extracts identity
  * fields from borrowed tree entries at O(1) per file.
  *
  * Memory ownership:
- * - manifest: borrowed, caller retains ownership
- * - profile: arena-backed name every row of this profile borrows
+ * - manifest: borrowed, caller retains ownership — the mount table and the unbound
+ *             slice are read and written through it
+ * - contribution: the profile's own, borrowed from manifest_contribute: its
+ *             arena-backed name (every row of this profile borrows the pointer)
+ *             and its location index
+ * - profile: the contribution's name, for rows and error messages
  * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
  *          entries; a missing binding (no location) contributes no row and is
  *          recorded on the view (manifest_note_unbound)
- * - metadata: borrowed from manifest_claim_tree, which loads the sheet of the
- *             tree being claimed; never NULL — a tree without one holds an empty
+ * - metadata: borrowed from manifest_contribute, which loads the sheet of the
+ *             tree being read; never NULL — a tree without one holds an empty
  *             sheet, so there is no absent case for the walker to carry
- * - arena: borrowed, must not be NULL; per-row strings + spine growth allocations
- *          are abandoned to it
+ * - placed / contenders: the step's two build-local lists, borrowed — every row
+ *             this profile placed, and the rows that arrived at a location it
+ *             had already named. Both are spent when manifest_contribute returns.
+ * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
  * - error: owned by callback, caller must free on error
  */
 struct claim_ctx {
     manifest_t *manifest;          /* Target view (modified by callback) */
+    contribution_t *contribution;  /* The profile's own claims and their index */
     const char *profile;           /* Profile name for rows and error messages */
     const mount_table_t *mounts;   /* Mount table for storage→filesystem resolution */
     const metadata_t *metadata;    /* The tree's own claim sheet, never NULL */
+    ptr_array_t *placed;           /* Every row this step placed, in claim order */
+    ptr_array_t *contenders;       /* The rows that met a location already named */
     arena_t *arena;                /* Arena for allocations (must not be NULL) */
     error_t *error;                /* Error propagation (set on failure) */
 };
@@ -116,8 +157,10 @@ struct claim_ctx {
  *
  * A key the sheet does not carry leaves the row's Git-derived defaults intact.
  *
- * Override-path callers may freely overwrite owner/group: prior values are
- * arena-borrowed and abandoned to the arena, no per-pointer free required.
+ * The row is fresh and unpublished — every row is, nothing being reset any more
+ * — and a failure here aborts the build whole, so the fields are written as they
+ * are read: there is no prior owner or group a half-done call could replace,
+ * and a half-built row in a failed build is never read.
  *
  * @param row      Target row (mutable)
  * @param metadata The tree's own claim sheet, never NULL (must not be NULL)
@@ -135,14 +178,12 @@ static error_t *manifest_apply_metadata(
     }
 
     /* owner/group apply to every blob row, links included: the ownership claim
-     * is true regardless of what the path became. Copied first so the
-     * mode/encrypted override below runs after the allocations have already
-     * succeeded. arena_strdup returns NULL only on real failure (NULL
-     * item->owner/group bypasses the if-guards and leaves the dup NULL). */
-    char *owner_dup = NULL;
+     * is true regardless of what the path became. arena_strdup returns NULL only
+     * on real failure (a NULL item->owner/group bypasses the if-guard and leaves
+     * the field NULL). */
     if (item->owner) {
-        owner_dup = arena_strdup(arena, item->owner);
-        if (!owner_dup) {
+        row->owner = arena_strdup(arena, item->owner);
+        if (!row->owner) {
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate owner for '%s'",
                 row->storage_path
@@ -150,20 +191,15 @@ static error_t *manifest_apply_metadata(
         }
     }
 
-    char *group_dup = NULL;
     if (item->group) {
-        group_dup = arena_strdup(arena, item->group);
-        if (!group_dup) {
+        row->group = arena_strdup(arena, item->group);
+        if (!row->group) {
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate group for '%s'",
                 row->storage_path
             );
         }
     }
-
-    /* Allocations succeeded — commit the overrides. */
-    row->owner = owner_dup;
-    row->group = group_dup;
 
     /* mode/encrypted apply only where a mode can stand — the tree's word
      * (row->type), never the item's kind — and only the mode the item claims:
@@ -179,80 +215,46 @@ static error_t *manifest_apply_metadata(
 }
 
 /**
- * Claim a filesystem path: the row for it, reset, ready to be filled
+ * A row of this contribution at `location`: allocated and on the list of everything
+ * the profile placed
  *
- * The one precedence primitive. A path already in the view is being claimed by
- * a later — higher — profile (or by the same profile's directory pass, which
- * yields before calling; see manifest_claim_tree): the existing row is zeroed
- * so nothing of the loser survives — not its owner/group/encrypted, not its kind
- * — and keeps only the indexed key. A new path gets a fresh arena row, indexed
- * then appended, so a failed index insert leaves the spine untouched.
+ * Whether it *stands* at the location is the caller's next line — the index takes
+ * it, or the contest does. Nothing here is ever reset or overwritten: a name
+ * that loses keeps its own row and leaves the slice at the settle, which is what
+ * lets a lower profile's claim be read after a higher one wins the location
+ * (manifest_lookup_claim) and what makes an index the one thing that says who
+ * stands where.
  *
- * The old strings of a reset row are arena-borrowed and abandoned to the caller's
- * arena; the index's key is the row's original filesystem_path string, which
- * stays valid and equal.
+ * `location` is arena-borrowed from mount_resolve; the cast discards the const
+ * qualifier its output type carries. The row keeps it as its key for the view's
+ * life. Two names at one location produce two arena strings with equal content,
+ * and both indexes key by content — no string is shared, and a hashmap_set that
+ * replaces a value keeps the key pointer it was first given, which stays valid
+ * and equal for the arena's lifetime.
  *
- * @param manifest Target view (must not be NULL)
- * @param filesystem_path Arena-backed path the row is keyed by (must not be NULL)
- * @param arena Arena for the row and the spine (must not be NULL)
- * @param out The claimed row, zero but for filesystem_path (must not be NULL)
+ * @param placed The step's list of every row placed (must not be NULL)
+ * @param location Arena-backed location the row is keyed by (must not be NULL)
+ * @param arena Arena for the row (must not be NULL)
+ * @param out The placed row, zero but for filesystem_path (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_claim(
-    manifest_t *manifest,
-    const char *filesystem_path,
+static error_t *manifest_place(
+    ptr_array_t *placed,
+    const char *location,
     arena_t *arena,
     manifest_row_t **out
 ) {
-    manifest_row_t *row = hashmap_get(manifest->index, filesystem_path);
-    if (row) {
-        char *key = row->filesystem_path;
-        memset(row, 0, sizeof(*row));
-        row->filesystem_path = key;
-        *out = row;
-        return NULL;
-    }
-
-    /* Grow the spine if needed.
-     *
-     * Arena abandon-and-realloc: allocate a new chunk from the arena, memcpy
-     * the existing pointers, and swap. The old chunk stays valid for the arena's
-     * lifetime but is no longer referenced; the arena reclaims it at arena_destroy.
-     * The rows themselves never move, so the index's row pointers are unaffected
-     * by the spine relocation. */
-    if (manifest->count >= manifest->capacity) {
-        if (manifest->capacity > SIZE_MAX / 2) {
-            return ERROR(ERR_INTERNAL, "Manifest capacity overflow");
-        }
-        size_t new_capacity = manifest->capacity * 2;
-
-        manifest_row_t **new_rows = arena_calloc(
-            arena, new_capacity, sizeof(*new_rows)
-        );
-        if (!new_rows) {
-            return ERROR(ERR_MEMORY, "Failed to grow manifest");
-        }
-        memcpy(new_rows, manifest->rows, manifest->count * sizeof(*new_rows));
-        manifest->rows = new_rows;
-        manifest->capacity = new_capacity;
-    }
-
-    row = arena_calloc(arena, 1, sizeof(*row));
+    manifest_row_t *row = arena_calloc(arena, 1, sizeof(*row));
     if (!row) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest row");
     }
+    row->filesystem_path = (char *) location;
 
-    /* filesystem_path is arena-borrowed via mount_resolve; the cast discards
-     * the const qualifier exposed by mount_resolve's output type. It is the index's
-     * key for the rest of the view's life. */
-    row->filesystem_path = (char *) filesystem_path;
-
-    error_t *err = hashmap_set(manifest->index, row->filesystem_path, row);
+    error_t *err = ptr_array_push(placed, row);
     if (err) {
-        return error_wrap(err, "Failed to index manifest row");
+        return error_wrap(err, "Failed to record a placed row");
     }
 
-    manifest->rows[manifest->count++] = row;
     *out = row;
     return NULL;
 }
@@ -319,7 +321,335 @@ static error_t *manifest_note_unbound(
 }
 
 /**
- * Tree-walk callback that claims the tree's blobs into the manifest
+ * Record one name the contribution did not keep
+ *
+ * The health primitive the settle spends its losers through: appends (profile,
+ * name, kind) against the name that stood at the location. No dedup — a row is
+ * in one group and is recorded once if it loses, and no two rows of one profile
+ * share a name (the tree holds one blob per path, the sheet one item per key,
+ * and the content-authority rule settles the one name they can both carry before
+ * the contest sees it).
+ *
+ * Growth is the unbound slice's abandon-and-realloc idiom. Every string must be
+ * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ *
+ * @param manifest Target view (must not be NULL)
+ * @param profile Arena-backed profile name (must not be NULL)
+ * @param row The row whose name did not stand (must not be NULL)
+ * @param kept The name that did (must not be NULL)
+ * @param arena Arena for the array growth (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_note_unkept(
+    manifest_t *manifest,
+    const char *profile,
+    const manifest_row_t *row,
+    const char *kept,
+    arena_t *arena
+) {
+    if (manifest->unkept_count >= manifest->unkept_capacity) {
+        size_t new_capacity =
+            manifest->unkept_capacity > 0 ? manifest->unkept_capacity * 2 : 8;
+
+        manifest_unkept_claim_t *grown = arena_calloc(
+            arena, new_capacity, sizeof(*grown)
+        );
+        if (!grown) {
+            return ERROR(ERR_MEMORY, "Failed to grow unkept claim list");
+        }
+        memcpy(grown, manifest->unkept, manifest->unkept_count * sizeof(*grown));
+        manifest->unkept = grown;
+        manifest->unkept_capacity = new_capacity;
+    }
+
+    manifest->unkept[manifest->unkept_count++] = (manifest_unkept_claim_t){
+        .profile = profile,
+        .storage_path = row->storage_path,
+        .kind = path_type_kind(row->type),
+        .kept = kept,
+        .filesystem_path = row->filesystem_path,
+    };
+    return NULL;
+}
+
+/**
+ * Does this contribution hold a blob under `name`?
+ *
+ * A path is a tree or a blob and the tree is the content authority, so a DIRECTORY
+ * item the tree holds a blob at is stale metadata and claims nothing. The blob
+ * that name reaches stands at the item's own location — one table, one profile,
+ * so both resolve alike — which means the tree's answer is already placed: it
+ * is the row standing at the location, or one of the names contending for it. A
+ * name keys one row within a profile, so the name is the whole test and no location
+ * need be compared; and a sheet holds one item per key, so no directory row of
+ * this profile can carry the item's own key — every row this finds was placed
+ * by the blob pass.
+ *
+ * Asked by the name and never by the holder: the stale item of a blob that lost
+ * its own location would otherwise contend a second time, and a genuine
+ * file-versus-directory pair under two names would be dropped instead of decided.
+ * This is the in-memory twin of the git_tree_entry_bypath the same rule is spelled
+ * with in core/profiles.c (profile_get_stats), and asking it here costs no ODB
+ * lookup.
+ *
+ * Asked before the tracked test, and that order is what keeps the settle's bytewise
+ * order total: a stale item that reached the contest would put two rows with
+ * one name in a group.
+ *
+ * Cost: the contest holds this profile's second names — none on a healthy branch,
+ * so the scan is over an empty array; a branch that names K locations twice pays
+ * K comparisons per directory item.
+ *
+ * @param held The row standing at the item's location, or NULL when none is
+ * @param contenders The names still contending, this profile's (must not be NULL)
+ * @param name The item's own key
+ * @return true when a row of this contribution already carries the name
+ */
+static bool manifest_holds_blob(
+    const manifest_row_t *held,
+    const ptr_array_t *contenders,
+    const char *name
+) {
+    if (held && strcmp(held->storage_path, name) == 0) return true;
+
+    for (size_t i = 0; i < contenders->count; i++) {
+        const manifest_row_t *row = contenders->items[i];
+        if (strcmp(row->storage_path, name) == 0) return true;
+    }
+
+    return false;
+}
+
+/**
+ * The pending claim at `location` that names what lies beneath it
+ *
+ * A pending FILE names its own location and nothing under it
+ * (manifest_pending_claim_t); a location the verb entered without claiming holds
+ * a NULL value, and hashmap_get folds "absent" and "no claim" into the one answer
+ * the ascent owes.
+ */
+static const char *manifest_pending_directory(
+    const hashmap_t *pending, const char *location
+) {
+    const manifest_pending_claim_t *claim = pending
+        ? hashmap_get(pending, location) : NULL;
+
+    return claim && claim->kind == PATH_KIND_DIRECTORY ? claim->storage_path : NULL;
+}
+
+/**
+ * The name `profile` composes for `location` from what stands above it
+ *
+ * The rungs above the location, nearest first: a pending DIRECTORY claim of this
+ * command, then a tracked directory row of the profile — either is a name the
+ * location is composed beneath. A root of the profile ends the ascent at every
+ * rung, the location itself included: nothing of the profile's stands above its
+ * own binding, and mount_name composes the answer beneath the deepest root it
+ * has (NULL when the location is that root). An ancestor claim is never an
+ * authority, and a blob above the location cannot hold one — nothing is named
+ * beneath a file — so both are climbed past.
+ *
+ * The claim is asked before the root at every rung, and the loop's shape is what
+ * makes that true: the root test at the top reads the rung whose claim the previous
+ * turn read, so the order over the rungs is root(L), claim(P1), root(P1),
+ * claim(P2), … Written with the root test after the up-step instead, a typed
+ * `home/jail` standing at web's own target would be climbed past, and web's name
+ * for what lies beneath it would be the binding's rather than its own claim's.
+ *
+ * The root "/" is a rung the ascent passes through and never reads: no storage
+ * path spells it, so nothing can be listed or tracked there, and the sentinel —
+ * a root of every namespace — ends the ascent at the top of the next turn. The
+ * skip is load-bearing, not an optimisation: the tail arithmetic below assumes
+ * a separator where the rung ends, which the root and the empty prefix do not have.
+ *
+ * The scratch copy is the arena's and abandoned, the module's idiom: the ascent
+ * is asked once per argument and once per contested location, never per walked
+ * child.
+ *
+ * @param c The profile's own contribution, or NULL when the view has none for it
+ * @param mounts The table the view was placed by (must not be NULL)
+ * @param profile The asker — the contribution's own name when it has one
+ * @param location Absolute location (must not be NULL)
+ * @param pending The command's uncommitted claims, or NULL
+ * @param arena Arena that owns the answer (must not be NULL)
+ * @param out_storage The composed name, NULL at a root (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_ascend(
+    const contribution_t *c,
+    const mount_table_t *mounts,
+    const char *profile,
+    const char *location,
+    const hashmap_t *pending,
+    arena_t *arena,
+    const char **out_storage
+) {
+    *out_storage = NULL;
+
+    char *rung = arena_strdup(arena, location);
+    if (!rung) {
+        return ERROR(ERR_MEMORY, "Failed to copy the location");
+    }
+    size_t len = strlen(rung);
+
+    for (;;) {
+        if (mount_root(mounts, profile, rung)) break;
+
+        size_t up = str_path_parent_len(rung);
+        if (up >= len) break;   /* "/" is its own parent; the sentinel ends it anyway */
+        len = up;
+        rung[len] = '\0';
+        if (len < 2) continue;  /* "/" and the empty prefix name nothing — see above */
+
+        const char *above = manifest_pending_directory(pending, rung);
+        if (!above && c) {
+            const manifest_row_t *row = hashmap_get(c->index, rung);
+            if (row && row->type == PATH_TYPE_DIRECTORY && row->tracked) {
+                above = row->storage_path;
+            }
+        }
+        if (!above) continue;
+
+        *out_storage = arena_str_format(arena, "%s/%s", above, location + len + 1);
+        return *out_storage ? NULL
+                            : ERROR(ERR_MEMORY, "Failed to compose the name");
+    }
+
+    return mount_name(mounts, profile, location, arena, out_storage);
+}
+
+/**
+ * By location, then by name
+ *
+ * A parent's location is a strict prefix of its child's and strcmp puts a prefix
+ * before every extension, so lexicographic order settles a contested parent before
+ * a deeper group's ascent reads it. The name breaks the tie, so the order is
+ * total and the runs are stable whatever qsort does with equals.
+ */
+static int contest_order(const void *a, const void *b) {
+    const manifest_row_t *const *ra = a;
+    const manifest_row_t *const *rb = b;
+
+    int by_location = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
+
+    return by_location ? by_location
+                       : strcmp((*ra)->storage_path, (*rb)->storage_path);
+}
+
+/**
+ * Bytewise by name: the order a location's group is decided and reported in.
+ */
+static int name_order(const void *a, const void *b) {
+    const manifest_row_t *const *ra = a;
+    const manifest_row_t *const *rb = b;
+
+    return strcmp((*ra)->storage_path, (*rb)->storage_path);
+}
+
+/**
+ * Decide every location this profile named twice, and record what did not stand
+ *
+ * The within-profile rule's last clause, run once the contribution is whole so
+ * the ascent reads every tracked parent the profile has: **the name the profile
+ * would give the location fresh** stands — beneath its tracked parent, else beneath
+ * its deepest root, which is the binding's custom/ over the portable home/ over
+ * the absolute root/ — and between names none of which it is, the bytewise-least.
+ * Every other name is recorded against the one that stood (manifest_note_unkept).
+ *
+ * The group is the index's holder plus the run, sorted whole, so the holder is
+ * a member and not a special case: every loser reads bytewise, the first-arrived
+ * included, and the winner is group[0] unless a member *is* the fresh name. No
+ * comparator carries `fresh` and no bool survives the loop.
+ *
+ * Two rows of one group can never share a name, so the order is total: the tree
+ * holds one blob per path, the sheet one item per key, and the content-authority
+ * rule (manifest_holds_blob) settles the one name they can both carry before
+ * the contest sees it.
+ *
+ * `fresh` is NULL when the location is a root of the profile — mount_name's own
+ * answer, a root having no name — and the bytewise-least then stands, no name
+ * being the fresh one there.
+ *
+ * Empty on every profile that names each of its locations once, which is the
+ * whole cost on a branch this machine authored alone.
+ *
+ * @param manifest Target view — the mount table, and the unkept slice (must not
+ *                 be NULL)
+ * @param c The contribution being settled (must not be NULL)
+ * @param contenders The rows that met a location already named (must not be NULL)
+ * @param arena Arena for the groups and the composed names (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_settle(
+    manifest_t *manifest,
+    contribution_t *c,
+    ptr_array_t *contenders,
+    arena_t *arena
+) {
+    if (contenders->count == 0) return NULL;
+
+    qsort(
+        contenders->items, contenders->count, sizeof(*contenders->items),
+        contest_order
+    );
+
+    for (size_t i = 0; i < contenders->count;) {
+        const char *location = ((manifest_row_t *) contenders->items[i])->filesystem_path;
+
+        size_t n = 0;
+        while (i + n < contenders->count &&
+            strcmp(
+            ((manifest_row_t *) contenders->items[i + n])->filesystem_path,
+            location
+            ) == 0) n++;
+
+        /* The group: the name that arrived first, and the ones that met it. */
+        manifest_row_t **group = arena_calloc(arena, n + 1, sizeof(*group));
+        if (!group) {
+            return ERROR(ERR_MEMORY, "Failed to allocate a contested group");
+        }
+        group[0] = hashmap_get(c->index, location);
+        for (size_t g = 0; g < n; g++) group[g + 1] = contenders->items[i + g];
+        qsort(group, n + 1, sizeof(*group), name_order);
+
+        const char *fresh = NULL;
+        error_t *err = manifest_ascend(
+            c, manifest->mounts, c->profile, location, NULL, arena, &fresh
+        );
+        if (err) {
+            return error_wrap(
+                err, "Failed to name '%s' for profile '%s'", location, c->profile
+            );
+        }
+
+        /* The fresh name if a member is it, else the bytewise-least. */
+        manifest_row_t *winner = group[0];
+        for (size_t g = 0; fresh && g <= n; g++) {
+            if (strcmp(group[g]->storage_path, fresh) != 0) continue;
+            winner = group[g];
+            break;
+        }
+
+        err = hashmap_set(c->index, location, winner);
+        if (err) {
+            return error_wrap(err, "Failed to index a settled row");
+        }
+        for (size_t g = 0; g <= n; g++) {
+            if (group[g] == winner) continue;
+            err = manifest_note_unkept(
+                manifest, c->profile, group[g], winner->storage_path, arena
+            );
+            if (err) return err;
+        }
+
+        i += n;
+    }
+
+    return NULL;
+}
+
+/**
+ * Tree-walk callback that places the tree's blobs into the contribution
  *
  * Performance optimization: Instead of collecting paths in pass 1 then
  * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this callback
@@ -332,7 +662,7 @@ static error_t *manifest_note_unbound(
  * Handles:
  * - The content gate: a blob under a storage label, and nothing else
  * - Storage path to filesystem path conversion
- * - Profile precedence override (higher precedence wins — manifest_claim)
+ * - The within-profile placement rule (the index, or the contest)
  * - File identity extraction from Git tree entry
  * - Per-profile metadata application (mode override, owner, group, encrypted)
  *
@@ -426,23 +756,27 @@ static int manifest_claim_blob(
         return ctx->error ? -1 : 0;
     }
 
-    /* Claim the path: a fresh row, or the lower-precedence profile's slot reset
-     * (precedence override). Either way the row is zero but for its key, and
-     * everything below is written the same way. */
+    /* Place the row, then say whether it stands. During this pass every row of
+     * the contribution is a blob, so the first arm is exactly "nothing stands
+     * here" and the second is exactly "a second name of this profile", for the
+     * settle to decide. The sibling rule across profiles is manifest_layer's,
+     * where an explicit claim takes a held location outright: that is the whole
+     * difference between precedence and a profile naming one place twice. */
+    const manifest_row_t *held = hashmap_get(ctx->contribution->index, filesystem_path);
+
     manifest_row_t *row = NULL;
-    err = manifest_claim(ctx->manifest, filesystem_path, ctx->arena, &row);
+    err = manifest_place(ctx->placed, filesystem_path, ctx->arena, &row);
     if (err) {
         ctx->error = err;
         return -1;
     }
 
-    /* ctx->profile is the arena-backed name the builder duplicated; the cast
-     * discards its const decoration to fit the row's `char *profile` slot. */
+    /* ctx->profile is the arena-backed name the step duplicated; the cast discards
+     * its const decoration to fit the row's `char *profile` slot. */
     row->storage_path = storage_path;
     row->profile = (char *) ctx->profile;
 
-    /* Extract identity from borrowed tree entry (blob_oid, type, mode). The
-     * overriding profile may differ in filemode (e.g., executable bit). */
+    /* Extract identity from the borrowed tree entry (blob_oid, type, mode). */
     git_oid_cpy(&row->blob_oid, git_tree_entry_id(entry));
     switch (git_tree_entry_filemode(entry)) {
         case GIT_FILEMODE_BLOB_EXECUTABLE:
@@ -462,11 +796,12 @@ static int manifest_claim_blob(
 
     /* Apply this profile's metadata claim (if any) to the row. The Git-derived
      * defaults set above are the floor; metadata may override mode and encrypted,
-     * and contribute owner/group. */
+     * and contribute owner/group. A contender is a finished row and takes its
+     * own claim like any other — the sheet is looked up by the row's own name. */
     err = manifest_apply_metadata(row, ctx->metadata, ctx->arena);
     if (err) {
         /* The caller's outer error path propagates without freeing the view's
-         * rows (spine + strings are arena-backed); a half-built row in a failed
+         * rows (spines + strings are arena-backed); a half-built row in a failed
          * build is never read. */
         ctx->error = error_wrap(
             err, "Failed to apply metadata to '%s'",
@@ -475,73 +810,120 @@ static int manifest_claim_blob(
         return -1;
     }
 
+    err = !held || manifest_is_derived(held)
+        ? hashmap_set(ctx->contribution->index, filesystem_path, row)
+        : ptr_array_push(ctx->contenders, row);
+    if (err) {
+        ctx->error = error_wrap(
+            err, "Failed to place '%s' of profile '%s'", storage_path, ctx->profile
+        );
+        return -1;
+    }
+
     return 0;  /* Continue walk */
 }
 
 /**
- * Claim one profile's contribution: the tree's blobs, then its directories
+ * One profile's contribution: the tree's blobs, then its sheet's directories
  *
- * The per-profile step both builders run. The tree walk claims every blob
- * (manifest_claim_blob); then every DIRECTORY item of the profile's metadata
- * claims its path — resolved against the mount table, the same way files are —
- * subject to the one rule below: a tracked claim yields to this profile's own
- * blob (a path is a tree or a blob, so a DIRECTORY item at a blob's storage_path
- * is stale metadata, and the tree is the content authority), and an ancestor
- * claim yields to whatever already holds the path. A DIRECTORY item under a profile
- * lacking a target binding on this host degrades exactly as the file side does
- * — no row, recorded on the view (manifest_note_unbound) — so both kinds hold
- * under one UNBOUND policy.
+ * The per-profile step both builders run, and the whole of the within-profile
+ * rule. The contribution is registered here — its arena-backed name (every row
+ * of it borrows the pointer), its own location index, and its slot in the view's
+ * parallel arrays — so one function owns one profile's claims from the name to
+ * the settled spine, and the builders hand over a tree and a name.
+ *
+ * The tree walk places every blob (manifest_claim_blob); then every DIRECTORY
+ * item of the profile's sheet places its own, resolved against the mount table
+ * the same way files are, subject to the three rules the loop below states. A
+ * DIRECTORY item under a profile lacking a target binding on this host degrades
+ * exactly as the file side does — no row, recorded on the view
+ * (manifest_note_unbound) — so both kinds hold under one UNBOUND policy. The
+ * settle then decides every location this profile named twice, and the tail cuts
+ * the spine to what stands.
  *
  * The sheet is the tree's, loaded here and never handed in: it is a blob of the
- * very tree being claimed, so no caller of a builder chooses a policy for a fact
- * this step is the authority on. `profile` is the arena-backed name every row
- * borrows, and the name the sheet is read under.
+ * very tree being read, so no caller of a builder chooses a policy for a fact
+ * this step is the authority on.
  *
- * Memory: every allocation lands in `arena`; the sheet is this call's and is
- * released at its tail (no row borrows it — each takes an arena copy). On error,
- * rows already claimed are left as they are — the build fails whole and the caller
- * releases the index.
+ * Memory: every allocation the view keeps lands in `arena`; the sheet is this
+ * call's and is released at its tail (no row borrows it — each takes an arena
+ * copy), and so are the step's two lists, whose lifetime is this call and not
+ * the view's. On error, rows already placed are left as they are — the build
+ * fails whole and the caller releases the indexes.
+ *
+ * @param manifest Target view (must not be NULL; its mount table is what places
+ *                 rows)
+ * @param repo Repository the tree's blobs are read from (must not be NULL)
+ * @param tree The profile's tree (must not be NULL)
+ * @param profile The profile whose claims these are (must not be NULL; copied)
+ * @param arena Arena backing the contribution (must not be NULL)
+ * @return Error or NULL on success
  */
-static error_t *manifest_claim_tree(
+static error_t *manifest_contribute(
     manifest_t *manifest,
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
-    const mount_table_t *mounts,
     arena_t *arena
 ) {
+    /* Register the contribution before anything can fail into it: the name is
+     * arena-backed so the view never depends on the state's row cache, and the
+     * index is allocated before profile_count counts the slot, so manifest_free
+     * over a build that stopped partway frees exactly what was made. */
+    contribution_t *c = &manifest->contributions[manifest->profile_count];
+
+    c->profile = arena_strdup(arena, profile);
+    if (!c->profile) {
+        return ERROR(ERR_MEMORY, "Failed to duplicate profile name");
+    }
+    c->index = hashmap_borrow(128);
+    if (!c->index) {
+        return ERROR(ERR_MEMORY, "Failed to create contribution index");
+    }
+    manifest->profiles[manifest->profile_count++] = c->profile;
+
     /* This profile's claim sheet, read from the tree already open rather than
      * through a second ref/commit/tree lookup. Per-profile is the correctness
-     * boundary for attribution — each profile claims its own files and directories
+     * boundary for attribution — each profile places its own files and directories
      * via its own sheet, never via a cross-profile merge — and loading it here
      * is what makes that structural: the step is handed one tree and one name.
      * A tree without a sheet loads as an empty one (Git-derived defaults stand,
      * no directories); every error is a sheet that would not load, and the build
      * fails whole rather than read it as "no claims". */
     metadata_t *metadata = NULL;
-    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    error_t *err = metadata_load_from_tree(repo, tree, c->profile, &metadata);
     if (err) {
         return error_wrap(
-            err, "Failed to load metadata for profile '%s'", profile
+            err, "Failed to load metadata for profile '%s'", c->profile
         );
     }
 
-    /* Build view rows via single-pass tree traversal.
+    /* The step's two lists, spent when it returns (Rule 1 — they are valid across
+     * one build, and the contribution is valid across the view's life): every
+     * row this profile placed, in claim order, and the rows that met a location
+     * it had already named. The second is empty on every profile that names each
+     * of its locations once. */
+    ptr_array_t placed PTR_ARRAY_AUTO = { 0 };
+    ptr_array_t contenders PTR_ARRAY_AUTO = { 0 };
+
+    /* Place the rows via single-pass tree traversal.
      *
      * The callback extracts identity fields (blob_oid, type, mode) from borrowed
-     * tree entries, converts paths via mount_resolve, handles precedence override,
-     * applies per-profile metadata to mode/owner/group/encrypted, and populates
-     * manifest_row_t rows
-     * directly — all in O(N) time. mounts is borrowed from the caller;
-     * bindings are keyed by profile (which the callback feeds verbatim into
-     * mount_resolve). */
+     * tree entries, converts paths via mount_resolve, applies the within-profile
+     * placement rule, applies per-profile metadata to mode/owner/group/encrypted,
+     * and populates manifest_row_t rows directly — all in O(N) time. The table
+     * is the view's; bindings are keyed by profile (which the callback feeds
+     * verbatim into mount_resolve). */
     struct claim_ctx ctx = {
-        .manifest = manifest,
-        .profile  = profile,
-        .mounts   = mounts,
-        .metadata = metadata,
-        .arena    = arena,
-        .error    = NULL
+        .manifest     = manifest,
+        .contribution = c,
+        .profile      = c->profile,
+        .mounts       = manifest->mounts,
+        .metadata     = metadata,
+        .placed       = &placed,
+        .contenders   = &contenders,
+        .arena        = arena,
+        .error        = NULL
     };
 
     err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
@@ -554,7 +936,7 @@ static error_t *manifest_claim_tree(
     }
     if (err) {
         err = error_wrap(
-            err, "Failed to build manifest for profile '%s'", profile
+            err, "Failed to build manifest for profile '%s'", c->profile
         );
         goto cleanup;
     }
@@ -569,13 +951,15 @@ static error_t *manifest_claim_tree(
         const metadata_item_t *item = items[j];
         if (item->kind != PATH_KIND_DIRECTORY) continue;
 
-        /* Resolve before claiming so the error path claims nothing. */
+        /* Resolve before placing so the error path places nothing. */
         const char *filesystem_path = NULL;
-        err = mount_resolve(mounts, profile, item->key, arena, &filesystem_path);
+        err = mount_resolve(
+            manifest->mounts, c->profile, item->key, arena, &filesystem_path
+        );
         if (err) {
             err = error_wrap(
-                err, "Failed to derive filesystem path from storage path: %s",
-                item->key
+                err, "Failed to convert path '%s' from profile '%s'",
+                item->key, c->profile
             );
             break;
         }
@@ -586,43 +970,54 @@ static error_t *manifest_claim_tree(
              * (a DIRECTORY item at an unbound blob's storage path). */
             char *key = arena_strdup(arena, item->key);
             if (!key) {
-                err = ERROR(ERR_MEMORY, "Failed to duplicate storage path");
+                err = ERROR(
+                    ERR_MEMORY, "Failed to duplicate storage path '%s' of profile '%s'",
+                    item->key, c->profile
+                );
                 break;
             }
             err = manifest_note_unbound(
-                manifest, profile, key, PATH_KIND_DIRECTORY, arena
+                manifest, c->profile, key, PATH_KIND_DIRECTORY, arena
             );
             if (err) break;
             continue;
         }
 
-        /* Same-profile rule for a tracked claim: the tree's blob outranks the
-         * stale item. For an ancestor claim it is the whole rule — a derived
-         * claim fills a slot, it never takes one.
+        const manifest_row_t *held = hashmap_get(c->index, filesystem_path);
+
+        /* Stale metadata: a path is a tree or a blob, and the tree is the content
+         * authority, so an item the tree holds a blob at claims nothing. Asked
+         * by the item's own name and asked first — that order is what keeps the
+         * settle's group free of two rows under one name (manifest_holds_blob).
+         * The test is total with a `held` in hand: the blob that name reaches
+         * resolves to this very location, so the blob pass placed a row here,
+         * and the one way it could not have — an unbound custom/ claim — took
+         * the arm above under the same key. */
+        if (manifest_holds_blob(held, &contenders, item->key)) continue;
+
+        /* A derived claim never takes a held slot: it is a consequence of an
+         * older name, not a source of new ones. Explicit outranks derived within
+         * one profile as across them, so a tracked item falls through to the
+         * placement rule below and takes a derived row's slot there.
          *
          * Ancestors are structurally shared where claims are per-profile and
          * precedence-resolved, and two profiles that traverse the same directory
          * derive it identically: their claims carry no intent to conflict, so
-         * they do not compete. The first profile to name the path holds it, and
-         * the row's owner therefore does not move when a profile above it is
-         * enabled — no reassignment churn in the receipts over a directory nobody
-         * named. Every explicit claim outranks every derived one whatever the
-         * precedence order, which is what keeps a walk's tracked claim a scan
-         * root when a higher profile merely passes through the directory, and
-         * what keeps a genuine blob-versus-directory conflict visible instead
-         * of silently taking one of the two rows. */
-        const manifest_row_t *held = hashmap_get(manifest->index, filesystem_path);
-        if (held && (!item->tracked || strcmp(held->profile, profile) == 0)) continue;
+         * they do not compete. That is manifest_layer's half of the rule; here
+         * the two chains are one profile's own, and the first placed stands —
+         * the row says the profile holds a subtree beneath the location, never
+         * which name its subtree runs through. */
+        if (held && !item->tracked) continue;
 
         manifest_row_t *row = NULL;
-        err = manifest_claim(manifest, filesystem_path, arena, &row);
+        err = manifest_place(&placed, filesystem_path, arena, &row);
         if (err) break;
 
         /* A directory row is claimed from metadata alone: blob_oid stays zero
          * and encrypted false; owner, group and the class are the item's, and
          * the mode is the claim or the floor — the row leaves the build total. */
         row->storage_path = arena_strdup(arena, item->key);
-        row->profile = (char *) profile;
+        row->profile = (char *) c->profile;
         row->type = PATH_TYPE_DIRECTORY;
         row->tracked = item->tracked;
         row->mode = item->mode != MODE_UNCLAIMED ? item->mode : DIR_MODE_DEFAULT;
@@ -631,8 +1026,47 @@ static error_t *manifest_claim_tree(
 
         if (!row->storage_path ||
             (item->owner && !row->owner) || (item->group && !row->group)) {
-            err = ERROR(ERR_MEMORY, "Failed to copy directory row fields");
+            err = ERROR(
+                ERR_MEMORY, "Failed to copy directory row fields for '%s' in profile '%s'",
+                item->key, c->profile
+            );
             break;
+        }
+
+        /* The placement rule, as the blob pass states it. */
+        err = !held || manifest_is_derived(held)
+            ? hashmap_set(c->index, filesystem_path, row)
+            : ptr_array_push(&contenders, row);
+        if (err) {
+            err = error_wrap(
+                err, "Failed to place '%s' of profile '%s'", item->key, c->profile
+            );
+            break;
+        }
+    }
+    if (err) goto cleanup;
+
+    /* Every location this profile named twice, decided once. */
+    err = manifest_settle(manifest, c, &contenders, arena);
+    if (err) goto cleanup;
+
+    /* The contribution's rows: what the index points at, in claim order. A name
+     * that lost and a derived claim an explicit one retook stay in the arena
+     * and leave the slice. Sized exactly — the index is the count. */
+    size_t standing = hashmap_size(c->index);
+    if (standing > 0) {
+        c->rows = arena_calloc(arena, standing, sizeof(*c->rows));
+        if (!c->rows) {
+            err = ERROR(
+                ERR_MEMORY, "Failed to allocate rows for profile '%s'", c->profile
+            );
+            goto cleanup;
+        }
+        for (size_t j = 0; j < placed.count; j++) {
+            manifest_row_t *row = placed.items[j];
+            if (hashmap_get(c->index, row->filesystem_path) == row) {
+                c->rows[c->count++] = row;
+            }
         }
     }
 
@@ -642,19 +1076,79 @@ cleanup:
 }
 
 /**
- * Allocate a fresh manifest_t, ready for the claim routine.
+ * Precedence over the settled contributions, and the winners' spine
  *
- * Both the view struct, the initial spine and the profile list (sized for the
- * profiles the build will walk at most) are arena-allocated. The index hashmap
- * is heap-allocated (borrowed-key mode — keys live in the caller's arena and
- * survive the hashmap's lifetime).
+ * Today's cross-profile rule, applied to finished contributions instead of to
+ * rows mid-build: for each contribution in precedence order, an explicit row
+ * takes the location whatever stands there, and a derived one only fills an empty
+ * one — two profiles that traverse the same directory derive it identically,
+ * their claims carry no intent to conflict, and the first to name the path holds
+ * it, so the row's owner does not move when a profile above it is enabled and
+ * no reassignment churn appears in the receipts over a directory nobody named.
+ *
+ * The spine is then cut once, exactly, from what the index points at, in claim
+ * order across the contributions — so a path a higher profile overrides sits at
+ * the winner's place. Row order is unspecified and this is what there is of it.
+ *
+ * Run once at the tail of each builder, so manifest_lookup is never asked
+ * mid-build. An empty view allocates no spine and manifest_rows answers an empty
+ * slice.
+ *
+ * @param manifest The view whose contributions are all settled (must not be NULL)
+ * @param arena Arena for the spine (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
+    for (size_t i = 0; i < manifest->profile_count; i++) {
+        const contribution_t *c = &manifest->contributions[i];
+        for (size_t j = 0; j < c->count; j++) {
+            manifest_row_t *row = c->rows[j];
+
+            /* A derived row only fills an empty location; an explicit one takes
+             * whatever stands there. */
+            if (manifest_is_derived(row) &&
+                hashmap_has(manifest->index, row->filesystem_path)) continue;
+
+            error_t *err = hashmap_set(manifest->index, row->filesystem_path, row);
+            if (err) return error_wrap(err, "Failed to index manifest row");
+        }
+    }
+
+    size_t standing = hashmap_size(manifest->index);
+    if (standing == 0) return NULL;
+
+    manifest->rows = arena_calloc(arena, standing, sizeof(*manifest->rows));
+    if (!manifest->rows) {
+        return ERROR(ERR_MEMORY, "Failed to allocate manifest spine");
+    }
+    for (size_t i = 0; i < manifest->profile_count; i++) {
+        const contribution_t *c = &manifest->contributions[i];
+        for (size_t j = 0; j < c->count; j++) {
+            manifest_row_t *row = c->rows[j];
+            if (hashmap_get(manifest->index, row->filesystem_path) == row) {
+                manifest->rows[manifest->count++] = row;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Allocate a fresh manifest_t, ready for the per-profile step.
+ *
+ * The view struct, the contributions array and the profile list beside it (both
+ * sized for the profiles the build will walk at most) are arena-allocated; each
+ * contribution fills its own slot as it is registered (manifest_contribute).
+ * The index hashmap is heap-allocated (borrowed-key mode — keys live in the
+ * caller's arena and survive the hashmap's lifetime). No spine is allocated here:
+ * each is cut once, exactly, from the index that decides it.
  *
  * On error, the function returns ERR_MEMORY and *out is NULL; arena allocations
  * are abandoned to the arena and no heap allocation is outstanding.
  */
 static error_t *manifest_allocate(
     arena_t *arena,
-    size_t initial_capacity,
     size_t index_capacity,
     size_t profile_capacity,
     manifest_t **out
@@ -666,18 +1160,15 @@ static error_t *manifest_allocate(
         return ERROR(ERR_MEMORY, "Failed to allocate manifest");
     }
 
-    manifest->capacity = initial_capacity;
-    manifest->rows = arena_calloc(arena, manifest->capacity, sizeof(*manifest->rows));
-    if (!manifest->rows) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest spine");
-    }
-
     if (profile_capacity > 0) {
+        manifest->contributions = arena_calloc(
+            arena, profile_capacity, sizeof(*manifest->contributions)
+        );
         manifest->profiles = arena_calloc(
             arena, profile_capacity, sizeof(*manifest->profiles)
         );
-        if (!manifest->profiles) {
-            return ERROR(ERR_MEMORY, "Failed to allocate manifest profile list");
+        if (!manifest->contributions || !manifest->profiles) {
+            return ERROR(ERR_MEMORY, "Failed to allocate manifest contributions");
         }
     }
 
@@ -761,20 +1252,14 @@ error_t *manifest_build(
     }
 
     manifest_t *manifest = NULL;
-    err = manifest_allocate(arena, 64, 128, profiles.count, &manifest);
+    err = manifest_allocate(arena, 128, profiles.count, &manifest);
     if (err) return err;
     manifest->mounts = mounts;
 
-    /* Process each profile in order (later profiles override earlier) */
+    /* One contribution per profile, in order; precedence runs over them once
+     * every one of them is settled. */
     for (size_t i = 0; i < profiles.count; i++) {
-        /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
-         * arena outlives the view (it backs every per-row string the walk writes),
-         * so the view never depends on the state's row cache. */
-        const char *profile = arena_strdup(arena, profiles.entries[i].name);
-        if (!profile) {
-            err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
-            goto cleanup;
-        }
+        const char *profile = profiles.entries[i].name;
 
         /* Does the branch exist? Asked separately because the tree loader maps
          * a missing ref to ERR_GIT like every other failure, and "gone" must
@@ -792,8 +1277,6 @@ error_t *manifest_build(
         }
         if (!exists) continue;
 
-        manifest->profiles[manifest->profile_count++] = profile;
-
         /* Load tree for this profile (scoped to iteration). */
         git_tree *tree = NULL;
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
@@ -806,12 +1289,16 @@ error_t *manifest_build(
 
         /* The profile's claims: its own sheet, read by the step from the tree
          * just opened, and its blobs. One view, many sheets — each read under
-         * the name whose claims it is. */
-        err = manifest_claim_tree(manifest, repo, tree, profile, mounts, arena);
+         * the name whose claims it is. The name the step copies is what every
+         * row of it borrows, so the view never depends on the state's row cache. */
+        err = manifest_contribute(manifest, repo, tree, profile, arena);
         git_tree_free(tree);
 
         if (err) goto cleanup;
     }
+
+    err = manifest_layer(manifest, arena);
+    if (err) goto cleanup;
 
     *out = manifest;
     return NULL;
@@ -844,26 +1331,20 @@ error_t *manifest_build_tree(
     *out = NULL;
 
     manifest_t *manifest = NULL;
-    error_t *err = manifest_allocate(arena, 64, 128, 1, &manifest);
+    error_t *err = manifest_allocate(arena, 128, 1, &manifest);
     if (err) return err;
-
-    /* Arena-allocate the profile name. Rows borrow this pointer; the caller's
-     * arena outlives the view (it backs every per-row string the walk writes),
-     * so the borrow stays valid until arena_destroy. */
-    const char *owned_profile = arena_strdup(arena, profile);
-    if (!owned_profile) {
-        err = ERROR(ERR_MEMORY, "Failed to duplicate profile name");
-        goto cleanup;
-    }
-    manifest->profiles[manifest->profile_count++] = owned_profile;
 
     /* mounts borrows from a function parameter — it outlives the tree walk, and
      * the table outlives the view (manifest_mounts lends it). The sheet is the
      * step's, loaded from `tree` and released there. */
     manifest->mounts = mounts;
-    err = manifest_claim_tree(
-        manifest, repo, tree, owned_profile, mounts, arena
-    );
+
+    /* One contribution, settled and layered like any other, so a tree view answers
+     * manifest_lookup_claim and manifest_name exactly as an enabled view does. */
+    err = manifest_contribute(manifest, repo, tree, profile, arena);
+    if (err) goto cleanup;
+
+    err = manifest_layer(manifest, arena);
     if (err) goto cleanup;
 
     *out = manifest;
@@ -875,7 +1356,7 @@ cleanup:
 }
 
 /**
- * Every row of the view, both kinds, unordered
+ * Every winning row of the view, both kinds, unordered
  *
  * The cast adds const at both pointer levels (T ** → const T *const *) — legal
  * per the C standard's qualifier-conversion rule, no diagnostic required. Mirrors
@@ -918,6 +1399,98 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
         .entries = manifest->unbound,
         .count = manifest->unbound_count,
     };
+}
+
+/**
+ * The names the profiles hold for locations they also name otherwise
+ */
+manifest_unkept_t manifest_unkept(const manifest_t *manifest) {
+    if (!manifest) return (manifest_unkept_t){ 0 };
+    return (manifest_unkept_t){
+        .entries = manifest->unkept,
+        .count = manifest->unkept_count,
+    };
+}
+
+/**
+ * The contribution `profile` placed, or NULL when the view has none for it
+ *
+ * Linear over the profiles: the enabled set, so a handful of strcmp. A NULL asker
+ * has no contribution — it is the shared roots and nothing else (manifest_name).
+ */
+static const contribution_t *manifest_contribution(
+    const manifest_t *manifest, const char *profile
+) {
+    if (!profile) return NULL;
+
+    for (size_t i = 0; i < manifest->profile_count; i++) {
+        if (strcmp(manifest->contributions[i].profile, profile) == 0) {
+            return &manifest->contributions[i];
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * The row `profile` holds at `filesystem_path` in its own contribution
+ */
+const manifest_row_t *manifest_lookup_claim(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *filesystem_path
+) {
+    if (!manifest || !filesystem_path) return NULL;
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+
+    return c ? hashmap_get(c->index, filesystem_path) : NULL;
+}
+
+/**
+ * What `profile` calls `location` under this view
+ *
+ * The leaf clause and the ascent. A pending claim at the location names it whatever
+ * its kind — the command has already named this very location — and an explicit
+ * claim of the profile standing there is its own name; a derived row is no
+ * authority and falls through, as does a location the profile holds nothing at.
+ *
+ * The answer is the caller's arena's whichever rung produced it: the leaf clause
+ * copies, which costs one strdup on a call made once per argument and buys the
+ * absence of a contract where three lifetimes meet.
+ */
+error_t *manifest_name(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *location,
+    const hashmap_t *pending,
+    arena_t *arena,
+    const char **out_storage
+) {
+    CHECK_NULL(manifest);
+    CHECK_NULL(location);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_storage);
+
+    *out_storage = NULL;
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+
+    const manifest_pending_claim_t *claim = pending
+        ? hashmap_get(pending, location) : NULL;
+    const char *here = claim ? claim->storage_path : NULL;
+    if (!here && c) {
+        const manifest_row_t *row = hashmap_get(c->index, location);
+        if (row && !manifest_is_derived(row)) here = row->storage_path;
+    }
+    if (here) {
+        *out_storage = arena_strdup(arena, here);
+        return *out_storage ? NULL : ERROR(ERR_MEMORY, "Failed to copy the name");
+    }
+
+    return manifest_ascend(
+        c, manifest->mounts, profile, location, pending, arena, out_storage
+    );
 }
 
 /**
@@ -976,14 +1549,25 @@ size_t manifest_holders(
 
 /**
  * Free a manifest
+ *
+ * Every heap index the build made: one per registered contribution, then the
+ * view's own. A build that stopped partway registered as many contributions as
+ * it counted, and each index is allocated before its slot is counted, so this
+ * frees exactly what was made.
  */
 void manifest_free(manifest_t *manifest) {
     if (!manifest) return;
+    for (size_t i = 0; i < manifest->profile_count; i++) {
+        if (manifest->contributions[i].index) {
+            hashmap_free(manifest->contributions[i].index, NULL);
+            manifest->contributions[i].index = NULL;
+        }
+    }
     if (manifest->index) {
         hashmap_free(manifest->index, NULL);
         manifest->index = NULL;
     }
-    /* The struct, the spine and the rows are the arena's. */
+    /* The struct, the spines and the rows are the arena's. */
 }
 
 /**

@@ -41,13 +41,17 @@
  * @param unbound The view's health slice: the claims the build could not place,
  *                annotated onto their profile's line (a count, the paths under
  *                -v) with one hint naming the repairs after the section
+ * @param unkept Its sibling: the names a profile holds for a location it also
+ *               names otherwise, annotated and listed the same way. Both say a
+ *               profile carries more than it projects, for two different reasons
  */
 static void display_enabled_profiles(
     output_t *out,
     const state_t *state,
     const string_array_t *profiles,
     const workspace_t *ws,
-    manifest_unbound_t unbound
+    manifest_unbound_t unbound,
+    manifest_unkept_t unkept
 ) {
     if (!out || !profiles) return;
 
@@ -61,8 +65,11 @@ static void display_enabled_profiles(
         workspace_files(ws), workspace_directories(ws)
     };
 
-    /* The first profile with unbound claims names the hint's example. */
+    /* The first profile with unbound claims names its hint's example, and the
+     * first unkept name its own — a name dotta knows, where the target is one
+     * only the user can give. */
     const char *unbound_profile = NULL;
+    const manifest_unkept_claim_t *first_unkept = NULL;
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
@@ -106,6 +113,22 @@ static void display_enabled_profiles(
         }
         if (unplaced > 0 && !unbound_profile) unbound_profile = profile;
 
+        /* Nor are the names the profile did not keep. Both counts are the screen's:
+         * a group of three names at one location must not read as three locations.
+         * The slice arrives grouped by profile and, within a profile, by location,
+         * so one walk counts each run. */
+        size_t names = 0;
+        size_t locations = 0;
+        const char *last = NULL;
+        for (size_t j = 0; j < unkept.count; j++) {
+            const manifest_unkept_claim_t *claim = &unkept.entries[j];
+            if (strcmp(claim->profile, profile) != 0) continue;
+            names++;
+            if (!last || strcmp(claim->filesystem_path, last) != 0) locations++;
+            last = claim->filesystem_path;
+            if (!first_unkept) first_unkept = claim;
+        }
+
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
             char relative_buf[64];
@@ -128,6 +151,14 @@ static void display_enabled_profiles(
             );
         }
 
+        if (names > 0) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}(%zu name%s not kept at %zu location%s){reset}",
+                names, names == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+            );
+        }
+
         /* In verbose mode, name what this profile contributes */
         if (output_is_verbose(out)) {
             char counts[64];
@@ -142,6 +173,16 @@ static void display_enabled_profiles(
                     path_kind_suffix(unbound.entries[j].kind)
                 );
             }
+
+            for (size_t j = 0; j < unkept.count; j++) {
+                if (strcmp(unkept.entries[j].profile, profile) != 0) continue;
+                output_print(
+                    out, OUTPUT_NORMAL, "\n    not kept: %s%s (kept as %s)",
+                    unkept.entries[j].storage_path,
+                    path_kind_suffix(unkept.entries[j].kind),
+                    unkept.entries[j].kept
+                );
+            }
         }
 
         output_newline(out, OUTPUT_NORMAL);
@@ -153,6 +194,18 @@ static void display_enabled_profiles(
             "Run 'dotta profile enable %s --target /path' to set the target, "
             "or 'dotta remove %s <path>' to untrack",
             unbound_profile, unbound_profile
+        );
+    }
+
+    /* A preview, not the repair: untracking a name takes every claim beneath
+     * it, and a directory's descendants include ones that stand at their own
+     * location under that very name. */
+    if (first_unkept) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
+            "would take; a directory name takes everything beneath it",
+            first_unkept->profile, first_unkept->storage_path
         );
     }
 }
@@ -1469,7 +1522,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Display enabled profiles and last deployment info */
     display_enabled_profiles(
-        out, state, scope_active(scope), ws, manifest_unbound(manifest)
+        out, state, scope_active(scope), ws, manifest_unbound(manifest),
+        manifest_unkept(manifest)
     );
 
     /* The whole view, on request — before the verdict and the sections that name

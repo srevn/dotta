@@ -2239,6 +2239,41 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             );
         }
 
+        /* Its sibling, and the same reason this is the import moment's only signal:
+         * a name a profile did not keep is in the branch and in no row, so neither
+         * view's rows can say it. The locations are counted apart from the names
+         * — a group of three at one location is one path. */
+        manifest_unkept_t unkept = manifest_unkept(after);
+        const manifest_unkept_claim_t *first_unkept = NULL;
+        for (size_t i = 0; i < unkept.count;) {
+            const char *profile = unkept.entries[i].profile;
+            size_t n = 0;
+            size_t locations = 0;
+            const char *last = NULL;
+            while (i + n < unkept.count &&
+                strcmp(unkept.entries[i + n].profile, profile) == 0) {
+                const char *at = unkept.entries[i + n].filesystem_path;
+                if (!last || strcmp(at, last) != 0) locations++;
+                last = at;
+                n++;
+            }
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Profile '%s': %zu name%s not kept at %zu location%s",
+                profile, n, n == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+            );
+            if (!first_unkept) first_unkept = &unkept.entries[i];
+            i += n;
+        }
+        if (first_unkept) {
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
+                "would take; a directory name takes everything beneath it",
+                first_unkept->profile, first_unkept->storage_path
+            );
+        }
+
         /* The hint's standing half: what the record already disagreed with the
          * view about, whichever sync or scope change left it there. Read off
          * the view the Git phase produced and the two facts anchor_t's doc states

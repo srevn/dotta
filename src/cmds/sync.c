@@ -2265,12 +2265,21 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             if (!first_unkept) first_unkept = &unkept.entries[i];
             i += n;
         }
+        /* A preview, not the repair, and this is the screen where the reach matters
+         * most: the import is what brought the second name here, the name leaves
+         * the branch every machine reads, and the collision is this machine's
+         * roots alone — the machine that authored the pair keeps the two apart
+         * (core/manifest.h). */
         if (first_unkept) {
             output_hint(
                 out, OUTPUT_NORMAL,
                 "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-                "would take; a directory name takes everything beneath it",
-                first_unkept->profile, first_unkept->storage_path
+                "would take", first_unkept->profile, first_unkept->storage_path
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  A directory name takes everything beneath it, and the name leaves "
+                "the branch — only this machine's roots put the two at one place"
             );
         }
 

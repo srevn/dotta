@@ -87,14 +87,25 @@ typedef struct {
  * `updated` is the phase's word that the anchor pass ran and its transaction
  * committed — the receipt's "Manifest updated" line and its counts speak only
  * then; false reads "profile not enabled". The counts qualify it: how many of
- * the captured files this profile's rows actually took (a higher-precedence profile
- * keeps its own), and how many of those took over a record another profile's
- * deployment had written.
+ * the captured files this profile's rows actually took, and how many of those
+ * took over a record another profile's deployment had written.
+ *
+ * A capture the rows did not take has two causes, and each is counted where the
+ * row that says which is in hand rather than read off a difference: a
+ * higher-precedence profile holds the location (`overridden`), or this profile's
+ * own other name stands there (`unkept`) — a second name of one profile being a
+ * thing a branch can hold and a sync can bring here (core/manifest.h
+ * manifest_unkept), whose repair is the health channel's on the same screen,
+ * not this receipt's. A difference would name whichever cause the line happened
+ * to be written for; the sum falls short of the captures only for a claim this
+ * machine cannot place, which has no row to blame and goes unnamed.
  */
 typedef struct {
     bool updated;          /* The anchor pass ran and the transaction committed */
     size_t synced;         /* Files anchored under this profile's rows */
     size_t taken_over;     /* Of those, records taken over from another profile */
+    size_t overridden;     /* Files whose location a higher-precedence profile holds */
+    size_t unkept;         /* Files committed under a name the view did not keep */
 } record_receipt_t;
 
 /**
@@ -949,8 +960,10 @@ static error_t *update_manifest_after_add(
          * names apart can commit and a sync can bring here. Either way the row
          * is someone else's word and so is its record, and the capture's stat
          * would certify a blob these bytes are not (receipt->synced < added_files).
-         * Write failures are non-fatal: disk is the just-committed blob, and
-         * the next status's slow path confirms it.
+         * The two are told apart here, where the row is in hand, so the receipt
+         * names the cause it checked rather than a difference: only a row of
+         * another profile is an override. Write failures are non-fatal: disk is
+         * the just-committed blob, and the next status's slow path confirms it.
          *
          * A row is found at the location this profile gives the storage path —
          * the view's own spelling, resolved through the table as the build resolved
@@ -1000,7 +1013,13 @@ static error_t *update_manifest_after_add(
             if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!manifest_is_claim(row, profile, path->storage_path)) continue;
+            if (!manifest_is_claim(row, profile, path->storage_path)) {
+                if (row) {
+                    if (strcmp(row->profile, profile) != 0) receipt->overridden++;
+                    else receipt->unkept++;
+                }
+                continue;
+            }
 
             error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
             if (anchor_err) {
@@ -1828,9 +1847,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* Manifest status feedback */
         if (record.updated) {
             if (added_count > 0) {
-                /* Files were added - show sync results with precedence awareness:
-                 * the rows a higher profile owns got no anchor; the ones another
-                 * profile's deployment had written were taken over. */
+                /* Files were added — the sync results, and what the rows did
+                 * with each capture: a location this profile's claim did not
+                 * win got no anchor, and the records another profile's deployment
+                 * had written were taken over. */
                 if (record.synced == added_count) {
                     output_info(
                         out, OUTPUT_NORMAL,
@@ -1844,12 +1864,26 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                         record.synced, added_count, added_count == 1 ? "" : "s"
                     );
 
-                    size_t skipped = added_count - record.synced;
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Note: %zu file%s overridden by higher-precedence profiles",
-                        skipped, skipped == 1 ? "" : "s"
-                    );
+                    /* Each cause named by the count that checked it, never by
+                     * the shortfall (record_receipt_t): a row of another profile
+                     * is an override, a row of this one under another of its
+                     * own names is a name the view did not keep, and the health
+                     * channel carries that one's repair on the status screen. */
+                    if (record.overridden > 0) {
+                        output_info(
+                            out, OUTPUT_NORMAL,
+                            "Note: %zu file%s overridden by higher-precedence profiles",
+                            record.overridden, record.overridden == 1 ? "" : "s"
+                        );
+                    }
+                    if (record.unkept > 0) {
+                        output_info(
+                            out, OUTPUT_NORMAL,
+                            "Note: %zu file%s under a name the view does not keep; "
+                            "'dotta status -v' names it",
+                            record.unkept, record.unkept == 1 ? "" : "s"
+                        );
+                    }
                 }
                 if (record.taken_over > 0) {
                     output_info(

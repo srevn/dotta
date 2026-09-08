@@ -1715,12 +1715,20 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             if (!first) first = &unkept.entries[i];
             i += n;
         }
+        /* A preview, not the repair: a directory name untracks its descendants,
+         * and the name leaves the branch every machine reads while the collision
+         * is this machine's roots alone — two names of one profile meet only
+         * where its roots put them (core/manifest.h). */
         if (first) {
             output_hint(
                 out, OUTPUT_NORMAL,
                 "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-                "would take; a directory name takes everything beneath it",
-                first->profile, first->storage_path
+                "would take", first->profile, first->storage_path
+            );
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  A directory name takes everything beneath it, and the name leaves "
+                "the branch — only this machine's roots put the two at one place"
             );
         }
     }

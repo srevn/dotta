@@ -197,15 +197,23 @@ static void display_enabled_profiles(
         );
     }
 
-    /* A preview, not the repair: untracking a name takes every claim beneath
-     * it, and a directory's descendants include ones that stand at their own
-     * location under that very name. */
+    /* A preview, not the repair, and the continuation says why twice over:
+     * untracking a name takes every claim beneath it, a directory's descendants
+     * including ones that stand at their own location under that very name; and
+     * the name leaves the branch, which is every machine's, while the collision
+     * that asked for the repair is this machine's roots alone — two names of
+     * one profile meet only where its roots put them, so a machine that keeps
+     * them apart still reads the one removed here. */
     if (first_unkept) {
         output_hint(
             out, OUTPUT_NORMAL,
             "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-            "would take; a directory name takes everything beneath it",
-            first_unkept->profile, first_unkept->storage_path
+            "would take", first_unkept->profile, first_unkept->storage_path
+        );
+        output_hintline(
+            out, OUTPUT_NORMAL,
+            "  A directory name takes everything beneath it, and the name leaves "
+            "the branch — only this machine's roots put the two at one place"
         );
     }
 }

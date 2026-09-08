@@ -265,10 +265,11 @@ static error_t *manifest_place(
  * The health primitive both claim sites share: appends (profile, storage_path,
  * kind) to the view's health slice unless the pair is already recorded — the
  * one duplicate source is a stale DIRECTORY item at an unbound blob's storage
- * path, and recording it twice would count one path as two; the blob walked first,
- * so the first writer is the content authority, mirroring the bound path's
- * same-profile rule. The scan is linear over the slice, which holds only the
- * unplaced claims — empty on the common build.
+ * path, and recording it twice would count one path as two. The dedup is by name,
+ * which is the very test the bound path makes of that pair (manifest_holds_blob):
+ * a path is a tree or a blob and the tree is the content authority, so the blob
+ * — which walked first — is the entry that stands. The scan is linear over the
+ * slice, which holds only the unplaced claims — empty on the common build.
  *
  * Growth is the spine's abandon-and-realloc idiom. Both strings must be
  * arena-backed by the caller; the entry borrows them for the view's lifetime.
@@ -588,20 +589,18 @@ static error_t *manifest_settle(
 ) {
     if (contenders->count == 0) return NULL;
 
-    qsort(
-        contenders->items, contenders->count, sizeof(*contenders->items),
-        contest_order
-    );
+    /* The contest, typed once: a ptr_array holds void *, and every read below
+     * is a row's location or its name. */
+    manifest_row_t **rows = (manifest_row_t **) contenders->items;
+
+    qsort(rows, contenders->count, sizeof(*rows), contest_order);
 
     for (size_t i = 0; i < contenders->count;) {
-        const char *location = ((manifest_row_t *) contenders->items[i])->filesystem_path;
+        const char *location = rows[i]->filesystem_path;
 
         size_t n = 0;
         while (i + n < contenders->count &&
-            strcmp(
-            ((manifest_row_t *) contenders->items[i + n])->filesystem_path,
-            location
-            ) == 0) n++;
+            strcmp(rows[i + n]->filesystem_path, location) == 0) n++;
 
         /* The group: the name that arrived first, and the ones that met it. */
         manifest_row_t **group = arena_calloc(arena, n + 1, sizeof(*group));
@@ -609,7 +608,7 @@ static error_t *manifest_settle(
             return ERROR(ERR_MEMORY, "Failed to allocate a contested group");
         }
         group[0] = hashmap_get(c->index, location);
-        for (size_t g = 0; g < n; g++) group[g + 1] = contenders->items[i + g];
+        for (size_t g = 0; g < n; g++) group[g + 1] = rows[i + g];
         qsort(group, n + 1, sizeof(*group), name_order);
 
         const char *fresh = NULL;
@@ -1006,7 +1005,17 @@ static error_t *manifest_contribute(
          * they do not compete. That is manifest_layer's half of the rule; here
          * the two chains are one profile's own, and the first placed stands —
          * the row says the profile holds a subtree beneath the location, never
-         * which name its subtree runs through. */
+         * which name its subtree runs through.
+         *
+         * The first placed is the sheet's first key (items arrive in insertion
+         * order and the writer sorts, core/metadata.c), and the tie-break settles
+         * more than a name: a derived claim carries the mode, owner and group
+         * dotta creates the directory with, and two chains captured at different
+         * moments can disagree about them — 0700 under home/jail/etc, 0755 under
+         * custom/etc, one location. Neither is the truer statement, both being
+         * what disk held when a walk passed through, so the tie is stated here
+         * rather than decided. Nothing is recorded either: manifest_unkept is
+         * names, and a derived claim named nothing. */
         if (held && !item->tracked) continue;
 
         manifest_row_t *row = NULL;

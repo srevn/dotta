@@ -34,8 +34,8 @@
  * own name the tree holds a blob at is stale metadata and claims nothing, a path
  * being a tree or a blob and the tree the content authority; and two explicit
  * names are decided when the contribution is whole — **the name the profile would
- * give the location fresh** stands (manifest_name), and every other is recorded
- * against it.
+ * give the location fresh** stands (manifest_name's ascent), or the bytewise-least
+ * where the branch holds no such name, and every other is recorded against it.
  *
  * Two things a claim can fail to become, and the health channel says both. A
  * claim this machine cannot place has no location: manifest_unbound, the repair
@@ -708,9 +708,13 @@ typedef struct {
  * by what it holds. `profile` may be NULL — the shared roots alone, as mount_name
  * reads it.
  *
- * This is the rule the view itself runs when a profile names one location twice:
- * the name this answers *fresh* is the one the contribution keeps, and every
- * other is manifest_unkept's.
+ * This is the rule the view itself runs when a profile names one location twice
+ * — minus the leaf clause, which is the one thing a settle cannot ask, a name
+ * standing there being what it is deciding. The settle takes the ascent's answer
+ * alone and keeps the name of the group that IS it; where the branch holds none
+ * of it — the composed name is a name nobody committed — the bytewise-least stands
+ * instead. Every other name is manifest_unkept's, and this function then answers
+ * the kept one at that location, whichever of the two ways it was chosen.
  *
  * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
  *

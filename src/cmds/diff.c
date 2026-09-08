@@ -20,7 +20,6 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -1022,7 +1021,6 @@ static error_t *diff_commit_to_workspace(
     git_commit *commit = NULL;
     char *profile = NULL;
     git_tree *tree = NULL;
-    metadata_t *metadata = NULL;
     manifest_t *historical = NULL;
     manifest_rows_t tree_files = { 0 };
     manifest_rows_t tree_dirs = { 0 };
@@ -1064,17 +1062,12 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 4: Load metadata from that historical tree. A tree without a sheet
-     * loads as an empty one; a sheet that would not load is folded into one too,
-     * and the historical rows read Git's defaults. */
-    err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) {
-        error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) goto cleanup;
-    }
-
-    /* Step 5: Build the historical tree's view and split its rows by kind.
+    /* Step 4: Build the historical tree's view and split its rows by kind.
+     *
+     * The tree's own claim sheet is the builder's to read (core/manifest.h), so
+     * the historical rows carry the modes and stamps that commit claimed, and a
+     * sheet that will not load refuses the diff instead of showing Git's defaults
+     * as though nothing had been claimed.
      *
      * Rows, per-row strings, and the pointer arrays are allocated into the borrowed
      * command arena; they outlive both this call and the subsequent
@@ -1084,7 +1077,7 @@ static error_t *diff_commit_to_workspace(
      * file slice, the filter validation takes both, so the kind is settled here,
      * once. */
     err = manifest_build_tree(
-        tree, profile, mounts, metadata, arena, &historical
+        repo, tree, profile, mounts, arena, &historical
     );
     if (err) {
         err = error_wrap(err, "Failed to build manifest from commit");
@@ -1112,7 +1105,7 @@ static error_t *diff_commit_to_workspace(
         tree_dirs = (manifest_rows_t){ .entries = dirs, .count = dir_count };
     }
 
-    /* Step 6: Compare historical slice against current filesystem */
+    /* Step 5: Compare historical slice against current filesystem */
     size_t diff_count = 0;
     err = compare_tree_files_to_filesystem(
         tree_files, profile, file_filter, opts, cache, out, &diff_count
@@ -1137,7 +1130,6 @@ cleanup:
      * arena's lifetime and reclaims every row, string, and the pointer array at
      * command end. Only the view's index is freed here. */
     manifest_free(historical);
-    metadata_free(metadata);
     git_tree_free(tree);
     git_commit_free(commit);
     free(profile);

@@ -580,6 +580,14 @@ error_t *metadata_load_from_branch(
  * key) — and a reader that folds one into an empty sheet is reading a corrupt
  * sheet as "no claims".
  *
+ * The view holds to that without exception: both builders load the sheet of the
+ * tree they read, and one that will not load fails the build (core/manifest.h).
+ * Three readers deliberately do otherwise, each on its own screen and for its
+ * own reason — export's materialisation floor (the bytes come out of a damaged
+ * profile, warned), show's encryption annotation, list's directory count. Those
+ * are those commands' decisions about their own output, never a second answer
+ * from here; a fourth would have to argue for one.
+ *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)
  * @param profile Profile name for error messages (must not be NULL)

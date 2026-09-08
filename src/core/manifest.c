@@ -15,11 +15,12 @@
  *     The view holds one row per path.
  *   - Blob OID Extraction: the tree walker reads blob_oid, type and the Git-derived
  *     mode from each borrowed tree entry for O(1) content identity.
- *   - Metadata Integration: the walker attributes per-profile metadata onto each
- *     row during the tree walk (single profile per row, no cross-profile merge
- *     — storage_path collisions across profiles with distinct target values are
- *     kept apart), and the same metadata's DIRECTORY items are claimed after
- *     the walk.
+ *   - Metadata Integration: the per-profile claim routine loads the sheet of
+ *     the tree it is claiming — no caller supplies one — and the walker attributes
+ *     it onto each row during the tree walk (single profile per row, no
+ *     cross-profile merge — storage_path collisions across profiles with distinct
+ *     target values are kept apart); the same sheet's DIRECTORY items are claimed
+ *     after the walk.
  *   - Diff, not delta-tracking: what a scope transition or a sync did to the
  *     view is read off two views (manifest_diff), never recorded while it happened.
  */
@@ -82,8 +83,9 @@ struct manifest {
  * - mounts: borrowed, must not be NULL — keyed by ctx->profile to resolve custom/
  *          entries; a missing binding (no location) contributes no row and is
  *          recorded on the view (manifest_note_unbound)
- * - metadata: borrowed (per-profile, reloaded for each profile in the outer build
- *             loop), can be NULL (profile lacks metadata.json)
+ * - metadata: borrowed from manifest_claim_tree, which loads the sheet of the
+ *             tree being claimed; never NULL — a tree without one holds an empty
+ *             sheet, so there is no absent case for the walker to carry
  * - arena: borrowed, must not be NULL; per-row strings + spine growth allocations
  *          are abandoned to it
  * - error: owned by callback, caller must free on error
@@ -92,7 +94,7 @@ struct claim_ctx {
     manifest_t *manifest;          /* Target view (modified by callback) */
     const char *profile;           /* Profile name for rows and error messages */
     const mount_table_t *mounts;   /* Mount table for storage→filesystem resolution */
-    const metadata_t *metadata;    /* Per-profile metadata (NULL if absent) */
+    const metadata_t *metadata;    /* The tree's own claim sheet, never NULL */
     arena_t *arena;                /* Arena for allocations (must not be NULL) */
     error_t *error;                /* Error propagation (set on failure) */
 };
@@ -113,14 +115,13 @@ struct claim_ctx {
  * or a blob, and the tree is the content authority), so it contributes nothing,
  * not even its owner/group.
  *
- * NULL metadata and a key the profile does not carry both leave the row's
- * Git-derived defaults intact.
+ * A key the sheet does not carry leaves the row's Git-derived defaults intact.
  *
  * Override-path callers may freely overwrite owner/group: prior values are
  * arena-borrowed and abandoned to the arena, no per-pointer free required.
  *
  * @param row      Target row (mutable)
- * @param metadata Per-profile metadata (NULL → no-op)
+ * @param metadata The tree's own claim sheet, never NULL (must not be NULL)
  * @param arena    Allocation arena for string copies (must not be NULL)
  * @return Error or NULL on success
  */
@@ -487,20 +488,40 @@ static int manifest_claim_blob(
  * — no row, recorded on the view (manifest_note_unbound) — so both kinds hold
  * under one UNBOUND policy.
  *
- * `profile` is the arena-backed name every row borrows; `metadata` may be NULL
- * (no metadata.json: Git-derived defaults stand, no directories).
+ * The sheet is the tree's, loaded here and never handed in: it is a blob of the
+ * very tree being claimed, so no caller of a builder chooses a policy for a fact
+ * this step is the authority on. `profile` is the arena-backed name every row
+ * borrows, and the name the sheet is read under.
  *
- * Memory: every allocation lands in `arena`. On error, rows already claimed are
- * left as they are — the build fails whole and the caller releases the index.
+ * Memory: every allocation lands in `arena`; the sheet is this call's and is
+ * released at its tail (no row borrows it — each takes an arena copy). On error,
+ * rows already claimed are left as they are — the build fails whole and the caller
+ * releases the index.
  */
 static error_t *manifest_claim_tree(
     manifest_t *manifest,
-    git_tree *tree,
+    git_repository *repo,
+    const git_tree *tree,
     const char *profile,
     const mount_table_t *mounts,
-    const metadata_t *metadata,
     arena_t *arena
 ) {
+    /* This profile's claim sheet, read from the tree already open rather than
+     * through a second ref/commit/tree lookup. Per-profile is the correctness
+     * boundary for attribution — each profile claims its own files and directories
+     * via its own sheet, never via a cross-profile merge — and loading it here
+     * is what makes that structural: the step is handed one tree and one name.
+     * A tree without a sheet loads as an empty one (Git-derived defaults stand,
+     * no directories); every error is a sheet that would not load, and the build
+     * fails whole rather than read it as "no claims". */
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    if (err) {
+        return error_wrap(
+            err, "Failed to load metadata for profile '%s'", profile
+        );
+    }
+
     /* Build view rows via single-pass tree traversal.
      *
      * The callback extracts identity fields (blob_oid, type, mode) from borrowed
@@ -519,7 +540,7 @@ static error_t *manifest_claim_tree(
         .error    = NULL
     };
 
-    error_t *err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
+    err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
     if (ctx.error) {
         /* The callback's error names the entry that failed; the walk's own is
          * the abort libgit2 stamped in answer to it — an echo of this call's
@@ -528,12 +549,11 @@ static error_t *manifest_claim_tree(
         err = ctx.error;
     }
     if (err) {
-        return error_wrap(
+        err = error_wrap(
             err, "Failed to build manifest for profile '%s'", profile
         );
+        goto cleanup;
     }
-
-    if (!metadata) return NULL;
 
     /* The directory claims: every DIRECTORY item the profile's metadata carries.
      * A tree holds no empty directory, so the item is the claim's whole
@@ -612,6 +632,8 @@ static error_t *manifest_claim_tree(
         }
     }
 
+cleanup:
+    metadata_free(metadata);
     return err;
 }
 
@@ -738,28 +760,11 @@ error_t *manifest_build(
             goto cleanup;
         }
 
-        /* Load this profile's metadata.json from the tree we just opened (avoid
-         * a second ref/commit/tree walk). Per-profile lookup is the correctness
-         * boundary for attribution: each profile claims its own files and
-         * directories via its own metadata, never via a cross-profile merge. A
-         * tree without a sheet loads as an empty one (Git-derived defaults stand,
-         * no directories); every error is a sheet that would not load, and the
-         * build fails whole rather than read it as "no claims". */
-        metadata_t *profile_metadata = NULL;
-        err = metadata_load_from_tree(repo, tree, profile, &profile_metadata);
-        if (err) {
-            git_tree_free(tree);
-            err = error_wrap(
-                err, "Failed to load metadata for profile '%s'", profile
-            );
-            goto cleanup;
-        }
-
-        err = manifest_claim_tree(
-            manifest, tree, profile, mounts, profile_metadata, arena
-        );
+        /* The profile's claims: its own sheet, read by the step from the tree
+         * just opened, and its blobs. One view, many sheets — each read under
+         * the name whose claims it is. */
+        err = manifest_claim_tree(manifest, repo, tree, profile, mounts, arena);
         git_tree_free(tree);
-        metadata_free(profile_metadata);
 
         if (err) goto cleanup;
     }
@@ -778,13 +783,14 @@ cleanup:
  * Build the manifest from a single Git tree
  */
 error_t *manifest_build_tree(
-    git_tree *tree,
+    git_repository *repo,
+    const git_tree *tree,
     const char *profile,
     const mount_table_t *mounts,
-    const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out
 ) {
+    CHECK_NULL(repo);
     CHECK_NULL(tree);
     CHECK_NULL(profile);
     CHECK_NULL(mounts);
@@ -807,16 +813,14 @@ error_t *manifest_build_tree(
     }
     manifest->profiles[manifest->profile_count++] = owned_profile;
 
-    /* mounts and metadata borrow from function parameters — both outlive the
-     * tree walk, and the table outlives the view (manifest_mounts lends it). */
+    /* mounts borrows from a function parameter — it outlives the tree walk, and
+     * the table outlives the view (manifest_mounts lends it). The sheet is the
+     * step's, loaded from `tree` and released there. */
     manifest->mounts = mounts;
     err = manifest_claim_tree(
-        manifest, tree, owned_profile, mounts, metadata, arena
+        manifest, repo, tree, owned_profile, mounts, arena
     );
-    if (err) {
-        err = error_wrap(err, "Failed to build manifest from tree");
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     *out = manifest;
     return NULL;

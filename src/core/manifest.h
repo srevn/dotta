@@ -12,11 +12,17 @@
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
  *     — the historical-diff path (cmd_diff) — and is the same per-profile step
- *     applied once. Both produce manifest_row_t rows directly, the one row shape
- *     every consumer reads, so there is no bridge between the build step and
- *     its readers. The dispatcher builds the view once per command for the commands
- *     that declare it (ctx->run.manifest, include/runtime.h); a command that
- *     moves Git or the enabled set builds the post-mutation view itself.
+ *     applied once. Each step loads the claim sheet of the tree it reads: a tree
+ *     without one holds an empty sheet, and a sheet that will not load fails
+ *     the build rather than read as "no claims", so no caller of a builder chooses
+ *     a policy for a fact the builder is the authority on. That is the view's
+ *     rule and only the view's — a command reading a sheet for its own screen
+ *     decides for itself (core/metadata.h). Both produce manifest_row_t rows
+ *     directly, the one row shape every consumer reads, so there is no bridge
+ *     between the build step and its readers. The dispatcher builds the view
+ *     once per command for the commands that declare it (ctx->run.manifest,
+ *     include/runtime.h); a command that moves Git or the enabled set builds
+ *     the post-mutation view itself.
  *
  *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
  *     profiles the rows came from, in precedence order), manifest_mounts (the
@@ -47,7 +53,6 @@
 #include <sys/stat.h>
 #include <types.h>
 
-#include "core/metadata.h"
 #include "infra/mount.h"
 
 /* manifest_build reads the enabled set from the state handle and manifest_diff
@@ -278,19 +283,19 @@ error_t *manifest_build(
 /**
  * Build the manifest from a single Git tree
  *
- * Used by the historical-diff path (cmd_diff): given a tree, profile, mount table
- * — explicit here, since there is no state to derive one from and a past tree
- * is deliberately resolved under today's topology — and optional per-tree metadata,
- * produces a manifest_row_t row for every blob the tree exposes (sans repository
- * metadata files — .dottaignore, .bootstrap, .git/, .dotta/) and, when metadata
- * is supplied, for every DIRECTORY item it claims — the same per-profile step
- * manifest_build runs, applied once. Readers that want files only test row->type.
+ * One profile's view of one tree: a manifest_row_t row for every blob the tree
+ * exposes (sans repository metadata files — .dottaignore, .bootstrap, .git/,
+ * .dotta/) and for every DIRECTORY item the tree's own claim sheet carries —
+ * the same per-profile step manifest_build runs, applied once, sheet included
+ * (the Builders note above: the sheet is loaded here, never handed in, so one
+ * rule reads it). Readers that want files only test row->type.
  *
- * Metadata, when supplied, is applied row-by-row in lockstep with the tree walk
- * — mode, owner, group, and encrypted are filled from the tree's own metadata.json.
- * Pass NULL to skip metadata application (rows keep Git-derived defaults, and
- * no directories are claimed). Callers that have already loaded the tree's metadata
- * for their own purposes should pass it here.
+ * The tree is the caller's to choose — a branch tip, a historical commit's, a
+ * stage's — and `profile` names whose claims these are, since a tree carries no
+ * name; the mount table is explicit for the same reason, there being no state
+ * to derive one from and a past tree deliberately resolved under today's topology.
+ * The sheet's claims are applied row-by-row in lockstep with the walk: mode,
+ * owner, group and encrypted come from the tree's own metadata.json.
  *
  * Custom-prefix resolution is delegated to `mounts`. A custom/ claim the handle
  * records no binding for contributes no row and is recorded on the view
@@ -302,21 +307,22 @@ error_t *manifest_build(
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
  *
+ * @param repo Git repository the tree's blobs (the sheet among them) are read
+ *             from (must not be NULL)
  * @param tree Git tree to build from (must not be NULL)
- * @param profile Profile name carried on each row (must not be NULL;
- *                duplicated into the arena)
+ * @param profile Profile name carried on each row, and the name the sheet is
+ *                read under (must not be NULL; duplicated into the arena)
  * @param mounts Per-machine mount table (must not be NULL)
- * @param metadata Optional per-tree metadata applied to rows (can be NULL)
  * @param arena Arena backing every allocation produced by the call (must not be
  *              NULL)
  * @param out Manifest (must not be NULL; caller frees with manifest_free)
  * @return Error or NULL on success
  */
 error_t *manifest_build_tree(
-    git_tree *tree,
+    git_repository *repo,
+    const git_tree *tree,
     const char *profile,
     const mount_table_t *mounts,
-    const metadata_t *metadata,
     arena_t *arena,
     manifest_t **out
 );

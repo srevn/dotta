@@ -94,9 +94,10 @@ const args_command_t *const *dotta_registry(void) {
  *
  * The needs are checked for closure first — the spec names the full set its handler
  * reads, and the set must hold its own inputs (runtime.h). Then the repository,
- * state, the crypto handles, the mount table and the view, each iff declared;
- * every member starts NULL and is populated in place, so on an error the members
- * already opened are exactly what `close_run` releases.
+ * state, the crypto handles, the view and the mount table — the view's own where
+ * both are declared — each iff declared; every member starts NULL and is populated
+ * in place, so on an error the members already opened are exactly what `close_run`
+ * releases.
  *
  * The first open that fails returns its own error — it names the resource and,
  * for the epoch and the view, the repair — and the run stays partially open for
@@ -214,15 +215,6 @@ static error_t *open_run(
         }
     }
 
-    /* The mount table built from the state's rows — the topology at dispatch,
-     * for classifying the command's input. The arena's; nothing to close. */
-    if (needs->mounts) {
-        mount_table_t *mounts = NULL;
-        err = profile_build_mount_table(run->state, arena, &mounts);
-        if (err) goto done;
-        run->mounts = mounts;
-    }
-
     /* The view over the enabled set as it stands. The builder's error is returned
      * as it is: it names the profile and, for a custom/ path under a profile
      * with no target, the repair. The rows land in the command arena; the index
@@ -230,6 +222,24 @@ static error_t *open_run(
     if (needs->manifest) {
         err = manifest_build(run->repo, run->state, arena, &run->manifest);
         if (err) goto done;
+    }
+
+    /* The mount table — the topology at dispatch, for classifying the command's
+     * input. A command that declares the view borrows the view's: the table its
+     * rows were placed by, built inside the build from the same rows
+     * (manifest_mounts), so the arguments the command classifies and the rows
+     * it selects read one value rather than two builds of it. A command that
+     * declares mounts alone gets its own build. Either way the arena's; nothing
+     * to close. */
+    if (needs->mounts) {
+        if (needs->manifest) {
+            run->mounts = manifest_mounts(run->manifest);
+        } else {
+            mount_table_t *mounts = NULL;
+            err = profile_build_mount_table(run->state, arena, &mounts);
+            if (err) goto done;
+            run->mounts = mounts;
+        }
     }
 
 done:

@@ -188,11 +188,14 @@ typedef enum dotta_crypto_mode {
  * This machine's topology over the enabled set — `profile_build_mount_table`
  * over the state's rows and `$HOME` — for classifying the command's input
  * (`path_input_resolve`, `scope_build`). Requires `state`. A command that reads
- * a CLI path declares it; the view does not need it — the builder derives its
- * own table from the rows it reads. Every location the run spells — a row's, a
- * record's, a classified argument's — is the physical spelling as far as the
- * table knows its roots (`infra/mount.h`), whichever spelling the binder or the
- * user typed; the rows keep the binder's for the screens.
+ * a CLI path declares it. A command that declares the view as well borrows the
+ * view's table — `manifest_mounts`, the one the builder derived from the rows
+ * it read — so the arguments it classifies and the rows it selects read one
+ * topology; a command that declares `mounts` alone gets its own build from the
+ * same rows. Every location the run spells — a row's, a record's, a classified
+ * argument's — is the physical spelling as far as the table knows its roots
+ * (`infra/mount.h`), whichever spelling the binder or the user typed; the rows
+ * keep the binder's for the screens.
  *
  * crypto
  * ------
@@ -305,8 +308,9 @@ typedef struct dotta_needs {
  *     and `$HOME`, it borrows nothing from the row cache, so after a command
  *     mutates the binding set (profile enable/disable, clone, interactive,
  *     add-with-implicit-enable) it still reads as the topology at dispatch —
- *     the one before. It classifies the command's input; the view derives its
- *     own table from the rows it reads.
+ *     the one before. It classifies the command's input. Where the view is declared
+ *     too it is the view's own table, lent (`manifest_mounts`): one topology
+ *     per run, and still the arena's.
  *   - `keymgr != NULL` implies `config->encryption_enabled`. `content_cache`
  *     carries a borrowed pointer to it (NULL when encryption is disabled) and
  *     is torn down before it.
@@ -342,7 +346,10 @@ typedef struct dotta_needs {
  *      `workspace_get_X` / `state_get_X` accessor that exposes run-scope resources
  *      via a lower layer. The workspace's products (rows, records, verdicts)
  *      are read through the workspace; the run's resources are read through the
- *      context, at every layer.
+ *      context, at every layer. The dispatcher populating one member from another's
+ *      product at open — `mounts` from `manifest_mounts` — is the run's own shape,
+ *      not this pattern: the table is the view's product, and handlers read the
+ *      member, never the accessor.
  */
 typedef struct dotta_run {
     struct git_repository *repo;        /* needs->repo == OPEN */

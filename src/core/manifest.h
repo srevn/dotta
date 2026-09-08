@@ -19,9 +19,10 @@
  *     moves Git or the enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (both kinds, unordered), manifest_profiles (the
- *     profiles the rows came from, in precedence order), manifest_lookup (by
- *     filesystem path, O(1)) and manifest_lookup_storage (by storage path, linear);
- *     and manifest_diff, the per-profile delta between two views that the
+ *     profiles the rows came from, in precedence order), manifest_mounts (the
+ *     table the rows were placed by, lent), manifest_lookup (by filesystem path,
+ *     O(1)) and manifest_lookup_storage (by storage path, linear); and
+ *     manifest_diff, the per-profile delta between two views that the
  *     scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
@@ -201,9 +202,11 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  * Manifest (opaque)
  *
  * Rows and their strings live in the arena the builder was given; the path index
- * is heap-allocated and released by manifest_free. A view borrows nothing else
- * — not the state's row cache it was read from — so it stands across the mutations
- * that invalidate the cache, for the arena's lifetime.
+ * is heap-allocated and released by manifest_free. A view built over the enabled
+ * set borrows nothing else — not the state's row cache it was read from — so it
+ * stands across the mutations that invalidate the cache, for the arena's lifetime.
+ * A tree view borrows the one thing its caller handed it, the mount table, and
+ * lends it back (manifest_mounts).
  */
 typedef struct manifest manifest_t;
 
@@ -345,6 +348,25 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * @return Borrowed array of profile names, or NULL when count is 0
  */
 const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
+
+/**
+ * The table the rows were placed by
+ *
+ * The one the build made from the rows it read (manifest_build), or the caller's
+ * (manifest_build_tree). Borrowed for the view's lifetime — the build's is the
+ * arena's, and a tree view's caller keeps its table alive as long as the view.
+ * Rule 1, never cache a cache: a consumer that holds the view and needs the
+ * topology it was placed by reads it here rather than building a second table
+ * from the same rows, so the arguments it locates and the rows it selects read
+ * one value. Readers: the dispatcher (`run.mounts` for a command that declares
+ * the view, include/runtime.h).
+ *
+ * Pure value return — no allocation, no error path.
+ *
+ * @param manifest Manifest (NULL returns NULL)
+ * @return Borrowed table, never NULL for a built view
+ */
+const mount_table_t *manifest_mounts(const manifest_t *manifest);
 
 /**
  * One claim the build could not place: its profile has no deployment target on

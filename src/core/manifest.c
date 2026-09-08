@@ -58,6 +58,7 @@ struct manifest {
     hashmap_t *index;              /* fs_path → manifest_row_t *, heap-allocated */
     const char **profiles;         /* The profiles the rows came from, in precedence order (arena) */
     size_t profile_count;          /* Profiles listed */
+    const mount_table_t *mounts;   /* The table the rows were placed by: the build's own, or a tree view's caller's */
 
     /* The health slice: claims the build could not place (no target binding),
      * grouped by profile in build order. Flat arena array, abandon-and-realloc
@@ -690,6 +691,7 @@ error_t *manifest_build(
     manifest_t *manifest = NULL;
     err = manifest_allocate(arena, 64, 128, profiles.count, &manifest);
     if (err) return err;
+    manifest->mounts = mounts;
 
     /* Process each profile in order (later profiles override earlier) */
     for (size_t i = 0; i < profiles.count; i++) {
@@ -800,7 +802,8 @@ error_t *manifest_build_tree(
     manifest->profiles[manifest->profile_count++] = owned_profile;
 
     /* mounts and metadata borrow from function parameters — both outlive the
-     * tree walk. */
+     * tree walk, and the table outlives the view (manifest_mounts lends it). */
+    manifest->mounts = mounts;
     err = manifest_claim_tree(
         manifest, tree, owned_profile, mounts, metadata, arena
     );
@@ -842,6 +845,14 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count) 
     }
     *count = manifest->profile_count;
     return manifest->profiles;
+}
+
+/**
+ * The table the rows were placed by
+ */
+const mount_table_t *manifest_mounts(const manifest_t *manifest) {
+    if (!manifest) return NULL;
+    return manifest->mounts;
 }
 
 /**

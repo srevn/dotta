@@ -63,6 +63,11 @@
  * is handed — a stat triple without a blob is meaningless, and the row is the
  * one the stat was verified against.
  *
+ * And the row is the record's own claim: the blob a record carries is the blob
+ * of the claim it names (core/state.h anchor_t), which is what makes it readable
+ * at all when it is encrypted. A row that is not the record's claim records nothing
+ * — see workspace_record_confirmation.
+ *
  * The row pointer is borrowed from ws->active_files (workspace lifetime). Carrying
  * the row directly lets the flush call state_confirm with the row itself and
  * patch the record by the row's path.
@@ -448,6 +453,17 @@ static error_t *workspace_add_untracked(
  * workspace_flush_updates() can persist them via state_confirm(). The blob the
  * stat binds to is the row's — disk was found equal to it.
  *
+ * A confirmation belongs to the claim the record names, and this is where that
+ * is enforced (core/state.h state_confirm's precondition): the blob it advances
+ * is that claim's, and an encrypted blob opens under one (profile, storage path)
+ * pair and no other, so a confirmation taken from another row would leave the
+ * record carrying a blob no reader — this analysis's own base least of all —
+ * can place. A row that is not the record's claim is a pending handover: apply's
+ * acknowledgement is what moves the record onto it, and until then the path takes
+ * the slow path on every load, which is the price of a record that means one
+ * thing. A path with no record yet is confirmed from this row like any other:
+ * the flush observes before it confirms, and the record it creates is this row's.
+ *
  * OOM asymmetry — returns void on realloc failure. Every other path in workspace
  * analysis propagates ERR_MEMORY; this one deliberately does not. The confirmation
  * is a performance optimization — it converts the NEXT slow-path CMP_EQUAL into
@@ -465,13 +481,19 @@ static error_t *workspace_add_untracked(
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active row disk was found equal to (borrowed; workspace lifetime)
+ * @param anchor The record dotta keeps of the path, or NULL when it has none
  * @param st Verified filesystem stat
  */
 static void workspace_record_confirmation(
     workspace_t *ws,
     const manifest_row_t *row,
+    const anchor_t *anchor,
     const struct stat *st
 ) {
+    if (anchor && !manifest_is_claim(row, anchor->profile, anchor->storage_path)) {
+        return;
+    }
+
     if (ws->confirmation_count >= ws->confirmation_capacity) {
         size_t new_cap = ws->confirmation_capacity
                        ? ws->confirmation_capacity * 2 : 16;
@@ -763,10 +785,13 @@ static error_t *analyze_file_divergence(
          * observation). The claim questions — absence, reassignment, the item's
          * record column — stay the anchor's alone: a released fact is not a claim,
          * and never fabricates a record, a reassignment, or a DELETED absence.
-         * The decryption pair rides with its base: an anchored base compares
-         * under the row's (storage_path, profile); a released base under its
-         * own recorded pair — the only binding on file, and the one its blob
-         * was written whole with. */
+         * A base compares under its own recorded binding, whichever of the two
+         * it is: a blob opens under one (profile, storage path) pair and no other,
+         * and each of these facts names the claim its blob was confirmed under
+         * (core/state.h). The row's pair is never a base's — a row that is not
+         * the record's claim is a handover the record has yet to follow, and
+         * reading the base under it authenticates a ciphertext against a tree
+         * path it was never sealed at. */
         bool anchor_has_blob = anchor && !git_oid_is_zero(&anchor->blob_oid);
         const released_copy_t *released = anchor_has_blob ? NULL
             : hashmap_get(ws->released_index, fs_path);
@@ -783,7 +808,9 @@ static error_t *analyze_file_divergence(
         if (anchor_has_blob) {
             base_blob = &anchor->blob_oid;
             base_stat = &anchor->stat;
-            base_type = anchor->type;   /* the pair stays the row's — see above */
+            base_type = anchor->type;
+            base_storage = anchor->storage_path;
+            base_profile = anchor->profile;
         } else if (released) {
             base_blob = &released->blob_oid;
             base_stat = &released->stat;
@@ -833,7 +860,7 @@ static error_t *analyze_file_divergence(
              * the blob, and the flush's join then forgets the released row the
              * fresher confirmation subsumes. */
             if (cmp_result == CMP_EQUAL && released) {
-                workspace_record_confirmation(ws, row, &file_stat);
+                workspace_record_confirmation(ws, row, anchor, &file_stat);
             }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
@@ -899,7 +926,7 @@ static error_t *analyze_file_divergence(
              * with the row's blob and the current stat so the next run can
              * short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_confirmation(ws, row, &file_stat);
+                workspace_record_confirmation(ws, row, anchor, &file_stat);
             }
 
             /* Second question — ours vs base — asked only when it can change

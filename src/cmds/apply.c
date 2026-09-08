@@ -2001,8 +2001,25 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
         bool adopt = !anchor || anchor->deployed_at == 0;
-        bool acknowledge = !adopt && strcmp(anchor->profile, file->profile) != 0;
+
+        /* A record dotta owns that names a claim this row is not — another
+         * profile's, or another name of the same profile, whose location the
+         * view gave to this one — is a handover, and this loop is where the record
+         * follows it. The whole claim is the test because the whole claim is
+         * what a record means: the blob it carries is the blob of the claim it
+         * names (core/state.h anchor_t), so a record left on a name no row stands
+         * at is never confirmed again — every load re-hashes the path, and its
+         * base drifts further from what is there. */
+        bool acknowledge = !adopt &&
+            !manifest_is_claim(file, anchor->profile, anchor->storage_path);
         if (!adopt && !acknowledge) continue;
+
+        /* Which half of the claim moved, read before the write below rewrites
+         * the record it is read from. Only the profile half is the reassignment
+         * the receipt counts: a name flip within one profile is bookkeeping the
+         * user did not ask for and cannot act on from this screen, and counting
+         * it would make the run's line disagree with the preview's. */
+        bool reassigns = acknowledge && strcmp(anchor->profile, file->profile) != 0;
 
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's blob on every route a
@@ -2029,7 +2046,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
         if (adopt) adopted_count++;
-        else acknowledged_count++;
+        else if (reassigns) acknowledged_count++;
     }
     if (adopted_count > 0) {
         output_styled(
@@ -2061,8 +2078,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
-            strcmp(anchor->profile, dir->profile) != 0;
+            !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
+
+        /* The file loop's counter, same derivation and same reason it is read
+         * here: the write below rewrites the record it reads. */
+        bool reassigns = strcmp(anchor->profile, dir->profile) != 0;
 
         if (!opts->dry_run) {
             error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
@@ -2077,7 +2098,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 continue;  /* Failed writes don't count — preview still accurate */
             }
         }
-        acknowledged_count++;
+        if (reassigns) acknowledged_count++;
     }
 
     /* How many in-scope files Git has moved since dotta deployed them. [stale]

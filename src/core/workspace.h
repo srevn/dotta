@@ -802,8 +802,9 @@ error_t *workspace_observe(
  *
  * Single entry point for every workspace-scope ownership event:
  *   - apply's adoption loop (ownership event on first claim, and the
- *     acknowledgement of a clean reassignment — the record's profile becomes
- *     the row's)
+ *     acknowledgement of a clean handover — the record's claim becomes the row's,
+ *     whichever half of it moved: another profile's row, or another name of the
+ *     same profile that the view gave the location to)
  *   - apply's record step (ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path)
@@ -855,13 +856,17 @@ error_t *workspace_anchor(
  *   confirmation rewrites only what it confirmed (type, blob, stat); the record's
  *   claim — profile, storage path, mode, owner, group — is an ownership event's
  *   to change, so a clean reassignment keeps reading as one until apply
- *   acknowledges it. The snapshot's record is patched on the same columns. One
- *   taken through a symlinked ancestor binds the target file's triple — harmless
- *   whether the ancestor is the user's own arrangement or a displaced managed
- *   directory: the engines judge the latter by the item's displaced class, and
- *   by the row-keyed probe (workspace_displaced_ancestor) where a row has no
- *   item, never by the confirmation, and the fast path simply misses until the
- *   path heals and the slow path re-confirms.
+ *   acknowledges it. And only a row that IS the record's claim is ever queued
+ *   (workspace_record_confirmation): the blob a record carries is the blob of
+ *   the claim it names, so a path whose record names another claim takes the
+ *   slow path on every load until an ownership event moves the record onto the
+ *   standing one. The snapshot's record is patched on the same columns. One taken
+ *   through a symlinked ancestor binds the target file's triple — harmless whether
+ *   the ancestor is the user's own arrangement or a displaced managed directory:
+ *   the engines judge the latter by the item's displaced class, and by the
+ *   row-keyed probe (workspace_displaced_ancestor) where a row has no item, never
+ *   by the confirmation, and the fast path simply misses until the path heals
+ *   and the slow path re-confirms.
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the

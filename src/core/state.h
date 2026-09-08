@@ -181,6 +181,14 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.
+ *   - the blob a record carries is the blob of the claim the record names. The
+ *     pair (profile, storage_path) is the binding that blob was confirmed under,
+ *     and an encrypted blob is readable under no other (infra/content) — so the
+ *     record's own pair, not the row's, is what a later load decrypts its base
+ *     with (core/workspace.c analyze_file_divergence, compute_orphan_divergence).
+ *     Kept by the two writers between them: state_anchor writes the claim beside
+ *     the blob, and state_confirm advances the blob only for the claim the record
+ *     already names (its precondition below).
  *
  * The identity and metadata fields (storage_path, profile, type, mode, owner,
  * group) are those of the row the record was written from — who deployed what,
@@ -623,13 +631,27 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
  * confirmation to rewrite the profile, the slow path would acknowledge
  * reassignments silently while the fast path, which writes nothing, showed them.
  *
+ * And why a confirmation of another claim is not written at all — the precondition:
+ * `row` must be the claim the record names (manifest_is_claim on the record's
+ * profile and storage path). Advancing the blob from any other row would leave
+ * the record naming one claim and carrying another's bytes, which is not merely
+ * untidy: an encrypted blob opens under one (profile, storage path) pair and no
+ * other, so the pair the record does name would no longer decrypt what it holds,
+ * and the base every later load measures disk against would be unreadable. Enforced
+ * by the one place confirmations are queued from — core/workspace.c's
+ * workspace_record_confirmation, which holds the record and asks before it queues
+ * — so this statement trusts what it is handed and the flush is its only caller.
+ * A row that is not the record's claim is a pending handover: apply's
+ * acknowledgement moves the record onto it (cmds/apply.c), and until it does
+ * the path takes the slow path on every load.
+ *
  * No snapshot mirror is taken here: the caller that keeps one (the workspace's
  * flush) patches exactly the columns this statement names on the record it already
  * holds.
  *
  * @param state State (must not be NULL, must have open database)
- * @param row Active row whose blob disk was found equal to (must not be NULL; a
- *            file row with a non-zero blob)
+ * @param row Active row whose blob disk was found equal to, and the claim the
+ *            record names (must not be NULL; a file row with a non-zero blob)
  * @param stat Stat triple captured by the comparison (must not be NULL)
  * @return Error or NULL on success
  */

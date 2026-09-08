@@ -127,16 +127,20 @@ typedef struct manifest_row {
 /**
  * Is the row the claim (`profile`, `storage_path`)?
  *
- * The test a writer of the record makes before it certifies a capture against a
- * row. An anchor binds the capture's stat to the row's blob, so the row has to
- * be the very claim the commit wrote: the winner standing at a location may be
- * another claim of the same profile — a branch that arrived from a machine whose
- * roots kept two names apart holds both — and its blob is not what was captured.
- * Both halves, because within one profile a location is not an identity.
+ * The test a writer of the record makes before it advances one against a row. A
+ * record binds what dotta confirmed — the blob, the stat — to the claim it names,
+ * so the row has to be that very claim: the winner standing at a location may
+ * be another claim of the same profile — a branch that arrived from a machine
+ * whose roots kept two names apart holds both — and its blob is neither what
+ * was captured nor anything the record's own name can be read under (core/state.h
+ * anchor_t). Both halves, because within one profile a location is not an identity.
  *
  * Readers: add's two anchor loops (cmds/add.c), update's capture loop
- * (cmds/update.c). The let-go loops ask the other direction — whether any row
- * still stands at the path — and are not readers of this. NULL is no claim.
+ * (cmds/update.c), the workspace's confirmation recorder (core/workspace.c) and
+ * apply's two acknowledgement loops (cmds/apply.c), which are what moves a record
+ * onto the claim standing at its path. The let-go loops ask the other direction
+ * — whether any row still stands at the path — and are not readers of this. NULL
+ * is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path

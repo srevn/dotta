@@ -558,9 +558,17 @@ error_t *profile_list_tree_files(
     }
 
     error_t *err = gitops_tree_walk(tree, tree_walk_callback, &data);
-    if (err || data.error) {
+    if (data.error) {
+        /* The callback's error names the entry that failed; the walk's own is
+         * the abort libgit2 stamped in answer to it — an echo of this call's
+         * own decision, which names nothing and is freed rather than reported
+         * in its place. */
+        error_free(err);
+        err = data.error;
+    }
+    if (err) {
         string_array_free(data.paths);
-        return err ? err : data.error;
+        return err;
     }
 
     *out = data.paths;

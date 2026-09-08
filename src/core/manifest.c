@@ -520,8 +520,14 @@ static error_t *manifest_claim_tree(
     };
 
     error_t *err = gitops_tree_walk(tree, manifest_claim_blob, &ctx);
-    if (err || ctx.error) {
-        err = ctx.error ? ctx.error : err;
+    if (ctx.error) {
+        /* The callback's error names the entry that failed; the walk's own is
+         * the abort libgit2 stamped in answer to it — an echo of this call's
+         * own decision, which names nothing and is freed rather than dropped. */
+        error_free(err);
+        err = ctx.error;
+    }
+    if (err) {
         return error_wrap(
             err, "Failed to build manifest for profile '%s'", profile
         );

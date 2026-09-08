@@ -1,89 +1,121 @@
 /**
- * pathspec.c - Path matcher implementation
+ * pathspec.c - The positional path filter
  */
 
 #include "infra/pathspec.h"
 
 #include <assert.h>
-#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/gitignore.h"
-#include "base/hashmap.h"
 #include "base/string.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 
-/* Compiled glob entry: the pattern in its storage-space form (filesystem-shaped
- * inputs are stored resolved, the way the exact arm stores its inputs) and a
- * single-rule ruleset isolating the pattern from its siblings. Both are
- * arena-backed; their lifetime ends when the caller's arena is destroyed.
- *
- * The isolated ruleset preserves per-pattern coverage attribution: a
- * combined-ruleset evaluation folds one pattern's negation into another's verdict,
- * which under-counts coverage on overlap. A one-rule ruleset evaluated alone
- * gives each input independent attribution. */
+/* The ascent's copy of a subject: the stack covers the common case, the heap
+ * the rest, so a long path is walked and never silently skipped. */
+#define PATH_STACK_BUFFER 4096
+
+/* One compiled input. `text` is what the coverage line prints — the entry as
+ * compiled: the storage path, or the pattern in its storage-space form. An exact
+ * entry keeps its storage path in `prefix`, its length hoisted, for the beneath
+ * test the matcher and the attribution share; a rule keeps the parsed rule and
+ * no prefix. Every byte is the arena's. */
 typedef struct {
-    const char *pattern;
-    gitignore_ruleset_t *isolated;
-} pathspec_glob_t;
+    const char *text;
+    gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
+    const char *prefix;              /* an exact entry's storage path; NULL for a rule */
+    size_t prefix_len;
+} entry_t;
 
 struct pathspec {
-    /* Exact paths.
-     *
-     * The hashmap supports O(1) match lookup in pathspec_matches and walk-up
-     * ancestor probing. The parallel exact_keys array gives stable indexed
-     * iteration without leaking the hashmap's iterator type into the public API.
-     * Pointers in exact_keys borrow into the hashmap-owned key storage; the hashmap
-     * is immutable post-construction, so they are stable for the pathspec's
-     * lifetime. */
-    hashmap_t *exact_paths;     /* heap-owned */
-    const char **exact_keys;    /* heap-owned; NULL when exact_count == 0 */
-    size_t exact_count;
-
-    /* Glob patterns.
-     *
-     * glob_combined gives last-match-wins semantics across patterns (negation
-     * between sibling patterns works as users expect from gitignore). The
-     * per-pattern isolated rulesets in globs[] support coverage validation. */
-    gitignore_ruleset_t *glob_combined; /* arena-borrowed; NULL when glob_count == 0 */
-    pathspec_glob_t *globs;             /* arena-borrowed; NULL when glob_count == 0 */
-    size_t glob_count;
-
-    size_t count;                       /* exact_count + glob_count */
+    entry_t *entries;                /* insertion order; exact duplicates collapsed */
+    size_t count;
+    size_t rules;                    /* how many are rules: the program runs only when some are */
 };
 
-/* Materialize a borrowed-pointer view of the hashmap's keys for indexed iteration.
- * Called once after the hashmap is fully populated and never modified again, so
- * the borrowed pointers are stable. */
-static error_t *materialize_exact_keys(pathspec_t *spec) {
-    size_t n = hashmap_size(spec->exact_paths);
-    spec->exact_count = n;
-    if (n == 0) {
-        spec->exact_keys = NULL;
-        return NULL;
+/* --- Compile ---------------------------------------------------------- */
+
+/* A rule: the pattern in its storage-space form, parsed alone.
+ *
+ * A slash-bearing glob speaks one of two vocabularies. Storage space — a label
+ * prefix, or a leading `<star><star>`/`<star>` component — compiles as-is. A
+ * filesystem shape (absolute, tilde, relative dot) is the exact arm's vocabulary
+ * wearing a glob tail: the whole input rides through the same resolver
+ * (metacharacters are ordinary characters to the mount table) and compiles in
+ * its storage form; gitignore's directory-only marker (a trailing '/') is
+ * semantics, not directory spelling, so it is re-applied after the resolver sheds
+ * it. Anything else — a bare `conf<star>/x` could mean either vocabulary — is
+ * refused toward the self-announcing spellings. */
+static error_t *compile_rule(
+    const mount_table_t *table,
+    const char *input,
+    arena_t *arena,
+    entry_t *out
+) {
+    const char *pattern = NULL;
+
+    if (strchr(input, '/') != NULL &&
+        mount_spec_for_path(input) == NULL &&
+        !str_starts_with(input, "**/") &&
+        !str_starts_with(input, "*/")) {
+        if (input[0] != '/' && input[0] != '~' && input[0] != '.') {
+            return ERROR(
+                ERR_INVALID_ARG,
+                "Glob pattern '%s' must be basename-only, storage format, "
+                "or a filesystem path (absolute, ~/, ./)\n"
+                "Examples: '*.vim', 'home/nvim/*.lua', '~/.config/*.conf'",
+                input
+            );
+        }
+
+        const char *resolved = NULL;
+        error_t *err = path_input_resolve(table, input, arena, &resolved);
+        if (err) {
+            return error_wrap(err, "Invalid glob pattern '%s'", input);
+        }
+        pattern = input[strlen(input) - 1] == '/'
+                  ? arena_str_format(arena, "%s/", resolved)
+                  : resolved;
+    } else {
+        pattern = arena_strdup(arena, input);
+    }
+    if (!pattern) {
+        return ERROR(ERR_MEMORY, "Failed to allocate pattern");
     }
 
-    const char **keys = malloc(n * sizeof(*keys));
-    if (!keys) {
-        return ERROR(ERR_MEMORY, "Failed to allocate exact-path index");
+    gitignore_rule_t *rule = NULL;
+    error_t *err = gitignore_rule_parse(arena, pattern, &rule);
+    if (err) {
+        return error_wrap(err, "Failed to compile glob pattern '%s'", input);
+    }
+    if (!rule) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Glob pattern '%s' makes no rule "
+            "(gitignore reads a leading '#' as a comment)",
+            input
+        );
     }
 
-    hashmap_iter_t iter;
-    hashmap_iter_init(&iter, spec->exact_paths);
-    const char *key;
-    size_t idx = 0;
-    while (hashmap_iter_next(&iter, &key, NULL) && idx < n) {
-        keys[idx++] = key;
-    }
-    /* Hashmap is unmodified between size and iteration, so idx == n. */
-    assert(idx == n);
-
-    spec->exact_keys = keys;
+    *out = (entry_t){ .text = pattern, .rule = rule };
     return NULL;
+}
+
+/* Is the storage path already an exact entry? Two spellings of one path — a tilde
+ * form beside its absolute — are one entry, as the count and the coverage lines
+ * read them. */
+static bool listed(const pathspec_t *spec, const char *storage_path) {
+    for (size_t i = 0; i < spec->count; i++) {
+        const entry_t *e = &spec->entries[i];
+        if (e->prefix && strcmp(e->prefix, storage_path) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 error_t *pathspec_create(
@@ -103,171 +135,114 @@ error_t *pathspec_create(
         return NULL;
     }
 
-    pathspec_t *spec = calloc(1, sizeof(*spec));
+    /* Each input makes at most one entry, so the inputs bound the list. */
+    pathspec_t *spec = arena_calloc(arena, 1, sizeof(*spec));
     if (!spec) {
         return ERROR(ERR_MEMORY, "Failed to allocate pathspec");
     }
-
-    spec->exact_paths = hashmap_create(0);
-    if (!spec->exact_paths) {
-        free(spec);
-        return ERROR(ERR_MEMORY, "Failed to allocate pathspec hashmap");
+    spec->entries = arena_calloc(arena, count, sizeof(*spec->entries));
+    if (!spec->entries) {
+        return ERROR(ERR_MEMORY, "Failed to allocate pathspec entries");
     }
 
-    error_t *err = NULL;
-
-    /* First pass: count globs so the per-glob storage can be sized exactly. The
-     * arena is only touched when at least one glob is present, keeping the "exact
-     * paths only" common path allocation-free beyond the hashmap. */
-    size_t glob_capacity = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (inputs[i] && strpbrk(inputs[i], "*?[")) glob_capacity++;
-    }
-
-    if (glob_capacity > 0) {
-        err = gitignore_ruleset_create(arena, &spec->glob_combined);
-        if (err) {
-            err = error_wrap(err, "Failed to allocate glob ruleset");
-            goto cleanup;
-        }
-        spec->globs = arena_calloc(
-            arena, glob_capacity, sizeof(*spec->globs)
-        );
-        if (!spec->globs) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate glob entry table");
-            goto cleanup;
-        }
-    }
-
-    /* Second pass: classify and store each input. */
     for (size_t i = 0; i < count; i++) {
         const char *input = inputs[i];
+        entry_t entry = { 0 };
 
-        /* Glob pattern */
-        if (input && strpbrk(input, "*?[")) {
-            /* A slash-bearing glob speaks one of two vocabularies. Storage space
-             * — a label prefix, or a leading `<star><star>`/`<star>` component
-             * — compiles as-is. A filesystem shape (absolute, tilde, relative
-             * dot) is the exact arm's vocabulary wearing a glob tail: the whole
-             * input rides through the same resolver (metacharacters are ordinary
-             * characters to the mount table) and compiles in its storage form.
-             * gitignore's directory-only marker (a trailing '/') is semantics,
-             * not directory spelling, so it is re-applied after the resolver
-             * sheds it. Anything else — a bare `conf<star>/x` could mean either
-             * vocabulary — is refused toward the self-announcing spellings. */
-            const char *pattern = NULL;
-            if (strchr(input, '/') != NULL &&
-                mount_spec_for_path(input) == NULL &&
-                !str_starts_with(input, "**/") &&
-                !str_starts_with(input, "*/")) {
-                if (input[0] != '/' && input[0] != '~' && input[0] != '.') {
-                    err = ERROR(
-                        ERR_INVALID_ARG,
-                        "Glob pattern '%s' must be basename-only, storage format, "
-                        "or a filesystem path (absolute, ~/, ./)\n"
-                        "Examples: '*.vim', 'home/nvim/*.lua', '~/.config/*.conf'",
-                        input
-                    );
-                    goto cleanup;
-                }
-
-                const char *resolved = NULL;
-                err = path_input_resolve(table, input, arena, &resolved);
-                if (err) {
-                    err = error_wrap(err, "Invalid glob pattern '%s'", input);
-                    goto cleanup;
-                }
-
-                if (input[strlen(input) - 1] == '/') {
-                    size_t len = strlen(resolved);
-                    char *dir_marked = arena_alloc(arena, len + 2);
-                    if (!dir_marked) {
-                        err = ERROR(ERR_MEMORY, "Failed to allocate pattern");
-                        goto cleanup;
-                    }
-                    memcpy(dir_marked, resolved, len);
-                    dir_marked[len] = '/';
-                    dir_marked[len + 1] = '\0';
-                    pattern = dir_marked;
-                } else {
-                    pattern = resolved;
-                }
-            } else {
-                pattern = arena_strdup(arena, input);
-                if (!pattern) {
-                    err = ERROR(ERR_MEMORY, "Failed to duplicate pattern");
-                    goto cleanup;
-                }
-            }
-
-            size_t slot = spec->glob_count;
-            err = gitignore_ruleset_create(arena, &spec->globs[slot].isolated);
+        if (strpbrk(input, "*?[")) {
+            RETURN_IF_ERROR(compile_rule(table, input, arena, &entry));
+            spec->rules++;
+        } else {
+            /* An exact path: resolved through the table, one entry per storage
+             * path however many inputs spell it. */
+            const char *resolved = NULL;
+            error_t *err = path_input_resolve(table, input, arena, &resolved);
             if (err) {
-                err = error_wrap(
-                    err, "Failed to allocate isolated ruleset for '%s'", input
-                );
-                goto cleanup;
+                return error_wrap(err, "Invalid path '%s'", input);
             }
-
-            /* Append to combined ruleset (last-match-wins matching) and to the
-             * isolated ruleset (per-pattern coverage validation).
-             *
-             * Subtle: gitignore drops a non-wildcard negation like `!literal`
-             * when no earlier rule could match. In a single-rule ruleset there
-             * are no earlier rules, so the rule is dropped and the isolated check
-             * returns false — which is the correct "this pattern alone matches
-             * nothing" verdict for coverage purposes. */
-            err = gitignore_ruleset_append(spec->glob_combined, pattern, 0);
-            if (err) {
-                err = error_wrap(err, "Failed to compile glob pattern '%s'", input);
-                goto cleanup;
+            if (listed(spec, resolved)) {
+                continue;
             }
-            err = gitignore_ruleset_append(
-                spec->globs[slot].isolated, pattern, 0
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to compile glob pattern '%s'", input);
-                goto cleanup;
-            }
-
-            spec->globs[slot].pattern = pattern;
-            spec->glob_count++;
-            continue;
+            entry = (entry_t){
+                .text = resolved, .prefix = resolved, .prefix_len = strlen(resolved)
+            };
         }
 
-        /* Exact path: resolve via shared mount table, store in hashmap. */
-        const char *resolved = NULL;
-        err = path_input_resolve(table, input, arena, &resolved);
-        if (err) {
-            err = error_wrap(err, "Invalid path '%s'", input);
-            goto cleanup;
-        }
-
-        err = hashmap_set(spec->exact_paths, resolved, (void *) 1);
-        if (err) goto cleanup;
+        spec->entries[spec->count++] = entry;
     }
-
-    /* Materialize a borrowed-pointer view of the hashmap keys for the indexed
-     * accessors. Done last so it sees the final, deduplicated key set — duplicate
-     * inputs collapse into a single hashmap entry. */
-    err = materialize_exact_keys(spec);
-    if (err) goto cleanup;
-
-    spec->count = spec->exact_count + spec->glob_count;
 
     *out = spec;
     return NULL;
+}
 
-cleanup:
-    /* Arena-borrowed fields (glob_combined, globs[].pattern, globs[].isolated)
-     * are reclaimed when the caller's arena is destroyed; nothing to do here.
-     *
-     * exact_keys is only set on the success path of materialize_exact_keys —
-     * failure leaves it NULL. free(NULL) is well-defined. */
-    free(spec->exact_keys);
-    hashmap_free(spec->exact_paths, NULL);
-    free(spec);
-    return err;
+/* --- Match ------------------------------------------------------------ */
+
+/* Is the subject the exact entry, or beneath it? The one test both tiers of readers
+ * share — the matcher and the coverage attribution. */
+static bool exact_covers(const entry_t *e, const char *storage_path) {
+    return strcmp(storage_path, e->prefix) == 0 ||
+           str_path_beneath(storage_path, e->prefix, e->prefix_len);
+}
+
+/* One subject's rungs above the leaf, deepest first: a copy of the subject,
+ * shortened in place at each parent separator. The leaf is read from the subject
+ * as given — most subjects decide there — so the copy is made only for an ascent,
+ * on the stack where it fits and on the heap past it. */
+typedef struct {
+    char *rung;                      /* the current rung: the copy, shortened in place */
+    char *heap;                      /* the copy when it outgrew the stack */
+    char stack[PATH_STACK_BUFFER];
+} rungs_t;
+
+/* The copy, or false when it cannot be made: the ascent is then abandoned and
+ * the answer stays the leaf's. Close in either case. */
+static bool rungs_open(rungs_t *r, const char *subject) {
+    size_t n = strlen(subject);
+
+    r->heap = NULL;
+    r->rung = n < sizeof(r->stack) ? r->stack : (r->heap = malloc(n + 1));
+    if (!r->rung) {
+        return false;
+    }
+    memcpy(r->rung, subject, n + 1);
+    return true;
+}
+
+/* Up one rung. False past the last: the parent of a single component is no rung
+ * (str_path_parent_len answers 0 — the label of a storage path), and neither is
+ * the root of an absolute one (1 — "/" is nothing a rule reads). */
+static bool rungs_up(rungs_t *r) {
+    size_t n = str_path_parent_len(r->rung);
+    if (n <= 1) {
+        return false;
+    }
+    r->rung[n] = '\0';
+    return true;
+}
+
+static void rungs_close(rungs_t *r) {
+    free(r->heap);
+}
+
+/* What the program answers at one rung. */
+typedef enum {
+    VERDICT_NONE,                    /* no rule matched: the rung above decides, or none does */
+    VERDICT_OUT,                     /* a negation matched: not in scope */
+    VERDICT_IN                       /* a rule matched: in scope */
+} verdict_t;
+
+/* The program at one rung: the rules in reverse insertion order, and the first
+ * to match decides. */
+static verdict_t program_at(
+    const pathspec_t *spec, const char *rung, bool is_dir
+) {
+    for (size_t i = spec->count; i > 0; --i) {
+        const entry_t *e = &spec->entries[i - 1];
+        if (e->rule && gitignore_rule_matches(e->rule, rung, is_dir)) {
+            return gitignore_rule_negated(e->rule) ? VERDICT_OUT : VERDICT_IN;
+        }
+    }
+    return VERDICT_NONE;
 }
 
 bool pathspec_matches(
@@ -277,80 +252,63 @@ bool pathspec_matches(
     if (!spec) return true;
     if (!storage_path) return false;
 
-    /* Fast path 1: O(1) exact match via hashmap. */
-    if (hashmap_has(spec->exact_paths, storage_path)) return true;
-
-    /* Fast path 2: ancestor-prefix matching. Preserves gitignore-style directory
-     * matching where filter "home/.config" matches all files under that
-     * directory. */
-    size_t len = strlen(storage_path);
-    if (len < PATH_MAX) {
-        char buf[PATH_MAX];
-        memcpy(buf, storage_path, len + 1);
-
-        char *last_slash;
-        while ((last_slash = strrchr(buf, '/')) != NULL) {
-            *last_slash = '\0';
-            if (hashmap_has(spec->exact_paths, buf)) return true;
+    /* The exact tier: the path, or one beneath an entry. */
+    for (size_t i = 0; i < spec->count; i++) {
+        const entry_t *e = &spec->entries[i];
+        if (e->prefix && exact_covers(e, storage_path)) {
+            return true;
         }
     }
+    if (spec->rules == 0) return false;
 
-    /* Slow path: combined gitignore ruleset.
-     *
-     * One gitignore_eval scan honours rule ordering, negation, directory walk-up,
-     * and `**` recursive globs consistently with the rest of the ignore stack.
-     * The kind decides whether a directory-only glob (`dir/`) may match this
-     * path itself; walk-up covers its contents. */
-    return gitignore_is_ignored(
-        spec->glob_combined, storage_path, kind == PATH_KIND_DIRECTORY
-    );
-}
-
-void pathspec_free(pathspec_t *spec) {
-    if (!spec) return;
-
-    /* Free the borrowed-pointer view first. The pointers it holds borrow into
-     * hashmap-owned key storage, so the order of these two frees is purely semantic
-     * — the array contents are not read during hashmap_free. */
-    free(spec->exact_keys);
-    hashmap_free(spec->exact_paths, NULL);
-
-    /* Arena-borrowed fields (glob_combined, globs) are released when the caller's
-     * arena is destroyed; nothing to do here. */
-
-    free(spec);
+    /* The program: at the leaf as given, then up the rungs until one decides. */
+    verdict_t verdict = program_at(spec, storage_path, kind == PATH_KIND_DIRECTORY);
+    if (verdict == VERDICT_NONE) {
+        rungs_t rungs;
+        if (rungs_open(&rungs, storage_path)) {
+            while (verdict == VERDICT_NONE && rungs_up(&rungs)) {
+                verdict = program_at(spec, rungs.rung, true);
+            }
+        }
+        rungs_close(&rungs);
+    }
+    return verdict == VERDICT_IN;
 }
 
 size_t pathspec_count(const pathspec_t *spec) {
     return spec ? spec->count : 0;
 }
 
-size_t pathspec_exact_count(const pathspec_t *spec) {
-    return spec ? spec->exact_count : 0;
-}
-
-size_t pathspec_glob_count(const pathspec_t *spec) {
-    return spec ? spec->glob_count : 0;
-}
-
-const char *pathspec_exact_at(const pathspec_t *spec, size_t i) {
+pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i) {
     assert(spec != NULL);
-    assert(i < spec->exact_count);
-    return spec->exact_keys[i];
+    assert(i < spec->count);
+    const entry_t *e = &spec->entries[i];
+    return (pathspec_entry_t){ .text = e->text, .glob = e->rule != NULL };
 }
 
-const char *pathspec_glob_at(const pathspec_t *spec, size_t i) {
-    assert(spec != NULL);
-    assert(i < spec->glob_count);
-    return spec->globs[i].pattern;
-}
-
-bool pathspec_glob_matches_at(
+bool pathspec_entry_matches_at(
     const pathspec_t *spec, size_t i, const char *storage_path, path_kind_t kind
 ) {
     if (!spec || !storage_path) return false;
-    assert(i < spec->glob_count);
-    return gitignore_is_ignored(
-        spec->globs[i].isolated, storage_path, kind == PATH_KIND_DIRECTORY
-    );
+    assert(i < spec->count);
+    const entry_t *e = &spec->entries[i];
+
+    if (!e->rule) {
+        return exact_covers(e, storage_path);
+    }
+
+    /* The rule at the leaf, then at every rung above it; a match either way is
+     * the entry doing something to the subject. */
+    if (gitignore_rule_matches(e->rule, storage_path, kind == PATH_KIND_DIRECTORY)) {
+        return true;
+    }
+    bool matched = false;
+    rungs_t rungs;
+    if (rungs_open(&rungs, storage_path)) {
+        while (!matched && rungs_up(&rungs)) {
+            matched = gitignore_rule_matches(e->rule, rungs.rung, true);
+        }
+    }
+    rungs_close(&rungs);
+    return matched;
 }

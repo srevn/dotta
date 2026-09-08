@@ -879,16 +879,17 @@ cleanup:
 /**
  * Validate file filter entries against the managed slices
  *
- * Checks each filter entry (exact paths and glob patterns) against the file slice's
+ * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
+ * by whether it matches at any rung, either polarity — against the file slice's
  * storage paths. Outputs a warning for each entry that matches nothing — which
  * likely indicates a typo — plus the list hint as the warnings' remedy. An entry
- * that names only tracked directories is answered for what it is instead: managed,
+ * that covers only tracked directories is answered for what it is instead: managed,
  * just with no content to diff.
  *
- * Per-pattern isolation matters here: a combined-ruleset evaluation folds one
- * pattern's negation into another's verdict and would under-count coverage on
- * overlap. The pathspec_glob_matches_at primitive gives each glob independent
- * attribution.
+ * Per-entry attribution matters here: the combined program folds one pattern's
+ * negation into another's verdict and would under-count coverage on overlap;
+ * and a negation that excluded something has done its work, so it is not called
+ * "matches nothing" (pathspec_entry_matches_at).
  *
  * One implementation serves both diff paths — the historical-diff path
  * (commit-to-workspace) feeds the file and directory rows of a tree-built view
@@ -914,80 +915,46 @@ static size_t validate_filter_paths(
     size_t unmatched = 0;
     bool hint = false;
 
-    /* Exact paths: literal equality, then directory-prefix walk-up. */
-    size_t exact_count = pathspec_exact_count(file_filter);
-    for (size_t e = 0; e < exact_count; e++) {
-        const char *filter_path = pathspec_exact_at(file_filter, e);
-        size_t filter_len = strlen(filter_path);
-
+    size_t count = pathspec_count(file_filter);
+    for (size_t e = 0; e < count; e++) {
         bool found = false;
-        for (size_t i = 0; i < files.count; i++) {
-            const char *sp = files.entries[i]->storage_path;
-            if (strcmp(sp, filter_path) == 0) {
-                found = true;
-                break;
-            }
-            /* Directory prefix: filter path is ancestor of storage path */
-            if (strncmp(sp, filter_path, filter_len) == 0 &&
-                sp[filter_len] == '/') {
-                found = true;
-                break;
-            }
+        for (size_t i = 0; i < files.count && !found; i++) {
+            found = pathspec_entry_matches_at(
+                file_filter, e, files.entries[i]->storage_path, PATH_KIND_FILE
+            );
         }
         if (found) continue;
 
         bool tracked_dir = false;
         for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
-            tracked_dir =
-                strcmp(directories.entries[i]->storage_path, filter_path) == 0;
-        }
-        if (tracked_dir) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "'%s' is a tracked directory (no content to diff)", filter_path
-            );
-        } else {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "No managed path matches '%s'", filter_path
-            );
-            hint = true;
-        }
-        unmatched++;
-    }
-
-    /* Glob patterns: per-pattern isolated coverage check. */
-    size_t glob_count = pathspec_glob_count(file_filter);
-    for (size_t g = 0; g < glob_count; g++) {
-        bool found = false;
-        for (size_t i = 0; i < files.count; i++) {
-            if (pathspec_glob_matches_at(
-                file_filter, g, files.entries[i]->storage_path, PATH_KIND_FILE
-                )) {
-                found = true;
-                break;
-            }
-        }
-        if (found) continue;
-
-        bool tracked_dir = false;
-        for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
-            tracked_dir = pathspec_glob_matches_at(
-                file_filter, g, directories.entries[i]->storage_path,
+            tracked_dir = pathspec_entry_matches_at(
+                file_filter, e, directories.entries[i]->storage_path,
                 PATH_KIND_DIRECTORY
             );
         }
-        if (tracked_dir) {
+
+        pathspec_entry_t entry = pathspec_entry_at(file_filter, e);
+        if (tracked_dir && entry.glob) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Pattern '%s' matches only tracked directories "
-                "(no content to diff)", pathspec_glob_at(file_filter, g)
+                "(no content to diff)", entry.text
             );
-        } else {
+        } else if (tracked_dir) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'%s' matches only tracked directories (no content to diff)",
+                entry.text
+            );
+        } else if (entry.glob) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "No managed path matches pattern '%s'",
-                pathspec_glob_at(file_filter, g)
+                "No managed path matches pattern '%s'", entry.text
+            );
+            hint = true;
+        } else {
+            output_warning(
+                out, OUTPUT_NORMAL, "No managed path matches '%s'", entry.text
             );
             hint = true;
         }

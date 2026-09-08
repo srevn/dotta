@@ -123,8 +123,8 @@ typedef struct scope_inputs {
  *               NULL; arena-borrowed; consumed by pathspec_create only — scope_t
  *               does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
- *               and the path filter's glob storage; must outlive the returned
- *               scope (must not be NULL)
+ *               and the path filter; must outlive the returned scope (must not
+ *               be NULL)
  * @param out    Scope (must not be NULL, caller frees with scope_free)
  * @return Error or NULL on success
  */
@@ -178,8 +178,8 @@ const string_array_t *scope_active(const scope_t *s);
  * Consumers that read the filter itself — diff's historical arms (a commit range
  * selected delta by delta, the coverage answers over the compiled entries) and
  * apply's count line — use this with the pathspec accessors (pathspec_count /
- * pathspec_exact_at / pathspec_glob_at / pathspec_glob_matches_at). Per-iteration
- * path-vs-filter checks should use scope_accepts_path instead.
+ * pathspec_entry_at / pathspec_entry_matches_at). Per-iteration path-vs-filter
+ * checks should use scope_accepts_path instead.
  *
  * Borrowed; valid until scope_free.
  */

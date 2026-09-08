@@ -18,15 +18,15 @@
 /**
  * Internal scope representation.
  *
- * `enabled`, `filter`, and `paths` are owned by scope_t and freed in scope_free.
- * `active` is a borrowed pointer into either `enabled` or `filter` — set once
- * during build, dangles after scope_free returns (which is fine: no one is meant
- * to dereference it post-free).
+ * `enabled` and `filter` are owned by scope_t and freed in scope_free. `active`
+ * is a borrowed pointer into either `enabled` or `filter` — set once during build,
+ * dangles after scope_free returns (which is fine: no one is meant to dereference
+ * it post-free).
  *
- * `excludes_ruleset` is arena-borrowed (typically from `ctx->arena`);
- * released by arena_destroy, not scope_free. Matching goes through base/gitignore
- * for full `!`-negation, directory walk-up, and anchoring semantics — the same
- * engine that powers the layered `.dottaignore` ruleset in core/ignore.
+ * `paths` and `excludes_ruleset` are arena-borrowed (typically from `ctx->arena`);
+ * released by arena_destroy, not scope_free. Exclude matching goes through
+ * base/gitignore for full `!`-negation, directory walk-up, and anchoring semantics
+ * — the same engine that powers the layered `.dottaignore` ruleset in core/ignore.
  *
  * The mount table is supplied by the caller (typically `ctx->run.mounts`) and
  * consumed by pathspec_create only. scope_t does not store it — per-machine
@@ -36,7 +36,7 @@ struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
     string_array_t *filter;             /* CLI filter; NULL when no -p */
     gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
-    pathspec_t *paths;                  /* CLI path filter; NULL when no positional args */
+    pathspec_t *paths;                  /* CLI path filter; arena-borrowed; NULL when no positional args */
     const string_array_t *active;       /* Borrowed: filter if set, else enabled */
 };
 
@@ -204,8 +204,7 @@ void scope_free(scope_t *s) {
     if (!s) return;
     string_array_free(s->enabled);
     string_array_free(s->filter);
-    pathspec_free(s->paths);
-    /* s->active is a borrow; do not free. */
+    /* s->paths and s->excludes_ruleset are the arena's; s->active is a borrow. */
     free(s);
 }
 

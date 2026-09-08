@@ -833,7 +833,7 @@ static error_t *test_path_ignore(
         if (err) return err;
     } else {
         char *absolute = NULL;
-        err = path_input_normalize(input, NULL, &absolute);
+        err = path_input_normalize(input, &absolute);
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", input);
         }

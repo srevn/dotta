@@ -759,7 +759,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * plan_validate to refuse at save with the message, the way it refuses
              * a bad path today. */
             char *captured = NULL;
-            error_t *err = path_input_normalize(p->buffer, NULL, &captured);
+            error_t *err = path_input_normalize(p->buffer, &captured);
             if (err) {
                 error_free(err);
                 captured = strdup(p->buffer);

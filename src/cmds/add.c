@@ -20,6 +20,7 @@
 #include "base/gitignore.h"
 #include "base/hashmap.h"
 #include "base/output.h"
+#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
@@ -104,6 +105,116 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
     }
 
     return NULL;
+}
+
+/**
+ * Is `path` the target, or beneath it, under either spelling?
+ *
+ * One directory, two strings: as its binder typed it, and as realpath spells it
+ * — the same string when realpath agrees or cannot answer, the way the table
+ * spells a root (infra/mount.h). An argument arrives under either: tab-completion
+ * and find give the physical one, the flag usually the typed one, so a physical
+ * input under a raw-typed target — or the reverse, macOS's /tmp -> /private/tmp
+ * under `--target /tmp/web` — is inside without being re-prepended to nonsense.
+ *
+ * str_path_beneath is strict and the target is inside itself, so `add web --target
+ * ~/jail ~/jail` is the jail, walked. Asked twice for each argument: before the
+ * compose, on the bytes as typed — unfolded, so a `..` beneath the target is
+ * inside here and walks out at the fold, where the escape rule reads it — and
+ * after it, on the folded spelling, to refuse what walked out.
+ */
+static bool inside_target(
+    const char *path, const char *target, const char *target_physical
+) {
+    return strcmp(path, target) == 0 ||
+           str_path_beneath(path, target, strlen(target)) ||
+           strcmp(path, target_physical) == 0 ||
+           str_path_beneath(path, target_physical, strlen(target_physical));
+}
+
+/**
+ * The argument as add reads it: absolute, and the target's when one stands
+ *
+ * `--target <dir>` makes that directory a virtual root — an argument is read as
+ * if the user stood inside it, the way a chroot reads a path — which is how a
+ * jail, a container overlay, a fakeroot tree or a staging area is populated from
+ * outside. Two spellings are the shell's and are never re-rooted: a tilde path
+ * (`~/x` is HOME's, its own namespace, as a shell resolves '~' before any cd
+ * context applies) and a path spelled from here (`./x`, `../x`, a dotfile's `.x`
+ * — the file in front of the user, wherever they stand, the way the resolver
+ * reads a leading '.'). A bare relative path is the jail's.
+ *
+ *   cd anywhere;     ~/file                  -> $HOME/file        (HOME's)
+ *                    etc/foo                 -> <target>/etc/foo  (the jail's)
+ *                    /etc/foo                -> <target>/etc/foo  (re-rooted)
+ *                    <target>/etc/foo        -> as typed          (inside)
+ *                    <target-physical>/etc/x -> as typed          (inside, the
+ *                                                                  other spelling)
+ *   cd <target>/etc; ./x                     -> <target>/etc/x    (from here)
+ *                    ../x                    -> <target>/x        (from here,
+ *                                                                  still inside)
+ *   cd ~;            ./x                     -> ERROR             (from here,
+ *                                                                  outside)
+ *                    <target>/../etc/secret  -> ERROR             (walked out)
+ *                    ""                      -> ERROR             (no path in any
+ *                                                                  grammar)
+ *
+ * The refusal is lexical, on the spelling: what a path reaches through a link
+ * is not this rule's business — a declared link inside the target that reaches
+ * outside is typed inside and admitted, named for where it lands.
+ *
+ * @param input           The argument as typed (must not be NULL)
+ * @param target          --target, absolute and validated, or NULL: nothing
+ *                        re-roots
+ * @param target_physical The target as realpath spells it — its own spelling
+ *                        when realpath agrees or cannot answer; unread with no
+ *                        target
+ * @param out             Normalized absolute path (caller must free)
+ * @return Error or NULL on success
+ */
+static error_t *spell_argument(
+    const char *input,
+    const char *target,
+    const char *target_physical,
+    char **out
+) {
+    /* The shell's own reading: no target to read the argument as, a tilde path,
+     * or an empty argument — no path in any grammar, and the normalizer is the
+     * one place that says so, rather than the joiner below refusing it by accident
+     * of validating its own component. */
+    if (!target || input[0] == '~' || input[0] == '\0') {
+        return path_input_normalize(input, out);
+    }
+
+    /* Re-root, unless the argument is already the target's: spelled from here,
+     * or standing inside it under either spelling. The join reads a host-absolute
+     * input's leading '/' as its own separator, so `/etc/foo` and `etc/foo` both
+     * land at <target>/etc/foo. */
+    char *composed = NULL;
+    if (input[0] != '.' && !inside_target(input, target, target_physical)) {
+        error_t *join_err = fs_path_join(target, input, &composed);
+        if (join_err) return join_err;
+    }
+
+    error_t *err = path_input_normalize(composed ? composed : input, out);
+    free(composed);
+    if (err) return err;
+
+    /* One check for every escape, whatever the shape: `..` walked out of a path
+     * that started inside, or a path spelled from here while the user stands
+     * outside. No per-shape pre-validation in the compose step. */
+    if (!inside_target(*out, target, target_physical)) {
+        err = ERROR(
+            ERR_INVALID_ARG,
+            "Path '%s' resolves outside target root '%s'.\n"
+            "A path spelled from here, or one walking out with '..', cannot "
+            "escape the target.", *out, target
+        );
+        free(*out);
+        *out = NULL;
+    }
+
+    return err;
 }
 
 /**
@@ -999,6 +1110,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     metadata_t *metadata = NULL;
     const mount_table_t *mounts = NULL;   /* The command's table: see below */
     const char *target = NULL;            /* --target, absolute: what the row stores */
+    const char *target_physical = NULL;   /* ...as realpath spells it (see below) */
 
     /* The ancestry pass's other half: the keys it retired, read by the record
      * write once the commit that drops them has landed. */
@@ -1045,7 +1157,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * absolute path the row stores, then held to the target's rules. */
     if (opts->target) {
         char *absolute = NULL;
-        err = path_input_normalize(opts->target, NULL, &absolute);
+        err = path_input_normalize(opts->target, &absolute);
         if (err) goto cleanup;
         target = arena_strdup(ctx->arena, absolute);
         free(absolute);
@@ -1085,6 +1197,21 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate the target");
                 goto cleanup;
             }
+        }
+
+        /* The target as realpath spells it, for the arguments that arrive under
+         * that spelling (inside_target): taken once, here, where the flag's value
+         * and the row's have settled — never once per argument. Best-effort, as
+         * the table's own is (infra/mount.h): a target realpath cannot answer
+         * is no alias, and its typed spelling answers alone. */
+        char *physical = NULL;
+        error_t *physical_err = fs_canonicalize_path(target, &physical);
+        target_physical = physical_err ? target : arena_strdup(ctx->arena, physical);
+        error_free(physical_err);
+        free(physical);
+        if (!target_physical) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate the target's spelling");
+            goto cleanup;
         }
     }
 
@@ -1247,9 +1374,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
         } else {
-            /* Regular filesystem path - normalize it */
+            /* Regular filesystem path — as add reads it: the target's when one
+             * stands (spell_argument), the shell's when none does. */
             char *absolute = NULL;
-            err = path_input_normalize(file, target, &absolute);
+            err = spell_argument(file, target, target_physical, &absolute);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;

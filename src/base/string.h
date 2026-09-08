@@ -35,7 +35,12 @@ bool str_ends_with(const char *str, const char *suffix);
  * A prefix and then a separator, so "/a/bc" is not beneath "/a/b" — and neither
  * is "/a/b" itself. strncmp == 0 guarantees `path` has at least dir_len bytes,
  * so reading path[dir_len] is in bounds: it is either the terminator or a real
- * character. Both sides are canonical paths without a trailing separator.
+ * character.
+ *
+ * `dir` carries no trailing separator — the boundary byte is read at dir_len.
+ * `path` is read as written: a prefix and then a separator is beneath, whatever
+ * else the spelling holds, so a caller testing an argument before it is folded
+ * gets the lexical answer it asked for.
  *
  * @param path Candidate path
  * @param dir Directory path

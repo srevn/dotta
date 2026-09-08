@@ -479,9 +479,11 @@ bool completion_commits_at(
  * Filesystem paths under a relocatable root
  */
 bool completion_paths_under(FILE *out, const char *root, const char *current) {
-    /* Mirrors path_input_normalize (infra/path.c): no root, a tilde token, a
-     * token spelled from here, or a token already inside the root — the path is
-     * what the shell sees. */
+    /* Mirrors spell_argument (cmds/add.c): no root, a tilde token, a token spelled
+     * from here, or a token already inside the root — the path is what the shell
+     * sees. Inside is the root as typed here: spell_argument also reads the
+     * spelling realpath gives it, and a completion that resolved the root per
+     * keystroke would pay a syscall for a token the shell will re-offer anyway. */
     if (root == NULL || root[0] == '\0' || current[0] == '~' || current[0] == '.') {
         return false;
     }
@@ -491,7 +493,7 @@ bool completion_paths_under(FILE *out, const char *root, const char *current) {
      * relative root against an absolute token. A root the command will refuse
      * has nothing to offer under it. */
     char *absolute = NULL;
-    error_t *err = path_input_normalize(root, NULL, &absolute);
+    error_t *err = path_input_normalize(root, &absolute);
     if (err) {
         error_free(err);
         return false;

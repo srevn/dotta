@@ -68,71 +68,33 @@ error_t *path_input_resolve(
 );
 
 /**
- * Normalize a CLI filesystem-path argument to an absolute path, optionally
- * re-rooted under `target_root`.
+ * Normalize a CLI filesystem-path argument to an absolute path
  *
- * When `target_root` is non-NULL, it acts as a virtual root: a typed path is
- * resolved as if the user were operating inside that directory (chroot-style).
- * Generalises any "operate within this tree" usage — chroots, container overlays,
- * fakeroot trees, vendor directories, staging areas, project subroots. Two
- * spellings are the shell's and never re-rooted: a tilde path (`~/X` always lands
- * under $HOME, its own namespace) and a path spelled from here — `./x`, `../x`,
- * a dotfile's `.x` — which is the file in front of the user, wherever they stand,
- * and must land inside the target to be taken. A bare relative path is the jail's.
+ * The shell's reading: a tilde path expands under $HOME, a relative one — `./x`,
+ * `../x`, a dotfile's `.x`, `path/to/file` — resolves against the working directory
+ * as the shell spells it, and an absolute one stands; then `.`, `..`, a run of
+ * slashes and the directory spelling are folded lexically. No symlink is resolved
+ * and the path need not exist: the fold is string work over the spelling, so a
+ * symlink argument stays the link.
  *
- * Compose model (target_root="/jail", canonical="/private/jail"):
- *   ~/file                  -> $HOME/file       (tilde bypass)
- *   rel/file                -> /jail/rel/file   (relative + target)
- *   /etc/foo                -> /jail/etc/foo    (host-absolute re-rooted)
- *   /jail/etc/foo           -> /jail/etc/foo    (already inside, raw)
- *   /private/jail/etc/foo   -> /private/jail/etc/foo
- *                                               (already inside, canonical surface
- *                                                form)
- *   /jail/../etc/secret     -> ERROR            (escapes after `..`
- *                                                resolution)
- *   cd /jail/etc/sub; ./dotted -> /jail/etc/sub/dotted   (from here)
- *   cd /jail/etc/sub; ../x     -> /jail/etc/x            (from here, still inside)
- *   cd /jail;         .        -> /jail                  (the target: a root)
- *   cd ~;             ./foo    -> ERROR                  (from here, outside the target)
- *   cd /jail/etc;     etc/foo  -> /jail/etc/foo          (bare: the jail's)
+ *   ~/file       -> $HOME/file
+ *   /etc/foo     -> /etc/foo
+ *   rel/file     -> $CWD/rel/file
+ *   ./a/../b/    -> $CWD/b
  *
- * Without `target_root`:
- *   ~/file                  -> $HOME/file
- *   /etc/foo                -> /etc/foo
- *   rel/file                -> $CWD/rel/file
+ * The filesystem arm of path_input_resolve is this function followed by
+ * mount_classify; the commands that read a filesystem spelling and walk it (add),
+ * bind it (the binders' --target), test it (ignore --test) or complete beneath
+ * it (the completion's root) call it directly. Storage-path inputs ("home/",
+ * "root/", "custom/") are not this function's — they are validated and placed
+ * at the call site (mount_validate_storage, mount_resolve). add's re-rooting
+ * under --target is add's own grammar, spelled around this call (cmds/add.c,
+ * spell_argument).
  *
- * Symlink-aware re-rooting: each "already inside" check cross-products the raw
- * `target_root` with its realpath-canonical sibling, so a canonical CLI input
- * (from getcwd / find / tab-completion) under a
- * raw-typed target — or the reverse, e.g. macOS's `/tmp -> /private/tmp`
- * with `--target /tmp/web` — is recognised as inside without being re-prepended
- * to nonsense.
- *
- * Pairs with path_input_resolve, whose filesystem arm is this function with no
- * root: it stops at the absolute filesystem path, the resolver continues through
- * mount classification to a storage path. Callers that walk directories (need
- * filesystem paths to opendir / stat) use this; callers that query Git data (need
- * storage paths) use the resolver. The output is fed into mount_classify per-file
- * when the storage path is needed.
- *
- * Storage-path inputs ("home/", "root/", "custom/") are not handled here — those
- * are validated and consumed via mount_validate_storage + mount_resolve at the
- * call site. This function answers the "filesystem path" arm of the input-shape
- * dispatch.
- *
- * @param input        User-provided path (filesystem or tilde; must
- *                     not be NULL)
- * @param target_root  Optional virtual root that re-roots every input not the
- *                     shell's (tilde, or spelled from here). NULL or empty disables
- *                     re-rooting; relative inputs then resolve via the actual CWD.
- * @param out          Normalized absolute path (caller must free,
- *                     must not be NULL)
+ * @param input User-provided path (filesystem or tilde; must not be NULL)
+ * @param out   Normalized absolute path (caller must free, must not be NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_normalize(
-    const char *input,
-    const char *target_root,
-    char **out
-);
+error_t *path_input_normalize(const char *input, char **out);
 
 #endif /* DOTTA_PATH_H */

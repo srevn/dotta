@@ -144,11 +144,11 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out);
 
 /**
  * Filesystem paths under a relocatable root, as `add --target` reads them
- * (`path_input_normalize`, infra/path.c): `etc/x` and `/etc/x` both mean
- * `<root>/etc/x`, so the candidates are listed under the root and printed in
- * the style the token was typed in. The root is read as the command reads it —
- * relative to the working directory when not absolute. Dotfiles are offered only
- * when the name being typed starts with '.', as the shell does.
+ * (`spell_argument`, cmds/add.c): `etc/x` and `/etc/x` both mean `<root>/etc/x`,
+ * so the candidates are listed under the root and printed in the style the token
+ * was typed in. The root is read as the command reads it — relative to the working
+ * directory when not absolute. Dotfiles are offered only when the name being
+ * typed starts with '.', as the shell does.
  *
  * @return true when the root applies and the candidates were printed; false when
  *         the path is what the shell sees — no root, a tilde token (HOME's

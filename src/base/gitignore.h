@@ -9,13 +9,16 @@
  *   - `**` recursive globs via base/wildmatch
  *   - exact match attribution via per-rule origin tags
  *
- * Two entry points over one scan: `gitignore_eval` is the whole grammar — the
- * rules at the path, then at every ancestor of it, until one decides;
- * `gitignore_eval_rung` is that scan at one rung alone, for a caller that owns
- * the walk itself.
+ * The ruleset is the whole grammar: the gate at parse (a non-wildcard negation
+ * no earlier rule could match is dropped — git's "a parent directory cannot be
+ * re-included"), the reverse scan at a rung, and the walk up the ancestors until
+ * one rung decides (`gitignore_eval`). A rule is one line of it, parsed and asked
+ * alone (`gitignore_rule_t`, at the end of this header), for a caller whose program
+ * is its own — infra/pathspec, which reads its rules in its own order and walks
+ * the rungs itself.
  *
- * Lifetime: the ruleset is arena-backed. All memory (rule array, pattern copies)
- * lives until arena_destroy; there is no separate free.
+ * Lifetime: the ruleset and every rule are arena-backed. All memory (rule array,
+ * pattern copies) lives until arena_destroy; there is no separate free.
  *
  * Thread safety: concurrent readers of a ruleset are safe once all
  * gitignore_ruleset_append calls have returned. Concurrent appends are not safe.
@@ -112,8 +115,8 @@ error_t *gitignore_ruleset_append_patterns(
  * Semantics mirror gitignore exactly: rules are scanned in reverse insertion
  * order (last-match-wins). If no rule matches at the given path, the evaluator
  * walks up one directory at a time, re-scanning at each parent (with is_dir=true),
- * which is what makes `cache/` match `cache/file.txt`. Each of those scans is
- * one gitignore_eval_rung; this is the walk over it.
+ * which is what makes `cache/` match `cache/file.txt`. Each of those scans reads
+ * every rule at that rung as gitignore_rule_matches reads one.
  *
  * Never fails. Always populates every field of *out; decided=false means no rule
  * matched (caller treats as not-ignored). `pattern` is the winning rule's source
@@ -126,36 +129,6 @@ error_t *gitignore_ruleset_append_patterns(
  * @param out     Match result (must not be NULL)
  */
 void gitignore_eval(
-    const gitignore_ruleset_t *ruleset,
-    const char *path,
-    bool is_dir,
-    gitignore_match_t *out
-);
-
-/**
- * Evaluate `path` at this rung only.
- *
- * The rules in reverse, the first to match decides, and no ancestor is consulted
- * — the scan `gitignore_eval` runs at every rung of a path, exposed for a caller
- * that owns the walk itself. The walk is not always the ruleset's to make:
- * infra/pathspec has to match a location and a storage path under one ordered
- * set of rules, so the rungs of the two interleave and neither can carry a walk
- * of its own. Until that reader lands, gitignore_eval is the only one.
- *
- * `path` is a rung: a leading slash is shed (a location subject carries one,
- * and an anchored rule reads the rule's own, not the subject's), and a trailing
- * slash is not read as a directory hint — say so with `is_dir`. A path that is
- * empty, or nothing but slashes, decides nothing.
- *
- * Never fails, and allocates nothing: no copy, no walk. Always populates every
- * field of *out, on the same terms as gitignore_eval.
- *
- * @param ruleset Ruleset (can be NULL: undecided)
- * @param path    One rung, relative to the ruleset's root (can be NULL: undecided)
- * @param is_dir  True if the rung refers to a directory
- * @param out     Match result (must not be NULL)
- */
-void gitignore_eval_rung(
     const gitignore_ruleset_t *ruleset,
     const char *path,
     bool is_dir,
@@ -190,5 +163,72 @@ bool gitignore_is_ignored(
  * @return Rule count, or 0 if ruleset is NULL
  */
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
+
+/* -------------------------------------------------------------------- */
+/* The rule alone                                                       */
+/* -------------------------------------------------------------------- */
+
+/*
+ * One line of the grammar as a rule of its own — no ruleset around it, and none
+ * of the ruleset's context: a negation stands whatever came before it, since
+ * there is no before. For a caller whose program is its own and reads each rule
+ * itself (infra/pathspec: its rules in its own order, over rungs of its own walk);
+ * a ruleset of one rule is not the rule the line wrote, because the gate drops
+ * a non-wildcard negation with nothing before it to negate.
+ */
+typedef struct gitignore_rule gitignore_rule_t;
+
+/**
+ * Parse one line into a rule.
+ *
+ * The line as the ruleset's parser reads one: the `!` and the anchor slash, the
+ * trailing slash as the directory marker, escapes, trailing whitespace trimmed.
+ * A line that makes no rule — blank, a comment (`#` first), whitespace only,
+ * trimmed to nothing — answers NULL with no error; a line past 4096 bytes, or
+ * one holding a newline (a rule is one line), is refused (ERR_VALIDATION). The
+ * rule is the arena's.
+ *
+ * @param arena Arena providing storage (borrowed; must outlive the rule)
+ * @param line  One line of gitignore grammar (must not be NULL)
+ * @param out   The rule, or NULL when the line makes none (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *gitignore_rule_parse(
+    arena_t *arena,
+    const char *line,
+    gitignore_rule_t **out
+);
+
+/**
+ * Does the rule match this rung?
+ *
+ * `rung` and `is_dir` as for the ruleset's scan at one rung: a leading slash is
+ * shed (the subject's, never an anchor), a trailing slash is not read — say so
+ * with `is_dir` — and a rung that is empty or nothing but slashes matches nothing.
+ * A directory-only rule matches only when `is_dir`; an anchored rule reads the
+ * whole rung, a bare one its basename. No ancestor is consulted: the walk is
+ * the caller's. Never fails, allocates nothing.
+ *
+ * @param rule   The rule (can be NULL: false)
+ * @param rung   One rung, relative to the rule's root (can be NULL: false)
+ * @param is_dir True if the rung refers to a directory
+ * @return true iff the rule matches
+ */
+bool gitignore_rule_matches(
+    const gitignore_rule_t *rule,
+    const char *rung,
+    bool is_dir
+);
+
+/**
+ * Is the rule a negation (`!…`)?
+ *
+ * A match then un-ignores — or, for a selector, un-selects. The polarity is the
+ * parser's, not the first byte's: `\!x` is a literal.
+ *
+ * @param rule The rule (can be NULL: false)
+ * @return true iff the rule negates
+ */
+bool gitignore_rule_negated(const gitignore_rule_t *rule);
 
 #endif /* DOTTA_GITIGNORE_H */

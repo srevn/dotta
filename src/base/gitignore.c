@@ -55,13 +55,13 @@
 #define GITIGNORE_FLAG_HASWILD   (1U << 3)
 #define GITIGNORE_FLAG_MATCH_ALL (1U << 4)
 
-typedef struct {
+struct gitignore_rule {
     const char *pattern;              /* arena-owned, NUL-terminated */
     size_t length;                    /* strlen(pattern) post-unescape */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
-    gitignore_origin_t origin;        /* caller-assigned tag */
+    gitignore_origin_t origin;        /* the ruleset's tag; 0 for a rule alone */
     const char *source;               /* the line as written, trimmed (arena-owned) */
-} gitignore_rule_t;
+};
 
 struct gitignore_ruleset {
     arena_t *arena;                   /* borrowed */
@@ -158,13 +158,11 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
 /* --- Per-line parse ------------------------------------------------- */
 
 /* On success, *have_rule is true for a produced rule, false for
- * blank/comment/trimmed-to-empty lines. Returns an error on arena exhaustion. */
+ * blank/comment/trimmed-to-empty lines. The origin is not the line's: the ruleset
+ * tags the rule after the parse, and a rule alone carries none. Returns an error
+ * on arena exhaustion. */
 static error_t *parse_one_rule(
-    arena_t *arena,
-    const char *line,
-    size_t line_len,
-    gitignore_origin_t origin,
-    gitignore_rule_t *out_rule,
+    arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule,
     bool *have_rule
 ) {
     *have_rule = false;
@@ -192,7 +190,7 @@ static error_t *parse_one_rule(
         out_rule->pattern = copy;
         out_rule->length = 1;
         out_rule->flags = GITIGNORE_FLAG_MATCH_ALL;
-        out_rule->origin = origin;
+        out_rule->origin = 0;
         out_rule->source = copy;
         *have_rule = true;
         return NULL;
@@ -282,10 +280,69 @@ static error_t *parse_one_rule(
     out_rule->pattern = copy;
     out_rule->length = final_length;
     out_rule->flags = flags;
-    out_rule->origin = origin;
+    out_rule->origin = 0;
     out_rule->source = source;
     *have_rule = true;
+
     return NULL;
+}
+
+/* --- The match at one rung ------------------------------------------ */
+
+/* A leading slash is the subject's, not a rule's anchor: shed it by moving the
+ * pointer. Nothing else is normalized here — a rung has no trailing slash to
+ * read, and the caller says is_dir. Answers the basename the bare rules read,
+ * or NULL when nothing is left of the rung. */
+static const char *open_rung(const char **rung) {
+    const char *p = *rung;
+    while (*p == '/')
+        p++;
+    if (*p == '\0')
+        return NULL;
+
+    *rung = p;
+    const char *slash = strrchr(p, '/');
+    return slash ? slash + 1 : p;
+}
+
+/* One rule against one rung: the directory marker against is_dir, then the pattern
+ * against the whole rung (anchored) or its basename (bare). The core both readers
+ * share — the ruleset's scan over every rule, and the rule asked alone. */
+static bool rule_matches(
+    const gitignore_rule_t *r, const char *rung, const char *basename,
+    bool is_dir
+) {
+    if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
+        return false;
+    if (r->flags & GITIGNORE_FLAG_MATCH_ALL)
+        return true;
+    if (r->flags & GITIGNORE_FLAG_FULLPATH)
+        return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
+    return wildmatch(r->pattern, basename, 0) == WM_MATCH;
+}
+
+/* The scan at one rung: the rules in reverse, the first to match decides, and
+ * no ancestor is consulted. Writes *out only on a match; the caller has set it
+ * undecided. */
+static void scan_rung(
+    const gitignore_ruleset_t *set, const char *rung, bool is_dir,
+    gitignore_match_t *out
+) {
+    const char *basename = open_rung(&rung);
+    if (!basename)
+        return;
+
+    for (size_t i = set->count; i > 0; --i) {
+        const gitignore_rule_t *r = &set->rules[i - 1];
+        if (!rule_matches(r, rung, basename, is_dir))
+            continue;
+
+        out->decided = true;
+        out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
+        out->origin = r->origin;
+        out->pattern = r->source;
+        return;
+    }
 }
 
 /* --- Negation filter ------------------------------------------------- */
@@ -296,8 +353,7 @@ static error_t *parse_one_rule(
  * ignore.c:50-168. */
 
 static bool does_negate_pattern(
-    const gitignore_rule_t *rule,
-    const gitignore_rule_t *neg
+    const gitignore_rule_t *rule, const gitignore_rule_t *neg
 ) {
     if ((rule->flags & GITIGNORE_FLAG_NEGATIVE) != 0 ||
         (neg->flags & GITIGNORE_FLAG_NEGATIVE) == 0)
@@ -324,8 +380,7 @@ static bool does_negate_pattern(
  * rule in `set`. Called only for non-wildcard negations — the wildcard case is
  * indeterminate and libgit2 keeps them unconditionally. */
 static bool negation_has_effect(
-    const gitignore_ruleset_t *set,
-    const gitignore_rule_t *neg
+    const gitignore_ruleset_t *set, const gitignore_rule_t *neg
 ) {
     for (size_t i = 0; i < set->count; i++) {
         const gitignore_rule_t *rule = &set->rules[i];
@@ -358,10 +413,7 @@ static bool negation_has_effect(
 
 /* --- Public API ------------------------------------------------------ */
 
-error_t *gitignore_ruleset_create(
-    arena_t *arena,
-    gitignore_ruleset_t **out
-) {
+error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -377,9 +429,7 @@ error_t *gitignore_ruleset_create(
 }
 
 error_t *gitignore_ruleset_append(
-    gitignore_ruleset_t *set,
-    const char *content,
-    gitignore_origin_t origin
+    gitignore_ruleset_t *set, const char *content, gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
     CHECK_NULL(content);
@@ -399,10 +449,9 @@ error_t *gitignore_ruleset_append(
         gitignore_rule_t rule = { 0 };
         bool have = false;
         RETURN_IF_ERROR(
-            parse_one_rule(
-            set->arena, cursor, line_len, origin, &rule, &have
-            )
+            parse_one_rule(set->arena, cursor, line_len, &rule, &have)
         );
+        rule.origin = origin;
 
         /* Drop a non-wildcard negation that no earlier rule could match
          * (gitignore's "parent directory cannot be re-included" rule). Mirrors
@@ -419,9 +468,7 @@ error_t *gitignore_ruleset_append(
         if (have) {
             if (set->count >= MAX_RULES)
                 return ERROR(
-                    ERR_VALIDATION,
-                    "gitignore: exceeds %d rules",
-                    MAX_RULES
+                    ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES
                 );
             RETURN_IF_ERROR(ensure_capacity(set));
             set->rules[set->count++] = rule;
@@ -436,9 +483,7 @@ error_t *gitignore_ruleset_append(
 }
 
 error_t *gitignore_ruleset_append_patterns(
-    gitignore_ruleset_t *set,
-    const char *const *patterns,
-    size_t count,
+    gitignore_ruleset_t *set, const char *const *patterns, size_t count,
     gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
@@ -480,9 +525,7 @@ error_t *gitignore_ruleset_append_patterns(
 }
 
 void gitignore_eval(
-    const gitignore_ruleset_t *set,
-    const char *path,
-    bool is_dir,
+    const gitignore_ruleset_t *set, const char *path, bool is_dir,
     gitignore_match_t *out
 ) {
     if (!out)
@@ -535,7 +578,7 @@ void gitignore_eval(
 
     /* The walk: the scan at this rung, then at each parent, until one decides. */
     while (true) {
-        gitignore_eval_rung(set, p, is_dir, out);
+        scan_rung(set, p, is_dir, out);
         if (out->decided)
             break;
 
@@ -552,63 +595,8 @@ cleanup:
     free(heap);
 }
 
-void gitignore_eval_rung(
-    const gitignore_ruleset_t *set,
-    const char *path,
-    bool is_dir,
-    gitignore_match_t *out
-) {
-    if (!out)
-        return;
-
-    out->decided = false;
-    out->ignored = false;
-    out->origin = 0;
-    out->pattern = NULL;
-
-    if (!set || !path)
-        return;
-
-    /* A leading slash is the subject's, not a rule's anchor: shed it by moving
-     * the pointer. Nothing else is normalized here — a rung has no trailing slash
-     * to read, and the caller says is_dir. */
-    while (*path == '/')
-        path++;
-    if (*path == '\0')
-        return;
-
-    const char *slash = strrchr(path, '/');
-    const char *basename = slash ? slash + 1 : path;
-
-    for (size_t i = set->count; i > 0; --i) {
-        const gitignore_rule_t *r = &set->rules[i - 1];
-
-        if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
-            continue;
-
-        bool matched;
-        if (r->flags & GITIGNORE_FLAG_MATCH_ALL) {
-            matched = true;
-        } else if (r->flags & GITIGNORE_FLAG_FULLPATH) {
-            matched = wildmatch(r->pattern, path, WM_PATHNAME) == WM_MATCH;
-        } else {
-            matched = wildmatch(r->pattern, basename, 0) == WM_MATCH;
-        }
-
-        if (matched) {
-            out->decided = true;
-            out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
-            out->origin = r->origin;
-            out->pattern = r->source;
-            return;
-        }
-    }
-}
-
 bool gitignore_is_ignored(
-    const gitignore_ruleset_t *set,
-    const char *path,
-    bool is_dir
+    const gitignore_ruleset_t *set, const char *path, bool is_dir
 ) {
     gitignore_match_t m;
     gitignore_eval(set, path, is_dir, &m);
@@ -617,4 +605,53 @@ bool gitignore_is_ignored(
 
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
     return set ? set->count : 0;
+}
+
+/* --- The rule alone -------------------------------------------------- */
+
+error_t *gitignore_rule_parse(
+    arena_t *arena, const char *line, gitignore_rule_t **out
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(line);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    size_t len = strlen(line);
+    if (len > MAX_PATTERN_LENGTH)
+        return ERROR(
+            ERR_VALIDATION,
+            "gitignore: line exceeds %d bytes", MAX_PATTERN_LENGTH
+        );
+    if (memchr(line, '\n', len))
+        return ERROR(ERR_VALIDATION, "gitignore: a rule is one line");
+
+    gitignore_rule_t rule = { 0 };
+    bool have = false;
+    RETURN_IF_ERROR(parse_one_rule(arena, line, len, &rule, &have));
+    if (!have)
+        return NULL;
+
+    gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));
+    if (!copy)
+        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
+    *copy = rule;
+
+    *out = copy;
+    return NULL;
+}
+
+bool gitignore_rule_matches(
+    const gitignore_rule_t *rule, const char *rung, bool is_dir
+) {
+    if (!rule || !rung)
+        return false;
+
+    const char *basename = open_rung(&rung);
+    return basename && rule_matches(rule, rung, basename, is_dir);
+}
+
+bool gitignore_rule_negated(const gitignore_rule_t *rule) {
+    return rule && (rule->flags & GITIGNORE_FLAG_NEGATIVE);
 }

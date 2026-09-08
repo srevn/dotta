@@ -331,7 +331,7 @@ static error_t *manifest_note_unbound(
  * on the row.
  *
  * Handles:
- * - Metadata file filtering (.dotta/, .bootstrap, etc.)
+ * - The content gate: a blob under a storage label, and nothing else
  * - Storage path to filesystem path conversion
  * - Profile precedence override (higher precedence wins — manifest_claim)
  * - File identity extraction from Git tree entry
@@ -354,6 +354,17 @@ static int manifest_claim_blob(
         return 0;
     }
 
+    /* The content gate: a managed path lives under a storage label, so the walk's
+     * own root is the whole test — a blob at the branch root, or beneath a tree
+     * no label names, is not content. dotta's own files (.dottaignore, .bootstrap,
+     * .dotta/) sit there, and so does whatever else a hand or a tool left beside
+     * them: a README, a LICENSE, a docs/ tree. Asked on the root, before the
+     * join, so machinery costs no allocation and no unlabelled path reaches the
+     * shape check below to be read as corruption. */
+    if (!mount_spec_for_path(root)) {
+        return 0;
+    }
+
     /* Build the full storage path from root + entry name, straight into the arena
      * — the row keeps it, so the join is the allocation, and Git's only bound
      * on a path's length is memory. A skipped entry abandons its string to the
@@ -368,12 +379,6 @@ static int manifest_claim_blob(
     }
     if (root_len > 0) memcpy(storage_path, root, root_len);
     memcpy(storage_path + root_len, name, name_len + 1);
-
-    /* Skip repository bookkeeping — nothing the branch keeps for dotta's own
-     * use is a managed path, and mount_resolve below would refuse it anyway */
-    if (profile_is_repo_metadata(storage_path)) {
-        return 0;
-    }
 
     /* The entry name is Git's, not this machine's. mount_resolve joins a label's
      * tail verbatim on the strength of the path having been validated at its

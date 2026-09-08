@@ -437,29 +437,12 @@ cleanup:
 }
 
 /**
- * Is this path inside a profile branch dotta's own bookkeeping?
- */
-bool profile_is_repo_metadata(const char *storage_path) {
-    if (!storage_path) {
-        return false;
-    }
-
-    return strcmp(storage_path, ".dottaignore") == 0 ||
-           strcmp(storage_path, ".bootstrap") == 0 ||
-           strcmp(storage_path, ".gitignore") == 0 ||
-           strcmp(storage_path, "README.md") == 0 ||
-           strcmp(storage_path, "README") == 0 ||
-           str_starts_with(storage_path, ".git/") ||
-           str_starts_with(storage_path, ".dotta/");
-}
-
-/**
  * Compose a tree entry's storage path, and say whether the walk should see it
  *
  * Every walk over a profile tree below asks an entry the same three things: is
- * it a blob, what is its path within the branch, and is that path tracked content
- * rather than bookkeeping. Answered once here, so each walk differs only in what
- * it does with a path it accepts.
+ * it a blob, does it stand under a storage label, and what is its path within
+ * the branch. Answered once here, so each walk differs only in what it does with
+ * a path it accepts.
  *
  * `out_err` receives the truncation error and nothing else — an entry that is
  * simply not content leaves it untouched, which is what lets a caller read "false
@@ -483,6 +466,15 @@ static bool tree_entry_content_path(
         return false;
     }
 
+    /* The content gate: a managed path lives under a storage label, so the walk's
+     * own root is the whole test (core/manifest.c reads it the same way). A blob
+     * at the branch root, or beneath a tree no label names, is not content —
+     * dotta's own files sit there, and so does whatever else a hand or a tool
+     * left beside them. */
+    if (!mount_spec_for_path(root)) {
+        return false;
+    }
+
     const char *name = git_tree_entry_name(entry);
     int ret;
 
@@ -500,7 +492,7 @@ static bool tree_entry_content_path(
         return false;
     }
 
-    return !profile_is_repo_metadata(buf);
+    return true;
 }
 
 /**

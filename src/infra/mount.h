@@ -104,6 +104,18 @@ const mount_spec_t *mount_spec_for_kind(mount_kind_t kind);
  * NULL when `storage_path` is NULL or does not begin with a known label; otherwise
  * the borrowed spec for the matching kind. No tail validation — callers needing
  * full validation use mount_validate_storage.
+ *
+ * This is also the content gate every walk over a profile tree asks of its own
+ * walk root: a managed path stands under a label, so a blob at the branch root,
+ * or beneath a tree no label names, is the branch's own machinery — dotta's files
+ * (.dottaignore, .bootstrap, .dotta/) and whatever else a hand or a tool left
+ * beside them. Nothing else distinguishes them, and nothing needs to: a branch
+ * may hold what it likes next to the labels, and no walk of content sees it or
+ * refuses it. Readers: the view's claim routine (core/manifest.c), the file listing
+ * and the branch statistics (core/profiles.c), the refspec completion
+ * (cmds/completion.c). cmds/export.c asks the neighbouring question of a top-level
+ * entry's bare name and spells it there — a label as a name rather than as a
+ * prefix, which this cannot answer (it requires the '/').
  */
 const mount_spec_t *mount_spec_for_path(const char *storage_path);
 

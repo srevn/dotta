@@ -51,7 +51,8 @@ typedef struct {
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
  * 3. Reads both entries — the commit's, which must be a blob, and the branch
- *    tip's, which may be absent — and the claim the commit records at the name
+ *    tip's, which may be absent — the restored blob's own bytes, and the claims
+ *    both sheets record at the name
  * 4. Answers "nothing to do" when that whole write already stands
  * 5. Shows the preview (restored / diff / mode and ownership only)
  * 6. Prompts for confirmation (unless --force)

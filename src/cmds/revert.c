@@ -275,8 +275,8 @@ static char *build_revert_commit_message(
 }
 
 /**
- * The claim to restore: the target commit's own item for the path, or one
- * reconstructed from the entry it holds
+ * The claim to restore: the one the target commit records, or one reconstructed
+ * from the entry it holds
  *
  * A symlink's claim is the entry as recorded — revert restores history, it does
  * not reinterpret it — and its absence is an answer (NULL): the target records
@@ -290,72 +290,47 @@ static char *build_revert_commit_message(
  * the user can still decline it. It used to be announced during the write, so a
  * dry run never mentioned it at all.
  *
- * @param ctx Dispatch context (must not be NULL)
- * @param target_commit The commit being restored from (must not be NULL)
- * @param profile Profile name, for the sheet's messages (must not be NULL)
- * @param file_path Storage path (must not be NULL)
- * @param entry The blob standing at file_path in that commit's tree, admitted
- *              by the caller (must not be NULL)
+ * Every input is a fact the caller has already established, and none of them is
+ * a Git object: the claim the commit records, the name to write it under, the
+ * entry's filemode and the restored blob's kind. Nothing here reads the repository,
+ * so nothing here can fail for a reason the preview could not have shown.
+ *
+ * @param out Output handle (must not be NULL)
+ * @param recorded The FILE claim the target commit records at the name, or NULL
+ *                 where it records none (borrowed)
+ * @param file_path Storage path the claim is written under (must not be NULL)
+ * @param target_mode The admitted entry's filemode
+ * @param target_kind The restored blob's own bytes (cmd_revert step 5)
+ * @param commit Abbreviated target commit oid, for the warning (must not be NULL)
  * @param out_claim The claim, or NULL where the target records none (must not
  *                  be NULL; caller frees with metadata_item_free)
  * @return Error or NULL on success
  */
 static error_t *claim_to_restore(
-    const dotta_ctx_t *ctx,
-    git_commit *target_commit,
-    const char *profile,
+    output_t *out,
+    const metadata_item_t *recorded,
     const char *file_path,
-    const git_tree_entry *entry,
+    git_filemode_t target_mode,
+    content_kind_t target_kind,
+    const char *commit,
     metadata_item_t **out_claim
 ) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(target_commit);
-    CHECK_NULL(profile);
+    CHECK_NULL(out);
     CHECK_NULL(file_path);
-    CHECK_NULL(entry);
+    CHECK_NULL(commit);
     CHECK_NULL(out_claim);
 
-    git_repository *repo = ctx->run.repo;
-    output_t *out = ctx->out;
-
     *out_claim = NULL;
-
-    error_t *err = NULL;
-    git_tree *target_tree = NULL;
-    metadata_t *target_metadata = NULL;
-    content_kind_t target_kind = CONTENT_PLAINTEXT;
-    bool target_encrypted = false;
-
-    /* The commit's sheet. A commit without one loads as an empty sheet (the tree
-     * loader's contract), so a revert to a state before any claim was written
-     * retires what stands. */
-    int ret = git_commit_tree(&target_tree, target_commit);
-    if (ret < 0) {
-        return error_from_git(ret);
-    }
-
-    err = metadata_load_from_tree(repo, target_tree, profile, &target_metadata);
-    git_tree_free(target_tree);
-    if (err) {
-        return error_wrap(err, "Failed to load metadata from target commit");
-    }
-
-    git_filemode_t target_mode = git_tree_entry_filemode(entry);
-    const metadata_item_t *target_meta_item =
-        metadata_lookup(target_metadata, file_path);
 
     if (target_mode == GIT_FILEMODE_LINK) {
         /* A link's entry is a FILE item without a mode. Restore it as recorded
          * — revert restores history, it does not reinterpret it; whatever the
          * entry carries, the view adjudicates against the tree. No entry → the
          * write's retire arm takes the standing item. */
-        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
-            err = metadata_item_clone(target_meta_item, out_claim);
-            if (err) {
-                err = error_wrap(err, "Failed to clone symlink metadata item");
-            }
+        if (!recorded) {
+            return NULL;
         }
-        goto cleanup;
+        return metadata_item_clone(recorded, out_claim);
     }
 
     /* The encrypted bit revert writes must be true of the blob it restores: it
@@ -364,54 +339,34 @@ static error_t *claim_to_restore(
      * (or, absent an entry, invented beside) a historical stamp.
      * UNSUPPORTED_VERSION carries encryption intent and collapses onto true,
      * the same collapse the capture paths make. */
-    err = content_classify(repo, git_tree_entry_id(entry), &target_kind, NULL);
-    if (err) {
-        err = error_wrap(err, "Failed to classify blob for '%s'", file_path);
-        goto cleanup;
-    }
-    target_encrypted = (target_kind != CONTENT_PLAINTEXT);
+    const bool encrypted = (target_kind != CONTENT_PLAINTEXT);
 
-    if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
+    if (recorded) {
         /* Found metadata entry - clone it. Mode and ownership have no byte source,
          * so the entry is their authority; the encrypted bit is the blob's
          * (above). */
-        err = metadata_item_clone(target_meta_item, out_claim);
-        if (err) {
-            err = error_wrap(err, "Failed to clone metadata item");
-            goto cleanup;
-        }
-        (*out_claim)->encrypted = target_encrypted;
-        goto cleanup;
+        RETURN_IF_ERROR(metadata_item_clone(recorded, out_claim));
+        (*out_claim)->encrypted = encrypted;
+        return NULL;
     }
 
     /* No metadata entry at target commit - mode falls back to the tree's filemode;
      * ownership is not recoverable */
-    char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
-
     output_warning(
         out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
-        file_path, oid_str
+        file_path, commit
     );
     output_hintline(
         out, OUTPUT_NORMAL,
         "Reconstructed from the commit (mode=%04o, encrypted=%s); "
         "ownership is not recoverable",
         (unsigned int) (target_mode & 0777),
-        target_encrypted ? "true" : "false"
+        encrypted ? "true" : "false"
     );
 
-    err = metadata_item_create_file(
-        file_path, target_mode & 0777, target_encrypted, out_claim
+    return metadata_item_create_file(
+        file_path, target_mode & 0777, encrypted, out_claim
     );
-    if (err) {
-        err = error_wrap(err, "Failed to create default metadata item");
-    }
-
-cleanup:
-    metadata_free(target_metadata);
-
-    return err;
 }
 
 /**
@@ -472,6 +427,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
     metadata_t *current_metadata = NULL;
+    metadata_t *target_metadata = NULL;
     metadata_item_t *restore_metadata = NULL;
     char *msg = NULL;
 
@@ -581,9 +537,27 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* The blob the revert restores: the admitted entry's own identity, which
-     * the preview and the write both read. */
+    /* The blob the revert restores and the mode Git records for it: the admitted
+     * entry's own identity, which the preview, the claim and the write all read. */
     const git_oid *restored_blob = git_tree_entry_id(target_entry);
+    git_filemode_t restored_mode = git_tree_entry_filemode(target_entry);
+
+    /* And the bytes behind it, read once. The kind is what the claim's encrypted
+     * bit is stamped from (step 6), and the read itself is the proof the repository
+     * holds the object — which every filemode needs and only the regular-file
+     * arm used to make: a link whose blob was gone passed the dry run and failed
+     * at the tree write, after the preview had promised the restore. A link's
+     * bytes are its target path and no claim reads their kind (cmds/add.c stages
+     * them raw) — classification is a fact about bytes, and whether it applies
+     * is the filemode's question. */
+    content_kind_t target_kind = CONTENT_PLAINTEXT;
+    err = content_classify(repo, restored_blob, &target_kind, NULL);
+    if (err) {
+        err = error_wrap(
+            err, "Cannot read '%s' at commit %s", resolved_path, oid_str
+        );
+        goto cleanup;
+    }
 
     ret = git_tree_entry_bypath(&current_entry, stage_tree(stage), resolved_path);
     if (ret < 0 && ret != GIT_ENOTFOUND) {
@@ -604,11 +578,17 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 6: the rest of what the revert writes — the sheet the write merges
-     * into, read from the tree the stage opened at, and the claim the target
-     * commit records at the name. Both are read here so that everything the revert
+    /* Step 6: the two sheets — the one the write merges into, read from the tree
+     * the stage opened at, and the target commit's, whose claim at the name is
+     * what the revert restores. Both are read here so that everything the revert
      * will do is known before it is shown: the reconstruction a claimless target
-     * earns is announced by the preview, not by the write. */
+     * earns is announced by the preview, not by the write. Both are read strictly,
+     * as every reader of a sheet is unless it argues otherwise (core/metadata.h):
+     * a corrupt destination sheet would discard claims for unrelated paths when
+     * the write saved its replacement, and a corrupt source sheet would invent
+     * attributes while claiming to restore them. A commit without a sheet loads
+     * as an empty one (the tree loader's contract), so a revert to a state before
+     * any claim was written retires what stands. */
     err = metadata_load_from_tree(
         repo, stage_tree(stage), profile, &current_metadata
     );
@@ -617,8 +597,28 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
+    err = metadata_load_from_tree(
+        repo, target_tree, profile, &target_metadata
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to load metadata from target commit");
+        goto cleanup;
+    }
+
+    /* What the target records at the name, as the claim builder reads one: a
+     * FILE item, or nothing. A DIRECTORY item at a key the tree holds a blob at
+     * claims nothing about this file — the tree is the content authority, and
+     * it has already answered (step 5). */
+    const metadata_item_t *recorded = metadata_lookup(
+        target_metadata, resolved_path
+    );
+    if (recorded && recorded->kind != PATH_KIND_FILE) {
+        recorded = NULL;
+    }
+
     err = claim_to_restore(
-        ctx, target_commit, profile, resolved_path, target_entry, &restore_metadata
+        out, recorded, resolved_path, restored_mode, target_kind, oid_str,
+        &restore_metadata
     );
     if (err) goto cleanup;
 
@@ -735,9 +735,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* The target's blob at the path — an object the ODB already holds, so the
      * entry is put by id — and the merged sheet beside it */
-    err = stage_put_blob(
-        stage, resolved_path, restored_blob, git_tree_entry_filemode(target_entry)
-    );
+    err = stage_put_blob(stage, resolved_path, restored_blob, restored_mode);
     if (err) goto cleanup;
 
     err = metadata_save_to_stage(stage, current_metadata);
@@ -786,6 +784,7 @@ cleanup:
     if (msg) free(msg);
     if (restore_metadata) metadata_item_free(restore_metadata);
     if (current_metadata) metadata_free(current_metadata);
+    if (target_metadata) metadata_free(target_metadata);
     if (current_entry) git_tree_entry_free(current_entry);
     if (target_entry) git_tree_entry_free(target_entry);
     if (target_tree) git_tree_free(target_tree);

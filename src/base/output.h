@@ -393,9 +393,13 @@ void output_format_counts(
  * `home` itself reads as `~`, a path beneath it as `~/<rest>`, and every other
  * path as it is — a sibling of `home` with the same leading bytes is not beneath
  * it, so the match stops at a component boundary. Pure string work: `home` is
- * passed in because the base layer reads no identity, and the four screens that
- * print a bound target (profile list, status, the interactive rows, disable's
- * receipt) pass the invoker's. PATH_MAX bytes hold any path the table validated.
+ * passed in because the base layer reads no identity, and every reader passes
+ * the invoker's: the four screens that print a bound target (profile list, status,
+ * the interactive rows, disable's receipt), and status's unused-path listing,
+ * where the location is the shared term of three paths on one line and the absolute
+ * spelling would be the longest of them. A screen listing managed paths one to
+ * a line prints them absolute and does not come here. PATH_MAX bytes hold any
+ * path the table validated.
  *
  * @param path Absolute path to spell (must not be NULL)
  * @param home The directory `~` stands for (must not be NULL; no trailing slash)

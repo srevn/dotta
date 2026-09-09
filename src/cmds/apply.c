@@ -1669,66 +1669,79 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The claims the view could not place speak before the plan: they are in no
      * bucket below, and silence at the deploy moment is exactly what the old
-     * hard error existed to prevent. One line per affected profile — the slice
-     * arrives grouped, so a linear walk counts each run. */
+     * hard error existed to prevent. Two sections in the shape this screen gives
+     * every other set of paths it will not touch — the header, the paths, then
+     * the cost and the way out on their own lines — rather than a warning and a
+     * hint, which is how this file speaks about a run and not about a list of
+     * paths. Both slices arrive grouped by profile, so the listing reads by profile
+     * unsorted, and both cap where every list in this file caps.
+     *
+     * The repairs name neither a profile nor a path: a line above names every
+     * profile that carries one, so a filled name would read as the only one,
+     * and a path holding a space would paste into a command it breaks. */
     {
         manifest_unbound_t unbound = manifest_unbound(manifest);
-        for (size_t i = 0; i < unbound.count;) {
-            const char *profile = unbound.entries[i].profile;
-            size_t n = 0;
-            while (i + n < unbound.count &&
-                strcmp(unbound.entries[i + n].profile, profile) == 0) n++;
-            output_warning(
+        if (unbound.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Paths with no target");
+            for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unbound.entries[i].storage_path,
+                    path_kind_suffix(unbound.entries[i].kind),
+                    unbound.entries[i].profile
+                );
+            }
+            if (unbound.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    unbound.count - LIST_LIMIT
+                );
+            }
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Skipping %zu custom/ path%s of profile '%s' (no deployment target)",
-                n, n == 1 ? "" : "s", profile
+                "  Their profile has no deployment target here, so nothing lands them."
             );
-            i += n;
+            output_info(
+                out, OUTPUT_NORMAL,
+                "  Set one with 'dotta profile enable <profile> --target /path'"
+            );
         }
     }
 
-    /* Its sibling: the names a profile holds for a location it also names
+    /* Its sibling: the paths a profile holds for a location it also names
      * otherwise. These have a location and are in no bucket either — one name
      * of the group stands there and deploys, and the rest are in the branch and
-     * in no row. Same loop shape; the locations are counted apart from the names
-     * because a group of three at one location is one path, not three. */
+     * in no row. `--dry-run` is the safety on the way out: dropping a directory
+     * name takes every claim beneath it, and the preview shows that rather than
+     * asserting it. */
     {
         manifest_unkept_t unkept = manifest_unkept(manifest);
-        const manifest_unkept_claim_t *first = NULL;
-        for (size_t i = 0; i < unkept.count;) {
-            const char *profile = unkept.entries[i].profile;
-            size_t n = 0;
-            size_t locations = 0;
-            const char *last = NULL;
-            while (i + n < unkept.count &&
-                strcmp(unkept.entries[i + n].profile, profile) == 0) {
-                const char *at = unkept.entries[i + n].filesystem_path;
-                if (!last || strcmp(at, last) != 0) locations++;
-                last = at;
-                n++;
+        if (unkept.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Unused paths");
+            for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unkept.entries[i].storage_path,
+                    path_kind_suffix(unkept.entries[i].kind),
+                    unkept.entries[i].profile
+                );
             }
-            output_warning(
+            if (unkept.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    unkept.count - LIST_LIMIT
+                );
+            }
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Profile '%s': %zu name%s not kept at %zu location%s",
-                profile, n, n == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+                "  Another name of the same profile stands at each of these places; "
+                "'dotta status -v' pairs them."
             );
-            if (!first) first = &unkept.entries[i];
-            i += n;
-        }
-        /* A preview, not the repair: a directory name untracks its descendants,
-         * and the name leaves the branch every machine reads while the collision
-         * is this machine's roots alone — two names of one profile meet only
-         * where its roots put them (core/manifest.h). */
-        if (first) {
-            output_hint(
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-                "would take", first->profile, first->storage_path
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL,
-                "  A directory name takes everything beneath it, and the name leaves "
-                "the branch — only this machine's roots put the two at one place"
+                "  Drop one with 'dotta remove --dry-run <profile> <path>'"
             );
         }
     }

@@ -44,9 +44,12 @@
  * are claims the branch holds and the view has no row for, for two different
  * reasons; a claim precedence hides is neither — it is **overridden**, the normal
  * shape of layering, and no health question at all. A name the view did not keep
- * is in the branch and in no row: no screen, no filter and no record join meets
- * it, and `remove` — which reads the branch, not the view — is the one verb that
- * can still name it.
+ * is in the branch and in no row, so nothing keyed by the view meets it: no filter,
+ * no record join, no divergence screen, no deploy. The verbs that read a branch
+ * directly serve it as readily as any other name — `dotta list -p P` lists it,
+ * `dotta show -p P` prints its bytes — and none of them says it is unused, which
+ * is what the health channel is for; `remove`, which reads the branch too, is
+ * the one verb that takes it away.
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
@@ -516,8 +519,10 @@ error_t *manifest_mount_table(
  * One claim the build could not place: its profile has no deployment target on
  * this machine. Recorded, never dropped in silence — the health consumers (status,
  * apply, sync) surface these; the repair is one command (`profile enable <p>
- * --target /path`), the untracking another (`remove`). Strings are the build
- * arena's, same lifetime as the rows.
+ * --target /path`), the untracking another (`remove`). The screen says **no
+ * target**, never "unbound": the header's word is what the build could not do,
+ * the screen's is what the user must give. Strings are the build arena's, same
+ * lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -557,6 +562,15 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest);
  * profile's branch holds, and the index may point elsewhere. The name is in the
  * branch and in no row: `remove` is the one verb that can still take it, which
  * is why that is the repair.
+ *
+ * The screen says **unused path**, never "unkept name": `name` on a dotta screen
+ * is a profile's (`profile enable <name>`) and every screen calls a storage path
+ * a path. The words differ because the subjects do — kept/unkept is what the
+ * settle did inside this contribution and is always true of it; used/unused is
+ * what the machine does with the result, which a higher profile's row can change.
+ * `kept` is this profile's name for the location, never a promise that anything
+ * reads it, and a screen that says otherwise contradicts the window onto the
+ * view two sections above it.
  */
 typedef struct {
     const char *profile;
@@ -579,12 +593,17 @@ typedef struct {
  *
  * Pure value return — no allocation, no error path. Grouped by profile in build
  * order, a location's entries contiguous and bytewise by name, so one linear
- * walk counts both names and locations without sorting. Each (profile, name)
- * appears once — a name resolves to one location under one profile, and a name
- * the tree and the sheet both carry is settled before the contest by the
- * content-authority rule. Empty on every build whose profiles each name their
- * locations once. A change of roots between two writes is what breaks that, and
- * this machine's own captures do it as readily as an import: capture under
+ * walk counts a profile's run and a listing prints a location's names together
+ * in a stable order. Each (profile, name) appears once — a name resolves to one
+ * location under one profile, and a name the tree and the sheet both carry is
+ * settled before the contest by the content-authority rule. Empty on every build
+ * whose profiles each name their locations once.
+ *
+ * Two names meet where two of this machine's roots overlap, and that needs no
+ * exotic topology: `home/` lies beneath `root/` on every machine, so a branch
+ * carrying both spellings of one path collides here with no binding in sight. A
+ * `custom/` target inside `$HOME` puts the other pair in reach, and this machine's
+ * own captures author that one as readily as an import does — capture under
  * `~/jail`, bind the profile there, capture again, and the branch holds
  * `home/jail/…` beside `custom/…` for one file.
  *

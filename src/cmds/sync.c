@@ -30,6 +30,8 @@
 #include "sys/upstream.h"
 #include "utils/hooks.h"
 
+#define LIST_LIMIT 20  /* Every capped list in this file trims here. */
+
 /**
  * Per-profile sync outcome
  */
@@ -2212,74 +2214,72 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             output_print(out, OUTPUT_NORMAL, "\n");
         }
 
-        /* The import's health: claims the branches carry that this machine cannot
-         * place (their profile has no deployment target here). The block above
-         * cannot say it — an unbound claim is in neither view's rows — so this
-         * notice is the import moment's only signal. */
+        /* The import's health, in the receipt's own shape and apply's: the paths
+         * a branch carries that this machine will not land, a section each. The
+         * Manifest block above cannot say either — neither kind is in either
+         * view's rows — so this is the import moment's only signal, and the moment
+         * the paths are worth naming rather than counting, an import being what
+         * brought them. Both repairs are generic: the (from P) beside every path
+         * names the profiles, and a path holding a space would paste into a command
+         * it breaks. */
         manifest_unbound_t unbound = manifest_unbound(after);
-        const char *unbound_profile = NULL;
-        for (size_t i = 0; i < unbound.count;) {
-            const char *profile = unbound.entries[i].profile;
-            size_t n = 0;
-            while (i + n < unbound.count &&
-                strcmp(unbound.entries[i + n].profile, profile) == 0) n++;
-            output_warning(
+        if (unbound.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Paths with no target");
+            for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unbound.entries[i].storage_path,
+                    path_kind_suffix(unbound.entries[i].kind),
+                    unbound.entries[i].profile
+                );
+            }
+            if (unbound.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    unbound.count - LIST_LIMIT
+                );
+            }
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Profile '%s': %zu custom/ path%s need%s a deployment target",
-                profile, n, n == 1 ? "" : "s", n == 1 ? "s" : ""
+                "  Their profile has no deployment target here, so nothing lands them."
             );
-            if (!unbound_profile) unbound_profile = profile;
-            i += n;
-        }
-        if (unbound_profile) {
-            output_hint(
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s --target /path' to set the target",
-                unbound_profile
+                "  Set one with 'dotta profile enable <profile> --target /path'"
             );
         }
 
-        /* Its sibling, and the same reason this is the import moment's only signal:
-         * a name a profile did not keep is in the branch and in no row, so neither
-         * view's rows can say it. The locations are counted apart from the names
-         * — a group of three at one location is one path. */
+        /* Its sibling: a path the profile did not keep is in the branch and in
+         * no row either. `--dry-run` is the safety on the way out — dropping a
+         * directory name takes every claim beneath it, and the preview shows
+         * that rather than asserting it. */
         manifest_unkept_t unkept = manifest_unkept(after);
-        const manifest_unkept_claim_t *first_unkept = NULL;
-        for (size_t i = 0; i < unkept.count;) {
-            const char *profile = unkept.entries[i].profile;
-            size_t n = 0;
-            size_t locations = 0;
-            const char *last = NULL;
-            while (i + n < unkept.count &&
-                strcmp(unkept.entries[i + n].profile, profile) == 0) {
-                const char *at = unkept.entries[i + n].filesystem_path;
-                if (!last || strcmp(at, last) != 0) locations++;
-                last = at;
-                n++;
+        if (unkept.count > 0) {
+            output_section(out, OUTPUT_NORMAL, "Unused paths");
+            for (size_t i = 0; i < unkept.count && i < LIST_LIMIT; i++) {
+                output_styled(
+                    out, OUTPUT_NORMAL,
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unkept.entries[i].storage_path,
+                    path_kind_suffix(unkept.entries[i].kind),
+                    unkept.entries[i].profile
+                );
             }
-            output_warning(
+            if (unkept.count > LIST_LIMIT) {
+                output_print(
+                    out, OUTPUT_NORMAL, "  ... and %zu more\n",
+                    unkept.count - LIST_LIMIT
+                );
+            }
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Profile '%s': %zu name%s not kept at %zu location%s",
-                profile, n, n == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+                "  Another name of the same profile stands at each of these places; "
+                "'dotta status -v' pairs them."
             );
-            if (!first_unkept) first_unkept = &unkept.entries[i];
-            i += n;
-        }
-        /* A preview, not the repair, and this is the screen where the reach matters
-         * most: the import is what brought the second name here, the name leaves
-         * the branch every machine reads, and the collision is this machine's
-         * roots alone — the machine that authored the pair keeps the two apart
-         * (core/manifest.h). */
-        if (first_unkept) {
-            output_hint(
+            output_info(
                 out, OUTPUT_NORMAL,
-                "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-                "would take", first_unkept->profile, first_unkept->storage_path
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL,
-                "  A directory name takes everything beneath it, and the name leaves "
-                "the branch — only this machine's roots put the two at one place"
+                "  Drop one with 'dotta remove --dry-run <profile> <path>'"
             );
         }
 

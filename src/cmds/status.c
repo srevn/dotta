@@ -40,7 +40,7 @@
  *           empty then, and the header is names alone)
  * @param unbound The view's health slice: the claims the build could not place,
  *                annotated onto their profile's line (a count, the paths under
- *                -v) with one hint naming the repairs after the section
+ *                -v), the repair a legend line under the block
  * @param unkept Its sibling: the names a profile holds for a location it also
  *               names otherwise, annotated and listed the same way. Both say a
  *               profile carries more than it projects, for two different reasons
@@ -65,11 +65,12 @@ static void display_enabled_profiles(
         workspace_files(ws), workspace_directories(ws)
     };
 
-    /* The first profile with unbound claims names its hint's example, and the
-     * first unkept name its own — a name dotta knows, where the target is one
-     * only the user can give. */
-    const char *unbound_profile = NULL;
-    const manifest_unkept_claim_t *first_unkept = NULL;
+    /* Whether either repair has a line to stand under. The question is about
+     * the profiles this run *displays*, not the slices: -p filters the active
+     * set while the view is always the whole enabled one, so a legend keyed off
+     * a slice's own count would explain an annotation no line above it carries. */
+    bool unbound_shown = false;
+    bool unused_shown = false;
 
     for (size_t i = 0; i < profiles->count; i++) {
         const char *profile = profiles->items[i];
@@ -111,23 +112,16 @@ static void display_enabled_profiles(
         for (size_t j = 0; j < unbound.count; j++) {
             if (strcmp(unbound.entries[j].profile, profile) == 0) unplaced++;
         }
-        if (unplaced > 0 && !unbound_profile) unbound_profile = profile;
+        if (unplaced > 0) unbound_shown = true;
 
-        /* Nor are the names the profile did not keep. Both counts are the screen's:
-         * a group of three names at one location must not read as three locations.
-         * The slice arrives grouped by profile and, within a profile, by location,
-         * so one walk counts each run. */
-        size_t names = 0;
-        size_t locations = 0;
-        const char *last = NULL;
+        /* Nor are the paths the view does not use. One count and not two: the
+         * repair is per path, and the file each of them reaches is on its own
+         * -v line, which is worth more than a tally of the files. */
+        size_t unused = 0;
         for (size_t j = 0; j < unkept.count; j++) {
-            const manifest_unkept_claim_t *claim = &unkept.entries[j];
-            if (strcmp(claim->profile, profile) != 0) continue;
-            names++;
-            if (!last || strcmp(claim->filesystem_path, last) != 0) locations++;
-            last = claim->filesystem_path;
-            if (!first_unkept) first_unkept = claim;
+            if (strcmp(unkept.entries[j].profile, profile) == 0) unused++;
         }
+        if (unused > 0) unused_shown = true;
 
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
@@ -151,11 +145,10 @@ static void display_enabled_profiles(
             );
         }
 
-        if (names > 0) {
+        if (unused > 0) {
             output_styled(
-                out, OUTPUT_NORMAL,
-                "  {yellow}(%zu name%s not kept at %zu location%s){reset}",
-                names, names == 1 ? "" : "s", locations, locations == 1 ? "" : "s"
+                out, OUTPUT_NORMAL, "  {yellow}(%zu unused path%s){reset}",
+                unused, unused == 1 ? "" : "s"
             );
         }
 
@@ -174,12 +167,27 @@ static void display_enabled_profiles(
                 );
             }
 
+            /* The file is what makes the pair legible: two storage paths side
+             * by side say nothing about being one thing, and this is the only
+             * screen that says either is unused — `list -p` serves both, unmarked.
+             * Named, not used: the kept name is what this profile calls the
+             * location, while the window onto the view may show a higher profile
+             * there. The location is the shared term of three paths on one line
+             * and takes the target's own spelling a few lines above, not the
+             * window's absolute one: `~/jail/etc/x` beside two storage paths
+             * reads, where the absolute form is the longest thing on the line
+             * and is mostly the storage path with its label spelled out. */
+            char shown[PATH_MAX];
             for (size_t j = 0; j < unkept.count; j++) {
                 if (strcmp(unkept.entries[j].profile, profile) != 0) continue;
+                output_format_path(
+                    unkept.entries[j].filesystem_path, identity()->home, shown,
+                    sizeof(shown)
+                );
                 output_print(
-                    out, OUTPUT_NORMAL, "\n    not kept: %s%s (kept as %s)",
+                    out, OUTPUT_NORMAL, "\n    unused: %s%s — %s (named %s)",
                     unkept.entries[j].storage_path,
-                    path_kind_suffix(unkept.entries[j].kind),
+                    path_kind_suffix(unkept.entries[j].kind), shown,
                     unkept.entries[j].kept
                 );
             }
@@ -188,33 +196,37 @@ static void display_enabled_profiles(
         output_newline(out, OUTPUT_NORMAL);
     }
 
-    if (unbound_profile) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta profile enable %s --target /path' to set the target, "
-            "or 'dotta remove %s <path>' to untrack",
-            unbound_profile, unbound_profile
-        );
-    }
-
-    /* A preview, not the repair, and the continuation says why twice over:
-     * untracking a name takes every claim beneath it, a directory's descendants
-     * including ones that stand at their own location under that very name; and
-     * the name leaves the branch, which is every machine's, while the collision
-     * that asked for the repair is this machine's roots alone — two names of
-     * one profile meet only where its roots put them, so a machine that keeps
-     * them apart still reads the one removed here. */
-    if (first_unkept) {
-        output_hint(
-            out, OUTPUT_NORMAL,
-            "Run 'dotta remove --dry-run %s %s' to see what untracking a name "
-            "would take", first_unkept->profile, first_unkept->storage_path
-        );
-        output_hintline(
-            out, OUTPUT_NORMAL,
-            "  A directory name takes everything beneath it, and the name leaves "
-            "the branch — only this machine's roots put the two at one place"
-        );
+    /* The repairs, in the shape this screen spells a repair: a dimmed key and a
+     * sentence under the block it belongs to, keys aligned — what the Issues
+     * and Unverifiable lists do for their tags, with the yellow annotation above
+     * playing the tag's part. `Hint:` is apply's voice and sync's, and this channel
+     * was the only thing in status that spoke it.
+     *
+     * Generic in both the profile and the path. The annotations say which profiles
+     * carry them, so one filled name would read as the only one wherever two
+     * do; and the path is the -v listing's to spell, where a name holding a space
+     * is read rather than pasted into a command it would break. `--dry-run` is
+     * the whole of the unused-path safety: dropping a directory name takes every
+     * claim beneath it, and the preview shows that rather than asserting it.
+     * Both are worth a line at all because nothing else offers them — neither
+     * claim has a row, so no completion source reaches one. */
+    if (unbound_shown || unused_shown) {
+        output_newline(out, OUTPUT_NORMAL);
+        if (unbound_shown) {
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  custom/ paths - 'dotta profile enable <profile> --target /path' "
+                "sets the target; 'dotta remove <profile> <path>' untracks"
+            );
+        }
+        if (unused_shown) {
+            /* The trailing space is the alignment: one key short of the other. */
+            output_hintline(
+                out, OUTPUT_NORMAL,
+                "  unused paths  - 'dotta remove --dry-run <profile> <path>' shows "
+                "what dropping one takes"
+            );
+        }
     }
 }
 

@@ -95,17 +95,18 @@ typedef struct {
  * higher-precedence profile holds the location (`overridden`), or this profile's
  * own other name stands there (`unkept`) — a second name of one profile being a
  * thing a branch can hold and a sync can bring here (core/manifest.h
- * manifest_unkept), whose repair is the health channel's on the same screen,
- * not this receipt's. A difference would name whichever cause the line happened
- * to be written for; the sum falls short of the captures only for a claim this
- * machine cannot place, which has no row to blame and goes unnamed.
+ * manifest_unkept, whose screen word is "unused path"), whose repair is the health
+ * channel's on the same screen, not this receipt's. A difference would name
+ * whichever cause the line happened to be written for; the sum falls short of
+ * the captures only for a claim this machine cannot place, which has no row to
+ * blame and goes unnamed.
  */
 typedef struct {
     bool updated;          /* The anchor pass ran and the transaction committed */
     size_t synced;         /* Files anchored under this profile's rows */
     size_t taken_over;     /* Of those, records taken over from another profile */
     size_t overridden;     /* Files whose location a higher-precedence profile holds */
-    size_t unkept;         /* Files committed under a name the view did not keep */
+    size_t unkept;         /* Files committed under a path the view does not use */
 } record_receipt_t;
 
 /**
@@ -1867,8 +1868,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     /* Each cause named by the count that checked it, never by
                      * the shortfall (record_receipt_t): a row of another profile
                      * is an override, a row of this one under another of its
-                     * own names is a name the view did not keep, and the health
-                     * channel carries that one's repair on the status screen. */
+                     * own names is an unused path, and the health channel carries
+                     * that one's repair on the status screen. */
                     if (record.overridden > 0) {
                         output_info(
                             out, OUTPUT_NORMAL,
@@ -1879,9 +1880,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     if (record.unkept > 0) {
                         output_info(
                             out, OUTPUT_NORMAL,
-                            "Note: %zu file%s under a name the view does not keep; "
-                            "'dotta status -v' names it",
-                            record.unkept, record.unkept == 1 ? "" : "s"
+                            "Note: %zu file%s captured under an unused path; "
+                            "'dotta status -v' names %s",
+                            record.unkept, record.unkept == 1 ? "" : "s",
+                            record.unkept == 1 ? "it" : "them"
                         );
                     }
                 }

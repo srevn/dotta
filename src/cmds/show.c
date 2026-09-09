@@ -209,7 +209,9 @@ static error_t *print_blob_content(
  * The branch's tip, or the tree of the commit the user named — resolved in the
  * branch, so a ref that means something elsewhere means nothing here — with the
  * commit's own header lines printed from the same handle, which is released before
- * this returns. The tree is the caller's.
+ * this returns. A resolved commit is always in hand (sys/gitops.h): the handle
+ * is the tree's source and the header's, and neither reads it conditionally.
+ * The tree is the caller's.
  */
 static error_t *show_source(
     const dotta_ctx_t *ctx,
@@ -241,49 +243,50 @@ static error_t *show_source(
     );
     if (err) return err;
 
-    err = gitops_get_tree_from_commit(repo, &commit_oid, out_tree);
-    if (err) {
+    /* The commit is in hand, so its tree is one dereference and not a second
+     * lookup by oid. */
+    int ret = git_commit_tree(out_tree, commit);
+    if (ret < 0) {
         git_commit_free(commit);
-        return error_wrap(err, "Failed to load tree from commit '%s'", commit_ref);
+        return error_wrap(
+            error_from_git(ret), "Failed to load tree from commit '%s'", commit_ref
+        );
     }
 
-    if (commit) {
-        char oid_str[8];
-        git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
 
-        const git_signature *author = git_commit_author(commit);
-        time_t commit_time = (time_t) author->when.time;
-        char time_str[64];
-        format_relative_time(commit_time, time_str, sizeof(time_str));
+    const git_signature *author = git_commit_author(commit);
+    time_t commit_time = (time_t) author->when.time;
+    char time_str[64];
+    format_relative_time(commit_time, time_str, sizeof(time_str));
 
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
-            oid_str
-        );
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
-            time_str
-        );
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
-            author->name, author->email
-        );
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
+        oid_str
+    );
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
+        time_str
+    );
+    output_styled(
+        out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
+        author->name, author->email
+    );
 
-        /* Show first line of commit message */
-        const char *msg = git_commit_message(commit);
-        if (msg) {
-            const char *newline = strchr(msg, '\n');
-            if (newline) {
-                output_styled(
-                    out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
-                    (int) (newline - msg), msg
-                );
-            } else {
-                output_styled(
-                    out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n",
-                    msg
-                );
-            }
+    /* Show first line of commit message */
+    const char *msg = git_commit_message(commit);
+    if (msg) {
+        const char *newline = strchr(msg, '\n');
+        if (newline) {
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
+                (int) (newline - msg), msg
+            );
+        } else {
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n", msg
+            );
         }
     }
 
@@ -461,13 +464,14 @@ static error_t *show_commit(
         goto cleanup;
     }
 
-    /* Get commit tree */
-    err = gitops_get_tree_from_commit(repo, &commit_oid, &commit_tree);
-    if (err) {
+    /* Get commit tree — from the commit in hand, not by a second lookup */
+    int ret = git_commit_tree(&commit_tree, commit);
+    if (ret < 0) {
+        err = error_from_git(ret);
         goto cleanup;
     }
 
-    /* Get parent tree (NULL if first commit) */
+    /* Get parent tree (NULL if first commit) — only its oid is in hand */
     unsigned int parent_count = git_commit_parentcount(commit);
     if (parent_count > 0) {
         const git_oid *parent_oid = git_commit_parent_id(commit, 0);
@@ -566,7 +570,7 @@ static error_t *show_commit(
     output_print(out, OUTPUT_NORMAL, "\n\n");
 
     /* Print the diff with color */
-    int ret = git_diff_print(
+    ret = git_diff_print(
         diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out
     );
     if (ret < 0) {

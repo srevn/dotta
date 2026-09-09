@@ -5,22 +5,18 @@
  *
  *   path_input_resolve    - the key the input names: a location (a filesystem
  *                           shape, normalized and located) or a storage path
- *                           (validated, as typed) — the pathspec, show and list
- *                           without a profile, path_input_classify
+ *                           (validated, as typed) — the pathspec, and every verb
+ *                           that takes a path from the command line
  *
  *   path_input_normalize  - filesystem path -> absolute filesystem path
  *                           (the commands that walk, bind or test a spelling:
  *                            add, the binders' --target, ignore --test, the
  *                            completion)
  *
- * and the former resolver, path_input_classify — a location named through the
- * asker's own roots — kept for the query verbs until a claim is found where it
- * stands.
- *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the normalizer, then asks
  * the table where the spelling stands. The topology (mount_spec_for_path,
- * mount_validate_storage, mount_locate, mount_name) and the filesystem primitives
+ * mount_validate_storage, mount_locate) and the filesystem primitives
  * (fs_expand_tilde, fs_make_absolute, fs_normalize_path) are delegated to the
  * layers below.
  */
@@ -145,45 +141,4 @@ error_t *path_input_normalize(const char *input, char **out) {
     free(absolute);
 
     return err;
-}
-
-error_t *path_input_classify(
-    const mount_table_t *table, const char *profile, const char *input,
-    arena_t *arena, const char **out_storage
-) {
-    CHECK_NULL(table);
-    CHECK_NULL(input);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_storage);
-
-    *out_storage = NULL;
-
-    path_input_t arg;
-    error_t *err = path_input_resolve(table, input, arena, &arg);
-    if (err) return err;
-
-    if (arg.key == PATH_KEY_STORAGE) {
-        *out_storage = arg.storage_path;
-        return NULL;
-    }
-
-    /* The name the asker's own roots give it: mount_name produces a well-formed
-     * storage path by construction — the label is one of three compile-time
-     * constants, and the tail is a located path past a validated target — so
-     * its output is not re-validated. The resolver located, and the namer does
-     * not locate. */
-    err = mount_name(table, profile, arg.location, arena, out_storage);
-    if (err) return err;
-
-    if (!*out_storage) {
-        /* The input is a root of that namespace itself ($HOME, /, or the asker's
-         * own target). A root has no name; the verbs that ask this function take
-         * a claim, and a root holds none. */
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Path '%s' is a mount root and has no storage representation", input
-        );
-    }
-
-    return NULL;
 }

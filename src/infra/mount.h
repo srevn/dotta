@@ -407,11 +407,11 @@ error_t *mount_locate(
  *   - ERR_MEMORY on arena allocation failure.
  *
  * Readers: the last rung of the namer's ascent (core/manifest.c manifest_ascend),
- * add's argument arm and its walk (cmds/add.c), and the interim resolver `remove`
- * still shares (infra/path.h path_input_classify). `ignore --test` was one until
- * its subject became the whole ascent's (core/manifest.h manifest_name), and
- * show, list and revert until their claim was found where it stands
- * (core/profiles.h profile_claim_name); add's two are what C3 takes.
+ * and add's argument arm and its walk (cmds/add.c), which C3 takes. `ignore --test`
+ * was one until its subject became the whole ascent's (core/manifest.h
+ * manifest_name), and the five `-p` verbs shared an interim resolver over it
+ * (infra/path.h) until each found its claim where it stands (core/profiles.h
+ * profile_claim_name) or matched by location outright (cmds/remove.c).
  *
  * @param table       Mount table (must not be NULL)
  * @param profile     The asker, or NULL for the shared roots alone

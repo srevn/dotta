@@ -262,39 +262,6 @@ error_t *profile_has_custom_files(
 );
 
 /**
- * Build inverted index of all files across profiles
- *
- * Creates a hashmap that maps storage paths to lists of profile names, enabling
- * O(1) lookups for multi-profile conflict detection and overlap analysis.
- *
- * The index maps: storage_path (char*) -> string_array_t* (list of profile names)
- *
- * This is a performance optimization for operations that need to check which
- * profiles contain specific files. Instead of loading each profile's tree
- * repeatedly (O(N×M×GitOps)), this function loads all profiles once (O(M×P))
- * and provides O(1) lookups.
- *
- * Usage:
- * - Multi-profile conflict detection (update, remove commands)
- * - File overlap analysis
- * - Profile relationship mapping
- *
- * Complexity: O(M×P) where M = profile count, P = avg files per profile
- *
- * @param repo Repository (must not be NULL)
- * @param exclude_profile Optional profile name to exclude from index (can be NULL)
- * @param out_index Output hashmap: storage_path -> string_array_t* of profile names
- *                  (must not be NULL, caller must free with hashmap_free(...,
- *                  string_array_free))
- * @return Error or NULL on success
- */
-error_t *profile_build_file_index(
-    git_repository *repo,
-    const char *exclude_profile,
-    hashmap_t **out_index
-);
-
-/**
  * The name `profile` has for the argument in `tree`: the claim standing there,
  * or the name a claim there would take
  *
@@ -423,6 +390,47 @@ error_t *profile_discover_claims(
     const path_input_t *arg,
     arena_t *arena,
     profile_claims_t *out
+);
+
+/**
+ * location → the claims every local branch but `exclude` places there
+ *
+ * Each branch read once through its own view of its tip under this machine's
+ * table, so a claim is keyed by where it stands and never by what it is called:
+ * two profiles bound at two targets holding one name are two locations and meet
+ * no key of each other's, and one profile's two names for one location are one
+ * row and one entry. A claim this machine cannot place stands nowhere and is
+ * not indexed. Directory claims are indexed like any row — the branch claims
+ * the directory, and a caller asking who else is at a place is owed it.
+ *
+ * The map borrows its keys — a row's own location string, the arena's — and its
+ * values are the arena's: free the map alone, hashmap_free(index, NULL).
+ *
+ * Complete or an error, like its sibling: a short index is an "also in" a user
+ * reads as complete. What a failure means is the caller's, and remove's is advisory
+ * — it says what it could not read and drops the section rather than refuse the
+ * untrack, since a local branch nobody enabled must not stop the repair and must
+ * not hide a claim in silence either.
+ *
+ * Cost: one view per branch — a tree walk and a sheet load each — then O(T log
+ * T) over T placed rows for the runs.
+ *
+ * Reader: remove's overlap analysis.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param mounts This machine's mount table (must not be NULL)
+ * @param exclude A branch to leave out, or NULL for every one of them
+ * @param arena Arena that owns the claims (must not be NULL)
+ * @param out_index location (const char *) -> profile_claims_t * (must not be
+ *                  NULL; free with hashmap_free(index, NULL))
+ * @return Error or NULL on success
+ */
+error_t *profile_build_location_index(
+    git_repository *repo,
+    const mount_table_t *mounts,
+    const char *exclude,
+    arena_t *arena,
+    hashmap_t **out_index
 );
 
 #endif /* DOTTA_PROFILES_H */

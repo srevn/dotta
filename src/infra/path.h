@@ -6,9 +6,8 @@
  * the one the user named and manufactures neither from the other: what a profile
  * calls a location is a claim standing in a branch, and a command asks the branch
  * (core/manifest.h, the view by location; core/profiles.h profile_claim_name,
- * one profile's own). The one exception is path_input_classify below, the former
- * resolver, which still manufactures a name from a location for the one verb
- * that has no branch reader.
+ * one profile's own). There is no exception left: nothing here manufactures one
+ * key from the other, and no surface below offers to.
  *
  * The single chokepoint for input-shape dispatch; the topology primitives
  * (mount_locate, mount_resolve, mount_table_build) live one layer down in
@@ -81,7 +80,8 @@ typedef struct {
  * a name by its holders); show, list and revert with one, which hand the key to
  * the branch that would hold it (core/profiles.h profile_claim_name,
  * profile_discover_claims); export, which hands each key to the arm that answers
- * in it (cmds/export.c); path_input_classify.
+ * in it (cmds/export.c); remove, which matches its own claims by the key the
+ * argument named (cmds/remove.c).
  *
  * @param table Mount table (must not be NULL)
  * @param input User-provided path string (must not be NULL)
@@ -125,38 +125,5 @@ error_t *path_input_resolve(
  * @return Error or NULL on success
  */
 error_t *path_input_normalize(const char *input, char **out);
-
-/**
- * The resolver's former answer: a filesystem argument named through its roots.
- *
- * The name the asker's own roots give a location (infra/mount.h mount_name) —
- * which is the last rung of the question, not the question: the claim standing
- * there, in the branch that holds it, is what a verb actually wants. Kept under
- * its own name for the one verb that still asks it (remove) until its arguments
- * match by location too; deleted with that landing. Not a reader for new code —
- * export left this list when its location arm began selecting rows (cmds/export.c),
- * and show, list and revert left it when the claim became something found where
- * it stands (core/profiles.h profile_claim_name). A storage shape is the name
- * as typed; a root is refused as it always was ("is a mount root").
- *
- * `profile` is the asker: with none, the location is named through HOME and `/`
- * alone, so a claim a bound profile holds under `custom/` is not found — a clean
- * miss until the search reads the branches.
- *
- * @param table       Mount table (must not be NULL)
- * @param profile     The asker, or NULL for the shared roots alone
- * @param input       User-provided path string (must not be NULL)
- * @param arena       Arena that owns the returned storage path
- * @param out_storage Arena-borrowed storage path on success; NULL after an error
- *                    (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *path_input_classify(
-    const mount_table_t *table,
-    const char *profile,
-    const char *input,
-    arena_t *arena,
-    const char **out_storage
-);
 
 #endif /* DOTTA_PATH_H */

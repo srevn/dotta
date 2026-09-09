@@ -85,8 +85,8 @@ static error_t *validate_options(const cmd_remove_options_t *opts) {
  */
 typedef struct {
     const char *storage_path;      /* arena */
-    const char *filesystem_path;   /* arena; the storage path itself when this
-                                    * machine cannot project the claim */
+    const char *filesystem_path;   /* arena; NULL when this machine places the
+                                    * claim nowhere — an unbound custom/ one */
     path_kind_t kind;
 } removal_claim_t;
 
@@ -197,28 +197,34 @@ static error_t *settle_let_go(
 /**
  * Resolve the arguments to the claims they remove
  *
- * Accepts both filesystem paths and storage paths as input. Each argument matches
- * claims of either kind: the exact claim and — at a '/' boundary, never a false
- * prefix like home/dir2 for home/dir — every claim beneath it (naming a directory
- * means untracking it whole). A claim is removed once, however many arguments
- * match it.
- *
  * The claims array starts as everything the branch holds, in branch order (the
  * tree's blobs, then the directory items) — read from `tree`, the one the caller's
  * stage opened at, so the claims, the sheet and the commit describe one tip;
- * the arguments mark what they take, and the array compacts to just that. The
- * filesystem path is filled at compaction — it is display and record plumbing,
- * not resolution: when this machine cannot project a claim, the storage path
- * stands in and removal proceeds regardless.
+ * the arguments mark what they take, and the array compacts to just that.
+ *
+ * Where each claim stands is established before the match, not after it, because
+ * the match is by the key the argument named (infra/path.h) and neither key is
+ * manufactured from the other. A storage argument matches over the claims' names;
+ * a location argument matches over the locations they were placed at — so `remove
+ * web ~/jail/etc/x` takes the claim standing there under whatever name, and a
+ * root takes everything beneath it. Either way an argument matches the exact
+ * claim and — at a '/' boundary, never a false prefix like home/dir2 for home/dir
+ * — every claim beneath it: naming a directory means untracking it whole. A claim
+ * is removed once, however many arguments match it.
+ *
+ * A claim this machine places nowhere — an unbound custom/ one — keeps a NULL
+ * location and no location argument reaches it; its name still does, which is
+ * how such a claim is untracked at all. Nothing stands in for the location: the
+ * screens print the name outright, the hook's file list renders it where there
+ * is no location to hand over, and the overlap analysis and the record read the
+ * NULL as the fact it is.
  *
  * The branch's metadata rides out through `metadata_out` for the commit's edit
  * — loaded once, where the directory claims are enumerated; an empty sheet when
  * the branch carries none (the loader's contract). Caller frees.
  *
  * @param ctx Dispatch context (must not be NULL). ctx->run.mounts covers HOME,
- *            ROOT, and every enabled profile's binding. Unenabled-profile lookups
- *            (custom/X) resolve to no location, which the compaction handles as
- *            "no filesystem path on this machine".
+ *            ROOT, and every enabled profile's binding.
  * @param tree The branch's tree as the stage opened it — the universe of claims
  *            (must not be NULL)
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
@@ -327,17 +333,25 @@ static error_t *resolve_removal_claims(
         };
     }
 
+    /* Where each claim stands on this machine, or nowhere: the key a location
+     * argument matches against, established before the match rather than after
+     * it. A custom/ claim under a profile with no target here has no location
+     * and gets none — a miss the location arm below reads as "not this claim".
+     * Every path here is a validated storage path (the tree walk's own gate and
+     * the sheet's parse both refuse anything else), so the only failure left is
+     * allocation, and that is nobody's to swallow. */
+    for (size_t j = 0; j < claim_count; j++) {
+        err = mount_resolve(
+            mounts, profile, claims[j].storage_path, ctx->arena,
+            &claims[j].filesystem_path
+        );
+        if (err) goto cleanup;
+    }
+
     /* Match each argument, marking the claims it takes */
     for (size_t i = 0; i < path_count; i++) {
-        const char *input_path = input_paths[i];
-        const char *storage_path = NULL;
-
-        /* The name this profile's own roots give the argument (file need not
-         * exist; the location match over the profile's own claims is the next
-         * commit's answer) */
-        err = path_input_classify(
-            mounts, profile, input_path, ctx->arena, &storage_path
-        );
+        path_input_t arg;
+        err = path_input_resolve(mounts, input_paths[i], ctx->arena, &arg);
         if (err) {
             if (!opts->force) {
                 goto cleanup;
@@ -345,21 +359,30 @@ static error_t *resolve_removal_claims(
             /* With --force, skip this path */
             output_warning(
                 out, OUTPUT_VERBOSE, "Skipping invalid path '%s': %s",
-                input_path, error_message(err)
+                input_paths[i], error_message(err)
             );
             error_free(err);
             err = NULL;
             continue;
         }
 
-        size_t storage_path_len = strlen(storage_path);
+        /* The sum type, read at the use site: a storage argument keys against
+         * the claims' names, a location against where they stand. The filesystem
+         * root is spelled "" — the one prefix every absolute path is beneath,
+         * as the table spells it and the pathspec reads it. */
+        const char *subject = arg.key == PATH_KEY_STORAGE ? arg.storage_path
+                              : strcmp(arg.location, "/") == 0 ? "" : arg.location;
+        size_t subject_len = strlen(subject);
         size_t matches_found = 0;
 
         for (size_t j = 0; j < claim_count; j++) {
+            const char *key = arg.key == PATH_KEY_STORAGE
+                              ? claims[j].storage_path : claims[j].filesystem_path;
+            if (!key) continue;                       /* it stands nowhere */
+
             /* The exact claim, or one beneath it at a directory boundary */
-            if (!str_starts_with(claims[j].storage_path, storage_path)) continue;
-            char boundary = claims[j].storage_path[storage_path_len];
-            if (boundary != '\0' && boundary != '/') continue;
+            if (strcmp(key, subject) != 0 &&
+                !str_path_beneath(key, subject, subject_len)) continue;
 
             matches_found++;
             taken[j] = true;
@@ -370,36 +393,22 @@ static error_t *resolve_removal_claims(
                 err = ERROR(
                     ERR_NOT_FOUND, "Path '%s' not found in profile '%s'\n"
                     "Hint: Use 'dotta list --profile %s' to see tracked paths",
-                    storage_path, profile, profile
+                    input_paths[i], profile, profile
                 );
                 goto cleanup;
             }
             /* With --force, warn and skip */
             output_warning(
                 out, OUTPUT_VERBOSE, "Path '%s' not found in profile, skipping",
-                storage_path
+                input_paths[i]
             );
         }
     }
 
-    /* Compact to the taken claims and fill their filesystem paths — the path as
-     * this profile deploys the claim, for display and the hook context. No location
-     * when the profile has no --target on this machine; genuine resolve errors
-     * (malformed storage, OOM) are non-fatal here too — the storage path serves
-     * as fallback either way, and downstream consumers handle it gracefully:
-     * state lookups return "not found", display shows storage format. */
+    /* Compact to the taken claims. */
     size_t taken_count = 0;
     for (size_t j = 0; j < claim_count; j++) {
-        if (!taken[j]) continue;
-
-        const char *fs_path = NULL;
-        error_t *resolve_err = mount_resolve(
-            mounts, profile, claims[j].storage_path, ctx->arena, &fs_path
-        );
-        if (resolve_err) error_free(resolve_err);
-
-        claims[j].filesystem_path = fs_path ? fs_path : claims[j].storage_path;
-        claims[taken_count++] = claims[j];
+        if (taken[j]) claims[taken_count++] = claims[j];
     }
 
     /* Check if the arguments took any claims */
@@ -427,145 +436,155 @@ cleanup:
 }
 
 /**
- * Analyze multi-profile conflicts for claims to be removed
+ * One location this removal shares with other branches
  *
- * Checks each file claim against all other profiles and determines:
- * - Which other profiles contain the file
- * - Whether the file is owned by another profile in the view — the enabled set's
- *   precedence gives the path to a profile other than the one the user is removing
- *   from, so the removal changes nothing on disk
+ * The claim removed there — the first, where a pair of the profile's own names
+ * is removed at one place — and who else stands there under what name.
+ */
+typedef struct {
+    const char *location;
+    const char *storage_path;
+    const profile_claims_t *others;
+} removal_overlap_t;
+
+/**
+ * The multi-profile section, as data
+ *
+ * One entry per location this removal shares with another branch, and the one
+ * fact its closing line reads: whether the view's winner at any of those locations
+ * is a different enabled profile, which is what makes a removal change nothing
+ * on disk.
+ */
+typedef struct {
+    const removal_overlap_t *entries;
+    size_t count;
+    bool provided_by_other;
+} removal_overlaps_t;
+
+/**
+ * What this removal shares with the other profiles
+ *
+ * Keyed by location, not by name (core/profiles.h profile_build_location_index):
+ * two profiles bound at two targets holding one name are two paths and share
+ * nothing, while a portable name and a binding's name at one place do share and
+ * used to go unsaid. A claim this machine places nowhere meets nothing and is
+ * skipped.
+ *
+ * The index is read once per location and taken out of the map, so a pair of
+ * the profile's own names removed at one place is one line and one count — the
+ * data is the dedup, and no seen-set or second scan is needed.
+ *
+ * `provided_by_other` is the view's fact, not the record's: the winner at the
+ * location is another enabled profile, so the path stays as it is. It is asked
+ * only where the index answered, which is sound — a winner other than this profile
+ * holds a row at the location and is therefore in the index, the excluded branch
+ * being this profile itself.
  *
  * The view is built here, tolerantly: remove must run on an enabled set the builder
  * refuses (that is how an offending claim gets untracked), so a failed build
- * leaves the deployed bit false and the warning keeps its neutral closing lines.
- *
- * Directory claims are not in the file index and get no cross-profile warning:
- * the record step's fallback detection covers the semantic half (a lower enabled
- * profile still claiming the path keeps the record, which reads [reassigned]
- * until apply).
- *
- * Performance: O(M×P + N) where M=profiles, P=avg files/profile, N=claims checked
- * Uses centralized profile_build_file_index() for optimal performance.
- *
- * Hands the profile file index (storage_path → the other profiles claiming it)
- * to the caller so the display can borrow from it; free with hashmap_free(...,
- * string_array_free_cb).
+ * leaves the bit false and the closing lines keep their neutral wording. The
+ * index is not tolerant — a short index is an "also in" a user reads as complete
+ * — and its failure is the caller's to weigh.
  */
-static error_t *analyze_multi_profile_conflicts(
+static error_t *analyze_overlaps(
     const dotta_ctx_t *ctx,
     const removal_claim_t *claims,
     size_t claim_count,
     const char *current_profile,
-    hashmap_t **profile_index_out,
-    size_t *multi_profile_count_out,
-    bool *has_deployed_from_other_out
+    removal_overlaps_t *out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(claims);
     CHECK_NULL(current_profile);
-    CHECK_NULL(profile_index_out);
-    CHECK_NULL(multi_profile_count_out);
-    CHECK_NULL(has_deployed_from_other_out);
+    CHECK_NULL(out);
 
-    git_repository *repo = ctx->run.repo;
-    const state_t *state = ctx->run.state;
+    *out = (removal_overlaps_t){ 0 };
 
-    /* Build profile file index once (O(M×P) - loads all profiles) Uses centralized
-     * function from core/profiles.c */
-    hashmap_t *profile_index = NULL;
-    error_t *err = profile_build_file_index(repo, current_profile, &profile_index);
-    if (err) {
-        return error_wrap(err, "Failed to build profile index");
-    }
+    hashmap_t *index = NULL;
+    error_t *err = profile_build_location_index(
+        ctx->run.repo, ctx->run.mounts, current_profile, ctx->arena, &index
+    );
+    if (err) return err;
 
-    /* The view, for the deployed bit alone — NULL on a set the builder refuses
-     * (see the tolerance note above). */
     manifest_t *view = NULL;
-    error_t *view_err = manifest_build(repo, state, ctx->arena, &view);
-    if (view_err) {
-        error_free(view_err);
+    error_t *view_err = manifest_build(
+        ctx->run.repo, ctx->run.state, ctx->arena, &view
+    );
+    if (view_err) error_free(view_err);
+
+    removal_overlap_t *overlaps = arena_calloc(
+        ctx->arena, claim_count, sizeof(*overlaps)
+    );
+    if (!overlaps) {
+        manifest_free(view);
+        hashmap_free(index, NULL);
+        return ERROR(ERR_MEMORY, "Failed to allocate the overlaps");
     }
 
-    size_t multi_profile_count = 0;
-    bool has_deployed_from_other = false;
-
-    /* Check each claim using O(1) index lookups */
+    size_t count = 0;
+    bool provided_by_other = false;
     for (size_t i = 0; i < claim_count; i++) {
         const removal_claim_t *claim = &claims[i];
+        if (!claim->filesystem_path) continue;
 
-        /* Lookup profiles containing this file - O(1) */
-        string_array_t *indexed_profiles = hashmap_get(
-            profile_index, claim->storage_path
-        );
-        if (!indexed_profiles || indexed_profiles->count == 0) {
-            continue;
-        }
-        multi_profile_count++;
+        void *others = NULL;
+        if (!hashmap_remove(index, claim->filesystem_path, &others)) continue;
 
-        /* Check if another profile owns the path in the view. Only valid with
-         * actual filesystem paths (absolute), not storage path fallbacks (relative,
-         * e.g., "home/.bashrc"). */
-        if (view && claim->filesystem_path[0] == '/') {
-            const manifest_row_t *row = manifest_lookup(view, claim->filesystem_path);
-            if (row && strcmp(row->profile, current_profile) != 0) {
-                has_deployed_from_other = true;
-            }
+        overlaps[count++] = (removal_overlap_t){
+            claim->filesystem_path, claim->storage_path, others
+        };
+
+        const manifest_row_t *row = manifest_lookup(view, claim->filesystem_path);
+        if (row && strcmp(row->profile, current_profile) != 0) {
+            provided_by_other = true;
         }
     }
 
     manifest_free(view);
+    hashmap_free(index, NULL);
 
-    *profile_index_out = profile_index;
-    *multi_profile_count_out = multi_profile_count;
-    *has_deployed_from_other_out = has_deployed_from_other;
+    *out = (removal_overlaps_t){ overlaps, count, provided_by_other };
 
     return NULL;
 }
 
 /**
- * Display multi-profile warnings to the user
+ * Display the overlap section to the user
  *
- * Shows which files exist in multiple profiles and explains the implications;
- * the closing line names the fate `delete_files` chose. Borrows the analysis's
- * profile index for each file's "also in" list.
+ * One line per shared location: the path, then each other profile and — where
+ * its name for the place differs from the removed claim's — the name it holds
+ * it under, since under two bindings one location wears two names. The closing
+ * line names the fate `delete_files` chose.
  */
-static void display_multi_profile_warnings(
+static void display_overlaps(
     output_t *out,
-    const removal_claim_t *claims,
-    size_t claim_count,
-    const hashmap_t *profile_index,
-    size_t multi_profile_count,
-    bool has_deployed_from_other,
+    const removal_overlaps_t *overlaps,
     const char *current_profile,
     bool delete_files
 ) {
-    if (!out || multi_profile_count == 0) return;
+    if (!out || overlaps->count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Multi-profile path warning");
     output_warning(
         out, OUTPUT_NORMAL, "Found %zu path%s in multiple profiles:",
-        multi_profile_count, multi_profile_count == 1 ? "" : "s"
+        overlaps->count, overlaps->count == 1 ? "" : "s"
     );
 
-    /* Display each multi-profile file */
-    for (size_t i = 0; i < claim_count; i++) {
-        const string_array_t *others = hashmap_get(
-            profile_index, claims[i].storage_path
-        );
-        if (!others || others->count == 0) {
-            continue;
-        }
+    for (size_t i = 0; i < overlaps->count; i++) {
+        const removal_overlap_t *overlap = &overlaps->entries[i];
 
         output_styled(
-            out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:",
-            claims[i].filesystem_path
+            out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->location
         );
+        for (size_t j = 0; j < overlap->others->count; j++) {
+            const profile_claim_t *other = &overlap->others->entries[j];
 
-        for (size_t j = 0; j < others->count; j++) {
-            output_styled(
-                out, OUTPUT_NORMAL, " {cyan}%s{reset}",
-                others->items[j]
-            );
+            output_styled(out, OUTPUT_NORMAL, " {cyan}%s{reset}", other->profile);
+            if (strcmp(other->storage_path, overlap->storage_path) != 0) {
+                output_styled(
+                    out, OUTPUT_NORMAL, " {dim}(as %s){reset}", other->storage_path
+                );
+            }
         }
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -578,10 +597,10 @@ static void display_multi_profile_warnings(
         current_profile
     );
 
-    if (has_deployed_from_other) {
+    if (overlaps->provided_by_other) {
         output_warning(
             out, OUTPUT_NORMAL,
-            "Some paths are currently deployed from other profiles."
+            "Some paths are provided by another enabled profile."
         );
         output_info(
             out, OUTPUT_NORMAL,
@@ -761,8 +780,7 @@ static error_t *remove_files_from_profile(
     removal_claim_t *claims = NULL;        /* arena — the resolver's */
     size_t claim_count = 0;
     metadata_t *metadata = NULL;           /* the branch's, from the resolver (owned) */
-    hashmap_t *profile_index = NULL;       /* storage_path → the other profiles claiming it (owned) */
-    size_t multi_profile_count = 0;
+    removal_overlaps_t overlaps = { 0 };   /* arena — the analysis's */
     string_array_t *removed_paths = NULL;
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
@@ -798,22 +816,22 @@ static error_t *remove_files_from_profile(
         goto cleanup;
     }
 
-    /* Analyze multi-profile conflicts (critical safety check) */
-    bool has_deployed_from_other = false;
-    err = analyze_multi_profile_conflicts(
-        ctx, claims, claim_count, opts->profile, &profile_index,
-        &multi_profile_count, &has_deployed_from_other
-    );
-
+    /* What the removal shares with the other branches (critical safety check).
+     * Advisory: the untrack proceeds without the section and says why, since a
+     * local branch nobody enabled must not stop the repair — and must not hide
+     * a claim in silence either, an absent section reading as "no overlap". */
+    err = analyze_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
     if (err) {
-        goto cleanup;
+        output_warning(
+            out, OUTPUT_NORMAL, "Could not read the other profiles' claims: %s",
+            error_message(err)
+        );
+        error_free(err);
+        err = NULL;
     }
 
-    /* Display multi-profile warnings BEFORE any operation */
-    display_multi_profile_warnings(
-        out, claims, claim_count, profile_index, multi_profile_count,
-        has_deployed_from_other, opts->profile, opts->delete_files
-    );
+    /* The overlap section, BEFORE any operation */
+    display_overlaps(out, &overlaps, opts->profile, opts->delete_files);
 
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
@@ -858,10 +876,6 @@ static error_t *remove_files_from_profile(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Done with the profile index — the display was its last reader */
-    hashmap_free(profile_index, string_array_free_cb);
-    profile_index = NULL;
-
     /* Selection: the accepted claims, before anything fires. In interactive mode
      * each claim is confirmed here, so the hooks and the plan below see exactly
      * what will happen — a declined claim is out before the pre-hook names the
@@ -898,8 +912,12 @@ static error_t *remove_files_from_profile(
     }
     for (size_t i = 0; i < claim_count; i++) {
         /* Arena-backed and never written through; the cast bridges the hook
-         * contract's char *const *. */
-        hook_paths[i] = (char *) claims[i].filesystem_path;
+         * contract's char *const *. A claim this machine places nowhere has no
+         * path to hand over, and its name goes in the field's stead — the shape
+         * a hook comparing DOTTA_FILE_N against $HOME has always received here,
+         * spelled at the site rather than substituted upstream. */
+        hook_paths[i] = (char *) (claims[i].filesystem_path ? claims[i].filesystem_path
+                                                            : claims[i].storage_path);
     }
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
@@ -1035,19 +1053,22 @@ static error_t *remove_files_from_profile(
     size_t anchor_count = 0;
     record_err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
 
-    /* The candidates, as this profile deploys them, each carrying the bucket it
-     * came from and joined to its record — a candidate exists only where one of
-     * this profile's records stands, so a non-empty set is the write intent.
-     * UNBOUND (custom/ under a profile with no target here) names nothing on
-     * this machine: nothing to settle. A genuine resolve error (malformed storage,
-     * OOM) skips the path the same way — the compaction's fallback stance above,
-     * spelled here. */
+    /* The candidates, as this profile deploys them, each joined to its record —
+     * a candidate exists only where one of this profile's records stands, so a
+     * non-empty set is the write intent. A claim that stands nowhere on this
+     * machine (custom/ under a profile with no target here) names nothing to
+     * settle, and is not one.
+     *
+     * The two buckets are placed differently because they were placed already,
+     * or never: a removed claim carries the location the resolver established
+     * before the match (resolve_removal_claims), while a pruned directory entry
+     * was no claim of the arguments and is placed here. */
     removal_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     if (!record_err && anchor_count > 0) {
         candidates = arena_alloc(
             ctx->arena,
-            (removed_paths->count + pruned_dirs.count) * sizeof(*candidates)
+            (claim_count + pruned_dirs.count) * sizeof(*candidates)
         );
         anchor_index = hashmap_borrow(anchor_count);
         if (!candidates || !anchor_index) {
@@ -1058,26 +1079,38 @@ static error_t *remove_files_from_profile(
                 anchor_index, anchors[i].filesystem_path, &anchors[i]
             );
         }
-        const string_array_t *let_go[] = { removed_paths, &pruned_dirs };
-        for (size_t b = 0; !record_err && b < sizeof(let_go) / sizeof(let_go[0]); b++) {
-            for (size_t i = 0; i < let_go[b]->count; i++) {
-                const char *fs_path = NULL;
-                error_t *resolve_err = mount_resolve(
-                    mounts, opts->profile, let_go[b]->items[i], ctx->arena, &fs_path
-                );
-                if (resolve_err) {
-                    error_free(resolve_err);
-                    continue;
-                }
-                if (!fs_path) continue;
-                const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
-                if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
-                candidates[candidate_count++] = (removal_candidate_t){
-                    .path = fs_path,
-                    .anchor = anchor,
-                    .named = (let_go[b] == removed_paths),
-                };
+
+        /* The claims the arguments took: the user's word reaches all of them
+         * (settle_let_go). */
+        for (size_t i = 0; !record_err && i < claim_count; i++) {
+            const char *fs_path = claims[i].filesystem_path;
+            if (!fs_path) continue;
+            const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
+            if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
+            candidates[candidate_count++] = (removal_candidate_t){
+                .path = fs_path, .anchor = anchor, .named = true
+            };
+        }
+
+        /* The entries the metadata step pruned: nobody asked for them, so the
+         * flag does not speak to them. A resolve that fails here skips the path
+         * — Git stands, and an unsettled record is the orphan the next apply
+         * reads and releases. */
+        for (size_t i = 0; !record_err && i < pruned_dirs.count; i++) {
+            const char *fs_path = NULL;
+            error_t *resolve_err = mount_resolve(
+                mounts, opts->profile, pruned_dirs.items[i], ctx->arena, &fs_path
+            );
+            if (resolve_err) {
+                error_free(resolve_err);
+                continue;
             }
+            if (!fs_path) continue;
+            const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
+            if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
+            candidates[candidate_count++] = (removal_candidate_t){
+                .path = fs_path, .anchor = anchor, .named = false
+            };
         }
     }
 
@@ -1187,7 +1220,6 @@ cleanup:
     free(message);
     string_array_deinit(&pruned_dirs);
     if (removed_paths) string_array_free(removed_paths);
-    if (profile_index) hashmap_free(profile_index, string_array_free_cb);
     if (metadata) metadata_free(metadata);
     stage_free(stage);
 

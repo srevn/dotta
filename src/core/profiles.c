@@ -746,159 +746,107 @@ error_t *profile_has_custom_files(
 }
 
 /**
- * Context for file_index_callback
- */
-struct file_index_ctx {
-    hashmap_t *index;          /* Target hashmap: storage_path -> string_array_t* */
-    const char *branch_name;   /* Current branch (borrowed from all_branches) */
-    error_t *error;            /* Error propagation */
-    bool fatal;                /* If true, error is unrecoverable (propagate to caller) */
-};
-
-/**
- * Tree walk callback that populates the file index directly
+ * By location, then by profile
  *
- * Inserts each file's storage path into the index hashmap during the walk,
- * eliminating the intermediate string_array_t that the old approach needed per
- * branch (each path was strdup'd into the array, strdup'd again into the hashmap,
- * then the array copy was freed).
+ * Equal locations sort together, so the rows standing at one location form a
+ * contiguous run; the profile breaks the tie, and the order is total because
+ * one branch places one row per location. The name would not be: two branches
+ * can hold one name at one location.
  */
-static int file_index_callback(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
-) {
-    struct file_index_ctx *ctx = (struct file_index_ctx *) payload;
+static int index_order(const void *a, const void *b) {
+    const manifest_row_t *const *ra = a;
+    const manifest_row_t *const *rb = b;
 
-    char storage_path[PROFILE_TREE_PATH_MAX];
-    if (!tree_entry_content_path(
-        root, entry, storage_path, sizeof(storage_path), &ctx->error
-        )) {
-        return ctx->error ? -1 : 0;
-    }
+    int by_location = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
 
-    /* Get or create profile list for this path */
-    string_array_t *profiles = hashmap_get(ctx->index, storage_path);
-    if (!profiles) {
-        profiles = string_array_new(0);
-        if (!profiles) {
-            ctx->error = ERROR(
-                ERR_MEMORY, "Failed to create profile list for file"
-            );
-            ctx->fatal = true;
-            return -1;
-        }
-
-        error_t *err = hashmap_set(ctx->index, storage_path, profiles);
-        if (err) {
-            string_array_free(profiles);
-            ctx->error = error_wrap(err, "Failed to index file");
-            ctx->fatal = true;
-            return -1;
-        }
-    }
-
-    /* Add this branch to the list (non-fatal on failure) */
-    error_t *err = string_array_push(profiles, ctx->branch_name);
-    if (err) {
-        error_free(err);
-    }
-
-    return 0;
+    return by_location ? by_location : strcmp((*ra)->profile, (*rb)->profile);
 }
 
 /**
- * Build inverted index of all files across profiles
- *
- * Walks each branch tree directly into a hashmap that maps storage paths to lists
- * of profile names. Uses gitops_load_branch_tree for direct tree loading, and
- * populates the hashmap during the tree walk to eliminate intermediate string
- * arrays.
- *
- * Complexity: O(M×P) where M = profile count, P = avg files per profile. Lookups
- * are then O(1) instead of O(M×GitOps).
+ * location → the claims every local branch but `exclude` places there
  */
-error_t *profile_build_file_index(
+error_t *profile_build_location_index(
     git_repository *repo,
-    const char *exclude_profile,
+    const mount_table_t *mounts,
+    const char *exclude,
+    arena_t *arena,
     hashmap_t **out_index
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(mounts);
+    CHECK_NULL(arena);
     CHECK_NULL(out_index);
 
-    error_t *err = NULL;
-    hashmap_t *index = NULL;
-    string_array_t *all_branches = NULL;
+    *out_index = NULL;
 
-    /* Create index hashmap */
-    index = hashmap_create(256);  /* Reasonable initial size */
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) return err;
+
+    /* Every placed row of every branch, gathered before any of it is keyed: the
+     * rows are the arena's and outlive the views they came from. */
+    ptr_array_t rows PTR_ARRAY_AUTO = { 0 };
+    for (size_t i = 0; i < branches->count && !err; i++) {
+        if (exclude && strcmp(branches->items[i], exclude) == 0) continue;
+
+        manifest_t *view = NULL;
+        err = manifest_build_branch(
+            repo, branches->items[i], mounts, arena, &view
+        );
+        if (err) break;
+
+        manifest_rows_t placed = manifest_rows(view);
+        for (size_t j = 0; j < placed.count && !err; j++) {
+            err = ptr_array_push(&rows, placed.entries[j]);
+        }
+        manifest_free(view);
+    }
+    string_array_free(branches);
+    if (err) return err;
+
+    /* The runs, typed once: a ptr_array holds void *, and every read below is a
+     * row's location, its profile or its name. */
+    const manifest_row_t **sorted = (const manifest_row_t **) rows.items;
+    qsort(sorted, rows.count, sizeof(*sorted), index_order);
+
+    hashmap_t *index = hashmap_borrow(rows.count);
     if (!index) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile file index");
-        goto cleanup;
+        return ERROR(ERR_MEMORY, "Failed to create the location index");
     }
 
-    /* Every profile here */
-    err = gitops_list_branches(repo, &all_branches);
+    for (size_t i = 0; i < rows.count && !err;) {
+        const char *location = sorted[i]->filesystem_path;
+
+        size_t n = 0;
+        while (i + n < rows.count &&
+            strcmp(sorted[i + n]->filesystem_path, location) == 0) n++;
+
+        profile_claim_t *entries = arena_calloc(arena, n, sizeof(*entries));
+        profile_claims_t *claims = arena_calloc(arena, 1, sizeof(*claims));
+        if (!entries || !claims) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate the claims at a location");
+            break;
+        }
+        for (size_t g = 0; g < n; g++) {
+            entries[g] = (profile_claim_t){
+                sorted[i + g]->profile, sorted[i + g]->storage_path
+            };
+        }
+        *claims = (profile_claims_t){ entries, n };
+
+        /* The key is the row's own string — hashmap_borrow keeps the pointer
+         * and compares by content, and the row outlives the map. */
+        err = hashmap_set(index, location, claims);
+        i += n;
+    }
     if (err) {
-        err = error_wrap(err, "Failed to list branches");
-        goto cleanup;
+        hashmap_free(index, NULL);
+        return err;
     }
 
-    /* Load each profile once and index its files */
-    for (size_t i = 0; i < all_branches->count; i++) {
-        const char *branch_name = all_branches->items[i];
-
-        /* Skip the excluded profile */
-        if (exclude_profile && strcmp(branch_name, exclude_profile) == 0) {
-            continue;
-        }
-
-        git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, branch_name, &tree, NULL);
-        if (err) {
-            error_free(err);
-            err = NULL;
-            continue;  /* Non-fatal: skip this profile */
-        }
-
-        struct file_index_ctx ctx = {
-            .index       = index,
-            .branch_name = branch_name,
-            .error       = NULL,
-            .fatal       = false
-        };
-
-        err = gitops_tree_walk(tree, file_index_callback, &ctx);
-        git_tree_free(tree);
-
-        if (ctx.fatal) {
-            error_free(err);
-            err = ctx.error;
-            goto cleanup;
-        }
-
-        if (err || ctx.error) {
-            error_free(err);
-            error_free(ctx.error);
-            err = NULL;
-            continue;
-        }
-    }
-
-    /* Success */
-    string_array_free(all_branches);
     *out_index = index;
 
     return NULL;
-
-cleanup:
-    string_array_free(all_branches);
-    if (index) {
-        /* Free index and all its arrays */
-        hashmap_free(index, string_array_free_cb);
-    }
-
-    return err;
 }
 
 /**

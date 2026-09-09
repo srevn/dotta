@@ -12,6 +12,20 @@
 #include <types.h>
 
 /**
+ * Two strings that say the same thing, either of which may be absent
+ *
+ * NULL is a value here, not a programming error: the fields this compares are
+ * optional by design — a claim's owner and group, an item's key — and "neither
+ * side has one" is as much an equality as "both say root". Two NULLs are equal,
+ * a NULL and a string are not, and strcmp is reached only when both are there.
+ *
+ * @param a First string (can be NULL)
+ * @param b Second string (can be NULL)
+ * @return true if both are absent, or both are present and equal
+ */
+bool str_equal(const char *a, const char *b);
+
+/**
  * Check if string starts with prefix
  *
  * @param str String to check

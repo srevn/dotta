@@ -303,6 +303,27 @@ const metadata_item_t *metadata_lookup(
 );
 
 /**
+ * Two claims that say the same thing
+ *
+ * Every field, the key included: a claim is one row of the sheet, and two rows
+ * are the same row when nothing about them differs. Absence is a value on both
+ * sides — a NULL owner is a claim of no owner, and two absent claims (NULL and
+ * NULL) are equal, which is what a caller comparing "what the sheet says" with
+ * "what it would say" needs about a key neither holds.
+ *
+ * Reader: revert's nothing-to-do gate, which must know whether the write it is
+ * about to make is already standing. The sheet carries what the tree cannot —
+ * the mode below the owner-execute bit, and ownership — so a caller that reads
+ * the tree's entry alone cannot answer this (infra/content stamps a filemode
+ * from S_IXUSR and nothing else).
+ *
+ * @param a First claim (NULL is the absent claim)
+ * @param b Second claim (NULL is the absent claim)
+ * @return true if the two say the same thing
+ */
+bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b);
+
+/**
  * Remove metadata item
  *
  * Works for every kind. Removing a key the collection does not hold changes nothing

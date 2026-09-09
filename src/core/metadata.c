@@ -371,6 +371,27 @@ const metadata_item_t *metadata_lookup(
 }
 
 /**
+ * Two claims that say the same thing
+ *
+ * Field by field, absence included. Two claims of the same key can differ in
+ * what only the sheet carries — the mode's lower bits, an owner, a group — so
+ * the tree's entry cannot stand in for this comparison.
+ */
+bool metadata_same_claim(const metadata_item_t *a, const metadata_item_t *b) {
+    if (a == b) {
+        return true;
+    }
+    if (!a || !b) {
+        return false;
+    }
+
+    return a->kind == b->kind && a->mode == b->mode &&
+           a->encrypted == b->encrypted && a->tracked == b->tracked &&
+           str_equal(a->key, b->key) && str_equal(a->owner, b->owner) &&
+           str_equal(a->group, b->group);
+}
+
+/**
  * Remove metadata item
  *
  * Unified removal function that replaces:
@@ -898,11 +919,10 @@ static error_t *capture_ancestor(
     /* A re-derivation that found nothing new authors nothing: the standing claim
      * keeps its place, so nothing is counted and the caller's commit gate never
      * fires on a chain that has not moved. Ownership is both names or neither
-     * (capture_ownership), so the pair is one question. */
+     * (capture_ownership), so an absent one compares as the value it is. */
     if (held && held->mode == item->mode &&
-        (held->owner == NULL) == (item->owner == NULL) &&
-        (item->owner == NULL || (strcmp(held->owner, item->owner) == 0 &&
-        strcmp(held->group, item->group) == 0))) {
+        str_equal(held->owner, item->owner) &&
+        str_equal(held->group, item->group)) {
         metadata_item_free(item);
         return NULL;
     }

@@ -142,10 +142,10 @@ error_t *profile_resolve_enabled(
  *
  * Readers: ignore (--test, and the edit), bootstrap (the explicit names, and
  * --edit's template), show, export, list (a profile's files; an explicit profile's
- * history), revert (the -p fast path), and scope's filter on its refusal path.
- * A verb that acts on both answers — add (checkout or create), enable's skip,
- * remove's --force arm, validate's probe, the view's build — asks
- * gitops_branch_exists itself and reads the bool.
+ * history), revert (the -p arm), and scope's filter on its refusal path. A verb
+ * that acts on both answers — add (checkout or create), enable's skip, remove's
+ * --force arm, validate's probe, the view's build — asks gitops_branch_exists
+ * itself and reads the bool.
  *
  * @param repo Repository (must not be NULL)
  * @param name Profile name (must not be NULL)

@@ -42,13 +42,20 @@ typedef struct {
  * command modifies the Git repository only - deployed files remain unchanged
  * until 'dotta apply' is run.
  *
+ * Everything the revert writes is decided before any of it is shown, and shown
+ * before it is asked: a dry run and a real run reach the same verdict on the
+ * same argument, and the prompt is the only gate between the preview and the
+ * commit.
+ *
  * The operation:
- * 1. Discovers file in profiles (requires --profile if ambiguous)
+ * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
- * 3. Shows diff preview (current → target state)
- * 4. Prompts for confirmation (unless --force)
- * 5. Reverts file to target commit state
- * 6. Creates commit with restored file and metadata
+ * 3. Reads both entries — the commit's, which must be a blob, and the branch
+ *    tip's, which may be absent — and the claim the commit records at the name
+ * 4. Answers "nothing to do" when that whole write already stands
+ * 5. Shows the preview (restored / diff / mode and ownership only)
+ * 6. Prompts for confirmation (unless --force)
+ * 7. Creates one commit with the restored blob and the merged metadata
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

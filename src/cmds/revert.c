@@ -29,115 +29,31 @@
 #include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stage.h"
-#include "sys/stats.h"
 #include "utils/commit.h"
 
 /**
- * Discover file in history (fallback when not found in HEAD)
+ * Which profile holds the argument, and under which name
  *
- * Uses stats_get_file_history() to search the commit history of a profile for
- * evidence that a file existed. This is expensive (O(all commits)) but necessary
- * for reverting deleted files.
+ * The profile question, and only that. Whether the branch holds the name at its
+ * tip is not asked here: a revert restores what the *commit* holds, and a path
+ * the profile deleted is the case a revert exists for. Both trees are read once,
+ * together, where the revert is decided (cmd_revert step 5).
  *
- * This function should only be called as a fallback when the file is not found
- * in the current HEAD and the user has provided a profile hint.
+ * With profile_hint: the user's word, required to be here.
  *
- * @param ctx Dispatch context (must not be NULL; ctx->arena owns the returned
- *            strings)
- * @param storage_path Storage path (must not be NULL)
- * @param profile Profile name (must not be NULL)
- * @param out_profile Arena-borrowed profile name (must not be NULL)
- * @param out_resolved_path Arena-borrowed storage path (must not be NULL)
- * @return Error or NULL on success
- */
-static error_t *discover_file_in_history(
-    const dotta_ctx_t *ctx,
-    const char *storage_path,
-    const char *profile,
-    const char **out_profile,
-    const char **out_resolved_path
-) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(profile);
-    CHECK_NULL(out_profile);
-    CHECK_NULL(out_resolved_path);
-
-    git_repository *repo = ctx->run.repo;
-    arena_t *arena = ctx->arena;
-    output_t *out = ctx->out;
-
-    /* Inform user about expensive operation */
-    output_info(
-        out, OUTPUT_NORMAL, "File not found in current HEAD, "
-        "searching history of '%s' profile...\n", profile
-    );
-
-    /* Use stats module to get file history */
-    file_history_t *history = NULL;
-    error_t *err = stats_get_file_history(
-        repo, profile, storage_path, &history
-    );
-    if (err) {
-        return error_wrap(err, "Failed to search history");
-    }
-
-    /* Check if file ever existed */
-    if (history->count == 0) {
-        stats_free_file_history(history);
-        return ERROR(
-            ERR_NOT_FOUND, "File '%s' has no history in profile '%s'\n"
-            "The file was never tracked in this profile.\n"
-            "Hint: Use 'dotta list --profile %s' to see tracked files",
-            storage_path, profile, profile
-        );
-    }
-
-    /* Found in history! Show user where it was last seen */
-    char short_sha[8];
-    git_oid_tostr(short_sha, sizeof(short_sha), &history->commits[0].oid);
-
-    output_success(
-        out, OUTPUT_NORMAL, "Found in history (last modified: commit %s)",
-        short_sha
-    );
-
-    stats_free_file_history(history);
-
-    /* Return profile and path (arena-borrowed) */
-    *out_profile = arena_strdup(arena, profile);
-    *out_resolved_path = arena_strdup(arena, storage_path);
-
-    if (!*out_profile || !*out_resolved_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate strings");
-    }
-
-    return NULL;
-}
-
-/**
- * Discover file in profiles
- *
- * Returns profile name and resolved storage path. Accepts filesystem paths or
- * storage paths.
- *
- * With profile_hint: Checks specific profile's tree, falls back to history search
- * if file deleted from HEAD.
- *
- * Without profile_hint: Uses profile_discover_file() for all-branch scan. Handles
- * disambiguation when file exists in multiple profiles.
+ * Without profile_hint: profile_discover_file() scans every local branch's tip
+ * for the name — the lookup *is* the profile resolution — and an argument two
+ * profiles hold is ambiguous, listed and refused.
  */
 static error_t *discover_file(
     const dotta_ctx_t *ctx,
     const char *file_path,
     const char *profile_hint,
-    bool *found_in_history,
     const char **out_profile,
     const char **out_resolved_path
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(file_path);
-    CHECK_NULL(found_in_history);
     CHECK_NULL(out_profile);
     CHECK_NULL(out_resolved_path);
 
@@ -149,9 +65,6 @@ static error_t *discover_file(
     error_t *err = NULL;
     const char *storage_path = NULL;
 
-    /* Initialize output flag */
-    *found_in_history = false;
-
     /* The name the asker's own roots give the argument (file need not exist;
      * the claim standing at a location, in the branch that holds it, is the next
      * commit's answer). With no -p the asker is nobody, so the shared roots name
@@ -162,43 +75,12 @@ static error_t *discover_file(
         return err;
     }
 
-    /* Fast path: If profile specified, check only that profile — which must be
-     * here */
+    /* An explicit profile must be here; nothing else about it is this function's
+     * question */
     if (profile_hint) {
         err = profile_require(repo, profile_hint);
         if (err) return err;
 
-        git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, profile_hint, &tree, NULL);
-        if (err) {
-            return error_wrap(err, "Failed to load profile '%s'", profile_hint);
-        }
-
-        /* Check if file exists in tree */
-        git_tree_entry *entry = NULL;
-        int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
-        bool exists = (git_err == 0);
-
-        if (entry) {
-            git_tree_entry_free(entry);
-        }
-        git_tree_free(tree);
-
-        if (!exists) {
-            /* File not in HEAD - try history search as fallback */
-            err = discover_file_in_history(
-                ctx, storage_path, profile_hint, out_profile, out_resolved_path
-            );
-            if (err) {
-                return err;
-            }
-
-            /* Found in history! */
-            *found_in_history = true;
-            return NULL;
-        }
-
-        /* Found in HEAD (fast path) */
         *out_profile = arena_strdup(arena, profile_hint);
         if (!*out_profile) {
             return ERROR(ERR_MEMORY, "Failed to allocate profile name");
@@ -265,6 +147,10 @@ static error_t *discover_file(
  * so users see readable plaintext diffs instead of encrypted gibberish. The content
  * layer classifies each blob by its own bytes, so blobs with different encryption
  * states across commits are routed correctly without any caller-supplied flag.
+ *
+ * The two blobs differ: the caller reaches this only from the preview arm that
+ * says so, and the arm beside it is what a copy with the same bytes and a different
+ * mode gets.
  */
 static error_t *show_diff_preview(
     const dotta_ctx_t *ctx,
@@ -282,12 +168,6 @@ static error_t *show_diff_preview(
     git_repository *repo = ctx->run.repo;
     keymgr *keymgr = ctx->run.keymgr; /* NULL if encryption disabled */
     output_t *out = ctx->out;
-
-    /* Check if blobs are identical */
-    if (git_oid_equal(current_oid, target_oid)) {
-        output_info(out, OUTPUT_NORMAL, "File is already at target state (no changes)");
-        return NULL;
-    }
 
     /* Get decrypted plaintext content from both blobs.
      *
@@ -422,272 +302,176 @@ static char *build_revert_commit_message(
 }
 
 /**
- * Load metadata from a specific commit
+ * The claim to restore: the target commit's own item for the path, or one
+ * reconstructed from the entry it holds
  *
- * Composed: the commit's tree via git_commit_tree, then metadata_load_from_tree.
- * A commit without a sheet loads as an empty one (the tree loader's contract),
- * so a revert to a state before any claim was written retires what stands.
+ * A symlink's claim is the entry as recorded — revert restores history, it does
+ * not reinterpret it — and its absence is an answer (NULL): the target records
+ * no claim for the link, so the standing one is retired by the write. For every
+ * other blob the encrypted bit is stamped from the restored blob's own bytes
+ * (the write-boundary invariant — see policy.h), over an item cloned from the
+ * sheet or, where the target commit has none, over a mode read from the entry's
+ * own filemode and no ownership at all.
  *
- * @param repo Repository (must not be NULL)
- * @param commit Commit to load from (must not be NULL)
- * @param profile Profile name for error messages (must not be NULL)
- * @param out Metadata (must not be NULL, caller must free)
+ * The reconstruction is announced here — at the preview, before the prompt, where
+ * the user can still decline it. It used to be announced during the write, so a
+ * dry run never mentioned it at all.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param target_commit The commit being restored from (must not be NULL)
+ * @param profile Profile name, for the sheet's messages (must not be NULL)
+ * @param file_path Storage path (must not be NULL)
+ * @param entry The blob standing at file_path in that commit's tree, admitted
+ *              by the caller (must not be NULL)
+ * @param out_claim The claim, or NULL where the target records none (must not
+ *                  be NULL; caller frees with metadata_item_free)
  * @return Error or NULL on success
  */
-static error_t *load_metadata_from_commit(
-    git_repository *repo,
-    git_commit *commit,
+static error_t *claim_to_restore(
+    const dotta_ctx_t *ctx,
+    git_commit *target_commit,
     const char *profile,
-    metadata_t **out
+    const char *file_path,
+    const git_tree_entry *entry,
+    metadata_item_t **out_claim
 ) {
-    CHECK_NULL(repo);
-    CHECK_NULL(commit);
+    CHECK_NULL(ctx);
+    CHECK_NULL(target_commit);
     CHECK_NULL(profile);
-    CHECK_NULL(out);
+    CHECK_NULL(file_path);
+    CHECK_NULL(entry);
+    CHECK_NULL(out_claim);
 
-    git_tree *tree = NULL;
-    int ret = git_commit_tree(&tree, commit);
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
+
+    *out_claim = NULL;
+
+    error_t *err = NULL;
+    git_tree *target_tree = NULL;
+    metadata_t *target_metadata = NULL;
+    content_kind_t target_kind = CONTENT_PLAINTEXT;
+    bool target_encrypted = false;
+
+    /* The commit's sheet. A commit without one loads as an empty sheet (the tree
+     * loader's contract), so a revert to a state before any claim was written
+     * retires what stands. */
+    int ret = git_commit_tree(&target_tree, target_commit);
     if (ret < 0) {
         return error_from_git(ret);
     }
 
-    error_t *err = metadata_load_from_tree(repo, tree, profile, out);
-    git_tree_free(tree);
+    err = metadata_load_from_tree(repo, target_tree, profile, &target_metadata);
+    git_tree_free(target_tree);
+    if (err) {
+        return error_wrap(err, "Failed to load metadata from target commit");
+    }
+
+    git_filemode_t target_mode = git_tree_entry_filemode(entry);
+    const metadata_item_t *target_meta_item =
+        metadata_lookup(target_metadata, file_path);
+
+    if (target_mode == GIT_FILEMODE_LINK) {
+        /* A link's entry is a FILE item without a mode. Restore it as recorded
+         * — revert restores history, it does not reinterpret it; whatever the
+         * entry carries, the view adjudicates against the tree. No entry → the
+         * write's retire arm takes the standing item. */
+        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
+            err = metadata_item_clone(target_meta_item, out_claim);
+            if (err) {
+                err = error_wrap(err, "Failed to clone symlink metadata item");
+            }
+        }
+        goto cleanup;
+    }
+
+    /* The encrypted bit revert writes must be true of the blob it restores: it
+     * is stamped from the target blob's own bytes — the single authority — the
+     * way the capture paths stamp from the bytes they store, never trusted from
+     * (or, absent an entry, invented beside) a historical stamp.
+     * UNSUPPORTED_VERSION carries encryption intent and collapses onto true,
+     * the same collapse the capture paths make. */
+    err = content_classify(repo, git_tree_entry_id(entry), &target_kind, NULL);
+    if (err) {
+        err = error_wrap(err, "Failed to classify blob for '%s'", file_path);
+        goto cleanup;
+    }
+    target_encrypted = (target_kind != CONTENT_PLAINTEXT);
+
+    if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
+        /* Found metadata entry - clone it. Mode and ownership have no byte source,
+         * so the entry is their authority; the encrypted bit is the blob's
+         * (above). */
+        err = metadata_item_clone(target_meta_item, out_claim);
+        if (err) {
+            err = error_wrap(err, "Failed to clone metadata item");
+            goto cleanup;
+        }
+        (*out_claim)->encrypted = target_encrypted;
+        goto cleanup;
+    }
+
+    /* No metadata entry at target commit - mode falls back to the tree's filemode;
+     * ownership is not recoverable */
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
+
+    output_warning(
+        out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
+        file_path, oid_str
+    );
+    output_hintline(
+        out, OUTPUT_NORMAL,
+        "Reconstructed from the commit (mode=%04o, encrypted=%s); "
+        "ownership is not recoverable",
+        (unsigned int) (target_mode & 0777),
+        target_encrypted ? "true" : "false"
+    );
+
+    err = metadata_item_create_file(
+        file_path, target_mode & 0777, target_encrypted, out_claim
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to create default metadata item");
+    }
+
+cleanup:
+    metadata_free(target_metadata);
+
     return err;
 }
 
 /**
- * Revert file and metadata in profile branch to target commit
+ * Is the revert's whole write already standing at the name?
  *
- * This atomically reverts both file content AND its metadata entry to the target
- * commit state in a single commit. Permissions and ownership are restored from
- * the target's metadata entry; the encrypted bit is stamped from the restored
- * blob's own bytes (the write-boundary invariant — see policy.h).
+ * The entry it would put — both halves of it, the blob and the mode Git records
+ * — and the claim it would write beside it. A revert restores bytes, the entry's
+ * mode, and the sheet's mode and ownership; comparing blob oids alone read a
+ * restored exec bit, a 0644 over a 0600 and an ownership claim as "no changes"
+ * and did nothing about any of them. A tree's filemode carries only the
+ * owner-execute bit (infra/content), so the sheet cannot be read off the entry
+ * and is asked for itself.
  *
- * The stage is the caller's, opened at the tip the preview showed: the current
- * sheet is read from its tree, the target blob and the merged sheet are put on
- * it, and its commit is refused if the branch moved since — the check the preview's
- * promise needs, made by the commit itself rather than by a second look at the tip.
+ * `standing` is NULL where the branch's tip has no entry at the name — a path
+ * the profile deleted, which is never already at the target.
  *
- * The function handles:
- * - Files that exist in both current and target (normal revert)
- * - Files deleted from HEAD (restore from history)
- * - Missing metadata gracefully (mode from the tree's filemode, with a warning)
- * - Symlinks (restore ownership metadata if present at target commit; absent,
- *   the standing entry is retired — the target records no claim for the link)
+ * @param standing The entry at the branch tip, or NULL for none
+ * @param standing_claim The sheet's claim at the name there, or NULL for none
+ * @param restored The entry at the target commit (must not be NULL)
+ * @param restored_claim The claim the revert would write, or NULL where the target
+ *                       records none
+ * @return true when nothing about the write would change the branch
  */
-static error_t *revert_file_in_branch(
-    const dotta_ctx_t *ctx,
-    stage_t *stage,
-    const char *profile,
-    const char *file_path,
-    const git_oid *target_commit_oid,
-    const char *commit_message
+static bool already_at_target(
+    const git_tree_entry *standing,
+    const metadata_item_t *standing_claim,
+    const git_tree_entry *restored,
+    const metadata_item_t *restored_claim
 ) {
-    CHECK_NULL(ctx);
-    CHECK_NULL(stage);
-    CHECK_NULL(profile);
-    CHECK_NULL(file_path);
-    CHECK_NULL(target_commit_oid);
-
-    git_repository *repo = ctx->run.repo;
-    const config_t *config = ctx->config;
-    output_t *out = ctx->out;
-
-    error_t *err = NULL;
-    git_commit *target_commit = NULL;
-    git_tree *target_tree = NULL;
-    git_tree_entry *target_entry = NULL;
-    metadata_t *target_metadata = NULL;
-    metadata_item_t *meta_to_restore = NULL;
-    metadata_t *current_metadata = NULL;
-    char *msg = NULL;
-    git_oid target_blob_oid_copy;
-    git_filemode_t target_mode = 0;
-    bool is_symlink = false;
-
-    /* PHASE 1: Load Target State */
-
-    /* Get target commit's tree */
-    int ret = git_commit_lookup(&target_commit, repo, target_commit_oid);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    ret = git_commit_tree(&target_tree, target_commit);
-    if (ret < 0) {
-        err = error_from_git(ret);
-        goto cleanup;
-    }
-
-    /* Find file in target tree */
-    ret = git_tree_entry_bypath(&target_entry, target_tree, file_path);
-    if (ret < 0) {
-        if (ret == GIT_ENOTFOUND) {
-            err = ERROR(
-                ERR_NOT_FOUND, "File '%s' not found at target commit",
-                file_path
-            );
-        } else {
-            err = error_from_git(ret);
-        }
-        goto cleanup;
-    }
-
-    /* Get target blob OID and mode */
-    git_oid_cpy(&target_blob_oid_copy, git_tree_entry_id(target_entry));
-    target_mode = git_tree_entry_filemode(target_entry);
-    is_symlink = (target_mode == GIT_FILEMODE_LINK);
-
-    /* Load metadata from target commit */
-    err = load_metadata_from_commit(repo, target_commit, profile, &target_metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to load metadata from target commit");
-        goto cleanup;
-    }
-
-    /* Extract or create metadata item for this file/symlink */
-    if (is_symlink) {
-        /* A link's entry is a FILE item without a mode. Restore it as recorded
-         * — revert restores history, it does not reinterpret it; whatever the
-         * entry carries, the view adjudicates against the tree. No entry → the
-         * retire arm below takes the standing item. */
-        const metadata_item_t *target_meta_item =
-            metadata_lookup(target_metadata, file_path);
-
-        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
-            err = metadata_item_clone(target_meta_item, &meta_to_restore);
-            if (err) {
-                err = error_wrap(err, "Failed to clone symlink metadata item");
-                goto cleanup;
-            }
-        }
-    } else {
-        /* The encrypted bit revert writes must be true of the blob it restores:
-         * it is stamped from the target blob's own bytes — the single authority
-         * — the way the capture paths stamp from the bytes they store, never
-         * trusted from (or, absent an entry, invented beside) a historical stamp.
-         * UNSUPPORTED_VERSION carries encryption intent and collapses onto true,
-         * the same collapse the capture paths make. */
-        content_kind_t target_kind = CONTENT_PLAINTEXT;
-        err = content_classify(repo, &target_blob_oid_copy, &target_kind, NULL);
-        if (err) {
-            err = error_wrap(err, "Failed to classify blob for '%s'", file_path);
-            goto cleanup;
-        }
-        bool target_encrypted = (target_kind != CONTENT_PLAINTEXT);
-
-        const metadata_item_t *target_meta_item =
-            metadata_lookup(target_metadata, file_path);
-
-        if (target_meta_item && target_meta_item->kind == PATH_KIND_FILE) {
-            /* Found metadata entry - clone it. Mode and ownership have no byte
-             * source, so the entry is their authority; the encrypted bit is the
-             * blob's (above). */
-            err = metadata_item_clone(target_meta_item, &meta_to_restore);
-            if (err) {
-                err = error_wrap(err, "Failed to clone metadata item");
-                goto cleanup;
-            }
-            meta_to_restore->encrypted = target_encrypted;
-        } else {
-            /* No metadata entry at target commit - mode falls back to the tree's
-             * filemode; ownership is not recoverable */
-            char oid_str[8];
-            git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
-
-            output_warning(
-                out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
-                file_path, oid_str
-            );
-            output_hintline(
-                out, OUTPUT_NORMAL,
-                "Reconstructed from the commit (mode=%04o, encrypted=%s); "
-                "ownership is not recoverable",
-                (unsigned int) (target_mode & 0777),
-                target_encrypted ? "true" : "false"
-            );
-
-            err = metadata_item_create_file(
-                file_path, target_mode & 0777, target_encrypted, &meta_to_restore
-            );
-            if (err) {
-                err = error_wrap(err, "Failed to create default metadata item");
-                goto cleanup;
-            }
-        }
-    }
-
-    /* Free target metadata (no longer needed) */
-    metadata_free(target_metadata);
-    target_metadata = NULL;
-
-    /* PHASE 2: Load the current metadata — the sheet in the tree the stage opened
-     * at, the tip the preview showed */
-
-    err = metadata_load_from_tree(
-        repo, stage_tree(stage), profile, &current_metadata
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to load current metadata");
-        goto cleanup;
-    }
-
-    /* PHASE 3: Merge the target metadata item, and stage the file and the sheet */
-
-    /* Merge the target state's claim: an item to restore upserts over the standing
-     * one. */
-    if (meta_to_restore) {
-        err = metadata_add_item(current_metadata, &meta_to_restore);
-        if (err) {
-            err = error_wrap(err, "Failed to update metadata");
-            goto cleanup;
-        }
-    } else {
-        /* The target commit records no claim for this link; a standing item is
-         * the reverted-away state's — retire it. */
-        metadata_remove_item(current_metadata, file_path);
-    }
-
-    /* The target's blob at the path — an object the ODB already holds, so the
-     * entry is put by id — and the merged sheet beside it */
-    err = stage_put_blob(stage, file_path, &target_blob_oid_copy, target_mode);
-    if (err) {
-        goto cleanup;
-    }
-
-    err = metadata_save_to_stage(stage, current_metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to save metadata");
-        goto cleanup;
-    }
-
-    /* PHASE 4: Atomic Commit (file + metadata.json) */
-
-    /* Build commit message */
-    msg = build_revert_commit_message(
-        config, profile, file_path, target_commit_oid, commit_message
-    );
-    if (!msg) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
-        goto cleanup;
-    }
-
-    /* One commit, parented on the tip the preview showed; a branch another writer
-     * moved since is refused here */
-    err = stage_commit(stage, msg, NULL);
-
-cleanup:
-    if (target_commit) git_commit_free(target_commit);
-    if (target_tree) git_tree_free(target_tree);
-    if (target_entry) git_tree_entry_free(target_entry);
-    if (target_metadata) metadata_free(target_metadata);
-    if (meta_to_restore) metadata_item_free(meta_to_restore);
-    if (current_metadata) metadata_free(current_metadata);
-    if (msg) free(msg);
-
-    return err;
+    return standing &&
+           git_oid_equal(git_tree_entry_id(standing), git_tree_entry_id(restored)) &&
+           git_tree_entry_filemode(standing) == git_tree_entry_filemode(restored) &&
+           metadata_same_claim(standing_claim, restored_claim);
 }
 
 /**
@@ -713,35 +497,28 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     git_tree *target_tree = NULL;
     git_tree_entry *current_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    bool user_aborted = false;
+    metadata_t *current_metadata = NULL;
+    metadata_item_t *restore_metadata = NULL;
+    char *msg = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Step 2: Discover file in profiles */
+    /* Step 2: Which profile holds the argument, and under which name */
     output_print(
         out, OUTPUT_VERBOSE, "Discovering file in profiles...\n"
     );
 
-    bool found_in_history = false;
     err = discover_file(
-        ctx, opts->file_path, opts->profile, &found_in_history, &profile,
-        &resolved_path
+        ctx, opts->file_path, opts->profile, &profile, &resolved_path
     );
     if (err) goto cleanup;
 
-    if (found_in_history) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "File was deleted from HEAD, reverting from history"
-        );
-    }
-
     output_print(
-        out, OUTPUT_VERBOSE, "Found file in profile '%s': %s\n",
-        profile, resolved_path
+        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n",
+        resolved_path, profile
     );
 
     /* Step 3: Resolve target commit */
@@ -754,6 +531,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         repo, profile, opts->commit, &target_oid, &target_commit
     );
     if (err) goto cleanup;
+
+    char oid_str[8];
+    git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
 
     /* Step 4: The branch's stage — its tip is the current state the preview
      * compares against and the parent the revert's commit will have, so a branch
@@ -769,85 +549,111 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 5: Prepare for revert - two distinct workflows based on file state */
-    const git_oid *current_blob_oid = NULL;
-    const git_oid *target_blob_oid = NULL;
+    /* Step 5: the two entries the revert reads, both admitted here — before
+     * anything is shown and before the prompt.
+     *
+     * The commit's side is required, and it is the whole authority on whether
+     * there is a revert to make: a name with bytes at the commit the user typed
+     * is one, a name without is the argument's error. (A walk of the branch's
+     * history used to stand in for this question and answered a weaker one — a
+     * name held at some *other* commit passed it — while a commit object anywhere
+     * in the branch could refuse a revert that needed none of it.)
+     *
+     * The tip's side may be absent: a path the profile deleted is exactly what
+     * a revert brings back. Wherever either side stands it is a blob — a regular
+     * file or a symlink — because a revert restores one file's bytes; a directory
+     * and a submodule are refused here by their own noun, not at the stage after
+     * the prompt where stage_put_blob refuses the mode and content_classify the
+     * oid, and not after a dry run that promised the revert would happen.
+     *
+     * git_tree_entry_bypath answers three ways and is read as three: an
+     * intermediate object that will not load is a failure to read, never an
+     * absence. */
+    int ret = git_commit_tree(&target_tree, target_commit);
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
 
-    if (found_in_history) {
-        /*
-         * Workflow A: Restoring Deleted File File doesn't exist in current HEAD
-         * but was found in commit history. Skip tree extraction entirely - not
-         * needed for restoration preview. The revert operation itself will handle
-         * all necessary Git operations.
-         */
-        output_print(
-            out, OUTPUT_VERBOSE,
-            "File deleted from HEAD, preparing restoration from history\n"
+    ret = git_tree_entry_bypath(&target_entry, target_tree, resolved_path);
+    if (ret == GIT_ENOTFOUND) {
+        err = ERROR(
+            ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
+            resolved_path, oid_str, profile
         );
+        goto cleanup;
+    }
+    if (ret < 0) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
 
-    } else {
-        /*
-         * Workflow B: Reverting Existing File File exists in current HEAD - perform
-         * standard revert workflow. Extract trees and entries for blob comparison
-         * and diff preview; the current tree is the stage's.
-         */
-        output_print(
-            out, OUTPUT_VERBOSE,
-            "File exists in HEAD, extracting trees for comparison\n"
+    git_object_t target_type = git_tree_entry_type(target_entry);
+    if (target_type != GIT_OBJECT_BLOB) {
+        err = ERROR(
+            ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
+            resolved_path,
+            target_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
+            oid_str
         );
+        goto cleanup;
+    }
 
-        int ret = git_commit_tree(&target_tree, target_commit);
-        if (ret < 0) {
-            err = error_from_git(ret);
-            goto cleanup;
-        }
+    /* The blob the revert restores: the admitted entry's own identity, which
+     * the preview and the write both read. */
+    const git_oid *restored_blob = git_tree_entry_id(target_entry);
 
-        ret = git_tree_entry_bypath(
-            &current_entry, stage_tree(stage), resolved_path
-        );
-        if (ret < 0) {
-            if (ret == GIT_ENOTFOUND) {
-                err = ERROR(
-                    ERR_NOT_FOUND, "File '%s' not found in current HEAD",
-                    resolved_path
-                );
-            } else {
-                err = error_from_git(ret);
-            }
-            goto cleanup;
-        }
+    ret = git_tree_entry_bypath(&current_entry, stage_tree(stage), resolved_path);
+    if (ret < 0 && ret != GIT_ENOTFOUND) {
+        err = error_from_git(ret);
+        goto cleanup;
+    }
 
-        ret = git_tree_entry_bypath(&target_entry, target_tree, resolved_path);
-        if (ret < 0) {
-            if (ret == GIT_ENOTFOUND) {
-                err = ERROR(
-                    ERR_NOT_FOUND, "File '%s' not found at target commit",
-                    resolved_path
-                );
-            } else {
-                err = error_from_git(ret);
-            }
-            goto cleanup;
-        }
-
-        current_blob_oid = git_tree_entry_id(current_entry);
-        target_blob_oid = git_tree_entry_id(target_entry);
-
-        /* Early exit: Check if file is already at target state */
-        if (git_oid_equal(current_blob_oid, target_blob_oid)) {
-            output_info(
-                out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
-                opts->file_path
+    if (current_entry) {
+        git_object_t current_type = git_tree_entry_type(current_entry);
+        if (current_type != GIT_OBJECT_BLOB) {
+            err = ERROR(
+                ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
+                resolved_path,
+                current_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
+                profile
             );
-            goto cleanup;  /* Not an error, just nothing to do */
+            goto cleanup;
         }
     }
 
-    /* Step 6: Show preview (always, including dry-run) */
-    output_section(out, OUTPUT_NORMAL, "Revert preview:");
+    /* Step 6: the rest of what the revert writes — the sheet the write merges
+     * into, read from the tree the stage opened at, and the claim the target
+     * commit records at the name. Both are read here so that everything the revert
+     * will do is known before it is shown: the reconstruction a claimless target
+     * earns is announced by the preview, not by the write. */
+    err = metadata_load_from_tree(
+        repo, stage_tree(stage), profile, &current_metadata
+    );
+    if (err) {
+        err = error_wrap(err, "Failed to load current metadata");
+        goto cleanup;
+    }
 
-    char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &target_oid);
+    err = claim_to_restore(
+        ctx, target_commit, profile, resolved_path, target_entry, &restore_metadata
+    );
+    if (err) goto cleanup;
+
+    /* Step 7: nothing to do — the whole write, entry and claim, already stands */
+    if (already_at_target(
+        current_entry, metadata_lookup(current_metadata, resolved_path),
+        target_entry, restore_metadata
+        )) {
+        output_info(
+            out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
+            resolved_path
+        );
+        goto cleanup;  /* Not an error, just nothing to do */
+    }
+
+    /* Step 8: Show preview (always, including dry-run) */
+    output_section(out, OUTPUT_NORMAL, "Revert preview:");
 
     const git_signature *author = git_commit_author(target_commit);
     time_t commit_time = (time_t) author->when.time;
@@ -873,20 +679,29 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         oid_str, time_buf
     );
 
-    if (found_in_history) {
-        /* File was deleted - show simple restoration message */
+    /* The three ways the write differs from what stands: the file comes back,
+     * only its mode and ownership move — the one thing no diff can show — or
+     * its bytes do. */
+    if (!current_entry) {
+        output_newline(out, OUTPUT_NORMAL);
+        output_styled(
+            out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
+        );
+    } else if (git_oid_equal(git_tree_entry_id(current_entry), restored_blob)) {
         output_newline(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL,
-            "{green}Restoring deleted file from commit history{reset}\n"
+            "{green}Contents unchanged; restoring the recorded mode and "
+            "ownership{reset}\n"
         );
     } else {
-        /* File exists - show detailed diff preview with decryption support. The
-         * content layer classifies each blob by its own bytes, so the "current
-         * vs target may differ in encryption state" case is handled inside
-         * show_diff_preview without caller-side metadata gymnastics. */
+        /* Detailed diff preview with decryption support. The content layer
+         * classifies each blob by its own bytes, so the "current vs target may
+         * differ in encryption state" case is handled inside show_diff_preview
+         * without caller-side metadata gymnastics. */
         err = show_diff_preview(
-            ctx, resolved_path, profile, current_blob_oid, target_blob_oid
+            ctx, resolved_path, profile, git_tree_entry_id(current_entry),
+            restored_blob
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).
@@ -900,46 +715,65 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Free tree entries and the target tree after preview (no longer needed) */
-    git_tree_entry_free(target_entry);
-    target_entry = NULL;
-    git_tree_entry_free(current_entry);
-    current_entry = NULL;
-    git_tree_free(target_tree);
-    target_tree = NULL;
-
-    /* Step 7: Early exit for dry-run (preview shown, no changes to make) */
+    /* Step 9: Early exit for dry-run (preview shown, no changes to make) */
     if (opts->dry_run) {
         output_info(out, OUTPUT_NORMAL, "\nDry-run mode: No changes made");
         goto cleanup;
     }
 
-    /* Step 8: Prompt for confirmation (unless --force or config disables) */
+    /* Step 10: Prompt for confirmation (unless --force or config disables) */
     if (!output_confirm_destructive(
         out, config ? config->confirm_destructive : true, "Revert file?", opts->force
         )) {
         output_info(out, OUTPUT_NORMAL, "Aborted.");
-        user_aborted = true;
-        goto cleanup;
+        goto cleanup;  /* err is NULL here: an abort is not a failure */
     }
 
     output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
 
-    /* Perform revert on the stage opened at the preview's tip */
-    err = revert_file_in_branch(
-        ctx,
-        stage,
-        profile,
-        resolved_path,
-        &target_oid,
-        opts->message
+    /* Step 11: the write, on the stage opened at the preview's tip — the blob
+     * and the merged sheet in one commit, all of it decided above. A branch another
+     * writer moved since is refused by the commit itself rather than by a second
+     * look at the tip.
+     *
+     * The claim to restore upserts over the standing one; where the target records
+     * none for a link, the standing item is the reverted-away state's — retire
+     * it. */
+    if (restore_metadata) {
+        err = metadata_add_item(current_metadata, &restore_metadata);
+        if (err) {
+            err = error_wrap(err, "Failed to update metadata");
+            goto cleanup;
+        }
+    } else {
+        metadata_remove_item(current_metadata, resolved_path);
+    }
+
+    /* The target's blob at the path — an object the ODB already holds, so the
+     * entry is put by id — and the merged sheet beside it */
+    err = stage_put_blob(
+        stage, resolved_path, restored_blob, git_tree_entry_filemode(target_entry)
     );
+    if (err) goto cleanup;
+
+    err = metadata_save_to_stage(stage, current_metadata);
     if (err) {
-        err = error_wrap(err, "Failed to revert file");
+        err = error_wrap(err, "Failed to save metadata");
         goto cleanup;
     }
 
-    /* Step 9: Report. Nothing to write: the revert moved the branch HEAD, and
+    msg = build_revert_commit_message(
+        config, profile, resolved_path, &target_oid, opts->message
+    );
+    if (!msg) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
+        goto cleanup;
+    }
+
+    err = stage_commit(stage, msg, NULL);
+    if (err) goto cleanup;
+
+    /* Step 12: Report. Nothing to write: the revert moved the branch HEAD, and
      * the next load's view carries the reverted blob — the record stays where
      * apply last confirmed it, so the workspace reads the result as [stale] until
      * apply deploys it. A disabled profile's revert reaches no view at all. */
@@ -965,13 +799,14 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     );
 
 cleanup:
+    if (msg) free(msg);
+    if (restore_metadata) metadata_item_free(restore_metadata);
+    if (current_metadata) metadata_free(current_metadata);
     if (current_entry) git_tree_entry_free(current_entry);
     if (target_entry) git_tree_entry_free(target_entry);
     if (target_tree) git_tree_free(target_tree);
     stage_free(stage);
     if (target_commit) git_commit_free(target_commit);
-    /* Don't return error if user aborted */
-    if (user_aborted) return NULL;
 
     return err;
 }

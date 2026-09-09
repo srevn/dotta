@@ -12,6 +12,10 @@
 
 #include "base/error.h"
 
+bool str_equal(const char *a, const char *b) {
+    return a == b || (a && b && strcmp(a, b) == 0);
+}
+
 bool str_starts_with(const char *str, const char *prefix) {
     if (!str || !prefix) {
         return false;

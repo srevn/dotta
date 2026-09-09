@@ -831,38 +831,50 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     if (opts->file_path) {
         /* Resolve the CLI path to storage form — the name this profile's own
          * roots give it (path_input_classify; the claim standing at the location,
-         * in the branch that holds it, is the next commit's answer). On resolution
-         * failure fall back to the raw input — the tree lookup below is the final
-         * authority (mirrors show), and a bare label (`export global home`) reaches
-         * it this way. */
-        const char *converted = NULL;
-        error_t *conv_err = path_input_classify(
-            mounts, opts->profile, opts->file_path, arena, &converted
+         * in the branch that holds it, is the next commit's answer). Whatever
+         * comes back starts with a storage label and carries no trailing slash:
+         * a storage shape was validated as typed, a filesystem shape was named
+         * through a root. So the only shapes needing a word here are the ones
+         * the resolver refused. */
+        const char *storage = NULL;
+        err = path_input_classify(
+            mounts, opts->profile, opts->file_path, arena, &storage
         );
-        const char *storage = conv_err ? opts->file_path : converted;
-        if (conv_err) error_free(conv_err);
-
-        /* Tolerate a typed trailing slash on directory targets. */
-        size_t slen = strlen(storage);
-        while (slen > 1 && storage[slen - 1] == '/') slen--;
-        if (storage[slen] != '\0') {
-            storage = arena_strndup(arena, storage, slen);
-            if (!storage) {
+        if (err) {
+            /* The one refused shape a branch subtree answers is a label alone
+             * (`export global home`, `home/`): the whole tree under it, which
+             * is not a storage path and has no location. Every other refusal
+             * stands — an absolute path outside the roots, a `..` in the tail,
+             * a root — because a name the tree lookup happened to find would
+             * become the destination's basename, and `home/..` copies beside
+             * the destination the user named rather than into it. */
+            size_t len = strlen(opts->file_path);
+            while (len > 1 && opts->file_path[len - 1] == '/') len--;
+            const char *label = arena_strndup(arena, opts->file_path, len);
+            if (!label) {
+                error_free(err);
                 err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
                 goto cleanup;
             }
-        }
+            if (strchr(label, '/') != NULL) goto cleanup;
 
-        if (!storage_namespace_contains(storage)) {
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "'%s' is not exportable content\n"
-                "Profile content lives under home/, root/, or custom/; "
-                "anything else is dotta machinery.\n"
-                "Hint: Use 'dotta git' for raw repository access",
-                storage
-            );
-            goto cleanup;
+            /* A bare word, which the resolver reads as neither shape because
+             * its callers' first positional may be a profile. Here it is a label
+             * or it is machinery, and export says which in its own words. */
+            error_free(err);
+            err = NULL;
+            if (!storage_namespace_contains(label)) {
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is not exportable content\n"
+                    "Profile content lives under home/, root/, or custom/; "
+                    "anything else is dotta machinery.\n"
+                    "Hint: Use 'dotta git' for raw repository access",
+                    opts->file_path
+                );
+                goto cleanup;
+            }
+            storage = label;
         }
 
         err = gitops_find_file_in_tree(tree, storage, &target);

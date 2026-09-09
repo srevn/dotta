@@ -986,12 +986,6 @@ static error_t *test_path_ignore(
         err = mount_locate(mounts, absolute, ctx->arena, &argument_location);
         free(absolute);
         if (err) goto cleanup;
-
-        /* One location for every asker, so one observation and no asker to name
-         * it. */
-        argument_is_directory = stands_as_directory(
-            "", test_path, argument_location, trailing_slash, out
-        );
     }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
@@ -1046,6 +1040,17 @@ static error_t *test_path_ignore(
                 "Testing against baseline .dottaignore and config patterns only"
             );
         }
+    }
+
+    /* The kind a located argument is asked with: one reading for every asker,
+     * so one observation and no asker to name it. Taken after the preamble rather
+     * than at the locate, so the note it may print stands under the same header
+     * the per-asker notes of a storage name stand under — one command saying
+     * one thing in one order. */
+    if (argument_location) {
+        argument_is_directory = stands_as_directory(
+            "", test_path, argument_location, trailing_slash, out
+        );
     }
 
     bool any_ignored = false;

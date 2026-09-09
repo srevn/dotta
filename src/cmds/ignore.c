@@ -946,11 +946,15 @@ static error_t *test_path_ignore(
     string_array_t *enabled = NULL;
 
     /* The key the user named, fixed for every asker: exactly one of the two is
-     * non-NULL, and which one is the whole condition the loop's arms read. The
+     * non-NULL, and which one is the whole condition the loop's arms read. Each
+     * is established whole here, its own second reading beside it — the name
+     * and the tail the rules see, the location and the kind observed there — so
+     * the loop reads what the argument gave and asks nothing of it again. The
      * table is the run's until a view is built, and then the view's own — the
      * one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
     const char *argument_name = NULL;        /* a storage argument: its own name */
+    const char *argument_subject = NULL;     /* … and its tail, what the rules see */
     const char *argument_location = NULL;    /* a filesystem argument: where it stands */
     bool argument_is_directory = false;      /* … and the kind observed there, once */
 
@@ -960,6 +964,7 @@ static error_t *test_path_ignore(
             return error_wrap(err, "Invalid storage path '%s'", input);
         }
         argument_name = input;
+        argument_subject = mount_strip_label(input);
     } else {
         /* Both builders free their own partial view and leave *out NULL, so this
          * returns; from the locate on, the view is owned and every failure leaves
@@ -1072,7 +1077,7 @@ static error_t *test_path_ignore(
          * name is one subject for every asker alike, a location is the machine's
          * one reading and the kind observed there once. The arm fills the half
          * the argument did not name. */
-        const char *subject = mount_strip_label(argument_name);
+        const char *subject = argument_subject;
         const char *location = argument_location;
         bool is_directory = argument_is_directory;
 

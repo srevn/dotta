@@ -260,7 +260,7 @@ static error_t *manifest_place(
 
     error_t *err = ptr_array_push(placed, row);
     if (err) {
-        return error_wrap(err, "Failed to record a placed row");
+        return error_wrap(err, "Failed to grow the placed list");
     }
 
     *out = row;
@@ -508,7 +508,7 @@ static error_t *manifest_ascend(
  * a deeper group's ascent reads it. The name breaks the tie, so the order is
  * total and the runs are stable whatever qsort does with equals.
  */
-static int contest_order(const void *a, const void *b) {
+static int location_order(const void *a, const void *b) {
     const manifest_row_t *const *ra = a;
     const manifest_row_t *const *rb = b;
 
@@ -574,7 +574,7 @@ static error_t *manifest_settle(
      * is a row's location or its name. */
     manifest_row_t **rows = (manifest_row_t **) contenders->items;
 
-    qsort(rows, contenders->count, sizeof(*rows), contest_order);
+    qsort(rows, contenders->count, sizeof(*rows), location_order);
 
     for (size_t i = 0; i < contenders->count;) {
         const char *location = rows[i]->filesystem_path;
@@ -1062,7 +1062,8 @@ static error_t *manifest_contribute(
             break;
         }
 
-        /* The placement rule, as the blob pass states it. */
+        /* The within-profile rule, as the blob pass states it: the row stands,
+         * or it contends. */
         err = !held || manifest_is_derived(held)
             ? hashmap_set(c->index, filesystem_path, row)
             : ptr_array_push(&contenders, row);

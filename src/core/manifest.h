@@ -585,15 +585,14 @@ typedef struct {
  * The claims the build could not place, grouped by profile
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
- * so one profile's claims are contiguous and consumers aggregate in a single
- * pass without sorting. Each (profile, storage path) appears once and nothing
- * enforces it: the two passes record disjoint names — the blob pass those the
- * tree holds a blob at, the directory pass those sheet keys it does not, the
- * content-authority rule having contradicted the rest at the blob (a path is a
- * tree or a blob, and the tree is the content authority) — and within a pass a
- * name is its own, a tree holding one blob per path and a sheet one item per
- * key. Empty on every build whose claims all placed — the common case, costing
- * nothing.
+ * so one profile's claims are contiguous. Each (profile, storage path) appears
+ * once and nothing enforces it: the two passes record disjoint names — the blob
+ * pass those the tree holds a blob at, the directory pass those sheet keys it
+ * does not, the content-authority rule having contradicted the rest at the blob
+ * (a path is a tree or a blob, and the tree is the content authority) — and within
+ * a pass a name is its own, a tree holding one blob per path and a sheet one
+ * item per key. Empty on every build whose claims all placed — the common case,
+ * costing nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
@@ -638,12 +637,11 @@ typedef struct {
  * The names the profiles hold for locations they also name otherwise
  *
  * Pure value return — no allocation, no error path. Grouped by profile in build
- * order, a location's entries contiguous and bytewise by name, so one linear
- * walk counts a profile's run and a listing prints a location's names together
- * in a stable order. Each (profile, name) appears once — a name resolves to one
- * location under one profile, and a name the tree and the sheet both carry is
- * settled before the contest by the content-authority rule. Empty on every build
- * whose profiles each name their locations once.
+ * order, a location's entries contiguous and bytewise by name, so a listing prints
+ * a location's names together in a stable order. Each (profile, name) appears
+ * once — a name resolves to one location under one profile, and a name the tree
+ * and the sheet both carry is settled before the contest by the content-authority
+ * rule. Empty on every build whose profiles each name their locations once.
  *
  * Two names meet where two of this machine's roots overlap, and that needs no
  * exotic topology: `home/` lies beneath `root/` on every machine, so a branch

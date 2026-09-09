@@ -180,6 +180,9 @@ typedef struct {
  * not a failure. The custom/ probe (profile_has_custom_files) is answered from
  * the same tree, so a listing that marks such a profile reads the branch once.
  *
+ * The walk is complete or an error, as the listing's is: an entry whose path no
+ * mount can place fails the count rather than being skipped past.
+ *
  * Performance: O(files + directories), one tree walk and one metadata load.
  *
  * @param repo Repository (must not be NULL)
@@ -201,6 +204,12 @@ error_t *profile_get_stats(
  * and returns storage paths. For callers that already hold the tree, so one branch
  * read serves the walk and whatever else the caller does with it.
  *
+ * Complete or an error: an entry whose path no mount can place is corruption
+ * and fails the walk rather than being skipped, since a listing short by a path
+ * the caller cannot place would still read as complete. A branch this machine
+ * authored holds no such entry; one that arrived by clone, sync or foreign push
+ * can.
+ *
  * @param tree Git tree to walk (must not be NULL)
  * @param out String array of storage paths (must not be NULL, caller must free)
  * @return Error or NULL on success
@@ -214,7 +223,8 @@ error_t *profile_list_tree_files(
  * List files in profile
  *
  * Loads the profile's Git tree internally and walks it to collect storage paths.
- * Tree is freed before return.
+ * Tree is freed before return. The walk is profile_list_tree_files', and so is
+ * its answer to a malformed entry.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)

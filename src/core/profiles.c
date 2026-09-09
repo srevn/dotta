@@ -395,15 +395,16 @@ cleanup:
  * the branch. Answered once here, so each walk differs only in what it does with
  * a path it accepts.
  *
- * `out_err` receives the truncation error and nothing else — an entry that is
- * simply not content leaves it untouched, which is what lets a caller read "false
- * with no error" as "skip this entry, keep walking".
+ * `out_err` receives corruption and nothing else — a truncated join, or a path
+ * whose shape no mount can place. An entry that is simply not content leaves it
+ * untouched, which is what lets a caller read "false with no error" as "skip
+ * this entry, keep walking".
  *
  * @param root Walk root as libgit2 supplies it ("" or "dir/")
  * @param entry Tree entry (must not be NULL)
  * @param buf Receives the storage path when the entry is accepted
  * @param size Size of buf
- * @param out_err Receives a truncation error (must not be NULL)
+ * @param out_err Receives a corruption error (must not be NULL)
  * @return true when buf holds a content path the walk should process
  */
 static bool tree_entry_content_path(
@@ -427,19 +428,31 @@ static bool tree_entry_content_path(
     }
 
     const char *name = git_tree_entry_name(entry);
-    int ret;
 
-    if (root && root[0] != '\0') {
-        ret = snprintf(buf, size, "%s%s", root, name);
-    } else {
-        ret = snprintf(buf, size, "%s", name);
-    }
+    /* The path within the branch is the walk root and the entry's name: libgit2
+     * supplies the root as "" or "dir/", and an empty one is the name alone. */
+    int ret = snprintf(buf, size, "%s%s", root ? root : "", name);
 
     if (ret < 0 || (size_t) ret >= size) {
         *out_err = ERROR(
             ERR_INTERNAL, "Path exceeds maximum length: %s%s",
             root ? root : "", name
         );
+        return false;
+    }
+
+    /* The entry name is Git's, not this machine's. A tree can name a subtree
+     * "..", and every consumer of a path from here joins it onto a mount's physical
+     * (infra/mount.h mount_resolve) on the strength of its having been validated
+     * where it was written — which holds for a branch this machine authored and
+     * not for one that arrived by clone, sync or foreign push. So the shape is
+     * checked where the tree is read, exactly as the view checks its own
+     * (core/manifest.c manifest_claim_blob). Malformed here is corruption, not
+     * an entry to skip: a walk that dropped it silently would leave the caller
+     * a listing it cannot place and call it complete. */
+    error_t *shape = mount_validate_storage(buf);
+    if (shape) {
+        *out_err = shape;
         return false;
     }
 

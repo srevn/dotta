@@ -1524,14 +1524,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * through one, or the profile's own name for its own target (`add q
              * home/jail/link`, which resolves back to the link). A root has no
              * name, and the walk does not follow symlinks. */
-            char noun[MOUNT_NOUN_MAX];
+            char buf[MOUNT_NOUN_MAX];
+            const char *noun = mount_root_describe(
+                mount_root(mounts, opts->profile, fs_path), opts->profile, buf,
+                sizeof(buf)
+            );
             err = ERROR(
                 ERR_INVALID_ARG,
                 "'%s' is %s and cannot be added itself; name what is inside it",
-                file, mount_root_describe(
-                mount_root(mounts, opts->profile, fs_path), opts->profile,
-                noun, sizeof(noun)
-                )
+                file, noun
             );
             goto cleanup;
         } else {

@@ -1088,13 +1088,14 @@ static error_t *test_path_ignore(
             err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             if (!name) {
-                char noun[MOUNT_NOUN_MAX];
+                char buf[MOUNT_NOUN_MAX];
+                const char *noun = mount_root_describe(
+                    mount_root(mounts, asker, location), asker, buf, sizeof(buf)
+                );
                 output_info(
                     out, OUTPUT_NORMAL,
                     "%s'%s' is %s: it has no name for a pattern to match",
-                    who, test_path, mount_root_describe(
-                    mount_root(mounts, asker, location), asker, noun, sizeof(noun)
-                    )
+                    who, test_path, noun
                 );
                 continue;
             }

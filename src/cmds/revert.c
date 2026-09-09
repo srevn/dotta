@@ -623,9 +623,11 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     if (err) goto cleanup;
 
     /* Step 7: nothing to do — the whole write, entry and claim, already stands */
+    const metadata_item_t *standing_claim = metadata_lookup(
+        current_metadata, resolved_path
+    );
     if (already_at_target(
-        current_entry, metadata_lookup(current_metadata, resolved_path),
-        target_entry, restore_metadata
+        current_entry, standing_claim, target_entry, restore_metadata
         )) {
         output_info(
             out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",

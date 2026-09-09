@@ -20,27 +20,33 @@
  *
  * Two-phase execution model:
  *
- *   Phase 1 (read-only): walk the tree collecting entries, resolve every final
- *   destination path, and validate everything — type collisions, pre-existing
- *   symlinks that would re-route content writes, unsupported blob formats — then
- *   decrypt encrypted files into memory. Every refusal, including the passphrase
- *   prompt and any decryption failure, lands before the first byte is written.
- *   --dry-run is phase 1 alone.
+ *   Phase 1 (read-only): collect entries, complete the copy into a tree, resolve
+ *   every final destination path, and validate everything — type collisions,
+ *   pre-existing symlinks that would re-route content writes, unsupported blob
+ *   formats — then decrypt encrypted files into memory. Every refusal, including
+ *   the passphrase prompt and any decryption failure, lands before the first
+ *   byte is written. --dry-run is phase 1 alone.
  *
  *   Phase 2 (write): create directories, write blobs, recreate symlinks. Fail
  *   fast on first error; the remaining failure window is filesystem errors and
  *   repository corruption only.
  *
- * Traversal safety is structural: git forbids '/', '.', and '..' in tree entry
- * names, so joined paths cannot escape the export root. The remaining escape
- * vector — a pre-existing symlink at a content-dictated path below the root —
- * is refused in phase 1.
+ * Traversal safety is established, not assumed. A tree entry's name is whoever
+ * wrote the branch's, and git accepts one called ".." without a murmur, so every
+ * path a source dictates is read against the storage grammar where the source
+ * is read: mount_validate_storage in the walk callback, the same check the view
+ * makes for the same reason (core/manifest.c manifest_claim_blob), and, for the
+ * claim sheet, its own loader (core/metadata.c). The remaining escape vector —
+ * a pre-existing symlink at a content-dictated path below the root — is refused
+ * in phase 1, which can see every such path because the entry list is completed
+ * first: every directory the copy needs is an entry of it.
  */
 
 #include "cmds/export.h"
 
 #include <errno.h>
 #include <git2.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,6 +56,7 @@
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/string.h"
@@ -80,7 +87,11 @@ typedef enum {
 
 typedef struct {
     export_entry_kind_t kind;
-    const char *storage_path;  /* Full storage path (metadata key, AAD) */
+    const char *storage_path;  /* The source's name for it — the metadata key and
+                                * the AAD. NULL where the copy needs a directory
+                                * no source names: the root of a whole-profile
+                                * copy, and the rungs complete_directories
+                                * supplies. */
     const char *rel_path;      /* Path relative to the export root (display) */
     const char *dest_path;     /* Final filesystem path */
     git_oid blob_oid;          /* FILE / SYMLINK only */
@@ -92,6 +103,22 @@ typedef struct {
     buffer_t content;
 } export_entry_t;
 
+/**
+ * The entries of one copy, and the shape they carry.
+ *
+ * A tree-shaped copy's first entry is its root: relative path "", the resolved
+ * destination, the mode and claim of whatever stands at the source. Every arm
+ * appends it before anything beneath it, and the sort keeps it first — "" is a
+ * prefix of every other relative path, so it compares least, and the same fact
+ * puts every directory before its own contents (creation order) and after them
+ * when read backwards (the deepest-first chmod).
+ *
+ * A single-file copy has no root: its one entry is the leaf, and the destination
+ * is the user's own path rather than a directory to nest under (cp semantics,
+ * validate_destinations' `single_dest`). So `items[0].rel_path[0] == '\0'` says
+ * which shape a list is and nothing else has to; every arm appends its first
+ * entry or fails, so there is always an items[0] to ask.
+ */
 typedef struct {
     export_entry_t *items;     /* Arena-owned spine */
     size_t count;
@@ -126,6 +153,33 @@ static error_t *entry_list_append(
 
     list->items[list->count++] = *src;
     return NULL;
+}
+
+/**
+ * Open a tree-shaped copy with its root — the entry whose relative path is empty.
+ *
+ * `storage_path` and `claimed` are the source's word about the directory standing
+ * there — a sheet item, a row — or NULL and false where nothing names it: a whole
+ * profile, whose root is the destination and not a path of the branch.
+ */
+static error_t *append_root(
+    export_entry_list_t *list,
+    arena_t *arena,
+    const char *dest_path,
+    const char *storage_path,
+    mode_t mode,
+    bool claimed
+) {
+    export_entry_t e;
+    memset(&e, 0, sizeof(e));
+    e.kind = EXPORT_ENTRY_DIRECTORY;
+    e.storage_path = storage_path;
+    e.rel_path = "";
+    e.dest_path = dest_path;
+    e.mode = mode;
+    e.claimed = claimed;
+
+    return entry_list_append(list, arena, &e);
 }
 
 /**
@@ -254,6 +308,7 @@ static error_t *dest_resolve(
  */
 struct collect_ctx {
     const metadata_t *metadata;
+    const char *profile;       /* Named by the refusal a malformed tree earns */
     const char *storage_base;  /* "" for whole profile, else target path */
     const char *dest_root;
     bool whole_profile;        /* Branch-root machinery gate active */
@@ -269,12 +324,15 @@ static int collect_tree_callback(
 ) {
     struct collect_ctx *ctx = payload;
     const char *name = git_tree_entry_name(entry);
+    bool at_branch_root = ctx->whole_profile && root[0] == '\0';
 
     /* Whole-profile walks start at branch root, where content lives only under
      * storage-label subtrees; everything else is machinery. Positive return prunes
-     * the entry (and its subtree, pre-order). */
-    if (ctx->whole_profile && root[0] == '\0' &&
-        (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
+     * the entry (and its subtree, pre-order). What survives is a label exactly
+     * — storage_namespace_contains matches to the terminator and a tree entry
+     * name holds no '/' — so the shape check below has nothing left to ask of
+     * it. */
+    if (at_branch_root && (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
         !storage_namespace_contains(name))) {
         return 1;
     }
@@ -298,6 +356,24 @@ static int collect_tree_callback(
     if (!e.rel_path || !e.storage_path || !e.dest_path) {
         ctx->error = ERROR(ERR_MEMORY, "Failed to allocate export entry");
         return -1;
+    }
+
+    /* The name is Git's, not this machine's: a branch that arrived by clone,
+     * push or `dotta git` was validated by whoever wrote it, which is to say
+     * not at all, and a tree can name a subtree "..". Asked of trees as much as
+     * blobs — an empty malicious subtree has no blob for a blob-only check to
+     * meet — and after the join, because the grammar is the whole path's
+     * (core/manifest.c manifest_claim_blob makes the same check in the same words).
+     * A link's target is the link's own business, copied verbatim, and is not a
+     * path of this copy. */
+    if (!at_branch_root) {
+        error_t *shape = mount_validate_storage(e.storage_path);
+        if (shape) {
+            ctx->error = error_wrap(
+                shape, "Invalid path in profile '%s'", ctx->profile
+            );
+            return -1;
+        }
     }
 
     switch (git_tree_entry_type(entry)) {
@@ -347,36 +423,209 @@ static int collect_tree_callback(
 }
 
 /**
- * Order export entries by storage path.
+ * Order export entries by their path within the copy.
  *
- * Applied to the appended claims batch alone: parents sort before children (a
- * prefix compares less), keeping creation order and the deepest-first chmod
- * coherent with the walk's pre-order.
+ * Applied once to the whole list, after every collector and the completion: a
+ * prefix compares less, so the root ("") leads, every directory precedes its
+ * own contents, and reading backwards reaches the deepest first. Relative rather
+ * than storage, because the root of a whole-profile copy has no storage path —
+ * and within one copy the two orders agree anyway, every entry sharing one base.
  */
 static int export_entry_cmp(const void *a, const void *b) {
     const export_entry_t *ea = a;
     const export_entry_t *eb = b;
-    return strcmp(ea->storage_path, eb->storage_path);
+    return strcmp(ea->rel_path, eb->rel_path);
+}
+
+/**
+ * The branch's directory claims with no tree entry, appended beneath `base`.
+ *
+ * An empty tracked directory holds no blobs, so no walk can see it; the metadata
+ * item is its whole Git footprint, and it is content — materialized at its stored
+ * mode. `base` scopes the batch to one exported subtree (NULL for a whole profile);
+ * the base itself is the copy's root and never a claim of the list. The sheet's
+ * keys were checked against the storage grammar when the sheet loaded
+ * (core/metadata.c), so unlike the walk's names they arrive well-formed.
+ */
+static error_t *append_claim_dirs(
+    export_entry_list_t *list,
+    arena_t *arena,
+    const metadata_t *metadata,
+    git_tree *tree,
+    const char *base
+) {
+    const char *dest_root = list->items[0].dest_path;
+    size_t base_len = base ? strlen(base) : 0;
+
+    size_t item_count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+        const char *key = items[i]->key;
+
+        const char *rel = key;
+        if (base_len > 0) {
+            if (strncmp(key, base, base_len) != 0 || key[base_len] != '/') {
+                continue;
+            }
+            rel = key + base_len + 1;
+        }
+
+        /* Three answers, not two: the entry is there, it is absent, or the tree
+         * will not read — a lookup that fails on a missing object is corruption
+         * and not a claim without a blob. */
+        git_tree_entry *probe = NULL;
+        int rc = git_tree_entry_bypath(&probe, tree, key);
+        if (rc == 0) {
+            git_tree_entry_free(probe);
+            continue;   /* Tree-backed: the walk collected it */
+        }
+        if (rc != GIT_ENOTFOUND) {
+            return error_wrap(
+                error_from_git(rc), "Failed to read '%s' in the profile tree", key
+            );
+        }
+
+        export_entry_t e;
+        memset(&e, 0, sizeof(e));
+        e.kind = EXPORT_ENTRY_DIRECTORY;
+        e.claimed = true;
+        e.storage_path = arena_strdup(arena, key);
+        if (!e.storage_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate export entry");
+        }
+        e.rel_path = e.storage_path + (rel - key);
+        e.dest_path = arena_join_path(arena, dest_root, e.rel_path);
+        if (!e.dest_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate export entry");
+        }
+        e.mode = items[i]->mode != MODE_UNCLAIMED ? items[i]->mode : DIR_MODE_DEFAULT;
+
+        error_t *err = entry_list_append(list, arena, &e);
+        if (err) return err;
+    }
+
+    return NULL;
+}
+
+/**
+ * Complete the copy into a tree: every directory it needs is an entry, and nothing
+ * stands beneath a file.
+ *
+ * The census holds every collected entry by its relative path. The climb reads
+ * each proper prefix of each entry — every rung between the root and it — and
+ * every rung must be a directory entry: one no entry names is supplied at the
+ * default mode claiming nothing (core/deploy's own rule for an ancestor no verdict
+ * covers), and one a file or a link stands at refuses the copy, a filesystem
+ * being unable to hold both a file and paths beneath it where a branch can, two
+ * of its names reaching one chain. Run after any collector, because each leaves
+ * its own kind of gap: the walk sees every tree node but never the label above
+ * a blob-less claim, and a selection of rows sees claims but never the rungs
+ * between them.
+ *
+ * What it establishes is what phase 1 goes on to trust — an lstat of every entry
+ * covers every content-dictated component beneath the root, so a symlink standing
+ * at any of them is refused before a byte is written. The root's own ancestors
+ * are the user's typed destination and follow normal resolution (cp semantics);
+ * this is about the paths content dictates.
+ *
+ * The census holds each entry by index rather than by pointer — the spine moves
+ * when a rung is appended, an index does not — so a refusal can name the entry
+ * standing in the way, and index zero (the root) stays distinct from absence by
+ * the customary +1. Only the collected entries climb: a supplied rung's own
+ * prefixes were the climb that supplied it.
+ */
+static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) {
+    hashmap_t *standing = hashmap_borrow(list->count);
+    if (!standing) {
+        return ERROR(ERR_MEMORY, "Failed to index the export entries");
+    }
+
+    error_t *err = NULL;
+    for (size_t i = 0; i < list->count && !err; i++) {
+        err = hashmap_set(
+            standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1)
+        );
+    }
+
+    const char *dest_root = list->items[0].dest_path;
+    size_t collected = list->count;
+
+    for (size_t i = 0; i < collected && !err; i++) {
+        /* One copy spells every prefix of this entry in turn. */
+        char *rung = strdup(list->items[i].rel_path);
+        if (!rung) {
+            err = ERROR(ERR_MEMORY, "Failed to copy a path for the climb");
+            break;
+        }
+
+        for (char *slash = strchr(rung, '/'); slash && !err;
+            slash = strchr(slash + 1, '/')) {
+            *slash = '\0';
+
+            size_t held = (size_t) (uintptr_t) hashmap_get(standing, rung);
+            if (held == 0) {
+                export_entry_t e;
+                memset(&e, 0, sizeof(e));
+                e.kind = EXPORT_ENTRY_DIRECTORY;
+                e.mode = DIR_MODE_DEFAULT;
+                e.rel_path = arena_strdup(arena, rung);
+                e.dest_path = arena_join_path(arena, dest_root, rung);
+                if (!e.rel_path || !e.dest_path) {
+                    err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
+                } else {
+                    err = entry_list_append(list, arena, &e);
+                }
+                if (!err) {
+                    err = hashmap_set(
+                        standing, e.rel_path, (void *) (uintptr_t) list->count
+                    );
+                }
+            } else if (list->items[held - 1].kind != EXPORT_ENTRY_DIRECTORY) {
+                /* Both subjects in the branch's own names, because the
+                 * contradiction is the branch's and that is where it gets fixed.
+                 * Every entry that climbs carries one: a leaf comes from a source
+                 * that named it, and the root — the only collected entry without
+                 * a name — holds no slash to climb. */
+                const export_entry_t *blocker = &list->items[held - 1];
+                err = ERROR(
+                    ERR_CONFLICT,
+                    "Cannot export '%s': '%s' is a %s in this profile, so "
+                    "nothing can stand beneath it",
+                    list->items[i].storage_path, blocker->storage_path,
+                    blocker->kind == EXPORT_ENTRY_SYMLINK ? "symlink" : "file"
+                );
+            }
+
+            *slash = '/';
+        }
+
+        free(rung);
+    }
+
+    hashmap_free(standing, NULL);
+    return err;
 }
 
 /**
  * Phase-1 destination validation.
  *
- * lstat every entry's final path and refuse anything that would collide by type
- * or write through a pre-existing symlink. Below the export root every intermediate
- * directory is itself a walk entry, so checking entries covers every
- * content-dictated path component; the root's own ancestors are user-typed and
- * deliberately follow normal filesystem resolution (cp semantics).
+ * lstat every entry's final path — the root among them — and refuse anything
+ * that would collide by type or write through a pre-existing symlink. Below the
+ * export root every intermediate directory is itself an entry
+ * (complete_directories), so checking entries covers every content-dictated path
+ * component; the root's own ancestors are user-typed and deliberately follow
+ * normal filesystem resolution (cp semantics).
  *
- * `single_dest`: a lone user-typed file destination keeps the shipped cp semantics
- * — writing through a symlink at the typed path is the user's stated intent —
- * while content-dictated paths inside a tree export refuse symlinks outright
- * (the escape vector).
+ * A single-file copy — the list whose one entry is a leaf rather than a root —
+ * keeps the shipped cp semantics for its user-typed destination: writing through
+ * a symlink there is the user's stated intent, while content-dictated paths inside
+ * a tree copy refuse symlinks outright (the escape vector).
  */
-static error_t *validate_destinations(
-    export_entry_list_t *list,
-    bool single_dest
-) {
+static error_t *validate_destinations(export_entry_list_t *list) {
+    const bool single_dest = list->items[0].rel_path[0] != '\0';
+
     for (size_t i = 0; i < list->count; i++) {
         export_entry_t *e = &list->items[i];
 
@@ -525,13 +774,14 @@ static error_t *validate_content(
  * restrictive stored modes (0500), then chmod'd to the exact stored mode
  * deepest-first after the subtree is fully written. Pre-existing directories
  * are never touched — the copy makes no claim over what was already there.
+ *
+ * Sorted order does the sequencing: the root leads and every directory precedes
+ * its own contents, so nothing here creates a path phase 1 did not lstat, and
+ * the reverse pass reaches the deepest first and the root last.
  */
 static error_t *materialize_entries(
     const dotta_ctx_t *ctx,
     const char *profile,
-    const char *root_path,     /* NULL for single-file exports */
-    bool root_existed,
-    mode_t root_mode,
     export_entry_list_t *list,
     bool verbose
 ) {
@@ -541,33 +791,26 @@ static error_t *materialize_entries(
 
     error_t *err = NULL;
 
-    if (root_path && !root_existed) {
-        err = fs_create_dir_with_mode(root_path, root_mode | S_IRWXU, true);
-        if (err) {
-            return error_wrap(err, "Failed to create '%s'", root_path);
-        }
-    }
-
     for (size_t i = 0; i < list->count; i++) {
         export_entry_t *e = &list->items[i];
+        bool is_root = e->rel_path[0] == '\0';
 
         switch (e->kind) {
             case EXPORT_ENTRY_DIRECTORY:
                 if (e->dest_existed) break;
-                /* Parents allowed: a claims-batch entry may sit under an unclaimed,
-                 * blob-less ancestor no walk entry created — intermediates land
-                 * at the default mode, deploy's own ancestor rule. Walk entries'
-                 * parents always exist. */
-                err = fs_create_dir_with_mode(e->dest_path, e->mode | S_IRWXU, true);
+                /* Parents only for the root, whose ancestors are the destination
+                 * the user typed and follow normal resolution (cp semantics).
+                 * Every directory beneath it is an entry created before this
+                 * loop reached its contents (complete_directories). */
+                err = fs_create_dir_with_mode(e->dest_path, e->mode | S_IRWXU, is_root);
                 if (err) {
                     return error_wrap(
                         err, "Failed to create directory '%s'", e->dest_path
                     );
                 }
-                if (verbose) {
+                if (verbose && !is_root) {
                     output_styled(
-                        out, OUTPUT_NORMAL,
-                        "  created {cyan}%s/{reset} (mode %04o)\n",
+                        out, OUTPUT_NORMAL, "  created {cyan}%s/{reset} (mode %04o)\n",
                         e->rel_path, (unsigned) e->mode
                     );
                 }
@@ -611,6 +854,11 @@ static error_t *materialize_entries(
                 err = fs_remove_file(e->dest_path);
                 if (err) return err;
 
+                /* The one-entry copy's destination is the user's own path, and
+                 * its parent is created here exactly as fs_write_file_raw creates
+                 * one for a file (sys/filesystem.h). Inside a tree copy every
+                 * parent is already an entry, created before this loop reached
+                 * the link. */
                 err = fs_ensure_parent_dirs(e->dest_path);
                 if (err) return err;
 
@@ -648,19 +896,15 @@ static error_t *materialize_entries(
         }
     }
 
-    if (root_path && !root_existed && (root_mode | S_IRWXU) != root_mode) {
-        err = fs_set_permissions(root_path, root_mode);
-        if (err) {
-            return error_wrap(err, "Failed to set mode on '%s'", root_path);
-        }
-    }
-
     return NULL;
 }
 
 /**
  * Print the --dry-run plan: header plus one line per file entry and per directory
  * claim (slash-marked; scaffolding directories are not listed).
+ *
+ * The root is not a line of it: the header names the destination, and the root
+ * is the destination. Everything listed is relative to it.
  */
 static void print_dry_run(
     output_t *out,
@@ -680,6 +924,7 @@ static void print_dry_run(
     int width = 0;
     for (size_t i = 0; i < list->count; i++) {
         const export_entry_t *e = &list->items[i];
+        if (e->rel_path[0] == '\0') continue;
         if (e->kind == EXPORT_ENTRY_DIRECTORY && !e->claimed) continue;
         int len = (int) strlen(e->rel_path) +
             (e->kind == EXPORT_ENTRY_DIRECTORY ? 1 : 0);
@@ -689,6 +934,8 @@ static void print_dry_run(
 
     for (size_t i = 0; i < list->count; i++) {
         const export_entry_t *e = &list->items[i];
+        if (e->rel_path[0] == '\0') continue;
+
         switch (e->kind) {
             case EXPORT_ENTRY_DIRECTORY: {
                 if (!e->claimed) break;
@@ -743,6 +990,12 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     CHECK_NULL(opts);
     CHECK_NULL(opts->profile);
     CHECK_NULL(opts->output);
+    /* '-' names one file's bytes, so a path was named — export_post_parse refuses
+     * the pairing in its own words, and the refusal below names what was typed. */
+    CHECK_ARG(
+        strcmp(opts->output, "-") != 0 || opts->file_path != NULL,
+        "A stdout export must name a path"
+    );
 
     git_repository *repo = ctx->run.repo;
     const mount_table_t *mounts = ctx->run.mounts;
@@ -762,12 +1015,6 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     git_tree_entry *target = NULL;
     metadata_t *metadata = NULL;
     export_entry_list_t list = { 0 };
-    const char *root_path = NULL;    /* Non-NULL for tree exports */
-    bool root_existed = false;
-    mode_t root_mode = DIR_MODE_DEFAULT;
-    bool tree_export = false;
-    const char *claims_base = NULL;  /* Claims-append scope (NULL = whole profile) */
-    bool claim_only = false;         /* Target is a metadata-only directory claim */
     char commit_suffix[16] = "";
 
     /* Export is local-only: no network IO, ever. The explicit porcelain for making
@@ -899,30 +1146,25 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
         bool claim_target = target == NULL;
         if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
-            /* Directory export: walk the subtree — or, for a metadata-only claim,
-             * no subtree to walk: any children are claims themselves, collected
+            /* Directory export: the target is the copy's root, and beneath it
+             * the subtree is walked — or, for a metadata-only claim, there is
+             * no subtree to walk and any children are claims themselves, collected
              * by the append below. */
-            if (to_stdout) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'-' streams a single file's bytes; '%s' is a "
-                    "directory and needs a path destination", storage
-                );
-                goto cleanup;
-            }
-
+            const char *root_path = NULL;
             err = dest_resolve(
                 opts->output, path_basename(storage), arena, &root_path
             );
             if (err) goto cleanup;
 
-            root_mode = export_entry_mode(
-                metadata, storage, PATH_KIND_DIRECTORY,
-                GIT_FILEMODE_TREE
+            const metadata_item_t *root_item = metadata_lookup(metadata, storage);
+            mode_t root_mode = export_entry_mode(
+                metadata, storage, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
             );
-            tree_export = true;
-            claims_base = storage;
-            claim_only = claim_target;
+            err = append_root(
+                &list, arena, root_path, storage, root_mode,
+                root_item && root_item->kind == PATH_KIND_DIRECTORY
+            );
+            if (err) goto cleanup;
 
             if (!claim_target) {
                 int git_ret = git_tree_lookup(
@@ -935,6 +1177,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 
                 struct collect_ctx cctx = {
                     .metadata      = metadata,
+                    .profile       = opts->profile,
                     .storage_base  = storage,
                     .dest_root     = root_path,
                     .whole_profile = false,
@@ -951,6 +1194,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 }
                 if (err) goto cleanup;
             }
+
+            err = append_claim_dirs(&list, arena, metadata, tree, storage);
+            if (err) goto cleanup;
         } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
             /* Single-entry export: degenerate case of the walk. */
             git_filemode_t filemode = git_tree_entry_filemode(target);
@@ -988,17 +1234,22 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     } else {
         /* Whole profile: walk from branch root, storage layout mirrored verbatim
          * (dest/home/..., dest/root/...). The export root takes the profile's
-         * last segment under a directory
-         * destination (hosts/mbp -> mbp). */
+         * last segment under a directory destination (hosts/mbp -> mbp), and no
+         * path of the branch names it — it is the destination and nothing else. */
+        const char *root_path = NULL;
         err = dest_resolve(
             opts->output, path_basename(opts->profile), arena, &root_path
         );
         if (err) goto cleanup;
 
-        tree_export = true;
+        err = append_root(
+            &list, arena, root_path, NULL, DIR_MODE_DEFAULT, false
+        );
+        if (err) goto cleanup;
 
         struct collect_ctx cctx = {
             .metadata      = metadata,
+            .profile       = opts->profile,
             .storage_base  = "",
             .dest_root     = root_path,
             .whole_profile = true,
@@ -1012,112 +1263,48 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             err = cctx.error;
         }
         if (err) goto cleanup;
-    }
 
-    /* The branch's directory claims with no tree entry — an empty tracked directory
-     * holds no blobs, so the walk cannot see it; the metadata item is its whole
-     * footprint. Appended after the walk (nothing tree-backed can live beneath
-     * a blob-less claim, so parents still precede children) and sorted so creation
-     * order and the deepest-first chmod stay coherent. */
-    if (tree_export) {
-        size_t appended_from = list.count;
-        size_t base_len = claims_base ? strlen(claims_base) : 0;
-        size_t item_count = 0;
-        const metadata_item_t *const *items = metadata_items(metadata, &item_count);
-        for (size_t i = 0; i < item_count; i++) {
-            if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-            const char *key = items[i]->key;
+        err = append_claim_dirs(&list, arena, metadata, tree, NULL);
+        if (err) goto cleanup;
 
-            const char *rel = key;
-            if (base_len > 0) {
-                /* Inside the exported subtree only; the base itself is the export
-                 * root, not a list entry. */
-                if (strncmp(key, claims_base, base_len) != 0 ||
-                    key[base_len] != '/') {
-                    continue;
-                }
-                rel = key + base_len + 1;
-            }
-
-            git_tree_entry *probe = NULL;
-            if (git_tree_entry_bypath(&probe, tree, key) == 0) {
-                git_tree_entry_free(probe);
-                continue;   /* Tree-backed: the walk collected it */
-            }
-
-            export_entry_t e;
-            memset(&e, 0, sizeof(e));
-            e.kind = EXPORT_ENTRY_DIRECTORY;
-            e.claimed = true;
-            e.storage_path = arena_strdup(arena, key);
-            if (!e.storage_path) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
-                goto cleanup;
-            }
-            e.rel_path = e.storage_path + (rel - key);
-            e.dest_path = arena_join_path(arena, root_path, e.rel_path);
-            if (!e.dest_path) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
-                goto cleanup;
-            }
-            e.mode = items[i]->mode != MODE_UNCLAIMED ? items[i]->mode : DIR_MODE_DEFAULT;
-
-            err = entry_list_append(&list, arena, &e);
-            if (err) goto cleanup;
-        }
-        if (list.count > appended_from + 1) {
-            qsort(
-                list.items + appended_from, list.count - appended_from,
-                sizeof(*list.items), export_entry_cmp
+        /* Emptiness is the collector's question, asked at its own source: a whole
+         * profile holding nothing but its root has no content to copy. The name
+         * arm answered its own above — the target is in the tree, or in the sheet,
+         * or not found. */
+        if (list.count == 1) {
+            err = ERROR(
+                ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
+                opts->profile, commit_suffix
             );
+            goto cleanup;
         }
     }
 
-    if (list.count == 0 && !claim_only) {
+    /* Which shape the copy is, asked of the list rather than remembered by the
+     * arms: a tree-shaped one opens with its root, a single-file one is its
+     * leaf. */
+    bool tree_export = list.items[0].rel_path[0] == '\0';
+
+    /* ── Phase 1 validation: every refusal before the first byte ── */
+
+    if (to_stdout && tree_export) {
         err = ERROR(
-            ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
-            opts->profile, commit_suffix
+            ERR_INVALID_ARG,
+            "'-' streams a single file's bytes; '%s' is a directory and "
+            "needs a path destination", opts->file_path
         );
         goto cleanup;
     }
 
-    /* ── Phase 1 validation: every refusal before the first byte ── */
-
     if (tree_export) {
-        struct stat st;
-        if (fs_lstat(root_path, &st) == 0) {
-            if (S_ISDIR(st.st_mode)) {
-                root_existed = true;
-            } else if (S_ISLNK(st.st_mode)) {
-                err = ERROR(
-                    ERR_CONFLICT,
-                    "Destination '%s' is a symlink — refusing to write "
-                    "through it", root_path
-                );
-                goto cleanup;
-            } else {
-                err = ERROR(
-                    ERR_CONFLICT,
-                    "Destination '%s' exists and is not a directory",
-                    root_path
-                );
-                goto cleanup;
-            }
-        } else if (errno == ENOTDIR) {
-            err = ERROR(
-                ERR_CONFLICT,
-                "A path component of '%s' exists and is not a directory",
-                root_path
-            );
-            goto cleanup;
-        } else if (errno != ENOENT) {
-            err = error_from_errno(errno, "Cannot stat '%s'", root_path);
-            goto cleanup;
-        }
+        err = complete_directories(&list, arena);
+        if (err) goto cleanup;
     }
 
+    qsort(list.items, list.count, sizeof(*list.items), export_entry_cmp);
+
     if (!to_stdout) {
-        err = validate_destinations(&list, !tree_export);
+        err = validate_destinations(&list);
         if (err) goto cleanup;
     }
 
@@ -1127,9 +1314,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     /* ── Reporting / phase 2 ── */
 
     /* The counts phrase: files (symlinks included) and the directory claims this
-     * export materializes — the walk's claimed entries, the appended batch, and
-     * (for a subtree export) the root when it is itself a claim. Scaffolding
-     * directories are plumbing, not content: uncounted. */
+     * export materializes — the root among them when it is itself a claim, since
+     * the root is an entry like any other. Scaffolding directories are plumbing,
+     * not content: uncounted. */
     size_t file_count = 0;
     size_t dir_claims = 0;
     for (size_t i = 0; i < list.count; i++) {
@@ -1139,17 +1326,11 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             file_count++;
         }
     }
-    if (claims_base) {
-        const metadata_item_t *root_item = metadata_lookup(metadata, claims_base);
-        if (root_item && root_item->kind == PATH_KIND_DIRECTORY) {
-            dir_claims++;
-        }
-    }
     char counts[64];
     output_format_counts(file_count, dir_claims, counts, sizeof(counts));
 
-    const char *dest_display = to_stdout ? "stdout"
-        : (root_path ? root_path : list.items[0].dest_path);
+    /* The copy's own first entry: the root for a tree, the leaf for a file. */
+    const char *dest_display = to_stdout ? "stdout" : list.items[0].dest_path;
 
     if (opts->dry_run) {
         print_dry_run(
@@ -1175,10 +1356,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         goto cleanup;
     }
 
-    err = materialize_entries(
-        ctx, opts->profile, root_path, root_existed, root_mode, &list,
-        verbose
-    );
+    err = materialize_entries(ctx, opts->profile, &list, verbose);
     if (err) goto cleanup;
 
     output_styled(

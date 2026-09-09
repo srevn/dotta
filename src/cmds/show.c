@@ -452,17 +452,14 @@ static error_t *show_commit(
     git_diff *diff = NULL;
     git_diff_stats *stats = NULL;
 
-    /* Resolve commit in profile */
+    /* Resolve commit in profile. The resolution names both the commit and the
+     * branch in every fate it has (sys/gitops.h), so there is nothing to restate
+     * here — and the sentence that used to stand over it said "not found" of an
+     * ancestry the walk could not read. */
     err = gitops_resolve_commit_in_branch(
         repo, profile, commit_ref, &commit_oid, &commit
     );
-    if (err) {
-        err = error_wrap(
-            err, "Commit '%s' not found in profile '%s'",
-            commit_ref, profile
-        );
-        goto cleanup;
-    }
+    if (err) goto cleanup;
 
     /* Get commit tree — from the commit in hand, not by a second lookup */
     int ret = git_commit_tree(&commit_tree, commit);

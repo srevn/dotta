@@ -442,7 +442,13 @@ error_t *gitops_get_commit(
  * commit. This function enforces the constraint the name implies.
  *
  * Returns ERR_NOT_FOUND if commit_ref cannot be resolved or if it resolves to a
- * commit not reachable from branch_name's tip.
+ * commit not reachable from branch_name's tip. Every other failure is a rung of
+ * the resolution that could not be made — the branch unreadable, its tip
+ * unreadable, a reference that peels to no commit, an ancestry the walk could
+ * not decide — and each is ERR_GIT under a sentence naming both the rung and
+ * the branch. A caller therefore adds nothing by restating the subject: a wrap
+ * saying "not found" over one of them would name a fate this function did not
+ * reach.
  *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)

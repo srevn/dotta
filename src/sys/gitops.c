@@ -1399,7 +1399,9 @@ error_t *gitops_resolve_commit_in_branch(
     git_reference *branch_ref = NULL;
     int ret = git_reference_lookup(&branch_ref, repo, ref_name);
     if (ret < 0) {
-        return error_from_git(ret);
+        return error_wrap(
+            error_from_git(ret), "Cannot read branch '%s'", branch_name
+        );
     }
 
     const git_oid *tip_target = git_reference_target(branch_ref);
@@ -1422,7 +1424,10 @@ error_t *gitops_resolve_commit_in_branch(
         if (out_commit) {
             ret = git_commit_lookup(out_commit, repo, out_oid);
             if (ret < 0) {
-                return error_from_git(ret);
+                return error_wrap(
+                    error_from_git(ret), "Cannot read the tip of branch '%s'",
+                    branch_name
+                );
             }
         }
         return NULL;
@@ -1501,7 +1506,11 @@ error_t *gitops_resolve_commit_in_branch(
         );
         if (reach < 0) {
             git_object_free(commit_obj);
-            return error_from_git(reach);
+            return error_wrap(
+                error_from_git(reach),
+                "Cannot tell whether commit '%s' is reachable from branch '%s'",
+                commit_ref, branch_name
+            );
         }
         if (reach == 0) {
             git_object_free(commit_obj);

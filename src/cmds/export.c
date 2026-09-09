@@ -1476,16 +1476,13 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
      * and encryption flags. */
     if (opts->commit) {
         git_oid commit_oid;
+        /* The resolution names both the commit and the branch in every fate it
+         * has (sys/gitops.h): nothing to restate, and the sentence that used to
+         * stand over it said "not found" of an ancestry the walk could not read. */
         err = gitops_resolve_commit_in_branch(
             repo, opts->profile, opts->commit, &commit_oid, &commit
         );
-        if (err) {
-            err = error_wrap(
-                err, "Commit '%s' not found in profile '%s'",
-                opts->commit, opts->profile
-            );
-            goto cleanup;
-        }
+        if (err) goto cleanup;
 
         /* The commit is in hand and its tree is one dereference away; the OID
          * helper beside this one would look the commit up a second time. */

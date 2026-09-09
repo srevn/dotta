@@ -693,12 +693,25 @@ error_t *profile_get_stats(
          * blob is stale metadata, and the tree is the content authority — the
          * same rule the view's directory pass applies when the profile is enabled
          * (core/manifest.c manifest_contribute), asked there of the sheet at
-         * the blob its own walk met rather than of the ODB. */
-        git_tree_entry *held = NULL;
-        if (git_tree_entry_bypath(&held, tree, items[i]->key) == 0) {
-            bool is_blob = git_tree_entry_type(held) == GIT_OBJECT_BLOB;
-            git_tree_entry_free(held);
+         * the blob its own walk met rather than of the ODB.
+         *
+         * Three answers, not two: the entry is there, it is absent, or the tree
+         * will not read — and an object that will not load is corruption, never
+         * an absence, so the count refuses rather than counts a directory the
+         * branch may not hold. */
+        git_tree_entry *entry = NULL;
+        int rc = git_tree_entry_bypath(&entry, tree, items[i]->key);
+        if (rc == 0) {
+            bool is_blob = git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
+            git_tree_entry_free(entry);
             if (is_blob) continue;
+        } else if (rc != GIT_ENOTFOUND) {
+            metadata_free(metadata);
+            git_tree_free(tree);
+            return error_wrap(
+                error_from_git(rc), "Failed to read '%s' in profile '%s'",
+                items[i]->key, profile
+            );
         }
 
         out->directory_count++;

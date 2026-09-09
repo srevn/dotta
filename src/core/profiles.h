@@ -162,8 +162,8 @@ error_t *profile_require(git_repository *repo, const char *name);
  *
  * Counted from the branch, not from the view: the listings that report these
  * name available profiles too, and a profile nothing has enabled owns no rows.
- * The two sources are the ones the view's claim routine reads when the profile
- * *is* enabled (manifest_claim_tree) — the tree's content blobs and the branch
+ * The two sources are the ones the view's per-profile step reads when the profile
+ * *is* enabled (manifest_contribute) — the tree's content blobs and the branch
  * metadata's tracked directories — and both sides read one content gate
  * (mount_spec_for_path, infra/mount.h), so a profile that wins every path it
  * claims counts the same here as its rows do there.

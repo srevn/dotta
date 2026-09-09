@@ -461,8 +461,11 @@ const mount_spec_t *mount_root(
 );
 
 /* The longest sentence mount_root_describe renders: "the deployment target" (20),
- * " of profile '" (13), a profile name (a branch name — 255 bytes at git's limit),
- * the closing quote and the terminator. */
+ * " of profile '" (13), a profile name, the closing quote and the terminator.
+ * The name is bounded by the ref it becomes, not by git's 255 — that one is per
+ * component and a profile name has several: gitops_build_refname refuses a name
+ * that will not fit DOTTA_REFNAME_MAX after "refs/heads/", and every site that
+ * turns a profile into a ref goes through it (sys/gitops.h). */
 #define MOUNT_NOUN_MAX 320
 
 /**

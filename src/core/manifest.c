@@ -107,9 +107,10 @@ struct manifest {
 /**
  * Context for the blob-claim tree-walk callback
  *
- * Passed to gitops_tree_walk() to place one profile's blobs directly during tree
- * traversal, eliminating O(N×D) two-pass overhead. The callback extracts identity
- * fields from borrowed tree entries at O(1) per file.
+ * Everything one walk of one tree needs to place that profile's blobs where they
+ * stand: the contribution being filled, the table that places them, the sheet
+ * that claims them, and the two lists the step spends. Handed to gitops_tree_walk
+ * once per profile and read at O(1) per entry.
  *
  * Memory ownership:
  * - manifest: borrowed, caller retains ownership — the mount table and the unbound
@@ -683,20 +684,16 @@ static error_t *manifest_settle(
 /**
  * Tree-walk callback that places the tree's blobs into the contribution
  *
- * Performance optimization: Instead of collecting paths in pass 1 then
- * re-traversing via git_tree_entry_bypath() in pass 2 (O(N×D)), this callback
- * writes manifest_row_t rows directly in O(N) time.
+ * The blob half of the per-profile step, and the whole of it that Git drives:
+ * one entry at a time, in one walk, a finished manifest_row_t or nothing. In
+ * order — the content gate (a blob under a storage label, and nothing else),
+ * the name joined from the walk's root, the location it resolves to, the row,
+ * its identity, this profile's claim over it, and the within-profile placement
+ * rule that says whether it stands or contends.
  *
- * Extracts identity fields (blob_oid, type, mode) from the borrowed tree entry
- * at the callback boundary — no git_tree_entry_dup needed, no opaque handle stored
- * on the row.
- *
- * Handles:
- * - The content gate: a blob under a storage label, and nothing else
- * - Storage path to filesystem path conversion
- * - The within-profile placement rule (the index, or the contest)
- * - File identity extraction from Git tree entry
- * - Per-profile metadata application (mode override, owner, group, encrypted)
+ * Identity — blob_oid, type and the Git-derived mode — is read off the borrowed
+ * entry here, at the one boundary where the entry is valid, so no row carries
+ * an opaque handle and nothing is duplicated to outlive the walk.
  *
  * @param root Directory path within tree (empty string for root level)
  * @param entry Git tree entry (borrowed — valid for callback duration only)
@@ -942,14 +939,10 @@ static error_t *manifest_contribute(
     ptr_array_t placed PTR_ARRAY_AUTO = { 0 };
     ptr_array_t contenders PTR_ARRAY_AUTO = { 0 };
 
-    /* Place the rows via single-pass tree traversal.
-     *
-     * The callback extracts identity fields (blob_oid, type, mode) from borrowed
-     * tree entries, converts paths via mount_resolve, applies the within-profile
-     * placement rule, applies per-profile metadata to mode/owner/group/encrypted,
-     * and populates manifest_row_t rows directly — all in O(N) time. The table
-     * is the view's; bindings are keyed by profile (which the callback feeds
-     * verbatim into mount_resolve). */
+    /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
+     * and bindings are keyed by profile — which the callback feeds verbatim into
+     * mount_resolve, so a custom/ claim of this profile places under this profile's
+     * target and no other's. */
     struct claim_ctx ctx = {
         .manifest     = manifest,
         .contribution = c,
@@ -1070,6 +1063,11 @@ static error_t *manifest_contribute(
         row->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
         row->group = item->group ? arena_strdup(arena, item->group) : NULL;
 
+        /* The three are refused together, where every other allocation in this
+         * file is refused on the line that made it: the row above is one statement,
+         * and the only failure any of its copies has is the arena's — one
+         * exhaustion, named by the path and the profile that were being placed
+         * when it came. */
         if (!row->storage_path ||
             (item->owner && !row->owner) || (item->group && !row->group)) {
             err = ERROR(

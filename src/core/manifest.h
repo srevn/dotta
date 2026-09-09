@@ -53,18 +53,19 @@
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
- *     — the historical diff (cmd_diff), and `ignore --test` under a named profile
- *     — and is the same per-profile step applied once. Each step loads the claim
- *     sheet of the tree it reads: a tree without one holds an empty sheet, and
- *     a sheet that will not load fails the build rather than read as "no claims",
- *     so no caller of a builder chooses a policy for a fact the builder is the
- *     authority on. That is the view's rule and only the view's — a command reading
- *     a sheet for its own screen decides for itself (core/metadata.h). Both produce
- *     manifest_row_t rows directly, the one row shape every consumer reads, so
- *     there is no bridge between the build step and its readers. The dispatcher
- *     builds the view once per command
- *     for the commands that declare it (ctx->run.manifest, include/runtime.h);
- *     a command that moves Git or the enabled set builds the post-mutation view
+ *     — the historical diff (cmd_diff), export's location arm, and the claim
+ *     search over whatever tree a verb selected — and is the same per-profile
+ *     step applied once, manifest_build_branch being it over a branch's tip.
+ *     Each step loads the claim sheet of the tree it reads: a tree without one
+ *     holds an empty sheet, and a sheet that will not load fails the build rather
+ *     than read as "no claims", so no caller of a builder chooses a policy for
+ *     a fact the builder is the authority on. That is the view's rule and only
+ *     the view's — a command reading a sheet for its own screen decides for itself
+ *     (core/metadata.h). All three produce manifest_row_t rows directly, the
+ *     one row shape every consumer reads, so there is no bridge between the build
+ *     step and its readers. The dispatcher builds the view once per command for
+ *     the commands that declare it (ctx->run.manifest, include/runtime.h); a
+ *     command that moves Git or the enabled set builds the post-mutation view
  *     itself.
  *
  *   - Readers: manifest_rows (every winning row, both kinds, unordered),
@@ -560,11 +561,11 @@ error_t *manifest_mount_table(
 /**
  * One claim the build could not place: its profile has no deployment target on
  * this machine. Recorded, never dropped in silence — the health consumers (status,
- * apply, sync) surface these; the repair is one command (`profile enable <p>
- * --target /path`), the untracking another (`remove`). The screen says **no
- * target**, never "unbound": the header's word is what the build could not do,
- * the screen's is what the user must give. Strings are the build arena's, same
- * lifetime as the rows.
+ * apply, sync) surface these, and export reads the count alone, for a hint; the
+ * repair is one command (`profile enable <p> --target /path`), the untracking
+ * another (`remove`). The screen says **no target**, never "unbound": the header's
+ * word is what the build could not do, the screen's is what the user must give.
+ * Strings are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
@@ -847,9 +848,11 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  *
  * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
  *
- * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the settle
- * of a contribution's collisions (core/manifest.c). add's argument arm and its
- * walk compute the same answer incrementally and are what C3 brings here.
+ * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the
+ * prospective name a claim search falls through to (core/profiles.c
+ * profile_claim_name); the settle of a contribution's collisions (core/manifest.c).
+ * add's argument arm and its walk compute the same answer incrementally and are
+ * what C3 brings here.
  *
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone

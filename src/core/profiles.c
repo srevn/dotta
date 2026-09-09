@@ -691,7 +691,8 @@ error_t *profile_get_stats(
 
         /* A path is a tree or a blob: a DIRECTORY item where the tree holds a
          * blob is stale metadata, and the tree is the content authority — the
-         * same rule manifest_claim_tree applies when the profile is enabled. */
+         * same rule manifest_holds_blob applies when the profile is enabled,
+         * asked there of the rows already placed rather than of the ODB. */
         git_tree_entry *held = NULL;
         if (git_tree_entry_bypath(&held, tree, items[i]->key) == 0) {
             bool is_blob = git_tree_entry_type(held) == GIT_OBJECT_BLOB;

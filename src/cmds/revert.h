@@ -44,8 +44,11 @@ typedef struct {
  *
  * Everything the revert writes is decided before any of it is shown, and shown
  * before it is asked: a dry run and a real run reach the same verdict on the
- * same argument, and the prompt is the only gate between the preview and the
- * commit.
+ * same argument — the same admission, semantic and structural, the stage's own
+ * refusals included — and the prompt is the only gate between the preview and
+ * the commit. What no preview can foresee is what is left: memory, a ref another
+ * writer moved between the preview and the commit, a repository that will not
+ * write.
  *
  * The operation:
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
@@ -54,9 +57,12 @@ typedef struct {
  *    tip's, which may be absent — the restored blob's own bytes, and the claims
  *    both sheets record at the name
  * 4. Answers "nothing to do" when that whole write already stands
- * 5. Shows the preview (restored / diff / mode and ownership only)
- * 6. Prompts for confirmation (unless --force)
- * 7. Creates one commit with the restored blob and the merged metadata
+ * 5. Puts the entry on the stage — the write's own admission, made here so that
+ *    a tree that cannot hold it refuses before the preview and not after the
+ *    prompt; no object is written by it
+ * 6. Shows the preview (restored / diff / mode and ownership only)
+ * 7. Prompts for confirmation (unless --force)
+ * 8. Creates one commit with the restored blob and the merged metadata
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

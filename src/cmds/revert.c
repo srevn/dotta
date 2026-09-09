@@ -636,7 +636,22 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;  /* Not an error, just nothing to do */
     }
 
-    /* Step 8: Show preview (always, including dry-run) */
+    /* Step 8: the entry the write puts, admitted now — the last thing about this
+     * revert that can be refused, and refused before the preview promises it.
+     * stage_put_blob is the producer of that refusal and it reads the private
+     * index alone: the mode, the path's shape, a proper prefix that names an
+     * entry, any entry beneath the path. A destination beneath a blob the tip
+     * holds used to pass the dry run and fail after the prompt, with what the
+     * dry run should have said.
+     *
+     * It writes no object — the blob is one the commit already holds — so a dry
+     * run or a declined prompt frees the stage and leaves the object database
+     * as it found it. stage_tree() is still the tree the stage opened at, so
+     * every read below is the tip's. */
+    err = stage_put_blob(stage, resolved_path, restored_blob, restored_mode);
+    if (err) goto cleanup;
+
+    /* Step 9: Show preview (always, including dry-run) */
     output_section(out, OUTPUT_NORMAL, "Revert preview:");
 
     const git_signature *author = git_commit_author(target_commit);
@@ -699,13 +714,13 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         }
     }
 
-    /* Step 9: Early exit for dry-run (preview shown, no changes to make) */
+    /* Step 10: Early exit for dry-run (preview shown, no changes to make) */
     if (opts->dry_run) {
         output_info(out, OUTPUT_NORMAL, "\nDry-run mode: No changes made");
         goto cleanup;
     }
 
-    /* Step 10: Prompt for confirmation (unless --force or config disables) */
+    /* Step 11: Prompt for confirmation (unless --force or config disables) */
     if (!output_confirm_destructive(
         out, config ? config->confirm_destructive : true, "Revert file?", opts->force
         )) {
@@ -715,10 +730,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
 
-    /* Step 11: the write, on the stage opened at the preview's tip — the blob
-     * and the merged sheet in one commit, all of it decided above. A branch another
-     * writer moved since is refused by the commit itself rather than by a second
-     * look at the tip.
+    /* Step 12: the write, on the stage opened at the preview's tip — the entry
+     * put at step 8 and the merged sheet beside it, in one commit, all of it
+     * decided above. A branch another writer moved since is refused by the commit
+     * itself rather than by a second look at the tip.
      *
      * The claim to restore upserts over the standing one; where the target records
      * none for a link, the standing item is the reverted-away state's — retire
@@ -732,11 +747,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     } else {
         metadata_remove_item(current_metadata, resolved_path);
     }
-
-    /* The target's blob at the path — an object the ODB already holds, so the
-     * entry is put by id — and the merged sheet beside it */
-    err = stage_put_blob(stage, resolved_path, restored_blob, restored_mode);
-    if (err) goto cleanup;
 
     err = metadata_save_to_stage(stage, current_metadata);
     if (err) {
@@ -755,7 +765,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     err = stage_commit(stage, msg, NULL);
     if (err) goto cleanup;
 
-    /* Step 12: Report. Nothing to write: the revert moved the branch HEAD, and
+    /* Step 13: Report. Nothing to write: the revert moved the branch HEAD, and
      * the next load's view carries the reverted blob — the record stays where
      * apply last confirmed it, so the workspace reads the result as [stale] until
      * apply deploys it. A disabled profile's revert reaches no view at all. */
@@ -970,12 +980,15 @@ const args_command_t spec_revert = {
         "afterward to propagate to the filesystem.\n",
     .notes       =
         "Execution Order:\n"
-        "  1. Locate the file in enabled profiles (exact path).\n"
-        "  2. Resolve the target commit in the profile's history.\n"
-        "  3. Show a diff between current and target state.\n"
-        "  4. Prompt for confirmation (bypassed by --force).\n"
-        "  5. Write file and metadata back to the target state.\n"
-        "  6. Create a commit capturing the restoration.\n",
+        "  1. Find the profile that holds the argument (--profile if ambiguous).\n"
+        "  2. Resolve the commit in that profile's history.\n"
+        "  3. Read what the commit holds and what stands at the branch tip.\n"
+        "  4. Answer 'nothing to do' when that whole state already stands.\n"
+        "  5. Show the preview: the restored file, a diff, or a metadata-only\n"
+        "     change. A dry run stops here, having refused whatever the real\n"
+        "     run would have refused.\n"
+        "  6. Prompt for confirmation (bypassed by --force).\n"
+        "  7. Create one commit with the restored blob and the merged metadata.\n",
     .examples    =
         "  %s revert home/.bashrc HEAD~3              # Profile inferred\n"
         "  %s revert darwin home/.bashrc a4f2c8e      # Explicit profile\n"

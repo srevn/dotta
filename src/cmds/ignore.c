@@ -965,17 +965,9 @@ static error_t *test_path_ignore(
          * returns; from the locate on, the view is owned and every failure leaves
          * by cleanup. */
         if (specific_profile) {
-            git_tree *tree = NULL;
-            err = gitops_load_branch_tree(repo, specific_profile, &tree, NULL);
-            if (err) {
-                return error_wrap(
-                    err, "Failed to load tree for profile '%s'", specific_profile
-                );
-            }
-            err = manifest_build_tree(
-                repo, tree, specific_profile, mounts, ctx->arena, &view
+            err = manifest_build_branch(
+                repo, specific_profile, mounts, ctx->arena, &view
             );
-            git_tree_free(tree);
         } else {
             err = manifest_build(repo, state, ctx->arena, &view);
         }

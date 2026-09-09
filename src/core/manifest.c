@@ -1400,6 +1400,39 @@ cleanup:
 }
 
 /**
+ * Build the manifest from a branch's tip
+ *
+ * The load is wrapped and the build is not: a build's own failures already name
+ * the profile they were reading.
+ */
+error_t *manifest_build_branch(
+    git_repository *repo,
+    const char *branch,
+    const mount_table_t *mounts,
+    arena_t *arena,
+    manifest_t **out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(branch);
+    CHECK_NULL(mounts);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+    if (err) {
+        return error_wrap(err, "Failed to load tree for profile '%s'", branch);
+    }
+
+    err = manifest_build_tree(repo, tree, branch, mounts, arena, out);
+    git_tree_free(tree);
+
+    return err;
+}
+
+/**
  * Every winning row of the view, both kinds, unordered
  *
  * The cast adds const at both pointer levels (T ** → const T *const *) — legal

@@ -11,9 +11,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "base/arena.h"
 #include "base/args.h"
-#include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/output.h"
@@ -32,112 +30,87 @@
 #include "utils/commit.h"
 
 /**
- * Which profile holds the argument, and under which name
+ * Which profile the revert acts on
  *
- * The profile question, and only that. Whether the branch holds the name at its
- * tip is not asked here: a revert restores what the *commit* holds, and a path
- * the profile deleted is the case a revert exists for. Both trees are read once,
- * together, where the revert is decided (cmd_revert step 5).
+ * The profile question, and only that. What that profile calls the argument is
+ * read afterwards, from the tree the revert edits (cmd_revert step 4) — a branch's
+ * tip is its stage's tree, so the search below and the naming there read one
+ * source and cannot disagree about a name.
  *
- * With profile_hint: the user's word, required to be here.
+ * With `opts->profile`: the user's word, required to be here. Whether the branch
+ * holds the argument at its tip is not asked — a revert restores what the *commit*
+ * holds, and a path the profile deleted is the case a revert exists for.
  *
- * Without profile_hint: profile_discover_file() scans every local branch's tip
- * for the name — the lookup *is* the profile resolution — and an argument two
- * profiles hold is ambiguous, listed and refused.
+ * Without: every local branch is asked what it stands at the argument
+ * (profile_discover_claims — enabled or not, revert's question), and an argument
+ * two profiles hold is ambiguous, listed with each branch's own name for it and
+ * refused.
  */
-static error_t *discover_file(
+static error_t *select_profile(
     const dotta_ctx_t *ctx,
-    const char *file_path,
-    const char *profile_hint,
-    const char **out_profile,
-    const char **out_resolved_path
+    const cmd_revert_options_t *opts,
+    const path_input_t *arg,
+    const char **out_profile
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(file_path);
+    CHECK_NULL(opts);
+    CHECK_NULL(arg);
     CHECK_NULL(out_profile);
-    CHECK_NULL(out_resolved_path);
 
     git_repository *repo = ctx->run.repo;
-    const mount_table_t *mounts = ctx->run.mounts;
-    arena_t *arena = ctx->arena;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
-    const char *storage_path = NULL;
+    *out_profile = NULL;
 
-    /* The name the asker's own roots give the argument (file need not exist;
-     * the claim standing at a location, in the branch that holds it, is the next
-     * commit's answer). With no -p the asker is nobody, so the shared roots name
-     * it and a claim a bound profile holds under custom/ is a clean miss — the
-     * branch search is what closes that. */
-    err = path_input_classify(mounts, profile_hint, file_path, arena, &storage_path);
-    if (err) {
-        return err;
-    }
-
-    /* An explicit profile must be here; nothing else about it is this function's
-     * question */
-    if (profile_hint) {
-        err = profile_require(repo, profile_hint);
-        if (err) return err;
-
-        *out_profile = arena_strdup(arena, profile_hint);
-        if (!*out_profile) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-        }
-
-        *out_resolved_path = storage_path;
+    if (opts->profile) {
+        RETURN_IF_ERROR(profile_require(repo, opts->profile));
+        *out_profile = opts->profile;
         return NULL;
     }
 
-    /* Search across all local branches for the file */
-    string_array_t *matches = NULL;
-    err = profile_discover_file(repo, storage_path, &matches);
+    /* The argument in the key it named — what every statement below is about.
+     * The hints spell the command with what the user typed, so they paste back. */
+    const char *subject = arg->key == PATH_KEY_LOCATION ? arg->location
+                                                        : arg->storage_path;
 
-    if (err) {
-        if (error_code(err) == ERR_NOT_FOUND) {
-            error_free(err);
-            err = ERROR(
-                ERR_NOT_FOUND, "File '%s' not found in any profile\n\n"
-                "If you are trying to revert a deleted file, specify the profile:\n"
-                "  dotta revert --profile <name> %s <commit>\n\n"
-                "Use 'dotta list' to see all profiles.", storage_path, file_path
-            );
-        }
-        return err;
-    }
-
-    if (matches->count == 1) {
-        /* Found in exactly one profile */
-        *out_profile = arena_strdup(arena, matches->items[0]);
-        string_array_free(matches);
-
-        if (!*out_profile) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-        }
-
-        *out_resolved_path = storage_path;
-        return NULL;
-    }
-
-    /* Found in multiple profiles - ambiguous */
-    output_print(
-        out, OUTPUT_NORMAL, "File '%s' found in multiple profiles:\n",
-        storage_path
+    profile_claims_t claims = { 0 };
+    error_t *err = profile_discover_claims(
+        repo, ctx->run.mounts, arg, ctx->arena, &claims
     );
+    if (err) {
+        if (error_code(err) != ERR_NOT_FOUND) return err;
+        error_free(err);
+        return ERROR(
+            ERR_NOT_FOUND, "'%s' is not held by any profile\n\n"
+            "If you are trying to revert a deleted file, specify the profile:\n"
+            "  dotta revert --profile <name> %s %s\n\n"
+            "Use 'dotta list' to see all profiles.",
+            subject, opts->file_path, opts->commit
+        );
+    }
 
-    for (size_t i = 0; i < matches->count; i++) {
+    if (claims.count == 1) {
+        *out_profile = claims.entries[0].profile;
+        return NULL;
+    }
+
+    output_print(
+        out, OUTPUT_NORMAL, "'%s' is held by %zu profiles:\n", subject,
+        claims.count
+    );
+    for (size_t i = 0; i < claims.count; i++) {
         output_print(
-            out, OUTPUT_NORMAL, "  • %s\n",
-            matches->items[i]
+            out, OUTPUT_NORMAL, "  • %s  (%s)\n", claims.entries[i].profile,
+            claims.entries[i].storage_path
         );
     }
     output_hint(out, OUTPUT_NORMAL, "Specify --profile to disambiguate:");
-    output_hintline(out, OUTPUT_NORMAL, "  dotta revert --profile <name> %s", storage_path);
+    output_hintline(
+        out, OUTPUT_NORMAL, "  dotta revert --profile <name> %s %s",
+        opts->file_path, opts->commit
+    );
 
-    string_array_free(matches);
-
-    return ERROR(ERR_INVALID_ARG, "Ambiguous file reference");
+    return ERROR(ERR_INVALID_ARG, "Ambiguous path '%s'", subject);
 }
 
 /**
@@ -485,6 +458,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
+    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -506,20 +480,15 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Step 2: Which profile holds the argument, and under which name */
-    output_print(
-        out, OUTPUT_VERBOSE, "Discovering file in profiles...\n"
-    );
-
-    err = discover_file(
-        ctx, opts->file_path, opts->profile, &profile, &resolved_path
-    );
+    /* Step 2: the argument in the key the user named — a location or a storage
+     * path, neither manufactured from the other (infra/path.h) — and the profile
+     * the revert acts on. */
+    path_input_t arg;
+    err = path_input_resolve(mounts, opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
-    output_print(
-        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n",
-        resolved_path, profile
-    );
+    err = select_profile(ctx, opts, &arg, &profile);
+    if (err) goto cleanup;
 
     /* Step 3: Resolve target commit */
     output_print(
@@ -538,7 +507,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Step 4: The branch's stage — its tip is the current state the preview
      * compares against and the parent the revert's commit will have, so a branch
      * that moves between the preview and the commit is refused at the commit,
-     * --force or not: what the user confirmed is what is reverted. */
+     * --force or not: what the user confirmed is what is reverted. It is also
+     * where the profile's name for the argument is read: the tree the revert
+     * edits is the tree the claim is looked for in, so the name and the write
+     * cannot disagree. */
     char refname[DOTTA_REFNAME_MAX];
     err = gitops_branch_refname(refname, sizeof(refname), profile);
     if (err) goto cleanup;
@@ -548,6 +520,16 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         err = error_wrap(err, "Failed to open profile '%s'", profile);
         goto cleanup;
     }
+
+    err = profile_claim_name(
+        repo, stage_tree(stage), mounts, profile, &arg, ctx->arena, &resolved_path
+    );
+    if (err) goto cleanup;
+
+    output_print(
+        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n", resolved_path,
+        profile
+    );
 
     /* Step 5: the two entries the revert reads, both admitted here — before
      * anything is shown and before the prompt.

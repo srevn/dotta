@@ -204,133 +204,167 @@ static error_t *print_blob_content(
 }
 
 /**
- * Show file from a specific profile (optionally at specific commit)
+ * The tree `show` reads, and the provenance it announces
+ *
+ * The branch's tip, or the tree of the commit the user named — resolved in the
+ * branch, so a ref that means something elsewhere means nothing here — with the
+ * commit's own header lines printed from the same handle, which is released before
+ * this returns. The tree is the caller's.
+ */
+static error_t *show_source(
+    const dotta_ctx_t *ctx,
+    const char *profile,
+    const char *commit_ref,
+    git_tree **out_tree
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(profile);
+    CHECK_NULL(out_tree);
+
+    git_repository *repo = ctx->run.repo;
+    output_t *out = ctx->out;
+
+    *out_tree = NULL;
+
+    if (!commit_ref) {
+        error_t *err = gitops_load_branch_tree(repo, profile, out_tree, NULL);
+        if (err) {
+            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
+        }
+        return NULL;
+    }
+
+    git_oid commit_oid;
+    git_commit *commit = NULL;
+    error_t *err = gitops_resolve_commit_in_branch(
+        repo, profile, commit_ref, &commit_oid, &commit
+    );
+    if (err) return err;
+
+    err = gitops_get_tree_from_commit(repo, &commit_oid, out_tree);
+    if (err) {
+        git_commit_free(commit);
+        return error_wrap(err, "Failed to load tree from commit '%s'", commit_ref);
+    }
+
+    if (commit) {
+        char oid_str[8];
+        git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+
+        const git_signature *author = git_commit_author(commit);
+        time_t commit_time = (time_t) author->when.time;
+        char time_str[64];
+        format_relative_time(commit_time, time_str, sizeof(time_str));
+
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
+            oid_str
+        );
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
+            time_str
+        );
+        output_styled(
+            out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
+            author->name, author->email
+        );
+
+        /* Show first line of commit message */
+        const char *msg = git_commit_message(commit);
+        if (msg) {
+            const char *newline = strchr(msg, '\n');
+            if (newline) {
+                output_styled(
+                    out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
+                    (int) (newline - msg), msg
+                );
+            } else {
+                output_styled(
+                    out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n",
+                    msg
+                );
+            }
+        }
+    }
+
+    git_commit_free(commit);
+
+    return NULL;
+}
+
+/**
+ * Print one claim of a profile, from the tree the caller opened
+ *
+ * The tree is the authority on what stands at the name; the sheet beside it is
+ * read for the encryption state the content layer validates against, tolerantly
+ * — a tree without one holds an empty sheet, and one that will not load is folded
+ * into an empty sheet too, which then says nothing about anything.
+ *
+ * The name is looked up once and answered three ways. A blob is printed. A tree
+ * and a submodule are each refused by their own noun. Absence asks the sheet,
+ * because a tracked directory the branch holds no blob beneath is a claim with
+ * no tree entry at all — the profile does hold it, and "not found" would be the
+ * wrong word.
  */
 static error_t *show_file(
     const dotta_ctx_t *ctx,
     const char *profile,
-    const char *file_path,
-    const char *commit_ref
+    const char *storage_path,
+    git_tree *tree
 ) {
     git_repository *repo = ctx->run.repo;
-    output_t *out = ctx->out;
 
-    error_t *err = NULL;
-    git_tree *tree = NULL;
     git_tree_entry *entry = NULL;
-    git_commit *commit = NULL;
-    git_oid commit_oid;
     metadata_t *metadata = NULL;
 
-    /* Step 1: Load the tree (HEAD or historical commit) */
-    if (commit_ref) {
-        /* Resolve commit and load its tree */
-        err = gitops_resolve_commit_in_branch(
-            repo, profile, commit_ref, &commit_oid, &commit
-        );
-        if (err) goto cleanup;
-
-        err = gitops_get_tree_from_commit(repo, &commit_oid, &tree);
-        if (err) {
-            err = error_wrap(err, "Failed to load tree from commit '%s'", commit_ref);
-            goto cleanup;
-        }
-
-        /* Print commit context */
-        if (commit) {
-            char oid_str[8];
-            git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
-
-            const git_signature *author = git_commit_author(commit);
-            time_t commit_time = (time_t) author->when.time;
-            char time_str[64];
-            format_relative_time(commit_time, time_str, sizeof(time_str));
-
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
-                oid_str
-            );
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Date:{reset}    %s\n",
-                time_str
-            );
-            output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Author:{reset}  %s <%s>\n",
-                author->name, author->email
-            );
-
-            /* Show first line of commit message */
-            const char *msg = git_commit_message(commit);
-            if (msg) {
-                const char *newline = strchr(msg, '\n');
-                if (newline) {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "{dim}# Message:{reset} %.*s\n",
-                        (int) (newline - msg), msg
-                    );
-                } else {
-                    output_styled(
-                        out, OUTPUT_NORMAL, "{dim}# Message:{reset} %s\n",
-                        msg
-                    );
-                }
-            }
-        }
-    } else {
-        /* Load from branch HEAD */
-        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-        if (err) {
-            err = error_wrap(err, "Failed to load tree for profile '%s'", profile);
-            goto cleanup;
-        }
-    }
-
-    /* Step 2: Load metadata from that same tree for encryption-state validation.
-     * A tree without a sheet loads as an empty one; a sheet that would not load
-     * is folded into one too, and validated against nothing. */
-    err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    /* The sheet of the same tree, for the encryption state print_blob_content
+     * validates against. A tree without one loads as an empty sheet; one that
+     * would not load is folded into an empty sheet too, and then says nothing —
+     * about the encryption state, and about a directory claim below. */
+    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         error_free(err);
         err = metadata_create_empty(&metadata);
         if (err) {
-            err = error_wrap(err, "Failed to create metadata");
-            goto cleanup;
+            return error_wrap(err, "Failed to create metadata");
         }
     }
 
-    /* Step 3: Find file in tree */
-    err = gitops_find_file_in_tree(tree, file_path, &entry);
+    err = gitops_find_file_in_tree(tree, storage_path, &entry);
     if (err) {
+        if (error_code(err) != ERR_NOT_FOUND) goto cleanup;
+
+        /* A claim the tree cannot hold: a tracked directory with no blob beneath
+         * it stands in the sheet alone, and the profile does hold it. */
+        const metadata_item_t *item = metadata_lookup(metadata, storage_path);
+        if (item && item->kind == PATH_KIND_DIRECTORY) {
+            error_free(err);
+            err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", storage_path);
+        }
         goto cleanup;
     }
 
-    /* Get entry type, OID, and filemode */
     git_object_t entry_type = git_tree_entry_type(entry);
-    const git_oid *entry_oid = git_tree_entry_id(entry);
-    git_filemode_t filemode = git_tree_entry_filemode(entry);
 
     if (entry_type == GIT_OBJECT_BLOB) {
-        /*
-         * Print file content with transparent decryption
-         *
-         * file_path is the storage_path (e.g., "home/.bashrc") profile is used
-         * for key derivation metadata is used for encryption state validation
-         * ctx->run.keymgr will prompt for password only if file is encrypted
-         */
+        /* The bytes, decrypted where they are ciphertext: the name is the one
+         * the blob was sealed under (the AAD, infra/content.h), the profile derives
+         * the key, and the sheet says what state to expect. */
         err = print_blob_content(
-            ctx, entry_oid, file_path, profile, metadata, filemode
+            ctx, git_tree_entry_id(entry), storage_path, profile, metadata,
+            git_tree_entry_filemode(entry)
         );
-    } else if (entry_type == GIT_OBJECT_TREE) {
-        err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", file_path);
     } else {
-        err = ERROR(ERR_INTERNAL, "Unexpected object type for '%s'", file_path);
+        err = ERROR(
+            ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
+            storage_path,
+            entry_type == GIT_OBJECT_TREE ? "a directory" : "a submodule"
+        );
     }
 
 cleanup:
-    if (metadata) metadata_free(metadata);
-    if (entry) git_tree_entry_free(entry);
-    if (tree) git_tree_free(tree);
-    if (commit) git_commit_free(commit);
+    metadata_free(metadata);
+    git_tree_entry_free(entry);
 
     return err;
 }
@@ -566,13 +600,13 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     error_t *err = NULL;
     string_array_t *profiles = NULL;
     manifest_t *manifest = NULL;
+    git_tree *tree = NULL;
+    const char *profile = opts->profile;
+    const char *storage_path = NULL;
 
     /* Handle SHOW_COMMIT mode */
     if (opts->mode == SHOW_COMMIT) {
         CHECK_NULL(opts->commit);
-
-        /* Determine which profile to search */
-        const char *profile = opts->profile;
 
         if (!profile) {
             /* No profile specified - use enabled profiles */
@@ -632,24 +666,30 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
-    if (opts->profile) {
-        /* Profile specified - show from that profile, under the name that profile's
-         * own roots give the argument (path_input_classify; the claim standing
-         * at the location, in the branch that holds it, is the next commit's
-         * answer). On a refusal, fall back to the original input — it may be a
-         * partial-match pattern the resolver rejects but the tree lookup below
-         * accepts. */
-        const char *converted = NULL;
-        error_t *convert_err = path_input_classify(
-            mounts, opts->profile, opts->file_path, ctx->arena, &converted
-        );
-        const char *search_path = convert_err ? opts->file_path : converted;
-        if (convert_err) error_free(convert_err);
-
-        err = profile_require(repo, opts->profile);
+    if (profile) {
+        /* The profile named must be here, and the argument must be a key, before
+         * anything is opened or announced under either — a refused argument is
+         * refused before a commit's header lines stand on screen. Then the tree
+         * the profile selected — its tip, or the commit's — which is both where
+         * the claim is looked for and what its bytes come from, so a name that
+         * changed since the commit is found as of then (core/profiles.h
+         * profile_claim_name). */
+        err = profile_require(repo, profile);
         if (err) goto cleanup;
 
-        err = show_file(ctx, opts->profile, search_path, opts->commit);
+        path_input_t arg;
+        err = path_input_resolve(mounts, opts->file_path, ctx->arena, &arg);
+        if (err) goto cleanup;
+
+        err = show_source(ctx, profile, opts->commit, &tree);
+        if (err) goto cleanup;
+
+        err = profile_claim_name(
+            repo, tree, mounts, profile, &arg, ctx->arena, &storage_path
+        );
+        if (err) goto cleanup;
+
+        err = show_file(ctx, profile, storage_path, tree);
         goto cleanup;
     }
 
@@ -671,22 +711,15 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * the winner standing there whatever its name. A name keys within one profile,
      * so the view may hold it once (home/, root/, or one binding), or once per
      * binding under custom/ — and then no profile is the answer, and each holder
-     * is named with the location that tells them apart. An argument the resolver
-     * refuses is read as a name, the fallback the tree lookup has always been
-     * given. */
+     * is named with the location that tells them apart. */
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     path_input_t arg;
-    error_t *convert_err = path_input_resolve(
+    err = path_input_resolve(
         manifest_mounts(manifest), opts->file_path, ctx->arena, &arg
     );
-    if (convert_err) {
-        error_free(convert_err);
-        arg = (path_input_t){
-            .key = PATH_KEY_STORAGE, .storage_path = opts->file_path
-        };
-    }
+    if (err) goto cleanup;
 
     const manifest_row_t *row = NULL;
     if (arg.key == PATH_KEY_LOCATION) {
@@ -723,18 +756,28 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* Show the file */
+    /* The winner names both halves: whose claim stands there, and what it is
+     * called — the row is that profile's own, so there is nothing to look up
+     * again in its branch. */
+    profile = row->profile;
+    storage_path = row->storage_path;
+
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-        row->profile
+        profile
     );
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-        row->storage_path
+        storage_path
     );
-    err = show_file(ctx, row->profile, row->storage_path, NULL);
+
+    err = show_source(ctx, profile, NULL, &tree);
+    if (err) goto cleanup;
+
+    err = show_file(ctx, profile, storage_path, tree);
 
 cleanup:
+    git_tree_free(tree);
     manifest_free(manifest);
     string_array_free(profiles);
 

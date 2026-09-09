@@ -407,10 +407,11 @@ error_t *mount_locate(
  *   - ERR_MEMORY on arena allocation failure.
  *
  * Readers: the last rung of the namer's ascent (core/manifest.c manifest_ascend),
- * add's argument arm and its walk (cmds/add.c), and the interim resolver the
- * five `-p` verbs share (infra/path.h path_input_classify). `ignore --test` was
- * one until its subject became the whole ascent's (core/manifest.h manifest_name);
- * add's two are what C3 takes.
+ * add's argument arm and its walk (cmds/add.c), and the interim resolver `remove`
+ * still shares (infra/path.h path_input_classify). `ignore --test` was one until
+ * its subject became the whole ascent's (core/manifest.h manifest_name), and
+ * show, list and revert until their claim was found where it stands
+ * (core/profiles.h profile_claim_name); add's two are what C3 takes.
  *
  * @param table       Mount table (must not be NULL)
  * @param profile     The asker, or NULL for the shared roots alone
@@ -450,7 +451,8 @@ error_t *mount_name(
  * argument — the location itself included, where mount_resolve's exception can
  * hand it an alias's own spelling (core/manifest.c manifest_ascend); the climb's
  * root guard (core/metadata.c capture_ancestor), add's argument-arm refusal
- * (cmds/add.c) and `ignore --test`'s root line (cmds/ignore.c).
+ * (cmds/add.c), `ignore --test`'s root line (cmds/ignore.c) and the claim search's
+ * root refusal (core/profiles.c profile_claim_name).
  */
 const mount_spec_t *mount_root(
     const mount_table_t *table,
@@ -468,15 +470,17 @@ const mount_spec_t *mount_root(
  * directory", "the filesystem root", "the deployment target of profile 'web'".
  *
  * `root` is the spec mount_root answered and must not be NULL; the caller has
- * just had mount_name answer NULL for the same table, asker and location, which
- * is the same find over the same data — an invariant, not a hope. `profile` is
- * read only for a per_profile root, and a per_profile root can only have been
+ * just had mount_name answer NULL for the same table, asker and location — asked
+ * directly, or as the last rung of the namer's ascent (core/manifest.c
+ * manifest_ascend), which is the only way that one answers NULL — and that is
+ * the same find over the same data, an invariant rather than a hope. `profile`
+ * is read only for a per_profile root, and a per_profile root can only have been
  * found by the profile that owns it, so it is non-NULL exactly when it is read.
  *
- * Returns `buf`, so the noun stands inside the message it belongs to rather than
- * in a statement of its own: three verbs print this sentence and would otherwise
- * spell it three ways — the message that a location has no name is the same message
- * whether a pattern, an argument or a search asked.
+ * Returns `buf`, so the noun reaches the message it belongs to as a value rather
+ * than through a statement of its own: three sites print this sentence and would
+ * otherwise spell it three ways — the message that a location has no name is
+ * the same message whether a pattern, an argument or a search asked.
  *
  * Truncates rather than fails: a screen noun, not a key.
  */

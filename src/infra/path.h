@@ -5,9 +5,10 @@
  * and a storage path keys within one (infra/mount.h). The resolver answers in
  * the one the user named and manufactures neither from the other: what a profile
  * calls a location is a claim standing in a branch, and a command asks the branch
- * (core/manifest.h, the view by location; core/profiles.h). The one exception
- * is path_input_classify below, the former resolver, which still manufactures a
- * name from a location for the verbs that still have no branch reader.
+ * (core/manifest.h, the view by location; core/profiles.h profile_claim_name,
+ * one profile's own). The one exception is path_input_classify below, the former
+ * resolver, which still manufactures a name from a location for the one verb
+ * that has no branch reader.
  *
  * The single chokepoint for input-shape dispatch; the topology primitives
  * (mount_locate, mount_resolve, mount_table_build) live one layer down in
@@ -77,7 +78,9 @@ typedef struct {
  *
  * Readers: the pathspec's exact entries and the anchors of its filesystem-shaped
  * rules (infra/pathspec); show and list without a profile (the view by location,
- * a name by its holders); export, which hands each key to the arm that answers
+ * a name by its holders); show, list and revert with one, which hand the key to
+ * the branch that would hold it (core/profiles.h profile_claim_name,
+ * profile_discover_claims); export, which hands each key to the arm that answers
  * in it (cmds/export.c); path_input_classify.
  *
  * @param table Mount table (must not be NULL)
@@ -129,11 +132,12 @@ error_t *path_input_normalize(const char *input, char **out);
  * The name the asker's own roots give a location (infra/mount.h mount_name) —
  * which is the last rung of the question, not the question: the claim standing
  * there, in the branch that holds it, is what a verb actually wants. Kept under
- * its own name for the verbs that still ask it (show -p, list -p, revert, remove)
- * until the claim is found where it stands (core/profiles.h); deleted with that
- * landing. Not a reader for new code — export left this list when its location
- * arm began selecting rows (cmds/export.c). A storage shape is the name as typed;
- * a root is refused as it always was ("is a mount root").
+ * its own name for the one verb that still asks it (remove) until its arguments
+ * match by location too; deleted with that landing. Not a reader for new code —
+ * export left this list when its location arm began selecting rows (cmds/export.c),
+ * and show, list and revert left it when the claim became something found where
+ * it stands (core/profiles.h profile_claim_name). A storage shape is the name
+ * as typed; a root is refused as it always was ("is a mount root").
  *
  * `profile` is the asker: with none, the location is named through HOME and `/`
  * alone, so a claim a bound profile holds under `custom/` is not found — a clean

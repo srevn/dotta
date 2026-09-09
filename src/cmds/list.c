@@ -620,17 +620,31 @@ static error_t *list_file_history(
      * The file need not exist on disk. */
     const char *profile = opts->profile;
     const char *storage_path = NULL;
+    git_tree *tree = NULL;
     error_t *err = NULL;
 
     if (profile) {
-        /* Explicit profile: the name that profile's own roots give the argument
-         * (path_input_classify; the claim standing at the location, in the branch
-         * that holds it, is the next commit's answer). */
-        err = path_input_classify(
-            mounts, profile, opts->file_path, ctx->arena, &storage_path
+        /* The profile named must be here before anything is read under it; then
+         * its tip, which is both where the claim is looked for and what the
+         * pre-check below reads (core/profiles.h profile_claim_name). */
+        RETURN_IF_ERROR(profile_require(repo, profile));
+
+        path_input_t arg;
+        RETURN_IF_ERROR(
+            path_input_resolve(mounts, opts->file_path, ctx->arena, &arg)
+        );
+
+        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        if (err) {
+            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
+        }
+
+        err = profile_claim_name(
+            repo, tree, mounts, profile, &arg, ctx->arena, &storage_path
         );
         if (err) {
-            return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
+            git_tree_free(tree);
+            return err;
         }
     } else {
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
@@ -651,7 +665,7 @@ static error_t *list_file_history(
         );
         if (err) {
             manifest_free(manifest);
-            return error_wrap(err, "Failed to resolve path '%s'", opts->file_path);
+            return err;
         }
 
         const manifest_row_t *row = NULL;
@@ -689,32 +703,38 @@ static error_t *list_file_history(
                 opts->file_path, opts->file_path
             );
         }
+        /* The winner names both halves: whose claim stands there, and what it
+         * is called — the row is that profile's own, so there is nothing to look
+         * up again in its branch. */
         profile = row->profile;
         storage_path = row->storage_path;
         manifest_free(manifest);
+
+        err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+        if (err) {
+            return error_wrap(err, "Failed to load tree for profile '%s'", profile);
+        }
     }
 
-    /* An explicit profile must be here (one the view named is, by construction);
-     * then a fast pre-check of the current tree, so a deleted file gets its word
-     * before the expensive O(total_commits) history walk. */
-    if (opts->profile) {
-        err = profile_require(repo, opts->profile);
-        if (err) return err;
-    }
-
-    git_tree *tree = NULL;
-    err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-    if (err) {
-        return error_wrap(err, "Failed to load profile '%s'", profile);
-    }
-
+    /* A fast pre-check of the tip, so a deleted file gets its word before the
+     * expensive O(total_commits) history walk. Three answers read as three: an
+     * intermediate object that will not load is a failure to read, never an
+     * absence. The history is one name's — a location's former names under another
+     * contract are the user's to type, a prospective name proving nothing about
+     * what the profile once held there. */
     git_tree_entry *check = NULL;
-    if (git_tree_entry_bypath(&check, tree, storage_path) != 0) {
+    int rc = git_tree_entry_bypath(&check, tree, storage_path);
+    git_tree_free(tree);
+
+    if (rc == 0) {
+        git_tree_entry_free(check);
+    } else if (rc == GIT_ENOTFOUND) {
         output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
     } else {
-        git_tree_entry_free(check);
+        return error_wrap(
+            error_from_git(rc), "Failed to read profile '%s'", profile
+        );
     }
-    git_tree_free(tree);
 
     /* Get file history */
     file_history_t *history = NULL;

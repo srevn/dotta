@@ -11,13 +11,16 @@
 #include <sys/utsname.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/gitops.h"
 #include "sys/stats.h"
 
@@ -898,72 +901,222 @@ cleanup:
     return err;
 }
 
-error_t *profile_discover_file(
+/**
+ * The name `profile` has for the argument in `tree`
+ */
+error_t *profile_claim_name(
     git_repository *repo,
-    const char *storage_path,
-    string_array_t **out_profiles
+    const git_tree *tree,
+    const mount_table_t *mounts,
+    const char *profile,
+    const path_input_t *arg,
+    arena_t *arena,
+    const char **out_storage
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out_profiles);
+    CHECK_NULL(tree);
+    CHECK_NULL(mounts);
+    CHECK_NULL(profile);
+    CHECK_NULL(arg);
+    CHECK_NULL(arena);
+    CHECK_NULL(out_storage);
 
-    error_t *err = NULL;
-    *out_profiles = NULL;
+    *out_storage = NULL;
 
-    /* Targeted branch scan: O(M×D) where D = path depth in tree. Checks each
-     * branch for the specific file instead of building the full file index
-     * (profile_build_file_index walks every tree, O(M×P)). */
-    string_array_t *all_branches = NULL;
-    err = gitops_list_branches(repo, &all_branches);
-    if (err) {
-        return error_wrap(
-            err, "Failed to list branches for file discovery"
+    /* A name is Git's key and needs no view: the caller's own read of the tree
+     * is what decides whether the profile holds it. */
+    if (arg->key == PATH_KEY_STORAGE) {
+        *out_storage = arg->storage_path;
+        return NULL;
+    }
+
+    manifest_t *view = NULL;
+    error_t *err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
+    if (err) return err;
+
+    /* The claim standing there, before the name one would take: a derived claim
+     * is held and names nothing, so the ascent climbs past it and would answer
+     * a name the branch never held. */
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, arg->location);
+    if (row) {
+        *out_storage = row->storage_path;   /* the arena's: outlives the view */
+        manifest_free(view);
+        return NULL;
+    }
+
+    /* Nothing stands there, so the name the profile would give the place — NULL
+     * at a root of its own namespace, and the refusal below is that. */
+    err = manifest_name(view, profile, arg->location, NULL, arena, out_storage);
+    manifest_free(view);
+    if (err) return err;
+
+    if (!*out_storage) {
+        /* A root of the profile with no claim on it. The namer's last rung is
+         * mount_name over this very table, asker and location (core/manifest.c
+         * manifest_ascend), so its NULL is the one mount_root_describe's contract
+         * asks for and the spec is there to describe. */
+        char buf[MOUNT_NOUN_MAX];
+        const char *noun = mount_root_describe(
+            mount_root(mounts, profile, arg->location), profile, buf, sizeof(buf)
         );
-    }
-
-    string_array_t *result = string_array_new(0);
-    if (!result) {
-        string_array_free(all_branches);
-        return ERROR(ERR_MEMORY, "Failed to allocate result array");
-    }
-
-    for (size_t i = 0; i < all_branches->count; i++) {
-        const char *branch = all_branches->items[i];
-
-        git_tree *tree = NULL;
-        err = gitops_load_branch_tree(repo, branch, &tree, NULL);
-        if (err) {
-            error_free(err);
-            err = NULL;
-            continue;
-        }
-
-        /* O(D) targeted lookup instead of full tree walk */
-        git_tree_entry *found = NULL;
-        int rc = git_tree_entry_bypath(&found, tree, storage_path);
-        git_tree_free(tree);
-
-        if (rc == 0) {
-            git_tree_entry_free(found);
-            err = string_array_push(result, branch);
-            if (err) {
-                error_free(err);
-                err = NULL;
-            }
-        }
-    }
-
-    string_array_free(all_branches);
-
-    if (result->count == 0) {
-        string_array_free(result);
         return ERROR(
-            ERR_NOT_FOUND, "File '%s' not found in any profile",
-            storage_path
+            ERR_INVALID_ARG, "'%s' is %s: name what is inside it", arg->location,
+            noun
         );
     }
 
-    *out_profiles = result;
+    return NULL;
+}
+
+/**
+ * The claim `branch` stands at `location`, or NULL
+ *
+ * The branch's own view of its tip under this machine's table, so the name is
+ * the branch's — a binding's, or one kept from before the binding — and never
+ * one this machine composed. The view is strict (core/manifest.h): a sheet that
+ * will not load is this branch's error, which is the whole cost a location argument
+ * carries over a name.
+ *
+ * The answer is the row's own string, the arena's, and outlives the view freed
+ * here.
+ */
+static error_t *claim_in_view(
+    git_repository *repo,
+    const char *branch,
+    const mount_table_t *mounts,
+    const char *location,
+    arena_t *arena,
+    const char **out_storage
+) {
+    *out_storage = NULL;
+
+    manifest_t *view = NULL;
+    error_t *err = manifest_build_branch(repo, branch, mounts, arena, &view);
+    if (err) return err;
+
+    const manifest_row_t *row = manifest_lookup_claim(view, branch, location);
+    if (row) {
+        *out_storage = row->storage_path;
+    }
+
+    manifest_free(view);
+    return NULL;
+}
+
+/**
+ * The claim `branch` holds under `storage_path`, or NULL
+ *
+ * A name is Git's key, so one lookup in the branch's tip answers it — a subtree
+ * counts, as a name has always counted. Three answers read as three: an
+ * intermediate object that will not load is a failure to read, never an absence.
+ * No sheet, no table, no view — the tolerant half of the split above.
+ */
+static error_t *claim_in_tree(
+    git_repository *repo,
+    const char *branch,
+    const char *storage_path,
+    const char **out_storage
+) {
+    *out_storage = NULL;
+
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, branch, &tree, NULL);
+    if (err) {
+        return error_wrap(err, "Failed to load tree for profile '%s'", branch);
+    }
+
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, tree, storage_path);
+    git_tree_free(tree);
+
+    if (rc == 0) {
+        git_tree_entry_free(entry);
+        *out_storage = storage_path;
+        return NULL;
+    }
+    if (rc != GIT_ENOTFOUND) {
+        return error_wrap(
+            error_from_git(rc), "Failed to read profile '%s'", branch
+        );
+    }
+
+    return NULL;
+}
+
+/**
+ * Every claim standing at what the user named, across the local branches
+ */
+error_t *profile_discover_claims(
+    git_repository *repo,
+    const mount_table_t *mounts,
+    const path_input_t *arg,
+    arena_t *arena,
+    profile_claims_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(mounts);
+    CHECK_NULL(arg);
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = (profile_claims_t){ 0 };
+
+    string_array_t *branches = NULL;
+    error_t *err = gitops_list_branches(repo, &branches);
+    if (err) return err;
+
+    /* At most one claim per branch: a branch names a location once and holds a
+     * name once. */
+    profile_claim_t *claims = arena_calloc(
+        arena, branches->count, sizeof(*claims)
+    );
+    if (!claims) {
+        string_array_free(branches);
+        return ERROR(ERR_MEMORY, "Failed to allocate the claims");
+    }
+
+    size_t count = 0;
+    for (size_t i = 0; i < branches->count; i++) {
+        const char *branch = branches->items[i];
+        const char *storage_path = NULL;
+
+        switch (arg->key) {
+            case PATH_KEY_LOCATION:
+                err = claim_in_view(
+                    repo, branch, mounts, arg->location, arena, &storage_path
+                );
+                break;
+
+            case PATH_KEY_STORAGE:
+                err = claim_in_tree(
+                    repo, branch, arg->storage_path, &storage_path
+                );
+                break;
+        }
+        if (err) break;
+        if (!storage_path) continue;
+
+        /* The branch name outlives the list freed below; the claim's name is
+         * the arena's already — the row's own, or the argument's. */
+        const char *owner = arena_strdup(arena, branch);
+        if (!owner) {
+            err = ERROR(ERR_MEMORY, "Failed to record a claim");
+            break;
+        }
+        claims[count++] = (profile_claim_t){ owner, storage_path };
+    }
+
+    string_array_free(branches);
+    if (err) return err;
+
+    if (count == 0) {
+        return ERROR(
+            ERR_NOT_FOUND, "'%s' is not held by any profile",
+            arg->key == PATH_KEY_LOCATION ? arg->location : arg->storage_path
+        );
+    }
+
+    *out = (profile_claims_t){ claims, count };
 
     return NULL;
 }

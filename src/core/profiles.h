@@ -1,8 +1,11 @@
 /**
  * profiles.h - Profile name resolution and Git queries
  *
- * Handles profile detection, name resolution, and branch-level queries. Pure
- * query module — no manifest types or construction.
+ * Handles profile detection, name resolution, and branch-level queries. The
+ * questions asked of one branch, or of every branch, answered from Git and this
+ * machine's topology; the searches by location build one branch's view to ask
+ * it (core/manifest.h) and free it before they answer, so no manifest type crosses
+ * this surface.
  *
  * The layering convention, least specific first:
  * 1. global
@@ -48,6 +51,7 @@
 
 #include "base/hashmap.h"
 #include "core/state.h"
+#include "infra/path.h"
 
 /**
  * Detect matching profile names from a list of available branches
@@ -291,25 +295,134 @@ error_t *profile_build_file_index(
 );
 
 /**
- * Discover which profile(s) contain a file, across every local branch
+ * The name `profile` has for the argument in `tree`: the claim standing there,
+ * or the name a claim there would take
  *
- * Branch scan, O(M×D) where D = path depth: each branch's HEAD tree is asked
- * for the one path. Returns ALL profiles containing the file, enabled or not —
- * revert's question. A caller that wants the owning profile among the enabled
- * set asks the view instead (manifest_holders on a manifest_build over the enabled
- * profiles — list, show).
+ * Two keys, two authorities, neither manufactured from the other (infra/path.h):
  *
- * The storage_path must already be resolved (use path_input_classify() first).
+ *   - a STORAGE argument is the name as typed, handed back. A name is Git's key,
+ *     so the caller's own read of `tree` decides whether the profile holds it,
+ *     and a name no claim sheet mentions — a bare subtree, a name the view did
+ *     not keep — is found there and nowhere else. Nothing is built and `tree`
+ *     is not read.
+ *   - a LOCATION argument is asked of the profile's own view of `tree`
+ *     (manifest_build_tree, the sheet loaded strictly), in this order: the row
+ *     standing there answers with its own name whatever its kind, so
+ *     home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x and
+ *     the chain above a file captured before the binding answers as the claim
+ *     it is; else the name the profile would give the location (manifest_name)
+ *     — the word a history search and a not-found line need; else a root of the
+ *     profile with no claim on it, refused by the root's own noun
+ *     (mount_root_describe), one thing not being a root.
+ *
+ * The row before the namer is the contract, not a shortcut: a derived claim is
+ * something the profile holds and nothing it names (manifest_is_derived), so
+ * the namer alone would climb past it and answer a name the branch never held.
+ * Search first, name second.
+ *
+ * A name, never an enumeration. A DIRECTORY claim names its location and says
+ * nothing about what stands beneath it (core/manifest.h manifest_lookup_claim);
+ * a verb that means everything at a place selects rows by location (cmds/export.c)
+ * and never walks this answer's subtree.
+ *
+ * `mounts` is the table the argument was located through: the rows are placed
+ * by it and the location keys against them by strcmp. The answer is the arena's
+ * — the view's own row string, or the namer's — and outlives the view this call
+ * builds and frees.
+ *
+ * Cost: one tree walk and one sheet load per location argument. Its other face:
+ * a profile whose sheet will not load refuses a location argument where a name
+ * argument proceeds — the view is strict, a verb's own read is not
+ * (core/manifest.h). A ref or a tree that will not load refuses both.
+ *
+ * Readers: `show -p` and `list -p` over the tree the verb selected (the branch's
+ * tip, or the commit the user named, so a name that changed since is found as
+ * of then); `revert` over the stage's tree, the tree the revert edits. `export`
+ * selects rows instead, `remove` matches its own claims, and `ignore --test`
+ * asks manifest_name itself.
+ *
+ * @param repo Repository the tree's blobs (the sheet among them) are read from
+ *             (must not be NULL)
+ * @param tree The tree the claim is looked for in (must not be NULL)
+ * @param mounts The table the argument was located through (must not be NULL)
+ * @param profile Whose claims these are (must not be NULL)
+ * @param arg The argument, in the key it named (must not be NULL)
+ * @param arena Arena that owns the answer (must not be NULL)
+ * @param out_storage Arena-borrowed storage path; NULL after an error (must not
+ *                    be NULL)
+ * @return Error or NULL on success
+ */
+error_t *profile_claim_name(
+    git_repository *repo,
+    const git_tree *tree,
+    const mount_table_t *mounts,
+    const char *profile,
+    const path_input_t *arg,
+    arena_t *arena,
+    const char **out_storage
+);
+
+/* A claim is (profile, name) — the pair that keys within one profile
+ * (infra/mount.h). No kind: its readers print a profile and a name, and the one
+ * verb that acts on a claim reads the kind from the tree entry it opens. */
+typedef struct {
+    const char *profile;
+    const char *storage_path;
+} profile_claim_t;
+
+/* Bound carrier over claims, the manifest_rows_t idiom: the entries and their
+ * count, both the producing call's arena's. */
+typedef struct {
+    const profile_claim_t *entries;
+    size_t count;
+} profile_claims_t;
+
+/**
+ * Every claim standing at what the user named, across the local branches
+ *
+ * A STORAGE argument: every branch whose tree holds the name, one lookup each
+ * (a subtree counts, as a name has always counted); the claim is the name as
+ * typed. A LOCATION argument: every branch whose view of its own tip, under this
+ * machine's table, holds a row there — the claim being that branch's own name
+ * for the place, since a location may be held under a non-canonical name and
+ * the caller must not name it again.
+ *
+ * The table is this machine's, and this machine's table is the enabled set's
+ * (core/manifest.h manifest_mount_table): a profile nothing has enabled has no
+ * binding here at all, so its custom/ claims stand nowhere and no location reaches
+ * them. That is the model being consistent, not a gap — by name they are found
+ * as they always were.
+ *
+ * Complete or an error: a branch that will not load, a lookup that fails for
+ * any reason but absence, a claim that could not be recorded — each is the call's
+ * failure and never a shorter list, a falsely unique answer being one a verb
+ * acts on. Empty is ERR_NOT_FOUND naming the argument in its own key. The branch
+ * list is one enumeration, not a snapshot: a ref born between it and the reads
+ * is not consulted.
+ *
+ * Cost, and the asymmetry it carries: a location builds one view per branch — a
+ * tree walk and a sheet load each, every branch's rows kept in the arena until
+ * the command ends — where a name is one tree lookup per branch. So a branch
+ * whose sheet will not load refuses `revert <location>` and not `revert <name>`,
+ * the strict/tolerant split the view draws everywhere.
+ *
+ * Reader: revert without a profile, whose question is every local branch and
+ * not the enabled set. A caller that wants the owning profile among the enabled
+ * set asks the view instead (manifest_lookup, manifest_holders — list, show).
  *
  * @param repo Repository (must not be NULL)
- * @param storage_path Storage path (e.g., "home/.bashrc")
- * @param out_profiles Matching profile names (caller frees with string_array_free)
- * @return Error (ERR_NOT_FOUND if no match) or NULL on success
+ * @param mounts This machine's mount table (must not be NULL)
+ * @param arg The argument, in the key it named (must not be NULL)
+ * @param arena Arena that owns the claims (must not be NULL)
+ * @param out The claims, at least one (must not be NULL; zeroed after an error)
+ * @return Error (ERR_NOT_FOUND when no branch holds it) or NULL on success
  */
-error_t *profile_discover_file(
+error_t *profile_discover_claims(
     git_repository *repo,
-    const char *storage_path,
-    string_array_t **out_profiles
+    const mount_table_t *mounts,
+    const path_input_t *arg,
+    arena_t *arena,
+    profile_claims_t *out
 );
 
 #endif /* DOTTA_PROFILES_H */

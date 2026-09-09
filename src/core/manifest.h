@@ -402,11 +402,13 @@ error_t *manifest_build(
  * manifest_lookup_claim and manifest_name for `profile` exactly as an enabled
  * view answers them for one of its own.
  *
- * Readers: the historical diff (cmds/diff.c), `ignore --test`'s named arm over
- * a branch's tip (cmds/ignore.c), and export's location arm (cmds/export.c
+ * Readers: the historical diff (cmds/diff.c); export's location arm (cmds/export.c
  * collect_location), which selects the rows one profile places at and beneath a
  * location — the rows, not the Git subtree of whatever name stands there, which
- * is what manifest_lookup_claim's own note is about.
+ * is what manifest_lookup_claim's own note is about; and the claim search over
+ * whatever tree a verb selected (core/profiles.c profile_claim_name). A caller
+ * that has a branch name and no tree reads manifest_build_branch, which loads
+ * one and calls this.
  *
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
@@ -426,6 +428,38 @@ error_t *manifest_build_tree(
     git_repository *repo,
     const git_tree *tree,
     const char *profile,
+    const mount_table_t *mounts,
+    arena_t *arena,
+    manifest_t **out
+);
+
+/**
+ * Build the manifest from a branch's tip
+ *
+ * manifest_build_tree over the branch's HEAD: the tree is loaded here, walked,
+ * and freed before this returns — the view's rows borrow nothing from it. The
+ * one shape for a caller that has a branch name and no tree; a caller that holds
+ * a tree — a historical commit's (cmds/diff.c, cmds/export.c), or the one a verb
+ * selected, a tip, a commit's or a stage's (core/profiles.c profile_claim_name)
+ * — reads manifest_build_tree. No policy enters here: no raw argument, no fallback,
+ * no enabled-set question, and the branch need not be enabled.
+ *
+ * Readers: `ignore --test`'s named arm (cmds/ignore.c), and the two cross-branch
+ * searches (core/profiles.c profile_discover_claims, profile_build_location_index),
+ * which build one per local branch.
+ *
+ * @param repo Git repository (must not be NULL)
+ * @param branch Branch name (must not be NULL); a branch that will not load is
+ *               this call's error, named
+ * @param mounts Per-machine mount table (must not be NULL)
+ * @param arena Arena backing every allocation produced by the call (must not be
+ *              NULL)
+ * @param out Manifest (must not be NULL; caller frees with manifest_free)
+ * @return Error or NULL on success
+ */
+error_t *manifest_build_branch(
+    git_repository *repo,
+    const char *branch,
     const mount_table_t *mounts,
     arena_t *arena,
     manifest_t **out
@@ -719,9 +753,11 @@ size_t manifest_holders(
  * the first. A caller that wants the subtree reads the rows beneath the location,
  * never the tree beneath the name.
  *
- * No production reader yet: the namer holds the contribution already and reads
- * its index directly. The unit pins are what read this, and the first production
- * reader will be the claim search a profile-scoped verb makes.
+ * Readers: the claim search a profile-scoped verb makes (core/profiles.h
+ * profile_claim_name, and the per-branch arm of profile_discover_claims), which
+ * asks this before the namer — a derived claim is something the profile holds
+ * and nothing it names, so the namer alone would climb past it and answer a name
+ * the branch never held.
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,

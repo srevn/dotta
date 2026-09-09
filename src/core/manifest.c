@@ -543,8 +543,10 @@ static error_t *manifest_ascend(
         if (!above) continue;
 
         *out_storage = arena_str_format(arena, "%s/%s", above, location + len + 1);
-        return *out_storage ? NULL
-                            : ERROR(ERR_MEMORY, "Failed to compose the name");
+        if (!*out_storage) {
+            return ERROR(ERR_MEMORY, "Failed to compose the name");
+        }
+        return NULL;
     }
 
     return mount_name(mounts, profile, location, arena, out_storage);
@@ -1557,7 +1559,10 @@ error_t *manifest_name(
     const char *here = manifest_standing(c, pending, location).storage_path;
     if (here) {
         *out_storage = arena_strdup(arena, here);
-        return *out_storage ? NULL : ERROR(ERR_MEMORY, "Failed to copy the name");
+        if (!*out_storage) {
+            return ERROR(ERR_MEMORY, "Failed to copy the name");
+        }
+        return NULL;
     }
 
     return manifest_ascend(

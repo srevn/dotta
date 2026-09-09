@@ -355,8 +355,11 @@ static error_t *physical_spelling(
     *out = table_spelling(arena, resolved);
     free(resolved);
 
-    return *out
-        ? NULL : ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
+    if (!*out) {
+        return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
+    }
+
+    return NULL;
 }
 
 /**

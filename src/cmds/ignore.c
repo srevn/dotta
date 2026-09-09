@@ -21,6 +21,7 @@
 #include "base/string.h"
 #include "cmds/completion.h"
 #include "core/ignore.h"
+#include "core/manifest.h"
 #include "core/profiles.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -776,22 +777,133 @@ static bool source_gitignore_matches(
     return excluded;
 }
 
+/* The longest lead an asker's line carries: "Profile '" (9), a profile name (a
+ * branch name — 255 bytes at git's limit), "': " and the terminator, rounded. */
+#define IGNORE_ASKER_MAX 288
+
 /**
- * Test if path is ignored across profiles
+ * The kind the rules are asked with: what stands where the argument stands.
  *
- * The argument is resolved the way `add` resolves its arguments — a storage path
- * is the subject as typed; a filesystem path (absolute, tilde, relative) is
- * normalized and located — and the rules are evaluated on the mount-relative
- * path, exactly as the walk would evaluate them. The path need not exist: a
- * trailing slash on one that does not is the directory hint, so directory-only
- * patterns (`cache/`) can be tested. The source tree's `.gitignore` is asked on
- * the filesystem path, when the argument has one.
+ * One lstat, the link itself and never its target — add's walk and the untracked
+ * scan both classify this way and offer a symlink whole (cmds/add.c collect_tree,
+ * core/workspace.c scan_directory_for_untracked), so a `pointer/` rule that does
+ * not decide there must not decide here. A stat would follow the link, and a
+ * broken one would read as absent; both are answers about something other than
+ * the path.
  *
- * A location has no subject of its own: what a profile calls it is that profile's
- * own roots' answer (infra/mount.h mount_name), so each arm below names its own
- * and the all-profiles loop names one per profile — which is the whole point of
- * asking `--test` before an `add`. A storage argument is the contract itself
- * and stands for every profile alike.
+ * `location` is NULL for a custom/ name this asker binds no target for: the name
+ * stands nowhere, so nothing can be looked at and the source tree has no path
+ * to be asked about either. That, an absent path and an unreadable one are one
+ * answer — the kind was not observed and the trailing-slash hint stands in, which
+ * is what lets a rule be tested against a path that does not exist yet — and
+ * each says which at VERBOSE, so a verdict that leaned on the hint says so. An
+ * unreadable path is never reported as an absent one (sys/filesystem.h: a reader
+ * must never infer absence from a failure to look).
+ *
+ * An observed leaf is a leaf whatever the hint says: `--test ~/foo/` where ~/foo
+ * is a file is matched as a file.
+ *
+ * `who` names the asker whose reading this is, or is empty: a location is one
+ * reading for every asker and is observed once, before the loop; a storage name
+ * stands where each asker's own target puts it, and each says so in its own turn.
+ * `typed` is the argument as the user wrote it — the only thing there is to name
+ * when nothing stands anywhere for it to be.
+ */
+static bool stands_as_directory(
+    const char *who,
+    const char *typed,
+    const char *location,
+    bool trailing_slash,
+    output_t *out
+) {
+    if (!location) {
+        output_info(
+            out, OUTPUT_VERBOSE,
+            "%s'%s' has no deployment target here: only the name is matched",
+            who, typed
+        );
+        return trailing_slash;
+    }
+
+    switch (fs_lstat_occupant(location, NULL)) {
+        case FS_OCCUPANT_DIRECTORY:
+            return true;
+
+        case FS_OCCUPANT_REGULAR:
+        case FS_OCCUPANT_SYMLINK:
+        case FS_OCCUPANT_OTHER:
+            return false;
+
+        case FS_OCCUPANT_NONE:
+            output_info(
+                out, OUTPUT_VERBOSE, "%sPath does not exist: %s", who, location
+            );
+            break;
+
+        case FS_OCCUPANT_UNKNOWN:
+            output_info(
+                out, OUTPUT_VERBOSE, "%sPath cannot be read: %s", who, location
+            );
+            break;
+    }
+
+    return trailing_slash;
+}
+
+/**
+ * Test whether a path is ignored, one profile at a time
+ *
+ * The argument is one of the two keys a managed path has, and every profile the
+ * verdict covers answers the other (infra/path.h — neither is manufactured from
+ * the other):
+ *
+ *   - a storage path is the contract itself: its own tail is the subject, for
+ *     every asker alike, and it stands wherever that asker's target puts it —
+ *     so the location, and the kind and source verdict that follow from it, are
+ *     read once per asker. Nothing here names anything, so no view is built: a
+ *     literal name stays testable on a repository whose claim sheets will not load.
+ *   - a filesystem path (absolute, tilde, relative, a bare name) is one location
+ *     for every asker — the machine's reading, asked once — and each asker names
+ *     it from its own claims and its own roots (core/manifest.h manifest_name):
+ *     a directory the profile already tracks names what lies beneath it, and
+ *     only where nothing of the profile's stands above the location do its roots
+ *     answer. That is the whole reason a view is built here.
+ *
+ * The shape is read by mount_spec_for_path and not by the resolver, for two
+ * reasons. A bare name is a filesystem argument here — `dotta ignore --test
+ * foo.log` reads it against the working directory, as add's grammar does — and
+ * path_input_resolve refuses one, its callers' first positional being a profile.
+ * And the resolver answers the shape and locates in one call, where the shape
+ * is what says whether there is a view to locate through: the location has to
+ * key against the view's rows by strcmp, and the rows were placed by the view's
+ * own table (core/manifest.h manifest_mounts). The one question that can be asked
+ * before the table is chosen is the pure label test, which touches none.
+ *
+ * The path need not exist: a trailing slash on one that does not is the directory
+ * hint, so directory-only patterns (`cache/`) can be tested. The rules are
+ * evaluated on the mount-relative subject, exactly as the walk evaluates them
+ * (cmds/add.c is_excluded); the source tree's `.gitignore` is asked on the
+ * location, when the asker has one, and only where no `.dottaignore` layer decided.
+ *
+ * The view is the named profile's branch at HEAD — which need not be enabled,
+ * and answers when some *other* enabled profile's branch will not build — or
+ * the enabled set's. Neither is declared: `ignore` is an editing command whose
+ * other four surfaces must build nothing.
+ *
+ * A NULL name is a root of that asker with no claim standing on it — a root has
+ * no canonical name and no pattern can match it — and is answered inside the
+ * asker's own turn, the one place that can name the root a binding's own target
+ * is. An asker that never got a subject cast no verdict, which is why the summary
+ * reads two accumulators and not one: a path no asker can name is neither ignored
+ * nor tracked.
+ *
+ * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
+ * load per enabled profile — where it read the table alone. cmds/completion.c
+ * already pays that on every tab press and records the measurement; a `--test`
+ * invocation is not tighter than a completion. The other face of the same cost:
+ * an enabled profile whose branch or sheet will not build refuses `--test` on a
+ * filesystem argument, as it refuses status, apply and list. The named profile's
+ * arm is insulated by construction, and a storage argument builds nothing.
  */
 static error_t *test_path_ignore(
     const dotta_ctx_t *ctx,
@@ -803,7 +915,6 @@ static error_t *test_path_ignore(
 
     git_repository *repo = ctx->run.repo;
     const state_t *state = ctx->run.state;
-    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -819,331 +930,245 @@ static error_t *test_path_ignore(
         }
     }
 
+    /* The profile named must be here before anything is read under it: the view
+     * below is its branch, and the refusal names both ways out. */
     error_t *err = NULL;
-    const char *storage_path = NULL;
-    const char *fs_path = NULL;   /* NULL when the argument has no location here */
+    if (specific_profile) {
+        err = profile_require(repo, specific_profile);
+        if (err) return err;
+    }
+
+    /* What the cleanup releases, established before the first goto so the label
+     * never reads an uninitialised one. */
+    manifest_t *view = NULL;
+    source_filter_t *source_filter = NULL;
+    ignore_rules_t *ignore_rules = NULL;
+    string_array_t *enabled = NULL;
+
+    /* The key the user named, fixed for every asker: exactly one of the two is
+     * non-NULL, and which one is the whole condition the loop's arms read. The
+     * table is the run's until a view is built, and then the view's own — the
+     * one its rows were placed by. */
+    const mount_table_t *mounts = ctx->run.mounts;
+    const char *argument_name = NULL;        /* a storage argument: its own name */
+    const char *argument_location = NULL;    /* a filesystem argument: where it stands */
+    bool argument_is_directory = false;      /* … and the kind observed there, once */
 
     if (mount_spec_for_path(input)) {
         err = mount_validate_storage(input);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);
         }
-        storage_path = input;
-
-        /* Its location, for the source check and the kind: a custom/ path binds
-         * only through a profile with a target — without one, the hint stands
-         * in for the kind and the source tree is not asked. */
-        err = mount_resolve(
-            mounts, specific_profile, storage_path, ctx->arena, &fs_path
-        );
-        if (err) return err;
+        argument_name = input;
     } else {
+        /* Both builders free their own partial view and leave *out NULL, so this
+         * returns; from the locate on, the view is owned and every failure leaves
+         * by cleanup. */
+        if (specific_profile) {
+            git_tree *tree = NULL;
+            err = gitops_load_branch_tree(repo, specific_profile, &tree, NULL);
+            if (err) {
+                return error_wrap(
+                    err, "Failed to load tree for profile '%s'", specific_profile
+                );
+            }
+            err = manifest_build_tree(
+                repo, tree, specific_profile, mounts, ctx->arena, &view
+            );
+            git_tree_free(tree);
+        } else {
+            err = manifest_build(repo, state, ctx->arena, &view);
+        }
+        if (err) return err;
+
+        /* The table the rows were placed by — the named profile's arm hands in
+         * the very table this lends back (core/manifest.h manifest_mounts). */
+        mounts = manifest_mounts(view);
+
         char *absolute = NULL;
         err = path_input_normalize(input, &absolute);
         if (err) {
-            return error_wrap(err, "Failed to resolve path '%s'", input);
+            err = error_wrap(err, "Failed to resolve path '%s'", input);
+            goto cleanup;
         }
-
-        /* Where the spelling stands: the subjects below are named from a location,
-         * as the walk names what it finds (infra/mount.h). */
-        err = mount_locate(mounts, absolute, ctx->arena, &fs_path);
+        err = mount_locate(mounts, absolute, ctx->arena, &argument_location);
         free(absolute);
-        if (err) return err;
-    }
+        if (err) goto cleanup;
 
-    /* What the patterns see, when the user named it. A storage argument is the
-     * contract itself, so its subject is the name as typed and stands for every
-     * profile alike; a location is named by the asker's own roots, one profile
-     * at a time, and each arm below names its own. */
-    const char *typed = mount_strip_label(storage_path);   /* NULL for a location */
-
-    bool path_exists = fs_path && fs_exists(fs_path);
-    bool is_directory = path_exists ? fs_is_directory(fs_path) : trailing_slash;
-
-    if (!path_exists) {
-        output_info(out, OUTPUT_VERBOSE, "Path does not exist: %s", test_path);
-    }
-
-    if (typed) {
-        output_info(
-            out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s",
-            test_path, typed, is_directory ? " (a directory)" : ""
+        /* One location for every asker, so one observation and no asker to name
+         * it. */
+        argument_is_directory = stands_as_directory(
+            "", test_path, argument_location, trailing_slash, out
         );
-    } else {
-        /* A location the asker holds no name for — one of its own roots — has
-         * no subject, and no pattern can match it. With no profile named these
-         * are the shared roots, HOME and `/`, which are every profile's; a
-         * binding's target is one profile's alone and is answered in that profile's
-         * own line below. */
-        const mount_spec_t *root = mount_root(mounts, specific_profile, fs_path);
-        if (root) {
-            char noun[MOUNT_NOUN_MAX];
-            output_info(
-                out, OUTPUT_NORMAL,
-                "'%s' is %s: it has no name for a pattern to match", test_path,
-                mount_root_describe(root, specific_profile, noun, sizeof(noun))
-            );
-            return NULL;
-        }
     }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
-     * test invocation so the discovered repo handle is reused across the
-     * per-profile loop below. */
-    source_filter_t *source_filter = NULL;
+     * invocation so the discovered repo handle is reused across the loop. */
     if (config && config->respect_gitignore) {
-        error_t *sf_err = source_filter_create(&source_filter);
-        if (sf_err) {
-            return error_wrap(sf_err, "Failed to build source .gitignore filter");
-        }
-    }
-
-    /* Layered-rules builder — loads baseline + config once, memoises each profile's
-     * ruleset on first request. */
-    ignore_rules_t *ignore_rules = NULL;
-    err = ignore_rules_create(
-        repo, config, NULL, 0, ctx->arena, &ignore_rules
-    );
-    if (err) {
-        source_filter_free(source_filter);
-        return error_wrap(err, "Failed to build ignore rules");
-    }
-
-    string_array_t *profiles = NULL;
-
-    /* If specific profile requested, test only that one */
-    if (specific_profile) {
-        err = profile_require(repo, specific_profile);
-        if (err) goto cleanup;
-
-        const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, specific_profile, &rules);
+        err = source_filter_create(&source_filter);
         if (err) {
-            err = error_wrap(
-                err, "Failed to load ignore rules for profile '%s'",
-                specific_profile
-            );
+            err = error_wrap(err, "Failed to build source .gitignore filter");
             goto cleanup;
         }
+    }
 
-        /* What the patterns see here: the argument as typed, or the name this
-         * arm's asker gives the location. The root above already answered for a
-         * root of that namespace, so the name stands. */
-        const char *subject = typed;
-        if (!subject) {
-            const char *name = NULL;
-            err = mount_name(mounts, specific_profile, fs_path, ctx->arena, &name);
-            if (err) goto cleanup;
-            subject = mount_strip_label(name);
-            output_info(
-                out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s", test_path,
-                subject, is_directory ? " (a directory)" : ""
-            );
-        }
-
-        gitignore_match_t match;
-        gitignore_eval(rules, subject, is_directory, &match);
-
-        if (match.decided && match.ignored) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
-                specific_profile
-            );
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
-                ignore_origin_describe((ignore_origin_t) match.origin),
-                match.pattern
-            );
-        } else if (!match.decided && source_gitignore_matches(
-            source_filter, fs_path, is_directory, out
-            )) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED by profile '%s'\n",
-                specific_profile
-            );
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: source .gitignore"
-            );
-        } else {
-            output_success(
-                out, OUTPUT_NORMAL, "Not ignored by profile '%s'",
-                specific_profile
-            );
-        }
-
+    /* Layered-rules builder — baseline + config once, each profile's ruleset
+     * memoised on first request. */
+    err = ignore_rules_create(repo, config, NULL, 0, ctx->arena, &ignore_rules);
+    if (err) {
+        err = error_wrap(err, "Failed to build ignore rules");
         goto cleanup;
     }
 
-    /* Test against all enabled profiles */
-    err = profile_resolve_enabled(repo, state, &profiles);
+    /* The askers: the profile named, the enabled set, or the one asker that is
+     * no profile — which names through the shared roots and meets the baseline
+     * and config layers alone. `askers` starts at the parameter itself, an array
+     * of one that is both the named-profile and the nothing-enabled case; the
+     * enabled set replaces it when there is one, and profile_resolve_enabled
+     * never answers success with an empty one, so `enabled` is also what the
+     * preamble and the summary key on. */
+    const char *const *askers = &specific_profile;
+    size_t asker_count = 1;
 
-    if (err) {
-        if (error_code(err) != ERR_NOT_FOUND) {
-            err = error_wrap(err, "Failed to load profiles");
-            goto cleanup;
-        }
-        error_free(err);
-        err = NULL;
-
-        /* No enabled profiles - test against baseline + config only.
-         * `ignore_rules_for_profile(..., NULL, ...)` returns the ruleset with
-         * no per-profile layer. */
-        output_info(
-            out, OUTPUT_NORMAL, "No enabled profiles found"
-        );
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Testing against baseline .dottaignore and config patterns only"
-        );
-
-        const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, NULL, &rules);
+    if (!specific_profile) {
+        err = profile_resolve_enabled(repo, state, &enabled);
         if (err) {
-            err = error_wrap(err, "Failed to build ignore rules");
-            goto cleanup;
+            if (error_code(err) != ERR_NOT_FOUND) {
+                err = error_wrap(err, "Failed to load profiles");
+                goto cleanup;
+            }
+            error_free(err);
+            err = NULL;
         }
 
-        /* What the patterns see here: the argument as typed, or the name this
-         * arm's asker gives the location. The root above already answered for a
-         * root of that namespace, so the name stands. */
-        const char *subject = typed;
-        if (!subject) {
-            const char *name = NULL;
-            err = mount_name(mounts, specific_profile, fs_path, ctx->arena, &name);
-            if (err) goto cleanup;
-            subject = mount_strip_label(name);
-            output_info(
-                out, OUTPUT_VERBOSE, "Matching '%s' as '%s'%s", test_path,
-                subject, is_directory ? " (a directory)" : ""
-            );
-        }
-
-        gitignore_match_t match;
-        gitignore_eval(rules, subject, is_directory, &match);
-
-        if (match.decided && match.ignored) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
-                ignore_origin_describe((ignore_origin_t) match.origin),
-                match.pattern
-            );
-        } else if (!match.decided && source_gitignore_matches(
-            source_filter, fs_path, is_directory, out
-            )) {
-            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} IGNORED\n");
-            output_info(
-                out, OUTPUT_NORMAL, "  Reason: source .gitignore"
-            );
+        if (enabled) {
+            askers = (const char *const *) enabled->items;
+            asker_count = enabled->count;
+            output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
+            output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", asker_count);
+            output_newline(out, OUTPUT_NORMAL);
         } else {
-            output_success(out, OUTPUT_NORMAL, "Not ignored");
+            output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Testing against baseline .dottaignore and config patterns only"
+            );
         }
-
-        goto cleanup;
     }
-
-    /* Test against each enabled profile */
-    output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
-    output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", profiles->count);
-    output_newline(out, OUTPUT_NORMAL);
 
     bool any_ignored = false;
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
+    bool any_named = false;
 
-        const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, profile, &rules);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to load ignore rules for profile '%s'", profile
-            );
-            goto cleanup;
+    for (size_t i = 0; i < asker_count; i++) {
+        const char *asker = askers[i];
+
+        /* Whose answer this is, on every line of the turn. One value, so each
+         * message below is spelled once and no site can forget the form the asker
+         * that is no profile needs — the shape mount_root_describe already uses
+         * for a root's noun. */
+        char who[IGNORE_ASKER_MAX] = "";
+        if (asker) {
+            snprintf(who, sizeof(who), "Profile '%s': ", asker);
         }
 
-        /* What the patterns see for this profile. Each iteration names its own:
-         * a subject carried across them would be non-NULL after the first and
-         * silently skip every later profile's ask. */
-        const char *subject = typed;
-        if (!subject) {
+        /* The asker's reading, seeded with the key the user named: a storage
+         * name is one subject for every asker alike, a location is the machine's
+         * one reading and the kind observed there once. The arm fills the half
+         * the argument did not name. */
+        const char *subject = mount_strip_label(argument_name);
+        const char *location = argument_location;
+        bool is_directory = argument_is_directory;
+
+        if (argument_name) {
+            /* Where this asker's target puts the name, and what stands there: a
+             * custom/ name places only under a profile with a target. */
+            err = mount_resolve(mounts, asker, argument_name, ctx->arena, &location);
+            if (err) goto cleanup;
+            is_directory = stands_as_directory(
+                who, test_path, location, trailing_slash, out
+            );
+        } else {
+            /* What this asker calls the location: the claims it holds above it,
+             * else its own roots. NULL is a root of this asker with no claim
+             * standing on it — mount_name answered it, so mount_root finds the
+             * spec that describes it, and no pattern can match a root. */
             const char *name = NULL;
-            err = mount_name(mounts, profile, fs_path, ctx->arena, &name);
+            err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             if (!name) {
-                /* The one root the pre-arm block could not refuse: this profile's
-                 * own target, which is nobody else's. */
                 char noun[MOUNT_NOUN_MAX];
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Profile '%s': '%s' is %s, and has no name to match", profile,
-                    test_path,
-                    mount_root_describe(
-                    mount_root(mounts, profile, fs_path), profile, noun,
-                    sizeof(noun)
+                    "%s'%s' is %s: it has no name for a pattern to match",
+                    who, test_path, mount_root_describe(
+                    mount_root(mounts, asker, location), asker, noun, sizeof(noun)
                     )
                 );
                 continue;
             }
             subject = mount_strip_label(name);
-            output_info(
-                out, OUTPUT_VERBOSE, "Matching '%s' as '%s' for profile '%s'%s",
-                test_path, subject, profile, is_directory ? " (a directory)" : ""
-            );
+        }
+        any_named = true;
+
+        output_info(
+            out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, test_path,
+            subject, is_directory ? " (a directory)" : ""
+        );
+
+        const gitignore_ruleset_t *rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, asker, &rules);
+        if (err) {
+            err = error_wrap(err, "Failed to build ignore rules");
+            goto cleanup;
         }
 
+        /* The rules on the subject; where no layer decided, the source tree's
+         * .gitignore on the location — the lowest layer, so a `!` above it wins. */
         gitignore_match_t match;
         gitignore_eval(rules, subject, is_directory, &match);
+        bool ignored = match.decided
+            ? match.ignored
+            : source_gitignore_matches(source_filter, location, is_directory, out);
 
-        bool ignored_here = match.decided && match.ignored;
-        bool by_source = false;
-        if (!match.decided) {
-            by_source = source_gitignore_matches(
-                source_filter, fs_path, is_directory, out
-            );
-            ignored_here = by_source;
-        }
-
-        if (ignored_here) {
-            output_styled(
-                out, OUTPUT_NORMAL, "{red}✗{reset} Profile '%s': IGNORED\n",
-                profile
-            );
-            if (output_is_verbose(out)) {
-                if (by_source) {
-                    output_info(out, OUTPUT_NORMAL, "    Reason: source .gitignore");
-                } else {
-                    output_info(
-                        out, OUTPUT_NORMAL, "    Reason: %s: '%s'",
-                        ignore_origin_describe((ignore_origin_t) match.origin),
-                        match.pattern
-                    );
-                }
+        if (ignored) {
+            output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);
+            if (match.decided) {
+                output_info(
+                    out, OUTPUT_NORMAL, "  Reason: %s: '%s'",
+                    ignore_origin_describe((ignore_origin_t) match.origin),
+                    match.pattern
+                );
+            } else {
+                output_info(out, OUTPUT_NORMAL, "  Reason: source .gitignore");
             }
             any_ignored = true;
         } else {
-            output_success(
-                out, OUTPUT_NORMAL, "Profile '%s': NOT IGNORED", profile
+            output_success(out, OUTPUT_NORMAL, "%sNOT IGNORED", who);
+        }
+    }
+
+    if (enabled) {
+        output_newline(out, OUTPUT_NORMAL);
+        if (any_ignored) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Result: Path would be IGNORED during add/update operations"
+            );
+        } else if (any_named) {
+            output_success(out, OUTPUT_NORMAL, "Result: Path would be TRACKED");
+        } else {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Result: No enabled profile has a name for this path"
             );
         }
     }
 
-    /* Summary */
-    output_newline(out, OUTPUT_NORMAL);
-    if (any_ignored) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Result: Path would be IGNORED during add/update operations"
-        );
-    } else {
-        output_success(
-            out, OUTPUT_NORMAL,
-            "Result: Path would be TRACKED"
-        );
-    }
-
 cleanup:
-    string_array_free(profiles);
-    source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);
+    source_filter_free(source_filter);
+    string_array_free(enabled);
+    manifest_free(view);
     return err;
 }
 
@@ -1345,6 +1370,7 @@ const args_command_t spec_ignore = {
         "  A pattern is matched against the path relative to its mount root,\n"
         "  as a .gitignore at ~, at / or at the deployment target would match\n"
         "  it: write .config/Code/Cache/ for ~/.config/Code/Cache, never home/.\n"
+        "  Run 'dotta ignore -v --test <path>' to see the exact subject.\n"
         "\n"
         "Pattern Syntax:\n"
         "  *.log                # Match all .log files\n"

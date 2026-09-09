@@ -53,18 +53,19 @@
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
- *     — the historical-diff path (cmd_diff) — and is the same per-profile step
- *     applied once. Each step loads the claim sheet of the tree it reads: a tree
- *     without one holds an empty sheet, and a sheet that will not load fails
- *     the build rather than read as "no claims", so no caller of a builder chooses
- *     a policy for a fact the builder is the authority on. That is the view's
- *     rule and only the view's — a command reading a sheet for its own screen
- *     decides for itself (core/metadata.h). Both produce manifest_row_t rows
- *     directly, the one row shape every consumer reads, so there is no bridge
- *     between the build step and its readers. The dispatcher builds the view
- *     once per command for the commands that declare it (ctx->run.manifest,
- *     include/runtime.h); a command that moves Git or the enabled set builds
- *     the post-mutation view itself.
+ *     — the historical diff (cmd_diff), and `ignore --test` under a named profile
+ *     — and is the same per-profile step applied once. Each step loads the claim
+ *     sheet of the tree it reads: a tree without one holds an empty sheet, and
+ *     a sheet that will not load fails the build rather than read as "no claims",
+ *     so no caller of a builder chooses a policy for a fact the builder is the
+ *     authority on. That is the view's rule and only the view's — a command reading
+ *     a sheet for its own screen decides for itself (core/metadata.h). Both produce
+ *     manifest_row_t rows directly, the one row shape every consumer reads, so
+ *     there is no bridge between the build step and its readers. The dispatcher
+ *     builds the view once per command
+ *     for the commands that declare it (ctx->run.manifest, include/runtime.h);
+ *     a command that moves Git or the enabled set builds the post-mutation view
+ *     itself.
  *
  *   - Readers: manifest_rows (every winning row, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
@@ -467,8 +468,9 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * topology it was placed by reads it here rather than building a second table
  * from the same rows, so the arguments it locates and the rows it selects read
  * one value. Readers: the dispatcher (`run.mounts` for a command that declares
- * the view, include/runtime.h); show and list without a profile, which build
- * the view themselves and locate the argument through its table.
+ * the view, include/runtime.h); show and list without a profile, and a filesystem
+ * argument to `ignore --test`, which build the view themselves and locate the
+ * argument through its table.
  *
  * Pure value return — no allocation, no error path.
  *
@@ -802,6 +804,10 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * the kept one at that location, whichever of the two ways it was chosen.
  *
  * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
+ *
+ * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the settle
+ * of a contribution's collisions (core/manifest.c). add's argument arm and its
+ * walk compute the same answer incrementally and are what C3 brings here.
  *
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone

@@ -143,6 +143,11 @@ typedef struct anchor anchor_t;
  * claim for permission bits — a hand-edit that contradicts the x-bit across the
  * two is resolved by that contract, not detected per-read.
  *
+ * Winner or not: `profile` is the profile whose claim the row is, and a row is
+ * never rewritten when a higher profile takes its location. A row read through
+ * the view's index stands there; a row read through manifest_lookup_claim is
+ * one profile's claim at a location whether or not it stands.
+ *
  * Strings are arena-backed by the producer; rows are read through `const
  * manifest_row_t *` and live for the producer's arena. The precedence oracle
  * below produces rows, the workspace partitions them, deploy and cleanup plan
@@ -152,7 +157,7 @@ typedef struct manifest_row {
     /* Identity */
     char *filesystem_path;      /* Deployed path (/home/user/.bashrc): physical spelling */
     char *storage_path;         /* Path in profile (home/.bashrc) */
-    char *profile;              /* Winning profile */
+    char *profile;              /* The profile whose claim the row is */
 
     /* What stands there */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
@@ -193,14 +198,23 @@ static inline bool manifest_is_claim(
  * Is the row an ancestor claim — a directory derived from the chain above a managed
  * path, never named by anyone?
  *
- * The one kind of row that is not a naming authority: the namer skips it, the
- * walkers compose past it, a contribution lets an explicit claim of the same
- * profile take its slot, the index lets it fill an empty location and never take
- * a held one, and a search reads it as "the profile holds a subtree beneath here"
- * — one of possibly several chains, never a name (manifest_lookup_claim's note).
- * False on every other kind, where `tracked` is false and nothing reads it.
+ * The bottom of the lattice a namer reads: the one kind of row that does not
+ * name its own location. Every other kind does, a blob as much as a tracked
+ * directory, so this is not the test for whether anything may be named *beneath*
+ * a row. That one is narrower — a tracked directory alone (manifest_claim_beneath)
+ * — and a walker that composes children beneath every row this answers false
+ * for composes them beneath a blob, where the namer composes beneath the root's
+ * label instead.
  *
- * Readers: manifest_name, the two claim passes and the layering (core/manifest.c).
+ * What reads it: the projection of a row into a claim gives it none, a contribution
+ * lets an explicit claim of the same profile take its slot, the index lets it
+ * fill an empty location and never take a held one, and a search reads it as
+ * "the profile holds a subtree beneath here" — one of possibly several chains,
+ * never a name (manifest_lookup_claim's note). False on every other kind, where
+ * `tracked` is false and nothing reads it.
+ *
+ * Readers: the projection a namer reads a row through, the two claim passes and
+ * the layering (core/manifest.c).
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
@@ -564,7 +578,10 @@ typedef struct {
  * appears once — a name resolves to one location under one profile, and a name
  * the tree and the sheet both carry is settled before the contest by the
  * content-authority rule. Empty on every build whose profiles each name their
- * locations once, which is every branch this machine authored alone.
+ * locations once. A change of roots between two writes is what breaks that, and
+ * this machine's own captures do it as readily as an import: capture under
+ * `~/jail`, bind the profile there, capture again, and the branch holds
+ * `home/jail/…` beside `custom/…` for one file.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime
@@ -653,19 +670,26 @@ size_t manifest_holders(
  * The row `profile` holds at `filesystem_path` in its own contribution — the
  * claim it placed there, whether or not it wins the location in the index.
  *
- * The authority rule's one source. NULL when the profile is not in the view,
- * holds nothing there, or is NULL — the API's own return convention, a
- * pointer-returning lookup having no CHECK_NULL to refuse with. O(P) over the
- * profiles to find the contribution, then O(1): P is the enabled set, and a caller
- * that asks once per directory entry pays a handful of strcmp.
+ * NULL when the profile is not in the view, holds nothing there, or is NULL —
+ * the API's own return convention, a pointer-returning lookup having no CHECK_NULL
+ * to refuse with. O(P) over the profiles to find the contribution, then O(1): P
+ * is the enabled set, and a caller that asks once per directory entry pays a
+ * handful of strcmp.
  *
- * A DIRECTORY row with `tracked == false` here says the profile holds a subtree
- * beneath this location; its `storage_path` is one of the chains its own names
- * run through, not a unique identity for that subtree — a profile bound after
- * some of its files were captured legitimately derives two. A caller that wants
- * the subtree reads the rows beneath the location.
+ * A DIRECTORY row here names and does not enumerate, and that is true of both
+ * classes: neither is an identity for the subtree standing beneath the location.
+ * A derived row says the profile holds a subtree there, and its `storage_path`
+ * is one of the chains its own names run through — a profile bound after some
+ * of its files were captured legitimately derives two. A tracked row says what
+ * the profile will call paths beneath the location from now on, and says nothing
+ * about the ones already captured: tracked `home/jail/etc` stands over
+ * `home/jail/etc/a` and `custom/etc/b` alike, and its own Git subtree holds only
+ * the first. A caller that wants the subtree reads the rows beneath the location,
+ * never the tree beneath the name.
  *
- * Readers: manifest_name (core/manifest.c).
+ * No production reader yet: the namer holds the contribution already and reads
+ * its index directly. The unit pins are what read this, and the first production
+ * reader will be the claim search a profile-scoped verb makes.
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -674,39 +698,76 @@ const manifest_row_t *manifest_lookup_claim(
 );
 
 /**
- * A claim a verb has admitted in this command and not yet committed — add's
- * listing, read by the namer as an authority exactly as a committed claim is.
+ * A claim as a namer reads it: the name, and how far it reaches
  *
- * `kind` is the whole reason this is a value and not a string: a claim at the
- * location names it whatever it is, but only a DIRECTORY names what lies beneath
- * it. A pending FILE above a location composes nothing — a name beneath a blob
- * is a tree entry the stage refuses — so the ascent climbs past it exactly as
- * it climbs past a committed blob row. A pending DIRECTORY is a claim the command
- * made (an argument, or a directory its walk entered): a verb that would admit
- * a derived claim has no business naming through it.
+ * `kind` is the whole reason this is a value and not a string: a claim at a
+ * location names the location whatever it is, but only a DIRECTORY names what
+ * lies beneath it — a name beneath a blob is a tree entry the stage refuses. The
+ * row is the claim entire, its mode and owner and blob (manifest_lookup_claim);
+ * this pair is the claim as a namer needs it.
  *
- * A location a verb entered without claiming (a root met from above) is stored
- * with a NULL value: hashmap_has says walked, hashmap_get says claimed.
+ * The two layers a namer reads speak this one shape. A claim a verb has admitted
+ * in this command and not yet committed — add's listing, the `pending` map — is
+ * one; a row of the profile's own contribution projects into the other, a derived
+ * row being no claim at all (it names neither itself nor what lies beneath:
+ * manifest_is_derived) and every other row naming its own location, with its
+ * kind saying whether anything can be named beneath it. A DIRECTORY the command
+ * admitted is a claim it made — an argument, or a directory its walk entered; a
+ * verb that would admit a derived claim has no business naming through it.
+ *
+ * The map is keyed by location in the spelling the view's own rows carry (what
+ * mount_locate produced), which is what the ascent truncates to reach a rung;
+ * and it is the asking profile's own listing, a claim of it standing in for that
+ * profile's committed row at the same place and for no other profile's.
+ *
+ * A stored claim always names. A location a verb entered without claiming (a
+ * root met from above) is stored with a NULL *value*: hashmap_has says walked,
+ * hashmap_get says claimed. A NULL `storage_path` is nothing standing, and `kind`
+ * says nothing then.
  */
 typedef struct {
     const char *storage_path;
     path_kind_t kind;
-} manifest_pending_claim_t;
+} manifest_claim_t;
+
+/**
+ * The name anything beneath this claim's location composes under, or NULL when
+ * nothing does
+ *
+ * The top of the lattice manifest_is_derived names the bottom of. A claim names
+ * its own location whatever its kind — that is `storage_path`, read directly —
+ * and only a DIRECTORY names what lies beneath it; a claim that names nothing
+ * answers NULL by its name, whatever its kind says. So the two questions a namer
+ * asks are one read and two projections of it, and neither leans on which value
+ * of the kind is the enum's zero.
+ *
+ * Readers: the ascent's rung (core/manifest.c manifest_ascend). The walk that
+ * lists a directory for capture and the scan that offers its untracked children
+ * ask the same question by hand today, each down a climb of its own.
+ */
+static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
+    return claim.kind == PATH_KIND_DIRECTORY ? claim.storage_path : NULL;
+}
 
 /**
  * What `profile` calls `location` under this view
  *
- * A pending claim there (`pending`: location → manifest_pending_claim_t, the
- * claims a verb has admitted in this command and not yet committed; NULL for
- * every other reader); else the explicit claim standing there; else composed
- * beneath the nearest authority above it — a pending directory claim, or a tracked
- * directory row of the profile, the claim asked before the root at every rung;
- * else what the profile's own roots make of it (infra/mount.h mount_name), which
- * is NULL when the location is one of them. An ancestor claim is never an
- * authority, and nothing composes beneath a blob. The profile's own contribution
- * is read, never the index: a location it lost to a higher profile is still named
- * by what it holds. `profile` may be NULL — the shared roots alone, as mount_name
- * reads it.
+ * Two layers at every rung, the location included, and the nearer answers alone:
+ * a claim this command has admitted and not yet committed (`pending`: location
+ * → manifest_claim_t; NULL for every other reader) speaks for the place whatever
+ * its kind, and only where it says nothing does the profile's committed row speak.
+ * So a staged blob shadows a tracked directory the branch holds at the same
+ * location, exactly as it will once committed — where the blob takes the location
+ * and the directory's name is the one the contribution does not keep.
+ *
+ * The claim standing at the location is its name; else the location is composed
+ * beneath the nearest rung above it that names what lies beneath — a DIRECTORY
+ * claim of either layer (manifest_claim_beneath), asked before the root at every
+ * rung; else what the profile's own roots make of it (infra/mount.h mount_name),
+ * which is NULL when the location is one of them. An ancestor claim names nothing,
+ * and nothing is named beneath a blob. The profile's own contribution is read,
+ * never the index: a location it lost to a higher profile is still named by what
+ * it holds. `profile` may be NULL — the shared roots alone, as mount_name reads it.
  *
  * This is the rule the view itself runs when a profile names one location twice
  * — minus the leaf clause, which is the one thing a settle cannot ask, a name
@@ -721,7 +782,8 @@ typedef struct {
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone
  * @param location Absolute location (must not be NULL)
- * @param pending The command's uncommitted claims, or NULL
+ * @param pending The asking profile's uncommitted claims, keyed by location
+ *                (manifest_claim_t), or NULL
  * @param arena Arena that owns `*out_storage` (must not be NULL)
  * @param out_storage Arena-backed storage path, NULL at a root (must not be NULL;
  *                    NULL after an error)

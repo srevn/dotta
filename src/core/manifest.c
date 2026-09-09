@@ -27,7 +27,10 @@
  *   - One naming rule, one body: manifest_ascend is what the settle asks for
  *     the fresh name of a contested location and what manifest_name answers callers
  *     with, so the name the view keeps and the name the namer gives are the same
- *     answer by construction.
+ *     answer by construction. One claim shape beneath it: both layers a namer
+ *     reads speak manifest_claim_t, so the leaf and the rung ask one producer
+ *     (manifest_standing) and differ only in which of its two projections they
+ *     take.
  *   - Diff, not delta-tracking: what a scope transition or a sync did to the
  *     view is read off two views (manifest_diff), never recorded while it happened.
  */
@@ -144,8 +147,8 @@ struct claim_ctx {
  *
  * Selectively overrides the metadata-owned fields (mode, owner, group, encrypted)
  * on a row whose Git-derived defaults have already been set. Each call attributes
- * a single profile's claim to the row; precedence across profiles is resolved
- * by manifest_claim's reset and the paired re-application of this helper.
+ * a single profile's claim to the row, and no row ever carries two: precedence
+ * across profiles picks between whole rows and rewrites none of them.
  *
  * When an item exists for the row's storage_path: owner/group ride every blob
  * row; mode/encrypted are the tree's to admit, and the mode only when claimed —
@@ -422,33 +425,65 @@ static bool manifest_holds_blob(
 }
 
 /**
- * The pending claim at `location` that names what lies beneath it
+ * The claim standing at `location` for this asker
  *
- * A pending FILE names its own location and nothing under it
- * (manifest_pending_claim_t); a location the verb entered without claiming holds
- * a NULL value, and hashmap_get folds "absent" and "no claim" into the one answer
- * the ascent owes.
+ * The two layers a namer reads, nearest first. A claim the command has admitted
+ * and not yet committed answers alone, whatever its kind: it is the nearer
+ * statement about the place, so a staged FILE names its own location and nothing
+ * under it, shadowing a tracked directory the branch holds at the same location
+ * exactly as it will once committed — where the blob takes the location and the
+ * directory's name is the one the contribution does not keep. A location the
+ * verb entered without claiming holds a NULL value, and hashmap_get folds "absent"
+ * and "entered, claimed nothing" into the one answer the layer below is owed.
+ *
+ * Where the command claimed nothing the profile's own committed row speaks,
+ * projected into the same pair: a derived row is no claim at all, and every other
+ * row names its own location. The derived filter runs first, so a
+ * PATH_KIND_DIRECTORY leaving the projection is a tracked directory's.
+ *
+ * The two questions the pair answers are the two its callers ask — manifest_name's
+ * leaf takes any name it finds, manifest_ascend's rung takes a directory's alone
+ * (manifest_claim_beneath). The name is borrowed from whichever layer answered;
+ * both outlive the call, and both callers copy or compose at once.
+ *
+ * The contribution is taken rather than the view because that is what keeps the
+ * O(P) search for it out of the per-rung loop. A public form reads (view, profile,
+ * location, pending) and finds the contribution itself, as manifest_lookup_claim
+ * does — a wrapper over this one, never a second body.
+ *
+ * @param c The profile's own contribution, or NULL when the view has none for it
+ * @param pending The asking profile's uncommitted claims, or NULL
+ * @param location The location to read (must not be NULL)
+ * @return The claim standing there, or a NULL name when none does
  */
-static const char *manifest_pending_directory(
-    const hashmap_t *pending, const char *location
+static manifest_claim_t manifest_standing(
+    const contribution_t *c, const hashmap_t *pending, const char *location
 ) {
-    const manifest_pending_claim_t *claim = pending
-        ? hashmap_get(pending, location) : NULL;
+    const manifest_claim_t *staged = pending ? hashmap_get(pending, location) : NULL;
+    if (staged) return *staged;
 
-    return claim && claim->kind == PATH_KIND_DIRECTORY ? claim->storage_path : NULL;
+    const manifest_row_t *row = c ? hashmap_get(c->index, location) : NULL;
+    if (!row || manifest_is_derived(row)) return (manifest_claim_t){ 0 };
+
+    return (manifest_claim_t){
+        .storage_path = row->storage_path,
+        .kind = path_type_kind(row->type),
+    };
 }
 
 /**
  * The name `profile` composes for `location` from what stands above it
  *
- * The rungs above the location, nearest first: a pending DIRECTORY claim of this
- * command, then a tracked directory row of the profile — either is a name the
- * location is composed beneath. A root of the profile ends the ascent at every
- * rung, the location itself included: nothing of the profile's stands above its
- * own binding, and mount_name composes the answer beneath the deepest root it
- * has (NULL when the location is that root). An ancestor claim is never an
- * authority, and a blob above the location cannot hold one — nothing is named
- * beneath a file — so both are climbed past.
+ * The rungs above the location, nearest first: the claim standing at each one
+ * (manifest_standing — this command's own listing where it has one there, else
+ * the profile's committed row), and the location is composed beneath the first
+ * that names what lies beneath it, a DIRECTORY claim of either layer
+ * (manifest_claim_beneath). A root of the profile ends the ascent at every rung,
+ * the location itself included: nothing of the profile's stands above its own
+ * binding, and mount_name composes the answer beneath the deepest root it has
+ * (NULL when the location is that root). An ancestor claim names nothing, and a
+ * blob names its own location and nothing under it — a name beneath a file is a
+ * tree entry the stage refuses — so both are climbed past.
  *
  * The claim is asked before the root at every rung, and the loop's shape is what
  * makes that true: the root test at the top reads the rung whose claim the previous
@@ -502,13 +537,9 @@ static error_t *manifest_ascend(
         rung[len] = '\0';
         if (len < 2) continue;  /* "/" and the empty prefix name nothing — see above */
 
-        const char *above = manifest_pending_directory(pending, rung);
-        if (!above && c) {
-            const manifest_row_t *row = hashmap_get(c->index, rung);
-            if (row && row->type == PATH_TYPE_DIRECTORY && row->tracked) {
-                above = row->storage_path;
-            }
-        }
+        /* The two layers at this rung, the nearer answering alone, and only a
+         * directory naming what lies beneath it. */
+        const char *above = manifest_claim_beneath(manifest_standing(c, pending, rung));
         if (!above) continue;
 
         *out_storage = arena_str_format(arena, "%s/%s", above, location + len + 1);
@@ -671,9 +702,7 @@ static error_t *manifest_settle(
  * @return 0 to continue walk, -1 to stop on error
  */
 static int manifest_claim_blob(
-    const char *root,
-    const git_tree_entry *entry,
-    void *payload
+    const char *root, const git_tree_entry *entry, void *payload
 ) {
     struct claim_ctx *ctx = (struct claim_ctx *) payload;
 
@@ -1459,10 +1488,11 @@ const manifest_row_t *manifest_lookup_claim(
 /**
  * What `profile` calls `location` under this view
  *
- * The leaf clause and the ascent. A pending claim at the location names it whatever
- * its kind — the command has already named this very location — and an explicit
- * claim of the profile standing there is its own name; a derived row is no
- * authority and falls through, as does a location the profile holds nothing at.
+ * The leaf clause and the ascent, over the one two-layer read (manifest_standing):
+ * the claim standing at the location names it whatever its kind — this command's
+ * own if it has admitted one there, since it has already named this very location
+ * — and a location nothing stands at falls through to the ascent, the profile
+ * holding no row there or holding a derived one, which is no claim.
  *
  * The answer is the caller's arena's whichever rung produced it: the leaf clause
  * copies, which costs one strdup on a call made once per argument and buys the
@@ -1485,13 +1515,7 @@ error_t *manifest_name(
 
     const contribution_t *c = manifest_contribution(manifest, profile);
 
-    const manifest_pending_claim_t *claim = pending
-        ? hashmap_get(pending, location) : NULL;
-    const char *here = claim ? claim->storage_path : NULL;
-    if (!here && c) {
-        const manifest_row_t *row = hashmap_get(c->index, location);
-        if (row && !manifest_is_derived(row)) here = row->storage_path;
-    }
+    const char *here = manifest_standing(c, pending, location).storage_path;
     if (here) {
         *out_storage = arena_strdup(arena, here);
         return *out_storage ? NULL : ERROR(ERR_MEMORY, "Failed to copy the name");

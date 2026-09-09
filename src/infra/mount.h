@@ -406,9 +406,10 @@ error_t *mount_locate(
  *     answers.
  *   - ERR_MEMORY on arena allocation failure.
  *
- * Readers: add's argument arm and its walk (cmds/add.c), `ignore --test`'s
- * per-profile subject (cmds/ignore.c), and the interim resolver the five `-p`
- * verbs share (infra/path.h path_input_classify).
+ * Readers: the last rung of the namer's ascent (core/manifest.c manifest_ascend),
+ * add's argument arm and its walk (cmds/add.c), `ignore --test`'s per-profile
+ * subject (cmds/ignore.c), and the interim resolver the five `-p` verbs share
+ * (infra/path.h path_input_classify).
  *
  * @param table       Mount table (must not be NULL)
  * @param profile     The asker, or NULL for the shared roots alone
@@ -444,9 +445,11 @@ error_t *mount_name(
  * must not be NULL, `profile` may be — a NULL asker meets the shared roots (HOME,
  * `/`) alone, so the answer is never a per_profile spec.
  *
- * Readers: the climb's root guard (core/metadata.c capture_ancestor), add's
- * argument-arm refusal (cmds/add.c) and `ignore --test`'s root lines
- * (cmds/ignore.c).
+ * Readers: the namer's ascent, which asks it at every rung rather than once per
+ * argument — the location itself included, where mount_resolve's exception can
+ * hand it an alias's own spelling (core/manifest.c manifest_ascend); the climb's
+ * root guard (core/metadata.c capture_ancestor), add's argument-arm refusal
+ * (cmds/add.c) and `ignore --test`'s root lines (cmds/ignore.c).
  */
 const mount_spec_t *mount_root(
     const mount_table_t *table,

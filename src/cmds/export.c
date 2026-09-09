@@ -104,25 +104,36 @@ typedef struct {
 } export_entry_t;
 
 /**
- * The entries of one copy, and the shape they carry.
+ * The entries of one copy, its shape, and its name.
  *
- * A tree-shaped copy's first entry is its root: relative path "", the resolved
- * destination, the mode and claim of whatever stands at the source. Every arm
- * appends it before anything beneath it, and the sort keeps it first — "" is a
- * prefix of every other relative path, so it compares least, and the same fact
- * puts every directory before its own contents (creation order) and after them
- * when read backwards (the deepest-first chmod).
+ * A tree-shaped copy's first entry is its root: relative path "", the mode and
+ * claim of whatever stands at the source. Every arm appends it before anything
+ * beneath it, and the sort keeps it first — "" is a prefix of every other relative
+ * path, so it compares least, and the same fact puts every directory before its
+ * own contents (creation order) and after them when read backwards (the
+ * deepest-first chmod).
  *
  * A single-file copy has no root: its one entry is the leaf, and the destination
  * is the user's own path rather than a directory to nest under (cp semantics,
  * validate_destinations' `single_dest`). So `items[0].rel_path[0] == '\0'` says
  * which shape a list is and nothing else has to; every arm appends its first
  * entry or fails, so there is always an items[0] to ask.
+ *
+ * Where the copy lands is nobody's until the copy is whole: resolve_destinations
+ * fills every dest_path in one pass, from the name below and the destination
+ * the user typed, after the collection and the completion. No collector knows a
+ * destination at all.
  */
 typedef struct {
     export_entry_t *items;     /* Arena-owned spine */
     size_t count;
     size_t capacity;
+    const char *basename;      /* The last segment of whatever named the copy — the
+                                * profile, the storage path, the location — which a
+                                * directory destination nests the copy under. Every
+                                * arm sets it, and a single-file copy's leaf borrows
+                                * this very pointer as its relative path, so the two
+                                * cannot drift. */
 } export_entry_list_t;
 
 /**
@@ -165,7 +176,6 @@ static error_t *entry_list_append(
 static error_t *append_root(
     export_entry_list_t *list,
     arena_t *arena,
-    const char *dest_path,
     const char *storage_path,
     mode_t mode,
     bool claimed
@@ -175,7 +185,6 @@ static error_t *append_root(
     e.kind = EXPORT_ENTRY_DIRECTORY;
     e.storage_path = storage_path;
     e.rel_path = "";
-    e.dest_path = dest_path;
     e.mode = mode;
     e.claimed = claimed;
 
@@ -267,6 +276,38 @@ static mode_t export_entry_mode(
 }
 
 /**
+ * The profile's claim sheet, or an empty one and a warning.
+ *
+ * Export's own sheet policy, in one place. A tree with no sheet loads as empty;
+ * a sheet that will not load costs the copy its stored modes and its blob-less
+ * directory claims — not the copy. The bytes are the tree's own and an export
+ * is often the repair, so this says what it lost and lets the walk materialize
+ * git filemodes rather than refuse.
+ *
+ * The two arms that read a sheet call this. The arm that selects rows reads none:
+ * it asks the profile's view, which is strict about the sheet by contract
+ * (core/manifest.h), and inherits that answer.
+ */
+static error_t *load_sheet(
+    const dotta_ctx_t *ctx,
+    git_tree *tree,
+    const char *profile,
+    metadata_t **out
+) {
+    error_t *err = metadata_load_from_tree(ctx->run.repo, tree, profile, out);
+    if (!err) return NULL;
+
+    output_warning(
+        ctx->out, OUTPUT_NORMAL,
+        "Metadata unreadable for profile '%s' (%s); falling back to git filemodes",
+        profile, error_message(err)
+    );
+    error_free(err);
+
+    return metadata_create_empty(out);
+}
+
+/**
  * Apply the destination rules shared by every export shape.
  *
  * Expand '~', then on directory intent — an existing directory, or an explicit
@@ -310,8 +351,6 @@ struct collect_ctx {
     const metadata_t *metadata;
     const char *profile;       /* Named by the refusal a malformed tree earns */
     const char *storage_base;  /* "" for whole profile, else target path */
-    const char *dest_root;
-    bool whole_profile;        /* Branch-root machinery gate active */
     export_entry_list_t *list;
     arena_t *arena;
     error_t *error;
@@ -324,7 +363,10 @@ static int collect_tree_callback(
 ) {
     struct collect_ctx *ctx = payload;
     const char *name = git_tree_entry_name(entry);
-    bool at_branch_root = ctx->whole_profile && root[0] == '\0';
+    /* The branch root, which only a whole-profile walk has: an empty storage
+     * base is what makes the walked tree the branch's own, and an empty callback
+     * root is its top level. */
+    bool at_branch_root = ctx->storage_base[0] == '\0' && root[0] == '\0';
 
     /* Whole-profile walks start at branch root, where content lives only under
      * storage-label subtrees; everything else is machinery. Positive return prunes
@@ -352,8 +394,7 @@ static int collect_tree_callback(
     memset(&e, 0, sizeof(e));
     e.rel_path = arena_strdup(ctx->arena, rel);
     e.storage_path = arena_join_path(ctx->arena, ctx->storage_base, rel);
-    e.dest_path = arena_join_path(ctx->arena, ctx->dest_root, rel);
-    if (!e.rel_path || !e.storage_path || !e.dest_path) {
+    if (!e.rel_path || !e.storage_path) {
         ctx->error = ERROR(ERR_MEMORY, "Failed to allocate export entry");
         return -1;
     }
@@ -454,7 +495,6 @@ static error_t *append_claim_dirs(
     git_tree *tree,
     const char *base
 ) {
-    const char *dest_root = list->items[0].dest_path;
     size_t base_len = base ? strlen(base) : 0;
 
     size_t item_count = 0;
@@ -496,10 +536,6 @@ static error_t *append_claim_dirs(
             return ERROR(ERR_MEMORY, "Failed to allocate export entry");
         }
         e.rel_path = e.storage_path + (rel - key);
-        e.dest_path = arena_join_path(arena, dest_root, e.rel_path);
-        if (!e.dest_path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate export entry");
-        }
         e.mode = items[i]->mode != MODE_UNCLAIMED ? items[i]->mode : DIR_MODE_DEFAULT;
 
         error_t *err = entry_list_append(list, arena, &e);
@@ -507,6 +543,190 @@ static error_t *append_claim_dirs(
     }
 
     return NULL;
+}
+
+/**
+ * The whole-profile arm: the branch's own layout, mirrored.
+ *
+ * The root is the destination and no path of the branch names it (dest/home/...,
+ * dest/root/...), so the list opens with a root claiming nothing. The walk starts
+ * at branch root, where content lives only under storage-label subtrees, and
+ * the sheet's blob-less directory claims follow it.
+ *
+ * Emptiness is asked here, at the arm's own source: a profile holding nothing
+ * but its root has no content to copy.
+ */
+static error_t *collect_profile(
+    const dotta_ctx_t *ctx,
+    git_tree *tree,
+    const char *profile,
+    const char *commit_suffix,
+    export_entry_list_t *list
+) {
+    arena_t *arena = ctx->arena;
+    metadata_t *metadata = NULL;
+
+    error_t *err = load_sheet(ctx, tree, profile, &metadata);
+    if (err) return err;
+
+    /* Under a directory destination the copy takes the profile's last segment
+     * (hosts/mbp -> mbp). */
+    list->basename = path_basename(profile);
+
+    err = append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
+    if (err) goto cleanup;
+
+    struct collect_ctx cctx = {
+        .metadata     = metadata,
+        .profile      = profile,
+        .storage_base = "",
+        .list         = list,
+        .arena        = arena,
+        .error        = NULL
+    };
+    err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
+    if (cctx.error) {
+        /* The callback error is the cause; the walk's generic user-abort wrapper
+         * is noise. */
+        error_free(err);
+        err = cctx.error;
+    }
+    if (err) goto cleanup;
+
+    err = append_claim_dirs(list, arena, metadata, tree, NULL);
+    if (err) goto cleanup;
+
+    if (list->count == 1) {
+        err = ERROR(
+            ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
+            profile, commit_suffix
+        );
+    }
+
+cleanup:
+    metadata_free(metadata);
+    return err;
+}
+
+/**
+ * The name arm: the branch subtree the storage path names, laid out beneath it.
+ *
+ * A blob is the single-entry copy, its destination the user's own path (cp
+ * semantics); a tree is the copy's root with its subtree walked beneath it. A
+ * name the tree holds nowhere may still be a claim of the sheet — an empty tracked
+ * directory has no tree entry, and the export is then the claim itself. Either
+ * way the sheet's blob-less claims beneath the name follow the walk.
+ */
+static error_t *collect_name(
+    const dotta_ctx_t *ctx,
+    git_tree *tree,
+    const char *profile,
+    const char *storage,
+    const char *commit_suffix,
+    export_entry_list_t *list
+) {
+    arena_t *arena = ctx->arena;
+    metadata_t *metadata = NULL;
+    git_tree_entry *target = NULL;
+    git_tree *subtree = NULL;
+
+    error_t *err = load_sheet(ctx, tree, profile, &metadata);
+    if (err) return err;
+
+    list->basename = path_basename(storage);
+
+    err = gitops_find_file_in_tree(tree, storage, &target);
+    if (err) {
+        if (err->code != ERR_NOT_FOUND) goto cleanup;
+
+        /* Not in the tree. An empty tracked directory has no tree entry — its
+         * claim lives only in the metadata, and the export is then the claim
+         * itself: the directory, at its stored mode. */
+        const metadata_item_t *claim_item = metadata_lookup(metadata, storage);
+        if (!claim_item || claim_item->kind != PATH_KIND_DIRECTORY) {
+            error_free(err);
+            err = ERROR(
+                ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
+                storage, profile, commit_suffix
+            );
+            goto cleanup;
+        }
+        error_free(err);
+        err = NULL;
+    }
+
+    bool claim_target = target == NULL;
+    if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
+        /* Directory export: the target is the copy's root, and beneath it the
+         * subtree is walked — or, for a metadata-only claim, there is no subtree
+         * to walk and any children are claims themselves, collected by the append
+         * below. */
+        const metadata_item_t *root_item = metadata_lookup(metadata, storage);
+        mode_t root_mode = export_entry_mode(
+            metadata, storage, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
+        );
+        err = append_root(
+            list, arena, storage, root_mode,
+            root_item && root_item->kind == PATH_KIND_DIRECTORY
+        );
+        if (err) goto cleanup;
+
+        if (!claim_target) {
+            int git_ret = git_tree_lookup(
+                &subtree, ctx->run.repo, git_tree_entry_id(target)
+            );
+            if (git_ret < 0) {
+                err = error_from_git(git_ret);
+                goto cleanup;
+            }
+
+            struct collect_ctx cctx = {
+                .metadata     = metadata,
+                .profile      = profile,
+                .storage_base = storage,
+                .list         = list,
+                .arena        = arena,
+                .error        = NULL
+            };
+            err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
+            if (cctx.error) {
+                error_free(err);
+                err = cctx.error;
+            }
+            if (err) goto cleanup;
+        }
+
+        err = append_claim_dirs(list, arena, metadata, tree, storage);
+    } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
+        /* Single-entry export: degenerate case of the walk. */
+        git_filemode_t filemode = git_tree_entry_filemode(target);
+
+        export_entry_t e;
+        memset(&e, 0, sizeof(e));
+        e.storage_path = storage;
+        e.rel_path = list->basename;
+        git_oid_cpy(&e.blob_oid, git_tree_entry_id(target));
+        if (filemode == GIT_FILEMODE_LINK) {
+            e.kind = EXPORT_ENTRY_SYMLINK;
+        } else {
+            e.kind = EXPORT_ENTRY_FILE;
+            e.mode = export_entry_mode(
+                metadata, storage, PATH_KIND_FILE, filemode
+            );
+        }
+
+        err = entry_list_append(list, arena, &e);
+    } else {
+        err = ERROR(
+            ERR_INVALID_ARG, "Unsupported entry type for '%s'", storage
+        );
+    }
+
+cleanup:
+    if (target) git_tree_entry_free(target);
+    if (subtree) git_tree_free(subtree);
+    metadata_free(metadata);
+    return err;
 }
 
 /**
@@ -549,7 +769,6 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
         );
     }
 
-    const char *dest_root = list->items[0].dest_path;
     size_t collected = list->count;
 
     for (size_t i = 0; i < collected && !err; i++) {
@@ -571,8 +790,7 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
                 e.kind = EXPORT_ENTRY_DIRECTORY;
                 e.mode = DIR_MODE_DEFAULT;
                 e.rel_path = arena_strdup(arena, rung);
-                e.dest_path = arena_join_path(arena, dest_root, rung);
-                if (!e.rel_path || !e.dest_path) {
+                if (!e.rel_path) {
                     err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
                 } else {
                     err = entry_list_append(list, arena, &e);
@@ -606,6 +824,39 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
 
     hashmap_free(standing, NULL);
     return err;
+}
+
+/**
+ * Phase-1 destination resolution: every entry's final path, in one pass.
+ *
+ * The copy's first entry — the root of a tree-shaped copy, the leaf of a
+ * single-file one — takes the destination itself, which is where dest_resolve
+ * applies the directory-intent rule to the copy's name; everything else hangs
+ * off it by the relative path its collector gave it. The layout is the collection's
+ * and where it lands is this pass's, so no collector knows a destination at all
+ * — which is also why a '-' export resolves none.
+ */
+static error_t *resolve_destinations(
+    export_entry_list_t *list,
+    const char *output,
+    arena_t *arena
+) {
+    error_t *err = dest_resolve(
+        output, list->basename, arena, &list->items[0].dest_path
+    );
+    if (err) return err;
+
+    const char *root = list->items[0].dest_path;
+    for (size_t i = 1; i < list->count; i++) {
+        list->items[i].dest_path = arena_join_path(
+            arena, root, list->items[i].rel_path
+        );
+        if (!list->items[i].dest_path) {
+            return ERROR(ERR_MEMORY, "Failed to allocate destination path");
+        }
+    }
+
+    return NULL;
 }
 
 /**
@@ -1011,9 +1262,6 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     error_t *err = NULL;
     git_commit *commit = NULL;
     git_tree *tree = NULL;
-    git_tree *subtree = NULL;
-    git_tree_entry *target = NULL;
-    metadata_t *metadata = NULL;
     export_entry_list_t list = { 0 };
     char commit_suffix[16] = "";
 
@@ -1022,9 +1270,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     err = profile_require(repo, opts->profile);
     if (err) goto cleanup;
 
-    /* Load the tree (HEAD or historical commit). Metadata comes from the SAME
-     * tree below, so historical exports get historical modes and encryption
-     * flags. */
+    /* Load the tree (HEAD or historical commit). Every arm reads the SAME tree
+     * — its claim sheet included — so historical exports get historical modes
+     * and encryption flags. */
     if (opts->commit) {
         git_oid commit_oid;
         err = gitops_resolve_commit_in_branch(
@@ -1038,10 +1286,13 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             goto cleanup;
         }
 
-        err = gitops_get_tree_from_commit(repo, &commit_oid, &tree);
-        if (err) {
+        /* The commit is in hand and its tree is one dereference away; the OID
+         * helper beside this one would look the commit up a second time. */
+        int git_ret = git_commit_tree(&tree, commit);
+        if (git_ret < 0) {
             err = error_wrap(
-                err, "Failed to load tree from commit '%s'", opts->commit
+                error_from_git(git_ret),
+                "Failed to load tree from commit '%s'", opts->commit
             );
             goto cleanup;
         }
@@ -1057,22 +1308,6 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             );
             goto cleanup;
         }
-    }
-
-    /* A tree without a sheet loads as an empty one; an error is a sheet that
-     * would not load, and the export says so and materializes the tree's own
-     * filemodes rather than refuse. */
-    err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
-    if (err) {
-        output_warning(
-            out, OUTPUT_NORMAL,
-            "Metadata unreadable for profile '%s' (%s); "
-            "falling back to git filemodes",
-            opts->profile, error_message(err)
-        );
-        error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) goto cleanup;
     }
 
     if (opts->file_path) {
@@ -1124,160 +1359,13 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             storage = label;
         }
 
-        err = gitops_find_file_in_tree(tree, storage, &target);
-        if (err) {
-            if (err->code != ERR_NOT_FOUND) goto cleanup;
-
-            /* Not in the tree. An empty tracked directory has no tree entry —
-             * its claim lives only in the metadata, and the export is then the
-             * claim itself: the directory, at its stored mode. */
-            const metadata_item_t *claim_item = metadata_lookup(metadata, storage);
-            if (!claim_item || claim_item->kind != PATH_KIND_DIRECTORY) {
-                error_free(err);
-                err = ERROR(
-                    ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
-                    storage, opts->profile, commit_suffix
-                );
-                goto cleanup;
-            }
-            error_free(err);
-            err = NULL;
-        }
-
-        bool claim_target = target == NULL;
-        if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
-            /* Directory export: the target is the copy's root, and beneath it
-             * the subtree is walked — or, for a metadata-only claim, there is
-             * no subtree to walk and any children are claims themselves, collected
-             * by the append below. */
-            const char *root_path = NULL;
-            err = dest_resolve(
-                opts->output, path_basename(storage), arena, &root_path
-            );
-            if (err) goto cleanup;
-
-            const metadata_item_t *root_item = metadata_lookup(metadata, storage);
-            mode_t root_mode = export_entry_mode(
-                metadata, storage, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
-            );
-            err = append_root(
-                &list, arena, root_path, storage, root_mode,
-                root_item && root_item->kind == PATH_KIND_DIRECTORY
-            );
-            if (err) goto cleanup;
-
-            if (!claim_target) {
-                int git_ret = git_tree_lookup(
-                    &subtree, repo, git_tree_entry_id(target)
-                );
-                if (git_ret < 0) {
-                    err = error_from_git(git_ret);
-                    goto cleanup;
-                }
-
-                struct collect_ctx cctx = {
-                    .metadata      = metadata,
-                    .profile       = opts->profile,
-                    .storage_base  = storage,
-                    .dest_root     = root_path,
-                    .whole_profile = false,
-                    .list          = &list,
-                    .arena         = arena,
-                    .error         = NULL
-                };
-                err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
-                if (cctx.error) {
-                    /* The callback error is the cause; the walk's generic
-                     * user-abort wrapper is noise. */
-                    error_free(err);
-                    err = cctx.error;
-                }
-                if (err) goto cleanup;
-            }
-
-            err = append_claim_dirs(&list, arena, metadata, tree, storage);
-            if (err) goto cleanup;
-        } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
-            /* Single-entry export: degenerate case of the walk. */
-            git_filemode_t filemode = git_tree_entry_filemode(target);
-
-            export_entry_t e;
-            memset(&e, 0, sizeof(e));
-            e.storage_path = storage;
-            e.rel_path = path_basename(storage);
-            git_oid_cpy(&e.blob_oid, git_tree_entry_id(target));
-            if (filemode == GIT_FILEMODE_LINK) {
-                e.kind = EXPORT_ENTRY_SYMLINK;
-            } else {
-                e.kind = EXPORT_ENTRY_FILE;
-                e.mode = export_entry_mode(
-                    metadata, storage, PATH_KIND_FILE, filemode
-                );
-            }
-
-            if (!to_stdout) {
-                err = dest_resolve(
-                    opts->output, path_basename(storage), arena,
-                    &e.dest_path
-                );
-                if (err) goto cleanup;
-            }
-
-            err = entry_list_append(&list, arena, &e);
-            if (err) goto cleanup;
-        } else {
-            err = ERROR(
-                ERR_INVALID_ARG, "Unsupported entry type for '%s'", storage
-            );
-            goto cleanup;
-        }
+        err = collect_name(
+            ctx, tree, opts->profile, storage, commit_suffix, &list
+        );
+        if (err) goto cleanup;
     } else {
-        /* Whole profile: walk from branch root, storage layout mirrored verbatim
-         * (dest/home/..., dest/root/...). The export root takes the profile's
-         * last segment under a directory destination (hosts/mbp -> mbp), and no
-         * path of the branch names it — it is the destination and nothing else. */
-        const char *root_path = NULL;
-        err = dest_resolve(
-            opts->output, path_basename(opts->profile), arena, &root_path
-        );
+        err = collect_profile(ctx, tree, opts->profile, commit_suffix, &list);
         if (err) goto cleanup;
-
-        err = append_root(
-            &list, arena, root_path, NULL, DIR_MODE_DEFAULT, false
-        );
-        if (err) goto cleanup;
-
-        struct collect_ctx cctx = {
-            .metadata      = metadata,
-            .profile       = opts->profile,
-            .storage_base  = "",
-            .dest_root     = root_path,
-            .whole_profile = true,
-            .list          = &list,
-            .arena         = arena,
-            .error         = NULL
-        };
-        err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
-        if (cctx.error) {
-            error_free(err);
-            err = cctx.error;
-        }
-        if (err) goto cleanup;
-
-        err = append_claim_dirs(&list, arena, metadata, tree, NULL);
-        if (err) goto cleanup;
-
-        /* Emptiness is the collector's question, asked at its own source: a whole
-         * profile holding nothing but its root has no content to copy. The name
-         * arm answered its own above — the target is in the tree, or in the sheet,
-         * or not found. */
-        if (list.count == 1) {
-            err = ERROR(
-                ERR_NOT_FOUND, "Profile '%s'%s has no exportable content",
-                opts->profile, commit_suffix
-            );
-            goto cleanup;
-        }
     }
 
     /* Which shape the copy is, asked of the list rather than remembered by the
@@ -1304,6 +1392,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     qsort(list.items, list.count, sizeof(*list.items), export_entry_cmp);
 
     if (!to_stdout) {
+        err = resolve_destinations(&list, opts->output, arena);
+        if (err) goto cleanup;
+
         err = validate_destinations(&list);
         if (err) goto cleanup;
     }
@@ -1371,9 +1462,6 @@ cleanup:
             buffer_free(&list.items[i].content);
         }
     }
-    if (target) git_tree_entry_free(target);
-    if (subtree) git_tree_free(subtree);
-    if (metadata) metadata_free(metadata);
     if (tree) git_tree_free(tree);
     if (commit) git_commit_free(commit);
 

@@ -1234,9 +1234,19 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     /* Parse JSON */
     root = cJSON_Parse(json_str);
     if (!root) {
+        /* cJSON hands back the position the parse stopped at, not the token that
+         * failed, so printing that pointer prints the whole remainder of the
+         * document — a 50 KB sheet with an early syntax error yields a 50 KB
+         * message. The offset is the fact; the excerpt beside it is a courtesy
+         * and is bounded, a sheet being as long as a branch is wide.
+         *
+         * The pointer is inside json_str, so the subtraction is defined: the
+         * parse that just failed set the position from the value it was handed
+         * (lib/cjson/cJSON.c), and CHECK_NULL above says there was one. */
+        const char *parse_end = cJSON_GetErrorPtr();
         err = ERROR(
-            ERR_INVALID_ARG, "Failed to parse metadata JSON: %s",
-            cJSON_GetErrorPtr() ? cJSON_GetErrorPtr() : "unknown error"
+            ERR_INVALID_ARG, "Failed to parse metadata JSON at byte %zu: '%.24s'",
+            (size_t) (parse_end - json_str), parse_end
         );
         goto cleanup;
     }

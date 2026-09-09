@@ -583,7 +583,7 @@ static workspace_state_t classify_absent(
     const manifest_row_t *row,
     const anchor_t *anchor
 ) {
-    if (row->type == PATH_TYPE_DIRECTORY && !row->tracked) {
+    if (manifest_is_derived(row)) {
         return WORKSPACE_STATE_UNDEPLOYED;
     }
 
@@ -3000,8 +3000,8 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         (item->item_kind == PATH_KIND_DIRECTORY ||
         (item->occupant != FS_OCCUPANT_REGULAR &&
         item->occupant != FS_OCCUPANT_SYMLINK))) {
-        return (item->item_kind == PATH_KIND_DIRECTORY && !item->row->tracked)
-               ? WORKSPACE_ROUTE_KIND_DERIVED : WORKSPACE_ROUTE_KIND;
+        return manifest_is_derived(item->row) ? WORKSPACE_ROUTE_KIND_DERIVED
+                                              : WORKSPACE_ROUTE_KIND;
     }
 
     if (divergence != DIVERGENCE_NONE) {

@@ -266,7 +266,8 @@ typedef struct {
  * same line, so nothing would ever discharge one. The clause lives in the rule
  * and not at the callers because most callers stand inside a loop that has already
  * settled the row's kind and class, and the ones that do not cannot see that
- * they need it. A file row's `tracked` is a don't-care, so the kind gates the read.
+ * they need it. manifest_is_derived is that clause entire: a file row's `tracked`
+ * is a don't-care, and the kind gates the read inside the predicate.
  *
  * Orphans: false by construction — a relocated orphan's row is carried only when
  * its profile equals the record's (the strict same-profile rule of the relocation
@@ -286,8 +287,7 @@ typedef struct {
 static inline bool workspace_reassigned(
     const manifest_row_t *row, const anchor_t *anchor
 ) {
-    return row && anchor && anchor->deployed_at > 0 &&
-           (row->type != PATH_TYPE_DIRECTORY || row->tracked) &&
+    return row && anchor && anchor->deployed_at > 0 && !manifest_is_derived(row) &&
            strcmp(anchor->profile, row->profile) != 0;
 }
 
@@ -432,10 +432,11 @@ typedef enum {
  *                            — the named re-derivation whose chain meets the
  *                            squatter drops the claim ('dotta update <dir>',
  *                            metadata_capture_ancestors). The two arms partition
- *                            what was one by the row's tracked field: a deployed
- *                            item is a view row's (the join), so the row holds,
- *                            and a file row's tracked field is a don't-care, so
- *                            the kind gates the read.
+ *                            what was one by the row's class: a deployed item
+ *                            is a view row's (the join), so the row is the subject
+ *                            and manifest_is_derived is the whole test — the
+ *                            kind gating the read inside it, a file row's tracked
+ *                            field being a don't-care.
  *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
  *                            file row stays here: the copy commits it as the
  *                            new kind.

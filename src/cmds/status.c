@@ -292,7 +292,7 @@ static void display_manifest(
                 continue;
             }
         } else {
-            bool derived = row->type == PATH_TYPE_DIRECTORY && !row->tracked;
+            bool derived = manifest_is_derived(row);
 
             tags[0] = derived ? "ancestor" : "clean";
             tag_count = 1;

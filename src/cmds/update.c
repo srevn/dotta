@@ -1795,7 +1795,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         for (size_t i = 0; i < all_rows.count; i++) {
             const manifest_row_t *row = all_rows.entries[i];
 
-            if (row->type == PATH_TYPE_DIRECTORY && !row->tracked) {
+            if (manifest_is_derived(row)) {
                 continue;
             }
             if (!scope_accepts_entry(

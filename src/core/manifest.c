@@ -109,7 +109,7 @@ struct manifest {
  *
  * Everything one walk of one tree needs to place that profile's blobs where they
  * stand: the contribution being filled, the table that places them, the sheet
- * that claims them, and the two lists the step spends. Handed to gitops_tree_walk
+ * that claims them, and the three lists the step spends. Handed to gitops_tree_walk
  * once per profile and read at O(1) per entry.
  *
  * Memory ownership:
@@ -125,9 +125,12 @@ struct manifest {
  * - metadata: borrowed from manifest_contribute, which loads the sheet of the
  *             tree being read; never NULL — a tree without one holds an empty
  *             sheet, so there is no absent case for the walker to carry
- * - placed / contenders: the step's two build-local lists, borrowed — every row
- *             this profile placed, and the rows that arrived at a location it
- *             had already named. Both are spent when manifest_contribute returns.
+ * - placed / contenders: the step's build-local lists, borrowed — every row this
+ *             profile placed, and the rows that arrived at a location it had
+ *             already named. Both are spent when manifest_contribute returns.
+ * - contradicted: borrowed, the third of them — the sheet's DIRECTORY keys this
+ *             walk met a blob at, written here and read by the directory pass.
+ *             Keyed by the arena name the walk joined, which outlives it.
  * - arena: borrowed, must not be NULL; per-row strings are abandoned to it
  * - error: owned by callback, caller must free on error
  */
@@ -139,54 +142,55 @@ struct claim_ctx {
     const metadata_t *metadata;    /* The tree's own claim sheet, never NULL */
     ptr_array_t *placed;           /* Every row this step placed, in claim order */
     ptr_array_t *contenders;       /* The rows that met a location already named */
+    hashmap_t *contradicted;       /* The sheet's names this tree holds a blob at */
     arena_t *arena;                /* Arena for allocations (must not be NULL) */
     error_t *error;                /* Error propagation (set on failure) */
 };
 
 /**
- * Apply per-profile metadata to a Git-built blob row.
+ * Apply this profile's claim to a Git-built blob row.
  *
- * Selectively overrides the metadata-owned fields (mode, owner, group, encrypted)
+ * Selectively overrides the claim-owned fields (mode, owner, group, encrypted)
  * on a row whose Git-derived defaults have already been set. Each call attributes
  * a single profile's claim to the row, and no row ever carries two: precedence
  * across profiles picks between whole rows and rewrites none of them.
  *
- * When an item exists for the row's storage_path: owner/group ride every blob
- * row; mode/encrypted are the tree's to admit, and the mode only when claimed —
- * an unclaimed one leaves the filemode floor standing, so the row leaves the
- * build total either way. The item's kind decides only the one rule left — a
- * DIRECTORY item at a blob's storage_path is stale metadata (a path is a tree
- * or a blob, and the tree is the content authority), so it contributes nothing,
- * not even its owner/group.
+ * owner/group ride every blob row; mode/encrypted are the tree's to admit, and
+ * the mode only when claimed — an unclaimed one leaves the filemode floor standing,
+ * so the row leaves the build total either way.
  *
- * A key the sheet does not carry leaves the row's Git-derived defaults intact.
+ * No claim leaves the Git-derived defaults intact, and there are two ways to
+ * make none: a key the sheet does not carry, and a key it carries a DIRECTORY
+ * item at — which the tree contradicts, and which the caller drops where it reads
+ * the name (manifest_claim_blob). The item's kind is therefore not read here:
+ * the caller hands the claim a blob can take, or nothing.
  *
  * The row is fresh and unpublished — every row is, nothing being reset any more
  * — and a failure here aborts the build whole, so the fields are written as they
  * are read: there is no prior owner or group a half-done call could replace,
  * and a half-built row in a failed build is never read.
  *
- * @param row      Target row (mutable)
- * @param metadata The tree's own claim sheet, never NULL (must not be NULL)
- * @param arena    Allocation arena for string copies (must not be NULL)
+ * @param row   Target row (mutable)
+ * @param claim This profile's claim over the row's name, NULL where it makes
+ *              none (may be NULL)
+ * @param arena Allocation arena for string copies (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *manifest_apply_metadata(
+static error_t *manifest_apply_claim(
     manifest_row_t *row,
-    const metadata_t *metadata,
+    const metadata_item_t *claim,
     arena_t *arena
 ) {
-    const metadata_item_t *item = metadata_lookup(metadata, row->storage_path);
-    if (!item || item->kind == PATH_KIND_DIRECTORY) {
+    if (!claim) {
         return NULL;
     }
 
     /* owner/group apply to every blob row, links included: the ownership claim
      * is true regardless of what the path became. arena_strdup returns NULL only
-     * on real failure (a NULL item->owner/group bypasses the if-guard and leaves
+     * on real failure (a NULL claim->owner/group bypasses the if-guard and leaves
      * the field NULL). */
-    if (item->owner) {
-        row->owner = arena_strdup(arena, item->owner);
+    if (claim->owner) {
+        row->owner = arena_strdup(arena, claim->owner);
         if (!row->owner) {
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate owner for '%s'",
@@ -195,8 +199,8 @@ static error_t *manifest_apply_metadata(
         }
     }
 
-    if (item->group) {
-        row->group = arena_strdup(arena, item->group);
+    if (claim->group) {
+        row->group = arena_strdup(arena, claim->group);
         if (!row->group) {
             return ERROR(
                 ERR_MEMORY, "Failed to duplicate group for '%s'",
@@ -206,13 +210,13 @@ static error_t *manifest_apply_metadata(
     }
 
     /* mode/encrypted apply only where a mode can stand — the tree's word
-     * (row->type), never the item's kind — and only the mode the item claims:
+     * (row->type), never the claim's kind — and only the mode the claim makes:
      * an unclaimed one leaves the filemode floor. */
     if (row->type != PATH_TYPE_SYMLINK) {
-        if (item->mode != MODE_UNCLAIMED) {
-            row->mode = item->mode;      /* A 0000 claim is a claim */
+        if (claim->mode != MODE_UNCLAIMED) {
+            row->mode = claim->mode;     /* A 0000 claim is a claim */
         }
-        row->encrypted = item->encrypted;
+        row->encrypted = claim->encrypted;
     }
 
     return NULL;
@@ -264,16 +268,14 @@ static error_t *manifest_place(
 }
 
 /**
- * Record one claim the build could not place, once
+ * Record one claim the build could not place
  *
  * The health primitive both claim sites share: appends (profile, storage_path,
- * kind) to the view's health slice unless the pair is already recorded — the
- * one duplicate source is a stale DIRECTORY item at an unbound blob's storage
- * path, and recording it twice would count one path as two. The dedup is by name,
- * which is the very test the bound path makes of that pair (manifest_holds_blob):
- * a path is a tree or a blob and the tree is the content authority, so the blob
- * — which walked first — is the entry that stands. The scan is linear over the
- * slice, which holds only the unplaced claims — empty on the common build.
+ * kind) to the view's health slice. No dedup, and none possible — the two passes
+ * note disjoint names. The blob pass notes names the tree holds a blob at; the
+ * directory pass notes sheet keys it does not, the content-authority rule having
+ * contradicted the rest before either pass resolved anything. And within a pass
+ * a name is its own: a tree holds one blob per path, a sheet one item per key.
  *
  * Growth is the spine's abandon-and-realloc idiom. Both strings must be
  * arena-backed by the caller; the entry borrows them for the view's lifetime.
@@ -292,13 +294,6 @@ static error_t *manifest_note_unbound(
     path_kind_t kind,
     arena_t *arena
 ) {
-    for (size_t i = 0; i < manifest->unbound_count; i++) {
-        if (strcmp(manifest->unbound[i].profile, profile) == 0 &&
-            strcmp(manifest->unbound[i].storage_path, storage_path) == 0) {
-            return NULL;
-        }
-    }
-
     if (manifest->unbound_count >= manifest->unbound_capacity) {
         size_t new_capacity =
             manifest->unbound_capacity > 0 ? manifest->unbound_capacity * 2 : 8;
@@ -375,54 +370,6 @@ static error_t *manifest_note_unkept(
         .filesystem_path = row->filesystem_path,
     };
     return NULL;
-}
-
-/**
- * Does this contribution hold a blob under `name`?
- *
- * A path is a tree or a blob and the tree is the content authority, so a DIRECTORY
- * item the tree holds a blob at is stale metadata and claims nothing. The blob
- * that name reaches stands at the item's own location — one table, one profile,
- * so both resolve alike — which means the tree's answer is already placed: it
- * is the row standing at the location, or one of the names contending for it. A
- * name keys one row within a profile, so the name is the whole test and no location
- * need be compared; and a sheet holds one item per key, so no directory row of
- * this profile can carry the item's own key — every row this finds was placed
- * by the blob pass.
- *
- * Asked by the name and never by the holder: the stale item of a blob that lost
- * its own location would otherwise contend a second time, and a genuine
- * file-versus-directory pair under two names would be dropped instead of decided.
- * This is the in-memory twin of the git_tree_entry_bypath the same rule is spelled
- * with in core/profiles.c (profile_get_stats), and asking it here costs no ODB
- * lookup.
- *
- * Asked before the tracked test, and that order is what keeps the settle's bytewise
- * order total: a stale item that reached the contest would put two rows with
- * one name in a group.
- *
- * Cost: the contest holds this profile's second names — none on a healthy branch,
- * so the scan is over an empty array; a branch that names K locations twice pays
- * K comparisons per directory item.
- *
- * @param held The row standing at the item's location, or NULL when none is
- * @param contenders The names still contending, this profile's (must not be NULL)
- * @param name The item's own key
- * @return true when a row of this contribution already carries the name
- */
-static bool manifest_holds_blob(
-    const manifest_row_t *held,
-    const ptr_array_t *contenders,
-    const char *name
-) {
-    if (held && strcmp(held->storage_path, name) == 0) return true;
-
-    for (size_t i = 0; i < contenders->count; i++) {
-        const manifest_row_t *row = contenders->items[i];
-        if (strcmp(row->storage_path, name) == 0) return true;
-    }
-
-    return false;
 }
 
 /**
@@ -598,8 +545,8 @@ static int name_order(const void *a, const void *b) {
  *
  * Two rows of one group can never share a name, so the order is total: the tree
  * holds one blob per path, the sheet one item per key, and the content-authority
- * rule (manifest_holds_blob) settles the one name they can both carry before
- * the contest sees it.
+ * rule contradicts the one name they can both carry at the blob, before either
+ * name was resolved and long before the contest sees it.
  *
  * `fresh` is NULL when the location is a root of the profile — mount_name's own
  * answer, a root having no name — and the bytewise-least then stands, no name
@@ -758,6 +705,34 @@ static int manifest_claim_blob(
         return -1;
     }
 
+    /* This blob's claim, by the name the tree gave it — and, in the same answer,
+     * the content authority. A path is a tree or a blob and the tree is the content
+     * authority, so a DIRECTORY item standing at a blob's name is stale metadata:
+     * it claims nothing here, not even its owner or group, and nothing in the
+     * directory pass either, which reads the name back from this set rather than
+     * asking the tree a second time. Asked before the resolve, because a claim
+     * is read by name and a name needs no location — so the one rule covers the
+     * blob this machine can place and the blob it cannot, and the health slice
+     * counts one path once.
+     *
+     * The row a contradicted claim leaves carries the filemode floor and
+     * `encrypted` false, which reads a ciphertext blob through the plaintext
+     * comparison and prints [modified] on every load (core/workspace.c). The
+     * contradiction is the branch's and that is where it gets fixed; the view
+     * states it rather than repairs it. */
+    const metadata_item_t *claim = metadata_lookup(ctx->metadata, storage_path);
+    if (claim && claim->kind == PATH_KIND_DIRECTORY) {
+        err = hashmap_set(ctx->contradicted, storage_path, NULL);
+        if (err) {
+            ctx->error = error_wrap(
+                err, "Failed to record the stale claim '%s' of profile '%s'",
+                storage_path, ctx->profile
+            );
+            return -1;
+        }
+        claim = NULL;
+    }
+
     /* Convert storage path to filesystem path against the mount table.
      *
      * No location when storage_path is custom/... and ctx->profile has no target
@@ -827,11 +802,11 @@ static int manifest_claim_blob(
             break;
     }
 
-    /* Apply this profile's metadata claim (if any) to the row. The Git-derived
-     * defaults set above are the floor; metadata may override mode and encrypted,
-     * and contribute owner/group. A contender is a finished row and takes its
-     * own claim like any other — the sheet is looked up by the row's own name. */
-    err = manifest_apply_metadata(row, ctx->metadata, ctx->arena);
+    /* Apply this profile's claim (if any) to the row. The Git-derived defaults
+     * set above are the floor; a claim may override mode and encrypted, and
+     * contribute owner/group. A contender is a finished row and takes its own
+     * claim like any other — the claim was read by the row's own name. */
+    err = manifest_apply_claim(row, claim, ctx->arena);
     if (err) {
         /* The caller's outer error path propagates without freeing the view's
          * rows (spines + strings are arena-backed); a half-built row in a failed
@@ -880,7 +855,7 @@ static int manifest_claim_blob(
  *
  * Memory: every allocation the view keeps lands in `arena`; the sheet is this
  * call's and is released at its tail (no row borrows it — each takes an arena
- * copy), and so are the step's two lists, whose lifetime is this call and not
+ * copy), and so are the step's three lists, whose lifetime is this call and not
  * the view's. On error, rows already placed are left as they are — the build
  * fails whole and the caller releases the indexes.
  *
@@ -931,13 +906,23 @@ static error_t *manifest_contribute(
         );
     }
 
-    /* The step's two lists, spent when it returns (Rule 1 — they are valid across
-     * one build, and the contribution is valid across the view's life): every
-     * row this profile placed, in claim order, and the rows that met a location
-     * it had already named. The second is empty on every profile that names each
-     * of its locations once. */
+    /* The step's three lists, spent when it returns (Rule 1 — they are valid
+     * across one build, and the contribution is valid across the view's life):
+     * every row this profile placed, in claim order; the rows that met a location
+     * it had already named; and the sheet's names the tree contradicted. The
+     * second is empty on every profile that names each of its locations once,
+     * the third on every branch whose sheet its own tree agrees with.
+     *
+     * The third borrows its keys: each is the arena name the walk joined, which
+     * outlives the map by the whole view. */
     ptr_array_t placed PTR_ARRAY_AUTO = { 0 };
     ptr_array_t contenders PTR_ARRAY_AUTO = { 0 };
+
+    hashmap_t *contradicted = hashmap_borrow(8);
+    if (!contradicted) {
+        err = ERROR(ERR_MEMORY, "Failed to create contradiction index");
+        goto cleanup;
+    }
 
     /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
      * and bindings are keyed by profile — which the callback feeds verbatim into
@@ -951,6 +936,7 @@ static error_t *manifest_contribute(
         .metadata     = metadata,
         .placed       = &placed,
         .contenders   = &contenders,
+        .contradicted = contradicted,
         .arena        = arena,
         .error        = NULL
     };
@@ -980,6 +966,16 @@ static error_t *manifest_contribute(
         const metadata_item_t *item = items[j];
         if (item->kind != PATH_KIND_DIRECTORY) continue;
 
+        /* The content authority, asked of the pass that read the tree: a path
+         * is a tree or a blob, so an item the tree holds a blob at is stale
+         * metadata and claims nothing. The blob pass met that name and contradicted
+         * it there — by the name alone, before it resolved anything — so the
+         * rule reaches the item this machine can place and the one it cannot
+         * alike, and no arm below has to recognise a name it has no location
+         * for. Asked before the tracked test too, whose order keeps the settle's
+         * group free of two rows under one name. */
+        if (hashmap_has(contradicted, item->key)) continue;
+
         /* Resolve before placing so the error path places nothing. */
         const char *filesystem_path = NULL;
         err = mount_resolve(
@@ -995,8 +991,7 @@ static error_t *manifest_contribute(
         if (!filesystem_path) {
             /* The blob side's degrade contract, DIRECTORY kind: recorded, not
              * placed. The item's key is the metadata's, freed with it — the note
-             * keeps an arena copy. The note itself dedups the stale-item case
-             * (a DIRECTORY item at an unbound blob's storage path). */
+             * keeps an arena copy. */
             char *key = arena_strdup(arena, item->key);
             if (!key) {
                 err = ERROR(
@@ -1013,16 +1008,6 @@ static error_t *manifest_contribute(
         }
 
         const manifest_row_t *held = hashmap_get(c->index, filesystem_path);
-
-        /* Stale metadata: a path is a tree or a blob, and the tree is the content
-         * authority, so an item the tree holds a blob at claims nothing. Asked
-         * by the item's own name and asked first — that order is what keeps the
-         * settle's group free of two rows under one name (manifest_holds_blob).
-         * The test is total with a `held` in hand: the blob that name reaches
-         * resolves to this very location, so the blob pass placed a row here,
-         * and the one way it could not have — an unbound custom/ claim — took
-         * the arm above under the same key. */
-        if (manifest_holds_blob(held, &contenders, item->key)) continue;
 
         /* A derived claim never takes a held slot: it is a consequence of an
          * older name, not a source of new ones. Explicit outranks derived within
@@ -1115,6 +1100,7 @@ static error_t *manifest_contribute(
     }
 
 cleanup:
+    hashmap_free(contradicted, NULL);
     metadata_free(metadata);
     return err;
 }

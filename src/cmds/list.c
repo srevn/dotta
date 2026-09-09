@@ -385,7 +385,7 @@ static error_t *list_files(
          * manages nothing there.
          *
          * The tree-versus-blob rule the two other readers of this sheet make
-         * (core/manifest.c manifest_holds_blob, core/profiles.c profile_get_stats)
+         * (core/manifest.c manifest_contribute, core/profiles.c profile_get_stats)
          * is not asked here and cannot be owed: a stale item is one the tree
          * holds a blob at, and a blob at a directory item's key is a content
          * path, so this arm — reached only where the branch has no content blobs

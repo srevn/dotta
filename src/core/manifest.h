@@ -586,11 +586,14 @@ typedef struct {
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
  * so one profile's claims are contiguous and consumers aggregate in a single
- * pass without sorting. Each (profile, storage path) is recorded once, the dedup
- * by name: a stale DIRECTORY item at an unbound blob's storage path contributes
- * no second entry, which is the same test the bound path makes of the same pair
- * (a path is a tree or a blob, and the tree is the content authority). Empty on
- * every build whose claims all placed — the common case, costing nothing.
+ * pass without sorting. Each (profile, storage path) appears once and nothing
+ * enforces it: the two passes record disjoint names — the blob pass those the
+ * tree holds a blob at, the directory pass those sheet keys it does not, the
+ * content-authority rule having contradicted the rest at the blob (a path is a
+ * tree or a blob, and the tree is the content authority) — and within a pass a
+ * name is its own, a tree holding one blob per path and a sheet one item per
+ * key. Empty on every build whose claims all placed — the common case, costing
+ * nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded claims, valid for the arena's lifetime

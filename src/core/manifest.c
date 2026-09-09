@@ -706,7 +706,13 @@ static int manifest_claim_blob(
 ) {
     struct claim_ctx *ctx = (struct claim_ctx *) payload;
 
-    /* Only process blobs (files), skip directories */
+    /* Only process blobs (files), skip directories — and, in the same line, a
+     * gitlink, which is neither. dotta never writes one (sys/stage refuses the
+     * mode), but `dotta git` and a foreign push can, and the view's answer is
+     * that it claims nothing: no row, no location, nothing beneath it composed
+     * through it. Stated rather than incidental, because a selection of rows is
+     * what export copies (cmds/export.c collect_location) and it copies around
+     * such an entry in silence. */
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) {
         return 0;
     }

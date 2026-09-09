@@ -402,6 +402,12 @@ error_t *manifest_build(
  * manifest_lookup_claim and manifest_name for `profile` exactly as an enabled
  * view answers them for one of its own.
  *
+ * Readers: the historical diff (cmds/diff.c), `ignore --test`'s named arm over
+ * a branch's tip (cmds/ignore.c), and export's location arm (cmds/export.c
+ * collect_location), which selects the rows one profile places at and beneath a
+ * location — the rows, not the Git subtree of whatever name stands there, which
+ * is what manifest_lookup_claim's own note is about.
+ *
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
  *

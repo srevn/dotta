@@ -35,9 +35,11 @@ typedef struct {
  * Materialize profile content to the filesystem
  *
  * Export is a copy, not a deployment: nothing registers in state, ownership is
- * never applied, and dotta makes no ongoing claim over the destination. Copies
- * one profile branch's subtree verbatim — layering is not composed and mounts
- * are not mapped.
+ * never applied, and dotta makes no ongoing claim over the destination. One
+ * profile, never the enabled set — layering is not composed. What is copied is
+ * named three ways, each laying the copy out in its own key: a profile mirrors
+ * its branch, a storage path copies that branch subtree, and a filesystem path
+ * copies what the profile places at and beneath that location on this machine.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

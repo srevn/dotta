@@ -22,6 +22,48 @@
 #include "sys/identity.h"
 #include "sys/transfer.h"
 
+error_t *gitops_init(void) {
+    /* The one git failure error_from_git cannot read: git_error_last answers
+     * out of a thread-local the runtime sets up, and an init that failed leaves
+     * the count at zero, so libgit2's own reply is the static "you must call
+     * git_libgit2_init" — the call that just failed, offered to a user who cannot
+     * make it. The subject is the whole message, and it has to be, main() being
+     * the one caller that prints an error rather than wrapping it. */
+    if (git_libgit2_init() < 0) {
+        return ERROR(ERR_GIT, "Failed to initialize libgit2");
+    }
+
+    /* libgit2 caches a parsed object only below a per-type ceiling, 4096 bytes
+     * for a tree by default — an entry costs its name plus 27 — so a directory
+     * past ~110 entries yields a tree that is never cached, and every
+     * git_tree_entry_bypath through it re-reads, inflates and SHA-1-verifies
+     * each tree on the way down. Four loops ask once per item, quadratic where
+     * the items scale with the directory's own width: core/workspace.c per orphaned
+     * record, core/profiles.c per tracked directory item, cmds/list.c per listed
+     * file under -v, cmds/export.c per sheet key.
+     *
+     * Trees: no ceiling. Blobs: libgit2's zero, never cached — infra/content
+     * keeps the one a blob needs. Total: 64 MB, below libgit2's 256 MB default.
+     *
+     * Unchecked because a refused opt leaves these two defaults standing, and
+     * standing they cost speed and change no answer. That is the test and not
+     * the habit: a knob whose refusal would change an answer — the strict-object
+     * and owner-validation family this function's header names — is checked where
+     * it is set. */
+    (void) git_libgit2_opts(
+        GIT_OPT_SET_CACHE_OBJECT_LIMIT, GIT_OBJECT_TREE, (size_t) SIZE_MAX
+    );
+    (void) git_libgit2_opts(
+        GIT_OPT_SET_CACHE_MAX_SIZE, (ssize_t) (64 * 1024 * 1024)
+    );
+
+    return NULL;
+}
+
+void gitops_shutdown(void) {
+    git_libgit2_shutdown();
+}
+
 error_t *gitops_get_signature(git_signature **out, git_repository *repo) {
     if (git_signature_default(out, repo) == 0) {
         return NULL;

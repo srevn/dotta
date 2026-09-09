@@ -47,6 +47,29 @@
 #define DOTTA_MESSAGE_MAX 512    /* For commit messages and prompts */
 
 /**
+ * Initialize libgit2 for this process, and configure it
+ *
+ * One producer for a fact every binary linking this library shares: how dotta
+ * configures libgit2. The library's options are process-wide, so a knob set in
+ * a `main()` would be the shipped binary's alone and every unit suite would
+ * exercise a differently configured library — a difference that costs only
+ * performance today and would cost correctness the first time a knob is one of
+ * the strict-object or owner-validation family. Paired with gitops_shutdown so
+ * no caller writes half of the lifecycle.
+ *
+ * @return Error or NULL on success
+ */
+error_t *gitops_init(void);
+
+/**
+ * Release this process's libgit2
+ *
+ * Decrements the library's reference count, freeing its object cache with the
+ * last reference. The other half of gitops_init's pair.
+ */
+void gitops_shutdown(void);
+
+/**
  * Build a commit signature with fallback for missing git config.
  *
  * Tries git_signature_default first (reads user.name / user.email from .gitconfig);

@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/process.h"
 #include "cmds/add.h"
@@ -482,9 +483,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Initialize libgit2 */
-    if (git_libgit2_init() < 0) {
-        fprintf(stderr, "Failed to initialize libgit2\n");
+    /* libgit2, and the configuration dotta gives it (sys/gitops). */
+    error_t *git_err = gitops_init();
+    if (git_err) {
+        error_print(git_err, stderr);
+        error_free(git_err);
         return 1;
     }
 
@@ -515,7 +518,7 @@ int main(int argc, char **argv) {
             error_message(cfg_err)
         );
         error_free(cfg_err);
-        git_libgit2_shutdown();
+        gitops_shutdown();
         return 1;
     }
 
@@ -529,13 +532,13 @@ int main(int argc, char **argv) {
     if (!out) {
         fprintf(stderr, "Failed to create output context\n");
         config_free(config);
-        git_libgit2_shutdown();
+        gitops_shutdown();
         return 1;
     }
 
     int ret = run_spec(spec, argc, argv, prog, config, out);
 
-    git_libgit2_shutdown();
+    gitops_shutdown();
     output_free(out);
     config_free(config);
 

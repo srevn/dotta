@@ -578,12 +578,6 @@ error_t *content_stage_file(
 
     if (!S_ISREG(st.st_mode)) {
         if (fd >= 0) close(fd);
-        const char *type = S_ISLNK(st.st_mode) ? "symlink" :
-            S_ISDIR(st.st_mode) ? "directory" :
-            S_ISFIFO(st.st_mode) ? "FIFO" :
-            S_ISSOCK(st.st_mode) ? "socket" :
-            S_ISCHR(st.st_mode) ? "character device" :
-            S_ISBLK(st.st_mode) ? "block device" : "special file";
 
         /* This capture's own requirement, not a product rule: a symlink is the
          * caller's put (the header), and the walk lists one as a leaf; what cannot
@@ -591,7 +585,7 @@ error_t *content_stage_file(
         return ERROR(
             ERR_INVALID_ARG,
             "Cannot capture '%s': it is a %s, not a regular file.",
-            filesystem_path, type
+            filesystem_path, fs_stat_noun(&st)
         );
     }
 

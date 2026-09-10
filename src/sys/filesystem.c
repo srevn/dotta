@@ -1698,6 +1698,20 @@ bool fs_stat_is_directory(const struct stat *st) {
     return S_ISDIR(st->st_mode);
 }
 
+const char *fs_stat_noun(const struct stat *st) {
+    if (!st) {
+        return "special file";
+    }
+
+    return S_ISREG(st->st_mode) ? "regular file" :
+           S_ISLNK(st->st_mode) ? "symlink" :
+           S_ISDIR(st->st_mode) ? "directory" :
+           S_ISFIFO(st->st_mode) ? "FIFO" :
+           S_ISSOCK(st->st_mode) ? "socket" :
+           S_ISCHR(st->st_mode) ? "character device" :
+           S_ISBLK(st->st_mode) ? "block device" : "special file";
+}
+
 /**
  * Ensure parent directories exist
  */

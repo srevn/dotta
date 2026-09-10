@@ -530,6 +530,21 @@ error_t *fs_remove_empty_dir(const char *path);
  */
 error_t *fs_list_dir(const char *path, string_array_t **out);
 
+/* The depth a recursive walk of this filesystem is bounded to. The directory a
+ * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth
+ * 128 opens nothing: a file listed inside frame 127 is taken, a directory found
+ * there is not entered. What each reader does at the bound is its own — add
+ * refuses, the untracked scan stops silently — and one shared value is what makes
+ * the pair coherent: add's frame 0 is the argument and the scan's is a tracked
+ * directory row, which add itself authors one frame below its own or deeper, so
+ * nothing captured lies below the depth status can reach. It bounds recursion
+ * and the per-frame resources a walk holds while it enumerates; it is not a
+ * path-length limit and not a total memory bound.
+ *
+ * Read by cmds/add's collect_tree and by core/workspace's untracked scan, which
+ * is where the arithmetic comes from. */
+#define FS_WALK_MAX_DEPTH 128
+
 /**
  * Ensure parent directories exist
  *
@@ -823,5 +838,25 @@ bool fs_stat_is_regular(const struct stat *st);
  * @return true if S_ISDIR(st->st_mode)
  */
 bool fs_stat_is_directory(const struct stat *st);
+
+/**
+ * The noun for what an lstat found
+ *
+ * "regular file", "symlink", "directory", "FIFO", "socket", "character device",
+ * "block device", "special file" — one spelling for the verbs that must name an
+ * occupant they cannot take: the capture's refusal (infra/content) and add's
+ * walk and argument arm. The input is a successful lstat's; there is no noun
+ * for NONE or UNKNOWN, which are answers about the call and not about an occupant.
+ *
+ * Why the stat and not fs_occupant_t: the enum deliberately folds FIFO, socket
+ * and both devices into FS_OCCUPANT_OTHER, and the noun is exactly the reading
+ * OTHER withholds. So the key is the stat, and this joins the fs_stat_is_* family.
+ * Total over the type bits even where a reader reaches only some of them — a
+ * total mapping over a total input has no unreached arm.
+ *
+ * @param st Stat data (must not be NULL)
+ * @return The noun, a string literal that outlives every caller
+ */
+const char *fs_stat_noun(const struct stat *st);
 
 #endif /* DOTTA_FILESYSTEM_H */

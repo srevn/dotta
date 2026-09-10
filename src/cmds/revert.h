@@ -84,7 +84,9 @@ typedef struct {
  * 5. Answers "nothing to do" when that whole write already stands
  * 6. Puts the entry on the stage — the write's own admission, made here so that
  *    a tree that cannot hold it refuses before the preview and not after the
- *    prompt; no object is written by it
+ *    prompt; no object is written by it. The sheet is asked first, since a
+ *    directory the profile claims and nothing fills has no entry for the index
+ *    to find and a blob above one leaves it nowhere to stand
  * 7. Shows the preview (restored / diff / mode and ownership only), naming the
  *    commit's own name for the file wherever it differs
  * 8. Prompts for confirmation (unless --force)

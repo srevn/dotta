@@ -178,25 +178,17 @@ error_t *stage_put(
     return stage_put_blob(st, path, &blob, mode);
 }
 
-error_t *stage_put_blob(
-    stage_t *st, const char *path, const git_oid *blob, git_filemode_t mode
-) {
-    CHECK_NULL(st);
-    CHECK_NULL(path);
-    CHECK_NULL(blob);
-
-    if (mode != GIT_FILEMODE_BLOB &&
-        mode != GIT_FILEMODE_BLOB_EXECUTABLE &&
-        mode != GIT_FILEMODE_LINK) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Cannot stage '%s' with mode 0%o: not a blob or link mode",
-            path, (unsigned int) mode
-        );
-    }
-
-    /* The shape at the door (see the header): what libgit2 would refuse later
-     * with a worse message, and the one shape it would write. */
+/**
+ * Can anything at all be named at this path — the shape, and no blob above it?
+ *
+ * The identical beginning of both admissions: what libgit2 would refuse later
+ * with a worse message, and then a proper prefix that names an entry, which puts
+ * the path inside a file. Neither answer depends on what is being put there.
+ *
+ * The scratch is this function's, NUL-terminated at each slash in turn; the
+ * sentence prints from `path`, which is whole throughout.
+ */
+static error_t *admit_tree_path(const stage_t *st, const char *path) {
     size_t len = strlen(path);
     if (len == 0 || path[0] == '/' || path[len - 1] == '/' || strstr(path, "//")) {
         return ERROR(
@@ -206,10 +198,7 @@ error_t *stage_put_blob(
         );
     }
 
-    /* The two collisions the index would resolve by dropping an entry. One scratch
-     * copy serves both: NUL-terminated at each slash in turn for the proper
-     * prefixes, then extended by one slash for the descendants. */
-    char *scratch = malloc(len + 2);
+    char *scratch = malloc(len + 1);
     if (!scratch) {
         return ERROR(ERR_MEMORY, "Failed to allocate path scratch");
     }
@@ -229,18 +218,87 @@ error_t *stage_put_blob(
         *slash = '/';
     }
 
-    /* A directory where the file goes: any entry beneath the path. */
-    scratch[len] = '/';
-    scratch[len + 1] = '\0';
-    size_t position;
-    int rc = git_index_find_prefix(&position, st->index, scratch);
     free(scratch);
+
+    return NULL;
+}
+
+error_t *stage_admit_blob(const stage_t *st, const char *path) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    RETURN_IF_ERROR(admit_tree_path(st, path));
+
+    /* A directory where the file goes: any entry beneath the path. The index is
+     * sorted, so one prefix probe answers. */
+    size_t len = strlen(path);
+    char *beneath = malloc(len + 2);
+    if (!beneath) {
+        return ERROR(ERR_MEMORY, "Failed to allocate path scratch");
+    }
+    memcpy(beneath, path, len);
+    beneath[len] = '/';
+    beneath[len + 1] = '\0';
+
+    int rc = git_index_find_prefix(NULL, st->index, beneath);
+    free(beneath);
+
     if (rc == 0) {
         return ERROR(
             ERR_CONFLICT, "Cannot stage '%s': it is a directory in this tree",
             path
         );
     }
+    if (rc != GIT_ENOTFOUND) {
+        /* Not tidiness: reading "no conflict" out of a failure to look admits a
+         * blob the index would then make room for by dropping an entry. The linked
+         * libgit2 is whichever one pkg-config found at or above 1.5, and its
+         * contract here is "0 or an error code". */
+        return error_wrap(
+            error_from_git(rc), "Failed to search the tree beneath '%s'", path
+        );
+    }
+
+    return NULL;
+}
+
+error_t *stage_admit_subtree(const stage_t *st, const char *path) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    RETURN_IF_ERROR(admit_tree_path(st, path));
+
+    /* A file at the path itself: a blob and a subtree cannot both stand there,
+     * and nothing beneath it could be committed either. Entries beneath the path
+     * are the subtree already standing, and need no asking. */
+    if (git_index_get_bypath(st->index, path, 0)) {
+        return ERROR(
+            ERR_CONFLICT, "Cannot stage '%s': it is a file in this tree", path
+        );
+    }
+
+    return NULL;
+}
+
+error_t *stage_put_blob(
+    stage_t *st, const char *path, const git_oid *blob, git_filemode_t mode
+) {
+    CHECK_NULL(st);
+    CHECK_NULL(path);
+    CHECK_NULL(blob);
+
+    if (mode != GIT_FILEMODE_BLOB &&
+        mode != GIT_FILEMODE_BLOB_EXECUTABLE &&
+        mode != GIT_FILEMODE_LINK) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Cannot stage '%s' with mode 0%o: not a blob or link mode",
+            path, (unsigned int) mode
+        );
+    }
+
+    /* The shape and the two collisions, before anything is added (see the header):
+     * the mode above is the put's own, since a caller asking about a path it
+     * has not read yet has no mode to offer. */
+    RETURN_IF_ERROR(stage_admit_blob(st, path));
 
     /* The same path already an entry: replaced — the upsert every writer wants. */
     git_index_entry entry;
@@ -249,7 +307,7 @@ error_t *stage_put_blob(
     entry.path = path;
     git_oid_cpy(&entry.id, blob);
 
-    rc = git_index_add(st->index, &entry);
+    int rc = git_index_add(st->index, &entry);
     if (rc < 0) {
         return error_wrap(error_from_git(rc), "Failed to stage '%s'", path);
     }

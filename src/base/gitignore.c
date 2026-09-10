@@ -99,6 +99,7 @@ static size_t trailing_space_length(const char *p, size_t len) {
         if ((n - i) % 2)
             break;
     }
+
     return len - n;
 }
 
@@ -152,6 +153,7 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
 
     set->rules = resized;
     set->capacity = new_cap;
+
     return NULL;
 }
 
@@ -302,6 +304,7 @@ static const char *open_rung(const char **rung) {
 
     *rung = p;
     const char *slash = strrchr(p, '/');
+
     return slash ? slash + 1 : p;
 }
 
@@ -318,6 +321,7 @@ static bool rule_matches(
         return true;
     if (r->flags & GITIGNORE_FLAG_FULLPATH)
         return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
+
     return wildmatch(r->pattern, basename, 0) == WM_MATCH;
 }
 
@@ -341,6 +345,7 @@ static void scan_rung(
         out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
         out->origin = r->origin;
         out->pattern = r->source;
+
         return;
     }
 }
@@ -373,6 +378,7 @@ static bool does_negate_pattern(
         return false;
     if (memchr(shorter->pattern, '/', shorter->length) != NULL)
         return false;
+
     return memcmp(tail, shorter->pattern, shorter->length) == 0;
 }
 
@@ -408,6 +414,7 @@ static bool negation_has_effect(
         if (wildmatch(rule->pattern, neg->pattern, flags) == WM_MATCH)
             return true;
     }
+
     return false;
 }
 

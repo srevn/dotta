@@ -1074,7 +1074,26 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * It writes no object — the id is one the commit already holds, or one the
      * reseal computed and step 20 will store — so a dry run or a declined prompt
      * frees the stage and leaves the object database as it found it. stage_tree()
-     * is still the tree the stage opened at, so every read below is the tip's. */
+     * is still the tree the stage opened at, so every read below is the tip's.
+     *
+     * The index answers for the tree alone, and the tree is only half of what
+     * the commit carries: an empty directory the profile claims has no entry to
+     * find, so a blob standing above one leaves it nowhere to stand and the branch
+     * names a directory it cannot hold. The sheet answers for those
+     * (core/metadata.h), and it answers here, where every other refusal of this
+     * revert already stands. */
+    const metadata_item_t *claimed = metadata_directory_beneath(
+        standing_sheet, restored_name
+    );
+    if (claimed) {
+        err = ERROR(
+            ERR_CONFLICT,
+            "Cannot restore '%s': '%s' is a directory profile '%s' claims beneath "
+            "it", restored_name, claimed->key, profile
+        );
+        goto cleanup;
+    }
+
     err = stage_put_blob(stage, restored_name, &restored_blob, restored_mode);
     if (err) goto cleanup;
 

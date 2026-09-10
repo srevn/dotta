@@ -1888,10 +1888,11 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 /**
  * Recursively scan directory for untracked files
  *
- * Depth-limited to prevent stack overflow from pathological directory nesting.
+ * Depth-limited at FS_WALK_MAX_DEPTH, the bound add's own walk is held to
+ * (sys/filesystem.h): the scan stops silently there, where a capture refuses,
+ * and sharing the value is what keeps the two from disagreeing about how deep
+ * this machine goes.
  */
-#define SCAN_MAX_DEPTH 128
-
 static error_t *scan_directory_for_untracked(
     const char *dir_path,
     const char *storage_prefix,
@@ -1906,7 +1907,7 @@ static error_t *scan_directory_for_untracked(
     CHECK_NULL(profile);
     CHECK_NULL(ws);
 
-    if (depth >= SCAN_MAX_DEPTH) {
+    if (depth >= FS_WALK_MAX_DEPTH) {
         return NULL;
     }
 

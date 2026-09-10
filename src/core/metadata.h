@@ -307,6 +307,37 @@ const metadata_item_t *metadata_lookup(
 );
 
 /**
+ * The directory claim standing beneath `storage_path`, if the sheet holds one
+ *
+ * The sheet's half of the tree's one namespace rule, read from a blob's side. A
+ * tree holds no empty directory, so a directory this profile claims and nothing
+ * fills lives in this sheet alone — the index has no entry for it, and sys/stage's
+ * stage_admit_blob therefore cannot see it. A blob standing at an ancestor of
+ * such a claim leaves it nowhere to stand: the two could never be deployed
+ * together, and the commit would carry a namespace that contradicts itself.
+ *
+ * Strictly beneath, and only that: a directory claim AT the path is the conversion
+ * a re-capture makes — the item is replaced and the blob lands — and one above
+ * it is the ancestry every path has.
+ *
+ * The claim, not a verdict: the caller names the obstruction in its own voice,
+ * at the verbosity its own arm speaks at. Insertion order, first match; O(items)
+ * per call, which is what a sheet with no index over its subtrees costs.
+ *
+ * Readers: add's walk and add's argument arm, each before it lists a name a blob
+ * would stand at, and revert's restore, before its preview promises the write.
+ *
+ * @param metadata Metadata collection (NULL returns NULL)
+ * @param storage_path The name a blob would stand at (NULL returns NULL)
+ * @return Borrowed item pointer (do not free), or NULL when no claim stands beneath
+ *         it
+ */
+const metadata_item_t *metadata_directory_beneath(
+    const metadata_t *metadata,
+    const char *storage_path
+);
+
+/**
  * Two claims that say the same thing
  *
  * Every field, the key included: a claim is one row of the sheet, and two rows

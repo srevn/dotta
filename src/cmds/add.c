@@ -5,7 +5,6 @@
 #include "cmds/add.h"
 
 #include <config.h>
-#include <dirent.h>
 #include <errno.h>
 #include <git2.h>
 #include <stdlib.h>
@@ -69,6 +68,14 @@ typedef struct {
  * the table knows; a link no binding names is two, as two claims through and
  * around it are two claims (infra/mount.h). Keys borrow the arena strings the
  * lists hold.
+ *
+ * `stage` and `sheet` are the two documents one commit carries, and the walk
+ * asks both whether the branch has room for a name before a byte is read: the
+ * tree holds every blob (sys/stage.h, the two admissions), and the sheet holds
+ * the directories a tree cannot — an empty one has no entry, so a claim the index
+ * cannot see is the sheet's to answer for (core/metadata.h
+ * metadata_directory_beneath). Both are the branch as this command found it;
+ * what the command itself authors is read once at the end, where both are final.
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
@@ -76,6 +83,8 @@ typedef struct {
     const char *profile;                 /* The asker: whose roots name what is found */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
+    const stage_t *stage;                /* The branch's tree, asked once per listing */
+    const metadata_t *sheet;             /* The branch's claims, asked with it */
     hashmap_t *seen;                     /* Filesystem path -> walked (borrowed keys) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
     ptr_array_t directories;             /* add_path_t *: every directory walked into */
@@ -404,6 +413,48 @@ static error_t *list_path(
 }
 
 /**
+ * Has the branch room for this name — in its tree, and in its sheet?
+ *
+ * One commit carries two documents, and they name one namespace: the tree holds
+ * every blob, and the sheet holds the directories a tree cannot, since an empty
+ * one has no entry at all. A blob at a name is incompatible with anything standing
+ * at that name and with everything standing beneath it, whichever document the
+ * thing beneath it lives in — so a blob asks both and a subtree asks the tree,
+ * a directory claim beneath another being ordinary.
+ *
+ * The subject is the branch as this command found it: the index seeded at the
+ * open, and the sheet loaded from the same tree. What this command itself authors
+ * is read once at the end, where both are final (cmd_add).
+ *
+ * One producer, two voices: every refusal is ERR_CONFLICT and says which name
+ * stands in the way, and the callers give it their own — the argument arm wraps
+ * it as an error, the walk prints it and skips the subtree. Anything else is
+ * the run failing to decide, which is never a verdict about the path.
+ */
+static error_t *admit_name(
+    const add_walk_t *walk, const char *storage_path, bool is_dir
+) {
+    if (is_dir) {
+        return stage_admit_subtree(walk->stage, storage_path);
+    }
+
+    /* The sheet first: a directory it claims beneath this name has no tree entry
+     * to find, so the index cannot answer for it. */
+    const metadata_item_t *claimed = metadata_directory_beneath(
+        walk->sheet, storage_path
+    );
+    if (claimed) {
+        return ERROR(
+            ERR_CONFLICT,
+            "Cannot stage '%s': '%s' is a directory this profile claims beneath it",
+            storage_path, claimed->key
+        );
+    }
+
+    return stage_admit_blob(walk->stage, storage_path);
+}
+
+/**
  * Collect a directory tree into the walk.
  *
  * `dir_fs` is a location, and so is every path this frame joins beneath it: the
@@ -412,8 +463,9 @@ static error_t *list_path(
  * in this profile's namespace, NULL when it is one of the profile's own roots
  * ($HOME, "/", its target): a root has no name, and is not listed; its descendants
  * are. Every other directory walked into is listed — the walk is the sole source
- * of directory tracking — and so is every non-excluded non-directory child.
- * Symlinks are never followed: a symlink to a directory is an entry like any other.
+ * of directory tracking — and so is every regular file and symlink child a branch
+ * can hold. Symlinks are never followed: a symlink to a directory is an entry
+ * like any other, and a special file is no entry at all.
  *
  * Each child is named here, once, through the walking profile's own roots; the
  * recursion receives both names and never names it again. Another profile's target
@@ -422,10 +474,18 @@ static error_t *list_path(
  * profile's roots is walked through unlisted when it is a directory, and skipped
  * otherwise: nothing in the namespace names it.
  *
+ * A name the branch has no room for is skipped with its subtree and one line at
+ * NORMAL (admit_name): a stale claim deep inside $HOME must not fail `dotta add
+ * p ~`, and the capture that would have refused it arrives too late to skip
+ * anything. `depth` bounds the recursion at FS_WALK_MAX_DEPTH, and this is the
+ * one walked verdict that refuses rather than skips — collection precedes capture,
+ * so a refusal here costs nothing, where a skip would leave the profile permanently
+ * short of a subtree that can in fact be captured.
+ *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
 static error_t *collect_tree(
-    add_walk_t *walk, const char *dir_fs, const char *dir_storage
+    add_walk_t *walk, const char *dir_fs, const char *dir_storage, size_t depth
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(dir_fs);
@@ -433,54 +493,85 @@ static error_t *collect_tree(
     arena_t *arena = walk->ctx->arena;
     output_t *out = walk->ctx->out;
 
-    /* A directory already walked was walked whole: nothing new beneath it. */
+    /* A directory already walked was walked whole: nothing new beneath it. Asked
+     * before the bound, so a deeper argument collected first does not make its
+     * parent's walk fail when the parent arrives at the limit. Every child is
+     * tested against `seen` in the ladder below, so what reaches this line is
+     * the argument arm's own entry. */
     if (hashmap_has(walk->seen, dir_fs)) return NULL;
 
-    DIR *dir = fs_opendir(dir_fs);
-    if (!dir) {
-        return error_from_errno(errno, "Failed to open directory '%s'", dir_fs);
-    }
-
-    error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
-    if (!err && dir_storage) {
-        err = list_path(arena, &walk->directories, dir_fs, dir_storage);
-    }
-    if (err) {
-        closedir(dir);
-        return err;
+    if (depth >= FS_WALK_MAX_DEPTH) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Cannot walk '%s': it is %d directories below where this walk began; "
+            "name it as an argument of its own, or exclude it",
+            dir_fs, FS_WALK_MAX_DEPTH
+        );
     }
 
     /* "/" is the one directory whose spelling ends in its separator: a child
      * beneath it is joined with none. */
     const char *separator = dir_fs[1] ? "/" : "";
 
-    struct dirent *entry;
-    errno = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            errno = 0;  /* Clear before next readdir() */
-            continue;
-        }
+    /* The whole listing, and the stream closed with it: one open at a time down
+     * the recursion rather than one per frame, and the errno discipline is
+     * fs_list_dir's. */
+    string_array_t *entries = NULL;
+    RETURN_IF_ERROR(fs_list_dir(dir_fs, &entries));
 
+    error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
+    if (!err && dir_storage) {
+        err = list_path(arena, &walk->directories, dir_fs, dir_storage);
+    }
+    if (err) goto cleanup;
+
+    for (size_t i = 0; i < entries->count; i++) {
         const char *child_fs = arena_str_format(
-            arena, "%s%s%s", dir_fs, separator, entry->d_name
+            arena, "%s%s%s", dir_fs, separator, entries->items[i]
         );
         if (!child_fs) {
-            closedir(dir);
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
+            err = ERROR(ERR_MEMORY, "Failed to allocate path");
+            goto cleanup;
         }
 
-        /* One lstat decides the kind: a symlink is never a directory here. */
+        /* One lstat names what stands there, and the kind follows from it: a
+         * symlink is never a directory here. Absence is a skip — the listing
+         * and this look are two moments, and a path that left between them is
+         * not this command's failure — while a path that cannot be read is the
+         * same refusal the enumeration itself would have raised, and is fatal
+         * with it. What no branch can hold, a device or a socket or a FIFO, is
+         * skipped by its noun rather than carried to a capture that would refuse
+         * it and take every sibling with it. */
         struct stat st;
-        if (fs_lstat(child_fs, &st) != 0) {
-            int saved_errno = errno;
-            closedir(dir);
-            return error_from_errno(
-                saved_errno, "Failed to stat '%s'", child_fs
-            );
+        bool is_dir = false;
+        switch (fs_lstat_occupant(child_fs, &st)) {
+            case FS_OCCUPANT_NONE:
+                output_info(out, OUTPUT_VERBOSE, "Skipped absent: %s", child_fs);
+                continue;
+
+            case FS_OCCUPANT_UNKNOWN: {
+                int saved_errno = errno;
+                err = error_from_errno(
+                    saved_errno, "Failed to stat '%s'", child_fs
+                );
+                goto cleanup;
+            }
+
+            case FS_OCCUPANT_OTHER:
+                output_info(
+                    out, OUTPUT_VERBOSE, "Skipped %s: %s", fs_stat_noun(&st),
+                    child_fs
+                );
+                continue;
+
+            case FS_OCCUPANT_DIRECTORY:
+                is_dir = true;
+                break;
+
+            case FS_OCCUPANT_REGULAR:
+            case FS_OCCUPANT_SYMLINK:
+                break;
         }
-        bool is_dir = S_ISDIR(st.st_mode);
 
         /* Where the child stands. A directory is the directory it is: one met
          * at a binder's own spelling — a root reached through a link no binding
@@ -493,8 +584,8 @@ static error_t *collect_tree(
             const char *joined = child_fs;
             err = mount_locate(walk->mounts, joined, arena, &child_fs);
             if (err) {
-                closedir(dir);
-                return error_wrap(err, "Failed to locate '%s'", joined);
+                err = error_wrap(err, "Failed to locate '%s'", joined);
+                goto cleanup;
             }
         }
 
@@ -504,8 +595,8 @@ static error_t *collect_tree(
         const char *child_storage = NULL;
         err = mount_name(walk->mounts, walk->profile, child_fs, arena, &child_storage);
         if (err) {
-            closedir(dir);
-            return error_wrap(err, "Failed to name '%s'", child_fs);
+            err = error_wrap(err, "Failed to name '%s'", child_fs);
+            goto cleanup;
         }
 
         if (!child_storage && !is_dir) {
@@ -513,7 +604,6 @@ static error_t *collect_tree(
              * when HOME is a link, or its target reached through one. The walk
              * does not follow symlinks, and the root itself has no name. */
             output_info(out, OUTPUT_VERBOSE, "Skipped root: %s", child_fs);
-            errno = 0;
             continue;
         }
 
@@ -533,38 +623,48 @@ static error_t *collect_tree(
                     child_fs
                 );
             }
-            errno = 0;
             continue;
+        }
+
+        /* Walked whole, or listed already: hoisted here from the two branches
+         * below, so nothing this walk has settled is settled a second time —
+         * and so a name the branch has no room for is warned about once. */
+        if (hashmap_has(walk->seen, child_fs)) continue;
+
+        /* What the branch can hold, asked before a byte is read. Only a shape
+         * conflict is a verdict about the path; a failure to decide is the run
+         * failing, and publishing a selection past one would commit a silently
+         * partial capture. */
+        if (child_storage) {
+            err = admit_name(walk, child_storage, is_dir);
+            if (err) {
+                if (error_code(err) != ERR_CONFLICT) goto cleanup;
+                output_warning(
+                    out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
+                    error_message(err)
+                );
+                error_free(err);
+                err = NULL;
+                continue;
+            }
         }
 
         if (is_dir) {
             /* Recurse: the child lists itself on entry. */
-            err = collect_tree(walk, child_fs, child_storage);
-        } else if (!hashmap_has(walk->seen, child_fs)) {
+            err = collect_tree(walk, child_fs, child_storage, depth + 1);
+        } else {
             err = hashmap_set(walk->seen, child_fs, (void *) 1);
             if (!err) {
                 err = list_path(arena, &walk->files, child_fs, child_storage);
             }
         }
-        if (err) {
-            closedir(dir);
-            return err;
-        }
-        errno = 0;
+        if (err) goto cleanup;
     }
 
-    /* readdir() returns NULL on both end-of-directory and error. With errno cleared
-     * before each call, non-zero errno means I/O error. */
-    if (errno != 0) {
-        int saved_errno = errno;
-        closedir(dir);
-        return error_from_errno(
-            saved_errno, "Error reading directory '%s'", dir_fs
-        );
-    }
+cleanup:
+    string_array_free(entries);
 
-    closedir(dir);
-    return NULL;
+    return err;
 }
 
 /**
@@ -1445,6 +1545,19 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
+    /* The profile's sheet, from the tree the stage opened at: the branch's own
+     * bytes, an empty sheet for a new profile (the loader's contract). Read before
+     * the walk, which asks it what the branch already claims beneath a name
+     * (admit_name); mutated as the captures go, and saved once. A sheet that
+     * will not load refuses the add here rather than after the arguments have
+     * been diagnosed — the branch's own state is the earlier question.
+     */
+    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
+    if (err) {
+        err = error_wrap(err, "Failed to load existing metadata");
+        goto cleanup;
+    }
+
     /* Collect every path to add, expanding directories. The walk lists each path
      * once, under both names: the CLI argument crosses the mount boundary here,
      * and what the walk finds beneath it crosses in the walk. */
@@ -1452,6 +1565,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.profile = opts->profile;
     walk.rules = profile_rules;
     walk.source_filter = source_filter;
+    walk.stage = stage;
+    walk.sheet = metadata;
     walk.seen = hashmap_borrow(0);
     if (!walk.seen) {
         err = ERROR(ERR_MEMORY, "Failed to allocate the walk's index");
@@ -1517,13 +1632,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* What stands at the path — the link itself for a symlink, a broken one
-         * included. Absence and a refusal are two answers: a storage path that
-         * resolves to nothing is as likely a relative path whose first component
-         * happens to be a label — `root/x` typed from `/` — so the message says
-         * where it looked and how to say the other; a path the invoker cannot
-         * reach names its reason, and the dispatch tail names the command that
-         * could. */
-        switch (fs_lstat_occupant(fs_path, NULL)) {
+         * included, and the kind of every supported occupant with it. Absence
+         * and a refusal are two answers: a storage path that resolves to nothing
+         * is as likely a relative path whose first component happens to be a
+         * label — `root/x` typed from `/` — so the message says where it looked
+         * and how to say the other; a path the invoker cannot reach names its
+         * reason, and the dispatch tail names the command that could. A special
+         * file is refused by its noun here, before a name is asked for and long
+         * before a capture would refuse it in the same breath as its siblings. */
+        struct stat st;
+        bool is_dir = false;
+        switch (fs_lstat_occupant(fs_path, &st)) {
             case FS_OCCUPANT_NONE:
                 if (spec) {
                     err = ERROR(
@@ -1543,10 +1662,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
+            case FS_OCCUPANT_OTHER:
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is a %s, and a profile holds files, symlinks and "
+                    "directories", file, fs_stat_noun(&st)
+                );
+                goto cleanup;
+
+            case FS_OCCUPANT_DIRECTORY:
+                is_dir = true;
+                break;
+
             case FS_OCCUPANT_REGULAR:
             case FS_OCCUPANT_SYMLINK:
-            case FS_OCCUPANT_DIRECTORY:
-            case FS_OCCUPANT_OTHER:
                 break;
         }
 
@@ -1558,8 +1687,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = error_wrap(err, "Failed to name '%s'", file);
             goto cleanup;
         }
-
-        bool is_dir = !fs_is_symlink(fs_path) && fs_is_directory(fs_path);
 
         /* A path named on the command line is subject to the rules like any the
          * walk finds, but a verdict against it is an error, not a silent skip:
@@ -1588,6 +1715,18 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
+        /* What the branch can hold, before a byte is read. The verdict a walked
+         * entry answers with a skip is an error here: the user asked for this
+         * path by name, and working around a claim they did not mention is not
+         * this command's to do. A root claims nothing and so is asked nothing. */
+        if (storage_path) {
+            err = admit_name(&walk, storage_path, is_dir);
+            if (err) {
+                err = error_wrap(err, "Cannot add '%s'", file);
+                goto cleanup;
+            }
+        }
+
         /* Handle symlinks, directories, and files */
         if (is_dir) {
             /* Remember counts so we can describe what the walk produced. */
@@ -1595,7 +1734,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             size_t dirs_before = walk.directories.count;
 
             /* A root is walked through unlisted: its descendants are listed. */
-            err = collect_tree(&walk, fs_path, storage_path);
+            err = collect_tree(&walk, fs_path, storage_path, 0);
             if (err) {
                 err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;
@@ -1638,19 +1777,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Check if we have anything to add (files or directories). A named path the
-     * rules refused was an error above, so this is a mount root with nothing
-     * listable beneath it. */
+     * rules refused was an error above, so this is a mount root the walk found
+     * nothing listable beneath — either because nothing is there, or because
+     * every entry was excluded, unsupported, or a name the branch has no room
+     * for. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
         err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
-        goto cleanup;
-    }
-
-    /* The profile's sheet, from the tree the stage opened at: the branch's own
-     * bytes, an empty sheet for a new profile (the loader's contract). Mutated
-     * as the walk goes, saved once. */
-    err = metadata_load_from_tree(repo, stage_tree(stage), opts->profile, &metadata);
-    if (err) {
-        err = error_wrap(err, "Failed to load existing metadata");
         goto cleanup;
     }
 
@@ -1786,8 +1918,39 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
+    /* The two documents this commit carries name one namespace, and this is where
+     * they meet — once, with both of them final. The tree holds every blob; the
+     * sheet holds the directories a tree cannot, since an empty one has no entry.
+     * A blob and a directory cannot stand at one name, and nothing stands beneath
+     * a blob. Every listing was admitted against the branch as this command found
+     * it (admit_name); the index has moved since, by this command's own puts,
+     * and the sheet has gained this command's own claims — so what the listing
+     * could not see is exactly what this pass reads. A contradiction the branch
+     * already carried is refused here too: nothing repairs it silently, and `dotta
+     * remove` is the verb that gives a claim up.
+     */
+    size_t item_count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+
+        err = stage_admit_subtree(stage, items[i]->key);
+        if (err) {
+            /* The stage names the storage path and the obstruction; the wrap
+             * says whose claim it is and that a claim is the subject, so an add
+             * of one path does not answer with a sentence about another the user
+             * never typed. No remedy line: where both sides are this command's
+             * own, nothing is committed for a `dotta remove` to take. */
+            err = error_wrap(
+                err, "Profile '%s' claims a directory its tree cannot hold",
+                opts->profile
+            );
+            goto cleanup;
+        }
+    }
+
     /* A new profile's .dottaignore: the template, on the stage beside the sheet
-     * — the two documents this commit carries that no capture wrote. Here rather
+     * — the two blobs this commit carries that no capture wrote. Here rather
      * than at the orphan's open, where the add has decided nothing yet: stage_put
      * writes the blob to the object database at once, so a refusal between the
      * two — a path that is not there, an argument the rules exclude, an unreadable
@@ -2116,7 +2279,7 @@ static error_t *add_dispatch(const void *ctx_v, void *opts_v) {
     const dotta_ctx_t *ctx = ctx_v;
     error_t *err = cmd_add(ctx, (const cmd_add_options_t *) opts_v);
 
-    /* A refusal the invoker met reading a source — the walk's opendir and lstat,
+    /* A refusal the invoker met reading a source — the walk's listing and lstat,
      * the open behind the capture (infra/content), the existence check — ends
      * the add before anything durable is written: the stage is in memory and
      * the commit is after the walk. The code is enough to say so without matching

@@ -368,6 +368,28 @@ const metadata_item_t *metadata_lookup(
     return hashmap_get(metadata->index, key);
 }
 
+const metadata_item_t *metadata_directory_beneath(
+    const metadata_t *metadata,
+    const char *storage_path
+) {
+    if (!metadata || !storage_path) {
+        return NULL;
+    }
+
+    size_t count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &count);
+    const size_t len = strlen(storage_path);
+
+    for (size_t i = 0; i < count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+        if (str_path_beneath(items[i]->key, storage_path, len)) {
+            return items[i];
+        }
+    }
+
+    return NULL;
+}
+
 /**
  * Two claims that say the same thing
  *

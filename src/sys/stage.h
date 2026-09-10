@@ -33,6 +33,15 @@
  * put and `a//b` at the tree write, but writes `/a` as a tree with an empty-named
  * component, so the stage checks the shape at the door.
  *
+ * That rule is askable without writing. stage_admit_blob and stage_admit_subtree
+ * are the two sides of it — a blob at N is incompatible with anything at N and
+ * with everything beneath N — and both answer about the index as it stands: the
+ * branch's tree at the open, plus whatever this stage has already put. A caller
+ * that must know before it reads a file's bytes asks; the put asks again and
+ * stays the authority, since two names one caller chooses can collide with each
+ * other after both were admitted. Neither verb reserves a name, writes an entry
+ * or is undone.
+ *
  * Every entry names a blob the ODB holds by commit time: stage_put writes it,
  * stage_put_blob trusts the caller (revert's target blob is looked up from a
  * commit), and the tree write refuses an id the ODB lacks. *By commit time* is
@@ -124,6 +133,51 @@ const git_tree *stage_tree(const stage_t *st);
  * @return The index
  */
 git_index *stage_index(stage_t *st);
+
+/**
+ * Can a blob stand at this path — the shape and the two collisions, without writing
+ * anything?
+ *
+ * What stage_put_blob refuses before it adds an entry, asked on its own so a
+ * caller can find out before it reads a file's bytes: the tree-path shape libgit2
+ * would reject later with a worse message, a proper prefix that names an entry
+ * (a file where a directory is needed), and an entry beneath the path (a directory
+ * where the file goes). An entry at the path itself is the upsert every writer
+ * wants and is admitted.
+ *
+ * It is not a dry run of the put: libgit2's own path validator is the put's
+ * (`home/.git` passes the framing rule and is refused by git_index_add), and so
+ * is the mode admission, which a caller listing a path does not yet have.
+ *
+ * Readers: add's walk and add's argument arm, before either lists a name; and
+ * stage_put_blob itself. cmds/revert deliberately does not read it — it holds
+ * the id and the mode, so it hoists the whole put before its preview and needs
+ * the actual index operation's refusal there, not a question about it.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Storage path (must not be NULL)
+ * @return Error naming the collision, or NULL when a blob may stand there
+ */
+error_t *stage_admit_blob(const stage_t *st, const char *path);
+
+/**
+ * Can a subtree stand at this path — the shape, and the one collision?
+ *
+ * The other half of the index's file/directory rule, for the caller that has no
+ * put to make: dotta's empty directories live in the sheet alone (core/metadata.h),
+ * so a profile can claim a directory the tree holds no entry for. A blob at the
+ * path, or at any proper prefix of it, leaves no room for entries beneath — nor
+ * for a claim about the directory itself. Entries beneath the path are the subtree
+ * already standing, and are admitted.
+ *
+ * Readers: add's walk and add's argument arm, before either lists a directory;
+ * and add's read of its finished sheet against its finished index.
+ *
+ * @param st Stage (must not be NULL)
+ * @param path Storage path (must not be NULL)
+ * @return Error naming the collision, or NULL when a subtree may stand there
+ */
+error_t *stage_admit_subtree(const stage_t *st, const char *path);
 
 /**
  * A blob from bytes, then the entry at `path`

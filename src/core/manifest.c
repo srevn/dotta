@@ -27,8 +27,12 @@
  *   - One naming rule, one body: manifest_ascend is what the settle asks for
  *     the fresh name of a contested location and what manifest_name answers callers
  *     with, so the name the view keeps and the name the namer gives are the same
- *     answer by construction. One claim shape beneath it: both layers a namer
- *     reads speak manifest_claim_t, so the leaf and the rung ask one producer
+ *     answer by construction. The choice between a location's names has one body
+ *     too (manifest_decide), asked by the settle over the group it has just built
+ *     and again by every namer that reads that location, because a command's
+ *     own uncommitted claims change what the location would be called fresh.
+ *     One claim shape beneath both: the two layers a namer reads speak
+ *     manifest_claim_t, so the leaf and the rung ask one producer
  *     (manifest_standing) and differ only in which of its two projections they
  *     take.
  *   - Diff, not delta-tracking: what a scope transition or a sync did to the
@@ -58,14 +62,28 @@
  * on it is ever rewritten: a name that lost the location and a derived claim an
  * explicit one retook stay in the arena and simply leave the slice.
  *
- * The index is heap-allocated and released by manifest_free with the view's own;
- * its keys borrow the arena-backed location each row carries.
+ * Both indexes are heap-allocated and released by manifest_free with the view's
+ * own; their keys borrow the arena-backed location each row carries.
  */
 typedef struct {
     const char *profile;           /* Arena-backed; the same pointer every row of it carries */
     manifest_row_t **rows;         /* The rows standing, in claim order (arena, exact) */
     size_t count;                  /* Rows standing */
     hashmap_t *index;              /* location → the row standing there, heap-allocated */
+
+    /* Every name the profile holds at a location it names more than once: the
+     * settle's own group, NULL-terminated, in name order. NULL until a settle
+     * happens — which is never, on a branch whose profile names each of its
+     * locations once. The group outlives the contest because the decision does:
+     * manifest_standing re-asks it wherever a name is read, an asker's own claims
+     * being able to change which name the next settle keeps, and
+     * manifest_holds_name reads it to answer whether a name is one the profile
+     * already holds.
+     *
+     * Every member is an explicit row. A contender is pushed only against a held
+     * explicit claim — the blob pass and the directory pass state that placement
+     * rule in the same line — so no reader of a group filters derived. */
+    hashmap_t *contested;          /* location → manifest_row_t **, heap-allocated */
 } contribution_t;
 
 /**
@@ -373,44 +391,45 @@ static error_t *manifest_note_unkept(
 }
 
 /**
- * The claim standing at `location` for this asker
+ * What one naming question is asked under
  *
- * The two layers a namer reads, nearest first. A claim the command has admitted
- * and not yet committed answers alone, whatever its kind: it is the nearer
- * statement about the place, so a staged FILE names its own location and nothing
- * under it, shadowing a tracked directory the branch holds at the same location
- * exactly as it will once committed — where the blob takes the location and the
- * directory's name is the one the contribution does not keep. A location the
- * verb entered without claiming holds a NULL value, and hashmap_get folds "absent"
- * and "entered, claimed nothing" into the one answer the layer below is owed.
+ * The profile's own contribution, the table its rows were placed by, the asker,
+ * the claims this command has admitted and not yet committed, and the arena the
+ * answer lands in. Built once per manifest_name and once per settle; the three
+ * functions below thread it and read nothing else.
  *
- * Where the command claimed nothing the profile's own committed row speaks,
- * projected into the same pair: a derived row is no claim at all, and every other
- * row names its own location. The derived filter runs first, so a
- * PATH_KIND_DIRECTORY leaving the projection is a tracked directory's.
- *
- * The two questions the pair answers are the two its callers ask — manifest_name's
- * leaf takes any name it finds, manifest_ascend's rung takes a directory's alone
- * (manifest_claim_beneath). The name is borrowed from whichever layer answered;
- * both outlive the call, and both callers copy or compose at once.
- *
- * The contribution is taken rather than the view because that is what keeps the
- * O(P) search for it out of the per-rung loop. A public form reads (view, profile,
- * location, pending) and finds the contribution itself, as manifest_lookup_claim
- * does — a wrapper over this one, never a second body.
- *
- * @param c The profile's own contribution, or NULL when the view has none for it
- * @param pending The asking profile's uncommitted claims, or NULL
- * @param location The location to read (must not be NULL)
- * @return The claim standing there, or a NULL name when none does
+ * `c` is NULL for an asker the view has no contribution for — the shared roots
+ * and nothing else, as mount_name reads it.
  */
-static manifest_claim_t manifest_standing(
-    const contribution_t *c, const hashmap_t *pending, const char *location
-) {
-    const manifest_claim_t *staged = pending ? hashmap_get(pending, location) : NULL;
-    if (staged) return *staged;
+typedef struct {
+    const contribution_t *c;       /* The asker's own claims, or NULL */
+    const mount_table_t *mounts;   /* The table those claims were placed by */
+    const char *profile;           /* The asker; the contribution's own name when it has one */
+    const hashmap_t *pending;      /* This command's uncommitted claims, or NULL */
+    arena_t *arena;                /* Arena that owns every composed answer */
+} naming_t;
 
-    const manifest_row_t *row = c ? hashmap_get(c->index, location) : NULL;
+/* The ascent and the standing are one rule read from two ends, and each asks
+ * the other: a name is composed from what stands above the location, and what
+ * stands where the profile names one location twice is what the next settle will
+ * keep there — which is the ascent's own answer under this command's claims.
+ * The pair terminates because the ascent reads rungs strictly above the location
+ * it is asked about, so every turn is a strictly shorter path and the depth is
+ * bounded by the rungs; it is entered at all only where a group stands. */
+static error_t *manifest_ascend(
+    const naming_t *n, const char *location, const char **out_storage
+);
+
+/**
+ * A row as a namer reads it
+ *
+ * The projection both layers meet in (core/manifest.h manifest_claim_t): a derived
+ * row is no claim at all, naming neither itself nor what lies beneath it, and
+ * every other row names its own location with its kind saying whether anything
+ * can be named beneath. NULL projects to nothing standing, which is the answer
+ * a location the profile holds nothing at is owed.
+ */
+static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
     if (!row || manifest_is_derived(row)) return (manifest_claim_t){ 0 };
 
     return (manifest_claim_t){
@@ -420,18 +439,148 @@ static manifest_claim_t manifest_standing(
 }
 
 /**
+ * Which of the names in a group the contribution keeps at `location`
+ *
+ * The settle's last clause, on its own so that it has one body: **the name the
+ * profile would give the location fresh** stands where the profile holds it,
+ * and the bytewise-least — the group's own head, the array being sorted by name
+ * — stands where it does not.
+ *
+ * Two askers, one answer. manifest_settle asks it over the group it has just
+ * built, with no pending layer, and stores the result; manifest_standing asks
+ * it again wherever a name is read, because an asker's own uncommitted claims
+ * change what the location's ascent composes and therefore which name the next
+ * settle will keep (209 C3 §1.10). Spelling the rule once is what keeps the name
+ * the view keeps and the name a namer gives from drifting apart.
+ *
+ * `fresh` is NULL where the location is a root of the profile — mount_name's
+ * own answer, a root having no name — and the bytewise-least then stands, no
+ * name being the fresh one there.
+ *
+ * @param n What the question is asked under (must not be NULL)
+ * @param location The location the group contends for (must not be NULL)
+ * @param group Every name the profile holds there, NULL-terminated, in name order
+ *              (must not be NULL, and must hold at least one row)
+ * @param out_kept The row whose name stands (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_decide(
+    const naming_t *n,
+    const char *location,
+    manifest_row_t **group,
+    manifest_row_t **out_kept
+) {
+    const char *fresh = NULL;
+    error_t *err = manifest_ascend(n, location, &fresh);
+    if (err) {
+        return error_wrap(
+            err, "Failed to name '%s' for profile '%s'", location, n->profile
+        );
+    }
+
+    /* The fresh name if a member is it, else the bytewise-least. */
+    *out_kept = group[0];
+    for (size_t g = 0; fresh && group[g]; g++) {
+        if (strcmp(group[g]->storage_path, fresh) != 0) continue;
+        *out_kept = group[g];
+        break;
+    }
+
+    return NULL;
+}
+
+/**
+ * The claim standing at `location` for this asker
+ *
+ * Three arms, and the first that speaks answers. Where the profile names the
+ * location more than once, **the settle answers**: which of a profile's names
+ * stands somewhere is the settle's question and never a single claim's, so it
+ * is asked here under this command's claims rather than read off the last build.
+ * That is what makes a capture land on the name the machine will use: a claim
+ * admitted above a contested location changes what the location's ascent composes,
+ * and with it the name the next settle keeps (209 C3 §1.10). A verb admits at
+ * such a location only a name the profile already holds (core/manifest.h
+ * manifest_holds_name), so the group is the whole of what that settle will decide
+ * over and the pending layer cannot add to it.
+ *
+ * Where the profile names the location once or not at all, the two layers a namer
+ * reads answer, nearest first. A claim the command has admitted and not yet
+ * committed answers alone, whatever its kind: it is the nearer statement about
+ * the place, so a staged FILE names its own location and nothing under it,
+ * shadowing a tracked directory the branch holds at the same location exactly
+ * as it will once committed. A location the verb entered without claiming holds
+ * a NULL value, and hashmap_get folds "absent" and "entered, claimed nothing"
+ * into the one answer the layer below is owed. Where the command claimed nothing
+ * the profile's own committed row speaks, projected into the same pair.
+ *
+ * The answer is what the profile's next contribution will stand at the location,
+ * given the claims the asker has admitted **so far**: naming is a snapshot taken
+ * when a path is listed, and a claim a later argument admits above one already
+ * named does not re-name it (cmds/add.c).
+ *
+ * With no pending layer the first arm reproduces the choice the settle already
+ * made and the index already holds — a cost, never a difference — and the cost
+ * is a group that exists only where a branch arrived holding two names for one
+ * path.
+ *
+ * The two questions the pair answers are the two its callers ask — manifest_name's
+ * leaf takes any name it finds, manifest_ascend's rung takes a directory's alone
+ * (manifest_claim_beneath). The name is borrowed from whichever layer answered;
+ * both outlive the call, and both callers copy or compose at once.
+ *
+ * The contribution is taken through the context rather than the view because
+ * that is what keeps the O(P) search for it out of the per-rung loop. A public
+ * form reads (view, profile, location, pending) and finds the contribution itself,
+ * as manifest_lookup_claim does — a wrapper over this one, never a second body.
+ *
+ * @param n What the question is asked under (must not be NULL)
+ * @param location The location to read (must not be NULL)
+ * @param out The claim standing there, a NULL name when none does (must not be
+ *            NULL)
+ * @return Error or NULL on success
+ */
+static error_t *manifest_standing(
+    const naming_t *n, const char *location, manifest_claim_t *out
+) {
+    *out = (manifest_claim_t){ 0 };
+
+    const contribution_t *c = n->c;
+
+    manifest_row_t **group =
+        c && c->contested ? hashmap_get(c->contested, location) : NULL;
+    if (group) {
+        manifest_row_t *kept = NULL;
+        error_t *err = manifest_decide(n, location, group, &kept);
+        if (err) return err;
+
+        *out = manifest_row_claim(kept);
+        return NULL;
+    }
+
+    const manifest_claim_t *staged =
+        n->pending ? hashmap_get(n->pending, location) : NULL;
+    if (staged) {
+        *out = *staged;
+        return NULL;
+    }
+
+    *out = manifest_row_claim(c ? hashmap_get(c->index, location) : NULL);
+    return NULL;
+}
+
+/**
  * The name `profile` composes for `location` from what stands above it
  *
  * The rungs above the location, nearest first: the claim standing at each one
  * (manifest_standing — this command's own listing where it has one there, else
- * the profile's committed row), and the location is composed beneath the first
- * that names what lies beneath it, a DIRECTORY claim of either layer
- * (manifest_claim_beneath). A root of the profile ends the ascent at every rung,
- * the location itself included: nothing of the profile's stands above its own
- * binding, and mount_name composes the answer beneath the deepest root it has
- * (NULL when the location is that root). An ancestor claim names nothing, and a
- * blob names its own location and nothing under it — a name beneath a file is a
- * tree entry the stage refuses — so both are climbed past.
+ * what the profile's committed claims settle on), and the location is composed
+ * beneath the first that names what lies beneath it, a DIRECTORY claim of either
+ * layer (manifest_claim_beneath). A root of the profile ends the ascent at every
+ * rung, the location itself included: nothing of the profile's stands above its
+ * own binding, and mount_name composes the answer beneath the deepest root it
+ * has (NULL when the location is that root). An ancestor claim names nothing,
+ * and a blob names its own location and nothing under it — a name beneath a file
+ * is a tree entry the stage refuses — so both are climbed past.
  *
  * The claim is asked before the root at every rung, and the loop's shape is what
  * makes that true: the root test at the top reads the rung whose claim the previous
@@ -447,37 +596,27 @@ static manifest_claim_t manifest_standing(
  * a separator where the rung ends, which the root and the empty prefix do not have.
  *
  * The scratch copy is the arena's and abandoned, the module's idiom: the ascent
- * is asked once per argument and once per contested location, never per walked
- * child.
+ * is asked once per argument, once per contested location, and once again per
+ * contested rung one of those reads.
  *
- * @param c The profile's own contribution, or NULL when the view has none for it
- * @param mounts The table the view was placed by (must not be NULL)
- * @param profile The asker — the contribution's own name when it has one
+ * @param n What the question is asked under (must not be NULL)
  * @param location Absolute location (must not be NULL)
- * @param pending The command's uncommitted claims, or NULL
- * @param arena Arena that owns the answer (must not be NULL)
  * @param out_storage The composed name, NULL at a root (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *manifest_ascend(
-    const contribution_t *c,
-    const mount_table_t *mounts,
-    const char *profile,
-    const char *location,
-    const hashmap_t *pending,
-    arena_t *arena,
-    const char **out_storage
+    const naming_t *n, const char *location, const char **out_storage
 ) {
     *out_storage = NULL;
 
-    char *rung = arena_strdup(arena, location);
+    char *rung = arena_strdup(n->arena, location);
     if (!rung) {
         return ERROR(ERR_MEMORY, "Failed to copy the location");
     }
     size_t len = strlen(rung);
 
     for (;;) {
-        if (mount_root(mounts, profile, rung)) break;
+        if (mount_root(n->mounts, n->profile, rung)) break;
 
         size_t up = str_path_parent_len(rung);
         if (up >= len) break;   /* "/" is its own parent; the sentinel ends it anyway */
@@ -485,19 +624,23 @@ static error_t *manifest_ascend(
         rung[len] = '\0';
         if (len < 2) continue;  /* "/" and the empty prefix name nothing — see above */
 
-        /* The two layers at this rung, the nearer answering alone, and only a
-         * directory naming what lies beneath it. */
-        const char *above = manifest_claim_beneath(manifest_standing(c, pending, rung));
+        /* What stands at this rung, and only a directory naming what lies beneath
+         * it. */
+        manifest_claim_t claim = { 0 };
+        error_t *err = manifest_standing(n, rung, &claim);
+        if (err) return err;
+
+        const char *above = manifest_claim_beneath(claim);
         if (!above) continue;
 
-        *out_storage = arena_str_format(arena, "%s/%s", above, location + len + 1);
+        *out_storage = arena_str_format(n->arena, "%s/%s", above, location + len + 1);
         if (!*out_storage) {
             return ERROR(ERR_MEMORY, "Failed to compose the name");
         }
         return NULL;
     }
 
-    return mount_name(mounts, profile, location, arena, out_storage);
+    return mount_name(n->mounts, n->profile, location, n->arena, out_storage);
 }
 
 /**
@@ -532,25 +675,26 @@ static int name_order(const void *a, const void *b) {
  * Decide every location this profile named twice, and record what did not stand
  *
  * The within-profile rule's last clause, run once the contribution is whole so
- * the ascent reads every tracked parent the profile has: **the name the profile
- * would give the location fresh** stands — beneath its tracked parent, else beneath
- * its deepest root, which is the binding's custom/ over the portable home/ over
- * the absolute root/ — and between names none of which it is, the bytewise-least.
- * Every other name is recorded against the one that stood (manifest_note_unkept).
+ * the ascent reads every tracked parent the profile has. The choice itself is
+ * manifest_decide's, asked here with no pending layer — beneath its tracked parent,
+ * else beneath its deepest root, which is the binding's custom/ over the portable
+ * home/ over the absolute root/. Every other name is recorded against the one
+ * that stood (manifest_note_unkept).
  *
  * The group is the index's holder plus the run, sorted whole, so the holder is
  * a member and not a special case: every loser reads bytewise, the first-arrived
- * included, and the winner is group[0] unless a member *is* the fresh name. No
- * comparator carries `fresh` and no bool survives the loop.
+ * included. No comparator carries `fresh` and no bool survives the loop.
  *
  * Two rows of one group can never share a name, so the order is total: the tree
  * holds one blob per path, the sheet one item per key, and the content-authority
  * rule contradicts the one name they can both carry at the blob, before either
  * name was resolved and long before the contest sees it.
  *
- * `fresh` is NULL when the location is a root of the profile — mount_name's own
- * answer, a root having no name — and the bytewise-least then stands, no name
- * being the fresh one there.
+ * The group outlives this call, indexed on the contribution: what stands at a
+ * contested location is a rule and not a fact the build fixes, so every namer
+ * that reads the location asks it again under whatever claims it has admitted
+ * (manifest_standing), and the admission that keeps such a group from growing
+ * asks whether a name is one of these (manifest_holds_name).
  *
  * Empty on every profile that names each of its locations once, which is the
  * whole cost on a branch this machine authored alone.
@@ -570,6 +714,24 @@ static error_t *manifest_settle(
 ) {
     if (contenders->count == 0) return NULL;
 
+    /* The index of the groups, allocated where the first one is about to exist:
+     * a contribution with no contender never has one, and the readers test the
+     * pointer rather than a count. */
+    c->contested = hashmap_borrow(8);
+    if (!c->contested) {
+        return ERROR(ERR_MEMORY, "Failed to create the contested index");
+    }
+
+    /* What every question below is asked under: this contribution, and no claim
+     * beyond it — the settle reads the branch as it arrived. */
+    const naming_t n = {
+        .c       = c,
+        .mounts  = manifest->mounts,
+        .profile = c->profile,
+        .pending = NULL,
+        .arena   = arena,
+    };
+
     /* The contest, typed once: a ptr_array holds void *, and every read below
      * is a row's location or its name. */
     manifest_row_t **rows = (manifest_row_t **) contenders->items;
@@ -579,50 +741,48 @@ static error_t *manifest_settle(
     for (size_t i = 0; i < contenders->count;) {
         const char *location = rows[i]->filesystem_path;
 
-        size_t n = 0;
-        while (i + n < contenders->count &&
-            strcmp(rows[i + n]->filesystem_path, location) == 0) n++;
+        size_t count = 0;
+        while (i + count < contenders->count &&
+            strcmp(rows[i + count]->filesystem_path, location) == 0) count++;
 
-        /* The group: the name that arrived first, and the ones that met it. */
-        manifest_row_t **group = arena_calloc(arena, n + 1, sizeof(*group));
+        /* The group: the name that arrived first, and the ones that met it. One
+         * slot past them stays NULL — the group outlives this loop, and every
+         * reader of it walks to the terminator. */
+        manifest_row_t **group = arena_calloc(arena, count + 2, sizeof(*group));
         if (!group) {
             return ERROR(ERR_MEMORY, "Failed to allocate a contested group");
         }
         group[0] = hashmap_get(c->index, location);
-        for (size_t g = 0; g < n; g++) group[g + 1] = rows[i + g];
-        qsort(group, n + 1, sizeof(*group), name_order);
+        for (size_t g = 0; g < count; g++) group[g + 1] = rows[i + g];
+        qsort(group, count + 1, sizeof(*group), name_order);
 
-        const char *fresh = NULL;
-        error_t *err = manifest_ascend(
-            c, manifest->mounts, c->profile, location, NULL, arena, &fresh
-        );
-        if (err) {
-            return error_wrap(
-                err, "Failed to name '%s' for profile '%s'", location, c->profile
-            );
-        }
+        manifest_row_t *kept = NULL;
+        error_t *err = manifest_decide(&n, location, group, &kept);
+        if (err) return err;
 
-        /* The fresh name if a member is it, else the bytewise-least. */
-        manifest_row_t *winner = group[0];
-        for (size_t g = 0; fresh && g <= n; g++) {
-            if (strcmp(group[g]->storage_path, fresh) != 0) continue;
-            winner = group[g];
-            break;
-        }
-
-        err = hashmap_set(c->index, location, winner);
+        err = hashmap_set(c->index, location, kept);
         if (err) {
             return error_wrap(err, "Failed to index a settled row");
         }
-        for (size_t g = 0; g <= n; g++) {
-            if (group[g] == winner) continue;
+
+        /* The group, kept against the location it contended for. Indexed after
+         * the winner is in place, so a deeper group's ascent — which reaches
+         * this rung by location order, parents first — reads a settled state
+         * whichever way it looks. */
+        err = hashmap_set(c->contested, location, group);
+        if (err) {
+            return error_wrap(err, "Failed to index a contested location");
+        }
+
+        for (size_t g = 0; group[g]; g++) {
+            if (group[g] == kept) continue;
             err = manifest_note_unkept(
-                manifest, c->profile, group[g], winner->storage_path, arena
+                manifest, c->profile, group[g], kept->storage_path, arena
             );
             if (err) return err;
         }
 
-        i += n;
+        i += count;
     }
 
     return NULL;
@@ -1512,17 +1672,51 @@ const manifest_row_t *manifest_lookup_claim(
 }
 
 /**
+ * Does `profile` hold `storage_path` as a name for `location`?
+ */
+bool manifest_holds_name(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *location,
+    const char *storage_path
+) {
+    if (!manifest || !location || !storage_path) return false;
+
+    const contribution_t *c = manifest_contribution(manifest, profile);
+    if (!c) return false;
+
+    /* Where the profile names the location more than once, the group is every
+     * name it holds there, the standing one among them — so membership is the
+     * whole question and which of them stands is not asked. */
+    manifest_row_t **group =
+        c->contested ? hashmap_get(c->contested, location) : NULL;
+    if (group) {
+        for (size_t g = 0; group[g]; g++) {
+            if (strcmp(group[g]->storage_path, storage_path) == 0) return true;
+        }
+        return false;
+    }
+
+    const manifest_row_t *row = hashmap_get(c->index, location);
+
+    return row && !manifest_is_derived(row) &&
+           strcmp(row->storage_path, storage_path) == 0;
+}
+
+/**
  * What `profile` calls `location` under this view
  *
- * The leaf clause and the ascent, over the one two-layer read (manifest_standing):
- * the claim standing at the location names it whatever its kind — this command's
- * own if it has admitted one there, since it has already named this very location
- * — and a location nothing stands at falls through to the ascent, the profile
- * holding no row there or holding a derived one, which is no claim.
+ * The leaf clause and the ascent, over the one read that answers what stands
+ * somewhere (manifest_standing): the claim standing at the location names it
+ * whatever its kind — this command's own if it has admitted one there, since it
+ * has already named this very location, and the one the next settle will keep
+ * where the profile names the location twice — and a location nothing stands at
+ * falls through to the ascent, the profile holding no row there or holding a
+ * derived one, which is no claim.
  *
  * The answer is the caller's arena's whichever rung produced it: the leaf clause
- * copies, which costs one strdup on a call made once per argument and buys the
- * absence of a contract where three lifetimes meet.
+ * copies, which costs one strdup and buys the absence of a contract where three
+ * lifetimes meet.
  */
 error_t *manifest_name(
     const manifest_t *manifest,
@@ -1539,20 +1733,27 @@ error_t *manifest_name(
 
     *out_storage = NULL;
 
-    const contribution_t *c = manifest_contribution(manifest, profile);
+    const naming_t n = {
+        .c       = manifest_contribution(manifest, profile),
+        .mounts  = manifest->mounts,
+        .profile = profile,
+        .pending = pending,
+        .arena   = arena,
+    };
 
-    const char *here = manifest_standing(c, pending, location).storage_path;
-    if (here) {
-        *out_storage = arena_strdup(arena, here);
+    manifest_claim_t here = { 0 };
+    error_t *err = manifest_standing(&n, location, &here);
+    if (err) return err;
+
+    if (here.storage_path) {
+        *out_storage = arena_strdup(arena, here.storage_path);
         if (!*out_storage) {
             return ERROR(ERR_MEMORY, "Failed to copy the name");
         }
         return NULL;
     }
 
-    return manifest_ascend(
-        c, manifest->mounts, profile, location, pending, arena, out_storage
-    );
+    return manifest_ascend(&n, location, out_storage);
 }
 
 /**
@@ -1623,6 +1824,10 @@ void manifest_free(manifest_t *manifest) {
         if (manifest->contributions[i].index) {
             hashmap_free(manifest->contributions[i].index, NULL);
             manifest->contributions[i].index = NULL;
+        }
+        if (manifest->contributions[i].contested) {
+            hashmap_free(manifest->contributions[i].contested, NULL);
+            manifest->contributions[i].contested = NULL;
         }
     }
     if (manifest->index) {

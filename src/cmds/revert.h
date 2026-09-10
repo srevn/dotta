@@ -68,9 +68,11 @@ typedef struct {
  * name is where a claim lands on every machine — so where the tip holds nothing
  * the restore takes the name the commit held it by, never one composed from today's
  * roots, and a typed name is refused where authoring it would give the profile
- * a second name for one location. Encrypted bytes are sealed under their own
- * name (crypto/cipher.h), so a cross-name restore reseals them: the same plaintext,
- * a different object, and a key where a same-name restore needed none.
+ * a second name for one location — a name the profile already holds there is a
+ * re-capture and authors nothing, whether or not the settle kept it
+ * (core/manifest.h manifest_holds_name). Encrypted bytes are sealed under their
+ * own name (crypto/cipher.h), so a cross-name restore reseals them: the same
+ * plaintext, a different object, and a key where a same-name restore needed none.
  *
  * The operation:
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)

@@ -36,6 +36,10 @@
  * names are decided when the contribution is whole — **the name the profile would
  * give the location fresh** stands (manifest_name's ascent), or the bytewise-least
  * where the branch holds no such name, and every other is recorded against it.
+ * That decision is not a fact the build fixes but a rule, re-asked wherever a
+ * name is read: a command's own uncommitted claims change what a location would
+ * be called fresh, so manifest_name answers what the *next* settle will keep
+ * rather than what the last one did.
  *
  * Two things a claim can fail to become, and the health channel says both. A
  * claim this machine cannot place has no location: manifest_unbound, the repair
@@ -73,10 +77,10 @@
  *     manifest_mounts (the table the rows were placed by, lent), manifest_lookup
  *     (by filesystem path, O(1)), manifest_lookup_storage (by claim — a storage
  *     path under one profile, linear), manifest_holders (how many rows hold a
- *     name, and the one when one does), manifest_lookup_claim and manifest_name
- *     (one profile's own contribution, whoever won the location); and
- *     manifest_diff, the per-profile delta between two views that the
- *     scope-changing verbs and sync print their receipts from.
+ *     name, and the one when one does), manifest_lookup_claim, manifest_name
+ *     and manifest_holds_name (one profile's own contribution, whoever won the
+ *     location); and manifest_diff, the per-profile delta between two views that
+ *     the scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -755,6 +759,13 @@ size_t manifest_holders(
  * the first. A caller that wants the subtree reads the rows beneath the location,
  * never the tree beneath the name.
  *
+ * Where the profile names the location more than once this is the row the settle
+ * kept, which is the location's shape. It is not always the row a namer answers
+ * from: manifest_name under a pending layer answers the name the *next* settle
+ * will keep, and that can be another of the group's. A caller that reads both
+ * reads one for the shape the profile's claims give the location and the other
+ * for the name it is about to author.
+ *
  * Readers: the claim search a profile-scoped verb makes (core/profiles.h
  * profile_claim_name, and the per-branch arm of profile_discover_claims), which
  * asks this before the namer — a derived claim is something the profile holds
@@ -765,6 +776,47 @@ const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
     const char *profile,
     const char *filesystem_path
+);
+
+/**
+ * Does `profile` hold `storage_path` as a name for `location`?
+ *
+ * A name in this profile's own contribution — the claim standing at the location,
+ * or one the settle recorded against it (manifest_unkept) — and never the tree's
+ * shape: a subtree the profile's own blobs spell is not a name it holds, and an
+ * empty tracked directory is a name with no tree entry at all. Both inputs are
+ * why the tree cannot answer this.
+ *
+ * A derived row answers false: an ancestor claim names nothing, and an explicit
+ * claim may be authored over it. An unbound claim answers false too — it stands
+ * nowhere on this machine, so it is at no location.
+ *
+ * The question a verb asks before authoring a name the user typed: a name the
+ * profile already holds is a re-capture, and only a name new to it at a location
+ * the profile already names is a second name. The committed claims alone are
+ * read — a name this command has already admitted is its own listing to check.
+ * O(1) where the profile names the location once, and a scan of the group where
+ * it names it twice.
+ *
+ * It is also the boundary the namer's own answer rests on: because a verb admits
+ * only a name the profile holds, the group the settle decides over cannot grow
+ * under an uncommitted claim, and manifest_name can answer what the next settle
+ * will keep.
+ *
+ * Readers: add's typed-argument admission (cmds/add.c) and revert's restore
+ * admission (cmds/revert.c). Both spell one rule: a profile names a location once.
+ *
+ * @param manifest Manifest (NULL answers false)
+ * @param profile The asker (NULL answers false)
+ * @param location Absolute location (NULL answers false)
+ * @param storage_path The name in question (NULL answers false)
+ * @return Whether this profile holds that name for that location
+ */
+bool manifest_holds_name(
+    const manifest_t *manifest,
+    const char *profile,
+    const char *location,
+    const char *storage_path
 );
 
 /**
@@ -784,6 +836,11 @@ const manifest_row_t *manifest_lookup_claim(
  * kind saying whether anything can be named beneath it. A DIRECTORY the command
  * admitted is a claim it made — an argument, or a directory its walk entered; a
  * verb that would admit a derived claim has no business naming through it.
+ *
+ * The nearer layer answers alone for a place the profile names at most once.
+ * Where it names a place more than once, *which* of its names stands there is
+ * the settle's question and not a single claim's, and the namer asks it again
+ * under the claims admitted (manifest_name).
  *
  * The map is keyed by location in the spelling the view's own rows carry (what
  * mount_locate produced), which is what the ascent truncates to reach a rung;
@@ -844,8 +901,28 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * standing there being what it is deciding. The settle takes the ascent's answer
  * alone and keeps the name of the group that IS it; where the branch holds none
  * of it — the composed name is a name nobody committed — the bytewise-least stands
- * instead. Every other name is manifest_unkept's, and this function then answers
- * the kept one at that location, whichever of the two ways it was chosen.
+ * instead. Every other name is manifest_unkept's.
+ *
+ * **What the next settle will keep.** At such a location this function does not
+ * report that decision but re-takes it, because `pending` can change what the
+ * location's ascent composes and therefore which name the settle keeps. What
+ * comes back is the name the profile's next contribution will stand there, given
+ * the claims the asker has admitted — by induction on the rungs, top down: a
+ * location the asker claims and the profile does not otherwise name has that
+ * claim and no other; a location the profile names more than once is decided by
+ * the settle's own rule over its group, re-asked under the rungs above it; and
+ * a verb admits at such a location only a name the profile already holds
+ * (manifest_holds_name), so no group grows. That is what lets a capture land on
+ * the bytes the machine will deploy rather than on a name the next load abandons.
+ *
+ * The induction is over the claims admitted **so far**. Naming is a snapshot
+ * taken when a path is listed, and a claim a later argument admits above a location
+ * already named does not re-name it; a verb whose arguments can do that says so
+ * where it orders them (cmds/add.c).
+ *
+ * With `pending` NULL the re-taking reproduces the choice the settle already
+ * made — a cost, never a difference — and the cost exists only where a branch
+ * arrived holding two names for one path.
  *
  * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
  *
@@ -877,8 +954,8 @@ error_t *manifest_name(
 /**
  * Free a manifest — the heap indexes only; rows are the arena's
  *
- * The view's own index and each contribution's. A build that failed partway has
- * as many contributions as it registered, so this frees exactly what it made.
+ * The view's own index, and each contribution's two. A build that failed partway
+ * has as many contributions as it registered, so this frees exactly what it made.
  *
  * No-op on NULL.
  */

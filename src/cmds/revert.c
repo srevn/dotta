@@ -128,14 +128,14 @@ static error_t *select_profile(
  * arena's and outlives the view — manifest_free releases the heap indexes and
  * nothing else — so the answer survives this call.
  *
- * The row and not its name, because this file asks it three ways: the read takes
- * any claim, the write's name takes the claim standing there whatever it is called,
- * and the admission takes only a claim that *names* the location — a derived
- * directory naming nothing (manifest_is_derived). A verb answering a string would
- * have to pick one of the three for all of them, which is also why revert no
- * longer asks core/profiles.h profile_claim_name: over a past tree a name today's
- * roots would compose is one that tree never held, and for a verb that writes,
- * composing a name would choose a deployment contract.
+ * The row and not its name, because this file asks it two ways: the read takes
+ * any claim, and the write's name takes the claim standing there whatever it is
+ * called. A verb answering a string would have to pick one of them for both,
+ * which is also why revert no longer asks core/profiles.h profile_claim_name:
+ * over a past tree a name today's roots would compose is one that tree never
+ * held, and for a verb that writes, composing a name would choose a deployment
+ * contract. The third question — may this name be authored at all — is the
+ * admission's, and it reads more of one view than a row (refuse_second_name).
  *
  * Strict, like every view: a tree whose sheet will not load refuses the question
  * rather than answering from the tree alone. cmd_revert loads both sheets strictly
@@ -174,6 +174,89 @@ static error_t *claim_standing(
     manifest_free(view);
 
     return NULL;
+}
+
+/**
+ * Refuse a typed name that would give the profile a second name for one location
+ *
+ * The tip's own contribution, asked two questions while it is alive: the claim
+ * standing where the name resolves, and whether the profile holds the typed name
+ * at all (core/manifest.h manifest_holds_name). Both readings are the
+ * contribution's, so they are asked of one build rather than of a row that outlived
+ * it — the second reads the names the settle recorded against the standing one,
+ * which no row carries.
+ *
+ * A name the profile already holds is a re-capture and authors nothing, whether
+ * it is the name standing at the location or one the settle did not keep. Only
+ * a name new to the profile at a location it already names is a second name,
+ * and that is what this refuses — naming the first, and not skippable by --force:
+ * a refusal is not a confirmation.
+ *
+ * A derived claim names nothing (manifest_is_derived), so it is not a first name
+ * and does not block one — explicit outranks derived within a profile as across
+ * them.
+ *
+ * @param ctx Dispatch context (must not be NULL)
+ * @param tip The tip's tree, whose claims the name would join (must not be NULL)
+ * @param profile Whose claims these are (must not be NULL)
+ * @param location Where the typed name resolves (must not be NULL)
+ * @param name The typed name (must not be NULL)
+ * @param commit Abbreviated target commit oid, for the remedy (must not be NULL)
+ * @return The refusal, or NULL when the name may be authored
+ */
+static error_t *refuse_second_name(
+    const dotta_ctx_t *ctx,
+    const git_tree *tip,
+    const char *profile,
+    const char *location,
+    const char *name,
+    const char *commit
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(tip);
+    CHECK_NULL(profile);
+    CHECK_NULL(location);
+    CHECK_NULL(name);
+    CHECK_NULL(commit);
+
+    manifest_t *view = NULL;
+    error_t *err = manifest_build_tree(
+        ctx->run.repo, tip, profile, ctx->run.mounts, ctx->arena, &view
+    );
+    if (err) return err;
+
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, location);
+    if (row && !manifest_is_derived(row) &&
+        !manifest_holds_name(view, profile, location, name)) {
+        /* The location is the shared term of three paths in one sentence, and
+         * the one path here the user never typed — so it is spelled the way the
+         * shell spells it, as the screen that reports the pair this refuses already
+         * spells it (cmds/status.c's unused-path listing, base/output.h
+         * output_format_path). The remedy stays runnable: a tilde is what the
+         * shell expands back. */
+        char shown[PATH_MAX];
+        output_format_path(location, identity()->home, shown, sizeof(shown));
+
+        /* Both remedies are spelled to run: the revert in the three-positional
+         * form, which assigns its words by position and never asks
+         * str_looks_like_git_ref whether the second one is a commit — the
+         * two-positional form reads a tag or a branch name as a profile and refuses
+         * the command it was offered as. */
+        err = ERROR(
+            ERR_INVALID_ARG,
+            "Profile '%s' names '%s' as '%s'\n\n"
+            "'%s' would be a second name for it, and a profile names a "
+            "location once.\n"
+            "  dotta revert %s %s %s   restores those bytes into it\n"
+            "  dotta remove %s %s   gives that name up first",
+            profile, shown, row->storage_path, name,
+            profile, shown, commit, profile, row->storage_path
+        );
+    }
+
+    manifest_free(view);
+
+    return err;
 }
 
 /**
@@ -885,56 +968,21 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 12: the admission. A typed name the tip's tree does not hold is a
      * name this command would author, and a profile names a location once
-     * (infra/mount.h, core/manifest.h): if another claim of the profile already
-     * *names* where this name resolves, authoring it would give the profile a
-     * second name for one place — the pair the health channel calls an unused
-     * path, and only `remove` can undo. Refused, naming the first, and not
-     * skippable by --force: a refusal is not a confirmation.
-     *
-     * A derived claim names nothing (manifest_is_derived), so it is not a first
-     * name and does not block one — explicit outranks derived within a profile
-     * as across them. It is still something the profile holds, which is why the
-     * location arm above is answered by it and this one is not: two questions,
-     * one row, two projections.
+     * (infra/mount.h, core/manifest.h): if the profile already names where this
+     * name resolves and does not hold this name for it, authoring it would give
+     * the profile a second name for one place — the pair the health channel calls
+     * an unused path, and only `remove` can undo (refuse_second_name).
      *
      * The entry test is the authoring question and not a cost guard: a name the
      * tree already holds is not authored, and whether one it lacks is a second
-     * name is the row's to answer. A location argument is answered *by* the claim
-     * standing there and can never be a second name, so this arm is the typed
-     * one's alone.
-     *
-     * Both remedies are spelled to run: the revert in the three-positional form,
-     * which assigns its words by position and never asks str_looks_like_git_ref
-     * whether the second one is a commit — the two-positional form reads a tag
-     * or a branch name as a profile and refuses the command it was offered as. */
+     * name is the contribution's to answer. A location argument is answered *by*
+     * the claim standing there and can never be a second name, so this arm is
+     * the typed one's alone. */
     if (arg.key == PATH_KEY_STORAGE && !standing_entry && location) {
-        const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, stage_tree(stage), profile, location, &row);
+        err = refuse_second_name(
+            ctx, stage_tree(stage), profile, location, restored_name, opts->commit
+        );
         if (err) goto cleanup;
-
-        if (row && !manifest_is_derived(row) &&
-            strcmp(row->storage_path, restored_name) != 0) {
-            /* The location is the shared term of three paths in one sentence,
-             * and the one path here the user never typed — so it is spelled the
-             * way the shell spells it, as the screen that reports the pair this
-             * refuses already spells it (cmds/status.c's unused-path listing,
-             * base/output.h output_format_path). The remedy stays runnable: a
-             * tilde is what the shell expands back. */
-            char shown[PATH_MAX];
-            output_format_path(location, identity()->home, shown, sizeof(shown));
-
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "Profile '%s' names '%s' as '%s'\n\n"
-                "'%s' would be a second name for it, and a profile names a "
-                "location once.\n"
-                "  dotta revert %s %s %s   restores those bytes into it\n"
-                "  dotta remove %s %s   gives that name up first",
-                profile, shown, row->storage_path, restored_name,
-                profile, shown, opts->commit, profile, row->storage_path
-            );
-            goto cleanup;
-        }
     }
 
     /* Step 13: the object the commit would store under the name the write uses.

@@ -188,14 +188,18 @@ typedef enum dotta_crypto_mode {
  * This machine's topology over the enabled set — `manifest_mount_table` over
  * the state's rows and `$HOME` — for locating the command's input
  * (`path_input_resolve`, `scope_build`). Requires `state`. A command that reads
- * a CLI path declares it. A command that declares the view as well borrows the
- * view's table — `manifest_mounts`, the one the builder derived from the rows
- * it read — so the arguments it locates and the rows it selects read one topology;
- * a command that declares `mounts` alone gets its own build from the same rows.
- * Every location the run spells — a row's, a record's, a located argument's —
- * is the physical spelling as far as the table knows its roots (`infra/mount.h`),
- * whichever spelling the binder or the user typed; the rows keep the binder's
- * for the screens.
+ * a CLI path declares it — unless it brings a binding of its own that no row
+ * need hold (`add --target`), which builds the same table with that binding
+ * standing for its profile's row (`core/manifest.h` `manifest_mount_table`) and
+ * reads that: the dispatcher's would be a second topology, and the one thing
+ * worse than no table is two. A command that declares the view as well borrows
+ * the view's table — `manifest_mounts`, the one the builder derived from the
+ * rows it read — so the arguments it locates and the rows it selects read one
+ * topology; a command that declares `mounts` alone gets its own build from the
+ * same rows. Every location the run spells — a row's, a record's, a located
+ * argument's — is the physical spelling as far as the table knows its roots
+ * (`infra/mount.h`), whichever spelling the binder or the user typed; the rows
+ * keep the binder's for the screens.
  *
  * crypto
  * ------

@@ -1379,11 +1379,13 @@ static error_t *manifest_allocate(
  * into mount_t entries and delegates the augmentation (HOME, canonical HOME,
  * root sentinel) to mount_table_build. The one derivation of this machine's
  * topology from the rows: manifest_build runs it below before it places a row,
- * and the dispatcher runs it alone for a command that declares `mounts` without
- * the view, so the two read one value from one instant's rows.
+ * the dispatcher runs it alone for a command that declares `mounts` without the
+ * view, and a command that brought a binding of its own runs it with that, so
+ * every one of them reads one value from one instant's rows.
  */
 error_t *manifest_mount_table(
     const state_t *state,
+    const mount_t *binding,
     arena_t *arena,
     mount_table_t **out
 ) {
@@ -1395,21 +1397,30 @@ error_t *manifest_mount_table(
 
     state_profiles_t rows = state_peek_profiles(state);
 
-    mount_t *mounts = NULL;
-    if (rows.count > 0) {
-        mounts = arena_calloc(arena, rows.count, sizeof(*mounts));
-        if (!mounts) {
-            return ERROR(ERR_MEMORY, "Failed to allocate mounts");
-        }
-        for (size_t i = 0; i < rows.count; i++) {
-            mounts[i] = (mount_t){
-                .profile = rows.entries[i].name,
-                .target = rows.entries[i].target
-            };
-        }
+    /* One slot per row plus the binding's, which is always there to reserve:
+     * the array is never NULL and mount_table_build takes it with a count of
+     * zero. The binding goes in first and its profile's row is skipped below,
+     * so substituting for a row and adding where there is none are one arm. */
+    mount_t *mounts = arena_calloc(arena, rows.count + 1, sizeof(*mounts));
+    if (!mounts) {
+        return ERROR(ERR_MEMORY, "Failed to allocate mounts");
     }
 
-    return mount_table_build(arena, mounts, rows.count, out);
+    size_t count = 0;
+    if (binding) {
+        mounts[count++] = *binding;
+    }
+    for (size_t i = 0; i < rows.count; i++) {
+        if (binding && strcmp(rows.entries[i].name, binding->profile) == 0) {
+            continue;
+        }
+        mounts[count++] = (mount_t){
+            .profile = rows.entries[i].name,
+            .target = rows.entries[i].target
+        };
+    }
+
+    return mount_table_build(arena, mounts, count, out);
 }
 
 /**
@@ -1437,7 +1448,7 @@ error_t *manifest_build(
      * machine's $HOME — built here, from the rows of this instant, so a custom/
      * path always resolves under the target the row it came from carries. */
     mount_table_t *mounts = NULL;
-    error_t *err = manifest_mount_table(state, arena, &mounts);
+    error_t *err = manifest_mount_table(state, NULL, arena, &mounts);
     if (err) {
         return error_wrap(err, "Failed to build mount table");
     }

@@ -235,7 +235,7 @@ static error_t *open_run(
             run->mounts = manifest_mounts(run->manifest);
         } else {
             mount_table_t *mounts = NULL;
-            err = manifest_mount_table(run->state, arena, &mounts);
+            err = manifest_mount_table(run->state, NULL, arena, &mounts);
             if (err) goto done;
             run->mounts = mounts;
         }

@@ -10,7 +10,8 @@
  * inside the build, and nothing here writes. Surface is two-fold — builders and
  * readers — with one function beside them: manifest_mount_table, the build's
  * own table derivation on its own, for a command that needs this machine's topology
- * without a view (include/runtime.h).
+ * without a view (include/runtime.h) or with a binding of its own the rows do
+ * not hold yet.
  *
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
@@ -535,11 +536,23 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * and gets the view's own: one build, one value, and the arguments it locates
  * read the topology its rows were placed by. Rule 1, never cache a cache.
  *
- * The derivation stays the builder's, never a parameter of it: a re-target is
- * in the next view because the next build reads the rows again, and a caller
- * handed the table would have to remember to rebuild it after every mutation
- * that moves one — silently placing a custom/ row under yesterday's target when
- * it forgot.
+ * `binding` is NULL for a reader describing the machine as it stands — the
+ * dispatcher's build and the view's own. A command that declares a binding of
+ * its own, which no row need hold (`add --target` on a new profile, or a disabled
+ * one), passes it here rather than building a table beside this one: the
+ * substitution is total and by name — the profile's own row is not read, so a
+ * binding with no target says that profile is bound nowhere in this run (mount_t)
+ * — and it is the only difference between the two topologies. A command whose
+ * arguments are located under one table and whose rows are placed under another
+ * has no key at all: with a second profile bound through a link inside the target,
+ * a table holding one binding leaves `<target>/link/x` as written where the view
+ * reads it through, and the ownership event is written nowhere.
+ *
+ * The derivation itself stays the builder's, never a parameter of it — a binding
+ * is one pairing the run declares, not a table handed in: a re-target is in the
+ * next view because the next build reads the rows again, and a caller handed
+ * the table would have to remember to rebuild it after every mutation that moves
+ * one — silently placing a custom/ row under yesterday's target when it forgot.
  *
  * Name and target are read from the row cache for the call only — the table copies
  * every string it keeps — so the handle is a value: the topology the rows described
@@ -552,12 +565,15 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * root/ and resolve no custom/ path, silently.
  *
  * @param state State handle (must not be NULL; borrowed, not freed)
+ * @param binding The run's own binding, standing for its profile's row, or NULL
+ *                for the machine as the rows describe it (borrowed for the call)
  * @param arena Arena backing the handle (must not be NULL; outlives the handle)
  * @param out Output handle (must not be NULL; lifetime tracks arena)
  * @return Error or NULL on success
  */
 error_t *manifest_mount_table(
     const state_t *state,
+    const mount_t *binding,
     arena_t *arena,
     mount_table_t **out
 );

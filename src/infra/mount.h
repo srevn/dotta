@@ -64,8 +64,9 @@
  * Four questions over the same data:
  *   - Where a spelling stands (filesystem -> location): mount_locate, the
  *     physical spelling as far as the table knows its roots — asked once per
- *     argument and once per directory a walk enters, never per child, and no
- *     other question's first step.
+ *     argument and once per directory a walk enters, never per child (and per
+ *     component of an argument whose jail boundary must be found), and no other
+ *     question's first step.
  *   - What a profile would call a location it holds no claim at (location ->
  *     storage): mount_name, beneath the deepest of that profile's own roots;
  *     nothing at a root itself. The fuller question — a claim of the profile
@@ -301,6 +302,11 @@ typedef struct {
  *   - ERR_INVALID_ARG when a mount names no profile.
  *   - ERR_MEMORY on arena allocation failure.
  *
+ * One production reader: core/manifest.h's manifest_mount_table, which shapes
+ * the state's rows — and a command's own binding, where the run brought one —
+ * into the array. A command builds no table of its own; two builds from two arrays
+ * are two topologies, and a location keyed under one is not a key under the other.
+ *
  * @param arena       Arena for the table and its internal storage
  * @param mounts      Caller-declared mounts (may be NULL when count is 0)
  * @param mount_count Number of mounts
@@ -331,11 +337,15 @@ error_t *mount_table_build(
  * it is asked once per argument and once per directory a walk enters, never per
  * child: a child joined beneath a location is a location, the walkers' rule,
  * and a directory that is a binder's own spelling is the one join that is not —
- * read through here, so the walk goes on inside it under the physical. Every
- * location the table produces — a resolve's, a row's, a child joined beneath
- * one — is its own answer, which is what makes a location a key the resolver's
- * answer and the view's rows share by strcmp. The one exception is stated here,
- * not hidden: a claim of the very link a binding is declared through (a stranger's
+ * read through here, so the walk goes on inside it under the physical. One question
+ * asks per component instead, and it asks about an argument's own ancestors rather
+ * than its children: where a `--target` jail's boundary falls in an argument
+ * spelled from outside it, which no pair of strings can answer because a target
+ * has as many spellings as the aliases above it (cmds/add.c). Every location
+ * the table produces — a resolve's, a row's, a child joined beneath one — is
+ * its own answer, which is what makes a location a key the resolver's answer
+ * and the view's rows share by strcmp. The one exception is stated here, not
+ * hidden: a claim of the very link a binding is declared through (a stranger's
  * `home/jail/link`) stands at the link (mount_resolve), and that spelling, located,
  * is the binding's directory — the row is reached beneath its parent and by its
  * name, never by its own spelling, and a walk that meets the link offers it as
@@ -347,9 +357,10 @@ error_t *mount_table_build(
  * every caller locates through a table its own arena built.
  *
  * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
- * key an argument is matched by; add's argument arm and every directory its walk
- * descends into (cmds/add.c); `ignore --test`'s filesystem arm (cmds/ignore.c).
- * The namer does not locate — its input is a location, and this is what makes one.
+ * key an argument is matched by; add's argument arm, its `--target` boundary
+ * and every directory its walk descends into (cmds/add.c); `ignore --test`'s
+ * filesystem arm (cmds/ignore.c). The namer does not locate — its input is a
+ * location, and this is what makes one.
  *
  * @param table        Mount table (must not be NULL)
  * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)

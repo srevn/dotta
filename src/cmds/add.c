@@ -127,28 +127,106 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
 }
 
 /**
- * Is `path` the target, or beneath it, under either spelling?
+ * Is this spelling the target, or beneath it?
  *
- * One directory, two strings: as its binder typed it, and as realpath spells it
- * — the same string when realpath agrees or cannot answer, the way the table
- * spells a root (infra/mount.h). An argument arrives under either: tab-completion
- * and find give the physical one, the flag usually the typed one, so a physical
- * input under a raw-typed target — or the reverse, macOS's /tmp -> /private/tmp
- * under `--target /tmp/web` — is inside without being re-prepended to nonsense.
+ * Asked of the table, one folded prefix at a time — "/", "/a", "/a/b", … — until
+ * a prefix stands where the target does. One directory has as many spellings as
+ * the aliases above it: as its binder typed it, as realpath spells it, read through
+ * HOME's own link, read through another profile's declared binding. Arguments
+ * arrive under all of them — tab-completion and find give the physical one, the
+ * flag usually the typed one — and the table is the only thing that knows they
+ * are one place, so the boundary is found by asking it rather than by holding a
+ * pair of strings and comparing bytes. The last prefix asked is the whole spelling,
+ * so the target is inside itself and `add web --target ~/jail ~/jail` is the
+ * jail, walked.
  *
- * str_path_beneath is strict and the target is inside itself, so `add web --target
- * ~/jail ~/jail` is the jail, walked. Asked twice for each argument: before the
- * compose, on the bytes as typed — unfolded, so a `..` beneath the target is
- * inside here and walks out at the fold, where the escape rule reads it — and
- * after it, on the folded spelling, to refuse what walked out.
+ * The prefix is folded and the tail is not: the decision is about where the
+ * argument was *spelled from*, and folding the tail first destroys it —
+ * `<target>/../secret` folds to a path outside the target, would be re-rooted
+ * under it, and would name a different file that may well exist. Past the boundary
+ * the tail is read as typed: a declared link inside the jail that reaches outside
+ * is typed inside and named for where it lands.
+ *
+ * Every prefix is folded before it is asked, because mount_locate's input is
+ * absolute and folded (infra/mount.h) — `/a/..` is a spelling of nowhere. The
+ * boundary is not always found before the first `..`, and does not need to be:
+ * `/a/../<target>/x` meets one first, and the fold is per prefix, not per argument.
+ * A `.` leaves the prefix as it was and a `..` returns it to one the append that
+ * made it already asked about, so neither asks again; the root the walk starts
+ * from is no binding's spelling (the table spells it "") and no target is "/"
+ * (mount_validate_target), so it is not the boundary either.
+ *
+ * `spelling` is absolute: the caller's grammar decides who is asked at all, and
+ * a bare relative path is the jail's without a question (spell_argument). The
+ * scratch is sized for one regardless — folding never grows a path — so the gate
+ * is a rule about meaning, never about memory.
+ *
+ * O(depth) locates per argument, never per child. Asked twice for each argument:
+ * before the compose, on the bytes as typed — unfolded, so a `..` beneath the
+ * target is inside here and walks out at the fold, where the escape rule reads
+ * it — and after it, on the folded spelling, to refuse what walked out. The scratch
+ * is the arena's and abandoned, the module's idiom, so no path here has a free
+ * to get wrong.
+ *
+ * @param mounts          The command's table (must not be NULL)
+ * @param spelling        Absolute filesystem spelling, as typed (must not be NULL)
+ * @param target_location Where the table says the target stands (must not be NULL)
+ * @param arena           Arena for the scratch and the locates
+ * @param out_inside      True iff a prefix of `spelling` stands at the target
+ * @return Error or NULL on success
  */
-static bool inside_target(
-    const char *path, const char *target, const char *target_physical
+static error_t *inside_target(
+    const mount_table_t *mounts, const char *spelling, const char *target_location,
+    arena_t *arena, bool *out_inside
 ) {
-    return strcmp(path, target) == 0 ||
-           str_path_beneath(path, target, strlen(target)) ||
-           strcmp(path, target_physical) == 0 ||
-           str_path_beneath(path, target_physical, strlen(target_physical));
+    *out_inside = false;
+
+    /* The folded prefix, grown one component at a time, with "." dropped and
+     * ".." popping — the fold fs_normalize_path performs over a whole argument,
+     * applied per prefix so the prefixes exist to be asked about. Folding never
+     * grows a path, so the spelling's own length plus a leading slash and a
+     * terminator bounds it, absolute or not. */
+    char *folded = arena_alloc(arena, strlen(spelling) + 2);
+    if (!folded) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the boundary scratch");
+    }
+    folded[0] = '/';
+    folded[1] = '\0';
+    size_t len = 1;
+
+    const char *cursor = spelling;
+    while (*cursor) {
+        while (*cursor == '/') cursor++;
+        if (!*cursor) break;
+
+        const char *component = cursor;
+        while (*cursor && *cursor != '/') cursor++;
+        size_t length = (size_t) (cursor - component);
+
+        if (length == 1 && component[0] == '.') continue;
+        if (length == 2 && component[0] == '.' && component[1] == '.') {
+            /* str_path_parent_len keeps the root's own slash ("/etc" -> 1, "/"
+             * -> 1), so the root pops to itself (base/string.h). */
+            len = str_path_parent_len(folded);
+            folded[len] = '\0';
+            continue;
+        }
+
+        if (len > 1) folded[len++] = '/';
+        memcpy(folded + len, component, length);
+        len += length;
+        folded[len] = '\0';
+
+        const char *location = NULL;
+        error_t *err = mount_locate(mounts, folded, arena, &location);
+        if (err) return err;
+        if (strcmp(location, target_location) == 0) {
+            *out_inside = true;   /* The tail is unread: past here it is Git's */
+            return NULL;
+        }
+    }
+
+    return NULL;
 }
 
 /**
@@ -167,8 +245,9 @@ static bool inside_target(
  *                    etc/foo                 -> <target>/etc/foo  (the jail's)
  *                    /etc/foo                -> <target>/etc/foo  (re-rooted)
  *                    <target>/etc/foo        -> as typed          (inside)
- *                    <target-physical>/etc/x -> as typed          (inside, the
- *                                                                  other spelling)
+ *                    <any spelling of the    -> as typed          (inside, under
+ *                     target>/etc/x                                a spelling only
+ *                                                                  the table knows)
  *   cd <target>/etc; ./x                     -> <target>/etc/x    (from here)
  *                    ../x                    -> <target>/x        (from here,
  *                                                                  still inside)
@@ -182,17 +261,20 @@ static bool inside_target(
  * is not this rule's business — a declared link inside the target that reaches
  * outside is typed inside and admitted, named for where it lands.
  *
+ * @param mounts          The command's table, which the boundary is found through
+ *                        (must not be NULL)
  * @param input           The argument as typed (must not be NULL)
  * @param target          --target, absolute and validated, or NULL: nothing
  *                        re-roots
- * @param target_physical The target as realpath spells it — its own spelling
- *                        when realpath agrees or cannot answer; unread with no
+ * @param target_location Where the table says the target stands; unread with no
  *                        target
+ * @param arena           Arena the boundary reads and writes through
  * @param out             Normalized absolute path (caller must free)
  * @return Error or NULL on success
  */
 static error_t *spell_argument(
-    const char *input, const char *target, const char *target_physical, char **out
+    const mount_table_t *mounts, const char *input, const char *target,
+    const char *target_location, arena_t *arena, char **out
 ) {
     /* The shell's own reading: no target to read the argument as, a tilde path,
      * or an empty argument — no path in any grammar, and the normalizer is the
@@ -202,30 +284,47 @@ static error_t *spell_argument(
         return path_input_normalize(input, out);
     }
 
-    /* Re-root, unless the argument is already the target's: spelled from here,
-     * or standing inside it under either spelling. The join reads a host-absolute
-     * input's leading '/' as its own separator, so `/etc/foo` and `etc/foo` both
-     * land at <target>/etc/foo. */
-    char *composed = NULL;
-    if (input[0] != '.' && !inside_target(input, target, target_physical)) {
-        error_t *join_err = fs_path_join(target, input, &composed);
-        if (join_err) return join_err;
+    /* Standing inside the target is something only an absolute spelling can be
+     * doing: a bare relative path is the jail's by the grammar above, and folding
+     * one onto the root to ask would read `etc/foo` under `--target /etc` as
+     * the target itself and leave the argument wherever the user happens to
+     * stand. */
+    error_t *err = NULL;
+    bool inside = false;
+    if (input[0] == '/') {
+        err = inside_target(mounts, input, target_location, arena, &inside);
+        if (err) return err;
     }
 
-    error_t *err = path_input_normalize(composed ? composed : input, out);
+    /* Re-root, unless the argument is already the target's: spelled from here,
+     * or standing inside it. The join reads a host-absolute input's leading '/'
+     * as its own separator, so `/etc/foo` and `etc/foo` both land at
+     * <target>/etc/foo — and it composes under the target as the row spells it,
+     * which is the spelling the refusal below prints. */
+    char *composed = NULL;
+    if (input[0] != '.' && !inside) {
+        err = fs_path_join(target, input, &composed);
+        if (err) return err;
+    }
+
+    err = path_input_normalize(composed ? composed : input, out);
     free(composed);
     if (err) return err;
 
     /* One check for every escape, whatever the shape: `..` walked out of a path
      * that started inside, or a path spelled from here while the user stands
      * outside. No per-shape pre-validation in the compose step. */
-    if (!inside_target(*out, target, target_physical)) {
+    bool landed_inside = false;
+    err = inside_target(mounts, *out, target_location, arena, &landed_inside);
+    if (!err && !landed_inside) {
         err = ERROR(
             ERR_INVALID_ARG,
             "Path '%s' resolves outside target root '%s'.\n"
             "A path spelled from here, or one walking out with '..', cannot "
             "escape the target.", *out, target
         );
+    }
+    if (err) {
         free(*out);
         *out = NULL;
     }
@@ -865,8 +964,14 @@ static error_t *create_commit(
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the state
  *            and the command arena)
- * @param mounts The command's table, which binds this profile's target whether
- *               the run brought one or state already held it (must not be NULL)
+ * @param mounts The command's table: this machine's rows, with the run's own
+ *               binding standing for this profile's (must not be NULL). It is
+ *               built from the rows STEP 1 below leaves for the view — a row
+ *               that exists holds this very target (the pre-flight took the row's
+ *               spelling), one that does not is written here as this target,
+ *               and a disabled profile has no anchor pass at all — so the location
+ *               this resolves a claim to and the location its row stands at are
+ *               one string, and the join is a lookup rather than a hope
  * @param profile The profile added to (must not be NULL)
  * @param target The binding the run brought, absolute, or NULL: written for a
  *               new profile and an enabled one (the UPSERT keeps a row's own
@@ -1140,9 +1245,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     bool profile_was_new = false;
     bool committed = false;
     metadata_t *metadata = NULL;
-    const mount_table_t *mounts = NULL;   /* The command's table: see below */
+    mount_table_t *mounts = NULL;         /* The command's table: see below */
     const char *target = NULL;            /* --target, absolute: what the row stores */
-    const char *target_physical = NULL;   /* ...as realpath spells it (see below) */
+    const char *target_location = NULL;   /* ...where the table says it stands */
 
     /* The ancestry pass's other half: the keys it retired, read by the record
      * write once the commit that drops them has landed. */
@@ -1230,51 +1335,35 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
         }
-
-        /* The target as realpath spells it, for the arguments that arrive under
-         * that spelling (inside_target): taken once, here, where the flag's value
-         * and the row's have settled — never once per argument. Best-effort, as
-         * the table's own is (infra/mount.h): a target realpath cannot answer
-         * is no alias, and its typed spelling answers alone. */
-        char *physical = NULL;
-        error_t *physical_err = fs_canonicalize_path(target, &physical);
-        target_physical = physical_err ? target : arena_strdup(ctx->arena, physical);
-        error_free(physical_err);
-        free(physical);
-        if (!target_physical) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate the target's spelling");
-            goto cleanup;
-        }
     }
 
-    /* Build the per-command mount table.
+    /* The topology this command reads: this machine's rows, with the binding
+     * the run brought standing for this profile's — which is why add declares
+     * no `mounts` need and the dispatcher builds none (include/runtime.h). One
+     * table for the walk, the argument arm, the boundary above and the record's
+     * join below. A table holding this binding alone would hide every other,
+     * and mount_locate is asker-free by contract: with a second profile bound
+     * through a link inside this target, it left `<target>/link/x` as written
+     * where the post-commit view reads it through, and the ownership event went
+     * nowhere.
      *
-     * Two modes selected by --target:
-     *
-     *   --target given: a single-mount table pairing opts->profile with the target.
-     *     It is the overlay, and that is the whole of its reason: the flag's
-     *     target may be in no row at all (a brand-new profile, a disabled one),
-     *     and where a row exists it is this same target (the idempotent re-bind
-     *     the pre-flight at the top of this function already verified). Other
-     *     profiles' bindings are absent, and that changes nothing — a name is
-     *     the asker's own roots' and no other profile's target is one of them
-     *     (infra/mount.h mount_name).
-     *
-     *   --target absent: borrow ctx->run.mounts. The full enabled set covers
-     *     opts->profile's existing binding (if any) plus HOME and ROOT. Paths
-     *     under opts->profile's stored target are named custom/X correctly without
-     *     re-deriving the binding. */
+     * The flag's own target is the row's whenever a row exists (the pre-flight
+     * above took the row's spelling), and where none does the binding is simply
+     * added — so the rows this table is built from are the rows STEP 1 of the
+     * record phase leaves for the view, and the two key alike. */
+    const mount_t binding = { .profile = opts->profile, .target = target };
+    err = manifest_mount_table(state, target ? &binding : NULL, ctx->arena, &mounts);
+    if (err) goto cleanup;
+
     if (target) {
-        mount_table_t *local_mounts = NULL;
-        mount_t mount = { .profile = opts->profile, .target = target };
-        err = mount_table_build(ctx->arena, &mount, 1, &local_mounts);
-        if (err) {
-            err = error_wrap(err, "Failed to build mount table");
-            goto cleanup;
-        }
-        mounts = local_mounts;
-    } else {
-        mounts = ctx->run.mounts;
+        /* Where the table says the target stands: the one spelling the boundary
+         * compares against, taken once here — where the flag's value and the
+         * row's have settled — and never once per argument. The table is the
+         * producer, its entry for this binding holding the pair already; a binding
+         * realpath cannot answer is known by its own settled spelling, which is
+         * as far as the table says it reaches (infra/mount.h). */
+        err = mount_locate(mounts, target, ctx->arena, &target_location);
+        if (err) goto cleanup;
     }
 
     /* Build ignore rules once per command.
@@ -1412,7 +1501,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * so the walk begins at where the spelling stands and everything it
              * joins beneath is a location too. */
             char *absolute = NULL;
-            err = spell_argument(file, target, target_physical, &absolute);
+            err = spell_argument(
+                mounts, file, target, target_location, ctx->arena, &absolute
+            );
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
@@ -2137,7 +2228,6 @@ const args_command_t spec_add = {
     .payload     = &(const dotta_needs_t){
         .repo    = DOTTA_REPO_OPEN,
         .state   = DOTTA_STATE_WRITE,
-        .mounts  = true,
         .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch    = add_dispatch,

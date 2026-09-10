@@ -27,6 +27,10 @@
  *    for — the walk is. Its `*` parse shortcut goes with it: a bare `*` parsed
  *    the ordinary way carries neither flag and matches every basename, which is
  *    what the shortcut was for.
+ *  - unescape_spaces is libgit2's and answer-neutral: it resolves the escapes
+ *    wildmatch resolves anyway, so a literal reads its full length, and a dangling
+ *    escape is kept rather than dropped — dropping one made `foo\` match `foo`,
+ *    where git matches nothing at all.
  *  - The trailing-whitespace rule is git's: libgit2 trims a trailing tab as well
  *    as a space, which drops a rule git keeps. gitignore(5) says spaces, and
  *    git's trim_trailing_spaces (dir.c:1029) trims those alone.
@@ -106,6 +110,13 @@ static size_t trailing_space_length(const char *p, size_t len) {
 
 /* --- Space-unescape in place (attr_file.c:684) ---------------------- */
 
+/* Resolves the escapes wildmatch would resolve anyway — `\ ` becomes a space,
+ * and every other escape keeps its backslash — so a pattern that cannot glob is
+ * as long as it reads. git has no such pass; it hands the line to the matcher
+ * as written, which answers the same. The one shape where the two could part is
+ * a *dangling* escape (`foo\`), and it is kept: wildmatch reads a trailing
+ * backslash as an escape with nothing behind it and refuses every subject, which
+ * is what git answers for such a rule. */
 static void unescape_spaces(char *str) {
     char *scan, *pos = str;
     bool escaped = false;
@@ -124,8 +135,10 @@ static void unescape_spaces(char *str) {
         escaped = false;
     }
 
-    if (pos != scan)
-        *pos = '\0';
+    if (escaped)
+        *pos++ = '\\';       /* nothing behind it, and the matcher says so */
+
+    *pos = '\0';
 }
 
 /* --- Rule storage growth -------------------------------------------- */

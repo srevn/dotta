@@ -7,6 +7,14 @@
  * to restate every pattern in `.dottaignore`. This module is the single adapter
  * over libgit2's nested-gitignore + attr-stack machinery for that one question.
  *
+ * The answer is libgit2's, and libgit2 differs from git(1) on nested negation:
+ * it stops at the first rung that decides, so `build/` followed by `!build/keep`
+ * leaves `build/keep` un-ignored where git excludes it. `base/gitignore` reads
+ * the rung order git reads; this adapter cannot, and no libgit2 release carries
+ * the fix (libgit2#7339, open upstream). A source tree whose `.gitignore` holds
+ * a negation beneath a directory rule is therefore read more permissively than
+ * the same rules in `.dottaignore` would be.
+ *
  * It is intentionally orthogonal to `core/ignore`, which compiles the user's
  * own `.dottaignore` + config + CLI layers inside the dotta repo. A consumer
  * that wants both behaviours calls both modules — no hidden cross-wiring.

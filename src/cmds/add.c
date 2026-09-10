@@ -399,10 +399,15 @@ static error_t *spell_argument(
  *
  * Either mechanism may be absent. `*out_match` is the rules' verdict — the layer
  * and the rule as written when they decided, undecided when the source tree's
- * .gitignore gave the verdict — so a caller can say who excluded the path.
- * Source-filter errors degrade to a verbose warning and a "not excluded" verdict
- * so an odd source repo never blocks the user from adding a file they explicitly
- * named. The gitignore evaluator never fails — its verdict is applied directly.
+ * .gitignore gave the verdict — so a caller can say who excluded the path. The
+ * rule it names is the outermost that excludes the path: an excluded directory
+ * is final, so the walk ends at the first ancestor a rule excludes and never
+ * reaches the rules below it (base/gitignore.h). Clearing that one can uncover
+ * the next, which is why the refusal offers one `-e` per rule rather than one
+ * flag and a promise. Source-filter errors degrade to a verbose warning and a
+ * "not excluded" verdict so an odd source repo never blocks the user from adding
+ * a file they explicitly named. The gitignore evaluator never fails — its verdict
+ * is applied directly.
  */
 static bool is_excluded(
     const add_walk_t *walk, const char *location, const char *storage_path,
@@ -1974,8 +1979,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 if (match.decided) {
                     err = ERROR(
                         ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
-                        "Add it anyway with -e '!%s', or edit the rule with "
-                        "'dotta ignore'",
+                        "Add it anyway with -e '!%s' — one -e per rule that "
+                        "excludes it — or edit the rule with 'dotta ignore'",
                         file, ignore_origin_describe((ignore_origin_t) match.origin),
                         match.pattern, match.pattern
                     );

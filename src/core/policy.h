@@ -14,7 +14,8 @@
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
  * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR over stored ciphertext
  * 3. File previously encrypted (byte truth) → ENCRYPT (maintain state)
- * 4. Auto-encrypt patterns → ENCRYPT (pattern match)
+ * 4. Auto-encrypt patterns → ENCRYPT (a selector — the last rule that reaches
+ *    the path wins; base/gitignore.h)
  * 5. Default → PLAINTEXT (safe default)
  *
  * Ruleset ownership:

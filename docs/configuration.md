@@ -50,6 +50,10 @@ auto_encrypt = [              # Patterns for automatic encryption
 ]
 ```
 
+The list is a *selector*: the last rule that reaches a file decides, where a rule
+reaches a file when it matches the file itself or any directory above it. A `!`
+rule stands wherever you put it — nothing here is final, unlike `.dottaignore`.
+
 See [Encryption](encryption.md) for the full encryption guide.
 
 ### [ignore]
@@ -159,7 +163,7 @@ dotta ignore --test home/.cache/x/
 
 **Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate), a trailing `/` for directories, a leading `/` to anchor at the mount root (`/.cache/` is `~/.cache` alone; `.cache/` is every `.cache` directory).
 
-Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore.
+Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore — a *pattern*, not a directory an earlier layer excluded. As in git, an excluded directory is final: with a baseline `.cache/`, `!.cache/keep.conf` does nothing and `!.cache/` is what re-opens it. The same holds for `--exclude`: `-e 'build/' -e '!build/keep'` keeps nothing, while `-e 'build/*' -e '!build/keep'` keeps the file, because a pattern that matches no directory builds no barrier. `dotta ignore --test` names the rule that excluded a path, which is the one to clear.
 
 ## Bootstrap
 

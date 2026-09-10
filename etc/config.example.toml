@@ -421,6 +421,15 @@ enabled = false
 #
 # Wildcards: * (any chars), ? (single char), [abc] (character class)
 #
+# The list is a selector, and the last rule that reaches a file wins. A rule
+# reaches a file when it matches the file itself or any directory above it, so
+# ".gnupg/*" covers the whole keyring and "secrets/" covers everything under it.
+# A "!" rule un-selects what it reaches and stands wherever you put it — unlike
+# .dottaignore, nothing here is final, so order is what decides:
+#
+#   [".ssh/", "!.ssh/*.pub"]   the public keys stay plaintext
+#   ["!.ssh/*.pub", ".ssh/"]   the directory rule came last, so it wins
+#
 # Common sensitive file patterns:
 auto_encrypt = [
     ".ssh/id_*",           # SSH private keys (id_rsa, id_ed25519, etc.)

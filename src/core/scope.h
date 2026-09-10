@@ -245,6 +245,15 @@ bool scope_accepts_path(
  * — the kind is what makes `-e 'dir/'` mean "leave that directory alone" for
  * the directory as well as its contents. NULL storage_path or no exclude patterns
  * returns false.
+ *
+ * It is exclusion, not selection, and an excluded directory is final: `-e 'build/'
+ * -e '!build/keep'` does not keep the file, because nothing beneath an excluded
+ * directory can be re-included (base/gitignore.h). The escape is git's own idiom:
+ * name the contents rather than the directory — `build/` with a star after the
+ * slash — and the `!` beneath it stands, because a pattern that matches no
+ * directory builds no barrier. One flag, one grammar: the same patterns are the
+ * CLI layer of `.dottaignore`'s ruleset on `add`, where the walk is a real
+ * traversal, so `-e` cannot read one program here and another there.
  */
 bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind

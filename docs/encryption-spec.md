@@ -450,7 +450,9 @@ auto_encrypt = [
 
 Patterns compile once into a `gitignore_ruleset_t` at `config_load` and live on the config handle (`config->auto_encrypt.rules`). Per-file matching runs in `encryption_policy_matches_auto_patterns`, which strips the storage prefix (`home/`, `root/`, `custom/`) before evaluation so users can write `.ssh/id_*` rather than `home/.ssh/id_*`.
 
-Full gitignore semantics include `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`).
+The grammar is gitignore's — `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`) — but the program is *selection*, not exclusion: the last rule that reaches the path decides, where a rule reaches a path when it matches the path itself or any directory above it. A `!` stands wherever the user put it and nothing is final, so `[".ssh/", "!.ssh/*.pub"]` leaves the public keys plaintext while `["!.ssh/*.pub", ".ssh/"]` does not. `.dottaignore` reads the other program (an excluded directory is final), and `base/gitignore.h` states both.
+
+A file already stored as ciphertext is unaffected by a pattern change: priority 3 reads the committed bytes and keeps it encrypted.
 
 ### Decision priority
 

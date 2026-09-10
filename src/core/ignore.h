@@ -13,7 +13,12 @@
  *
  * Rules from later layers override earlier ones via last-match-wins semantics,
  * so cross-layer negation works: a profile can un-ignore a baseline pattern,
- * CLI can un-ignore anything below, etc.
+ * CLI can un-ignore anything below, etc. What a later layer can un-ignore is a
+ * *pattern*, not a directory an earlier layer excluded: the layers compile into
+ * one ruleset and the ruleset is read as git reads one — the ancestors first,
+ * and an excluded directory final (base/gitignore.h). A baseline `.cache/` is
+ * not re-opened by a profile's `!.cache/keep`; `!.cache/` re-opens it, and then
+ * the rules beneath have their say.
  *
  * The source tree's own `.gitignore` (when the user runs `dotta add` against
  * files that live inside a different git repository) is a separate mechanism in

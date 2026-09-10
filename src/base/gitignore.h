@@ -9,13 +9,31 @@
  *   - `**` recursive globs via base/wildmatch
  *   - exact match attribution via per-rule origin tags
  *
- * The ruleset is the whole grammar: the gate at parse (a non-wildcard negation
- * no earlier rule could match is dropped — git's "a parent directory cannot be
- * re-included"), the reverse scan at a rung, and the walk up the ancestors until
- * one rung decides (`gitignore_eval`). A rule is one line of it, parsed and asked
- * alone (`gitignore_rule_t`, at the end of this header), for a caller whose program
- * is its own — infra/pathspec, which reads its rules in its own order and walks
- * the rungs itself.
+ * The parse is the grammar: the `!` and the anchor, the directory marker, the
+ * escapes, and the gate that drops a non-wildcard negation no earlier rule could
+ * match. A ruleset is a *program over the rungs of a path*, and there are two
+ * of them here:
+ *
+ *   Exclusion (`gitignore_eval`, `gitignore_is_ignored`) is git's. A rule that
+ *   matches a directory excludes everything beneath it and no rule beneath it
+ *   can re-include anything — so the ancestors are asked first, shallowest first,
+ *   and the first one a rule excludes is both the verdict and the rule it is
+ *   reported under. `.dottaignore`'s layers and `--exclude` read this.
+ *
+ *   Selection (`gitignore_is_selected`) is not. A rule that matches an ancestor
+ *   *reaches* everything beneath it, and nothing is final: the last rule in the
+ *   list that reaches the path decides. A list that picks files prunes no
+ *   traversal, so git's barrier — which exists because git does not list an
+ *   excluded directory — has no subject. The config's `auto_encrypt` reads this.
+ *
+ * The two agree on every ruleset with no negation in it: both answer "some rung
+ * matched". A `!` beneath a rule that matched an ancestor is the whole of what
+ * separates them.
+ *
+ * A rule is one line of the grammar, parsed and asked alone (`gitignore_rule_t`,
+ * at the end of this header), for a caller whose program is neither —
+ * infra/pathspec, which reads its rules in its own order and walks the rungs
+ * itself.
  *
  * Lifetime: the ruleset and every rule are arena-backed. All memory (rule array,
  * pattern copies) lives until arena_destroy; there is no separate free.
@@ -104,24 +122,33 @@ error_t *gitignore_ruleset_append_patterns(
 /**
  * Evaluate `path` against the ruleset.
  *
+ * Exclusion, attributed — the reading `gitignore_is_ignored` answers as a bool.
+ *
  * `path` is relative to the ruleset's root — the directory the rules were written
- * for, as a `.gitignore`'s are relative to the directory it sits in. The walk-up
- * below visits every ancestor of `path`, so an absolute path is evaluated against
- * the filesystem root with the whole ancestry taking part, which is never what
- * a caller wants. Leading and trailing slashes are stripped for gitignore parity,
+ * for, as a `.gitignore`'s are relative to the directory it sits in. The walk
+ * visits every ancestor of `path`, so an absolute path is evaluated against the
+ * filesystem root with the whole ancestry taking part, which is never what a
+ * caller wants. Leading and trailing slashes are stripped for gitignore parity,
  * and a trailing slash is treated as a directory hint. `is_dir` distinguishes
  * files from directories for directory-only rules.
  *
- * Semantics mirror gitignore exactly: rules are scanned in reverse insertion
- * order (last-match-wins). If no rule matches at the given path, the evaluator
- * walks up one directory at a time, re-scanning at each parent (with is_dir=true),
- * which is what makes `cache/` match `cache/file.txt`. Each of those scans reads
- * every rule at that rung as gitignore_rule_matches reads one.
+ * The order is git's (dir.c: prep_exclude, then last_matching_pattern): every
+ * ancestor, shallowest first, each read as a directory, and then the path itself.
+ * At one rung the rules are scanned in reverse insertion order (last-match-wins),
+ * each read as gitignore_rule_matches reads one. An ancestor a rule excludes
+ * ends the walk — nothing beneath an excluded directory can be re-included —
+ * and is the rule the verdict is reported under; an ancestor a rule un-excludes
+ * settles nothing about what lies beneath it and the walk continues.
  *
  * Never fails. Always populates every field of *out; decided=false means no rule
- * matched (caller treats as not-ignored). `pattern` is the winning rule's source
- * line, trimmed, as the user wrote it (`!build/`, `/.cache/`), so a verdict can
- * be reported by the rule that gave it; it borrows the ruleset's arena.
+ * matched any rung — the ruleset was silent, which is what core/ignore's readers
+ * turn their source-tree ladder on, and it is a fact about the rungs rather than
+ * about the walk: any order over them answers it the same. `pattern` and `origin`
+ * name the excluding rule when `ignored`; when `decided && !ignored` they name
+ * the deepest rule that matched and excluded nothing (git reports no pattern at
+ * all for that path), and no caller reads them there. `pattern` is the rule's
+ * source line, trimmed, as the user wrote it (`!build/`, `/.cache/`); it borrows
+ * the ruleset's arena.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param path    Relative path (must not be NULL)
@@ -157,6 +184,32 @@ bool gitignore_is_ignored(
 );
 
 /**
+ * Does the ruleset select `path`?
+ *
+ * Selection, not exclusion: the rules are read in reverse insertion order and
+ * the first one that *reaches* the path decides — a rule reaches a path when it
+ * matches the path itself or any directory above it. So `.ssh/` selects everything
+ * under `~/.ssh`, and a later `!.ssh/id_*.pub` un-selects the public keys,
+ * whichever of the two names the deeper rung. Nothing is final: a list that picks
+ * files walks no tree, so git's "a parent directory cannot be re-included" — a
+ * rule about a traversal git prunes — has no subject here, and every rule the
+ * user wrote keeps its say in the order they wrote it.
+ *
+ * `path`, `is_dir` and the ruleset's root as for gitignore_eval. Safe on NULL
+ * ruleset or NULL path (returns false). Never fails.
+ *
+ * @param ruleset Ruleset (can be NULL)
+ * @param path    Relative path (can be NULL)
+ * @param is_dir  True if path refers to a directory
+ * @return true iff the ruleset's verdict is "selected"
+ */
+bool gitignore_is_selected(
+    const gitignore_ruleset_t *ruleset,
+    const char *path,
+    bool is_dir
+);
+
+/**
  * Number of rules in the set (diagnostic).
  *
  * @param ruleset Ruleset (can be NULL)
@@ -169,12 +222,12 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
 /* -------------------------------------------------------------------- */
 
 /*
- * One line of the grammar as a rule of its own — no ruleset around it, and none
- * of the ruleset's context: a negation stands whatever came before it, since
- * there is no before. For a caller whose program is its own and reads each rule
- * itself (infra/pathspec: its rules in its own order, over rungs of its own walk);
- * a ruleset of one rule is not the rule the line wrote, because the gate drops
- * a non-wildcard negation with nothing before it to negate.
+ * One line of the grammar as a rule of its own — no ruleset around it, and so
+ * neither of the ruleset's programs: no ancestors, no order, nothing final. For
+ * a caller whose program is its own and reads each rule itself (infra/pathspec:
+ * its rules in its own order, over rungs of its own walk); a ruleset of one rule
+ * is not the rule the line wrote, because the gate drops a non-wildcard negation
+ * with nothing before it to negate.
  */
 typedef struct gitignore_rule gitignore_rule_t;
 

@@ -77,7 +77,7 @@ auto_encrypt = [
 - Patterns without `/` match basename at any depth (`*.key` matches `dir/api.key`).
 - Patterns with `/` match the full path from the mount root (`.ssh/id_*` matches `~/.ssh/id_rsa`, but not `~/backup/.ssh/id_rsa`).
 - Wildcards: `*` (any characters), `?` (single character), `[abc]` (character class), `**` (recursive directories).
-- `!` negates a prior match.
+- `!` negates a prior match, and stands wherever you put it: the list is a *selector*, so the last rule that reaches a file decides. A rule reaches a file when it matches the file itself or any directory above it (`.gnupg/*` covers the keyring; `secrets/` covers everything under it), and nothing is final — `[".ssh/", "!.ssh/*.pub"]` leaves the public keys plaintext, while `["!.ssh/*.pub", ".ssh/"]` encrypts them, because the directory rule came last. This is not `.dottaignore`'s reading, where an excluded directory is final and a `!` beneath one has no effect.
 
 Patterns match against the path relative to the mount root (see [Ignore Patterns](configuration.md#ignore-patterns)): write `.ssh/id_*` rather than `home/.ssh/id_*`.
 

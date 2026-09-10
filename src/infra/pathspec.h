@@ -12,12 +12,13 @@
  * to match decides, a negation deciding "not in scope". An exact hit selects
  * whatever any rule says. Every rule stands as typed: the pathspec selects rows
  * and walks nothing, so gitignore's "a parent directory cannot be re-included"
- * — the ruleset's gate, a traversal rule — has no subject here, and each rule
- * is parsed and asked on its own (base/gitignore.h, the rule alone). A
- * filesystem-shaped rule is an anchor and a tail: the components before the first
- * that holds a wildcard are a directory spelling, located and compared literally;
- * the rest is the pattern, rooted there as a `.gitignore` is rooted in its
- * directory. The rungs are the matcher's own walk.
+ * — a rule about a traversal git prunes, and the ruleset's own walk where it
+ * has a subject — has none here, and each rule is parsed and asked on its own
+ * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
+ * a tail: the components before the first that holds a wildcard are a directory
+ * spelling, located and compared literally; the rest is the pattern, rooted there
+ * as a `.gitignore` is rooted in its directory. The rungs are the matcher's own
+ * walk.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *

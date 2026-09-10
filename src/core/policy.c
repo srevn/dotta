@@ -65,9 +65,12 @@ static bool is_protected_meta_file(const char *storage_path) {
 /**
  * Check if file path matches auto-encrypt patterns
  *
- * Tests storage path against the config's compiled auto-encrypt ruleset. Returns
- * true iff the last-match-wins verdict is "ignored" (i.e. the path matches a
- * positive rule that no later negation un-matches).
+ * Tests storage path against the config's compiled auto-encrypt ruleset. The
+ * list is a *selector*, not an exclusion: the last rule that reaches the path —
+ * matching it or any directory above it — decides, so a `!` beneath a directory
+ * rule stands and a later directory rule outranks an earlier exception
+ * (base/gitignore.h). `.dottaignore` reads the other program, where an excluded
+ * directory is final; nothing here walks a tree for a barrier to prune.
  *
  * Full gitignore semantics (`!` negation, directory-only, anchoring, `**` recursive
  * globs) via base/gitignore. The storage-path prefix (`home/`, `root/`, `custom/`)
@@ -98,7 +101,7 @@ static bool encryption_policy_matches_auto_patterns(
      * Gitignore's last-match-wins with negation support is what the user actually
      * wants: `*.key` + `!public.key` correctly excludes `public.key` from
      * auto-encryption. */
-    return gitignore_is_ignored(
+    return gitignore_is_selected(
         config->auto_encrypt.rules, path_for_matching, false
     );
 }

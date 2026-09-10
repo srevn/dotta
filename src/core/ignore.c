@@ -62,7 +62,9 @@ static const char *const DEFAULT_DOTTAIGNORE =
     "#   - Use # for comments\n"
     "#   - Use * ? [abc] for glob patterns\n"
     "#   - Use / at end to match only directories\n"
-    "#   - Use ! to negate a pattern\n"
+    "#   - Use ! to negate a pattern. A ! cannot re-open a directory an\n"
+    "#     earlier pattern excluded: with `.cache/` above it, `!.cache/keep`\n"
+    "#     does nothing and `!.cache/` is what re-opens it\n"
     "#   - Use / at start to anchor to the mount root (`/.cache/` is ~/.cache\n"
     "#     alone; `.cache/` is every .cache directory)\n"
     "\n"
@@ -424,8 +426,8 @@ error_t *ignore_rules_create(
      *
      * Load errors are fatal: a corrupted or unreadable baseline must surface,
      * not silently drop safety defaults. The BUILTIN fallback only fires when
-     * the load returned NULL content (ref missing, file missing, or empty
-     * blob — all non-errors). */
+     * the load returned NULL content (ref missing, file missing, or empty blob
+     * — all non-errors). */
     char *baseline = NULL;
     error_t *err = ignore_blob_read(repo, BASELINE_REF, &baseline, NULL);
     if (err) {

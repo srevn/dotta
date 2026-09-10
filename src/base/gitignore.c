@@ -5,8 +5,7 @@
  *   src/libgit2/attr_file.c  (git_attr_fnmatch__parse,
  *                             git_attr_fnmatch__match, trailing_space_length,
  *                             unescape_spaces, parse_optimized_patterns)
- *   src/libgit2/ignore.c     (ignore_lookup_in_rules and the walk-up
- *                             inside git_ignore_path_is_ignored, does_negate_rule,
+ *   src/libgit2/ignore.c     (ignore_lookup_in_rules, does_negate_rule,
  *                             does_negate_pattern)
  * Copyright (C) the libgit2 contributors. GPLv2 with Linking Exception.
  *
@@ -25,9 +24,9 @@
  *  - Optimizes only "*" (not "."): libgit2's "." shortcut fires only at
  *    end-of-buffer, which a line-based port would generalise to every "." line,
  *    diverging from gitignore's literal-filename semantics.
- *  - Walk-up is inlined into gitignore_eval, mirroring the outer
- *    git_ignore_path_is_ignored so parent-directory matching works when callers
- *    pass is_dir=false against a nested file.
+ *  - The walk is git's (dir.c: prep_exclude, then last_matching_pattern), not
+ *    libgit2's: libgit2 stops at the first rung that decides, which re-includes
+ *    a file beneath an excluded directory (libgit2#7339, open upstream).
  *  - A negation after a bare "*" stands, as git reads it: libgit2's "*" shortcut
  *    carries no wildcard flag, so its negation filter drops `!keep` after `*`
  *    and diverges from gitignore's "nothing but keep" idiom.
@@ -291,23 +290,6 @@ static error_t *parse_one_rule(
 
 /* --- The match at one rung ------------------------------------------ */
 
-/* A leading slash is the subject's, not a rule's anchor: shed it by moving the
- * pointer. Nothing else is normalized here — a rung has no trailing slash to
- * read, and the caller says is_dir. Answers the basename the bare rules read,
- * or NULL when nothing is left of the rung. */
-static const char *open_rung(const char **rung) {
-    const char *p = *rung;
-    while (*p == '/')
-        p++;
-    if (*p == '\0')
-        return NULL;
-
-    *rung = p;
-    const char *slash = strrchr(p, '/');
-
-    return slash ? slash + 1 : p;
-}
-
 /* One rule against one rung: the directory marker against is_dir, then the pattern
  * against the whole rung (anchored) or its basename (bare). The core both readers
  * share — the ruleset's scan over every rule, and the rule asked alone. */
@@ -325,29 +307,48 @@ static bool rule_matches(
     return wildmatch(r->pattern, basename, 0) == WM_MATCH;
 }
 
-/* The scan at one rung: the rules in reverse, the first to match decides, and
- * no ancestor is consulted. Writes *out only on a match; the caller has set it
- * undecided. */
-static void scan_rung(
-    const gitignore_ruleset_t *set, const char *rung, bool is_dir,
-    gitignore_match_t *out
+/* The rule that decides at one rung: the rules in reverse, the first to match
+ * (last-match-wins), and no ancestor consulted — the walk is the caller's. NULL
+ * when the ruleset says nothing about this rung. The rung and its basename are
+ * the caller's to cut; a walk over a path knows where its separators are. */
+static const gitignore_rule_t *match_rung(
+    const gitignore_ruleset_t *set, const char *rung, const char *basename,
+    bool is_dir
 ) {
-    const char *basename = open_rung(&rung);
-    if (!basename)
-        return;
-
     for (size_t i = set->count; i > 0; --i) {
         const gitignore_rule_t *r = &set->rules[i - 1];
-        if (!rule_matches(r, rung, basename, is_dir))
-            continue;
-
-        out->decided = true;
-        out->ignored = !(r->flags & GITIGNORE_FLAG_NEGATIVE);
-        out->origin = r->origin;
-        out->pattern = r->source;
-
-        return;
+        if (rule_matches(r, rung, basename, is_dir))
+            return r;
     }
+
+    return NULL;
+}
+
+/* Does one rule reach this path — matching the path itself, or a directory above
+ * it? A rule that matches a directory reaches everything beneath it. The subject
+ * is cut in place at each separator and restored before the answer, so the caller
+ * keeps the whole path. */
+static bool rule_reaches(
+    const gitignore_rule_t *rule, char *subject, const char *basename, bool is_dir
+) {
+    if (rule_matches(rule, subject, basename, is_dir))
+        return true;
+
+    const char *base = subject;
+    for (char *slash = strchr(subject, '/'); slash; slash = strchr(slash + 1, '/')) {
+        if (slash == base) {          /* an empty component is no rung */
+            base = slash + 1;
+            continue;
+        }
+        *slash = '\0';
+        bool hit = rule_matches(rule, subject, base, true);
+        *slash = '/';
+        base = slash + 1;
+        if (hit)
+            return true;
+    }
+
+    return false;
 }
 
 /* --- Negation filter ------------------------------------------------- */
@@ -416,6 +417,29 @@ static bool negation_has_effect(
     }
 
     return false;
+}
+
+/* --- The subject ----------------------------------------------------- */
+
+/* The subject a walk cuts, copied into `dst` (room for strlen(path) + 1): the
+ * leading slashes are the caller's spelling and are dropped, and a trailing one
+ * is read as the directory hint it is — `*is_dir` is set by one, never cleared.
+ * Answers the length written; 0 for a subject with nothing left in it, so no
+ * scan is ever asked about an empty rung. */
+static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
+    while (*path == '/')
+        path++;
+
+    size_t len = strlen(path);
+    while (len > 0 && path[len - 1] == '/') {
+        len--;
+        *is_dir = true;
+    }
+
+    memcpy(dst, path, len);
+    dst[len] = '\0';
+
+    return len;
 }
 
 /* --- Public API ------------------------------------------------------ */
@@ -546,60 +570,69 @@ void gitignore_eval(
     if (!set || !path)
         return;
 
-    /* Copy to a mutable, NUL-terminated buffer. Walk-up shortens the logical
-     * path in place by inserting NUL at each `/`; strrchr and wildmatch both
-     * read until NUL, so no explicit length tracking is needed.
+    /* Copy to a mutable, NUL-terminated buffer. The walk cuts the subject in
+     * place at each `/` and restores it, so the buffer holds the whole path at
+     * every step; wildmatch reads until NUL, so no length tracking is needed.
      *
      * Buffer strategy: stack covers the common case; longer paths borrow heap
      * so the matcher never silently degrades. A heap-alloc failure on a single
      * path-sized block means the system is in dire straits; we keep the never-fails
      * contract by leaving out->decided = false (caller treats as not-ignored). */
     char stack_buf[PATH_STACK_BUFFER];
-    char *buf = stack_buf;
     char *heap = NULL;
+    char *p = stack_buf;
     size_t n = strlen(path);
 
     if (n >= sizeof(stack_buf)) {
         heap = malloc(n + 1);
         if (!heap)
             return;
-        buf = heap;
+        p = heap;
     }
-    memcpy(buf, path, n + 1);
 
-    char *p = buf;
-    while (*p == '/')
-        p++;
-    if (*p == '\0')
-        goto cleanup;
+    /* Git's own order (dir.c: prep_exclude, then last_matching_pattern): every
+     * ancestor of the path, shallowest first, and then the path itself. An excluded
+     * directory is final — nothing beneath it can be re-included — so the first
+     * ancestor a rule excludes ends the walk and is the rule the verdict is
+     * reported under. An ancestor a rule *un*-excludes settles nothing about
+     * what lies beneath it; it is kept only so a caller can tell "our rules spoke"
+     * from "our rules were silent" (`decided`), which is what the source-tree
+     * ladder in core/ignore's readers turns on. */
+    const gitignore_rule_t *match = NULL;
 
-    /* A trailing slash conveys "directory"; strip and flip is_dir so callers
-     * may pass either form. */
-    size_t len = strlen(p);
-    while (len > 0 && p[len - 1] == '/') {
-        p[--len] = '\0';
-        is_dir = true;
-    }
-    if (len == 0)
-        goto cleanup;
+    if (copy_subject(p, path, &is_dir) > 0) {
+        const char *base = p;
+        for (char *slash = strchr(p, '/'); slash; slash = strchr(slash + 1, '/')) {
+            if (slash == base) {          /* an empty component is no rung */
+                base = slash + 1;
+                continue;
+            }
+            *slash = '\0';
+            const gitignore_rule_t *rung = match_rung(set, p, base, true);
+            *slash = '/';
+            base = slash + 1;
 
-    /* The walk: the scan at this rung, then at each parent, until one decides. */
-    while (true) {
-        scan_rung(set, p, is_dir, out);
-        if (out->decided)
-            break;
+            if (rung) {
+                match = rung;
+                if (!(rung->flags & GITIGNORE_FLAG_NEGATIVE))
+                    goto cleanup;
+            }
+        }
 
-        /* Walk up one directory. Single-component paths terminate the scan (matches
-         * the basename == path check in libgit2's git_ignore_path_is_ignored). */
-        char *slash = strrchr(p, '/');
-        if (!slash)
-            break;
-        *slash = '\0';
-        is_dir = true;
+        const gitignore_rule_t *leaf = match_rung(set, p, base, is_dir);
+        if (leaf)
+            match = leaf;
     }
 
 cleanup:
     free(heap);
+
+    if (match) {
+        out->decided = true;
+        out->ignored = !(match->flags & GITIGNORE_FLAG_NEGATIVE);
+        out->origin = match->origin;
+        out->pattern = match->source;
+    }
 }
 
 bool gitignore_is_ignored(
@@ -608,6 +641,49 @@ bool gitignore_is_ignored(
     gitignore_match_t m;
     gitignore_eval(set, path, is_dir, &m);
     return m.decided && m.ignored;
+}
+
+bool gitignore_is_selected(
+    const gitignore_ruleset_t *set, const char *path, bool is_dir
+) {
+    if (!set || !path)
+        return false;
+
+    char stack_buf[PATH_STACK_BUFFER];
+    char *heap = NULL;
+    char *p = stack_buf;
+    size_t n = strlen(path);
+
+    if (n >= sizeof(stack_buf)) {
+        heap = malloc(n + 1);
+        if (!heap)
+            return false;
+        p = heap;
+    }
+
+    /* The rules in reverse, and the first that reaches the path decides
+     * (last-match-wins over the whole list, a directory rule reaching everything
+     * beneath it). No barrier: a list that picks files prunes no traversal, so
+     * a `!` beneath a directory rule stands — and a later rule outranks an earlier
+     * one wherever the two speak about the same path. */
+    const gitignore_rule_t *match = NULL;
+
+    if (copy_subject(p, path, &is_dir) > 0) {
+        const char *slash = strrchr(p, '/');
+        const char *basename = slash ? slash + 1 : p;
+
+        for (size_t i = set->count; i > 0; --i) {
+            const gitignore_rule_t *rule = &set->rules[i - 1];
+            if (rule_reaches(rule, p, basename, is_dir)) {
+                match = rule;
+                break;
+            }
+        }
+    }
+
+    free(heap);
+
+    return match && !(match->flags & GITIGNORE_FLAG_NEGATIVE);
 }
 
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
@@ -655,8 +731,14 @@ bool gitignore_rule_matches(
     if (!rule || !rung)
         return false;
 
-    const char *basename = open_rung(&rung);
-    return basename && rule_matches(rule, rung, basename, is_dir);
+    while (*rung == '/')    /* the subject's leading slash, never an anchor */
+        rung++;
+    if (*rung == '\0')
+        return false;
+
+    const char *slash = strrchr(rung, '/');
+
+    return rule_matches(rule, rung, slash ? slash + 1 : rung, is_dir);
 }
 
 bool gitignore_rule_negated(const gitignore_rule_t *rule) {

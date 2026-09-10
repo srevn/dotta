@@ -27,6 +27,9 @@
  *    for — the walk is. Its `*` parse shortcut goes with it: a bare `*` parsed
  *    the ordinary way carries neither flag and matches every basename, which is
  *    what the shortcut was for.
+ *  - The trailing-whitespace rule is git's: libgit2 trims a trailing tab as well
+ *    as a space, which drops a rule git keeps. gitignore(5) says spaces, and
+ *    git's trim_trailing_spaces (dir.c:1029) trims those alone.
  *  - The walk is git's (dir.c: prep_exclude, then last_matching_pattern), not
  *    libgit2's: libgit2 stops at the first rung that decides, which re-includes
  *    a file beneath an excluded directory (libgit2#7339, open upstream).
@@ -76,12 +79,17 @@ static inline bool is_ws(char c) {
            || c == '\f' || c == '\r' || c == '\v';
 }
 
-/* --- Trailing-space counting (attr_file.c:661) ---------------------- */
+/* --- Trailing-space counting (dir.c:1029) --------------------------- */
 
+/* Spaces, and only spaces: gitignore(5) says a trailing space, and git trims
+ * that alone (trim_trailing_spaces resets on every other byte). A tab is pattern
+ * content, and a line ending in one is a rule. Counted backwards over a slice
+ * the caller owns, where git walks forward over a NUL-terminated buffer it may
+ * cut; the two agree on every escape shape. */
 static size_t trailing_space_length(const char *p, size_t len) {
     size_t n, i;
     for (n = len; n; n--) {
-        if (p[n - 1] != ' ' && p[n - 1] != '\t')
+        if (p[n - 1] != ' ')
             break;
 
         /* Odd escape count before the space keeps it escaped; even count means

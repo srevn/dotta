@@ -76,9 +76,12 @@ error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out);
  * with `origin`. Safe to call repeatedly to layer sources (e.g. baseline then
  * profile).
  *
- * Blank and comment lines are skipped. Empty content is accepted (no rules
- * appended). Returns ERR_VALIDATION if any line exceeds 4096 bytes or the
- * cumulative rule count exceeds 10000; ERR_MEMORY on arena exhaustion.
+ * Blank and comment lines are skipped. A UTF-8 byte-order mark at the head of
+ * `content` is shed before the first line — it is the file's, not its first rule's;
+ * one anywhere else is pattern content. A final line needs no terminator. Empty
+ * content is accepted (no rules appended). Returns ERR_VALIDATION if any line
+ * exceeds 4096 bytes or the cumulative rule count exceeds 10000; ERR_MEMORY on
+ * arena exhaustion.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param content Gitignore source text (must not be NULL; may be empty)
@@ -97,8 +100,9 @@ error_t *gitignore_ruleset_append(
  * config arrays) rather than a gitignore file body.
  *
  * Semantically equivalent to joining `patterns[i]` with '\n' and calling
- * `gitignore_ruleset_append`. NULL entries in the array are skipped. Empty arrays
- * (NULL array or count==0, or all entries NULL) are a successful no-op.
+ * `gitignore_ruleset_append` — including that door's byte-order mark, which a
+ * pattern has no occasion to carry. NULL entries in the array are skipped. Empty
+ * arrays (NULL array or count==0, or all entries NULL) are a successful no-op.
  *
  * Per-pattern length (4096) and cumulative rule count (10000) caps are enforced
  * by the underlying parser; callers are expected to wrap the returned error with

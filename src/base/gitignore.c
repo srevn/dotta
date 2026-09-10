@@ -374,7 +374,16 @@ error_t *gitignore_ruleset_append(
     CHECK_NULL(set);
     CHECK_NULL(content);
 
+    /* A byte-order mark belongs to the file, not to the rule its bytes sit in
+     * front of — an editor that writes one would otherwise cost the caller its
+     * first pattern, silently. One at the head is shed and any other is content,
+     * which is git's own rule (dir.c:1226 add_patterns_from_buffer, calling
+     * skip_utf8_bom once over the whole buffer). strncmp, not memcmp: a content
+     * shorter than the mark is a content that does not carry one. */
     const char *cursor = content;
+    if (strncmp(cursor, "\xEF\xBB\xBF", 3) == 0)
+        cursor += 3;
+
     while (*cursor) {
         const char *nl = strchr(cursor, '\n');
         size_t line_len = nl ? (size_t) (nl - cursor) : strlen(cursor);

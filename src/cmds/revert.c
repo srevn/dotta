@@ -524,48 +524,41 @@ static char *build_revert_commit_message(
  * sheet or, where the target commit has none, over a mode read from the entry's
  * own filemode and no ownership at all.
  *
- * The reconstruction is announced here — at the preview, before the prompt, where
- * the user can still decline it. It used to be announced during the write, so a
- * dry run never mentioned it at all.
+ * The claim is built and not announced: a reconstruction is a fact about a write,
+ * and the write may still be answered "nothing to do" by the gate that reads
+ * this claim. The caller says it at the preview, where every other fact about
+ * the write is said and where the user can still decline it.
  *
- * Two names, because a claim outlives the name it was recorded under: the target
- * commit records it at one, and the revert writes it at the name the branch holds
- * now (cmd_revert, the two names). Every construction takes the second — the
- * sheet's own key is what metadata_same_claim compares, so a claim built under
- * the commit's name would answer "different" against every standing one — and
- * the reconstruction warning names the first, the place the commit records nothing.
+ * The name is the one the revert writes, because a claim outlives the name it
+ * was recorded under: the target commit records it at one, and the revert writes
+ * it at the name the branch holds now (cmd_revert, the two names). Every
+ * construction takes the second — the sheet's own key is what metadata_same_claim
+ * compares, so a claim built under the commit's name would answer "different"
+ * against every standing one.
  *
  * Every input is a fact the caller has already established, and none of them is
- * a Git object: the claim the commit records, the two names, the entry's filemode
- * and the restored blob's kind. Nothing here reads the repository, so nothing
- * here can fail for a reason the preview could not have shown.
+ * a Git object: the claim the commit records, the name to write it under, the
+ * entry's filemode and the restored blob's kind. Nothing here reads the repository
+ * or writes to a screen, so nothing here can fail, and nothing here can be said
+ * about a write that does not happen.
  *
- * @param out Output handle (must not be NULL)
- * @param recorded The FILE claim the target commit records at `target_name`, or
- *                 NULL where it records none (borrowed)
- * @param target_name Where the commit records the claim (must not be NULL)
+ * @param recorded The FILE claim the target commit records, or NULL where it
+ *                 records none (borrowed)
  * @param current_name Storage path the claim is written under (must not be NULL)
  * @param target_mode The admitted entry's filemode
  * @param target_kind The restored blob's own bytes (cmd_revert step 9)
- * @param commit Abbreviated target commit oid, for the warning (must not be NULL)
  * @param out_claim The claim, or NULL where the target records none (must not
  *                  be NULL; caller frees with metadata_item_free)
  * @return Error or NULL on success
  */
 static error_t *claim_to_restore(
-    output_t *out,
     const metadata_item_t *recorded,
-    const char *target_name,
     const char *current_name,
     git_filemode_t target_mode,
     content_kind_t target_kind,
-    const char *commit,
     metadata_item_t **out_claim
 ) {
-    CHECK_NULL(out);
-    CHECK_NULL(target_name);
     CHECK_NULL(current_name);
-    CHECK_NULL(commit);
     CHECK_NULL(out_claim);
 
     *out_claim = NULL;
@@ -599,19 +592,8 @@ static error_t *claim_to_restore(
     }
 
     /* No metadata entry at target commit - mode falls back to the tree's filemode;
-     * ownership is not recoverable */
-    output_warning(
-        out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
-        target_name, commit
-    );
-    output_hintline(
-        out, OUTPUT_NORMAL,
-        "Reconstructed from the commit (mode=%04o, encrypted=%s); "
-        "ownership is not recoverable",
-        (unsigned int) (target_mode & 0777),
-        encrypted ? "true" : "false"
-    );
-
+     * ownership is not recoverable. The caller announces it (cmd_revert step
+     * 17). */
     return metadata_item_create_file(
         current_name, target_mode & 0777, encrypted, out_claim
     );
@@ -977,9 +959,15 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         recorded = NULL;
     }
 
+    /* A link's claim is the entry as recorded and its absence is an answer, so
+     * a reconstruction is what a non-link without one earns. Named here, beside
+     * the lookup that decides it, and said at the preview: the gate below may
+     * yet answer "nothing to do", and a reconstruction that does not happen must
+     * not be announced. */
+    const bool reconstructed = !recorded && restored_mode != GIT_FILEMODE_LINK;
+
     err = claim_to_restore(
-        out, recorded, target_name, current_name, restored_mode, target_kind,
-        oid_str, &restored_claim
+        recorded, current_name, restored_mode, target_kind, &restored_claim
     );
     if (err) goto cleanup;
 
@@ -1045,6 +1033,25 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     if (strcmp(target_name, current_name) != 0) {
         output_print(
             out, OUTPUT_NORMAL, "  Named at the commit: %s\n", target_name
+        );
+    }
+
+    /* Mode and ownership have no byte source, so a commit that records no claim
+     * for the path leaves the revert reconstructing one from the entry's own
+     * filemode. It is said here, with the rest of what the write will do, and
+     * only once the write is going to happen. */
+    if (reconstructed) {
+        output_newline(out, OUTPUT_NORMAL);
+        output_warning(
+            out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
+            target_name, oid_str
+        );
+        output_hintline(
+            out, OUTPUT_NORMAL,
+            "Reconstructed from the commit (mode=%04o, encrypted=%s); "
+            "ownership is not recoverable",
+            (unsigned int) (restored_mode & 0777),
+            target_kind != CONTENT_PLAINTEXT ? "true" : "false"
         );
     }
 

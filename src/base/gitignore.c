@@ -102,9 +102,6 @@ static void unescape_spaces(char *str) {
     char *scan, *pos = str;
     bool escaped = false;
 
-    if (!str)
-        return;
-
     for (scan = str; *scan; scan++) {
         if (!escaped && *scan == '\\') {
             escaped = true;
@@ -181,34 +178,25 @@ static error_t *parse_one_rule(
         rem--;
     }
 
-    /* Body scan: the slashes over the full line. A backslash is skipped and the
-     * byte after it read as itself — an escaped separator still counts as one,
-     * as libgit2 counts it; what an escape protects is the wildmatch later, and
-     * unescape_spaces keeps it in the pattern. No early break at whitespace —
-     * libgit2 ALLOWSPACE mode lets spaces, tabs, and `\r` be part of the pattern.
-     * Trailing whitespace and a trailing `\r` are stripped below. Mirrors
-     * attr_file.c:763-784. */
+    /* Body scan: every `/` over the full line, an escaped one included — git
+     * reads the separators without reading escapes at all (dir.c:715), and what
+     * an escape protects is the wildmatch later. No early break at whitespace:
+     * spaces, tabs and `\r` are pattern content, and only what trails them is
+     * stripped below. */
     int slash_count = 0;
-    const char *scan = pattern;
     const char *end = pattern + rem;
 
-    while (scan < end) {
-        if (*scan == '\\') {
-            scan++;
+    for (const char *scan = pattern; scan < end; scan++) {
+        if (*scan != '/')
             continue;
-        }
 
-        if (*scan == '/') {
-            flags |= GITIGNORE_FLAG_FULLPATH;
-            slash_count++;
-            if (slash_count == 1 && pattern == scan)
-                pattern++;               /* consume leading anchor slash */
-        }
-
-        scan++;
+        flags |= GITIGNORE_FLAG_FULLPATH;
+        slash_count++;
+        if (slash_count == 1 && pattern == scan)
+            pattern++;                   /* consume leading anchor slash */
     }
 
-    size_t length = (size_t) (scan - pattern);
+    size_t length = (size_t) (end - pattern);
     if (length == 0)
         return NULL;
 

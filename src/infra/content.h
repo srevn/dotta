@@ -37,9 +37,8 @@
  *   crypto (cipher for the format's constants and header, keymgr for every encrypt
  *   and decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
- *   reads, policy's byte truth), commands (show, diff, export, revert — twice,
- *   for the kind it stamps and the name it reseals under — list; add and update
- *   through the capture)
+ *   reads, policy's byte truth), commands (show, diff, export, revert, list;
+ *   add and update through the capture)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -239,6 +238,12 @@ error_t *content_get_from_blob_oid(
  * The write-boundary invariant content_stage_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
  * metadata.encrypted from the source blob describes what it stores.
+ *
+ * The epoch does not move either, and that is the seal's doing rather than this
+ * function's: the open refuses a fingerprint that is not the handle's own before
+ * any key work (crypto/keymgr.h), so bytes that open here were sealed under the
+ * epoch this seals them back under. A blob from another epoch is refused, never
+ * re-sealed into this one.
  *
  * The plaintext lives only inside this call and is wiped on every exit path.
  *

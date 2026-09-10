@@ -6,6 +6,7 @@
 
 #include <config.h>
 #include <git2.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,6 +27,7 @@
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
+#include "sys/identity.h"
 #include "sys/stage.h"
 #include "utils/commit.h"
 
@@ -70,7 +72,11 @@ static error_t *select_profile(
     }
 
     /* The argument in the key it named — what every statement below is about.
-     * The hints spell the command with what the user typed, so they paste back. */
+     * The hints spell the command with what the user typed, so they paste back,
+     * and they spell it in the three-positional form: that is the one arm of
+     * revert_post_parse that assigns without asking str_looks_like_git_ref whether
+     * the second word is a commit, so a tag or a branch name pastes back as readily
+     * as an oid does. */
     const char *subject = arg->key == PATH_KEY_LOCATION ? arg->location
                                                         : arg->storage_path;
 
@@ -84,7 +90,7 @@ static error_t *select_profile(
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile\n\n"
             "If you are trying to revert a deleted file, specify the profile:\n"
-            "  dotta revert --profile <name> %s %s\n\n"
+            "  dotta revert <profile> %s %s\n\n"
             "Use 'dotta list' to see all profiles.",
             subject, opts->file_path, opts->commit
         );
@@ -105,9 +111,9 @@ static error_t *select_profile(
             claims.entries[i].storage_path
         );
     }
-    output_hint(out, OUTPUT_NORMAL, "Specify --profile to disambiguate:");
+    output_hint(out, OUTPUT_NORMAL, "Name the profile to disambiguate:");
     output_hintline(
-        out, OUTPUT_NORMAL, "  dotta revert --profile <name> %s %s",
+        out, OUTPUT_NORMAL, "  dotta revert <profile> %s %s",
         opts->file_path, opts->commit
     );
 
@@ -159,11 +165,10 @@ static error_t *claim_standing(
     *out_row = NULL;
 
     manifest_t *view = NULL;
-    RETURN_IF_ERROR(
-        manifest_build_tree(
+    error_t *err = manifest_build_tree(
         ctx->run.repo, tree, profile, ctx->run.mounts, ctx->arena, &view
-        )
     );
+    if (err) return err;
 
     *out_row = manifest_lookup_claim(view, profile, location);  /* the arena's */
     manifest_free(view);
@@ -264,6 +269,9 @@ static error_t *entry_to_restore(
         }
     }
 
+    /* The name is the guard, and it also makes the write below safe: the arm
+     * above drops the name only where it found no entry, so no entry can be
+     * standing here to overwrite. */
     if (!name && location) {
         const manifest_row_t *row = NULL;
         RETURN_IF_ERROR(
@@ -292,15 +300,13 @@ static error_t *entry_to_restore(
         }
 
         if (arg->key == PATH_KEY_LOCATION) {
-            const mount_spec_t *root = mount_root(
-                ctx->run.mounts, profile, arg->location
-            );
+            const mount_spec_t *root = mount_root(ctx->run.mounts, profile, arg->location);
             if (root) {
                 char buf[MOUNT_NOUN_MAX];
+                const char *noun = mount_root_describe(root, profile, buf, sizeof(buf));
                 return ERROR(
                     ERR_INVALID_ARG, "'%s' is %s: name what is inside it",
-                    arg->location,
-                    mount_root_describe(root, profile, buf, sizeof(buf))
+                    arg->location, noun
                 );
             }
             return ERROR(
@@ -352,11 +358,16 @@ static error_t *entry_to_restore(
  * says so, and the arm beside it is what a copy with the same bytes and a different
  * mode gets.
  *
+ * That arm is also why the caller hands its `restored_name` in here: the tip's
+ * entry is looked up at the name the revert writes, so wherever there is an entry
+ * to diff against, the write's name is the tip's binding and the two words name
+ * one string.
+ *
  * @param ctx Dispatch context (must not be NULL)
  * @param profile Profile name, for key derivation (must not be NULL)
- * @param current_name The tip's binding, and the label on both sides (must not
+ * @param standing_name The tip's binding, and the label on both sides (must not
  *                     be NULL)
- * @param current_oid The blob standing at the tip (must not be NULL)
+ * @param standing_oid The blob standing at the tip (must not be NULL)
  * @param target_name The commit's binding: how its bytes open (must not be NULL)
  * @param target_oid The committed object (must not be NULL)
  * @return Error or NULL on success
@@ -364,15 +375,15 @@ static error_t *entry_to_restore(
 static error_t *show_diff_preview(
     const dotta_ctx_t *ctx,
     const char *profile,
-    const char *current_name,
-    const git_oid *current_oid,
+    const char *standing_name,
+    const git_oid *standing_oid,
     const char *target_name,
     const git_oid *target_oid
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
-    CHECK_NULL(current_name);
-    CHECK_NULL(current_oid);
+    CHECK_NULL(standing_name);
+    CHECK_NULL(standing_oid);
     CHECK_NULL(target_name);
     CHECK_NULL(target_oid);
 
@@ -385,14 +396,14 @@ static error_t *show_diff_preview(
      * Each call classifies its own blob's bytes — the routing decision lives
      * with the blob, so encryption-state changes between commits are handled by
      * the content layer with no caller participation. */
-    buffer_t current_plaintext = BUFFER_INIT;
+    buffer_t standing_plaintext = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo,
-        current_oid,
-        current_name,
+        standing_oid,
+        standing_name,
         profile,
         keymgr,
-        &current_plaintext
+        &standing_plaintext
     );
     if (err) {
         return error_wrap(err, "Failed to get current file content");
@@ -408,7 +419,7 @@ static error_t *show_diff_preview(
         &target_plaintext
     );
     if (err) {
-        buffer_free(&current_plaintext);
+        buffer_free(&standing_plaintext);
         return error_wrap(err, "Failed to get target file content");
     }
 
@@ -420,13 +431,13 @@ static error_t *show_diff_preview(
     git_patch *patch = NULL;
     int ret = git_patch_from_buffers(
         &patch,
-        current_plaintext.data, current_plaintext.size, current_name,
-        target_plaintext.data, target_plaintext.size, current_name,
+        standing_plaintext.data, standing_plaintext.size, standing_name,
+        target_plaintext.data, target_plaintext.size, standing_name,
         NULL  /* options */
     );
 
     if (ret < 0) {
-        buffer_free(&current_plaintext);
+        buffer_free(&standing_plaintext);
         buffer_free(&target_plaintext);
         return error_from_git(ret);
     }
@@ -442,7 +453,7 @@ static error_t *show_diff_preview(
     /* Show stats */
     output_styled(
         out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
-        current_name
+        standing_name
     );
     output_styled(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
@@ -463,7 +474,7 @@ static error_t *show_diff_preview(
     git_patch_free(patch);
 
     /* Free plaintext buffers */
-    buffer_free(&current_plaintext);
+    buffer_free(&standing_plaintext);
     buffer_free(&target_plaintext);
 
     return NULL;
@@ -544,8 +555,8 @@ static char *build_revert_commit_message(
  *
  * @param recorded The FILE claim the target commit records, or NULL where it
  *                 records none (borrowed)
- * @param current_name Storage path the claim is written under (must not be NULL)
- * @param target_mode The admitted entry's filemode
+ * @param restored_name Storage path the claim is written under (must not be NULL)
+ * @param restored_mode The admitted entry's filemode
  * @param target_kind The restored blob's own bytes (cmd_revert step 9)
  * @param out_claim The claim, or NULL where the target records none (must not
  *                  be NULL; caller frees with metadata_item_free)
@@ -553,17 +564,17 @@ static char *build_revert_commit_message(
  */
 static error_t *claim_to_restore(
     const metadata_item_t *recorded,
-    const char *current_name,
-    git_filemode_t target_mode,
+    const char *restored_name,
+    git_filemode_t restored_mode,
     content_kind_t target_kind,
     metadata_item_t **out_claim
 ) {
-    CHECK_NULL(current_name);
+    CHECK_NULL(restored_name);
     CHECK_NULL(out_claim);
 
     *out_claim = NULL;
 
-    if (target_mode == GIT_FILEMODE_LINK) {
+    if (restored_mode == GIT_FILEMODE_LINK) {
         /* A link's entry is a FILE item without a mode. Restore it as recorded
          * — revert restores history, it does not reinterpret it; whatever the
          * entry carries, the view adjudicates against the tree. No entry → the
@@ -571,7 +582,7 @@ static error_t *claim_to_restore(
         if (!recorded) {
             return NULL;
         }
-        return metadata_item_clone(recorded, current_name, out_claim);
+        return metadata_item_clone(recorded, restored_name, out_claim);
     }
 
     /* The encrypted bit revert writes must be true of the blob it restores: it
@@ -586,7 +597,7 @@ static error_t *claim_to_restore(
         /* Found metadata entry - clone it. Mode and ownership have no byte source,
          * so the entry is their authority; the encrypted bit is the blob's
          * (above). */
-        RETURN_IF_ERROR(metadata_item_clone(recorded, current_name, out_claim));
+        RETURN_IF_ERROR(metadata_item_clone(recorded, restored_name, out_claim));
         (*out_claim)->encrypted = encrypted;
         return NULL;
     }
@@ -595,7 +606,7 @@ static error_t *claim_to_restore(
      * ownership is not recoverable. The caller announces it (cmd_revert step
      * 17). */
     return metadata_item_create_file(
-        current_name, target_mode & 0777, encrypted, out_claim
+        restored_name, restored_mode & 0777, encrypted, out_claim
     );
 }
 
@@ -661,17 +672,23 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
+    /* Three prefixes, one per column, and no local needs a comment to say which
+     * it is in: `target_` is the commit — what is read — `standing_` is the branch
+     * tip, and `restored_` is the write, which is neither of them. A restore
+     * lands on the claim standing at the location, so the standing side has no
+     * name of its own here: wherever the tip holds anything, its name is the
+     * write's, and where it holds nothing there is no name to have. */
     error_t *err = NULL;
     const char *profile = NULL;
-    const char *target_name = NULL;      /* the name the commit holds it under */
-    const char *current_name = NULL;     /* the name the revert writes */
+    const char *target_name = NULL;
+    const char *restored_name = NULL;
     git_oid target_commit_oid = { { 0 } };
     git_commit *target_commit = NULL;
     stage_t *stage = NULL;
     git_tree *target_tree = NULL;
-    git_tree_entry *current_entry = NULL;
+    git_tree_entry *standing_entry = NULL;
     git_tree_entry *target_entry = NULL;
-    metadata_t *current_sheet = NULL;
+    metadata_t *standing_sheet = NULL;
     metadata_t *target_sheet = NULL;
     metadata_item_t *restored_claim = NULL;
     buffer_t rebound = BUFFER_INIT;
@@ -744,7 +761,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * without a sheet loads as an empty one (the tree loader's contract), so a
      * revert to a state before any claim was written retires what stands. */
     err = metadata_load_from_tree(
-        repo, stage_tree(stage), profile, &current_sheet
+        repo, stage_tree(stage), profile, &standing_sheet
     );
     if (err) {
         err = error_wrap(err, "Failed to load current metadata");
@@ -834,32 +851,32 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         err = claim_standing(ctx, stage_tree(stage), profile, location, &row);
         if (err) goto cleanup;
 
-        current_name = row ? row->storage_path : target_name;
+        restored_name = row ? row->storage_path : target_name;
     } else {
-        current_name = arg.storage_path;
+        restored_name = arg.storage_path;
     }
 
     output_print(
-        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n", current_name,
+        out, OUTPUT_VERBOSE, "Resolved to '%s' in profile '%s'\n", restored_name,
         profile
     );
 
     /* Step 11: what stands at that name in the tip. It may be absent — a path
      * the profile deleted is exactly what a revert brings back — and wherever
      * it stands it is a blob, because a revert restores one file's bytes. */
-    ret = git_tree_entry_bypath(&current_entry, stage_tree(stage), current_name);
+    ret = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
     if (ret < 0 && ret != GIT_ENOTFOUND) {
         err = error_from_git(ret);
         goto cleanup;
     }
 
-    if (current_entry) {
-        git_object_t current_type = git_tree_entry_type(current_entry);
-        if (current_type != GIT_OBJECT_BLOB) {
+    if (standing_entry) {
+        git_object_t standing_type = git_tree_entry_type(standing_entry);
+        if (standing_type != GIT_OBJECT_BLOB) {
             err = ERROR(
                 ERR_INVALID_ARG, "'%s' is %s in profile '%s'; revert restores one file",
-                current_name,
-                current_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
+                restored_name,
+                standing_type == GIT_OBJECT_TREE ? "a directory" : "a submodule",
                 profile
             );
             goto cleanup;
@@ -884,25 +901,37 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * tree already holds is not authored, and whether one it lacks is a second
      * name is the row's to answer. A location argument is answered *by* the claim
      * standing there and can never be a second name, so this arm is the typed
-     * one's alone. */
-    if (arg.key == PATH_KEY_STORAGE && !current_entry && location) {
+     * one's alone.
+     *
+     * Both remedies are spelled to run: the revert in the three-positional form,
+     * which assigns its words by position and never asks str_looks_like_git_ref
+     * whether the second one is a commit — the two-positional form reads a tag
+     * or a branch name as a profile and refuses the command it was offered as. */
+    if (arg.key == PATH_KEY_STORAGE && !standing_entry && location) {
         const manifest_row_t *row = NULL;
         err = claim_standing(ctx, stage_tree(stage), profile, location, &row);
         if (err) goto cleanup;
 
         if (row && !manifest_is_derived(row) &&
-            strcmp(row->storage_path, current_name) != 0) {
+            strcmp(row->storage_path, restored_name) != 0) {
+            /* The location is the shared term of three paths in one sentence,
+             * and the one path here the user never typed — so it is spelled the
+             * way the shell spells it, as the screen that reports the pair this
+             * refuses already spells it (cmds/status.c's unused-path listing,
+             * base/output.h output_format_path). The remedy stays runnable: a
+             * tilde is what the shell expands back. */
+            char shown[PATH_MAX];
+            output_format_path(location, identity()->home, shown, sizeof(shown));
+
             err = ERROR(
                 ERR_INVALID_ARG,
                 "Profile '%s' names '%s' as '%s'\n\n"
                 "'%s' would be a second name for it, and a profile names a "
                 "location once.\n"
-                "  dotta revert --profile %s %s %s   restores those bytes into it\n"
+                "  dotta revert %s %s %s   restores those bytes into it\n"
                 "  dotta remove %s %s   gives that name up first",
-                profile, location, row->storage_path,
-                current_name,
-                profile, location, opts->commit,
-                profile, row->storage_path
+                profile, shown, row->storage_path, restored_name,
+                profile, shown, opts->commit, profile, row->storage_path
             );
             goto cleanup;
         }
@@ -926,14 +955,14 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the reseal has made one. */
     if (restored_mode != GIT_FILEMODE_LINK &&
         target_kind != CONTENT_PLAINTEXT &&
-        strcmp(target_name, current_name) != 0) {
+        strcmp(target_name, restored_name) != 0) {
         err = content_rebind(
-            repo, target_blob, target_name, current_name, profile,
+            repo, target_blob, target_name, restored_name, profile,
             ctx->run.keymgr, &rebound
         );
         if (err) {
             err = error_wrap(
-                err, "Cannot restore '%s' as '%s'", target_name, current_name
+                err, "Cannot restore '%s' as '%s'", target_name, restored_name
             );
             goto cleanup;
         }
@@ -944,7 +973,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         if (ret < 0) {
             err = error_wrap(
                 error_from_git(ret), "Cannot identify the resealed '%s'",
-                current_name
+                restored_name
             );
             goto cleanup;
         }
@@ -967,21 +996,21 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const bool reconstructed = !recorded && restored_mode != GIT_FILEMODE_LINK;
 
     err = claim_to_restore(
-        recorded, current_name, restored_mode, target_kind, &restored_claim
+        recorded, restored_name, restored_mode, target_kind, &restored_claim
     );
     if (err) goto cleanup;
 
     /* Step 15: nothing to do — the whole write, entry and claim, already stands */
     const metadata_item_t *standing_claim = metadata_lookup(
-        current_sheet, current_name
+        standing_sheet, restored_name
     );
     if (already_at_target(
-        current_entry, standing_claim, &restored_blob, restored_mode,
+        standing_entry, standing_claim, &restored_blob, restored_mode,
         restored_claim
         )) {
         output_info(
             out, OUTPUT_NORMAL, "File '%s' is already at target state (no changes)",
-            current_name
+            restored_name
         );
         goto cleanup;  /* Not an error, just nothing to do */
     }
@@ -995,14 +1024,14 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * dry run should have said.
      *
      * It writes no object — the id is one the commit already holds, or one the
-     * reseal computed and step 21 will store — so a dry run or a declined prompt
+     * reseal computed and step 20 will store — so a dry run or a declined prompt
      * frees the stage and leaves the object database as it found it. stage_tree()
      * is still the tree the stage opened at, so every read below is the tip's. */
-    err = stage_put_blob(stage, current_name, &restored_blob, restored_mode);
+    err = stage_put_blob(stage, restored_name, &restored_blob, restored_mode);
     if (err) goto cleanup;
 
     /* Step 17: Show preview (always, including dry-run) */
-    output_section(out, OUTPUT_NORMAL, "Revert preview:");
+    output_section(out, OUTPUT_NORMAL, "Revert preview");
 
     const git_signature *author = git_commit_author(target_commit);
     time_t commit_time = (time_t) author->when.time;
@@ -1015,13 +1044,17 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         snprintf(time_buf, sizeof(time_buf), "<invalid time>");
     }
 
+    /* A name is cyan and everything else is not — the profile's, the file's and,
+     * where there are two, the commit's — which is how a name is marked wherever
+     * one is printed beside other words (cmds/list.c's history header prints
+     * two in one line). The commit line is an oid and a time and carries none. */
     output_styled(
         out, OUTPUT_NORMAL, "  Profile: {cyan}%s{reset}\n",
         profile
     );
-    output_print(
-        out, OUTPUT_NORMAL, "  File: %s\n",
-        current_name
+    output_styled(
+        out, OUTPUT_NORMAL, "  File: {cyan}%s{reset}\n",
+        restored_name
     );
     output_print(
         out, OUTPUT_NORMAL, "  Target commit: %s (%s)\n",
@@ -1030,9 +1063,10 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* The other name, said once and only where there is one: the write lands on
      * the claim the branch holds now, and this is where the bytes come from. */
-    if (strcmp(target_name, current_name) != 0) {
-        output_print(
-            out, OUTPUT_NORMAL, "  Named at the commit: %s\n", target_name
+    if (strcmp(target_name, restored_name) != 0) {
+        output_styled(
+            out, OUTPUT_NORMAL, "  Named at the commit: {cyan}%s{reset}\n",
+            target_name
         );
     }
 
@@ -1042,8 +1076,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * only once the write is going to happen. */
     if (reconstructed) {
         output_newline(out, OUTPUT_NORMAL);
+        /* What is missing is a *file* claim, which is not the same as a missing
+         * sheet: a DIRECTORY item can stand at this very key and claim nothing
+         * about this file, the tree being the content authority. Both reach here,
+         * and the sentence names the one thing both mean. */
         output_warning(
-            out, OUTPUT_NORMAL, "No metadata found for '%s' at commit %s",
+            out, OUTPUT_NORMAL, "No file claim recorded for '%s' at commit %s",
             target_name, oid_str
         );
         output_hintline(
@@ -1056,19 +1094,22 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     /* The three ways the write differs from what stands: the file comes back,
-     * only its mode and ownership move — the one thing no diff can show — or
-     * its bytes do. */
-    if (!current_entry) {
+     * everything but its bytes moves — the one thing no diff can show — or its
+     * bytes do. The middle arm is *the blob is the same and the gate said something
+     * differs*, and what is left to differ is the entry's filemode and the four
+     * fields of the claim beside it, so the sentence names those rather than
+     * two of them. */
+    if (!standing_entry) {
         output_newline(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
         );
-    } else if (git_oid_equal(git_tree_entry_id(current_entry), &restored_blob)) {
+    } else if (git_oid_equal(git_tree_entry_id(standing_entry), &restored_blob)) {
         output_newline(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL,
-            "{green}Contents unchanged; restoring the recorded mode and "
-            "ownership{reset}\n"
+            "{green}Contents unchanged; restoring the recorded mode, ownership "
+            "and stamp{reset}\n"
         );
     } else {
         /* Detailed diff preview with decryption support. The content layer
@@ -1076,7 +1117,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
          * differ in encryption state" case is handled inside show_diff_preview
          * without caller-side metadata gymnastics. */
         err = show_diff_preview(
-            ctx, profile, current_name, git_tree_entry_id(current_entry),
+            ctx, profile, restored_name, git_tree_entry_id(standing_entry),
             target_name, target_blob
         );
         if (err) {
@@ -1117,7 +1158,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * would leave a loose object behind every dry run. */
     if (rebound.data) {
         err = stage_put(
-            stage, current_name, rebound.data, rebound.size, restored_mode
+            stage, restored_name, rebound.data, rebound.size, restored_mode
         );
         if (err) goto cleanup;
     }
@@ -1126,23 +1167,23 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * none for a link, the standing item is the reverted-away state's — retire
      * it. */
     if (restored_claim) {
-        err = metadata_add_item(current_sheet, &restored_claim);
+        err = metadata_add_item(standing_sheet, &restored_claim);
         if (err) {
             err = error_wrap(err, "Failed to update metadata");
             goto cleanup;
         }
     } else {
-        metadata_remove_item(current_sheet, current_name);
+        metadata_remove_item(standing_sheet, restored_name);
     }
 
-    err = metadata_save_to_stage(stage, current_sheet);
+    err = metadata_save_to_stage(stage, standing_sheet);
     if (err) {
         err = error_wrap(err, "Failed to save metadata");
         goto cleanup;
     }
 
     msg = build_revert_commit_message(
-        config, profile, current_name, &target_commit_oid, opts->message
+        config, profile, restored_name, &target_commit_oid, opts->message
     );
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
@@ -1156,11 +1197,13 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the next load's view carries the reverted blob — the record stays where
      * apply last confirmed it, so the workspace reads the result as [stale] until
      * apply deploys it. A disabled profile's revert reaches no view at all. */
+    output_success(
+        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", restored_name, profile
+    );
+
+    /* The one line after it differs: a profile this machine has not enabled has
+     * nothing to apply the revert to. */
     if (!state_has_profile(state, profile)) {
-        output_success(
-            out, OUTPUT_NORMAL, "Reverted %s in profile '%s'",
-            current_name, profile
-        );
         output_info(
             out, OUTPUT_NORMAL, "\nNote: Profile '%s' is not enabled on this machine",
             profile
@@ -1168,11 +1211,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    output_success(
-        out, OUTPUT_NORMAL, "Reverted %s in profile '%s'", current_name, profile
-    );
-
-    /* Guide user to deploy changes */
     output_info(
         out, OUTPUT_NORMAL, "\nRun 'dotta apply' to deploy changes to filesystem"
     );
@@ -1181,9 +1219,9 @@ cleanup:
     if (msg) free(msg);
     buffer_free(&rebound);
     if (restored_claim) metadata_item_free(restored_claim);
-    if (current_sheet) metadata_free(current_sheet);
+    if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);
-    if (current_entry) git_tree_entry_free(current_entry);
+    if (standing_entry) git_tree_entry_free(standing_entry);
     if (target_entry) git_tree_entry_free(target_entry);
     if (target_tree) git_tree_free(target_tree);
     stage_free(stage);
@@ -1373,12 +1411,15 @@ const args_command_t spec_revert = {
         "  3. Read what the commit holds and what stands at the branch tip. A\n"
         "     file the profile has renamed since is found either way, and comes\n"
         "     back under the name the profile uses now.\n"
-        "  4. Answer 'nothing to do' when that whole state already stands.\n"
-        "  5. Show the preview: the restored file, a diff, or a metadata-only\n"
+        "  4. Refuse a storage path that would be the profile's second name\n"
+        "     for one place, naming the first and both ways out. A profile\n"
+        "     names a place once, and --force does not skip a refusal.\n"
+        "  5. Answer 'nothing to do' when that whole state already stands.\n"
+        "  6. Show the preview: the restored file, a diff, or a metadata-only\n"
         "     change. A dry run stops here, having refused whatever the real\n"
         "     run would have refused.\n"
-        "  6. Prompt for confirmation (bypassed by --force).\n"
-        "  7. Create one commit with the restored blob and the merged metadata.\n",
+        "  7. Prompt for confirmation (bypassed by --force).\n"
+        "  8. Create one commit with the restored blob and the merged metadata.\n",
     .examples    =
         "  %s revert home/.bashrc HEAD~3              # Profile inferred\n"
         "  %s revert darwin home/.bashrc a4f2c8e      # Explicit profile\n"

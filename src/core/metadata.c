@@ -205,15 +205,7 @@ error_t *metadata_item_create_directory(
 }
 
 /**
- * Clone metadata item (deep copy)
- *
- * Creates a deep copy of a metadata item, duplicating all strings. This is useful
- * when you need to preserve an item while modifying the original collection.
- *
- * @param source Source item to clone (must not be NULL)
- * @param out Cloned item (must not be NULL, caller must free with
- *            metadata_item_free)
- * @return Error or NULL on success
+ * Clone a claim under the name it is being written to
  */
 error_t *metadata_item_clone(
     const metadata_item_t *source,
@@ -229,10 +221,10 @@ error_t *metadata_item_clone(
         return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
     }
 
-    /* Everything that is not a pointer copies wholesale — kind, mode and encrypted,
-     * so a field added later needs no line here. The three strings are then owned
-     * here: the key the caller named, the two ownership names the source carries,
-     * and the one refusal covers all three. */
+    /* Everything that is not a pointer copies wholesale — kind, mode and the
+     * two flags, so a field added later needs no line here. The three strings
+     * are then owned here: the key the caller named, the two ownership names
+     * the source carries, and the one refusal covers all three. */
     *item = *source;
     item->key = strdup(storage_path);
     item->owner = source->owner ? strdup(source->owner) : NULL;

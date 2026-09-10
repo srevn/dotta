@@ -484,9 +484,9 @@ const mount_spec_t *mount_root(
  * it, so it is non-NULL exactly when it is read.
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
- * than through a statement of its own: three sites print this sentence and would
- * otherwise spell it three ways — the message that a location has no name is
- * the same message whether a pattern, an argument or a search asked.
+ * than through a statement of its own: four sites print this sentence and would
+ * otherwise spell it four ways — the message that a location has no name is the
+ * same message whether a pattern, an argument, a search or a revert asked.
  *
  * Truncates rather than fails: a screen noun, not a key.
  */

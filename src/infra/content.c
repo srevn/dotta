@@ -338,12 +338,18 @@ error_t *content_rebind(
         plaintext.size, out_bytes
     );
 
+    /* The disposal is unconditional where the capture's is inside its own guard:
+     * there the success path goes on using the buffer, here nothing does. */
     if (plaintext.data) {
         secure_wipe(plaintext.data, plaintext.size);
     }
     buffer_free(&plaintext);
 
-    return err ? error_wrap(err, "Cannot encrypt '%s'", to_storage_path) : NULL;
+    if (err) {
+        return error_wrap(err, "Cannot encrypt '%s'", to_storage_path);
+    }
+
+    return NULL;
 }
 
 content_cache_t *content_cache_create(

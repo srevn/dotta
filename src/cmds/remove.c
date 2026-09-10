@@ -1162,14 +1162,14 @@ static error_t *remove_files_from_profile(
                     if (opts->delete_files) {
                         output_info(
                             out, OUTPUT_VERBOSE,
-                            "Manifest: %zu staged for removal, %zu released, %zu fallback%s",
+                            "Record: %zu staged for removal, %zu released, %zu fallback%s",
                             settlement.ordered, settlement.released, settlement.fallback,
                             settlement.fallback == 1 ? "" : "s"
                         );
                     } else {
                         output_info(
                             out, OUTPUT_VERBOSE,
-                            "Manifest: %zu released, %zu fallback%s",
+                            "Record: %zu released, %zu fallback%s",
                             settlement.released, settlement.fallback,
                             settlement.fallback == 1 ? "" : "s"
                         );

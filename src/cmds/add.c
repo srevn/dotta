@@ -111,10 +111,10 @@ typedef struct {
  * What the record phase did, for the receipt
  *
  * `updated` is the phase's word that the anchor pass ran and its transaction
- * committed — the receipt's "Manifest updated" line and its counts speak only
- * then; false reads "profile not enabled". The counts qualify it: how many of
- * the captured files this profile's rows actually took, and how many of those
- * took over a record another profile's deployment had written.
+ * committed — the receipt's "Record updated" line and its counts speak only then;
+ * false reads "profile not enabled". The counts qualify it: how many of the
+ * captured files this profile's rows actually took, and how many of those took
+ * over a record another profile's deployment had written.
  *
  * A capture the rows did not take has two causes, and each is counted where the
  * row that says which is in hand rather than read off a difference: a
@@ -2419,7 +2419,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     output_newline(out, OUTPUT_NORMAL);
 
-    /* Manifest status feedback */
+    /* Record status feedback */
     if (record.updated) {
         if (walk.files.count > 0) {
             /* Files were added — the sync results, and what the rows did with
@@ -2429,13 +2429,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             if (record.synced == walk.files.count) {
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Manifest updated (%zu file%s marked as deployed)",
+                    "Record updated (%zu file%s marked as deployed)",
                     record.synced, record.synced == 1 ? "" : "s"
                 );
             } else {
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Manifest updated (%zu/%zu file%s marked as deployed)",
+                    "Record updated (%zu/%zu file%s marked as deployed)",
                     record.synced, walk.files.count,
                     walk.files.count == 1 ? "" : "s"
                 );
@@ -2479,7 +2479,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         } else {
             /* Directory-only add */
             output_info(
-                out, OUTPUT_NORMAL, "Manifest updated (%zu director%s synced)",
+                out, OUTPUT_NORMAL, "Record updated (%zu director%s synced)",
                 walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
             );
         }
@@ -2489,7 +2489,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * and the hint names what enable will accept — the target as the user
          * typed it, when the run brought one. */
         output_info(
-            out, OUTPUT_NORMAL, "Profile not enabled - manifest not updated"
+            out, OUTPUT_NORMAL, "Profile not enabled - nothing marked as deployed"
         );
         if (opts->target) {
             output_hint(

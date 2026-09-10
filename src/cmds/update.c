@@ -1034,7 +1034,7 @@ static error_t *update_write_record(
     if (synced > 0 || removed > 0 || fallbacks > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
-            "Manifest synced: %zu staged, %zu removed, %zu fallback%s",
+            "Record synced: %zu staged, %zu removed, %zu fallback%s",
             synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
         );
     }
@@ -1930,7 +1930,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * summary below is its one sentence. */
     update_commit_t *commits = NULL;
     size_t commit_count = 0;
-    bool manifest_updated = false;
+    bool record_updated = false;
     if (!opts->dry_run) {
         err = update_execute_for_all_profiles(
             ctx, scope_enabled(scope),
@@ -1951,14 +1951,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * Non-fatal: if the record write fails, Git commits still succeeded;
          * the next status re-confirms the captured files on its slow path.
          */
-        error_t *manifest_err = update_write_record(
-            ctx, commits, commit_count, &manifest_updated
+        error_t *record_err = update_write_record(
+            ctx, commits, commit_count, &record_updated
         );
 
         /* The bookkeeping has served the record */
         update_commits_free(commits, commit_count);
 
-        if (manifest_err) {
+        if (record_err) {
             /* Non-fatal: the landed commits are Git truth and the record write
              * failed behind them. The next load reads the committed blobs from
              * Git and re-confirms the captured files against disk. Said in landed
@@ -1966,14 +1966,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
              * and this line must not claim more. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_message(manifest_err)
+                error_message(record_err)
             );
 
             output_info(
                 out, OUTPUT_NORMAL,
                 "The commits that landed are in Git; the record follows on the next status"
             );
-            error_free(manifest_err);
+            error_free(record_err);
             /* Continue to post-update hook and success output */
         }
 
@@ -1981,8 +1981,8 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             /* The executor stopped mid-sequence. The commits that landed are
              * recorded (just above); say so before reporting the stop, so the ✓
              * lines above are accounted for. */
-            if (manifest_updated && commit_count > 0) {
-                output_info(out, OUTPUT_NORMAL, "Manifest updated");
+            if (record_updated && commit_count > 0) {
+                output_info(out, OUTPUT_NORMAL, "Record updated");
             }
             goto cleanup;
         }
@@ -2015,11 +2015,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             );
         }
 
-        /* Record feedback, plain: the per-path split is the verbose "Manifest
-         * synced" line, and the failure case already said what happened (warning
-         * above) */
-        if (manifest_updated) {
-            output_info(out, OUTPUT_NORMAL, "Manifest updated");
+        /* Record feedback, plain: the per-path split is the verbose "Record synced"
+         * line, and the failure case already said what happened (warning above) */
+        if (record_updated) {
+            output_info(out, OUTPUT_NORMAL, "Record updated");
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta status' to verify state"
             );

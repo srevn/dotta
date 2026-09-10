@@ -1,25 +1,26 @@
 /*
  * gitignore.c - gitignore ruleset parsing and evaluation.
  *
- * Parser and matcher adapted from libgit2:
+ * Every rule here is git's. The parse is dir.c's (trim_trailing_spaces,
+ * parse_path_pattern), the walk over a path's ancestors is prep_exclude's, the
+ * scan at one rung is last_matching_pattern_from_list's, and the matcher is
+ * match_basename and match_pathname. tests/test-gitignore-parity.c is the
+ * specification, not a regression net: it asks git(1) itself, and where the two
+ * disagree the bug is here.
+ *
+ * The C is libgit2's, and two functions still read as it wrote them —
+ * trailing_space_length counts backwards over a slice the caller owns where git
+ * walks forwards over a buffer it may cut, and unescape_spaces has no counterpart
+ * at all:
  *   src/libgit2/attr_file.c  (git_attr_fnmatch__parse,
  *                             git_attr_fnmatch__match, trailing_space_length,
  *                             unescape_spaces, parse_optimized_patterns)
  *   src/libgit2/ignore.c     (ignore_lookup_in_rules)
  * Copyright (C) the libgit2 contributors. GPLv2 with Linking Exception.
  *
- * Adaptations from the original:
- *  - Drops macros/attributes/assignments (gitignore-only, no gitattributes).
- *  - Drops ICASE handling. Matches libgit2's gitignore ALLOWSPACE semantics:
- *    leading whitespace is preserved as pattern content; the caller pre-splits
- *    on `\n`, so the body scan runs to end-of-line.
- *  - Drops containing_dir / subdirectory .gitignore inheritance (dotta stores
- *    .dottaignore at repo root only).
- *  - Drops file source abstraction; rules come from caller-supplied content
- *    strings.
- *  - Replaces git_pool with base/arena and git_vector with a small inline dynamic
- *    array.
- *  - Adds per-rule origin tag for exact source attribution.
+ * Where libgit2's rules were left behind, and why:
+ *  - The walk. libgit2 stops at the first rung that decides, which re-includes
+ *    a file beneath an excluded directory (libgit2#7339, open upstream).
  *  - Every rule is kept as written. libgit2 drops a non-wildcard negation at
  *    parse when no earlier pattern appears able to match it; that heuristic
  *    compares two patterns without a path, so it also drops negations that do
@@ -27,17 +28,43 @@
  *    for — the walk is. Its `*` parse shortcut goes with it: a bare `*` parsed
  *    the ordinary way carries neither flag and matches every basename, which is
  *    what the shortcut was for.
- *  - unescape_spaces is libgit2's and answer-neutral: it resolves the escapes
- *    wildmatch resolves anyway, so a literal reads its full length, and a dangling
- *    escape is kept rather than dropped — dropping one made `foo\` match `foo`,
- *    where git matches nothing at all.
- *  - The trailing-whitespace rule is git's: libgit2 trims a trailing tab as well
- *    as a space, which drops a rule git keeps. gitignore(5) says spaces, and
- *    git's trim_trailing_spaces (dir.c:1029) trims those alone.
- *  - The walk is git's (dir.c: prep_exclude, then last_matching_pattern), not
- *    libgit2's: libgit2 stops at the first rung that decides, which re-includes
- *    a file beneath an excluded directory (libgit2#7339, open upstream).
- *    tests/test-gitignore-parity.c is the differential against git(1) itself.
+ *  - The trailing-whitespace rule. libgit2 trims a trailing tab as well as a
+ *    space, which drops a rule git keeps; gitignore(5) says spaces, and
+ *    trim_trailing_spaces trims those alone.
+ *  - A byte-order mark opens a file, not its first rule (git sheds one per buffer
+ *    in add_patterns_from_buffer; libgit2 sheds none).
+ *  - The matcher's shortcuts: parse_path_pattern's nowildcardlen and ENDSWITH,
+ *    read by match_basename and match_pathname, answer a rule that cannot glob
+ *    with a memcmp and never reach wildmatch at all. They change no answer.
+ *
+ * unescape_spaces is the one rule kept from libgit2, and it is answer-neutral:
+ * it resolves the escapes wildmatch resolves anyway, so a literal reads its full
+ * length and the shortcuts above reach further. A *dangling* escape is kept rather
+ * than dropped — the one shape where dropping it changed an answer.
+ *
+ * One deliberate difference from git, and it is this module's own: where a negated
+ * ancestor ends git's report with no pattern at all, the rule is kept here as
+ * `decided && !ignored`, which is what core/ignore's source-tree ladder turns
+ * on. The parity suite compares patterns only where both answers ignore.
+ *
+ * What git has and this file must not take, for want of a subject: per-pattern
+ * base/baselen (git reads a .gitignore per directory; dotta stores one at each
+ * root), the exclude_list_group / exclude_stack / untracked cache, resolve_dtype
+ * (the caller says which kind a path is), the cone-mode hashmaps, and icase — a
+ * rule is read byte for byte here, because its subject is a storage path in a
+ * tree that travels between machines rather than a name on this filesystem.
+ *
+ * What is this file's own, which git has no need for: the per-rule origin tag,
+ * the source line kept verbatim for the verdict's report, arena lifetime,
+ * `decided`, the rule parsed and asked alone that infra/pathspec reads, and the
+ * selection program beside the exclusion one (gitignore.h has both).
+ *
+ * Adaptations of shape only: drops macros, attributes and assignments
+ * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
+ * come from caller-supplied content strings, pre-split on `\n` by the caller,
+ * so the body scan runs to end-of-line and leading whitespace stays pattern content
+ * — and replaces git_pool with base/arena and git_vector with a small inline
+ * dynamic array.
  */
 
 #include "base/gitignore.h"
@@ -59,9 +86,13 @@
 #define GITIGNORE_FLAG_NEGATIVE  (1U << 0)
 #define GITIGNORE_FLAG_DIRECTORY (1U << 1)
 #define GITIGNORE_FLAG_FULLPATH  (1U << 2)
+#define GITIGNORE_FLAG_ENDSWITH  (1U << 3)
 
 struct gitignore_rule {
     const char *pattern;              /* arena-owned, NUL-terminated */
+    size_t len;                       /* strlen(pattern), after the escapes */
+    size_t prefix;                    /* its literal head (git's nowildcardlen);
+                                       * == len when nothing in it can glob */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* the ruleset's tag; 0 for a rule alone */
     const char *source;               /* the line as written, trimmed (arena-owned) */
@@ -117,7 +148,7 @@ static size_t trailing_space_length(const char *p, size_t len) {
  * a *dangling* escape (`foo\`), and it is kept: wildmatch reads a trailing
  * backslash as an escape with nothing behind it and refuses every subject, which
  * is what git answers for such a rule. */
-static void unescape_spaces(char *str) {
+static size_t unescape_spaces(char *str) {
     char *scan, *pos = str;
     bool escaped = false;
 
@@ -139,6 +170,8 @@ static void unescape_spaces(char *str) {
         *pos++ = '\\';       /* nothing behind it, and the matcher says so */
 
     *pos = '\0';
+
+    return (size_t) (pos - str);
 }
 
 /* --- Rule storage growth -------------------------------------------- */
@@ -257,9 +290,19 @@ static error_t *parse_one_rule(
     if (!copy)
         return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 
-    unescape_spaces(copy);
+    length = unescape_spaces(copy);
+
+    /* What the matcher can answer without asking wildmatch: how much of the pattern
+     * is a literal, and whether it is a `*` with a literal behind it. Both read
+     * the copy after the escapes are resolved, where `a\ b` is the three-byte
+     * literal it will be compared as. git's parse_path_pattern (dir.c:697), whose
+     * no_wildcard is the second test spelled out. */
+    if (copy[0] == '*' && copy[1 + wildmatch_literal_length(copy + 1)] == '\0')
+        flags |= GITIGNORE_FLAG_ENDSWITH;
 
     out_rule->pattern = copy;
+    out_rule->len = length;
+    out_rule->prefix = wildmatch_literal_length(copy);
     out_rule->flags = flags;
     out_rule->origin = 0;
     out_rule->source = source;
@@ -269,19 +312,64 @@ static error_t *parse_one_rule(
 
 /* --- The match at one rung ------------------------------------------ */
 
+/* A bare rule against one basename — git's match_basename (dir.c:1328). A rule
+ * that cannot glob is a length and a memcmp, `*literal` is a memcmp of the tail,
+ * and only what neither answers reaches wildmatch. */
+static bool match_basename(
+    const gitignore_rule_t *r, const char *basename, size_t basename_len
+) {
+    if (r->prefix == r->len)
+        return basename_len == r->len
+               && memcmp(r->pattern, basename, basename_len) == 0;
+
+    if (r->flags & GITIGNORE_FLAG_ENDSWITH) {
+        size_t tail = r->len - 1;      /* the literal behind the leading `*` */
+        return tail <= basename_len
+               && memcmp(r->pattern + 1, basename + basename_len - tail, tail) == 0;
+    }
+
+    return wildmatch(r->pattern, basename, 0) == WM_MATCH;
+}
+
+/* An anchored rule against a whole rung — git's match_pathname (dir.c:1352),
+ * without the base it carries for a per-directory .gitignore: every rule here
+ * is relative to one root. The literal head rejects early, and what survives it
+ * goes to wildmatch one byte short of that head — the byte git retains so a `**`
+ * standing at the cut can still see the separator in front of it. Dropping it
+ * changes answers: a rule whose head runs into a doublestar would read that
+ * doublestar as standing at the start of the pattern, and start spanning separators
+ * it must not. */
+static bool match_fullpath(
+    const gitignore_rule_t *r, const char *rung, size_t rung_len
+) {
+    if (r->prefix == 0)
+        return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
+
+    if (r->prefix > rung_len || memcmp(r->pattern, rung, r->prefix) != 0)
+        return false;
+    if (r->prefix == r->len)           /* nothing behind the head to match */
+        return rung_len == r->len;
+
+    size_t keep = r->prefix - 1;
+
+    return wildmatch(r->pattern + keep, rung + keep, WM_PATHNAME) == WM_MATCH;
+}
+
 /* One rule against one rung: the directory marker against is_dir, then the pattern
  * against the whole rung (anchored) or its basename (bare). The core both readers
- * share — the ruleset's scan over every rule, and the rule asked alone. */
+ * share — the ruleset's scan over every rule, and the rule asked alone. The rung's
+ * length is the caller's: a walk that cuts a subject knows it as a difference,
+ * and `basename` points inside `rung`, so its own length is one subtraction. */
 static bool rule_matches(
-    const gitignore_rule_t *r, const char *rung, const char *basename,
-    bool is_dir
+    const gitignore_rule_t *r, const char *rung, size_t rung_len,
+    const char *basename, bool is_dir
 ) {
     if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
         return false;
     if (r->flags & GITIGNORE_FLAG_FULLPATH)
-        return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
+        return match_fullpath(r, rung, rung_len);
 
-    return wildmatch(r->pattern, basename, 0) == WM_MATCH;
+    return match_basename(r, basename, rung_len - (size_t) (basename - rung));
 }
 
 /* The rule that decides at one rung: the rules in reverse, the first to match
@@ -289,12 +377,12 @@ static bool rule_matches(
  * when the ruleset says nothing about this rung. The rung and its basename are
  * the caller's to cut; a walk over a path knows where its separators are. */
 static const gitignore_rule_t *match_rung(
-    const gitignore_ruleset_t *set, const char *rung, const char *basename,
-    bool is_dir
+    const gitignore_ruleset_t *set, const char *rung, size_t rung_len,
+    const char *basename, bool is_dir
 ) {
     for (size_t i = set->count; i > 0; --i) {
         const gitignore_rule_t *r = &set->rules[i - 1];
-        if (rule_matches(r, rung, basename, is_dir))
+        if (rule_matches(r, rung, rung_len, basename, is_dir))
             return r;
     }
 
@@ -306,9 +394,10 @@ static const gitignore_rule_t *match_rung(
  * is cut in place at each separator and restored before the answer, so the caller
  * keeps the whole path. */
 static bool rule_reaches(
-    const gitignore_rule_t *rule, char *subject, const char *basename, bool is_dir
+    const gitignore_rule_t *rule, char *subject, size_t subject_len,
+    const char *basename, bool is_dir
 ) {
-    if (rule_matches(rule, subject, basename, is_dir))
+    if (rule_matches(rule, subject, subject_len, basename, is_dir))
         return true;
 
     const char *base = subject;
@@ -318,7 +407,7 @@ static bool rule_reaches(
             continue;
         }
         *slash = '\0';
-        bool hit = rule_matches(rule, subject, base, true);
+        bool hit = rule_matches(rule, subject, (size_t) (slash - subject), base, true);
         *slash = '/';
         base = slash + 1;
         if (hit)
@@ -505,7 +594,9 @@ void gitignore_eval(
      * ladder in core/ignore's readers turns on. */
     const gitignore_rule_t *match = NULL;
 
-    if (copy_subject(p, path, &is_dir) > 0) {
+    size_t len = copy_subject(p, path, &is_dir);
+
+    if (len > 0) {
         const char *base = p;
         for (char *slash = strchr(p, '/'); slash; slash = strchr(slash + 1, '/')) {
             if (slash == base) {          /* an empty component is no rung */
@@ -513,7 +604,9 @@ void gitignore_eval(
                 continue;
             }
             *slash = '\0';
-            const gitignore_rule_t *rung = match_rung(set, p, base, true);
+            const gitignore_rule_t *rung = match_rung(
+                set, p, (size_t) (slash - p), base, true
+            );
             *slash = '/';
             base = slash + 1;
 
@@ -524,7 +617,7 @@ void gitignore_eval(
             }
         }
 
-        const gitignore_rule_t *leaf = match_rung(set, p, base, is_dir);
+        const gitignore_rule_t *leaf = match_rung(set, p, len, base, is_dir);
         if (leaf)
             match = leaf;
     }
@@ -573,13 +666,15 @@ bool gitignore_is_selected(
      * one wherever the two speak about the same path. */
     const gitignore_rule_t *match = NULL;
 
-    if (copy_subject(p, path, &is_dir) > 0) {
+    size_t len = copy_subject(p, path, &is_dir);
+
+    if (len > 0) {
         const char *slash = strrchr(p, '/');
         const char *basename = slash ? slash + 1 : p;
 
         for (size_t i = set->count; i > 0; --i) {
             const gitignore_rule_t *rule = &set->rules[i - 1];
-            if (rule_reaches(rule, p, basename, is_dir)) {
+            if (rule_reaches(rule, p, len, basename, is_dir)) {
                 match = rule;
                 break;
             }
@@ -640,9 +735,10 @@ bool gitignore_rule_matches(
     if (*rung == '\0')
         return false;
 
+    size_t len = strlen(rung);
     const char *slash = strrchr(rung, '/');
 
-    return rule_matches(rule, rung, slash ? slash + 1 : rung, is_dir);
+    return rule_matches(rule, rung, len, slash ? slash + 1 : rung, is_dir);
 }
 
 bool gitignore_rule_negated(const gitignore_rule_t *rule) {

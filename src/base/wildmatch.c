@@ -319,3 +319,12 @@ int wildmatch(const char *pattern, const char *text, unsigned int flags) {
     int res = dowild((const uchar *) pattern, (const uchar *) text, flags);
     return res == WM_MATCH ? WM_MATCH : WM_NOMATCH;
 }
+
+/* git's simple_length (dir.c:680), reading the same table dowild reads. */
+size_t wildmatch_literal_length(const char *pattern) {
+    size_t n = 0;
+    while (pattern[n] && !is_glob_special(pattern[n]))
+        n++;
+
+    return n;
+}

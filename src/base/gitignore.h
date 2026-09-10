@@ -285,4 +285,35 @@ bool gitignore_rule_matches(
  */
 bool gitignore_rule_negated(const gitignore_rule_t *rule);
 
+/**
+ * How many leading bytes of `line` are the rule it makes, as written.
+ *
+ * The grammar takes nothing off the front of a line — the `!` and the anchor
+ * slash are consumed by the parse but are part of the rule the user wrote, and
+ * leading whitespace is pattern content. Off the back it takes a `\r` that is
+ * the line's last byte — a CRLF terminator; one with spaces behind it is inside
+ * the rule, as it is to git — and then a run of trailing spaces (an escaped one,
+ * `foo\ `, is kept; a tab is not a space and is kept). What is left is the rule
+ * as written — the same bytes `gitignore_match_t.pattern` reports for it.
+ *
+ * So the span is the *identity* of a rule for anyone editing the file it lives
+ * in: two lines name the same rule iff their spans are equal byte for byte,
+ * which makes `foo` and `foo   ` one rule and `foo` and `  foo` two. Zero says
+ * the line makes no rule at all — empty, a comment (`#` at column 0), or a head
+ * with nothing left behind it — and zero equals nothing, itself included.
+ *
+ * `line` is one line: a `\n` inside it is pattern content here, where the ruleset's
+ * own door would have split on it. A caller holding a whole file splits first;
+ * a caller holding one string it means as a single rule should put it through
+ * `gitignore_rule_parse`, which refuses an embedded newline and an over-long
+ * line by name.
+ *
+ * Allocates nothing, never fails. Safe on a NULL line (0).
+ *
+ * @param line One line, not necessarily NUL-terminated (can be NULL: 0)
+ * @param len  Bytes of `line` to read
+ * @return Byte count from `line`, or 0 when the line makes no rule
+ */
+size_t gitignore_rule_span(const char *line, size_t len);
+
 #endif /* DOTTA_GITIGNORE_H */

@@ -199,6 +199,41 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
     return NULL;
 }
 
+/* --- The rule as written --------------------------------------------- */
+
+/* How much of one line is the rule it makes — the span behind gitignore_rule_span,
+ * and the parse's own first question, so the grammar's ends are described once.
+ *
+ * Nothing is taken off the front: the `!` and the anchor slash are consumed by
+ * the parse but are the rule as the user wrote it, and no byte before them can
+ * be trimmed. Off the back go one `\r` (the CRLF terminator, which the caller's
+ * `\n` split leaves as the last byte) and then the trailing spaces
+ * trailing_space_length counts — in that order, so a mixed `pattern\r   ` does
+ * not swallow the `\r` inside the pattern (parity with attr_file.c:791-798).
+ * Zero for a line that makes no rule: empty, a comment, or a head with nothing
+ * left behind it. */
+static size_t rule_span(const char *line, size_t len) {
+    /* A comment is `#` at column 0 only. Leading whitespace is pattern content
+     * (libgit2 ALLOWSPACE semantics), so `  # literal` is a two-space-indented
+     * pattern and not a comment. */
+    if (len == 0 || *line == '#')
+        return 0;
+
+    size_t head = (*line == '!') ? 1 : 0;
+    if (head < len && line[head] == '/')
+        head++;                          /* the anchor slash */
+
+    size_t body = len - head;
+    if (body > 0 && line[len - 1] == '\r')
+        body--;
+    if (body == 0)
+        return 0;
+
+    body -= trailing_space_length(line + head, body);
+
+    return body == 0 ? 0 : head + body;
+}
+
 /* --- Per-line parse ------------------------------------------------- */
 
 /* A line that makes no rule — blank, a comment, trimmed to nothing — leaves
@@ -211,34 +246,26 @@ static error_t *parse_one_rule(
 ) {
     out_rule->pattern = NULL;
 
-    const char *pattern = line;
-    size_t rem = line_len;
-
-    /* Blank line produced by the caller's `\n` split. */
-    if (rem == 0)
-        return NULL;
-    /* Comment: `#` at column 0 only. Leading whitespace is preserved verbatim
-     * as pattern content (libgit2 ALLOWSPACE semantics), so a
-     * line like `  # literal` is a three-char-indented pattern, not a
-     * comment. */
-    if (*pattern == '#')
+    size_t span = rule_span(line, line_len);
+    if (span == 0)
         return NULL;
 
     unsigned int flags = 0;
+    const char *pattern = line;
+    size_t length = span;
 
     if (*pattern == '!') {
         flags |= GITIGNORE_FLAG_NEGATIVE;
         pattern++;
-        rem--;
+        length--;
     }
 
-    /* Body scan: every `/` over the full line, an escaped one included — git
-     * reads the separators without reading escapes at all (dir.c:715), and what
-     * an escape protects is the wildmatch later. No early break at whitespace:
-     * spaces, tabs and `\r` are pattern content, and only what trails them is
-     * stripped below. */
+    /* Body scan: every `/` over the rule, an escaped one included — git reads
+     * the separators without reading escapes at all (dir.c:715), and what an
+     * escape protects is the wildmatch later. Whitespace is pattern content and
+     * breaks nothing; what trails it is already outside the span. */
     int slash_count = 0;
-    const char *end = pattern + rem;
+    const char *end = pattern + length;
 
     for (const char *scan = pattern; scan < end; scan++) {
         if (*scan != '/')
@@ -250,31 +277,7 @@ static error_t *parse_one_rule(
             pattern++;                   /* consume leading anchor slash */
     }
 
-    size_t length = (size_t) (end - pattern);
-    if (length == 0)
-        return NULL;
-
-    /* Trim a single trailing `\r` (CRLF files). The caller splits on `\n`, so
-     * the `\r` of a CRLF terminator is the last byte of the line. Done before
-     * trailing_space_length so a mixed
-     * `pattern\r   ` does not swallow the `\r` inside the pattern —
-     * parity with attr_file.c:791-798. */
-    if (pattern[length - 1] == '\r') {
-        length--;
-        if (length == 0)
-            return NULL;
-    }
-
-    length -= trailing_space_length(pattern, length);
-    if (length == 0)
-        return NULL;
-
-    /* The rule as written — from the line's first byte (the `!` and the anchor
-     * slash included) to the end of the trimmed body — kept for the verdict's
-     * report. */
-    char *source = arena_strndup(arena, line, (size_t) (pattern + length - line));
-    if (!source)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
+    length = (size_t) (end - pattern);
 
     if (pattern[length - 1] == '/') {
         length--;
@@ -283,8 +286,14 @@ static error_t *parse_one_rule(
             flags &= ~GITIGNORE_FLAG_FULLPATH;
     }
 
-    if (length == 0)
+    if (length == 0)                     /* `//`: a body of separators alone */
         return NULL;
+
+    /* The rule as written — the `!` and the anchor slash included, what the span
+     * left off the back excluded — kept for the verdict's report. */
+    char *source = arena_strndup(arena, line, span);
+    if (!source)
+        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 
     char *copy = arena_strndup(arena, pattern, length);
     if (!copy)
@@ -480,8 +489,7 @@ error_t *gitignore_ruleset_append(
         if (line_len > MAX_PATTERN_LENGTH)
             return ERROR(
                 ERR_VALIDATION,
-                "gitignore: line exceeds %d bytes",
-                MAX_PATTERN_LENGTH
+                "gitignore: line exceeds %d bytes", MAX_PATTERN_LENGTH
             );
 
         gitignore_rule_t rule = { 0 };
@@ -743,4 +751,8 @@ bool gitignore_rule_matches(
 
 bool gitignore_rule_negated(const gitignore_rule_t *rule) {
     return rule && (rule->flags & GITIGNORE_FLAG_NEGATIVE);
+}
+
+size_t gitignore_rule_span(const char *line, size_t len) {
+    return line ? rule_span(line, len) : 0;
 }

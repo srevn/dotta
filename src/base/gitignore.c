@@ -5,8 +5,7 @@
  *   src/libgit2/attr_file.c  (git_attr_fnmatch__parse,
  *                             git_attr_fnmatch__match, trailing_space_length,
  *                             unescape_spaces, parse_optimized_patterns)
- *   src/libgit2/ignore.c     (ignore_lookup_in_rules, does_negate_rule,
- *                             does_negate_pattern)
+ *   src/libgit2/ignore.c     (ignore_lookup_in_rules)
  * Copyright (C) the libgit2 contributors. GPLv2 with Linking Exception.
  *
  * Adaptations from the original:
@@ -21,15 +20,17 @@
  *  - Replaces git_pool with base/arena and git_vector with a small inline dynamic
  *    array.
  *  - Adds per-rule origin tag for exact source attribution.
- *  - Optimizes only "*" (not "."): libgit2's "." shortcut fires only at
- *    end-of-buffer, which a line-based port would generalise to every "." line,
- *    diverging from gitignore's literal-filename semantics.
+ *  - Every rule is kept as written. libgit2 drops a non-wildcard negation at
+ *    parse when no earlier pattern appears able to match it; that heuristic
+ *    compares two patterns without a path, so it also drops negations that do
+ *    match one (`x/y*.txt` then `!ya.txt`), and it is not the rule it is named
+ *    for — the walk is. Its `*` parse shortcut goes with it: a bare `*` parsed
+ *    the ordinary way carries neither flag and matches every basename, which is
+ *    what the shortcut was for.
  *  - The walk is git's (dir.c: prep_exclude, then last_matching_pattern), not
  *    libgit2's: libgit2 stops at the first rung that decides, which re-includes
  *    a file beneath an excluded directory (libgit2#7339, open upstream).
- *  - A negation after a bare "*" stands, as git reads it: libgit2's "*" shortcut
- *    carries no wildcard flag, so its negation filter drops `!keep` after `*`
- *    and diverges from gitignore's "nothing but keep" idiom.
+ *    tests/test-gitignore-parity.c is the differential against git(1) itself.
  */
 
 #include "base/gitignore.h"
@@ -51,12 +52,9 @@
 #define GITIGNORE_FLAG_NEGATIVE  (1U << 0)
 #define GITIGNORE_FLAG_DIRECTORY (1U << 1)
 #define GITIGNORE_FLAG_FULLPATH  (1U << 2)
-#define GITIGNORE_FLAG_HASWILD   (1U << 3)
-#define GITIGNORE_FLAG_MATCH_ALL (1U << 4)
 
 struct gitignore_rule {
     const char *pattern;              /* arena-owned, NUL-terminated */
-    size_t length;                    /* strlen(pattern) post-unescape */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* the ruleset's tag; 0 for a rule alone */
     const char *source;               /* the line as written, trimmed (arena-owned) */
@@ -70,16 +68,12 @@ struct gitignore_ruleset {
 };
 
 /* --- Character predicates ------------------------------------------- */
-/* Mirror libgit2's git__isspace and git__iswildcard so parse behaviour stays
- * identical. Inline and private to avoid cross-module coupling. */
+/* Mirrors libgit2's git__isspace so parse behaviour stays identical. Inline and
+ * private to avoid cross-module coupling. */
 
 static inline bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\n'
            || c == '\f' || c == '\r' || c == '\v';
-}
-
-static inline bool is_wildcard(char c) {
-    return c == '*' || c == '?' || c == '[';
 }
 
 /* --- Trailing-space counting (attr_file.c:661) ---------------------- */
@@ -104,12 +98,12 @@ static size_t trailing_space_length(const char *p, size_t len) {
 
 /* --- Space-unescape in place (attr_file.c:684) ---------------------- */
 
-static size_t unescape_spaces(char *str) {
+static void unescape_spaces(char *str) {
     char *scan, *pos = str;
     bool escaped = false;
 
     if (!str)
-        return 0;
+        return;
 
     for (scan = str; *scan; scan++) {
         if (!escaped && *scan == '\\') {
@@ -127,8 +121,6 @@ static size_t unescape_spaces(char *str) {
 
     if (pos != scan)
         *pos = '\0';
-
-    return (size_t) (pos - str);
 }
 
 /* --- Rule storage growth -------------------------------------------- */
@@ -158,15 +150,15 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
 
 /* --- Per-line parse ------------------------------------------------- */
 
-/* On success, *have_rule is true for a produced rule, false for
- * blank/comment/trimmed-to-empty lines. The origin is not the line's: the ruleset
- * tags the rule after the parse, and a rule alone carries none. Returns an error
- * on arena exhaustion. */
+/* A line that makes no rule — blank, a comment, trimmed to nothing — leaves
+ * out_rule->pattern NULL, which is what the module's public door already answers
+ * for one (gitignore_rule_parse: *out = NULL). The origin is not the line's:
+ * the ruleset tags the rule after the parse, and a rule alone carries none. Returns
+ * an error on arena exhaustion. */
 static error_t *parse_one_rule(
-    arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule,
-    bool *have_rule
+    arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule
 ) {
-    *have_rule = false;
+    out_rule->pattern = NULL;
 
     const char *pattern = line;
     size_t rem = line_len;
@@ -181,22 +173,6 @@ static error_t *parse_one_rule(
     if (*pattern == '#')
         return NULL;
 
-    /* `*` shortcut mirrors libgit2 parse_optimized_patterns (scoped to `*` only;
-     * see module header for why `.` is intentionally skipped). Kept before the
-     * negation strip to match libgit2's call order. */
-    if (rem == 1 && *pattern == '*') {
-        char *copy = arena_strndup(arena, pattern, 1);
-        if (!copy)
-            return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
-        out_rule->pattern = copy;
-        out_rule->length = 1;
-        out_rule->flags = GITIGNORE_FLAG_MATCH_ALL;
-        out_rule->origin = 0;
-        out_rule->source = copy;
-        *have_rule = true;
-        return NULL;
-    }
-
     unsigned int flags = 0;
 
     if (*pattern == '!') {
@@ -205,34 +181,30 @@ static error_t *parse_one_rule(
         rem--;
     }
 
-    /* Body scan: track slashes and wildcards over the full line. No early break
-     * at whitespace — libgit2 ALLOWSPACE mode lets spaces, tabs, and `\r` be
-     * part of the pattern. Trailing whitespace and a trailing `\r` are stripped
-     * below. Mirrors attr_file.c:763-784. */
+    /* Body scan: the slashes over the full line. A backslash is skipped and the
+     * byte after it read as itself — an escaped separator still counts as one,
+     * as libgit2 counts it; what an escape protects is the wildmatch later, and
+     * unescape_spaces keeps it in the pattern. No early break at whitespace —
+     * libgit2 ALLOWSPACE mode lets spaces, tabs, and `\r` be part of the pattern.
+     * Trailing whitespace and a trailing `\r` are stripped below. Mirrors
+     * attr_file.c:763-784. */
     int slash_count = 0;
-    bool escaped = false;
     const char *scan = pattern;
     const char *end = pattern + rem;
 
     while (scan < end) {
-        char c = *scan;
-
-        if (c == '\\' && !escaped) {
-            escaped = true;
+        if (*scan == '\\') {
             scan++;
             continue;
         }
 
-        if (c == '/') {
+        if (*scan == '/') {
             flags |= GITIGNORE_FLAG_FULLPATH;
             slash_count++;
             if (slash_count == 1 && pattern == scan)
                 pattern++;               /* consume leading anchor slash */
-        } else if (is_wildcard(c) && !escaped) {
-            flags |= GITIGNORE_FLAG_HASWILD;
         }
 
-        escaped = false;
         scan++;
     }
 
@@ -276,14 +248,12 @@ static error_t *parse_one_rule(
     if (!copy)
         return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 
-    size_t final_length = unescape_spaces(copy);
+    unescape_spaces(copy);
 
     out_rule->pattern = copy;
-    out_rule->length = final_length;
     out_rule->flags = flags;
     out_rule->origin = 0;
     out_rule->source = source;
-    *have_rule = true;
 
     return NULL;
 }
@@ -299,8 +269,6 @@ static bool rule_matches(
 ) {
     if ((r->flags & GITIGNORE_FLAG_DIRECTORY) && !is_dir)
         return false;
-    if (r->flags & GITIGNORE_FLAG_MATCH_ALL)
-        return true;
     if (r->flags & GITIGNORE_FLAG_FULLPATH)
         return wildmatch(r->pattern, rung, WM_PATHNAME) == WM_MATCH;
 
@@ -345,74 +313,6 @@ static bool rule_reaches(
         *slash = '/';
         base = slash + 1;
         if (hit)
-            return true;
-    }
-
-    return false;
-}
-
-/* --- Negation filter ------------------------------------------------- */
-/* gitignore's "a parent directory cannot be re-included" rule: a non-wildcard
- * negation that no earlier rule could match is silently discarded during parse.
- * Without this filter, `build/` followed by `!build/important.log` would leave
- * the negation live and the file unignored — diverging from git(1). Mirrors libgit2
- * ignore.c:50-168. */
-
-static bool does_negate_pattern(
-    const gitignore_rule_t *rule, const gitignore_rule_t *neg
-) {
-    if ((rule->flags & GITIGNORE_FLAG_NEGATIVE) != 0 ||
-        (neg->flags & GITIGNORE_FLAG_NEGATIVE) == 0)
-        return false;
-
-    if (rule->length == neg->length)
-        return memcmp(rule->pattern, neg->pattern, rule->length) == 0;
-
-    const gitignore_rule_t *shorter = rule->length < neg->length ? rule : neg;
-    const gitignore_rule_t *longer = rule->length < neg->length ? neg : rule;
-
-    /* shorter must be basename-only AND match the tail of longer on a `/` boundary.
-     * Length inequality guarantees tail > longer->pattern, so tail[-1] is always
-     * inside longer's buffer. */
-    const char *tail = longer->pattern + longer->length - shorter->length;
-    if (tail[-1] != '/')
-        return false;
-    if (memchr(shorter->pattern, '/', shorter->length) != NULL)
-        return false;
-
-    return memcmp(tail, shorter->pattern, shorter->length) == 0;
-}
-
-/* Return true if `neg` could actually un-ignore a file matched by some earlier
- * rule in `set`. Called only for non-wildcard negations — the wildcard case is
- * indeterminate and libgit2 keeps them unconditionally. */
-static bool negation_has_effect(
-    const gitignore_ruleset_t *set, const gitignore_rule_t *neg
-) {
-    for (size_t i = 0; i < set->count; i++) {
-        const gitignore_rule_t *rule = &set->rules[i];
-
-        /* A bare `*` matches every path, so every negation after it stands: `*`
-         * then `!keep` is gitignore's idiom for "nothing but keep", and git reads
-         * it so. libgit2 does not — its `*` shortcut carries no wildcard flag,
-         * so the basename heuristic below runs on it and drops the negation. */
-        if (rule->flags & GITIGNORE_FLAG_MATCH_ALL)
-            return true;
-
-        if (!(rule->flags & GITIGNORE_FLAG_HASWILD)) {
-            if (does_negate_pattern(rule, neg))
-                return true;
-            continue;
-        }
-
-        /* For wildcard predecessors, mirror libgit2's wildmatch of the neg's
-         * pattern against the predecessor's pattern. WM_PATHNAME is gated on
-         * the predecessor having FULLPATH so that e.g. `*.log` still matches
-         * nested `path/foo.log`. */
-        unsigned int flags = (rule->flags & GITIGNORE_FLAG_FULLPATH)
-                                 ? WM_PATHNAME
-                                 : 0;
-        if (wildmatch(rule->pattern, neg->pattern, flags) == WM_MATCH)
             return true;
     }
 
@@ -478,25 +378,12 @@ error_t *gitignore_ruleset_append(
             );
 
         gitignore_rule_t rule = { 0 };
-        bool have = false;
-        RETURN_IF_ERROR(
-            parse_one_rule(set->arena, cursor, line_len, &rule, &have)
-        );
-        rule.origin = origin;
+        RETURN_IF_ERROR(parse_one_rule(set->arena, cursor, line_len, &rule));
 
-        /* Drop a non-wildcard negation that no earlier rule could match
-         * (gitignore's "parent directory cannot be re-included" rule). Mirrors
-         * the gate in libgit2's parse_ignore_file. */
-        if (have &&
-            (rule.flags & GITIGNORE_FLAG_NEGATIVE) &&
-            !(rule.flags & GITIGNORE_FLAG_HASWILD) &&
-            !negation_has_effect(set, &rule))
-            have = false;
-
-        /* Gate MAX_RULES only when we're actually about to store — a
-         * blank/comment/discarded line at index 10 000 must not falsely trip
-         * the limit. */
-        if (have) {
+        /* Gate MAX_RULES only when we're actually about to store — a blank/comment
+         * line at index 10 000 must not falsely trip the limit. */
+        if (rule.pattern) {
+            rule.origin = origin;
             if (set->count >= MAX_RULES)
                 return ERROR(
                     ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES
@@ -711,9 +598,8 @@ error_t *gitignore_rule_parse(
         return ERROR(ERR_VALIDATION, "gitignore: a rule is one line");
 
     gitignore_rule_t rule = { 0 };
-    bool have = false;
-    RETURN_IF_ERROR(parse_one_rule(arena, line, len, &rule, &have));
-    if (!have)
+    RETURN_IF_ERROR(parse_one_rule(arena, line, len, &rule));
+    if (!rule.pattern)
         return NULL;
 
     gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));

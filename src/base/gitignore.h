@@ -10,9 +10,8 @@
  *   - exact match attribution via per-rule origin tags
  *
  * The parse is the grammar: the `!` and the anchor, the directory marker, the
- * escapes, and the gate that drops a non-wildcard negation no earlier rule could
- * match. A ruleset is a *program over the rungs of a path*, and there are two
- * of them here:
+ * escapes. Every rule it makes is kept as written. A ruleset is a *program over
+ * the rungs of a path*, and there are two of them here:
  *
  *   Exclusion (`gitignore_eval`, `gitignore_is_ignored`) is git's. A rule that
  *   matches a directory excludes everything beneath it and no rule beneath it
@@ -225,9 +224,7 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
  * One line of the grammar as a rule of its own — no ruleset around it, and so
  * neither of the ruleset's programs: no ancestors, no order, nothing final. For
  * a caller whose program is its own and reads each rule itself (infra/pathspec:
- * its rules in its own order, over rungs of its own walk); a ruleset of one rule
- * is not the rule the line wrote, because the gate drops a non-wildcard negation
- * with nothing before it to negate.
+ * its rules in its own order, over rungs of its own walk).
  */
 typedef struct gitignore_rule gitignore_rule_t;
 

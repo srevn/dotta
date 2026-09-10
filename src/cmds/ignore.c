@@ -31,19 +31,16 @@
 #include "sys/source.h"
 
 /**
- * Check if a pattern already exists in content (zero-allocation)
+ * Does any line of content name the same rule as pattern? (zero-allocation)
  *
- * Scans content line by line, trimming whitespace, then compares against the
- * given pattern using length + memcmp.  All non-empty lines are compared.
- * Pattern must already be normalized (no leading/trailing whitespace).
+ * Rules, not text: each line is read as base/gitignore reads it, and two lines
+ * are one rule iff their spans are equal byte for byte — so `foo` and `foo   `
+ * are one rule while `foo` and `  foo` are two, and a blank or comment line
+ * names none. `span` is the pattern's own, which the caller has already asked
+ * for: it is also the bytes the caller writes.
  */
-static bool pattern_exists(const char *content, const char *pattern) {
-    if (!content || !pattern) {
-        return false;
-    }
-
-    size_t pat_len = strlen(pattern);
-    if (pat_len == 0) {
+static bool pattern_exists(const char *content, const char *pattern, size_t span) {
+    if (!content || span == 0) {
         return false;
     }
 
@@ -56,28 +53,9 @@ static bool pattern_exists(const char *content, const char *pattern) {
             line_end = line_start + strlen(line_start);
         }
 
-        /* Trim leading whitespace (no allocation) */
-        const char *trim_start = line_start;
-        size_t trim_len = (size_t) (line_end - line_start);
-
-        while (trim_len > 0 && (*trim_start == ' ' || *trim_start == '\t')) {
-            trim_start++;
-            trim_len--;
-        }
-
-        /* Trim trailing whitespace */
-        while (trim_len > 0) {
-            char c = trim_start[trim_len - 1];
-            if (c == ' ' || c == '\t' || c == '\r') {
-                trim_len--;
-            } else {
-                break;
-            }
-        }
-
-        /* Compare with pattern (skip empty lines) */
-        if (trim_len > 0 && trim_len == pat_len &&
-            memcmp(trim_start, pattern, pat_len) == 0) {
+        size_t line_len = (size_t) (line_end - line_start);
+        if (gitignore_rule_span(line_start, line_len) == span &&
+            memcmp(line_start, pattern, span) == 0) {
             return true;
         }
 
@@ -93,56 +71,52 @@ static bool pattern_exists(const char *content, const char *pattern) {
 }
 
 /**
- * Normalize a pattern by trimming leading and trailing whitespace
+ * Refuse an argument that names no pattern, before anything is read or written.
  *
- * Returns pointer to the normalized pattern in the provided buffer, or NULL if
- * the pattern is empty/NULL after trimming.
+ * Each goes through the grammar's own single-rule door, which refuses a newline
+ * (a pattern is one line; two would land in the file as two rules) and an over-long
+ * line by name. A line that makes no rule is refused here, where the flag and
+ * the argument can still be named, rather than landing in the file as a comment
+ * or as nothing and being reported as "no changes". A NULL entry is not an argument
+ * and is skipped.
  */
-static const char *normalize_pattern(
-    const char *pattern,
-    char *buffer,
-    size_t buffer_size,
-    size_t *out_len
+static error_t *require_patterns(
+    arena_t *arena, const char *flag, char **patterns, size_t count
 ) {
-    if (!pattern || *pattern == '\0') {
-        return NULL;
+    for (size_t i = 0; i < count; i++) {
+        const char *p = patterns[i];
+        if (!p) {
+            continue;
+        }
+
+        gitignore_rule_t *rule = NULL;
+        error_t *err = gitignore_rule_parse(arena, p, &rule);
+        if (err) {
+            return error_wrap(err, "Invalid %s pattern '%s'", flag, p);
+        }
+        if (rule) {
+            continue;
+        }
+
+        if (*p == '#') {
+            return ERROR(
+                ERR_INVALID_ARG, "%s '%s' is a comment, not a pattern\n"
+                "Escape the '#' to match it: '\\%s'", flag, p, p
+            );
+        }
+        return ERROR(ERR_INVALID_ARG, "%s '%s' names no pattern", flag, p);
     }
 
-    /* Trim leading whitespace */
-    while (*pattern == ' ' || *pattern == '\t') {
-        pattern++;
-    }
-    if (*pattern == '\0') {
-        return NULL;
-    }
-
-    /* Trim trailing whitespace */
-    size_t len = strlen(pattern);
-    while (len > 0 && (pattern[len - 1] == ' ' ||
-        pattern[len - 1] == '\t' ||
-        pattern[len - 1] == '\r')) {
-        len--;
-    }
-    if (len == 0 || len >= buffer_size) {
-        return NULL;
-    }
-
-    memcpy(buffer, pattern, len);
-    buffer[len] = '\0';
-    if (out_len) {
-        *out_len = len;
-    }
-
-    return buffer;
+    return NULL;
 }
 
 /**
  * Add patterns to .dottaignore content
  *
- * Appends normalized patterns (whitespace-trimmed) to existing_content, skipping
- * patterns that already exist or are duplicates within the batch. Deduplication
- * is textual — each candidate is compared against lines already present in the
- * accumulating buffer.
+ * Appends each pattern as the rule it names — its span, so what the grammar would
+ * trim off the back is not written and nothing else is lost — skipping a pattern
+ * whose rule is already present, in the file or earlier in the batch. Deduplication
+ * is by rule (pattern_exists), against the accumulating buffer.
  *
  * Contract: on success, *new_content is NULL iff *added_count == 0. The helper
  * never hands back a buffer that is byte-identical to its input, so callers can
@@ -169,7 +143,7 @@ static error_t *add_patterns_to_content(
     /* Calculate required buffer size */
     size_t existing_len = existing_content ? strlen(existing_content) : 0;
 
-    /* Upper-bound allocation: normalization only trims, so raw lengths suffice */
+    /* Upper-bound allocation: a span is never longer than its pattern */
     size_t max_size = existing_len + 1;  /* +1 for possible separator */
     for (size_t i = 0; i < pattern_count; i++) {
         if (patterns[i]) {
@@ -198,26 +172,21 @@ static error_t *add_patterns_to_content(
     *pos = '\0';
 
     /*
-     * Single pass: normalize, deduplicate, append.
+     * Single pass: span, deduplicate, append.
      *
      * Checking pattern_exists() against the accumulated result buffer handles
      * both existing-content dedup and batch dedup in one call: previously appended
      * patterns are already in the buffer.
      */
     for (size_t i = 0; i < pattern_count; i++) {
-        char buf[4096];
-        size_t plen;
-        const char *p = normalize_pattern(
-            patterns[i], buf, sizeof(buf), &plen
-        );
-        if (!p) continue;
-
-        if (pattern_exists(result, p)) {
+        const char *p = patterns[i];
+        size_t span = p ? gitignore_rule_span(p, strlen(p)) : 0;
+        if (span == 0 || pattern_exists(result, p, span)) {
             continue;
         }
 
-        memcpy(pos, p, plen);
-        pos += plen;
+        memcpy(pos, p, span);
+        pos += span;
         *pos++ = '\n';
         *pos = '\0';  /* Keep result valid for next pattern_exists call */
         (*added_count)++;
@@ -238,10 +207,11 @@ static error_t *add_patterns_to_content(
 /**
  * Remove patterns from .dottaignore content
  *
- * Filters existing_content line-by-line, dropping any non-comment line that
- * textually matches a normalized entry in patterns. `*not_found_count` reports
- * how many requested patterns were absent from the input and is always populated
- * regardless of whether the buffer changed.
+ * Filters existing_content line-by-line, dropping every line that names the same
+ * rule as an entry in patterns — equal spans, byte for byte, as pattern_exists
+ * reads them; a blank or comment line names none and is always kept.
+ * `*not_found_count` reports how many requested patterns were absent from the
+ * input and is always populated regardless of whether the buffer changed.
  *
  * Contract: on success, *new_content is NULL iff *removed_count == 0. Callers
  * can treat NULL as "nothing changed" without a content compare.
@@ -300,38 +270,16 @@ static error_t *remove_patterns_from_content(
         /* Extract line */
         size_t line_len = (size_t) (line_end - line_start);
 
-        /* Trim leading whitespace for comparison (no allocation) */
-        const char *trim_start = line_start;
-        size_t trim_len = line_len;
+        size_t span = gitignore_rule_span(line_start, line_len);
 
-        while (trim_len > 0 && (*trim_start == ' ' || *trim_start == '\t')) {
-            trim_start++;
-            trim_len--;
-        }
-
-        /* Trim trailing whitespace */
-        while (trim_len > 0) {
-            char c = trim_start[trim_len - 1];
-            if (c == ' ' || c == '\t' || c == '\r') {
-                trim_len--;
-            } else {
-                break;
-            }
-        }
-
-        /* Check if this line matches any pattern to remove */
+        /* Check if this line names the rule of any pattern to remove. A blank
+         * or comment line names none and stays. */
         bool should_remove = false;
-        if (trim_len > 0 && *trim_start != '#') {
+        if (span > 0) {
             for (size_t i = 0; i < pattern_count; i++) {
-                /* Normalize pattern for comparison */
-                char pbuf[4096];
-                size_t plen;
-                const char *p = normalize_pattern(
-                    patterns[i], pbuf, sizeof(pbuf), &plen
-                );
-                if (!p) continue;
-
-                if (plen == trim_len && memcmp(trim_start, p, plen) == 0) {
+                const char *p = patterns[i];
+                if (p && gitignore_rule_span(p, strlen(p)) == span &&
+                    memcmp(line_start, p, span) == 0) {
                     should_remove = true;
                     pattern_found[i] = true;
                     break;
@@ -1216,6 +1164,19 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     if (has_test) {
         return test_path_ignore(ctx, opts->test_path, opts->profile);
     }
+
+    /* A pattern is checked before its file is opened: an argument that names no
+     * rule, or names two, is refused by name rather than written. */
+    RETURN_IF_ERROR(
+        require_patterns(
+        ctx->arena, "--add", opts->add_patterns, opts->add_count
+        )
+    );
+    RETURN_IF_ERROR(
+        require_patterns(
+        ctx->arena, "--remove", opts->remove_patterns, opts->remove_count
+        )
+    );
 
     /* The scope for edit / modify: the file's home, its name on the screen, and
      * what an editor opens on when the file is not there yet. Each arm establishes

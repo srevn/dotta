@@ -595,9 +595,11 @@ static error_t *manifest_standing(
  * skip is load-bearing, not an optimisation: the tail arithmetic below assumes
  * a separator where the rung ends, which the root and the empty prefix do not have.
  *
- * The scratch copy is the arena's and abandoned, the module's idiom: the ascent
- * is asked once per argument, once per contested location, and once again per
- * contested rung one of those reads.
+ * The scratch copy is the arena's and abandoned, the module's idiom. How often
+ * that is paid is not "once per newly listed path": the ascent runs for every
+ * location nothing stands at — including one a caller goes on to exclude or refuse
+ * — and again at every contested location a namer reads, and again at every
+ * contested rung one of those ascents passes through.
  *
  * @param n What the question is asked under (must not be NULL)
  * @param location Absolute location (must not be NULL)

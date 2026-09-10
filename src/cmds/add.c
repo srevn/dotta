@@ -7,6 +7,7 @@
 #include <config.h>
 #include <errno.h>
 #include <git2.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -38,36 +39,51 @@
 #include "utils/hooks.h"
 
 /**
- * One path the walk collected, under both its names
+ * One path this command listed, under the claim it gives it
  *
- * The walk is where the mount boundary is crossed: each path it collects is named
- * there, once, through the command's table and this profile's own roots, and
- * everything after reads the name it needs — the capture the filesystem path,
- * the commit message the storage path, and the record loop the storage path again,
- * resolved back through the table to the location the view spells. The walk's
- * path is that location already — every argument is located and every directory
- * it enters is — so the resolve is a round-trip over one string. A file's stat
- * is the capture's (add_file_to_stage's one look at the bytes it staged), so
- * the record binds the committed blob to it; a directory's stays unset, as apply
- * records them.
+ * `location` is where the claim stands, which is the view's own key for it
+ * (mount_resolve's answer): the record joins by it with no round trip. It is
+ * the path the bytes are read at for every listing but one — a typed name standing
+ * at a binder's own spelling is a claim of the link, and the directory the walk
+ * enumerates beneath it is mount_locate's (infra/mount.h, the stated exception).
+ *
+ * `claim` is the pair the namer reads (core/manifest.h manifest_claim_t): the
+ * name the capture commits under, and the kind that says whether anything can
+ * be named beneath it. The listing indexes it by location, so every path beneath
+ * one already listed is named from it and the walk carries no frame of its own.
+ *
+ * `stat` is the file capture's own triple — the fstat of the descriptor the bytes
+ * came off — so the record binds the committed blob to it. A directory's stays
+ * unset, as apply records them.
  */
 typedef struct {
-    const char *fs_path;          /* Where it stands: the location (arena) */
-    const char *storage_path;     /* Named at collection, through this profile (arena) */
+    const char *location;         /* Where the claim stands (arena) */
+    manifest_claim_t claim;       /* The name and kind it was listed under (arena) */
     stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
 } add_path_t;
 
 /**
  * The walk: what every frame reads, and the two lists it fills
  *
- * `seen` holds every location the walk passed so far, so overlapping CLI arguments
- * (~/.config and ~/.config/fish) list each path once: a directory already walked
- * is skipped with its subtree, a file already listed is not listed again. The
- * key is the location, so two spellings of one argument — `~/x` beside its
- * physical, tab-completion beside `find`'s output — are one key for every alias
- * the table knows; a link no binding names is two, as two claims through and
- * around it are two claims (infra/mount.h). Keys borrow the arena strings the
- * lists hold.
+ * `listing` is this command's own claims, which is exactly the layer
+ * manifest_name reads as `pending`: location -> &item->claim, with a NULL *value*
+ * for a location entered without claiming (a root met from above). hashmap_has
+ * says this command settled the location, hashmap_get says it claimed it. So
+ * overlapping CLI arguments (~/.config and ~/.config/fish) list each path once
+ * — a directory already walked is skipped with its subtree, a file already listed
+ * is not listed again — and every path beneath one already listed is named from
+ * its claim, which is why no frame is carried down the walk. The key is the
+ * location, so two spellings of one argument — `~/x` beside its physical,
+ * tab-completion beside `find`'s output — are one key for every alias the table
+ * knows; a link no binding names is two, as two claims through and around it
+ * are two claims (infra/mount.h). Keys and values borrow the arena the items
+ * live in.
+ *
+ * `view` is the branch as this command opened it: this profile's contribution
+ * alone, from the tree the stage opened at, under this command's table. Every
+ * name comes from it (core/manifest.h manifest_name, over `listing`), the kind
+ * question reads it (manifest_lookup_claim), and so does the one refusal the
+ * completed selection owes (refuse_moved_name).
  *
  * `stage` and `sheet` are the two documents one commit carries, and the walk
  * asks both whether the branch has room for a name before a byte is read: the
@@ -80,12 +96,13 @@ typedef struct {
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
     const mount_table_t *mounts;         /* The command's table (see cmd_add) */
-    const char *profile;                 /* The asker: whose roots name what is found */
+    const char *profile;                 /* The asker: whose claims name what is found */
+    const manifest_t *view;              /* The branch as this command opened it */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
     const stage_t *stage;                /* The branch's tree, asked once per listing */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
-    hashmap_t *seen;                     /* Filesystem path -> walked (borrowed keys) */
+    hashmap_t *listing;                  /* location -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
     ptr_array_t directories;             /* add_path_t *: every directory walked into */
 } add_walk_t;
@@ -109,6 +126,12 @@ typedef struct {
  * whichever cause the line happened to be written for; the sum falls short of
  * the captures only for a claim this machine cannot place, which has no row to
  * blame and goes unnamed.
+ *
+ * `unkept` is now one thing only. This command cannot author a second name, and
+ * a capture at a contested location lands on the name the next settle will keep
+ * — refuse_moved_name is the last word on that — so a non-zero count is a typed
+ * re-capture of a loser, deliberately made, which is exactly what "captured under
+ * an unused path" says.
  */
 typedef struct {
     bool updated;          /* The anchor pass ran and the transaction committed */
@@ -351,10 +374,16 @@ static error_t *spell_argument(
  *      (mount_strip_label of `storage_path`): what a `.gitignore` at the mount
  *      root would see.
  *   2. The source tree's own `.gitignore`, if the command built a filter (gated
- *      on `config.respect_gitignore`), evaluated on `fs_path`: that repository's
+ *      on `config.respect_gitignore`), evaluated on `location`: that repository's
  *      root is the root its rules are relative to. The lowest layer: asked only
  *      when no `.dottaignore` layer decided, so a `!` rule in any of them overrides
  *      it.
+ *
+ * The subject of the first is the name this command chose, whatever produced it
+ * — a claim the profile already held, a composition beneath a tracked directory,
+ * a typed argument — so a path beneath a tracked `home/jail/etc` is matched as
+ * `jail/etc/x` and not as `etc/x` (cmds/add.h). The subject of the second is
+ * where the path stands, which no naming decision moves.
  *
  * Either mechanism may be absent. `*out_match` is the rules' verdict — the layer
  * and the rule as written when they decided, undecided when the source tree's
@@ -364,9 +393,14 @@ static error_t *spell_argument(
  * named. The gitignore evaluator never fails — its verdict is applied directly.
  */
 static bool is_excluded(
-    const add_walk_t *walk, const char *fs_path, const char *storage_path,
-    bool is_directory, gitignore_match_t *out_match
+    const add_walk_t *walk, const char *location, const char *storage_path,
+    path_kind_t kind, gitignore_match_t *out_match
 ) {
+    /* Both layers ask for the directory bit, which is the kind read as the two
+     * APIs want it: a gitignore rule with a trailing slash matches a directory
+     * alone, and the source filter's attr stack needs the same distinction. */
+    bool is_directory = kind == PATH_KIND_DIRECTORY;
+
     gitignore_eval(
         walk->rules, mount_strip_label(storage_path), is_directory, out_match
     );
@@ -377,12 +411,12 @@ static bool is_excluded(
     if (walk->source_filter) {
         bool excluded = false;
         error_t *err = source_filter_is_excluded(
-            walk->source_filter, fs_path, is_directory, &excluded
+            walk->source_filter, location, is_directory, &excluded
         );
         if (err) {
             output_warning(
                 walk->ctx->out, OUTPUT_VERBOSE,
-                "Source .gitignore check failed for %s: %s", fs_path,
+                "Source .gitignore check failed for %s: %s", location,
                 error_message(err)
             );
             error_free(err);
@@ -395,21 +429,37 @@ static bool is_excluded(
 }
 
 /**
- * List `fs_path` under both names. The item is the arena's; the list borrows it.
+ * List `location` under `claim`: the item, its bucket, and the listing's index
+ *
+ * The item is the arena's and stable, which is what lets the index borrow its
+ * claim rather than a loop-local pair — and that is what makes every path beneath
+ * this one nameable from it (core/manifest.h manifest_name, the `pending` layer).
+ * The claim's kind chooses the bucket: the walk is the sole source of directory
+ * tracking, and every phase after reads the two lists apart.
+ *
+ * Both fallible steps are checked. The listing is what this command promises to
+ * capture, so an entry lost to a failed push and captured anyway would break
+ * the selection model; a failure here aborts the command, and nothing reads the
+ * listing after one.
  */
 static error_t *list_path(
-    arena_t *arena, ptr_array_t *list, const char *fs_path,
-    const char *storage_path
+    add_walk_t *walk, const char *location, manifest_claim_t claim
 ) {
-    add_path_t *path = arena_calloc(arena, 1, sizeof(*path));
+    add_path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
     if (!path) {
         return ERROR(ERR_MEMORY, "Failed to allocate path entry");
     }
-    path->fs_path = fs_path;
-    path->storage_path = storage_path;
+    path->location = location;
+    path->claim = claim;
     path->stat = STAT_CACHE_UNSET;
 
-    return ptr_array_push(list, path);
+    error_t *err = ptr_array_push(
+        claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
+        path
+    );
+    if (err) return err;
+
+    return hashmap_set(walk->listing, location, &path->claim);
 }
 
 /**
@@ -432,9 +482,9 @@ static error_t *list_path(
  * the run failing to decide, which is never a verdict about the path.
  */
 static error_t *admit_name(
-    const add_walk_t *walk, const char *storage_path, bool is_dir
+    const add_walk_t *walk, const char *storage_path, path_kind_t kind
 ) {
-    if (is_dir) {
+    if (kind == PATH_KIND_DIRECTORY) {
         return stage_admit_subtree(walk->stage, storage_path);
     }
 
@@ -455,79 +505,80 @@ static error_t *admit_name(
 }
 
 /**
- * Collect a directory tree into the walk.
+ * Collect a directory's children into the walk.
  *
- * `dir_fs` is a location, and so is every path this frame joins beneath it: the
- * argument arm located what it began at, and a directory child is read through
- * the table before the walk enters it. `dir_storage` is the directory's own name
- * in this profile's namespace, NULL when it is one of the profile's own roots
- * ($HOME, "/", its target): a root has no name, and is not listed; its descendants
- * are. Every other directory walked into is listed — the walk is the sole source
- * of directory tracking — and so is every regular file and symlink child a branch
- * can hold. Symlinks are never followed: a symlink to a directory is an entry
- * like any other, and a special file is no entry at all.
+ * `directory` is the directory that stands at the frame's own location, and so
+ * is every path this frame joins beneath it: the caller located what it began
+ * at, and a directory child is read through the table before the walk enters
+ * it. The frame itself is neither named nor listed here — its caller has already
+ * settled it, the argument arm before it descends and the recursion below before
+ * it recurses — which is what lets a claim's key differ from the directory it
+ * enumerates: a typed name standing at a binder's own spelling keys at the link
+ * and enumerates the binding's directory (infra/mount.h, mount_resolve's
+ * exception).
  *
- * Each child is named here, once, through the walking profile's own roots; the
- * recursion receives both names and never names it again. Another profile's target
- * is an ordinary directory here — the walk lists it and enters it, and what it
- * finds beneath is named portably (infra/mount.h). A child that is one of *this*
- * profile's roots is walked through unlisted when it is a directory, and skipped
- * otherwise: nothing in the namespace names it.
+ * Every directory walked into is listed — the walk is the sole source of directory
+ * tracking — and so is every regular file and symlink child a branch can hold.
+ * Symlinks are never followed: a symlink to a directory is an entry like any
+ * other, and a special file is no entry at all.
  *
- * A name the branch has no room for is skipped with its subtree and one line at
- * NORMAL (admit_name): a stale claim deep inside $HOME must not fail `dotta add
- * p ~`, and the capture that would have refused it arrives too late to skip
- * anything. `depth` bounds the recursion at FS_WALK_MAX_DEPTH, and this is the
- * one walked verdict that refuses rather than skips — collection precedes capture,
- * so a refusal here costs nothing, where a skip would leave the profile permanently
- * short of a subtree that can in fact be captured.
+ * Each child is named here, once, by the claim standing at it — this command's
+ * own where it has listed one there, else the profile's own (core/manifest.h
+ * manifest_name over `listing`) — and the recursion names it again for no one.
+ * Another profile's target is an ordinary directory here: the walk lists it and
+ * enters it, and what it finds beneath is named portably (infra/mount.h). A child
+ * that is one of *this* profile's roots has no name at all: it is entered unlisted
+ * when it is a directory, and skipped otherwise.
+ *
+ * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
+ * kind the profile's own claim at the location contradicts, and a name the branch
+ * has no room for (admit_name). Neither may fail the command — a stale claim
+ * deep inside $HOME must not fail `dotta add p ~`, and the capture that would
+ * have refused it arrives too late to skip anything. `depth` bounds the recursion
+ * at FS_WALK_MAX_DEPTH, and that is the one walked verdict that refuses rather
+ * than skips — collection precedes capture, so a refusal there costs nothing,
+ * where a skip would leave the profile permanently short of a subtree that can
+ * in fact be captured.
  *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
 static error_t *collect_tree(
-    add_walk_t *walk, const char *dir_fs, const char *dir_storage, size_t depth
+    add_walk_t *walk, const char *directory, size_t depth
 ) {
     CHECK_NULL(walk);
-    CHECK_NULL(dir_fs);
+    CHECK_NULL(directory);
 
     arena_t *arena = walk->ctx->arena;
     output_t *out = walk->ctx->out;
 
-    /* A directory already walked was walked whole: nothing new beneath it. Asked
-     * before the bound, so a deeper argument collected first does not make its
-     * parent's walk fail when the parent arrives at the limit. Every child is
-     * tested against `seen` in the ladder below, so what reaches this line is
-     * the argument arm's own entry. */
-    if (hashmap_has(walk->seen, dir_fs)) return NULL;
-
+    /* The bound is the frame's own, tested before it enumerates. A directory
+     * already settled never reaches here: the callers test the listing before
+     * they descend, so a deeper argument collected first does not make its parent's
+     * walk fail when the parent arrives at the limit. */
     if (depth >= FS_WALK_MAX_DEPTH) {
         return ERROR(
             ERR_INVALID_ARG,
             "Cannot walk '%s': it is %d directories below where this walk began; "
             "name it as an argument of its own, or exclude it",
-            dir_fs, FS_WALK_MAX_DEPTH
+            directory, FS_WALK_MAX_DEPTH
         );
     }
 
     /* "/" is the one directory whose spelling ends in its separator: a child
      * beneath it is joined with none. */
-    const char *separator = dir_fs[1] ? "/" : "";
+    const char *separator = directory[1] ? "/" : "";
 
     /* The whole listing, and the stream closed with it: one open at a time down
      * the recursion rather than one per frame, and the errno discipline is
      * fs_list_dir's. */
     string_array_t *entries = NULL;
-    RETURN_IF_ERROR(fs_list_dir(dir_fs, &entries));
+    RETURN_IF_ERROR(fs_list_dir(directory, &entries));
 
-    error_t *err = hashmap_set(walk->seen, dir_fs, (void *) 1);
-    if (!err && dir_storage) {
-        err = list_path(arena, &walk->directories, dir_fs, dir_storage);
-    }
-    if (err) goto cleanup;
+    error_t *err = NULL;
 
     for (size_t i = 0; i < entries->count; i++) {
         const char *child_fs = arena_str_format(
-            arena, "%s%s%s", dir_fs, separator, entries->items[i]
+            arena, "%s%s%s", directory, separator, entries->items[i]
         );
         if (!child_fs) {
             err = ERROR(ERR_MEMORY, "Failed to allocate path");
@@ -543,7 +594,7 @@ static error_t *collect_tree(
          * skipped by its noun rather than carried to a capture that would refuse
          * it and take every sibling with it. */
         struct stat st;
-        bool is_dir = false;
+        path_kind_t kind = PATH_KIND_FILE;
         switch (fs_lstat_occupant(child_fs, &st)) {
             case FS_OCCUPANT_NONE:
                 output_info(out, OUTPUT_VERBOSE, "Skipped absent: %s", child_fs);
@@ -565,7 +616,7 @@ static error_t *collect_tree(
                 continue;
 
             case FS_OCCUPANT_DIRECTORY:
-                is_dir = true;
+                kind = PATH_KIND_DIRECTORY;
                 break;
 
             case FS_OCCUPANT_REGULAR:
@@ -580,7 +631,7 @@ static error_t *collect_tree(
          * A leaf keeps the spelling it stands under: the very link a binding is
          * declared through is a claim of the link (mount_locate's stated
          * exception), and the walk does not follow one. */
-        if (is_dir) {
+        if (kind == PATH_KIND_DIRECTORY) {
             const char *joined = child_fs;
             err = mount_locate(walk->mounts, joined, arena, &child_fs);
             if (err) {
@@ -589,54 +640,84 @@ static error_t *collect_tree(
             }
         }
 
-        /* The crossing: what this profile calls the child, or nothing when it
-         * is one of the profile's own roots — no name in the namespace, so neither
+        /* Walked whole, or listed already: asked before a name, so nothing this
+         * command has settled is settled a second time — and so a verdict against
+         * a path is reached once, whichever of the two said it. */
+        if (hashmap_has(walk->listing, child_fs)) continue;
+
+        /* The crossing: what this profile calls the child — the claim standing
+         * there, this command's own or the branch's, else the composition beneath
+         * the nearest claim above it — or nothing when the child is one of the
+         * profile's own roots, which has no name in the namespace and so is neither
          * excludable nor listed. */
         const char *child_storage = NULL;
-        err = mount_name(walk->mounts, walk->profile, child_fs, arena, &child_storage);
+        err = manifest_name(
+            walk->view, walk->profile, child_fs, walk->listing, arena,
+            &child_storage
+        );
         if (err) {
             err = error_wrap(err, "Failed to name '%s'", child_fs);
             goto cleanup;
         }
 
-        if (!child_storage && !is_dir) {
-            /* A symlink standing at one of this profile's own roots: $HOME itself
-             * when HOME is a link, or its target reached through one. The walk
-             * does not follow symlinks, and the root itself has no name. */
-            output_info(out, OUTPUT_VERBOSE, "Skipped root: %s", child_fs);
-            continue;
-        }
-
-        /* Check exclude patterns */
-        gitignore_match_t match;
-        if (child_storage &&
-            is_excluded(walk, child_fs, child_storage, is_dir, &match)) {
-            if (match.decided) {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
-                    ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.pattern
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
-                    child_fs
-                );
+        if (!child_storage) {
+            if (kind != PATH_KIND_DIRECTORY) {
+                /* A symlink standing at one of this profile's own roots: $HOME
+                 * itself when HOME is a link, or its target reached through one.
+                 * The walk does not follow symlinks, and the root itself has no
+                 * name. */
+                output_info(out, OUTPUT_VERBOSE, "Skipped root: %s", child_fs);
+                continue;
             }
-            continue;
-        }
 
-        /* Walked whole, or listed already: hoisted here from the two branches
-         * below, so nothing this walk has settled is settled a second time —
-         * and so a name the branch has no room for is warned about once. */
-        if (hashmap_has(walk->seen, child_fs)) continue;
+            /* A root met from above: entered and never listed, so the frames
+             * below it compose beneath its label and nothing is settled twice. */
+            err = hashmap_set(walk->listing, child_fs, NULL);
+        } else {
+            /* Check exclude patterns */
+            gitignore_match_t match;
+            if (is_excluded(walk, child_fs, child_storage, kind, &match)) {
+                if (match.decided) {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
+                        ignore_origin_describe((ignore_origin_t) match.origin),
+                        match.pattern
+                    );
+                } else {
+                    output_info(
+                        out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
+                        child_fs
+                    );
+                }
+                continue;
+            }
 
-        /* What the branch can hold, asked before a byte is read. Only a shape
-         * conflict is a verdict about the path; a failure to decide is the run
-         * failing, and publishing a selection past one would commit a silently
-         * partial capture. */
-        if (child_storage) {
-            err = admit_name(walk, child_storage, is_dir);
+            /* What the profile already claims at the location, against what stands
+             * there now. The row is the location's own authority on kind, a derived
+             * one included — it says the profile holds a subtree beneath the
+             * path, which a path that became a file cannot carry — and it is
+             * the one reading that sees a claim with nothing beneath it for either
+             * of the branch's documents to find, where admit_name below covers
+             * the rest, by the name. */
+            const manifest_row_t *held = manifest_lookup_claim(
+                walk->view, walk->profile, child_fs
+            );
+            if (held && path_type_kind(held->type) != kind) {
+                output_warning(
+                    out, OUTPUT_NORMAL,
+                    "Skipping '%s': profile '%s' holds it as the %s '%s', and a "
+                    "%s stands there now", child_fs, walk->profile,
+                    held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
+                    held->storage_path, fs_stat_noun(&st)
+                );
+                continue;
+            }
+
+            /* What the branch can hold, asked before a byte is read. Only a shape
+             * conflict is a verdict about the path; a failure to decide is the
+             * run failing, and publishing a selection past one would commit a
+             * silently partial capture. */
+            err = admit_name(walk, child_storage, kind);
             if (err) {
                 if (error_code(err) != ERR_CONFLICT) goto cleanup;
                 output_warning(
@@ -647,16 +728,16 @@ static error_t *collect_tree(
                 err = NULL;
                 continue;
             }
+
+            err = list_path(
+                walk, child_fs, (manifest_claim_t){ child_storage, kind }
+            );
         }
 
-        if (is_dir) {
-            /* Recurse: the child lists itself on entry. */
-            err = collect_tree(walk, child_fs, child_storage, depth + 1);
-        } else {
-            err = hashmap_set(walk->seen, child_fs, (void *) 1);
-            if (!err) {
-                err = list_path(arena, &walk->files, child_fs, child_storage);
-            }
+        /* Settled either way, so the descent is one statement: a listed directory
+         * and a root entered unlisted are both walked, and nothing else is. */
+        if (!err && kind == PATH_KIND_DIRECTORY) {
+            err = collect_tree(walk, child_fs, depth + 1);
         }
         if (err) goto cleanup;
     }
@@ -665,6 +746,83 @@ cleanup:
     string_array_free(entries);
 
     return err;
+}
+
+/**
+ * Refuse a selection that moves a name without capturing the one it moves to
+ *
+ * A location this branch names twice is decided by the settle, and this command's
+ * own claims can change that decision: a directory claim admitted above such a
+ * location changes what its ascent composes, and with it which of the profile's
+ * names stands there (core/manifest.h manifest_name, "what the next settle will
+ * keep"). Where the name that will stand is not one this command captured, the
+ * next apply deploys bytes this command never read — over the ones it just
+ * committed under the other name.
+ *
+ * The subject is exactly manifest_unkept's slice: no verb can give a profile a
+ * second name for a location it already names (manifest_holds_name), and a listing
+ * that is not typed takes the namer's own answer — so the groups are the branch's,
+ * and only which member stands can move. Asked once, with the selection complete,
+ * because naming is a snapshot taken when a path is listed and a later argument
+ * can change what an earlier one composed.
+ *
+ * `kept` is the settle's own answer at the location and needs no second lookup;
+ * the view is one profile's, so the slice needs no profile filter. A location
+ * its profile names three times appears twice and is asked twice — the question
+ * is pure, and a set to spend on that repetition would cost more than it saves.
+ *
+ * The name to give up is the one this command would move *to*: with it gone the
+ * location is named once, the pre-command winner stands, and nothing moves. Giving
+ * up the kept name performs the move instead of preventing it.
+ *
+ * Not liftable by --force: --force overwrites bytes under a name the profile
+ * holds, which is not what abandoning a name is.
+ */
+static error_t *refuse_moved_name(const add_walk_t *walk) {
+    manifest_unkept_t unkept = manifest_unkept(walk->view);
+
+    for (size_t i = 0; i < unkept.count; i++) {
+        const char *location = unkept.entries[i].filesystem_path;
+        const char *kept = unkept.entries[i].kept;
+
+        const char *next = NULL;
+        error_t *err = manifest_name(
+            walk->view, walk->profile, location, walk->listing,
+            walk->ctx->arena, &next
+        );
+        if (err) {
+            return error_wrap(err, "Failed to name '%s'", location);
+        }
+        if (strcmp(kept, next) == 0) continue;   /* nothing moved here */
+
+        /* The one selection that may move a name: the command captured the location
+         * under the very name the next settle will keep. */
+        const manifest_claim_t *listed = hashmap_get(walk->listing, location);
+        if (listed && strcmp(listed->storage_path, next) == 0) continue;
+
+        /* The location is the one path in the sentence the user never typed, so
+         * it is spelled the way the shell spells it — as the screen that reports
+         * this pair already spells it (cmds/status.c's unused-path listing).
+         * The opening is revert.c refuse_second_name's, deliberately: one profile
+         * names one location once, and these are that rule read from its two
+         * ends. */
+        char shown[PATH_MAX];
+        output_format_path(location, identity()->home, shown, sizeof(shown));
+
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Profile '%s' names '%s' as '%s'\n\n"
+            "This command's directory claims would name it '%s', which it does "
+            "not capture — a directory must be named before the paths beneath "
+            "it.\n"
+            "  dotta add %s --force %s   captures those bytes under that name\n"
+            "  dotta remove %s %s   gives that name up instead",
+            walk->profile, shown, kept, next,
+            walk->profile, next, walk->profile, next
+        );
+    }
+
+    return NULL;
 }
 
 /**
@@ -964,7 +1122,7 @@ static error_t *create_commit(
     error_t *err = NULL;
     for (size_t i = 0; i < added_files->count; i++) {
         const add_path_t *path = added_files->items[i];
-        err = string_array_push(storage_paths, path->storage_path);
+        err = string_array_push(storage_paths, path->claim.storage_path);
         if (err) {
             string_array_free(storage_paths);
             return err;
@@ -1076,7 +1234,7 @@ static error_t *create_commit(
  * @param target The binding the run brought, absolute, or NULL: written for a
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
- * @param profile_was_new This add created the profile's branch: enable it here
+ * @param profile_created This add created the profile's branch: enable it here
  * @param added_files The files the walk listed, each with the capture's stat
  *                    (must not be NULL)
  * @param added_dirs The directories the walk passed through (must not be NULL)
@@ -1090,7 +1248,7 @@ static error_t *update_manifest_after_add(
     const mount_table_t *mounts,
     const char *profile,
     const char *target,
-    bool profile_was_new,
+    bool profile_created,
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
     const string_array_t *retired,
@@ -1121,7 +1279,7 @@ static error_t *update_manifest_after_add(
      * Transaction Safety: If the record write below fails, the dispatcher's
      * state_free automatically rolls back this change. */
     bool enabled = true;
-    if (profile_was_new) {
+    if (profile_created) {
         err = state_enable_profile(state, profile, target);
         if (err) {
             return error_wrap(err, "Failed to enable profile in state");
@@ -1207,19 +1365,25 @@ static error_t *update_manifest_after_add(
             const add_path_t *path = added_files->items[i];
             const char *at = NULL;
 
-            err = mount_resolve(mounts, profile, path->storage_path, ctx->arena, &at);
+            /* The resolve is a round-trip over one string: a listing's location
+             * is where its own claim resolves under this very table, which is
+             * what the walk's key invariant says (cmds/add.h). It goes with the
+             * receipt work that owns this function. */
+            err = mount_resolve(
+                mounts, profile, path->claim.storage_path, ctx->arena, &at
+            );
             if (err) {
                 hashmap_free(anchor_index, NULL);
                 manifest_free(manifest);
                 return error_wrap(
                     err, "Failed to derive filesystem path from storage path: %s",
-                    path->storage_path
+                    path->claim.storage_path
                 );
             }
             if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!manifest_is_claim(row, profile, path->storage_path)) {
+            if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
                 if (row) {
                     if (strcmp(row->profile, profile) != 0) receipt->overridden++;
                     else receipt->unkept++;
@@ -1250,19 +1414,21 @@ static error_t *update_manifest_after_add(
             const add_path_t *path = added_dirs->items[i];
             const char *at = NULL;
 
-            err = mount_resolve(mounts, profile, path->storage_path, ctx->arena, &at);
+            err = mount_resolve(
+                mounts, profile, path->claim.storage_path, ctx->arena, &at
+            );
             if (err) {
                 hashmap_free(anchor_index, NULL);
                 manifest_free(manifest);
                 return error_wrap(
                     err, "Failed to derive filesystem path from storage path: %s",
-                    path->storage_path
+                    path->claim.storage_path
                 );
             }
             if (!at) continue;
 
             const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!manifest_is_claim(row, profile, path->storage_path)) continue;
+            if (!manifest_is_claim(row, profile, path->claim.storage_path)) continue;
 
             error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
             if (anchor_err) error_free(anchor_err);
@@ -1339,10 +1505,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
     stage_t *stage = NULL;
+    manifest_t *view = NULL;             /* The branch as the stage opened it: see below */
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
-    size_t added_count = 0;
     bool profile_exists = false;
-    bool profile_was_new = false;
+    bool profile_created = false;
     bool committed = false;
     metadata_t *metadata = NULL;
     mount_table_t *mounts = NULL;         /* The command's table: see below */
@@ -1525,7 +1691,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = stage_open(repo, refname, &stage);
     } else {
         err = stage_orphan(repo, refname, &stage);
-        profile_was_new = true;  /* Profile is newly created */
+        profile_created = true;   /* This add is what brought the branch */
     }
 
     if (err) {
@@ -1558,51 +1724,68 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Collect every path to add, expanding directories. The walk lists each path
-     * once, under both names: the CLI argument crosses the mount boundary here,
-     * and what the walk finds beneath it crosses in the walk. */
+    /* The branch as this command found it, under this command's table: one
+     * contribution, this profile's, from the tree the stage opened at. Built
+     * after the sheet load so a sheet that will not load is still the earlier
+     * refusal — the builder loads it again and would say the same thing later.
+     * Every naming question below reads it, so does the kind question, and so
+     * does the refusal the completed selection owes; freed once, at cleanup. */
+    err = manifest_build_tree(
+        repo, stage_tree(stage), opts->profile, mounts, ctx->arena, &view
+    );
+    if (err) goto cleanup;
+
+    /* Collect every path to add, expanding directories. Each listing is named
+     * once, by the claim standing at it; what the walk finds beneath one already
+     * listed is named from that claim. */
     walk.mounts = mounts;
     walk.profile = opts->profile;
+    walk.view = view;
     walk.rules = profile_rules;
     walk.source_filter = source_filter;
     walk.stage = stage;
     walk.sheet = metadata;
-    walk.seen = hashmap_borrow(0);
-    if (!walk.seen) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate the walk's index");
+    walk.listing = hashmap_borrow(0);
+    if (!walk.listing) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate the walk's listing");
         goto cleanup;
     }
 
-    /* Process each input path: the argument's location here, in the arena the
-     * walk keeps its listing in. */
+    /* Process each input path. Two parsing heads — a storage shape and a filesystem
+     * shape — and one ladder beneath them: what stands at the path, this command's
+     * own listing, the name, the rules, the claim the profile holds at the
+     * location, the branch's shape, and the listing itself. `typed` is the whole
+     * of what the user's choice of shape means, and it discriminates at exactly
+     * four places: the absent path's hint, the three sentences the dedup gate
+     * owes, the choice of name, and the membership gate that is the one place a
+     * second name for one location can be born. */
     for (size_t i = 0; i < opts->file_count; i++) {
         const char *file = opts->files[i];
-        const char *fs_path = NULL;
+        const char *location = NULL;
+        const char *typed = NULL;   /* The name the user wrote, or NULL for a spelling */
 
-        /* Check if input is a storage path */
-        const mount_spec_t *spec = mount_spec_for_path(file);
-        if (spec) {
-            /* CLI input is the write boundary for storage-path arguments. Validate
-             * the syntactic shape here so mount_resolve below can trust its input
-             * — establishes the invariant once and downstream readers (manifest
-             * tree-walk, sync, remove) trust it for the rest of the command. */
-            err = mount_validate_storage(file);
-            if (err) {
-                err = error_wrap(err, "Invalid storage path '%s'", file);
-                goto cleanup;
-            }
+        if (mount_spec_for_path(file)) {
+            /* A storage shape, read by the one resolver that reads input shapes
+             * — STORAGE by construction, since the same predicate dispatched
+             * here. It validates the shape and sheds a trailing slash, so `add
+             * p home/dir/` is the spelling every other consumer already accepts
+             * (infra/path.h). */
+            path_input_t in;
+            err = path_input_resolve(mounts, file, ctx->arena, &in);
+            if (err) goto cleanup;
+            typed = in.storage_path;
 
-            /* Its location here, through the table: home/ and root/ resolve for
-             * every profile, custom/ through this one's binding — the row's, or
-             * the flag's. A custom/ path with no binding names nothing on this
-             * machine, and the way to give it one is the flag. The table's answer
-             * is absolute and the arena's already. */
-            err = mount_resolve(mounts, opts->profile, file, ctx->arena, &fs_path);
+            /* Where the claim stands, through the table: home/ and root/ resolve
+             * for every profile, custom/ through this one's binding — the row's,
+             * or the flag's. A custom/ path with no binding names nothing on
+             * this machine, and the way to give it one is the flag. The table's
+             * answer is absolute and the arena's already. */
+            err = mount_resolve(mounts, opts->profile, typed, ctx->arena, &location);
             if (err) {
                 err = error_wrap(err, "Failed to convert storage path '%s'", file);
                 goto cleanup;
             }
-            if (!fs_path) {
+            if (!location) {
                 err = ERROR(
                     ERR_INVALID_ARG, "'%s' has no location for '%s' on this machine\n"
                     "  dotta add %s --target /path %s", file, opts->profile,
@@ -1623,7 +1806,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
             }
-            err = mount_locate(mounts, absolute, ctx->arena, &fs_path);
+            err = mount_locate(mounts, absolute, ctx->arena, &location);
             free(absolute);
             if (err) {
                 err = error_wrap(err, "Failed to locate '%s'", file);
@@ -1641,23 +1824,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * file is refused by its noun here, before a name is asked for and long
          * before a capture would refuse it in the same breath as its siblings. */
         struct stat st;
-        bool is_dir = false;
-        switch (fs_lstat_occupant(fs_path, &st)) {
+        path_kind_t kind = PATH_KIND_FILE;
+        switch (fs_lstat_occupant(location, &st)) {
             case FS_OCCUPANT_NONE:
-                if (spec) {
+                if (typed) {
                     err = ERROR(
                         ERR_NOT_FOUND, "Path not found: %s (storage path '%s')\n"
-                        "For a relative path, write ./%s", fs_path, file, file
+                        "For a relative path, write ./%s", location, file, file
                     );
                 } else {
-                    err = ERROR(ERR_NOT_FOUND, "Path not found: %s", fs_path);
+                    err = ERROR(ERR_NOT_FOUND, "Path not found: %s", location);
                 }
                 goto cleanup;
 
             case FS_OCCUPANT_UNKNOWN: {
                 int saved_errno = errno;
                 err = error_from_errno(
-                    saved_errno, "Cannot access '%s'", fs_path
+                    saved_errno, "Cannot access '%s'", location
                 );
                 goto cleanup;
             }
@@ -1671,7 +1854,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
 
             case FS_OCCUPANT_DIRECTORY:
-                is_dir = true;
+                kind = PATH_KIND_DIRECTORY;
                 break;
 
             case FS_OCCUPANT_REGULAR:
@@ -1679,62 +1862,204 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 break;
         }
 
-        /* What this profile calls the argument — NULL for one of its own roots
-         * ($HOME, "/", its target), which has no name. */
-        const char *storage_path = NULL;
-        err = mount_name(mounts, opts->profile, fs_path, ctx->arena, &storage_path);
-        if (err) {
-            err = error_wrap(err, "Failed to name '%s'", file);
-            goto cleanup;
-        }
+        /* This command's own listing. A location already settled here says nothing
+         * new — a second spelling of one argument, or an argument beneath a
+         * directory already walked — and a spelling simply moves on. A typed
+         * name is the one input that can disagree with what was settled, so it
+         * is the only one the gate owes a sentence. */
+        if (hashmap_has(walk.listing, location)) {
+            if (!typed) continue;
 
-        /* A path named on the command line is subject to the rules like any the
-         * walk finds, but a verdict against it is an error, not a silent skip:
-         * the user asked for it by name, and the answer says which rule stands
-         * in the way and how to get past it. A mount root has no name for a pattern
-         * to match. */
-        gitignore_match_t match;
-        if (storage_path &&
-            is_excluded(&walk, fs_path, storage_path, is_dir, &match)) {
-            if (match.decided) {
-                err = ERROR(
-                    ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
-                    "Add it anyway with -e '!%s', or edit the rule with "
-                    "'dotta ignore'",
-                    file, ignore_origin_describe((ignore_origin_t) match.origin),
-                    match.pattern, match.pattern
-                );
-            } else {
+            const manifest_claim_t *listed = hashmap_get(walk.listing, location);
+            if (!listed) {
+                /* Entered without claiming, which happens at a root of the profile
+                 * alone — so mount_root answers, as it did when the entry was
+                 * made. The walk beneath it has already composed its children
+                 * under the root's label, and a claim admitted now would move
+                 * their prefix. */
+                char buf[MOUNT_NOUN_MAX];
                 err = ERROR(
                     ERR_INVALID_ARG,
-                    "'%s' is ignored by its source tree's .gitignore\n"
-                    "Set respect_gitignore = false in the config to add it",
-                    file
+                    "'%s' names %s, which this command has already walked through\n\n"
+                    "A directory must be named before the paths beneath it.",
+                    file,
+                    mount_root_describe(
+                    mount_root(mounts, opts->profile, location), opts->profile,
+                    buf, sizeof(buf)
+                    )
                 );
+                goto cleanup;
             }
-            goto cleanup;
+            if (strcmp(listed->storage_path, typed) != 0) {
+                char shown[PATH_MAX];
+                output_format_path(location, identity()->home, shown, sizeof(shown));
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is named twice in this command: as '%s' and as '%s'",
+                    shown, listed->storage_path, typed
+                );
+                goto cleanup;
+            }
+            continue;                       /* the same claim, twice */
         }
 
-        /* What the branch can hold, before a byte is read. The verdict a walked
-         * entry answers with a skip is an error here: the user asked for this
-         * path by name, and working around a claim they did not mention is not
-         * this command's to do. A root claims nothing and so is asked nothing. */
-        if (storage_path) {
-            err = admit_name(&walk, storage_path, is_dir);
+        /* Before this argument's own listing, so the verbose line below counts
+         * the directory it names along with what lies beneath it. */
+        size_t files_before = walk.files.count;
+        size_t dirs_before = walk.directories.count;
+
+        /* The name the capture lands under: the user's own where they typed one,
+         * and otherwise what this profile calls the location — the claim standing
+         * there, this command's own or the branch's, else the composition beneath
+         * the nearest claim above it, else what the profile's own roots make of
+         * it, which is NULL at a root. */
+        const char *storage_path = typed;
+        if (!storage_path) {
+            err = manifest_name(
+                view, opts->profile, location, walk.listing, ctx->arena,
+                &storage_path
+            );
             if (err) {
-                err = error_wrap(err, "Cannot add '%s'", file);
+                err = error_wrap(err, "Failed to name '%s'", file);
                 goto cleanup;
             }
         }
 
-        /* Handle symlinks, directories, and files */
-        if (is_dir) {
-            /* Remember counts so we can describe what the walk produced. */
-            size_t files_before = walk.files.count;
-            size_t dirs_before = walk.directories.count;
+        if (!storage_path) {
+            /* One of this profile's own roots ($HOME, "/", its target), which
+             * has no name: a directory is walked through unlisted and its
+             * descendants are listed, and anything else cannot be added at all
+             * — $HOME itself when HOME is a symlink, or its target reached through
+             * one. A typed name never arrives here, the user's own name being
+             * the answer. */
+            if (kind != PATH_KIND_DIRECTORY) {
+                char buf[MOUNT_NOUN_MAX];
+                const char *noun = mount_root_describe(
+                    mount_root(mounts, opts->profile, location), opts->profile,
+                    buf, sizeof(buf)
+                );
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "'%s' is %s and cannot be added itself; name what is inside it",
+                    file, noun
+                );
+                goto cleanup;
+            }
 
-            /* A root is walked through unlisted: its descendants are listed. */
-            err = collect_tree(&walk, fs_path, storage_path, 0);
+            err = hashmap_set(walk.listing, location, NULL);
+            if (err) goto cleanup;
+        } else {
+            /* A path named on the command line is subject to the rules like any
+             * the walk finds, but a verdict against it is an error, not a silent
+             * skip: the user asked for it by name, and the answer says which
+             * rule stands in the way and how to get past it. */
+            gitignore_match_t match;
+            if (is_excluded(&walk, location, storage_path, kind, &match)) {
+                if (match.decided) {
+                    err = ERROR(
+                        ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
+                        "Add it anyway with -e '!%s', or edit the rule with "
+                        "'dotta ignore'",
+                        file, ignore_origin_describe((ignore_origin_t) match.origin),
+                        match.pattern, match.pattern
+                    );
+                } else {
+                    err = ERROR(
+                        ERR_INVALID_ARG,
+                        "'%s' is ignored by its source tree's .gitignore\n"
+                        "Set respect_gitignore = false in the config to add it",
+                        file
+                    );
+                }
+                goto cleanup;
+            }
+
+            /* What the profile already claims at the location, against what stands
+             * there now. The row is the location's own authority on kind, a derived
+             * one included — it says the profile holds a subtree beneath the
+             * path, which a path that became a file cannot carry — and it is
+             * the one reading that sees a claim with nothing beneath it for either
+             * document to find, where the name's own admission below covers the
+             * rest. The removal is name-shaped: it takes that claim and everything
+             * beneath it, under every topology, where a filesystem-shaped one
+             * addresses another key at a binder's own spelling. */
+            const manifest_row_t *held = manifest_lookup_claim(
+                view, opts->profile, location
+            );
+            if (held && path_type_kind(held->type) != kind) {
+                char shown[PATH_MAX];
+                output_format_path(location, identity()->home, shown, sizeof(shown));
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Profile '%s' holds '%s' as the %s '%s', and a %s stands "
+                    "there now\n\n"
+                    "  dotta remove %s %s   gives that claim up, and everything "
+                    "beneath it",
+                    opts->profile, shown,
+                    held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
+                    held->storage_path, fs_stat_noun(&st),
+                    opts->profile, held->storage_path
+                );
+                goto cleanup;
+            }
+
+            /* The name, by the profile's own claims — the authority on names. A
+             * typed name is the one input the namer did not produce, so it is
+             * the one place a second name for one location can be born; a name
+             * the profile already holds is a re-capture, gated by --force at
+             * the pre-flight, and a derived claim names nothing and blocks nothing
+             * (core/manifest.h manifest_is_derived). revert.c refuse_second_name
+             * is the same condition for the same rule, with its own verb's
+             * remedies. */
+            if (typed && held && !manifest_is_derived(held) &&
+                !manifest_holds_name(view, opts->profile, location, typed)) {
+                char shown[PATH_MAX];
+                output_format_path(location, identity()->home, shown, sizeof(shown));
+                err = ERROR(
+                    ERR_INVALID_ARG,
+                    "Profile '%s' names '%s' as '%s'\n\n"
+                    "'%s' would be a second name for it, and a profile names a "
+                    "location once.\n"
+                    "  dotta add %s --force %s   re-captures it under the name "
+                    "it has\n"
+                    "  dotta remove %s %s   gives that name up first",
+                    opts->profile, shown, held->storage_path, typed,
+                    opts->profile, held->storage_path,
+                    opts->profile, held->storage_path
+                );
+                goto cleanup;
+            }
+
+            /* What the branch can hold, before a byte is read. The verdict a
+             * walked entry answers with a skip is an error here: the user asked
+             * for this path by name, and working around a claim they did not
+             * mention is not this command's to do. */
+            err = admit_name(&walk, storage_path, kind);
+            if (err) {
+                err = error_wrap(err, "Cannot add '%s'", file);
+                goto cleanup;
+            }
+
+            err = list_path(
+                &walk, location, (manifest_claim_t){ storage_path, kind }
+            );
+            if (err) goto cleanup;
+        }
+
+        if (kind == PATH_KIND_DIRECTORY) {
+            /* The directory that stands at the claim's key — one string for every
+             * argument but one: a typed name at a binder's own spelling keys at
+             * the link and enumerates the binding's directory, and locate is
+             * the producer of both readings (infra/mount.h). Every other location
+             * is its own answer here. */
+            const char *directory = NULL;
+            err = mount_locate(mounts, location, ctx->arena, &directory);
+            if (err) {
+                err = error_wrap(err, "Failed to locate '%s'", location);
+                goto cleanup;
+            }
+
+            err = collect_tree(&walk, directory, 0);
             if (err) {
                 err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;
@@ -1746,33 +2071,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 out, OUTPUT_VERBOSE,
                 "Collected %zu file%s and %zu director%s under %s",
                 files_found, files_found == 1 ? "" : "s",
-                dirs_found, dirs_found == 1 ? "y" : "ies", fs_path
+                dirs_found, dirs_found == 1 ? "y" : "ies", location
             );
-        } else if (!storage_path) {
-            /* One of this profile's own roots, standing as something other than
-             * a directory: $HOME itself when HOME is a symlink, its target reached
-             * through one, or the profile's own name for its own target (`add q
-             * home/jail/link`, which resolves back to the link). A root has no
-             * name, and the walk does not follow symlinks. */
-            char buf[MOUNT_NOUN_MAX];
-            const char *noun = mount_root_describe(
-                mount_root(mounts, opts->profile, fs_path), opts->profile, buf,
-                sizeof(buf)
-            );
-            err = ERROR(
-                ERR_INVALID_ARG,
-                "'%s' is %s and cannot be added itself; name what is inside it",
-                file, noun
-            );
-            goto cleanup;
-        } else {
-            /* List it, unless a walk already did. */
-            if (hashmap_has(walk.seen, fs_path)) continue;
-            err = hashmap_set(walk.seen, fs_path, (void *) 1);
-            if (!err) {
-                err = list_path(ctx->arena, &walk.files, fs_path, storage_path);
-            }
-            if (err) goto cleanup;
         }
     }
 
@@ -1786,65 +2086,72 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Single-pass: add files and capture metadata inline. Each capture's stat
-     * triple is kept on the path, for the record: it is the stat of the bytes
-     * committed, which a later lstat could not promise. */
-    for (size_t i = 0; i < walk.files.count; i++) {
-        add_path_t *path = walk.files.items[i];
+    /* The selection is complete, so the one question its parts cannot answer is
+     * asked here: does this command abandon a name it moves? */
+    err = refuse_moved_name(&walk);
+    if (err) goto cleanup;
 
-        /* Validate storage path: this is the write boundary into the stage (and
-         * thence into Git). Establish the well-formed invariant here so downstream
-         * readers (manifest, sync, remove) can trust the bytes they read. */
-        err = mount_validate_storage(path->storage_path);
-        if (err) goto cleanup;
-
-        /* Add file to the stage and capture metadata
-         * ARCHITECTURE: add_file_to_stage handles both operations atomically,
-         * sharing stat() data between content and metadata layers to eliminate
-         * TOCTOU */
-        err = add_file_to_stage(
-            ctx, stage, path->fs_path, path->storage_path, opts, metadata,
-            &path->stat
-        );
-        if (err) {
-            err = error_wrap(err, "Failed to add file '%s'", path->fs_path);
+    /* What the branch already holds under a name this command chose. Asked over
+     * the whole listing before a byte is read, so a refusal at the last file
+     * does not leave the first four in the object database. Keyed by the name
+     * and not by the location: at a location the profile names twice, a typed
+     * re-capture of the loser must be gated by the name the user typed, not by
+     * the row that happens to stand there. The capture keeps its own
+     * git_index_get_bypath for the encryption policy's priority-3 read — two
+     * questions, one lookup each. */
+    if (!opts->force) {
+        for (size_t i = 0; i < walk.files.count; i++) {
+            const add_path_t *path = walk.files.items[i];
+            if (!git_index_get_bypath(
+                stage_index(stage), path->claim.storage_path, 0
+                )) {
+                continue;
+            }
+            err = ERROR(
+                ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
+                "Use --force to overwrite.", path->location,
+                path->claim.storage_path, opts->profile
+            );
             goto cleanup;
         }
-        added_count++;
     }
 
-    /* Capture directory metadata for every walked directory.
+    /* Capture directory metadata for every directory this command listed.
      *
-     * The walk lists every directory it walks into — including the CLI-arg
-     * top-level — so this loop captures the full tree, not just the CLI-named
-     * entry points. A mount root ($HOME, "/", --target) is never listed: it has
-     * no storage name; its descendants are captured normally.
+     * The walk lists every directory it walks into — including the argument itself
+     * — so this loop captures the full tree, not just the named entry points. A
+     * mount root ($HOME, "/", --target) is never listed: it has no storage name;
+     * its descendants are captured normally.
+     *
+     * Required, where update's sibling loop warns and carries on: a directory
+     * this command listed is the *name* its walk composed beneath, so a claim
+     * that does not land leaves the files captured under a name nothing authors
+     * — and the listing, which refuse_moved_name reads as a promise of the commit,
+     * would be a wish (core/metadata.h metadata_capture_from_directory). Ahead
+     * of the file captures for the same reason: a directory that cannot be claimed
+     * is found before any source blob reaches the object database.
      */
-    size_t dir_tracked_count = 0;
     for (size_t i = 0; i < walk.directories.count; i++) {
         const add_path_t *path = walk.directories.items[i];
-        const char *filesystem_path = path->fs_path;
-        const char *storage_path = path->storage_path;
+        const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
          * + S_ISDIR: the race guard update's capture arm has. The walk classified
-         * with lstat, so anything else standing here changed since — skip; a
-         * follow-stat would launder the target's attributes into the claim. */
+         * with lstat, so anything else standing here changed since. */
         struct stat dir_stat;
-        if (fs_lstat(filesystem_path, &dir_stat) != 0) {
-            output_warning(
-                out, OUTPUT_VERBOSE, "Failed to stat directory '%s': %s",
-                filesystem_path, strerror(errno)
+        if (fs_lstat(path->location, &dir_stat) != 0) {
+            err = error_from_errno(
+                errno, "Failed to stat directory '%s'", path->location
             );
-            continue;
+            goto cleanup;
         }
         if (!S_ISDIR(dir_stat.st_mode)) {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Skipping '%s': walked as directory but type changed on disk",
-                filesystem_path
+            err = ERROR(
+                ERR_CONFLICT,
+                "Cannot add '%s': it was walked as a directory and its type "
+                "changed on disk", path->location
             );
-            continue;
+            goto cleanup;
         }
 
         /* Capture directory metadata using stat data. The walk entered this
@@ -1853,39 +2160,47 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         metadata_item_t *dir_item = NULL;
         err = metadata_capture_from_directory(storage_path, &dir_stat, true, &dir_item);
         if (err) {
-            /* Non-fatal, and said at the verbosity its sibling above is said
-             * at: the walk's files are added either way, but the directory itself
-             * takes no claim from this run and so is not tracked at all — a loss
-             * the user only weighs if they are told about it. */
-            output_warning(
-                out, OUTPUT_NORMAL, "Skipping directory '%s': %s",
-                filesystem_path, error_message(err)
+            err = error_wrap(
+                err, "Failed to capture directory '%s'", path->location
             );
-            error_free(err);
-            err = NULL;
-            continue;
+            goto cleanup;
         }
 
         /* Verbose output before consuming the item */
-        report_capture(out, "directory metadata", filesystem_path, dir_item);
+        report_capture(out, "directory metadata", path->location, dir_item);
 
         /* Add directory to metadata */
         err = metadata_add_item(metadata, &dir_item);
         if (err) {
-            /* Non-fatal: log warning and continue */
             metadata_item_free(dir_item);
-            output_warning(
-                out, OUTPUT_VERBOSE, "Failed to track directory '%s': %s",
-                filesystem_path, error_message(err)
+            err = error_wrap(
+                err, "Failed to track directory '%s'", path->location
             );
-            error_free(err);
-            err = NULL;
-        } else {
-            dir_tracked_count++;
-            output_info(
-                out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s",
-                filesystem_path, storage_path
-            );
+            goto cleanup;
+        }
+        output_info(
+            out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s", path->location,
+            storage_path
+        );
+    }
+
+    /* Single-pass: add files and capture metadata inline. Each capture's stat
+     * triple is kept on the path, for the record: it is the stat of the bytes
+     * committed, which a later lstat could not promise. */
+    for (size_t i = 0; i < walk.files.count; i++) {
+        add_path_t *path = walk.files.items[i];
+
+        /* Add file to the stage and capture metadata
+         * ARCHITECTURE: add_file_to_stage handles both operations atomically,
+         * sharing stat() data between content and metadata layers to eliminate
+         * TOCTOU */
+        err = add_file_to_stage(
+            ctx, stage, path->location, path->claim.storage_path, opts, metadata,
+            &path->stat
+        );
+        if (err) {
+            err = error_wrap(err, "Failed to add file '%s'", path->location);
+            goto cleanup;
         }
     }
 
@@ -1905,7 +2220,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             const add_path_t *path = chains[b]->items[i];
 
             err = metadata_capture_ancestors(
-                metadata, mounts, opts->profile, path->storage_path, ctx->arena,
+                metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
                 &ancestors_captured, &ancestry_retired
             );
             if (err) goto cleanup;
@@ -1980,12 +2295,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
-    /* Verbose summary */
-    if (dir_tracked_count > 0) {
+    /* Verbose summary. Every count from here on is a list's own: each capture
+     * loop above is total over its list, so a run that reaches this line captured
+     * everything it listed and no accumulator says it twice. */
+    if (walk.directories.count > 0) {
         output_info(
             out, OUTPUT_VERBOSE,
             "Tracked %zu director%s for change detection",
-            dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+            walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
         );
     }
 
@@ -2020,11 +2337,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     record_receipt_t record = { 0 };
 
     error_t *manifest_err = update_manifest_after_add(
-        ctx, mounts, opts->profile, target, profile_was_new,
+        ctx, mounts, opts->profile, target, profile_created,
         &walk.files, &walk.directories, &ancestry_retired, &record
     );
     if (manifest_err) {
-        if (profile_was_new) {
+        if (profile_created) {
             /* Non-fatal: Git commit succeeded, user can manually enable later */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to auto-enable profile: %s",
@@ -2051,148 +2368,153 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Execute post-add hook */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
-    /* Show summary on success */
-    if ((added_count > 0 || dir_tracked_count > 0)) {
-        /* Primary success message */
-        if (!committed && added_count > 0) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Nothing changed in profile '%s' (%zu file%s already as captured)",
-                opts->profile, added_count, added_count == 1 ? "" : "s"
-            );
-        } else if (!committed) {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Nothing changed in profile '%s' (%zu director%s already as tracked)",
-                opts->profile, dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
-            );
-        } else if (added_count > 0) {
-            output_success(
-                out, OUTPUT_NORMAL, "Added %zu file%s to profile '%s'",
-                added_count, added_count == 1 ? "" : "s",
-                opts->profile
-            );
+    /* Show summary on success. The empty selection was refused above and both
+     * capture loops are total over their lists, so there is always something to
+     * report here. */
+
+    /* Primary success message */
+    if (!committed && walk.files.count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Nothing changed in profile '%s' (%zu file%s already as captured)",
+            opts->profile, walk.files.count, walk.files.count == 1 ? "" : "s"
+        );
+    } else if (!committed) {
+        output_info(
+            out, OUTPUT_NORMAL,
+            "Nothing changed in profile '%s' (%zu director%s already as tracked)",
+            opts->profile, walk.directories.count,
+            walk.directories.count == 1 ? "y" : "ies"
+        );
+    } else if (walk.files.count > 0) {
+        output_success(
+            out, OUTPUT_NORMAL, "Added %zu file%s to profile '%s'",
+            walk.files.count, walk.files.count == 1 ? "" : "s",
+            opts->profile
+        );
+    } else {
+        /* Directory-only add */
+        output_success(
+            out, OUTPUT_NORMAL, "Tracking %zu director%s in profile '%s'",
+            walk.directories.count, walk.directories.count == 1 ? "y" : "ies",
+            opts->profile
+        );
+    }
+
+    if (profile_created) {
+        output_success(
+            out, OUTPUT_NORMAL, "Profile '%s' created and enabled", opts->profile
+        );
+    }
+
+    /* Show directory tracking info only when files were also added — and only
+     * when the commit landed: under "Nothing changed" the directories were already
+     * tracked as claimed. */
+    if (committed && walk.files.count > 0 && walk.directories.count > 0) {
+        output_info(
+            out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
+            walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
+        );
+    }
+
+    output_newline(out, OUTPUT_NORMAL);
+
+    /* Manifest status feedback */
+    if (record.updated) {
+        if (walk.files.count > 0) {
+            /* Files were added — the sync results, and what the rows did with
+             * each capture: a location this profile's claim did not win got no
+             * anchor, and the records another profile's deployment had written
+             * were taken over. */
+            if (record.synced == walk.files.count) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Manifest updated (%zu file%s marked as deployed)",
+                    record.synced, record.synced == 1 ? "" : "s"
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Manifest updated (%zu/%zu file%s marked as deployed)",
+                    record.synced, walk.files.count,
+                    walk.files.count == 1 ? "" : "s"
+                );
+
+                /* Each cause named by the count that checked it, never by the
+                 * shortfall (record_receipt_t): a row of another profile is an
+                 * override, a row of this one under another of its own names is
+                 * an unused path, and the health channel carries that one's repair
+                 * on the status screen. */
+                if (record.overridden > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Note: %zu file%s overridden by higher-precedence profiles",
+                        record.overridden, record.overridden == 1 ? "" : "s"
+                    );
+                }
+                if (record.unkept > 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "Note: %zu file%s captured under an unused path; "
+                        "'dotta status -v' names %s",
+                        record.unkept, record.unkept == 1 ? "" : "s",
+                        record.unkept == 1 ? "it" : "them"
+                    );
+                }
+            }
+            if (record.taken_over > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Note: %zu file%s taken over from other profiles",
+                    record.taken_over, record.taken_over == 1 ? "" : "s"
+                );
+            }
+            if (!profile_created) {
+                /* Existing enabled profile */
+                output_hint(
+                    out, OUTPUT_NORMAL,
+                    "Paths captured from filesystem (already deployed)"
+                );
+            }
         } else {
             /* Directory-only add */
-            output_success(
-                out, OUTPUT_NORMAL, "Tracking %zu director%s in profile '%s'",
-                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies",
-                opts->profile
-            );
-        }
-
-        if (profile_was_new) {
-            output_success(
-                out, OUTPUT_NORMAL, "Profile '%s' created and enabled",
-                opts->profile
-            );
-        }
-
-        /* Show directory tracking info only when files were also added — and
-         * only when the commit landed: under "Nothing changed" the directories
-         * were already tracked as claimed. */
-        if (committed && added_count > 0 && dir_tracked_count > 0) {
             output_info(
-                out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
-                dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
+                out, OUTPUT_NORMAL, "Manifest updated (%zu director%s synced)",
+                walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
             );
         }
-
-        output_newline(out, OUTPUT_NORMAL);
-
-        /* Manifest status feedback */
-        if (record.updated) {
-            if (added_count > 0) {
-                /* Files were added — the sync results, and what the rows did
-                 * with each capture: a location this profile's claim did not
-                 * win got no anchor, and the records another profile's deployment
-                 * had written were taken over. */
-                if (record.synced == added_count) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Manifest updated (%zu file%s marked as deployed)",
-                        record.synced, record.synced == 1 ? "" : "s"
-                    );
-                } else {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Manifest updated (%zu/%zu file%s marked as deployed)",
-                        record.synced, added_count, added_count == 1 ? "" : "s"
-                    );
-
-                    /* Each cause named by the count that checked it, never by
-                     * the shortfall (record_receipt_t): a row of another profile
-                     * is an override, a row of this one under another of its
-                     * own names is an unused path, and the health channel carries
-                     * that one's repair on the status screen. */
-                    if (record.overridden > 0) {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Note: %zu file%s overridden by higher-precedence profiles",
-                            record.overridden, record.overridden == 1 ? "" : "s"
-                        );
-                    }
-                    if (record.unkept > 0) {
-                        output_info(
-                            out, OUTPUT_NORMAL,
-                            "Note: %zu file%s captured under an unused path; "
-                            "'dotta status -v' names %s",
-                            record.unkept, record.unkept == 1 ? "" : "s",
-                            record.unkept == 1 ? "it" : "them"
-                        );
-                    }
-                }
-                if (record.taken_over > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Note: %zu file%s taken over from other profiles",
-                        record.taken_over, record.taken_over == 1 ? "" : "s"
-                    );
-                }
-                if (!profile_was_new) {
-                    /* Existing enabled profile */
-                    output_hint(
-                        out, OUTPUT_NORMAL,
-                        "Paths captured from filesystem (already deployed)"
-                    );
-                }
-            } else {
-                /* Directory-only add */
-                output_info(
-                    out, OUTPUT_NORMAL, "Manifest updated (%zu director%s synced)",
-                    dir_tracked_count, dir_tracked_count == 1 ? "y" : "ies"
-                );
-            }
-            output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
+        output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
+    } else {
+        /* Existing disabled profile: the tree is shaped, no row holds a binding,
+         * and the hint names what enable will accept — the target as the user
+         * typed it, when the run brought one. */
+        output_info(
+            out, OUTPUT_NORMAL, "Profile not enabled - manifest not updated"
+        );
+        if (opts->target) {
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta profile enable %s --target %s' to deploy it here",
+                opts->profile, opts->target
+            );
         } else {
-            /* Existing disabled profile: the tree is shaped, no row holds a
-             * binding, and the hint names what enable will accept — the target
-             * as the user typed it, when the run brought one. */
-            output_info(
-                out, OUTPUT_NORMAL, "Profile not enabled - manifest not updated"
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta profile enable %s' to activate and deploy",
+                opts->profile
             );
-            if (opts->target) {
-                output_hint(
-                    out, OUTPUT_NORMAL,
-                    "Run 'dotta profile enable %s --target %s' to deploy it here",
-                    opts->profile, opts->target
-                );
-            } else {
-                output_hint(
-                    out, OUTPUT_NORMAL,
-                    "Run 'dotta profile enable %s' to activate and deploy",
-                    opts->profile
-                );
-            }
         }
     }
 
 cleanup:
-    /* Free resources in reverse order of allocation */
+    /* Free resources in reverse order of allocation. The listing's keys and values
+     * are the arena's, and so is every row the view points at: only the heap
+     * indexes are freed here. */
     if (metadata) metadata_free(metadata);
     ptr_array_deinit(&walk.directories);
     ptr_array_deinit(&walk.files);
-    hashmap_free(walk.seen, NULL);
+    hashmap_free(walk.listing, NULL);
+    manifest_free(view);
     stage_free(stage);
     source_filter_free(source_filter);
     ignore_rules_free(ignore_rules);
@@ -2356,17 +2678,26 @@ const args_command_t spec_add = {
         "%s add [options] <profile> <file|dir>...\n"
         "   or: %s add [options] --profile <name> <file|dir>...",
     .description =
-        "Import files or directories into a profile branch. The storage\n"
-        "prefix derives from the source path: home/ under $HOME, root/\n"
-        "otherwise, and custom/ under the profile's target.\n"
+        "Import files or directories into a profile branch. Each path is\n"
+        "stored under a prefix for where it lives: home/ under your home\n"
+        "directory, root/ anywhere else, custom/ under the profile's target.\n"
+        "\n"
+        "A path the profile already has keeps the name it has, and a new path\n"
+        "inside a directory the profile tracks is stored under that directory.\n"
+        "So names stay put as targets come and go.\n"
+        "\n"
+        "You can write the prefix yourself (home/..., root/..., custom/...).\n"
+        "Under --target, root/etc/foo still means /etc/foo. A second name for\n"
+        "a path the profile already has is refused.\n"
         "\n"
         "--target <dir> binds the profile's custom/ tree at that directory.\n"
         "A profile has one target; 'dotta profile enable --target' moves it.\n"
-        "Paths are then read as the jail reads them: etc/foo and /etc/foo\n"
-        "both mean <target>/etc/foo. A path spelled from here (./x, ../x)\n"
-        "is read where you stand.\n"
+        "Filesystem paths are then read as the jail reads them: etc/foo and\n"
+        "/etc/foo both mean <target>/etc/foo. A path spelled from here (./x,\n"
+        "../x) is read where you stand.\n"
         "\n"
-        "Metadata (mode, owner) is captured outside HOME.\n",
+        "Modes are captured for every file and directory; ownership only\n"
+        "under root/ and custom/.\n",
     .notes       =
         "Exclude Patterns:\n"
         "  Glob syntax with *, ?, [abc]. Flag is repeatable.\n"

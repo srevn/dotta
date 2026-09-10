@@ -357,8 +357,10 @@ error_t *mount_table_build(
  * every caller locates through a table its own arena built.
  *
  * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
- * key an argument is matched by; add's argument arm, its `--target` boundary
- * and every directory its walk descends into (cmds/add.c); `ignore --test`'s
+ * key an argument is matched by; add's argument arm, its `--target` boundary,
+ * every directory its walk descends into, and the directory it enumerates beneath
+ * a claim's key — the one asking about an answer of mount_resolve's, which is
+ * the same string but for the exception above (cmds/add.c); `ignore --test`'s
  * filesystem arm (cmds/ignore.c). The namer does not locate — its input is a
  * location, and this is what makes one.
  *
@@ -418,11 +420,14 @@ error_t *mount_locate(
  *   - ERR_MEMORY on arena allocation failure.
  *
  * Readers: the last rung of the namer's ascent (core/manifest.c manifest_ascend),
- * and add's argument arm and its walk (cmds/add.c), which C3 takes. `ignore --test`
- * was one until its subject became the whole ascent's (core/manifest.h
- * manifest_name), and the five `-p` verbs shared an interim resolver over it
- * (infra/path.h) until each found its claim where it stands (core/profiles.h
- * profile_claim_name) or matched by location outright (cmds/remove.c).
+ * and nothing else. No command reads it: a command asks what a profile calls a
+ * location, which is its claim there first and this only at the end of the climb.
+ * `ignore --test` was one until its subject became the whole ascent's
+ * (core/manifest.h manifest_name); the five `-p` verbs shared an interim resolver
+ * over it (infra/path.h) until each found its claim where it stands
+ * (core/profiles.h profile_claim_name) or matched by location outright
+ * (cmds/remove.c); and add's argument arm and its walk were the last two, until
+ * they asked the namer instead.
  *
  * @param table       Mount table (must not be NULL)
  * @param profile     The asker, or NULL for the shared roots alone

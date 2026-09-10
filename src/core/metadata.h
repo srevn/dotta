@@ -518,12 +518,17 @@ error_t *metadata_capture_from_file(
  * rules as file capture — the unnameable UID among them — while the mode is always
  * claimed from the stat. The class is the caller's: a stat cannot say whether a
  * walk entered the directory or only passed above it, so `tracked` is carried
- * through to the factory unread. Callers treat a directory-capture failure as a
- * warning where a file-capture failure is fatal: a directory item is an attributes
- * overlay, never content, so a missed capture loses a claim and nothing else.
- * It loses the mode with the ownership, though, and with it the directory's own
- * row — an add does not track it, an update leaves the standing claim alone —
- * so the callers' warning is one the user reads at any verbosity.
+ * through to the factory unread.
+ *
+ * The two callers answer a failure here differently, and the difference is what
+ * the claim is for. **add refuses**: a directory it listed is the name its walk
+ * composed beneath, so a claim that does not land leaves files committed under
+ * a name nothing authors — and the listing, which the command reads as a promise
+ * of its own commit, would be a wish (cmds/add.c). **update warns and carries
+ * on**: a claim it could not refresh keeps standing, nothing was named from this
+ * run, and the sheet goes on saying what it said (cmds/update.c). Either way
+ * the loss is the mode with the ownership, so update's warning is one the user
+ * reads at any verbosity.
  *
  * Ownership capture (user/group): the file capture's rule, above.
  *

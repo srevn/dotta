@@ -411,10 +411,12 @@ error_t *manifest_build(
  * Readers: the historical diff (cmds/diff.c); export's location arm (cmds/export.c
  * collect_location), which selects the rows one profile places at and beneath a
  * location — the rows, not the Git subtree of whatever name stands there, which
- * is what manifest_lookup_claim's own note is about; and the claim search over
- * whatever tree a verb selected (core/profiles.c profile_claim_name). A caller
- * that has a branch name and no tree reads manifest_build_branch, which loads
- * one and calls this.
+ * is what manifest_lookup_claim's own note is about; the claim search over whatever
+ * tree a verb selected (core/profiles.c profile_claim_name); revert's second-name
+ * admission (cmds/revert.c); and add, which builds one over the tree its stage
+ * opened at and asks it every naming question for the length of the command
+ * (cmds/add.c). A caller that has a branch name and no tree reads
+ * manifest_build_branch, which loads one and calls this.
  *
  * Memory: same contract as manifest_build — every allocation produced by the
  * call lives in the caller's arena; the index is manifest_free's.
@@ -666,10 +668,15 @@ typedef struct {
  * Two names meet where two of this machine's roots overlap, and that needs no
  * exotic topology: `home/` lies beneath `root/` on every machine, so a branch
  * carrying both spellings of one path collides here with no binding in sight. A
- * `custom/` target inside `$HOME` puts the other pair in reach, and this machine's
- * own captures author that one as readily as an import does — capture under
- * `~/jail`, bind the profile there, capture again, and the branch holds
- * `home/jail/…` beside `custom/…` for one file.
+ * `custom/` target inside `$HOME` puts the other pair in reach, and an import
+ * carries one here whole — though this machine's own captures no longer author
+ * one, a verb admitting only a name the profile already holds
+ * (manifest_holds_name).
+ *
+ * Readers: the health channel's own listing (cmds/status.c), and the completed
+ * selection's refusal in add (cmds/add.c) — which reads the slice as the whole
+ * of what its claims can move, since no group can grow under an uncommitted claim
+ * and only which member stands can change.
  *
  * @param manifest Manifest (NULL returns an empty slice)
  * @return Borrowed slice over the recorded names, valid for the arena's lifetime
@@ -786,7 +793,12 @@ size_t manifest_holders(
  * profile_claim_name, and the per-branch arm of profile_discover_claims), which
  * asks this before the namer — a derived claim is something the profile holds
  * and nothing it names, so the namer alone would climb past it and answer a name
- * the branch never held.
+ * the branch never held; and add's kind question, which asks whether the profile's
+ * own claim at a location agrees with what stands there now (cmds/add.c) — the
+ * one reading that sees an explicit claim with nothing beneath it for either of
+ * the branch's documents to find, and a derived row included, since a profile
+ * holding a subtree beneath a path is a statement a path that became a file
+ * contradicts.
  */
 const manifest_row_t *manifest_lookup_claim(
     const manifest_t *manifest,
@@ -820,7 +832,10 @@ const manifest_row_t *manifest_lookup_claim(
  * will keep.
  *
  * Readers: add's typed-argument admission (cmds/add.c) and revert's restore
- * admission (cmds/revert.c). Both spell one rule: a profile names a location once.
+ * admission (cmds/revert.c). Both spell one rule: a profile names a location
+ * once — three clauses at each site, the row's own two read where the row is in
+ * hand for the sentence, and this predicate the third. A drift between them is
+ * a defect, which is why both are named here.
  *
  * @param manifest Manifest (NULL answers false)
  * @param profile The asker (NULL answers false)
@@ -858,10 +873,13 @@ bool manifest_holds_name(
  * the settle's question and not a single claim's, and the namer asks it again
  * under the claims admitted (manifest_name).
  *
- * The map is keyed by location in the spelling the view's own rows carry (what
- * mount_locate produced), which is what the ascent truncates to reach a rung;
- * and it is the asking profile's own listing, a claim of it standing in for that
- * profile's committed row at the same place and for no other profile's.
+ * The map is keyed by location in the spelling the view's own rows carry — where
+ * a claim of this profile stands, which is mount_resolve's answer for its name
+ * (and the one place that is not a mount_locate fixed point is the stated
+ * exception: a claim of the very link a binding is declared through stands at
+ * the link, infra/mount.h). That is the key the ascent truncates to reach a rung;
+ * and the map is the asking profile's own listing, a claim of it standing in
+ * for that profile's committed row at the same place and for no other profile's.
  *
  * A stored claim always names. A location a verb entered without claiming (a
  * root met from above) is stored with a NULL *value*: hashmap_has says walked,
@@ -884,9 +902,11 @@ typedef struct {
  * asks are one read and two projections of it, and neither leans on which value
  * of the kind is the enum's zero.
  *
- * Readers: the ascent's rung (core/manifest.c manifest_ascend). The walk that
- * lists a directory for capture and the scan that offers its untracked children
- * ask the same question by hand today, each down a climb of its own.
+ * Readers: the ascent's rung (core/manifest.c manifest_ascend), which is now
+ * the whole of it for add — its walk carries no frame and composes nothing, every
+ * listing asking the namer for its own name (cmds/add.c). The scan that offers
+ * a tracked directory's untracked children still asks the same question by hand,
+ * down a climb of its own.
  */
 static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
     return claim.kind == PATH_KIND_DIRECTORY ? claim.storage_path : NULL;
@@ -944,9 +964,10 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  *
  * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the
  * prospective name a claim search falls through to (core/profiles.c
- * profile_claim_name); the settle of a contribution's collisions (core/manifest.c).
- * add's argument arm and its walk compute the same answer incrementally and are
- * what C3 brings here.
+ * profile_claim_name); the settle of a contribution's collisions (core/manifest.c);
+ * and the name every capture lands under — add's argument arm, its walk, and
+ * the one refusal its completed selection owes, all over the command's own listing
+ * (cmds/add.c).
  *
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone

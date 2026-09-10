@@ -602,14 +602,17 @@ static void display_workspace_status(
              * this one's header carries the remedy, true of every row beneath
              * it (content moved on both sides, or a kind the copy cannot commit
              * on a row a plan can hold — a squatted rung dotta only passes through
-             * has the next section, since no flag lifts it) */
+             * has the next section, since no flag lifts it). `add --force` is
+             * qualified because it takes one of the two and not the other: a
+             * kind change is a re-shaping of the tree and add refuses it by the
+             * claim standing at the location, naming `dotta remove` (cmds/add.c) */
             if (conflict_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Conflicts",
                     "changed on both sides or a different kind on disk; "
                     "\"dotta diff\" to compare, \"dotta apply --force\" to "
-                    "keep Git's, \"dotta add --force\" to keep disk's, "
-                    "\"dotta remove\" to untrack"
+                    "keep Git's, \"dotta add --force\" to keep disk's bytes "
+                    "when the kind matches, \"dotta remove\" to untrack"
                 );
 
                 if (list) {

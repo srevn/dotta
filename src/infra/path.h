@@ -81,7 +81,10 @@ typedef struct {
  * the branch that would hold it (core/profiles.h profile_claim_name,
  * profile_discover_claims); export, which hands each key to the arm that answers
  * in it (cmds/export.c); remove, which matches its own claims by the key the
- * argument named (cmds/remove.c).
+ * argument named (cmds/remove.c); and add's storage head, which reads the name
+ * the capture will land under and dispatches to it with the same predicate this
+ * one does (cmds/add.c) — its filesystem head is add's own grammar, spelled around
+ * path_input_normalize.
  *
  * @param table Mount table (must not be NULL)
  * @param input User-provided path string (must not be NULL)

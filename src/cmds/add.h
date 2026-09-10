@@ -93,6 +93,24 @@ typedef struct {
  * by name and skipped by a walk, and `--force` lifts neither — overwriting bytes
  * under a name the profile holds is not re-shaping the tree.
  *
+ * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
+ * the claim it was listed under is the location it was read at. A typed name is
+ * resolved into its location by construction; a walked one is named from the
+ * claim standing at the location the walk reached. That is what lets the record
+ * join by the location without a round trip through the name — and it holds while
+ * the topology does not move, so the join tests it rather than assuming it.
+ *
+ * **What the record records**: every capture is an ownership event — the path
+ * was put there from disk, so the record binds the committed blob to the stat
+ * the capture took and the next status takes its fast path. A capture whose
+ * location another profile's row wins, or another name of this profile's own,
+ * takes no anchor and the receipt says which; a capture whose claim no longer
+ * stands where it was read ends the phase, the topology having moved under the
+ * command. The record phase is not the command: a failure leaves Git's commit
+ * standing, leaves the record exactly as it was, says so, and names the retry —
+ * `--force`, over a branch that now holds the name, because an apply re-earns
+ * the event for a file it adopts and never for a directory.
+ *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)
  * @return Error or NULL on success

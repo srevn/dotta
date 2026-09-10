@@ -190,12 +190,11 @@ typedef struct manifest_row {
  * was captured nor anything the record's own name can be read under (core/state.h
  * anchor_t). Both halves, because within one profile a location is not an identity.
  *
- * Readers: add's two anchor loops (cmds/add.c), update's capture loop
- * (cmds/update.c), the workspace's confirmation recorder (core/workspace.c) and
- * apply's two acknowledgement loops (cmds/apply.c), which are what moves a record
- * onto the claim standing at its path. The let-go loops ask the other direction
- * — whether any row still stands at the path — and are not readers of this. NULL
- * is no claim.
+ * Readers: add's anchor pass (cmds/add.c), update's capture loop (cmds/update.c),
+ * the workspace's confirmation recorder (core/workspace.c) and apply's two
+ * acknowledgement loops (cmds/apply.c), which are what moves a record onto the
+ * claim standing at its path. The let-go loops ask the other direction — whether
+ * any row still stands at the path — and are not readers of this. NULL is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path
@@ -831,11 +830,20 @@ const manifest_row_t *manifest_lookup_claim(
  * under an uncommitted claim, and manifest_name can answer what the next settle
  * will keep.
  *
- * Readers: add's typed-argument admission (cmds/add.c) and revert's restore
- * admission (cmds/revert.c). Both spell one rule: a profile names a location
- * once — three clauses at each site, the row's own two read where the row is in
- * hand for the sentence, and this predicate the third. A drift between them is
- * a defect, which is why both are named here.
+ * A name this answers true for has a row standing at its location: the group's
+ * kept member is explicit, an uncontested one is explicit by the clause above,
+ * and the layering inserts every explicit row of every contribution — whoever
+ * wins it. So a caller that asks this first may read manifest_lookup's answer
+ * without asking whether there is one.
+ *
+ * Readers: add's typed-argument admission and its record join (cmds/add.c), and
+ * revert's restore admission (cmds/revert.c). The two admissions spell one rule:
+ * a profile names a location once — three clauses at each site, the row's own
+ * two read where the row is in hand for the sentence, and this predicate the
+ * third. A drift between them is a defect, which is why both are named here.
+ * The record join asks the other question the predicate answers: whether a
+ * capture's claim still stands where the walk read it, a table having been built
+ * twice.
  *
  * @param manifest Manifest (NULL answers false)
  * @param profile The asker (NULL answers false)

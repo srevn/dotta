@@ -119,6 +119,15 @@ typedef enum dotta_repo_mode {
  * what remains (apply's checkpoint, core/state.h); `state_free` in the dispatcher
  * rolls back any uncommitted transaction.
  *
+ * The dispatcher's rollback comes after everything the command does, so a WRITE
+ * command that runs anything more once its mutation is over — a hook, a subprocess,
+ * any other reader of the store — finishes the transaction itself first, saved
+ * or rolled back, rather than leaving a lock nothing will use again (`cmds/apply`
+ * commits before its post hook; `cmds/add`'s record phase rolls back at its one
+ * exit). The lock is held from before `hook_fire_pre` as well, which is deliberate
+ * — two applies must not interleave — and is why a hook of a WRITE command cannot
+ * itself run a `dotta` command that needs the write lock (etc/hooks/README.md).
+ *
  * CREATE-style commands (init, clone) declare NONE and open state themselves,
  * because the database file does not exist before dispatch runs — there is nothing
  * for the dispatcher to acquire. This parallels their undeclared `repo`: both

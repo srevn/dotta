@@ -326,6 +326,23 @@ to the hook as they received them. Make a path absolute before comparing it.
 Sudo's own variables (`SUDO_USER`, `SUDO_UID`, ...) are left as they were, so
 a hook that wants to know how the run was started can still tell.
 
+### The store's write lock
+
+`dotta add` and `dotta apply` hold the store's database write lock for the whole
+run — deliberately, so two of them cannot interleave. The lock is taken before
+the `pre-` hook fires and released once the command's own record write is
+finished, which is before the `post-` hook fires.
+
+So a hook of either command can read the store freely, but must not run a `dotta`
+command that itself writes state: from a `pre-add` or `pre-apply` hook such a
+command is refused with a database-locked error. `dotta status`, `dotta list`,
+`dotta diff`, `dotta show` and `dotta git ...` read only and are always fine; the
+same is true of every hook of the other commands, which take the lock only for
+the moment they write.
+
+If a hook needs to write state, run it from a `post-` hook — by then the command
+has finished its transaction either way, including when its record write failed.
+
 ### Best Practices
 
 1. **Always use `set -euo pipefail`** at the top of bash scripts

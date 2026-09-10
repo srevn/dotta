@@ -110,35 +110,47 @@ typedef struct {
 /**
  * What the record phase did, for the receipt
  *
- * `updated` is the phase's word that the anchor pass ran and its transaction
- * committed — the receipt's "Record updated" line and its counts speak only then;
- * false reads "profile not enabled". The counts qualify it: how many of the
- * captured files this profile's rows actually took, and how many of those took
- * over a record another profile's deployment had written.
+ * The phase's fate is its error return and is not restated here: a field for it
+ * would be a second producer of one fact, and it would exist only so the caller
+ * could free the error before rendering the fate. The caller renders both together
+ * instead (cmd_add's tail), and every count below speaks for a phase that returned
+ * NULL — a statement is not durable until state_save commits the transaction
+ * the dispatcher opened.
  *
- * A capture the rows did not take has two causes, and each is counted where the
- * row that says which is in hand rather than read off a difference: a
- * higher-precedence profile holds the location (`overridden`), or this profile's
- * own other name stands there (`unkept`) — a second name of one profile being a
- * thing a branch can hold and a sync can bring here (core/manifest.h
- * manifest_unkept, whose screen word is "unused path"), whose repair is the health
- * channel's on the same screen, not this receipt's. A difference would name
- * whichever cause the line happened to be written for; the sum falls short of
- * the captures only for a claim this machine cannot place, which has no row to
- * blame and goes unnamed.
+ * `enabled` is the one fact the error cannot carry, and the reason it is here
+ * rather than asked by the tail: a row can hold this profile through a failure
+ * (a branch recreated over a leftover row) and can fail to hold it through a
+ * success, and after the phase's rollback the tail cannot ask — state_rollback
+ * re-reads the profile cache with no error channel. The phase publishes the answer
+ * where its transaction settles.
  *
- * `unkept` is now one thing only. This command cannot author a second name, and
- * a capture at a contested location lands on the name the next settle will keep
- * — refuse_moved_name is the last word on that — so a non-zero count is a typed
+ * `anchored` is both kinds. The record's unit is the path — one row per managed
+ * path, a directory's differing only in the columns a directory has no content
+ * for — so the ownership event a capture earns is one event, and the kinds are
+ * named where they were captured, above this line.
+ *
+ * The three counts partition the capture exactly: a claim whose own row took
+ * the event, one a higher-precedence profile's row holds, and one another name
+ * of this profile holds — a second name of one profile being a thing a branch
+ * can hold and a sync can bring here (core/manifest.h manifest_unkept, whose
+ * screen word is "unused path"), whose repair is the health channel's on the
+ * same screen, not this receipt's. Nothing falls through: a capture whose claim
+ * no longer stands at the location it was read at ends the phase instead of being
+ * counted, which is what makes the sum total and each cause checked where the
+ * row that says it is in hand rather than read off a difference.
+ *
+ * `unkept` is one thing only. This command cannot author a second name, and a
+ * capture at a contested location lands on the name the next settle will keep —
+ * refuse_moved_name is the last word on that — so a non-zero count is a typed
  * re-capture of a loser, deliberately made, which is exactly what "captured under
  * an unused path" says.
  */
 typedef struct {
-    bool updated;          /* The anchor pass ran and the transaction committed */
-    size_t synced;         /* Files anchored under this profile's rows */
-    size_t taken_over;     /* Of those, records taken over from another profile */
-    size_t overridden;     /* Files whose location a higher-precedence profile holds */
-    size_t unkept;         /* Files committed under a path the view does not use */
+    bool enabled;          /* A row holds this profile, the phase's writes settled */
+    size_t anchored;       /* Captures whose own row took the ownership event */
+    size_t taken_over;     /* Of the anchored, records taken from another profile */
+    size_t overridden;     /* Captures a higher-precedence profile's row holds */
+    size_t unkept;         /* Captures another name of this profile holds */
 } record_receipt_t;
 
 /**
@@ -1161,10 +1173,10 @@ static error_t *create_commit(
  * Write the record after a successful add operation
  *
  * Called after Git commit succeeds, for a new profile and an existing one alike.
- * Anchors the files this add captured: they were captured FROM disk, so their
- * record is anchored to the just-committed blob with the stat the capture took,
- * and the next status hits the fast path; the directories it tracked are anchored
- * by the same rule — captured, so dotta's. The view is computed, so nothing
+ * Anchors what this add captured: every path was captured FROM disk, so its record
+ * is anchored to the just-committed blob with the stat the capture took and the
+ * next status hits the fast path; a directory is anchored by the same rule and
+ * binds no stat, having no content to confirm. The view is computed, so nothing
  * projects; one build over the enabled set says which of this add's own claims
  * won their locations.
  *
@@ -1174,15 +1186,14 @@ static error_t *create_commit(
  *      existing profile has rows in the view only if it is already enabled: not
  *      enabled skips the anchor pass (nothing to win) and the target UPSERT
  *      (enable's business), never the settle
- *   2. Build the mount table from the post-mutation row cache
- *   3. Build the view; anchor each captured claim's own row, found at the location
- *      the table gives its storage path; settle what the commit let go
- *   4. Commit transaction (state_save)
+ *   2. Build the view; anchor each captured claim's own row, standing at the
+ *      location the walk read the path at; settle what the commit let go
+ *   3. Commit the transaction (state_save), and finish it either way
  *
- * CRITICAL ORDER: Step 1 must precede step 3. The target stored in step 1 is
- * what lets the mount table built in step 2 resolve custom/ storage paths for
- * the view. Transaction atomicity ensures: enable + record succeed together or
- * fail together (automatic rollback on error).
+ * CRITICAL ORDER: step 1 must precede step 2. The builder's own table is built
+ * from the rows, so a custom/ claim of this profile stands nowhere until the
+ * row holds the target. Atomicity is the transaction's: the enable and the record
+ * commit together or not at all.
  *
  * A new branch's enabled_profiles row can pre-exist only as a leftover of a branch
  * deleted behind it. state_enable_profile is an UPSERT — the row keeps its
@@ -1201,35 +1212,46 @@ static error_t *create_commit(
  * Ownership:
  *   Captured rows get deployed_at = time(NULL) because ADD captures files and
  *   directories FROM the filesystem. They're already at their target locations,
- *   so deployed_at is set to indicate dotta put them there. A captured file whose
+ *   so deployed_at is set to indicate dotta put them there. A captured path whose
  *   record another profile's deployment had written is taken over — the write
  *   rewrites the record under this profile — and counted for the receipt: nothing
  *   later says so (apply acknowledges a reassignment the scope made, not one
  *   the user's own add made).
  *
  * Error Handling:
- *   - Profile not enabled, nothing let go → rollback transaction, return NULL
- *     (success, no update)
- *   - The view fails to build → rollback, return error
+ *   - Profile not enabled and nothing let go → NULL, with nothing written
+ *   - A refused statement ends the phase at the first one. The phase's writes
+ *     are one transaction and a database that refuses one write may have ended
+ *     it, so every write past an unexamined refusal is a coin flip between "in
+ *     the transaction" and "committed on its own"
+ *   - A capture whose claim no longer stands where the walk read it ends the
+ *     phase too: the table the whole command named under has moved, and every
+ *     path of this run was named under it
+ *
+ * Postcondition, on every path: the transaction the dispatcher opened is finished
+ * when this function returns — committed by state_save, or rolled back here.
+ * The caller runs the post-add hook next, and a hook that asks the database must
+ * not meet a lock this run has no further use for (cmds/apply commits before
+ * its hook and cmds/update rolls back before its own, for this reason).
  *
  * Non-Fatal Integration:
- *   Caller should treat a record write failure as non-fatal warning. Git commit
- *   already succeeded; the next status reads the committed blob from Git and
- *   confirms the file on its slow path. A new profile that failed to enable is
- *   enabled by hand.
+ *   Caller should treat a record write failure as a non-fatal warning: Git's
+ *   commit stands and the exit is zero. Nothing this phase wrote stands either
+ *   — the first refusal ended the pass and the rollback took the rest — so what
+ *   the record already held is what it still holds, and the retry is this command
+ *   again with --force. Not an apply: apply re-earns the ownership event for a
+ *   file it adopts and never for a directory, whose ownership is the capture's
+ *   alone (cmds/apply.c, the adoption loop).
  *
- * Performance: one view build + O(N) point lookups, N = files added
+ * Performance: one view build + O(N) point lookups, N = paths captured
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the state
  *            and the command arena)
- * @param mounts The command's table: this machine's rows, with the run's own
- *               binding standing for this profile's (must not be NULL). It is
- *               built from the rows STEP 1 below leaves for the view — a row
- *               that exists holds this very target (the pre-flight took the row's
- *               spelling), one that does not is written here as this target,
- *               and a disabled profile has no anchor pass at all — so the location
- *               this resolves a claim to and the location its row stands at are
- *               one string, and the join is a lookup rather than a hope
+ * @param mounts The command's table, read here by the settle alone: `retired`
+ *               holds names the ancestry pass dropped, and a name has no location
+ *               until the table gives it one (must not be NULL). The anchor pass
+ *               needs no table — a listing carries the location its own claim
+ *               resolves to under this very table (the key invariant, cmds/add.h)
  * @param profile The profile added to (must not be NULL)
  * @param target The binding the run brought, absolute, or NULL: written for a
  *               new profile and an enabled one (the UPSERT keeps a row's own
@@ -1243,7 +1265,7 @@ static error_t *create_commit(
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
-static error_t *update_manifest_after_add(
+static error_t *write_record(
     const dotta_ctx_t *ctx,
     const mount_table_t *mounts,
     const char *profile,
@@ -1266,41 +1288,43 @@ static error_t *update_manifest_after_add(
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
 
     error_t *err = NULL;
+    manifest_t *manifest = NULL;
+    hashmap_t *anchor_index = NULL;    /* Built with the anchor pass it serves */
 
     *receipt = (record_receipt_t){ 0 };
 
     /* STEP 1: Scope.
      *
-     * CRITICAL ORDER: Must enable (or re-bind) BEFORE the view is built so target
-     * is available in state for path resolution during the tree walk. The
-     * deployment target is stored in the enabled_profiles table and read by the
-     * mount table built below to resolve custom/ storage paths.
+     * Does a row hold this profile? Asked before the first write, because that
+     * is the answer a rollback leaves — and `enabled` is what STEP 1 leaves
+     * standing: an anchor pass needs a row, and the only row this phase can add
+     * is a created profile's. The tail publishes whichever of the two the
+     * transaction made true.
      *
-     * Transaction Safety: If the record write below fails, the dispatcher's
-     * state_free automatically rolls back this change. */
-    bool enabled = true;
-    if (profile_created) {
+     * CRITICAL ORDER: the binding is written before the view is built. The
+     * builder's own table is built from the rows, so a custom/ claim of this
+     * profile stands nowhere until the row holds the target. Atomicity is the
+     * transaction's: the enable and the record commit together or not at all. */
+    const bool held = state_has_profile(state, profile);
+    const bool enabled = held || profile_created;
+
+    if (profile_created || (held && target)) {
+        /* One UPSERT for two acts. A created profile's branch may still meet a
+         * row a deleted branch left behind: the row keeps its position, takes
+         * this run's binding when it brought one and keeps the leftover's
+         * otherwise. An enabled profile's re-bind is the same statement — the
+         * pre-flight refused a differing value, so this repeats the row's own
+         * spelling or binds an unbound row. */
         err = state_enable_profile(state, profile, target);
-        if (err) {
-            return error_wrap(err, "Failed to enable profile in state");
-        }
-    } else if (!state_has_profile(state, profile)) {
-        /* Only an enabled profile has rows in the view, so the anchor pass has
-         * no subject and a given target stays unbound (enable's business, when
-         * the user gets there). The settle is not gated with them: the commit
-         * just dropped whatever `retired` names, whatever the enabled set says,
-         * and a path the commit let go settles by its record, enabled set or
-         * no. With nothing let go there is nothing to write at all — success,
-         * and the dispatcher's state_free rolls back the untouched transaction. */
-        if (retired->count == 0) {
-            return NULL;
-        }
-        enabled = false;
-    } else if (target) {
-        err = state_enable_profile(state, profile, target);
-        if (err) {
-            return error_wrap(err, "Failed to update deployment target for profile");
-        }
+        if (err) goto cleanup;
+    } else if (!enabled && retired->count == 0) {
+        /* Nothing to write at all: no row for a capture to win, a target the
+         * run brought left unbound (enable's business, when the user gets there),
+         * and no claim let go. The settle below is not gated on enablement —
+         * the commit dropped whatever `retired` names whatever the enabled set
+         * says, and a path the commit let go settles by its record — but with
+         * nothing let go it has nothing to do either. */
+        goto cleanup;                                  /* err is NULL */
     }
 
     /* STEP 2: Build the view; anchor the rows this profile won; settle what the
@@ -1310,128 +1334,118 @@ static error_t *update_manifest_after_add(
      * re-bound — so a path under the just-bound target is a custom/ row here. A
      * disabled profile contributes no rows, and that is the build the settle
      * wants: its guard asks what the view still claims without this profile. */
-    manifest_t *manifest = NULL;
     err = manifest_build(repo, state, ctx->arena, &manifest);
-    if (err) return err;
+    if (err) goto cleanup;
 
-    hashmap_t *anchor_index = NULL;   /* Built with the anchor pass it serves */
     if (enabled) {
-        /* Anchor only the rows this add's own claims won: the row standing at a
-         * captured claim's location is anchored iff it IS that claim, both halves
-         * (core/manifest.h's manifest_is_claim). It is another's whenever a
-         * higher-precedence profile owns the location — and also when a second
-         * claim of this very profile does, which a machine whose roots kept two
-         * names apart can commit and a sync can bring here. Either way the row
-         * is someone else's word and so is its record, and the capture's stat
-         * would certify a blob these bytes are not (receipt->synced < added_files).
-         * The two are told apart here, where the row is in hand, so the receipt
-         * names the cause it checked rather than a difference: only a row of
-         * another profile is an override. Write failures are non-fatal: disk is
-         * the just-committed blob, and the next status's slow path confirms it.
-         *
-         * A row is found at the location this profile gives the storage path —
-         * the view's own spelling, resolved through the table as the build resolved
-         * it — never at the walk's path, which is the user's spelling (a physical
-         * path, a shell with no $PWD) and joins the view by string only when
-         * the two happen to agree. An unbound claim has no location here and no
-         * row.
-         *
-         * The record as it stands first, indexed by path, so a takeover is known
+        /* The record as it stands first, indexed by path, so a takeover is known
          * before the write that rewrites it. */
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
         err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
-        if (err) {
-            manifest_free(manifest);
-            return error_wrap(err, "Failed to read anchors");
-        }
+        if (err) goto cleanup;
 
         anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
         if (!anchor_index) {
-            manifest_free(manifest);
-            return ERROR(ERR_MEMORY, "Failed to create anchors index");
+            err = ERROR(ERR_MEMORY, "Failed to create anchors index");
+            goto cleanup;
         }
         for (size_t i = 0; i < anchor_count; i++) {
             err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
             if (err) {
-                hashmap_free(anchor_index, NULL);
-                manifest_free(manifest);
-                return error_wrap(err, "Failed to index anchors");
+                err = error_wrap(err, "Failed to index anchors");
+                goto cleanup;
             }
         }
 
         time_t now = time(NULL);
-        for (size_t i = 0; i < added_files->count; i++) {
-            const add_path_t *path = added_files->items[i];
-            const char *at = NULL;
 
-            /* The resolve is a round-trip over one string: a listing's location
-             * is where its own claim resolves under this very table, which is
-             * what the walk's key invariant says (cmds/add.h). It goes with the
-             * receipt work that owns this function. */
-            err = mount_resolve(
-                mounts, profile, path->claim.storage_path, ctx->arena, &at
-            );
-            if (err) {
-                hashmap_free(anchor_index, NULL);
-                manifest_free(manifest);
-                return error_wrap(
-                    err, "Failed to derive filesystem path from storage path: %s",
-                    path->claim.storage_path
-                );
-            }
-            if (!at) continue;
+        /* Both lists, one rule and one count. The kind decides one thing — what
+         * the anchor binds: the capture's own stat triple for a file, and nothing
+         * for a directory, which has no content to confirm — so the two lists
+         * were two loops for one line of difference, and the accounting drifted
+         * apart in exactly that gap, the directory count the receipt printed
+         * being the sheet's, taken before the pass that could refuse it.
+         *
+         * Both kinds earn one event. A path was captured from disk, so it is
+         * dotta's to prune on scope exit — the ownership the gate asks for, which
+         * nothing later grants a directory that was already there: apply observes
+         * those and anchors only the ones it makes, so an unowned directory is
+         * released where an owned one is pruned. Cleanup's emptiness rule guards
+         * their contents.
+         *
+         * The row anchored is the one standing at the location the walk read
+         * the path at, and only if it IS this claim, both halves (core/manifest.h's
+         * manifest_is_claim). No round trip through the name: for every listing
+         * mount_resolve of its own claim is that location (the key invariant,
+         * cmds/add.h), and the table this view was built from is the table the
+         * walk used — STEP 1 wrote the very binding it holds.
+         *
+         * That premise is checked, never assumed, because a miss is two things
+         * and only one of them is a count. Either the claim lost the location —
+         * to a higher-precedence profile's row, or to another name of this very
+         * profile that the settle kept, which a machine whose roots held two
+         * names apart can commit and a sync can bring here. Either way the row
+         * is someone else's word and so is its record, and the capture's stat
+         * would certify a blob these bytes are not; the two are told apart here,
+         * where the row is in hand, so the receipt names the cause it checked
+         * rather than a difference. Or the claim is not here any more, the branch
+         * or this machine's topology having moved between the two builds (a pre-add
+         * hook re-pointing a declared link is the way there) — and that is no
+         * per-path fact at all: every path of this run was named under the table
+         * that moved, so it ends the phase rather than choosing a noun.
+         *
+         * The profile's own contribution answers which, and answering it first
+         * is what lets the arms below read the row without asking whether there
+         * is one: a name this profile holds at a location has a row at that
+         * location, the layering inserting every explicit row of every contribution
+         * (core/manifest.h manifest_holds_name).
+         *
+         * A refused statement ends the pass. The phase's writes are one transaction
+         * and a database that refuses one write may have ended it — SQLite rolls
+         * back under a whole class of errors — so every write after an unexamined
+         * refusal is a coin flip between "in the transaction" and "committed on
+         * its own". The first refusal is the phase's failure, which is what makes
+         * the receipt's recovery line true of every prior state: nothing this
+         * phase wrote stands. Non-fatal is still the contract one level up —
+         * Git's commit stands and the receipt names the retry. */
+        const ptr_array_t *captured[] = { added_files, added_dirs };
+        for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
+            for (size_t i = 0; i < captured[b]->count; i++) {
+                const add_path_t *path = captured[b]->items[i];
 
-            const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
-                if (row) {
+                const manifest_row_t *row = manifest_lookup(manifest, path->location);
+                if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
+                    if (!manifest_holds_name(
+                        manifest, profile, path->location, path->claim.storage_path
+                        )) {
+                        err = ERROR(
+                            ERR_CONFLICT,
+                            "Profile '%s' no longer claims '%s' at '%s': the branch "
+                            "or this machine's topology moved while the command ran",
+                            profile, path->claim.storage_path, path->location
+                        );
+                        goto cleanup;
+                    }
                     if (strcmp(row->profile, profile) != 0) receipt->overridden++;
                     else receipt->unkept++;
+                    continue;
                 }
-                continue;
-            }
 
-            error_t *anchor_err = state_anchor(state, row, &path->stat, now, NULL);
-            if (anchor_err) {
-                error_free(anchor_err);
-                continue;
-            }
-            receipt->synced++;
-
-            const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
-            if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
-                receipt->taken_over++;
-            }
-        }
-
-        /* The directories this add tracked, by the same rule: captured from disk,
-         * so dotta's to prune on scope exit — the ownership the gate asks for,
-         * which nothing later grants a directory that was already there (apply
-         * observes those; it anchors only the ones it makes). Cleanup's emptiness
-         * rule guards their contents. No stat triple: a directory has no content
-         * confirmation, as apply records them. */
-        for (size_t i = 0; i < added_dirs->count; i++) {
-            const add_path_t *path = added_dirs->items[i];
-            const char *at = NULL;
-
-            err = mount_resolve(
-                mounts, profile, path->claim.storage_path, ctx->arena, &at
-            );
-            if (err) {
-                hashmap_free(anchor_index, NULL);
-                manifest_free(manifest);
-                return error_wrap(
-                    err, "Failed to derive filesystem path from storage path: %s",
-                    path->claim.storage_path
+                err = state_anchor(
+                    state, row,
+                    path->claim.kind == PATH_KIND_DIRECTORY ? NULL : &path->stat,
+                    now, NULL
                 );
+                if (err) goto cleanup;
+                receipt->anchored++;
+
+                const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
+                if (was && was->deployed_at > 0 &&
+                    strcmp(was->profile, profile) != 0) {
+                    receipt->taken_over++;
+                }
             }
-            if (!at) continue;
-
-            const manifest_row_t *row = manifest_lookup(manifest, at);
-            if (!manifest_is_claim(row, profile, path->claim.storage_path)) continue;
-
-            error_t *anchor_err = state_anchor(state, row, NULL, now, NULL);
-            if (anchor_err) error_free(anchor_err);
         }
     }
 
@@ -1441,48 +1455,50 @@ static error_t *update_manifest_after_add(
      * is the commit's to settle. It refuses nothing while it stands: a directory
      * only a record remembers reaches no view row (the reach rule,
      * core/workspace.h), so the leaf this add just captured through the arrangement
-     * is judged on its own occupant either way, and a retire that fails here
-     * leaves a [released] [type] row under status's Issues until an apply releases
-     * it. Enablement was not consulted on the way here: the derivation saw the
-     * disk contradict the claim whatever the enabled set says, and the record
-     * its drop strands is stale under a disabled profile exactly as under an
-     * enabled one. A rung some other profile still claims keeps its row and its
-     * record — the retire is this profile's word about its own claim, never about
-     * the path — and an unbound claim names nothing on this machine to retire. */
+     * is judged on its own occupant either way, and a retire that fails ends
+     * the phase without refusing the add — the retry re-anchors and re-runs no
+     * retire, the sheet already lacking the claim, so the stranded record stays
+     * apply's to release under status's Issues exactly as before. Enablement
+     * was not consulted on the way here: the derivation saw the disk contradict
+     * the claim whatever the enabled set says, and the record its drop strands
+     * is stale under a disabled profile exactly as under an enabled one. A rung
+     * some other profile still claims keeps its row and its record — the retire
+     * is this profile's word about its own claim, never about the path — and an
+     * unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
         const char *fs_path = NULL;
 
         err = mount_resolve(mounts, profile, retired->items[i], ctx->arena, &fs_path);
-        if (err) {
-            hashmap_free(anchor_index, NULL);
-            manifest_free(manifest);
-            return error_wrap(
-                err, "Failed to derive filesystem path from storage path: %s",
-                retired->items[i]
-            );
-        }
+        if (err) goto cleanup;
         if (!fs_path || manifest_lookup(manifest, fs_path)) continue;
 
-        error_t *retire_err = state_retire_anchor(state, fs_path);
-        if (retire_err) error_free(retire_err);
+        err = state_retire_anchor(state, fs_path);
+        if (err) goto cleanup;
     }
+
+    /* STEP 3: the transaction the dispatcher opened is this phase's to close.
+     * The tail is the label's — a failed save falls into the same settle a failed
+     * statement does. */
+    err = state_save(state);
+
+cleanup:
+    /* The phase finishes its own transaction, because the caller runs the post-add
+     * hook next and a hook that asks the database must not meet a lock this run
+     * has no further use for. state_rollback is a no-op once state_save has
+     * committed, and is also the one call that clears the handle's flag after
+     * SQLite rolled the transaction back itself.
+     *
+     * And it is what makes the answer below true: what a row says about this
+     * profile once the phase is settled — STEP 1's when the save landed, and
+     * the one this phase found when it did not. Nothing after this point reads
+     * the state, which is the contract state_rollback's own header asks for. */
+    state_rollback(state);
+    receipt->enabled = err ? held : enabled;
 
     hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
-    /* STEP 3: Commit transaction. state is borrowed from the dispatcher: if
-     * state_save succeeds the transaction is committed; otherwise the dispatcher's
-     * state_free rolls it back. */
-    err = state_save(state);
-    if (err) {
-        return error_wrap(err, "Failed to save record updates");
-    }
-
-    /* Success. A settle committed for a disabled profile is not the anchor pass
-     * having run: the receipt still reads "profile not enabled". */
-    receipt->updated = enabled;
-
-    return NULL;
+    return err;
 }
 
 /**
@@ -1507,8 +1523,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     stage_t *stage = NULL;
     manifest_t *view = NULL;             /* The branch as the stage opened it: see below */
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
-    bool profile_exists = false;
-    bool profile_created = false;
+    bool profile_exists = false;         /* The pre-flight's question, read above the open */
+    bool profile_created = false;        /* This run's act, read below it */
     bool committed = false;
     metadata_t *metadata = NULL;
     mount_table_t *mounts = NULL;         /* The command's table: see below */
@@ -2270,7 +2286,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * writes the blob to the object database at once, so a refusal between the
      * two — a path that is not there, an argument the rules exclude, an unreadable
      * file — would leave it there for a profile that was never created. */
-    if (!profile_exists) {
+    if (profile_created) {
         const char *template = ignore_profile_template();
         err = stage_put(
             stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB
@@ -2314,10 +2330,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *
-     * The files were captured from disk, so their record is anchored to the
-     * committed blob now rather than left for a later status to confirm — an
-     * ownership event whether or not Git moved, since the capture's stat is fresh
-     * either way. The view itself is computed at every load and needs no update.
+     * Every path was captured from disk, so its record is anchored to the committed
+     * blob now rather than left for a later status to confirm — an ownership
+     * event whether or not Git moved, since the capture's stat is fresh either
+     * way. The view itself is computed at every load and needs no update.
      *
      * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
      * enables it). UX Decision: Creating a profile via 'add' should enable it
@@ -2326,46 +2342,24 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * if already enabled).
      *
      * Both end in the same loop: one view build says which rows this profile
-     * won, and add's contribution is the anchor — the files were just captured
-     * from disk, so the anchor is stamped from that capture rather than left
-     * for a later status to fill in.
+     * won, and add's contribution is the anchor.
      *
-     * Non-fatal: If the record write fails, Git commit still succeeded. A new
-     * profile that failed to enable is enabled by hand; the next status confirms
-     * the committed files on its slow path.
+     * Non-fatal, and rendered in the tail with the counts: the phase's fate is
+     * its error and a warning above the ✓ lines would read as a refusal of the
+     * add, which a record failure is not. The error therefore lives from here
+     * to the screen that renders it, which frees it once below; the region between
+     * holds no exit.
      */
     record_receipt_t record = { 0 };
 
-    error_t *manifest_err = update_manifest_after_add(
+    error_t *record_err = write_record(
         ctx, mounts, opts->profile, target, profile_created,
         &walk.files, &walk.directories, &ancestry_retired, &record
     );
-    if (manifest_err) {
-        if (profile_created) {
-            /* Non-fatal: Git commit succeeded, user can manually enable later */
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to auto-enable profile: %s",
-                error_message(manifest_err)
-            );
-            output_hint(
-                out, OUTPUT_NORMAL, "Run 'dotta profile enable %s' to enable manually",
-                opts->profile
-            );
-        } else {
-            /* Non-fatal: Git commit succeeded */
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to update the record: %s",
-                error_message(manifest_err)
-            );
-            output_info(
-                out, OUTPUT_NORMAL, "Paths committed to Git successfully"
-            );
-        }
-        error_free(manifest_err);
-        record = (record_receipt_t){ 0 };
-    }
 
-    /* Execute post-add hook */
+    /* Execute post-add hook. The record phase settled its own transaction before
+     * returning, so the hook meets the database this run leaves — committed or
+     * rolled back — and not a lock nothing will use again. */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Show summary on success. The empty selection was refused above and both
@@ -2401,9 +2395,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
+    /* The branch is Git's fact and stands whatever the record did; the enabling
+     * is a row, which a failed phase can leave standing (a branch recreated over
+     * a leftover row) and a successful one cannot invent. So the second clause
+     * keys on membership, not on the fate. */
     if (profile_created) {
         output_success(
-            out, OUTPUT_NORMAL, "Profile '%s' created and enabled", opts->profile
+            out, OUTPUT_NORMAL,
+            record.enabled ? "Profile '%s' created and enabled"
+                           : "Profile '%s' created",
+            opts->profile
         );
     }
 
@@ -2419,78 +2420,98 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     output_newline(out, OUTPUT_NORMAL);
 
-    /* Record status feedback */
-    if (record.updated) {
-        if (walk.files.count > 0) {
-            /* Files were added — the sync results, and what the rows did with
-             * each capture: a location this profile's claim did not win got no
-             * anchor, and the records another profile's deployment had written
-             * were taken over. */
-            if (record.synced == walk.files.count) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Record updated (%zu file%s marked as deployed)",
-                    record.synced, record.synced == 1 ? "" : "s"
-                );
-            } else {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "Record updated (%zu/%zu file%s marked as deployed)",
-                    record.synced, walk.files.count,
-                    walk.files.count == 1 ? "" : "s"
-                );
+    /* The record phase's own screen, below the ✓ lines the add earned: the cause
+     * and what it left standing, what the rows took, or the fact that no row
+     * holds this profile. The fate is the error — the receipt carries no field
+     * for it — and it renders here with the other two rather than at the call. */
+    if (record_err) {
+        output_warning(
+            out, OUTPUT_NORMAL, "Failed to update the record: %s",
+            error_message(record_err)
+        );
 
-                /* Each cause named by the count that checked it, never by the
-                 * shortfall (record_receipt_t): a row of another profile is an
-                 * override, a row of this one under another of its own names is
-                 * an unused path, and the health channel carries that one's repair
-                 * on the status screen. */
-                if (record.overridden > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Note: %zu file%s overridden by higher-precedence profiles",
-                        record.overridden, record.overridden == 1 ? "" : "s"
-                    );
-                }
-                if (record.unkept > 0) {
-                    output_info(
-                        out, OUTPUT_NORMAL,
-                        "Note: %zu file%s captured under an unused path; "
-                        "'dotta status -v' names %s",
-                        record.unkept, record.unkept == 1 ? "" : "s",
-                        record.unkept == 1 ? "it" : "them"
-                    );
-                }
-            }
-            if (record.taken_over > 0) {
+        /* Nothing this phase wrote stands: the first refused statement ended
+         * the pass and the rollback took the rest, so every path's record is
+         * what it was — an ownership event that stood still stands, and a path
+         * with no record has none. */
+        output_info(
+            out, OUTPUT_NORMAL,
+            "The record was not written - what it already held stands"
+        );
+    } else if (record.enabled) {
+        /* What the record took of what the capture listed. The unit is the path
+         * — one row per managed path, both kinds — and the kinds are named where
+         * they were captured, above. */
+        const size_t captured = walk.files.count + walk.directories.count;
+        const bool whole = record.anchored == captured;
+
+        if (whole) {
+            output_info(
+                out, OUTPUT_NORMAL, "Record updated (%zu path%s marked as deployed)",
+                captured, captured == 1 ? "" : "s"
+            );
+        } else {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Record updated (%zu/%zu path%s marked as deployed)",
+                record.anchored, captured, captured == 1 ? "" : "s"
+            );
+
+            /* Each cause named by the count that checked it, never by the shortfall
+             * (record_receipt_t): a row of another profile is an override, a
+             * row of this one under another of its own names is an unused path,
+             * and the health channel carries that one's repair on the status
+             * screen. The two sum to the shortfall exactly. */
+            if (record.overridden > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
-                    "Note: %zu file%s taken over from other profiles",
-                    record.taken_over, record.taken_over == 1 ? "" : "s"
+                    "Note: %zu path%s overridden by higher-precedence profiles",
+                    record.overridden, record.overridden == 1 ? "" : "s"
                 );
             }
-            if (!profile_created) {
-                /* Existing enabled profile */
-                output_hint(
+            if (record.unkept > 0) {
+                output_info(
                     out, OUTPUT_NORMAL,
-                    "Paths captured from filesystem (already deployed)"
+                    "Note: %zu path%s captured under an unused path; "
+                    "'dotta status -v' names %s",
+                    record.unkept, record.unkept == 1 ? "" : "s",
+                    record.unkept == 1 ? "it" : "them"
                 );
             }
-        } else {
-            /* Directory-only add */
+        }
+        if (record.taken_over > 0) {
             output_info(
-                out, OUTPUT_NORMAL, "Record updated (%zu director%s synced)",
-                walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
+                out, OUTPUT_NORMAL,
+                "Note: %zu path%s taken over from other profiles",
+                record.taken_over, record.taken_over == 1 ? "" : "s"
+            );
+        }
+        /* Why nothing needs deploying: the bytes were read off disk, so the record
+         * names them deployed without an apply having run. Said only where it
+         * is true of every path on the line — a capture a row did not take is
+         * not standing at the winner's blob. */
+        if (whole) {
+            output_hint(
+                out, OUTPUT_NORMAL, "Paths captured from filesystem (already deployed)"
             );
         }
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta status' to verify");
     } else {
-        /* Existing disabled profile: the tree is shaped, no row holds a binding,
-         * and the hint names what enable will accept — the target as the user
-         * typed it, when the run brought one. */
         output_info(
             out, OUTPUT_NORMAL, "Profile not enabled - nothing marked as deployed"
         );
+    }
+
+    /* The remedy the run leaves, at one site and keyed on the one fact that decides
+     * it. No row holding this profile makes enable the first verb whichever fate
+     * brought the run here — the tree is shaped and enable is what gives it a
+     * place, taking the target as the user typed it when the run brought one. A
+     * row that does hold it leaves only a failure to answer, and the retry is
+     * this add again with --force over a branch that now holds the bytes: an
+     * apply re-earns the event for the files it adopts and never for a directory,
+     * and an unowned directory is released at scope exit where an owned one is
+     * pruned. */
+    if (!record.enabled) {
         if (opts->target) {
             output_hint(
                 out, OUTPUT_NORMAL,
@@ -2504,7 +2525,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 opts->profile
             );
         }
+    } else if (record_err) {
+        output_hint(
+            out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"
+        );
     }
+
+    /* Freed below both blocks that read it, not in the arm that prints its message:
+     * the remedy is chosen from the same fate one screen later. */
+    error_free(record_err);
 
 cleanup:
     /* Free resources in reverse order of allocation. The listing's keys and values

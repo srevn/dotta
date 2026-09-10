@@ -735,7 +735,8 @@ error_t *state_anchor(
  * row is success: the callers name paths that may have no record — never seen
  * here, nothing to retire. Called by apply's record step for every pruned or
  * reclaimed orphan (the copy is gone — there is no fact), by update's purge of
- * a deleted path, and — composed inside state_release — for every release.
+ * a deleted path, by add's settle of the ancestor claims its own commit dropped,
+ * and — composed inside state_release — for every release.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)

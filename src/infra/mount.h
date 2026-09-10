@@ -472,13 +472,16 @@ const mount_spec_t *mount_root(
  * A root's noun for a screen, rendered into `buf` and returned: "your home
  * directory", "the filesystem root", "the deployment target of profile 'web'".
  *
- * `root` is the spec mount_root answered and must not be NULL; the caller has
- * just had mount_name answer NULL for the same table, asker and location — asked
- * directly, or as the last rung of the namer's ascent (core/manifest.c
- * manifest_ascend), which is the only way that one answers NULL — and that is
- * the same find over the same data, an invariant rather than a hope. `profile`
- * is read only for a per_profile root, and a per_profile root can only have been
- * found by the profile that owns it, so it is non-NULL exactly when it is read.
+ * `root` is the spec mount_root answered and must not be NULL — that is the whole
+ * precondition, and the callers reach it two ways. Most have just had mount_name
+ * answer NULL for the same table, asker and location — asked directly, or as
+ * the last rung of the namer's ascent (core/manifest.c manifest_ascend), which
+ * is the only way that one answers NULL — the same find over the same data, an
+ * invariant rather than a hope. A caller whose own search already answered nothing
+ * at the location asks mount_root directly and reads its answer (cmds/revert.c),
+ * which establishes the same thing. `profile` is read only for a per_profile
+ * root, and a per_profile root can only have been found by the profile that owns
+ * it, so it is non-NULL exactly when it is read.
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
  * than through a statement of its own: three sites print this sentence and would

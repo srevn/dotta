@@ -17,10 +17,10 @@
  * Two-tier API:
  *
  * Simple API (single-file operations):
- *   buffer_t *content;
+ *   buffer_t content = BUFFER_INIT;
  *   content_get_from_blob_oid(repo, &oid, path, profile, keymgr, &content);
  *   // ... use content ...
- *   buffer_free(content);  // Caller owns buffer
+ *   buffer_free(&content);  // Caller owns buffer
  *
  * Cached API (batch operations):
  *   content_cache_t *cache = content_cache_create(repo, keymgr);
@@ -37,8 +37,9 @@
  *   crypto (cipher for the format's constants and header, keymgr for every encrypt
  *   and decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
- *   reads, policy's byte truth), commands (show, diff, export, revert, list;
- *   add and update through the capture)
+ *   reads, policy's byte truth), commands (show, diff, export, revert — twice,
+ *   for the kind it stamps and the name it reseals under — list; add and update
+ *   through the capture)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -211,6 +212,65 @@ error_t *content_get_from_blob_oid(
     const char *profile,
     keymgr *keymgr,
     buffer_t *out_content
+);
+
+/**
+ * The bytes this blob's content takes under another name
+ *
+ * Encrypted bytes carry their storage path in the seal (crypto/cipher.h "Path
+ * binding"), so a claim that changes name cannot carry its blob's id: no read
+ * under the new name could open it. This opens the content under `from` and seals
+ * it under `to` — the same plaintext, the same encryption intent, a different
+ * object — and the caller stores what it gets.
+ *
+ * Domain: bytes that carry a binding. A blob content_classify calls PLAINTEXT
+ * is refused (ERR_INTERNAL) rather than copied — an unbound blob's id travels
+ * unchanged, and the caller that reads the kind for its own claim already knows
+ * which it holds, the way content_stage_file refuses everything but a regular
+ * file and leaves a link's bytes to its caller. UNSUPPORTED_VERSION is refused
+ * in get_plaintext_from_blob's own words: this build cannot open the bytes, so
+ * it cannot seal them under another name, and entering them under one would leave
+ * a claim no key will ever read.
+ *
+ * A link is not content and never reaches here: its bytes are a target path,
+ * and Git's filemode is the authority on that at every boundary (cmds/add.c's
+ * put, core/manifest.c's link row, cmds/revert.c's claim).
+ *
+ * The write-boundary invariant content_stage_file states holds here too: what
+ * is answered classifies ENCRYPTED, as the source did, so a caller stamping
+ * metadata.encrypted from the source blob describes what it stores.
+ *
+ * The plaintext lives only inside this call and is wiped on every exit path.
+ *
+ * @param repo Repository the blob is read from (must not be NULL)
+ * @param blob The blob's id (must not be NULL)
+ * @param from_storage_path The name the bytes were sealed under (must not be
+ *          NULL; the AAD they are opened with)
+ * @param to_storage_path The name they are sealed under (must not be NULL)
+ * @param profile Profile name, for key derivation (must not be NULL)
+ * @param keymgr Key manager (ERR_LOCKED without one — every blob in the domain
+ *          is sealed)
+ * @param out_bytes Output buffer (CALLER OWNS - must free with buffer_free)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_LOCKED / ERR_CRYPTO: the read's own ladder, unwrapped (see
+ *   content_get_from_blob_oid), and the encrypt's under "Cannot encrypt '<to>'"
+ * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
+ * - ERR_INTERNAL: the blob carries no binding, so nothing here had anything to
+ *   move — the caller read the wrong fact
+ *
+ * Reader: a revert whose name changed between the commit and the branch's tip
+ * (cmds/revert.c).
+ */
+error_t *content_rebind(
+    git_repository *repo,
+    const git_oid *blob,
+    const char *from_storage_path,
+    const char *to_storage_path,
+    const char *profile,
+    keymgr *keymgr,
+    buffer_t *out_bytes
 );
 
 /**

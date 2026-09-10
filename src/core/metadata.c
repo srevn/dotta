@@ -215,8 +215,13 @@ error_t *metadata_item_create_directory(
  *            metadata_item_free)
  * @return Error or NULL on success
  */
-error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **out) {
+error_t *metadata_item_clone(
+    const metadata_item_t *source,
+    const char *storage_path,
+    metadata_item_t **out
+) {
     CHECK_NULL(source);
+    CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
     metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
@@ -225,10 +230,11 @@ error_t *metadata_item_clone(const metadata_item_t *source, metadata_item_t **ou
     }
 
     /* Everything that is not a pointer copies wholesale — kind, mode and encrypted,
-     * so a field added later needs no line here. The three strings are then
-     * re-owned, and the one refusal covers all three. */
+     * so a field added later needs no line here. The three strings are then owned
+     * here: the key the caller named, the two ownership names the source carries,
+     * and the one refusal covers all three. */
     *item = *source;
-    item->key = strdup(source->key);
+    item->key = strdup(storage_path);
     item->owner = source->owner ? strdup(source->owner) : NULL;
     item->group = source->group ? strdup(source->group) : NULL;
 

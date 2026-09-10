@@ -289,6 +289,63 @@ error_t *content_get_from_blob_oid(
     return err;
 }
 
+error_t *content_rebind(
+    git_repository *repo,
+    const git_oid *blob,
+    const char *from_storage_path,
+    const char *to_storage_path,
+    const char *profile,
+    keymgr *keymgr,
+    buffer_t *out_bytes
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(blob);
+    CHECK_NULL(from_storage_path);
+    CHECK_NULL(to_storage_path);
+    CHECK_NULL(profile);
+    CHECK_NULL(out_bytes);
+
+    *out_bytes = (buffer_t){ 0 };
+
+    gitops_blob_view_t view;
+    error_t *err = gitops_blob_view_open(repo, blob, &view);
+    if (err) {
+        return error_wrap(err, "Failed to load blob for '%s'", from_storage_path);
+    }
+
+    /* Bytes are authoritative here as everywhere: only a sealed blob has a name
+     * bound into it, and only it has anything to move. */
+    if (content_classify_bytes((const uint8_t *) view.data, view.size)
+        == CONTENT_PLAINTEXT) {
+        gitops_blob_view_close(&view);
+        return ERROR(
+            ERR_INTERNAL, "content_rebind received unbound content at '%s'",
+            from_storage_path
+        );
+    }
+
+    buffer_t plaintext = BUFFER_INIT;
+    err = get_plaintext_from_blob(
+        view.data, view.size, from_storage_path, profile, keymgr, &plaintext
+    );
+    gitops_blob_view_close(&view);
+    if (err) {
+        return err;              /* the read ladder's own words, unwrapped */
+    }
+
+    err = keymgr_encrypt(
+        keymgr, profile, to_storage_path, (const uint8_t *) plaintext.data,
+        plaintext.size, out_bytes
+    );
+
+    if (plaintext.data) {
+        secure_wipe(plaintext.data, plaintext.size);
+    }
+    buffer_free(&plaintext);
+
+    return err ? error_wrap(err, "Cannot encrypt '%s'", to_storage_path) : NULL;
+}
+
 content_cache_t *content_cache_create(
     git_repository *repo,
     keymgr *keymgr

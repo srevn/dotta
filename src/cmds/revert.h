@@ -50,19 +50,43 @@ typedef struct {
  * writer moved between the preview and the commit, a repository that will not
  * write.
  *
+ * The two names. A revert restores what the commit held into the name the branch
+ * tip holds, and the key the user named is the key both trees are asked in. A
+ * location asks each tree what claim stood there; a name asks each tree for that
+ * name. Only a name a tree does not hold falls back to that tree's claim at its
+ * location — never the reverse, because a location is always answerable and a
+ * name may simply not exist:
+ *
+ *              the write's name (the tip)      the read's name (the commit)
+ *   LOCATION   the claim standing at L,        the claim standing at L
+ *              else the read's own name
+ *   STORAGE    the name as typed               that name, else the sheet's claim
+ *                                              at it, else the claim at L
+ *
+ * Reading across names is safe: a name the commit held is a fact, and following
+ * it is how a revert survives a contract change. Writing across them is not — a
+ * name is where a claim lands on every machine — so where the tip holds nothing
+ * the restore takes the name the commit held it by, never one composed from today's
+ * roots, and a typed name is refused where authoring it would give the profile
+ * a second name for one location. Encrypted bytes are sealed under their own
+ * name (crypto/cipher.h), so a cross-name restore reseals them: the same plaintext,
+ * a different object, and a key where a same-name restore needed none.
+ *
  * The operation:
  * 1. Discovers which profile holds the argument (requires --profile if ambiguous)
  * 2. Resolves commit reference in profile branch history
  * 3. Reads both entries — the commit's, which must be a blob, and the branch
  *    tip's, which may be absent — the restored blob's own bytes, and the claims
- *    both sheets record at the name
- * 4. Answers "nothing to do" when that whole write already stands
- * 5. Puts the entry on the stage — the write's own admission, made here so that
+ *    both sheets record at the two names
+ * 4. Refuses a typed name that would be the profile's second for one location
+ * 5. Answers "nothing to do" when that whole write already stands
+ * 6. Puts the entry on the stage — the write's own admission, made here so that
  *    a tree that cannot hold it refuses before the preview and not after the
  *    prompt; no object is written by it
- * 6. Shows the preview (restored / diff / mode and ownership only)
- * 7. Prompts for confirmation (unless --force)
- * 8. Creates one commit with the restored blob and the merged metadata
+ * 7. Shows the preview (restored / diff / mode and ownership only), naming the
+ *    commit's own name for the file wherever it differs
+ * 8. Prompts for confirmation (unless --force)
+ * 9. Creates one commit with the restored blob and the merged metadata
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

@@ -35,9 +35,14 @@
  *
  * Every entry names a blob the ODB holds by commit time: stage_put writes it,
  * stage_put_blob trusts the caller (revert's target blob is looked up from a
- * commit), and the tree write refuses an id the ODB lacks. Bytes are stored as
- * given — no clean filter, no autocrlf, no filemode config — the way apply writes
- * them back; the mode is the caller's word.
+ * commit), and the tree write refuses an id the ODB lacks. *By commit time* is
+ * the whole of the promise: the put itself does not check, so an id whose object
+ * is not written yet is admitted and refused only if the commit still lacks it.
+ * A writer that must decide before it writes puts the id and materialises the
+ * bytes later — revert admits a reseal's hash before its preview and stores the
+ * object only past the prompt, so a dry run leaves the database as it found it.
+ * Bytes are stored as given — no clean filter, no autocrlf, no filemode config
+ * — the way apply writes them back; the mode is the caller's word.
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index.
  * A stage that is freed without a commit, or whose commit was refused, leaves

@@ -251,18 +251,22 @@ error_t *metadata_item_create_directory(
 void metadata_item_free(metadata_item_t *item);
 
 /**
- * Clone metadata item (deep copy)
+ * The same claim, deep-copied under `storage_path`
  *
- * Creates a deep copy of a metadata item, duplicating all strings. Useful when
- * preserving an item while modifying the original collection.
+ * Every field but the key travels: kind, mode, ownership, and the two flags.
+ * The key is a parameter because a claim outlives the name it was recorded under
+ * — a revert restores a commit's claim into the name the branch holds now
+ * (cmds/revert.c) — and passing `source->key` is the identity copy.
  *
  * @param source Source item to clone (must not be NULL)
+ * @param storage_path The key the copy carries (must not be NULL)
  * @param out Cloned item (must not be NULL, caller must free with
  *            metadata_item_free)
  * @return Error or NULL on success
  */
 error_t *metadata_item_clone(
     const metadata_item_t *source,
+    const char *storage_path,
     metadata_item_t **out
 );
 
@@ -659,10 +663,13 @@ error_t *metadata_from_json(
  *
  * Puts the sheet — .dotta/metadata.json, serialized by metadata_to_json — on
  * the stage as a regular blob; the caller's commit carries it. The one writer
- * of the sheet, for add, update, remove and revert alike. A sheet loaded and
- * saved unchanged puts the blob the tree already holds (the serializer's
- * byte-determinism), which is what lets the stage's commit see an untouched sheet
- * as no change.
+ * of the sheet, for add, update, remove and revert alike. A sheet this serializer
+ * wrote, loaded and saved unchanged, puts the blob the tree already holds (the
+ * serializer's byte-determinism), which is what lets the stage's commit see an
+ * untouched sheet as no change. A hand-written one the parser accepts — other
+ * whitespace, another item order, inert fields — is normalized by the save and
+ * moves its blob; nothing here promises otherwise, and no caller normalizes a
+ * sheet it did not otherwise change.
  *
  * @param stage The stage the sheet goes on (must not be NULL)
  * @param metadata Metadata to save (must not be NULL)

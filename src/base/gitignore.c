@@ -102,7 +102,7 @@ struct gitignore_rule {
                                        * == len when nothing in it can glob */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
     gitignore_origin_t origin;        /* the ruleset's tag; 0 for a rule alone */
-    const char *source;               /* the line as written, trimmed (arena-owned) */
+    const char *source;               /* the rule as written, its line's span (arena-owned) */
 };
 
 struct gitignore_ruleset {
@@ -600,7 +600,7 @@ void gitignore_eval(
     out->decided = false;
     out->ignored = false;
     out->origin = 0;
-    out->pattern = NULL;
+    out->source = NULL;
 
     if (!set || !path)
         return;
@@ -670,7 +670,7 @@ cleanup:
         out->decided = true;
         out->ignored = !(match->flags & GITIGNORE_FLAG_NEGATIVE);
         out->origin = match->origin;
-        out->pattern = match->source;
+        out->source = match->source;
     }
 }
 

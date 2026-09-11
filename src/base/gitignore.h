@@ -75,7 +75,7 @@ typedef struct {
     bool decided;                  /* true if any rule matched */
     bool ignored;                  /* winning rule's effect (negation-aware) */
     gitignore_origin_t origin;     /* origin of winning rule */
-    const char *pattern;           /* winning rule as written (arena-owned); NULL when undecided */
+    const char *source;            /* winning rule as written (arena-owned); NULL when undecided */
 } gitignore_match_t;
 
 /**
@@ -179,12 +179,12 @@ error_t *gitignore_ruleset_append_patterns(
  * Never fails. Always populates every field of *out; decided=false means no rule
  * matched any rung — the ruleset was silent, which is what core/ignore's readers
  * turn their source-tree ladder on, and it is a fact about the rungs rather than
- * about the walk: any order over them answers it the same. `pattern` and `origin`
+ * about the walk: any order over them answers it the same. `source` and `origin`
  * name the excluding rule when `ignored`; when `decided && !ignored` they name
  * the deepest rule that matched and excluded nothing (git reports no pattern at
- * all for that path), and no caller reads them there. `pattern` is the rule's
- * source line, trimmed, as the user wrote it (`!build/`, `/.cache/`); it borrows
- * the ruleset's arena.
+ * all for that path), and no caller reads them there. `source` is the rule as
+ * written — the bytes gitignore_rule_span answers for its line (`!build/`,
+ * `/.cache/`); it borrows the ruleset's arena.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param path    Relative path (must not be NULL)
@@ -342,7 +342,7 @@ bool gitignore_rule_negated(const gitignore_rule_t *rule);
  * the line's last byte — a CRLF terminator; one with spaces behind it is inside
  * the rule, as it is to git — and then a run of trailing spaces (an escaped one,
  * `foo\ `, is kept; a tab is not a space and is kept). What is left is the rule
- * as written — the same bytes `gitignore_match_t.pattern` reports for it.
+ * as written — the same bytes `gitignore_match_t.source` reports for it.
  *
  * So the span is the *identity* of a rule for anyone editing the file it lives
  * in: two lines name the same rule iff their spans are equal byte for byte,

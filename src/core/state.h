@@ -392,8 +392,8 @@ error_t *state_commit(state_t *state);
  * transaction left it holding rows the database no longer has. This is the one
  * place a read of that table has no channel: a read that fails here empties the
  * cache, and every caller of rollback is already unwinding the command (workspace's
- * flush, remove's and update's record phases, profile's and interactive's cleanup),
- * none of which reads the state again.
+ * flush, add's, remove's and update's record phases, profile's and interactive's
+ * cleanup), none of which reads the state again.
  *
  * @param state State (must not be NULL)
  */
@@ -569,8 +569,9 @@ typedef struct {
  *   - state_rollback
  *   - state_free
  *
- * A caller that must outlive one of those copies what it needs (cmds/profile.c's
- * disable receipt arena-copies the targets it is about to forget, and says so).
+ * A caller that must outlive one of those copies what it needs, and says so:
+ * cmds/profile.c's disable receipt the targets it is about to forget, and
+ * cmds/add.c's pre-flight the binding its receipt names after the record phase.
  *
  * @param state State (NULL returns an empty slice)
  * @return Borrowed slice over the rows

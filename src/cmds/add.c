@@ -910,6 +910,63 @@ static void report_capture(
 }
 
 /**
+ * Say which labels the captured paths landed under
+ *
+ * A capture's name is the one typed for it, or the claim standing at its location
+ * — this command's own, the profile's, a directory claim above it — and its root's
+ * label only where none stands (cmds/add.h, the name a capture lands under). So
+ * a label is the profile's history, not the command line's: `/` encloses HOME,
+ * so a path beneath HOME can take two labels in any profile, and a third beneath
+ * a binding. The counts above say which kinds were captured; this says where
+ * their names went, and it is where a name that stayed put shows.
+ *
+ * One line per label that took a path, in the labels' own order, counting paths:
+ * a file and a directory are one name each, so the lines sum to the kinds the
+ * counts above them name, in every arm. The per-profile label names where it
+ * stands, spelled as every screen that prints a bound target spells it
+ * (base/output.h). No tense: a noun phrase, true of a capture and of one about
+ * to happen.
+ *
+ * @param walk The selection, and the output (must not be NULL)
+ * @param target Where this profile's custom/ tree stands for this command — the
+ *               binding its table holds. Non-NULL whenever a listed name is
+ *               custom/, which only a binding composes or resolves
+ */
+static void report_labels(const add_walk_t *walk, const char *target) {
+    output_t *out = walk->ctx->out;
+    const ptr_array_t *listed[] = { &walk->files, &walk->directories };
+
+    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
+        const mount_spec_t *spec = mount_spec_for_kind(kind);
+
+        /* The spec pointers are the static table's (infra/mount.h), so a name's
+         * label is its spec's identity. */
+        size_t count = 0;
+        for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
+            for (size_t i = 0; i < listed[b]->count; i++) {
+                const add_path_t *path = listed[b]->items[i];
+                if (mount_spec_for_path(path->claim.storage_path) == spec) count++;
+            }
+        }
+        if (count == 0) continue;
+
+        if (spec->per_profile) {
+            char shown[PATH_MAX];
+            output_format_path(target, identity()->home, shown, sizeof(shown));
+            output_info(
+                out, OUTPUT_NORMAL, "  %zu path%s as %s/ under %s",
+                count, count == 1 ? "" : "s", spec->label, shown
+            );
+        } else {
+            output_info(
+                out, OUTPUT_NORMAL, "  %zu path%s as %s/",
+                count, count == 1 ? "" : "s", spec->label
+            );
+        }
+    }
+}
+
+/**
  * Capture one listed path onto the stage, and its claim onto the sheet
  *
  * As the kind it was listed as: the occupant chooses the capture, and each capture
@@ -1480,6 +1537,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
+    /* Where this profile's custom/ tree stands, as its row spells it — the binding
+     * this command's table holds for the profile whenever the row has one, a
+     * --target below being held to it and taking its spelling. A copy and not
+     * the peek: the record phase's enable and its rollback each replace the row
+     * cache the peek borrows from (core/state.h, state_peek_profiles), and the
+     * receipt names this binding after both. `target` is the flag's alone, NULL
+     * without it: re-rooting an argument is the flag's grammar (spell_argument),
+     * never a row's. */
+    const char *bound = state_peek_profile_target(state, opts->profile);
+    if (bound) {
+        bound = arena_strdup(ctx->arena, bound);
+        if (!bound) {
+            err = ERROR(ERR_MEMORY, "Failed to copy the profile's target");
+            goto cleanup;
+        }
+    }
+
     /* The target, when the run brought one: a filesystem-shaped argument —
      * absolute, tilde, or relative to the working directory — resolved to the
      * absolute path the row stores, then held to the target's rules. */
@@ -1506,8 +1580,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * — the table below, the UPSERT after the commit and the record's join
          * through the view all spell it the row's way — so the flag takes the
          * row's spelling here, and the arguments re-root under it. */
-        const char *existing = state_peek_profile_target(state, opts->profile);
-        if (existing && !mount_same_target(existing, target)) {
+        if (bound && !mount_same_target(bound, target)) {
             err = ERROR(
                 ERR_INVALID_ARG,
                 "Profile '%s' is bound at %s, and a profile has one target\n"
@@ -1515,17 +1588,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 "the next apply relocates its paths\n"
                 "  dotta add <profile> --target %s <path>    "
                 "a second tree is a second profile",
-                opts->profile, existing, opts->profile, opts->target, opts->target
+                opts->profile, bound, opts->profile, opts->target, opts->target
             );
             goto cleanup;
         }
-        if (existing) {
-            target = arena_strdup(ctx->arena, existing);
-            if (!target) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate the target");
-                goto cleanup;
-            }
-        }
+        if (bound) target = bound;
     }
 
     /* The topology this command reads: this machine's rows, with the binding
@@ -2424,6 +2491,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             opts->profile
         );
     }
+
+    /* The labels the names landed under, beneath the counts they sum to and in
+     * every arm — a re-capture that moved no byte included, the label a path
+     * keeps being its claim's and not the command line's. Under the binding this
+     * command's table holds: the flag's when the run brought one, else the row's
+     * the pre-flight copied. */
+    report_labels(&walk, target ? target : bound);
 
     /* The branch is Git's fact and stands whatever the record did; the enabling
      * is a row, which a failed phase can leave standing (a branch recreated over

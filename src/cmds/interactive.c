@@ -210,7 +210,7 @@ static error_t *build_items(
 
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
      * of zero rows, which is the correct empty enabled set rather than a failure
-     * to absorb. Save via 'w' lazily creates .git/dotta.db in state_begin. */
+     * to absorb. Save via 'w' publishes the store's dotta.db in state_begin. */
     err = state_get_profiles(deploy_state, &state_profiles);
     if (err) goto cleanup;
 

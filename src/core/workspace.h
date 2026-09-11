@@ -4,8 +4,8 @@
  * The workspace pairs three things per managed path:
  * 1. The view (core/manifest.h, built from Git at load): what *should* stand at
  *    each managed path, from which profile
- * 2. The record (.git/dotta.db, core/state.h): what dotta *did* there — deployed,
- *    confirmed, observed
+ * 2. The record (the store's dotta.db, core/state.h): what dotta *did* there —
+ *    deployed, confirmed, observed
  * 3. The filesystem: what *actually* stands there
  *
  * Detects and categorizes the divergence between them to prevent data loss and
@@ -501,7 +501,7 @@ typedef struct {
  * Slices the view, loads the record and performs divergence analysis against
  * the filesystem:
  * - The view: every enabled profile's tree and metadata at HEAD
- * - The record: the path_anchors in .git/dotta.db
+ * - The record: the path_anchors in the store's dotta.db
  * - The filesystem: actual files on disk
  *
  * Additionally scans tracked directories for untracked files (new files that

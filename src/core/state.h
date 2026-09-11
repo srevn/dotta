@@ -30,7 +30,7 @@
  * sync brought custom/ paths into after it was enabled here, and the build holds
  * that tree's claims until it is bound (manifest_unbound).
  *
- * Database location: .git/dotta.db
+ * Database location: the store's dotta.db, beside its refs (utils/repo.h)
  *
  * Schema:
  *   - schema_meta: Schema versioning
@@ -277,10 +277,24 @@ typedef struct state state_t;
 /**
  * Load state from repository (read-only, scoped-mutation capable)
  *
- * If .git/dotta.db doesn't exist, returns a usable handle whose state->db is
- * NULL (lazy promotion by state_begin happens on first write). If the file exists
- * but is corrupt or wrong version, returns an error. Use for the READ acquisition
- * shape — see runtime.h's dotta_state_mode_t.
+ * Nothing at the store's dotta.db — the filesystem's answer, never one inferred
+ * from an open that failed — is a store never written: a usable handle with no
+ * connection and no rows, promoted by state_begin at the first write intent.
+ * Anything else standing there is opened as dotta's store at this schema version
+ * or refused, the refusal naming the file: a file this identity cannot open, a
+ * directory, a link to nowhere, a file that is not a database, a database that
+ * holds no dotta schema (an empty one included: dotta never leaves one, see
+ * state_begin), another version's, or one missing a table. Use for the READ
+ * acquisition shape — see runtime.h's dotta_state_mode_t.
+ *
+ * The refusals are ERR_STATE_INVALID, never ERR_PERMISSION: SQLite opens the
+ * file as the invoker on every run, outside sys/filesystem's second try, so the
+ * remedy that code carries (base/error.h) would be false here.
+ *
+ * A load writes nothing of dotta's — no row, no schema, no journal mode, and no
+ * database where none was. What SQLite does on any read is its own: its shared
+ * locks, its -wal and -shm files, and the PASSIVE checkpoint state_free asks
+ * for at the close, which moves frames a writer committed into the file.
  *
  * Reads the enabled_profiles rows into the handle's cache: the boundary where
  * that table becomes this handle's, so every later reader of it is a plain read
@@ -297,12 +311,14 @@ error_t *state_load(git_repository *repo, state_t **out);
 /**
  * Load state for update (whole-dispatch transaction held)
  *
- * Opens (creating if necessary) .git/dotta.db with the write lock already held
- * (BEGIN IMMEDIATE). The transaction is committed by state_save() or rolled back
- * by state_free() (cleanup on error paths). Use for the WRITE acquisition shape
- * — see runtime.h's dotta_state_mode_t. If another process holds the write lock,
- * waits up to 3 seconds (SQLITE_BUSY). The row cache is read inside the lock,
- * so the rows this handle answers from are the transaction's own snapshot.
+ * state_load, promoted by state_begin: WRITE is READ promoted at dispatch, through
+ * the one door and the one creation, with the write lock already held (BEGIN
+ * IMMEDIATE) when it returns. The transaction is committed by state_save() or
+ * rolled back by state_free() (cleanup on error paths). Use for the WRITE
+ * acquisition shape — see runtime.h's dotta_state_mode_t. If another process
+ * holds the write lock, waits up to 3 seconds (SQLITE_BUSY). The row cache is
+ * read inside the lock, so the rows this handle answers from are the transaction's
+ * own snapshot. *out is set only once the lock is held: a refusal leaves it NULL.
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -335,11 +351,20 @@ error_t *state_save(state_t *state);
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations that need
  * atomicity on a state opened via state_load() (no inherent transaction), and
  * by a state_open() handle that has saved once and has more to write (see
- * state_save). On a handle whose underlying DB does not yet exist on disk
- * (state_load() on a repository never touched by `dotta init`), this lazily creates
- * .git/dotta.db before taking the lock — mirroring state_open()'s create semantics,
- * deferred to the moment of actual write intent. Must be paired with
- * state_commit(), state_save() or state_rollback().
+ * state_save). Must be paired with state_commit(), state_save() or
+ * state_rollback().
+ *
+ * On a handle whose load found nothing at the path, this first brings the store's
+ * database into being — the first write intent, never a read. It is built where
+ * no other process can see it and published whole, only where nothing stands:
+ * no process ever meets one half-made, a store another process published since
+ * this handle's load is opened and never replaced, and something else found
+ * standing there is refused as the load refuses it, with nothing written into
+ * it. A filesystem that holds no hard links refuses the publication.
+ *
+ * The lock is SQLite's to grant: a failure to take it names another process only
+ * when one holds it (SQLITE_BUSY, after the busy timeout). A database this identity
+ * cannot write is opened read-only, granted the lock, and refuses its first write.
  *
  * Re-reads the row cache inside the new lock: a handle that has been open since
  * before the lock was taken holds rows another process may have committed since,

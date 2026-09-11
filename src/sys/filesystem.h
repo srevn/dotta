@@ -37,12 +37,13 @@
  *
  * Dotta's own artifacts are the exception and keep their raw calls: the session
  * cache (crypto/session), the temp scripts (cmds/ignore, the bootstrap trio),
- * libgit2's and SQLite's files. Those paths are the invoker's by construction —
- * the drop is what makes them so under sudo — and a refusal on one is a broken
- * installation to report, not a question about reach. Three primitives serve
- * both worlds (fs_create_dir, fs_remove_dir, fs_write_file: the temp scripts'
- * directory, init's repository) and carry the reach with them; on the invoker's
- * own paths it never fires.
+ * the store's database (core/state builds it in a private file and publishes it
+ * by link(2)), libgit2's and SQLite's files. Those paths are the invoker's by
+ * construction — the drop is what makes them so under sudo — and a refusal on
+ * one is a broken installation to report, not a question about reach. Three
+ * primitives serve both worlds (fs_create_dir, fs_remove_dir, fs_write_file:
+ * the temp scripts' directory, init's repository) and carry the reach with them;
+ * on the invoker's own paths it never fires.
  */
 
 #ifndef DOTTA_FILESYSTEM_H

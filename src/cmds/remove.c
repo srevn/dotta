@@ -1046,9 +1046,10 @@ static error_t *remove_files_from_profile(
     error_t *record_err = NULL;
 
     /* The record, once, on the READ handle — empty when the database does not
-     * exist. Read before the transaction: state_begin creates .git/dotta.db at
-     * first write intent (its contract, core/state.h), and a remove with no record
-     * to settle must not grow a never-enabled repository a database. */
+     * exist. Read before the transaction: state_begin publishes the store's
+     * dotta.db at first write intent (its contract, core/state.h), and a remove
+     * with no record to settle must not grow a never-enabled repository a
+     * database. */
     anchor_t *anchors = NULL;
     size_t anchor_count = 0;
     record_err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
@@ -1588,9 +1589,9 @@ static error_t *delete_profile_branch(
     /* Post-deletion: the enabled set and the record, in one transaction — opened
      * only when there is something to write: the enabled row must drop, or a
      * record names the profile (the candidates). A repository with no database
-     * — never enabled, nothing recorded — is left without one: state_begin creates
-     * .git/dotta.db at first write intent, and a deletion with nothing to settle
-     * is not that.
+     * — never enabled, nothing recorded — is left without one: state_begin
+     * publishes the store's dotta.db at first write intent, and a deletion with
+     * nothing to settle is not that.
      *
      * The order of the branch deletion and this block does not matter: the view
      * is computed, and the prune order is the one fact the workspace reads for

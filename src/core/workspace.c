@@ -1,7 +1,7 @@
 /**
  * workspace.c - Workspace abstraction implementation
  *
- * The join of the view (Git), the record (.git/dotta.db) and the filesystem.
+ * The join of the view (Git), the record (the store's dotta.db) and the filesystem.
  * Detects and categorizes divergence to prevent data loss and enable safe
  * operations.
  *

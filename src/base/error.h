@@ -21,6 +21,12 @@
  * say the run cannot *become* an identity, they are coded by subsystem because
  * a setuid-family EAGAIN is not ERR_FS, and identity_init returns to main() before
  * there is a command to read them.
+ *
+ * core/state's refusals are outside it by subsystem too: SQLite opens the store's
+ * database as the invoker on every run, and no second try spans a call into it
+ * (sys/filesystem), so a refusal there is a broken installation to report, never
+ * a reach a root run would have. They are ERR_STATE_INVALID; an ERR_PERMISSION
+ * would send add's and update's tails to offer a sudo that changes nothing.
  */
 
 #ifndef DOTTA_ERROR_H
@@ -113,8 +119,9 @@ error_code_t error_code_from_errno(int errno_val);
  * act on the code (ERR_PERMISSION, ERR_NOT_FOUND) without matching prose. Read
  * errno into the argument before anything that could move it (a close, a free).
  * A site that codes its refusal by subsystem rather than by errno (a session
- * file's ERR_CRYPTO, the drop's ERR_PERMISSION) keeps its own spelling; every
- * ERR_FS born from a refusal reads through here.
+ * file's ERR_CRYPTO, the drop's ERR_PERMISSION, the store database's
+ * ERR_STATE_INVALID) keeps its own spelling; every ERR_FS born from a refusal
+ * reads through here.
  *
  * @param errno_val errno value
  * @param fmt Format string (printf-style) for the caller's part of the message

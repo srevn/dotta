@@ -70,7 +70,7 @@ typedef struct {
  * Workspace state - where an item exists
  *
  * Represents the location/deployment status of a file or directory across the
- * view (Git), the record (.git/dotta.db) and the filesystem.
+ * view (Git), the record (the store's dotta.db) and the filesystem.
  *
  * This enum captures WHERE an item exists, separate from WHAT is wrong with it
  * (see divergence_type_t). States are mutually exclusive.

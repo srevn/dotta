@@ -165,16 +165,17 @@ error_t *ignore_excludes_compile(
  *     into must outlive every ruleset the builder returns. In practice both are
  *     command-scoped.
  *
- * Refused here: a baseline Git cannot read ("Failed to load baseline .dottaignore")
- * and one that does not compile ("Failed to parse baseline .dottaignore"). Refused
- * at the first profile query: a profile's .dottaignore that does not load or
- * compile, and a composed ruleset past the cap. The config's layer was refused,
- * if at all, where the file was loaded.
+ * Refused here: a baseline Git cannot read or that is not text ("Failed to load
+ * baseline .dottaignore") and one that does not compile ("Failed to parse baseline
+ * .dottaignore"). Refused at the first profile query: a profile's .dottaignore
+ * that does not load, is not text or does not compile, and a composed ruleset
+ * past the cap. The config's layer was refused, if at all, where the file was
+ * loaded.
  *
- * Input validation (enforced by the underlying gitignore engine):
- *   - Per-pattern length: 4096 bytes.
- *   - Per-ruleset rule count: 10,000.
- *   - `.dottaignore` blob size: 1 MB.
+ * Input validation:
+ *   - Per-pattern length: 4096 bytes (the gitignore engine).
+ *   - Per-ruleset rule count: 10,000 (the gitignore engine).
+ *   - A `.dottaignore` blob: at most 1 MB, and text (ignore_blob_text).
  *
  * @param repo      Repository (must not be NULL)
  * @param config    Configuration (may be NULL)
@@ -228,7 +229,13 @@ error_t *ignore_rules_for_profile(
 const char *ignore_origin_describe(ignore_origin_t origin);
 
 /**
- * Read a `.dottaignore` blob from a ref into a heap buffer.
+ * Read a `.dottaignore` blob from a ref into a heap buffer: its bytes, as Git
+ * holds them.
+ *
+ * The editor's read (cmds/ignore's edit mode), which hands the bytes to a human
+ * and reads them back — the one reader that interprets nothing, and so the one
+ * that can mend a file the others refuse. Every reader that interprets the file,
+ * its rules or its lines, reads ignore_blob_text.
  *
  * Returns (*out_content = NULL, *out_size = 0) without error when any of the
  * following hold:
@@ -239,13 +246,14 @@ const char *ignore_origin_describe(ignore_origin_t origin);
  * Only I/O failures, malformed trees, OOM, or the 1 MB size cap produce an error.
  *
  * On success with non-NULL content, `*out_content` is a heap-allocated
- * NUL-terminated buffer of `*out_size` bytes. The caller owns it.
+ * NUL-terminated buffer of `*out_size` bytes, which may hold a NUL of its own —
+ * the size is its length, never strlen. The caller owns it.
  *
  * @param repo        Repository (must not be NULL)
  * @param refname     Full reference name — BASELINE_REF, or a profile's through
  *                    gitops_branch_refname (must not be NULL or empty)
  * @param out_content Output content (must not be NULL); NULL when absent
- * @param out_size    Output size in bytes (may be NULL)
+ * @param out_size    Output size in bytes (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *ignore_blob_read(
@@ -256,22 +264,48 @@ error_t *ignore_blob_read(
 );
 
 /**
+ * Read a `.dottaignore` blob as text: ignore_blob_read's bytes, refused when a
+ * NUL stands among them (ERR_VALIDATION, naming the ref).
+ *
+ * A NUL would end every string reading of the file — the rules the builder
+ * compiles, the lines `dotta ignore --add` and `--remove` rewrite — and whatever
+ * stood behind it would be lost without a word. Its readers: ignore_rules_create
+ * (the baseline), the per-profile build behind ignore_rules_for_profile, and
+ * cmds/ignore's --add / --remove. The editor reads the bytes, so a file refused
+ * here is mended by `dotta ignore`.
+ *
+ * Absent — no ref, no entry, an empty blob — as ignore_blob_read answers it.
+ *
+ * @param repo     Repository (must not be NULL)
+ * @param refname  Full reference name — BASELINE_REF, or a profile's through
+ *                 gitops_branch_refname (must not be NULL or empty)
+ * @param out_text Output text, heap-allocated and owned by the caller (must not
+ *                 be NULL); NULL when absent
+ * @return Error or NULL on success
+ */
+error_t *ignore_blob_text(
+    git_repository *repo,
+    const char *refname,
+    char **out_text
+);
+
+/**
  * Write `content` as the `.dottaignore` blob on `refname`, creating a commit
  * with `commit_msg`.
  *
  * One stage: open the ref, put the blob, commit — so a blob identical to the
  * ref's commits nothing (the stage's own rule), and the ref must exist
  * (ERR_NOT_FOUND otherwise; the callers verify it up front — the profile named,
- * or the baseline `dotta init` seeded). Rejects writes above the 1 MB cap up
- * front — symmetric with `ignore_blob_read`, so an editor buffer that somehow
- * grew past the cap fails cleanly instead of committing a blob that later refuses
- * to load.
+ * or the baseline `dotta init` seeded). Refuses up front what ignore_blob_text
+ * refuses — content past the 1 MB cap, or holding a NUL (ERR_VALIDATION) — so
+ * an editor buffer that grew past the cap or took a NUL fails cleanly, instead
+ * of committing a blob its readers would refuse.
  *
  * @param repo       Repository (must not be NULL)
  * @param refname    Full reference name — BASELINE_REF, or a profile's through
  *                   gitops_branch_refname (must not be NULL or empty)
  * @param content    Blob content (must not be NULL; may be empty)
- * @param size       Size in bytes (must be <= 1 MB)
+ * @param size       Size in bytes (at most 1 MB, and no NUL among them)
  * @param commit_msg Commit message (must not be NULL)
  * @return Error or NULL on success
  */

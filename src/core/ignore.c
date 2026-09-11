@@ -220,9 +220,7 @@ static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
  * `profile` is the canonicalised key ("" means baseline-only).
  */
 static error_t *build_profile_ruleset(
-    ignore_rules_t *r,
-    const char *profile,
-    gitignore_ruleset_t **out
+    ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
     gitignore_ruleset_t *rs = NULL;
     RETURN_IF_ERROR(gitignore_ruleset_create(r->arena, &rs));
@@ -242,7 +240,7 @@ static error_t *build_profile_ruleset(
         RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), profile));
 
         char *content = NULL;
-        error_t *err = ignore_blob_read(r->repo, refname, &content, NULL);
+        error_t *err = ignore_blob_text(r->repo, refname, &content);
         if (err) {
             return error_wrap(
                 err, "Failed to load .dottaignore for profile '%s'", profile
@@ -281,18 +279,16 @@ static error_t *build_profile_ruleset(
 }
 
 error_t *ignore_blob_read(
-    git_repository *repo,
-    const char *refname,
-    char **out_content,
-    size_t *out_size
+    git_repository *repo, const char *refname, char **out_content, size_t *out_size
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
     CHECK_NULL(out_content);
+    CHECK_NULL(out_size);
     CHECK_ARG(refname[0] != '\0', "Reference name cannot be empty");
 
     *out_content = NULL;
-    if (out_size) *out_size = 0;
+    *out_size = 0;
 
     /* An absent ref is not an error — callers treat NULL content as "no
      * baseline/profile .dottaignore yet". */
@@ -323,8 +319,7 @@ error_t *ignore_blob_read(
         free(content);
         return ERROR(
             ERR_VALIDATION,
-            ".dottaignore at '%s' exceeds capacity "
-            "(max %zu bytes, actual %zu)",
+            ".dottaignore at '%s' exceeds capacity (max %zu bytes, actual %zu)",
             refname, (size_t) MAX_DOTTAIGNORE_SIZE, size
         );
     }
@@ -337,16 +332,35 @@ error_t *ignore_blob_read(
     }
 
     *out_content = content;
-    if (out_size) *out_size = size;
+    *out_size = size;
+    return NULL;
+}
+
+error_t *ignore_blob_text(
+    git_repository *repo, const char *refname, char **out_text
+) {
+    size_t size = 0;
+    RETURN_IF_ERROR(ignore_blob_read(repo, refname, out_text, &size));
+
+    /* A NUL would end every string reading of the file — the rules compiled from
+     * it, the lines --add and --remove rewrite — and what stood behind it would
+     * be lost without a word. Here the bytes are still in hand with their
+     * length. */
+    if (*out_text && memchr(*out_text, '\0', size)) {
+        free(*out_text);
+        *out_text = NULL;
+        return ERROR(
+            ERR_VALIDATION,
+            ".dottaignore at '%s' is not text: it holds a NUL byte", refname
+        );
+    }
+
     return NULL;
 }
 
 error_t *ignore_blob_write(
-    git_repository *repo,
-    const char *refname,
-    const char *content,
-    size_t size,
-    const char *commit_msg
+    git_repository *repo, const char *refname, const char *content,
+    size_t size, const char *commit_msg
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(refname);
@@ -357,9 +371,13 @@ error_t *ignore_blob_write(
     if (size > MAX_DOTTAIGNORE_SIZE) {
         return ERROR(
             ERR_VALIDATION,
-            ".dottaignore content exceeds capacity "
-            "(max %zu bytes, actual %zu)",
+            ".dottaignore content exceeds capacity (max %zu bytes, actual %zu)",
             (size_t) MAX_DOTTAIGNORE_SIZE, size
+        );
+    }
+    if (memchr(content, '\0', size)) {
+        return ERROR(
+            ERR_VALIDATION, ".dottaignore content is not text: it holds a NUL byte"
         );
     }
 
@@ -377,9 +395,7 @@ error_t *ignore_blob_write(
 }
 
 error_t *ignore_excludes_compile(
-    char *const *patterns,
-    size_t count,
-    arena_t *arena,
+    char *const *patterns, size_t count, arena_t *arena,
     const gitignore_ruleset_t **out
 ) {
     CHECK_NULL(arena);
@@ -405,11 +421,8 @@ error_t *ignore_excludes_compile(
 }
 
 error_t *ignore_rules_create(
-    git_repository *repo,
-    const config_t *config,
-    const gitignore_ruleset_t *cli_rules,
-    arena_t *arena,
-    ignore_rules_t **out
+    git_repository *repo, const config_t *config,
+    const gitignore_ruleset_t *cli_rules, arena_t *arena, ignore_rules_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(arena);
@@ -421,14 +434,15 @@ error_t *ignore_rules_create(
      * blob, or the compiled defaults when the read answers none (ref missing,
      * file missing, or empty blob — all non-errors).
      *
-     * Load errors are fatal: a corrupted or unreadable baseline must surface,
-     * not silently drop safety defaults. The rules hold their own copies of every
-     * string, so the Git buffer is freed as soon as they are made. */
+     * Load errors are fatal: a corrupted or unreadable baseline, or one that is
+     * not text, must surface, not silently drop safety defaults. The rules hold
+     * their own copies of every string, so the Git buffer is freed as soon as
+     * they are made. */
     gitignore_ruleset_t *baseline = NULL;
     RETURN_IF_ERROR(gitignore_ruleset_create(arena, &baseline));
 
     char *blob = NULL;
-    error_t *err = ignore_blob_read(repo, BASELINE_REF, &blob, NULL);
+    error_t *err = ignore_blob_text(repo, BASELINE_REF, &blob);
     if (err) {
         return error_wrap(err, "Failed to load baseline .dottaignore");
     }
@@ -460,9 +474,7 @@ error_t *ignore_rules_create(
 }
 
 error_t *ignore_rules_for_profile(
-    ignore_rules_t *r,
-    const char *profile,
-    const gitignore_ruleset_t **out
+    ignore_rules_t *r, const char *profile, const gitignore_ruleset_t **out
 ) {
     CHECK_NULL(r);
     CHECK_NULL(out);

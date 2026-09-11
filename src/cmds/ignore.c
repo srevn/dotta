@@ -404,6 +404,10 @@ typedef struct {
  * Called with scope->refname already verified to exist (cmd_ignore hoists that
  * check). Loads existing content, delegates to the editor helper, commits the
  * result back to the same ref.
+ *
+ * The bytes, not the text (ignore_blob_read): a human reads the file here, so a
+ * .dottaignore every other reader refuses — one holding a NUL — opens as it stands,
+ * to be mended. The write refuses what those readers would.
  */
 static error_t *edit_dottaignore(
     git_repository *repo,
@@ -493,8 +497,9 @@ static error_t *edit_dottaignore(
 /**
  * Add / remove patterns in a .dottaignore non-interactively.
  *
- * Called with scope->refname already verified to exist. Load existing content,
- * apply add/remove transforms, commit the result if it actually changed.
+ * Called with scope->refname already verified to exist. Load existing content —
+ * the text (ignore_blob_text), which the transforms read a line at a time — apply
+ * add/remove transforms, commit the result if it actually changed.
  *
  * Ownership is linear: `owned` is the single buffer this function frees at every
  * exit. Each transform either leaves `owned` untouched (helper returned NULL =
@@ -516,9 +521,7 @@ static error_t *modify_dottaignore(
     CHECK_NULL(scope);
 
     char *owned = NULL;
-    error_t *err = ignore_blob_read(
-        repo, scope->refname, &owned, NULL
-    );
+    error_t *err = ignore_blob_text(repo, scope->refname, &owned);
     if (err) {
         return error_wrap(
             err, "Failed to load %s .dottaignore", scope->display_label

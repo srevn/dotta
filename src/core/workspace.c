@@ -2122,7 +2122,6 @@ static error_t *analyze_untracked_files(
         const gitignore_ruleset_t *profile_rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, profile, &profile_rules);
         if (err) {
-            ignore_rules_free(ignore_rules);
             source_filter_free(source_filter);
             return error_wrap(
                 err, "Failed to load ignore patterns for profile '%s'", profile
@@ -2211,7 +2210,6 @@ static error_t *analyze_untracked_files(
         }
     }
 
-    ignore_rules_free(ignore_rules);
     source_filter_free(source_filter);
 
     return NULL;

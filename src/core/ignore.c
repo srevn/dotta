@@ -171,7 +171,7 @@ typedef struct {
 } profile_entry_t;
 
 struct ignore_rules {
-    arena_t *arena;                 /* borrowed; backs baseline copy, cache array, all rulesets */
+    arena_t *arena;                 /* borrowed; backs the builder and everything it holds */
     git_repository *repo;           /* borrowed; used only by lazy profile loads */
 
     /* Common layers. `baseline_content` is either an arena-owned copy of the
@@ -413,7 +413,7 @@ error_t *ignore_rules_create(
 
     *out = NULL;
 
-    ignore_rules_t *r = calloc(1, sizeof(*r));
+    ignore_rules_t *r = arena_calloc(arena, 1, sizeof(*r));
     if (!r) {
         return ERROR(ERR_MEMORY, "Failed to allocate ignore rules builder");
     }
@@ -430,7 +430,6 @@ error_t *ignore_rules_create(
     char *baseline = NULL;
     error_t *err = ignore_blob_read(repo, BASELINE_REF, &baseline, NULL);
     if (err) {
-        ignore_rules_free(r);
         return error_wrap(err, "Failed to load baseline .dottaignore");
     }
 
@@ -440,7 +439,6 @@ error_t *ignore_rules_create(
         r->baseline_content = arena_strdup(r->arena, baseline);
         free(baseline);
         if (!r->baseline_content) {
-            ignore_rules_free(r);
             return ERROR(ERR_MEMORY, "Failed to copy baseline content");
         }
         r->baseline_origin = IGNORE_ORIGIN_BASELINE;
@@ -464,15 +462,6 @@ error_t *ignore_rules_create(
 
     *out = r;
     return NULL;
-}
-
-void ignore_rules_free(ignore_rules_t *r) {
-    if (!r) return;
-
-    /* Arena is borrowed — owned by the caller (typically ctx->arena). Per-profile
-     * rulesets, baseline copies, and the profile cache remain valid in that arena
-     * until the caller destroys it. */
-    free(r);
 }
 
 error_t *ignore_rules_for_profile(

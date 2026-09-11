@@ -2551,7 +2551,6 @@ cleanup:
     manifest_free(view);
     stage_free(stage);
     source_filter_free(source_filter);
-    ignore_rules_free(ignore_rules);
 
     return err;
 }

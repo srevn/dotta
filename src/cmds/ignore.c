@@ -1095,7 +1095,6 @@ static error_t *test_path_ignore(
     }
 
 cleanup:
-    ignore_rules_free(ignore_rules);
     source_filter_free(source_filter);
     string_array_free(enabled);
     manifest_free(view);

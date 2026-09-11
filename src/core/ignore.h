@@ -91,9 +91,11 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
  * `ignore_rules_for_profile` is a self-contained evaluator usable with any
  * `base/gitignore` primitive.
  *
- * Lifetime: command-scoped. Per-profile rulesets are memoised for the life of
- * the builder; pointers returned by `ignore_rules_for_profile` stay valid until
- * `ignore_rules_free`.
+ * Lifetime: the arena's. The builder, its profile cache and every ruleset
+ * `ignore_rules_for_profile` returns are allocated in the arena
+ * `ignore_rules_create` borrows, and live until that arena is destroyed — nothing
+ * frees them one by one. Per-profile rulesets are memoised for the life of the
+ * builder.
  *
  * Thread safety: not thread-safe.
  */
@@ -125,9 +127,9 @@ typedef enum {
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
- *   - `arena` is borrowed; the builder allocates the baseline copy, profile cache,
- *     and per-profile rulesets into it. The caller's arena must outlive
- *     `ignore_rules_free`. In practice both arena and builder are command-scoped
+ *   - `arena` is borrowed; the builder allocates itself, the baseline copy, the
+ *     profile cache and per-profile rulesets into it, and every one of them lives
+ *     until the arena is destroyed. In practice the arena is command-scoped
  *     (`ctx->arena`).
  *   - `config->ignore_patterns` and `cli_excludes` are borrowed; the backing
  *     arrays and their string entries must outlive the builder. In practice both
@@ -158,17 +160,10 @@ error_t *ignore_rules_create(
 );
 
 /**
- * Free the builder and every memoised ruleset it holds.
- *
- * @param rules Builder (may be NULL)
- */
-void ignore_rules_free(ignore_rules_t *rules);
-
-/**
  * Resolve the ruleset to use for `profile`.
  *
- * The returned pointer is borrowed from the builder's arena and stays valid until
- * `ignore_rules_free`. Repeated calls with the same profile name return the same
+ * The returned pointer is borrowed from the builder's arena and stays valid for
+ * the arena's life. Repeated calls with the same profile name return the same
  * pointer — the ruleset is built on first use and cached.
  *
  * `profile` may be NULL or empty to request the baseline-only ruleset

@@ -99,12 +99,16 @@ typedef enum {
  *   file would leak its content.
  *
  * Source of `previously_encrypted`:
- *   The caller computes this from byte truth — typically via content_classify
- *   on the entry the profile already holds. For first-time adds with no prior
- *   bytes, the caller passes false. Policy never opens a metadata side-channel;
- *   bytes are the single authority for whether a file IS encrypted, and
- *   metadata.encrypted is itself a byte-derived cache (established at the write
- *   boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore).
+ *   The caller computes this from byte truth: content_classify on the entry the
+ *   profile's stage holds at the name, judged by its mode — so a link, whose
+ *   bytes are its target, keeps no name sealed — as both callers do (cmds/add.c,
+ *   cmds/update.c). With no entry at the name there are no prior bytes, and the
+ *   caller passes false. Policy never opens a metadata side-channel, and neither
+ *   caller reads one for this: bytes are the single authority for whether a file
+ *   IS encrypted, metadata.encrypted is a byte-derived cache (established at
+ *   the write boundary in cmds/add.c, cmds/update.c, and cmds/revert.c's restore),
+ *   and a sheet that disagrees with its tree is a state the view tolerates
+ *   (core/manifest.c) — here, where a wrong answer publishes a secret.
  *
  * @param config Configuration (can be NULL; disables priority-4)
  * @param storage_path File path in profile (e.g., "home/.bashrc", must not be NULL)

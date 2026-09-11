@@ -40,11 +40,18 @@
 /**
  * Capture a file from the filesystem onto the stage (with optional encryption)
  *
- * @param ctx Dispatch context (must not be NULL; supplies the key and the
- *            encryption policy)
- * @param stage The profile's stage (must not be NULL)
- * @param previously_encrypted Whether the file's prior bytes (the branch's HEAD
- *                             blob) were encrypted — the caller's to source
+ * A regular file is sealed as the policy decides (core/policy.h), and the seal
+ * it keeps — priority 3 — is read from the entry the stage holds at this name,
+ * by its own bytes (infra/content.h content_classify), never from the sheet's
+ * copy of that fact. The view projects the copy for its screens, and a sheet
+ * that disagrees with its tree — a hand edit, another tool's commit, the
+ * contradicted claim the view reads as no claim at all (core/manifest.c) — would
+ * otherwise have this capture store a secret in the clear.
+ *
+ * @param ctx Dispatch context (must not be NULL; supplies the repository, the
+ *            key and the encryption policy)
+ * @param stage The profile's stage (must not be NULL; the entry it holds at
+ *              storage_path is the prior this capture replaces)
  * @param out_was_encrypted Set to true if the file was encrypted (must not be NULL)
  * @param out_stat The capture's own stat (infra/content.h): the lstat before a
  *                 link's target, the fstat beside a file's bytes (must not be NULL)
@@ -55,7 +62,6 @@ static error_t *capture_file(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
-    bool previously_encrypted,
     bool *out_was_encrypted,
     struct stat *out_stat
 ) {
@@ -86,15 +92,34 @@ static error_t *capture_file(
         return NULL;
     }
 
-    /* Handle regular file - determine encryption policy using centralized logic.
-     * previously_encrypted is the branch's flag for this path, the caller's to
-     * source (the walk reads it off the view row). */
+    /* Priority 3's source: the entry the stage holds at this name — the branch
+     * as the stage opened it, an update capturing each name once — judged by
+     * its bytes and its mode, and no entry at all for a file new to the profile.
+     * A blob that cannot be read is an error, not "not encrypted": a sniff that
+     * defaulted would flip the policy silently. */
+    error_t *err = NULL;
+    const git_index_entry *prior = git_index_get_bypath(
+        stage_index(stage), storage_path, 0
+    );
+    content_kind_t prior_kind = CONTENT_PLAINTEXT;
+    if (prior) {
+        err = content_classify(
+            ctx->run.repo, &prior->id, prior->mode, &prior_kind, NULL
+        );
+        if (err) {
+            return error_wrap(
+                err, "Failed to classify the committed bytes of '%s'", storage_path
+            );
+        }
+    }
+
+    /* Handle regular file - determine encryption policy using centralized logic */
     bool should_encrypt = false;
-    error_t *err = encryption_policy_should_encrypt(
+    err = encryption_policy_should_encrypt(
         ctx->config,
         storage_path,
         ENCRYPTION_REQUEST_NONE,  /* update carries no encryption flags */
-        previously_encrypted,
+        prior_kind != CONTENT_PLAINTEXT,
         &should_encrypt
     );
     if (err) {
@@ -471,22 +496,12 @@ static error_t *update_profile(
 
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
-                /* Source of previously_encrypted: the item's view row —
-                 * row->encrypted is projected at build from the same metadata.json
-                 * this branch carries, so this is the branch's flag read off
-                 * the frozen view instead of a second metadata load (an untracked
-                 * file has no row: never previously encrypted). Under the
-                 * write-time invariant the flag is byte-truth for the HEAD blob
-                 * — reading it is equivalent to classifying the existing bytes,
-                 * but cheaper (no fs read). */
-                bool previously_encrypted = item->row ? item->row->encrypted : false;
-
                 /* Capture onto the stage, and the stat beside it */
                 struct stat capture_stat;
                 bool capture_encrypted = false;
                 err = capture_file(
                     ctx, stage, item->filesystem_path, item->storage_path,
-                    profile, previously_encrypted, &capture_encrypted, &capture_stat
+                    profile, &capture_encrypted, &capture_stat
                 );
                 if (err) {
                     err = error_wrap(err, "Failed to capture '%s'", item->filesystem_path);

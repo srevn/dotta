@@ -27,6 +27,11 @@
  * does not parse or holds a key or a value the schema refuses — is an error,
  * wrapped once with the file's path.
  *
+ * The file is read key by key, each in the type the schema gives it: a section
+ * that is no table, a key the schema does not name, a value of another type or
+ * outside its key's domain, and a string or a name holding a NUL are refused,
+ * named by section and key — never read as the default, or cut short.
+ *
  * The two pattern lists, [ignore] patterns and [encryption] auto_encrypt, are
  * compiled here, auto_encrypt whether or not encryption is enabled: a list that
  * is no array, and an entry that is no string, holds a NUL or makes no rule
@@ -47,11 +52,6 @@ config_t *config_create_default(void);
  * Free the configuration: its arena, and with it everything it holds (NULL-safe)
  */
 void config_free(config_t *config);
-
-/**
- * Validate configuration
- */
-error_t *config_validate(const config_t *config);
 
 /**
  * DOTTA_REPO_DIR as the environment sets it, or NULL

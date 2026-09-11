@@ -13,6 +13,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/output.h"
 #include "sys/filesystem.h"
 
 /* Default values */
@@ -21,13 +22,132 @@
 #define DEFAULT_CONFIG_DIR "~/.config/dotta"
 #define DEFAULT_CONFIG_FILE "config.toml"
 
-/**
- * A string value, copied into the configuration's arena over the default — a
- * literal, which nothing frees.
+/*
+ * The readers of one value, one per kind of key. Each reads the value in its
+ * key's type, and within its domain where the key has one, or refuses it under
+ * the key's name as the file spells it — "[section] key". A reader is asked only
+ * about a key the file holds: one the file leaves out keeps its default.
  */
-static error_t *set_string(config_t *config, const char **field, const char *value) {
-    *field = arena_strdup(config->arena, value);
-    return *field ? NULL : ERROR(ERR_MEMORY, "Failed to allocate config string");
+
+static error_t *read_bool(
+    toml_datum_t value, const char *section, const char *key, bool *out
+) {
+    if (value.type != TOML_BOOLEAN) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: expected a boolean", section, key
+        );
+    }
+
+    *out = value.u.boolean;
+    return NULL;
+}
+
+/* An integer within [min, max]: the range is the key's domain, and the refusal
+ * names it. */
+static error_t *read_int(
+    toml_datum_t value, const char *section, const char *key, int32_t min,
+    int32_t max, int32_t *out
+) {
+    if (value.type != TOML_INT64) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: expected an integer", section, key
+        );
+    }
+    if (value.u.int64 < min || value.u.int64 > max) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: %lld (must be between %d and %d)",
+            section, key, (long long) value.u.int64, min, max
+        );
+    }
+
+    *out = (int32_t) value.u.int64;
+    return NULL;
+}
+
+/* The value as the C string it is read as. A TOML string keeps its length, and
+ * a C string ends at its first NUL: one inside would cut the value short, in
+ * silence, wherever it is read — so it is refused here, where the length is still
+ * in hand. The string is the parse's, alive while the parse is. */
+static error_t *read_text(
+    toml_datum_t value, const char *section, const char *key, const char **out
+) {
+    if (value.type != TOML_STRING) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: expected a string", section, key
+        );
+    }
+    if (memchr(value.u.str.ptr, '\0', (size_t) value.u.str.len)) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: the string holds a NUL byte",
+            section, key
+        );
+    }
+
+    *out = value.u.s;
+    return NULL;
+}
+
+/* A string, copied into the configuration's arena over the default — a literal,
+ * which nothing frees. */
+static error_t *read_string(
+    toml_datum_t value, const char *section, const char *key, arena_t *arena,
+    const char **out
+) {
+    RETURN_IF_ERROR(read_text(value, section, key, out));
+
+    /* The parse's string, then the arena's copy of it: the parse is gone once
+     * the file is read, and the configuration is not. */
+    *out = arena_strdup(arena, *out);
+    return *out ? NULL : ERROR(ERR_MEMORY, "Failed to copy [%s] %s", section, key);
+}
+
+/* A path: a string, and not an empty one — leaving the key out is how the default
+ * is asked for. */
+static error_t *read_path(
+    toml_datum_t value, const char *section, const char *key, arena_t *arena,
+    const char **out
+) {
+    RETURN_IF_ERROR(read_string(value, section, key, arena, out));
+
+    if (**out == '\0') {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: an empty path (leave the key out "
+            "for the default)", section, key
+        );
+    }
+    return NULL;
+}
+
+/* The three settings of a few words, each read as the value its word names by
+ * the owner of the words (utils/config.h), whose refusal the key's name wraps. */
+static error_t *read_verbosity(
+    toml_datum_t value, const char *section, const char *key, output_verbosity_t *out
+) {
+    const char *word = NULL;
+    RETURN_IF_ERROR(read_text(value, section, key, &word));
+
+    error_t *err = output_parse_verbosity(word, out);
+    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
+}
+
+static error_t *read_color(
+    toml_datum_t value, const char *section, const char *key, output_color_mode_t *out
+) {
+    const char *word = NULL;
+    RETURN_IF_ERROR(read_text(value, section, key, &word));
+
+    error_t *err = output_parse_color_mode(word, out);
+    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
+}
+
+static error_t *read_strategy(
+    toml_datum_t value, const char *section, const char *key, sync_strategy_t *out
+) {
+    const char *word = NULL;
+    RETURN_IF_ERROR(read_text(value, section, key, &word));
+
+    error_t *err = config_parse_strategy(word, out);
+    return err ? error_wrap(err, "Invalid [%s] %s", section, key) : NULL;
 }
 
 /**
@@ -44,10 +164,7 @@ static error_t *set_string(config_t *config, const char **field, const char *val
  * Published only whole.
  */
 static error_t *read_patterns(
-    toml_datum_t value,
-    const char *section,
-    const char *key,
-    arena_t *arena,
+    toml_datum_t value, const char *section, const char *key, arena_t *arena,
     const gitignore_ruleset_t **out
 ) {
     if (value.type != TOML_ARRAY) {
@@ -84,45 +201,6 @@ static error_t *read_patterns(
     }
 
     *out = rules;
-    return NULL;
-}
-
-/**
- * Helper: Validate that a TOML table contains only recognized keys
- *
- * Returns an error for the first unrecognized key found. section_name is used
- * in error messages — NULL means top-level (where keys are section names).
- */
-static error_t *validate_known_keys(
-    toml_datum_t table,
-    const char *section_name,
-    const char **known,
-    size_t known_count
-) {
-    if (table.type != TOML_TABLE) {
-        return NULL;
-    }
-    for (int32_t i = 0; i < table.u.tab.size; i++) {
-        bool recognized = false;
-        for (size_t k = 0; k < known_count; k++) {
-            if (strcmp(table.u.tab.key[i], known[k]) == 0) {
-                recognized = true;
-                break;
-            }
-        }
-        if (!recognized) {
-            if (section_name) {
-                return ERROR(
-                    ERR_INVALID_ARG, "Unknown key '%s' in [%s]",
-                    table.u.tab.key[i], section_name
-                );
-            }
-            return ERROR(
-                ERR_INVALID_ARG, "Unknown section [%s]",
-                table.u.tab.key[i]
-            );
-        }
-    }
     return NULL;
 }
 
@@ -224,264 +302,136 @@ static error_t *config_get_path(char **out) {
 }
 
 /**
- * Read the document's sections into `config`, each key over its default.
+ * One key of the schema, read from its value into its field — the one place a
+ * key is named, typed and bounded. A key the schema does not name is refused,
+ * never ignored.
+ */
+static error_t *read_key(
+    toml_datum_t value,
+    const char *section,
+    const char *key,
+    config_t *config
+) {
+    arena_t *arena = config->arena;
+
+    if (strcmp(section, "core") == 0) {
+        if (strcmp(key, "repo_dir") == 0)
+            return read_path(value, section, key, arena, &config->repo_dir);
+        if (strcmp(key, "strict_mode") == 0)
+            return read_bool(value, section, key, &config->strict_mode);
+        if (strcmp(key, "strict_ownership") == 0)
+            return read_bool(value, section, key, &config->strict_ownership);
+        if (strcmp(key, "auto_detect_new_files") == 0)
+            return read_bool(value, section, key, &config->auto_detect_new_files);
+    } else if (strcmp(section, "hooks") == 0) {
+        if (strcmp(key, "hooks_dir") == 0)
+            return read_path(value, section, key, arena, &config->hooks_dir);
+        if (strcmp(key, "timeout") == 0)
+            return read_int(value, section, key, 0, INT32_MAX, &config->hook_timeout);
+        if (strcmp(key, "pre_apply") == 0)
+            return read_bool(value, section, key, &config->pre_apply);
+        if (strcmp(key, "post_apply") == 0)
+            return read_bool(value, section, key, &config->post_apply);
+        if (strcmp(key, "pre_add") == 0)
+            return read_bool(value, section, key, &config->pre_add);
+        if (strcmp(key, "post_add") == 0)
+            return read_bool(value, section, key, &config->post_add);
+        if (strcmp(key, "pre_remove") == 0)
+            return read_bool(value, section, key, &config->pre_remove);
+        if (strcmp(key, "post_remove") == 0)
+            return read_bool(value, section, key, &config->post_remove);
+        if (strcmp(key, "pre_update") == 0)
+            return read_bool(value, section, key, &config->pre_update);
+        if (strcmp(key, "post_update") == 0)
+            return read_bool(value, section, key, &config->post_update);
+        if (strcmp(key, "pre_sync") == 0)
+            return read_bool(value, section, key, &config->pre_sync);
+        if (strcmp(key, "post_sync") == 0)
+            return read_bool(value, section, key, &config->post_sync);
+    } else if (strcmp(section, "security") == 0) {
+        if (strcmp(key, "confirm_destructive") == 0)
+            return read_bool(value, section, key, &config->confirm_destructive);
+        if (strcmp(key, "confirm_new_files") == 0)
+            return read_bool(value, section, key, &config->confirm_new_files);
+    } else if (strcmp(section, "ignore") == 0) {
+        if (strcmp(key, "patterns") == 0)
+            return read_patterns(value, section, key, arena, &config->ignore_ruleset);
+        if (strcmp(key, "respect_gitignore") == 0)
+            return read_bool(value, section, key, &config->respect_gitignore);
+    } else if (strcmp(section, "output") == 0) {
+        if (strcmp(key, "verbosity") == 0)
+            return read_verbosity(value, section, key, &config->verbosity);
+        if (strcmp(key, "color") == 0)
+            return read_color(value, section, key, &config->color);
+    } else if (strcmp(section, "commit") == 0) {
+        if (strcmp(key, "title") == 0)
+            return read_string(value, section, key, arena, &config->commit_title);
+        if (strcmp(key, "body") == 0)
+            return read_string(value, section, key, arena, &config->commit_body);
+    } else if (strcmp(section, "sync") == 0) {
+        if (strcmp(key, "auto_pull") == 0)
+            return read_bool(value, section, key, &config->auto_pull);
+        if (strcmp(key, "diverged_strategy") == 0)
+            return read_strategy(value, section, key, &config->diverged_strategy);
+    } else if (strcmp(section, "encryption") == 0) {
+        if (strcmp(key, "enabled") == 0)
+            return read_bool(value, section, key, &config->encryption_enabled);
+        if (strcmp(key, "auto_encrypt") == 0)
+            return read_patterns(value, section, key, arena, &config->auto_encrypt_ruleset);
+        if (strcmp(key, "session_timeout") == 0)
+            return read_int(value, section, key, -1, INT32_MAX, &config->session_timeout);
+    }
+
+    return ERROR(ERR_INVALID_ARG, "Unknown key '%s' in [%s]", key, section);
+}
+
+/**
+ * Read the document into `config`, key by key in the order the file writes them.
  *
- * A key the document does not name keeps its default; a section or key the schema
- * does not know, and a value it refuses, fail the read. The document is the
- * parse's, alive for this call and no longer (read_file).
+ * read_key is the schema: each section must be one of the sections below, and a
+ * table; each key in it one read_key names, read in its type and within its domain.
+ * A key the file leaves out keeps its default. The first key the schema refuses
+ * fails the read, named by its section and key. The document is the parse's,
+ * alive for this call and no longer (read_file).
  */
 static error_t *read_sections(toml_datum_t top, config_t *config) {
-    /* Validate top-level sections */
-    static const char *known[] = {
+    static const char *const sections[] = {
         "core",   "hooks",  "security", "ignore",
-        "output", "commit", "sync",     "encryption"
+        "output", "commit", "sync",     "encryption", NULL
     };
-    RETURN_IF_ERROR(validate_known_keys(top, NULL, known, 8));
 
-    /* Extract [core] section */
-    toml_datum_t core = toml_get(top, "core");
-    if (core.type == TOML_TABLE) {
-        static const char *known[] = {
-            "repo_dir", "strict_mode", "strict_ownership", "auto_detect_new_files"
-        };
-        RETURN_IF_ERROR(validate_known_keys(core, "core", known, 4));
+    for (int32_t i = 0; i < top.u.tab.size; i++) {
+        const char *section = top.u.tab.key[i];
+        toml_datum_t table = top.u.tab.value[i];
 
-        toml_datum_t repo_dir = toml_get(core, "repo_dir");
-        if (repo_dir.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(config, &config->repo_dir, repo_dir.u.s));
+        /* A quoted name may hold a NUL, and C reads only the name before it —
+         * which may be one of the schema's. No name the schema knows holds one,
+         * and the table's own length is the one place that says so. */
+        if (strlen(section) != (size_t) top.u.tab.len[i]) {
+            return ERROR(ERR_INVALID_ARG, "Unknown section: its name holds a NUL byte");
+        }
+        const char *const *known = sections;
+        while (*known && strcmp(*known, section) != 0) {
+            known++;
+        }
+        if (!*known) {
+            return ERROR(ERR_INVALID_ARG, "Unknown section [%s]", section);
+        }
+        if (table.type != TOML_TABLE) {
+            return ERROR(ERR_INVALID_ARG, "Invalid [%s]: expected a table", section);
         }
 
-        toml_datum_t strict_mode = toml_get(core, "strict_mode");
-        if (strict_mode.type == TOML_BOOLEAN) {
-            config->strict_mode = strict_mode.u.boolean;
-        }
-
-        toml_datum_t strict_ownership = toml_get(core, "strict_ownership");
-        if (strict_ownership.type == TOML_BOOLEAN) {
-            config->strict_ownership = strict_ownership.u.boolean;
-        }
-
-        toml_datum_t auto_detect_new_files = toml_get(core, "auto_detect_new_files");
-        if (auto_detect_new_files.type == TOML_BOOLEAN) {
-            config->auto_detect_new_files = auto_detect_new_files.u.boolean;
-        }
-    }
-
-    /* Extract [hooks] section */
-    toml_datum_t hooks = toml_get(top, "hooks");
-    if (hooks.type == TOML_TABLE) {
-        static const char *known[] = {
-            "hooks_dir",  "timeout",     "pre_apply",  "post_apply",
-            "pre_add",    "post_add",    "pre_remove", "post_remove",
-            "pre_update", "post_update", "pre_sync",   "post_sync"
-        };
-        RETURN_IF_ERROR(validate_known_keys(hooks, "hooks", known, 12));
-
-        toml_datum_t hooks_dir = toml_get(hooks, "hooks_dir");
-        if (hooks_dir.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(config, &config->hooks_dir, hooks_dir.u.s));
-        }
-
-        toml_datum_t hook_timeout = toml_get(hooks, "timeout");
-        if (hook_timeout.type == TOML_INT64) {
-            if (hook_timeout.u.int64 < 0 || hook_timeout.u.int64 > INT32_MAX) {
+        for (int32_t k = 0; k < table.u.tab.size; k++) {
+            const char *key = table.u.tab.key[k];
+            if (strlen(key) != (size_t) table.u.tab.len[k]) {
                 return ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid timeout: %lld (must be between 0 and %d)",
-                    (long long) hook_timeout.u.int64, INT32_MAX
+                    ERR_INVALID_ARG, "Unknown key in [%s]: its name holds a NUL byte",
+                    section
                 );
             }
-            config->hook_timeout = (int32_t) hook_timeout.u.int64;
-        }
-
-        toml_datum_t pre_apply = toml_get(hooks, "pre_apply");
-        if (pre_apply.type == TOML_BOOLEAN) {
-            config->pre_apply = pre_apply.u.boolean;
-        }
-
-        toml_datum_t post_apply = toml_get(hooks, "post_apply");
-        if (post_apply.type == TOML_BOOLEAN) {
-            config->post_apply = post_apply.u.boolean;
-        }
-
-        toml_datum_t pre_add = toml_get(hooks, "pre_add");
-        if (pre_add.type == TOML_BOOLEAN) {
-            config->pre_add = pre_add.u.boolean;
-        }
-
-        toml_datum_t post_add = toml_get(hooks, "post_add");
-        if (post_add.type == TOML_BOOLEAN) {
-            config->post_add = post_add.u.boolean;
-        }
-
-        toml_datum_t pre_remove = toml_get(hooks, "pre_remove");
-        if (pre_remove.type == TOML_BOOLEAN) {
-            config->pre_remove = pre_remove.u.boolean;
-        }
-
-        toml_datum_t post_remove = toml_get(hooks, "post_remove");
-        if (post_remove.type == TOML_BOOLEAN) {
-            config->post_remove = post_remove.u.boolean;
-        }
-
-        toml_datum_t pre_update = toml_get(hooks, "pre_update");
-        if (pre_update.type == TOML_BOOLEAN) {
-            config->pre_update = pre_update.u.boolean;
-        }
-
-        toml_datum_t post_update = toml_get(hooks, "post_update");
-        if (post_update.type == TOML_BOOLEAN) {
-            config->post_update = post_update.u.boolean;
-        }
-
-        toml_datum_t pre_sync = toml_get(hooks, "pre_sync");
-        if (pre_sync.type == TOML_BOOLEAN) {
-            config->pre_sync = pre_sync.u.boolean;
-        }
-
-        toml_datum_t post_sync = toml_get(hooks, "post_sync");
-        if (post_sync.type == TOML_BOOLEAN) {
-            config->post_sync = post_sync.u.boolean;
+            RETURN_IF_ERROR(read_key(table.u.tab.value[k], section, key, config));
         }
     }
-
-    /* Extract [security] section */
-    toml_datum_t security = toml_get(top, "security");
-    if (security.type == TOML_TABLE) {
-        static const char *known[] = { "confirm_destructive", "confirm_new_files" };
-        RETURN_IF_ERROR(validate_known_keys(security, "security", known, 2));
-
-        toml_datum_t confirm_destructive = toml_get(security, "confirm_destructive");
-        if (confirm_destructive.type == TOML_BOOLEAN) {
-            config->confirm_destructive = confirm_destructive.u.boolean;
-        }
-
-        toml_datum_t confirm_new_files = toml_get(security, "confirm_new_files");
-        if (confirm_new_files.type == TOML_BOOLEAN) {
-            config->confirm_new_files = confirm_new_files.u.boolean;
-        }
-    }
-
-    /* Extract [ignore] section */
-    toml_datum_t ignore = toml_get(top, "ignore");
-    if (ignore.type == TOML_TABLE) {
-        static const char *known[] = { "patterns", "respect_gitignore" };
-        RETURN_IF_ERROR(validate_known_keys(ignore, "ignore", known, 2));
-
-        toml_datum_t patterns = toml_get(ignore, "patterns");
-        if (patterns.type != TOML_UNKNOWN) {
-            RETURN_IF_ERROR(
-                read_patterns(
-                patterns, "ignore", "patterns", config->arena,
-                &config->ignore_ruleset
-                )
-            );
-        }
-
-        toml_datum_t respect_gitignore = toml_get(ignore, "respect_gitignore");
-        if (respect_gitignore.type == TOML_BOOLEAN) {
-            config->respect_gitignore = respect_gitignore.u.boolean;
-        }
-    }
-
-    /* Extract [output] section */
-    toml_datum_t output = toml_get(top, "output");
-    if (output.type == TOML_TABLE) {
-        static const char *known[] = { "verbosity", "color" };
-        RETURN_IF_ERROR(validate_known_keys(output, "output", known, 2));
-
-        toml_datum_t verbosity = toml_get(output, "verbosity");
-        if (verbosity.type == TOML_STRING) {
-            error_t *err = output_parse_verbosity(verbosity.u.s, &config->verbosity);
-            if (err) {
-                return error_wrap(err, "Invalid [output] verbosity");
-            }
-        }
-
-        toml_datum_t color = toml_get(output, "color");
-        if (color.type == TOML_STRING) {
-            error_t *err = output_parse_color_mode(color.u.s, &config->color);
-            if (err) {
-                return error_wrap(err, "Invalid [output] color");
-            }
-        }
-    }
-
-    /* Extract [commit] section */
-    toml_datum_t commit = toml_get(top, "commit");
-    if (commit.type == TOML_TABLE) {
-        static const char *known[] = { "title", "body" };
-        RETURN_IF_ERROR(validate_known_keys(commit, "commit", known, 2));
-
-        toml_datum_t title = toml_get(commit, "title");
-        if (title.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(config, &config->commit_title, title.u.s));
-        }
-
-        toml_datum_t body = toml_get(commit, "body");
-        if (body.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(config, &config->commit_body, body.u.s));
-        }
-    }
-
-    /* Extract [sync] section */
-    toml_datum_t sync = toml_get(top, "sync");
-    if (sync.type == TOML_TABLE) {
-        static const char *known[] = { "auto_pull", "diverged_strategy" };
-        RETURN_IF_ERROR(validate_known_keys(sync, "sync", known, 2));
-
-        toml_datum_t auto_pull = toml_get(sync, "auto_pull");
-        if (auto_pull.type == TOML_BOOLEAN) {
-            config->auto_pull = auto_pull.u.boolean;
-        }
-
-        toml_datum_t diverged_strategy = toml_get(sync, "diverged_strategy");
-        if (diverged_strategy.type == TOML_STRING) {
-            error_t *err = config_parse_strategy(
-                diverged_strategy.u.s, &config->diverged_strategy
-            );
-            if (err) {
-                return error_wrap(err, "Invalid [sync] diverged_strategy");
-            }
-        }
-    }
-
-    /* Extract [encryption] section */
-    toml_datum_t encryption = toml_get(top, "encryption");
-    if (encryption.type == TOML_TABLE) {
-        static const char *known[] = {
-            "enabled", "auto_encrypt", "session_timeout"
-        };
-        RETURN_IF_ERROR(validate_known_keys(encryption, "encryption", known, 3));
-
-        toml_datum_t enabled = toml_get(encryption, "enabled");
-        if (enabled.type == TOML_BOOLEAN) {
-            config->encryption_enabled = enabled.u.boolean;
-        }
-
-        toml_datum_t auto_encrypt = toml_get(encryption, "auto_encrypt");
-        if (auto_encrypt.type != TOML_UNKNOWN) {
-            RETURN_IF_ERROR(
-                read_patterns(
-                auto_encrypt, "encryption", "auto_encrypt", config->arena,
-                &config->auto_encrypt_ruleset
-                )
-            );
-        }
-
-        toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
-        if (session_timeout.type == TOML_INT64) {
-            if (session_timeout.u.int64 < -1 || session_timeout.u.int64 > INT32_MAX) {
-                return ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid session_timeout: %lld (must be -1, 0, or positive seconds)",
-                    (long long) session_timeout.u.int64
-                );
-            }
-            config->session_timeout = (int32_t) session_timeout.u.int64;
-        }
-    }
-
     return NULL;
 }
 
@@ -533,9 +483,9 @@ error_t *config_load(config_t **out) {
         return ERROR(ERR_MEMORY, "Failed to create config");
     }
 
-    /* Read the file over the defaults, then validate the result. */
+    /* The file over the defaults: each key it names is checked as it is read
+     * (read_key), so nothing is left to check after. */
     error_t *err = read_file(path, config);
-    if (!err) err = config_validate(config);
 
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. */
@@ -547,48 +497,6 @@ error_t *config_load(config_t **out) {
     }
     free(path);
     return err;
-}
-
-error_t *config_validate(const config_t *config) {
-    CHECK_NULL(config);
-
-    /* Validate repo_dir */
-    if (!config->repo_dir || config->repo_dir[0] == '\0') {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid repo_dir: must be a non-empty path"
-        );
-    }
-
-    /* Validate hook_timeout */
-    if (config->hook_timeout < 0) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid hook_timeout: %d "
-            "(must be >= 0, where 0 means no timeout)",
-            config->hook_timeout
-        );
-    }
-
-    /* Validate hooks_dir */
-    if (config->hooks_dir && config->hooks_dir[0] == '\0') {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid hooks_dir: empty string "
-            "(must be a valid path or omitted for default)"
-        );
-    }
-
-    /* Validate session_timeout */
-    if (config->session_timeout < -1) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid session_timeout: %d "
-            "(must be -1, 0, or positive seconds)",
-            config->session_timeout
-        );
-    }
-
-    return NULL;
 }
 
 const char *config_repo_dir_from_env(void) {

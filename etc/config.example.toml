@@ -11,6 +11,10 @@
 #
 # All paths support tilde (~) expansion for home directory.
 # Comments start with #
+#
+# Every value must be of its key's type — true/false, a number, a "string" or a
+# [list], as below. One of another type stops every command, and the error
+# names the key.
 
 
 # ============================================================================

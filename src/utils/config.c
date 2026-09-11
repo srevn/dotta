@@ -225,6 +225,15 @@ config_t *config_create_default(void) {
     config->auto_encrypt_pattern_count = 0;
     config->session_timeout = 3600;                /* 1 hour */
 
+    /* One check for every copy above: a default that failed to allocate would
+     * reach config_validate as the wrong reason, or a reader as a NULL. */
+    if (!config->repo_dir || !config->hooks_dir || !config->verbosity ||
+        !config->color || !config->commit_title || !config->commit_body ||
+        !config->diverged_strategy) {
+        config_free(config);
+        return NULL;
+    }
+
     return config;
 }
 
@@ -268,9 +277,11 @@ void config_free(config_t *config) {
     free(config);
 }
 
-error_t *config_get_path(char **out) {
-    CHECK_NULL(out);
-
+/**
+ * The configuration file's path: $DOTTA_CONFIG_FILE when it is set, else the
+ * default location.
+ */
+static error_t *config_get_path(char **out) {
     /* Check environment variable */
     const char *env_path = getenv("DOTTA_CONFIG_FILE");
     if (env_path && env_path[0] != '\0') {
@@ -289,76 +300,32 @@ error_t *config_get_path(char **out) {
     return err;
 }
 
-error_t *config_load(const char *config_path, config_t **out) {
-    CHECK_NULL(out);
-
-    error_t *err = NULL;
-    char *path = NULL;
-    config_t *config = NULL;
-    toml_result_t result = { 0 };
-    bool toml_needs_free = false;
-
-    /* Determine config path */
-    if (config_path) {
-        path = strdup(config_path);
-        if (!path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
-    } else {
-        err = config_get_path(&path);
-        if (err) {
-            return err;
-        }
-    }
-
-    /* Check if file exists */
-    if (!fs_file_exists(path)) {
-        /* No config file - return defaults */
-        free(path);
-        *out = config_create_default();
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to create default config");
-        }
-        return NULL;
-    }
-
-    /* Parse TOML file */
-    result = toml_parse_file_ex(path);
-    free(path);
-
-    if (!result.ok) {
-        return ERROR(ERR_INVALID_ARG, "Failed to parse config: %s", result.errmsg);
-    }
-    toml_needs_free = true;
-
-    /* Start with defaults */
-    config = config_create_default();
-    if (!config) {
-        err = ERROR(ERR_MEMORY, "Failed to create config");
-        goto cleanup;
-    }
-
+/**
+ * Read the document's sections into `config`, each key over its default.
+ *
+ * A key the document does not name keeps its default; a section or key the schema
+ * does not know, and a value it refuses, fail the read. The document is the
+ * parse's, alive for this call and no longer (read_file).
+ */
+static error_t *read_sections(toml_datum_t top, config_t *config) {
     /* Validate top-level sections */
     static const char *known[] = {
         "core",   "hooks",  "security", "ignore",
         "output", "commit", "sync",     "encryption"
     };
-    err = validate_known_keys(result.toptab, NULL, known, 8);
-    if (err) goto cleanup;
+    RETURN_IF_ERROR(validate_known_keys(top, NULL, known, 8));
 
     /* Extract [core] section */
-    toml_datum_t core = toml_get(result.toptab, "core");
+    toml_datum_t core = toml_get(top, "core");
     if (core.type == TOML_TABLE) {
         static const char *known[] = {
             "repo_dir", "strict_mode", "strict_ownership", "auto_detect_new_files"
         };
-        err = validate_known_keys(core, "core", known, 4);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(core, "core", known, 4));
 
         toml_datum_t repo_dir = toml_get(core, "repo_dir");
         if (repo_dir.type == TOML_STRING) {
-            err = set_string(&config->repo_dir, repo_dir.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->repo_dir, repo_dir.u.s));
         }
 
         toml_datum_t strict_mode = toml_get(core, "strict_mode");
@@ -378,31 +345,28 @@ error_t *config_load(const char *config_path, config_t **out) {
     }
 
     /* Extract [hooks] section */
-    toml_datum_t hooks = toml_get(result.toptab, "hooks");
+    toml_datum_t hooks = toml_get(top, "hooks");
     if (hooks.type == TOML_TABLE) {
         static const char *known[] = {
             "hooks_dir",  "timeout",     "pre_apply",  "post_apply",
             "pre_add",    "post_add",    "pre_remove", "post_remove",
             "pre_update", "post_update", "pre_sync",   "post_sync"
         };
-        err = validate_known_keys(hooks, "hooks", known, 12);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(hooks, "hooks", known, 12));
 
         toml_datum_t hooks_dir = toml_get(hooks, "hooks_dir");
         if (hooks_dir.type == TOML_STRING) {
-            err = set_string(&config->hooks_dir, hooks_dir.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->hooks_dir, hooks_dir.u.s));
         }
 
         toml_datum_t hook_timeout = toml_get(hooks, "timeout");
         if (hook_timeout.type == TOML_INT64) {
             if (hook_timeout.u.int64 < 0 || hook_timeout.u.int64 > INT32_MAX) {
-                err = ERROR(
+                return ERROR(
                     ERR_INVALID_ARG,
                     "Invalid timeout: %lld (must be between 0 and %d)",
                     (long long) hook_timeout.u.int64, INT32_MAX
                 );
-                goto cleanup;
             }
             config->hook_timeout = (int32_t) hook_timeout.u.int64;
         }
@@ -459,11 +423,10 @@ error_t *config_load(const char *config_path, config_t **out) {
     }
 
     /* Extract [security] section */
-    toml_datum_t security = toml_get(result.toptab, "security");
+    toml_datum_t security = toml_get(top, "security");
     if (security.type == TOML_TABLE) {
         static const char *known[] = { "confirm_destructive", "confirm_new_files" };
-        err = validate_known_keys(security, "security", known, 2);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(security, "security", known, 2));
 
         toml_datum_t confirm_destructive = toml_get(security, "confirm_destructive");
         if (confirm_destructive.type == TOML_BOOLEAN) {
@@ -477,11 +440,10 @@ error_t *config_load(const char *config_path, config_t **out) {
     }
 
     /* Extract [ignore] section */
-    toml_datum_t ignore = toml_get(result.toptab, "ignore");
+    toml_datum_t ignore = toml_get(top, "ignore");
     if (ignore.type == TOML_TABLE) {
         static const char *known[] = { "patterns", "respect_gitignore" };
-        err = validate_known_keys(ignore, "ignore", known, 2);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(ignore, "ignore", known, 2));
 
         toml_datum_t patterns = toml_get(ignore, "patterns");
         if (patterns.type == TOML_ARRAY) {
@@ -499,11 +461,10 @@ error_t *config_load(const char *config_path, config_t **out) {
                 patterns, &config->ignore_patterns,
                 &config->ignore_pattern_count
                 )) {
-                err = ERROR(
+                return ERROR(
                     ERR_INVALID_ARG,
                     "Invalid ignore patterns: all elements must be strings"
                 );
-                goto cleanup;
             }
         }
 
@@ -514,51 +475,44 @@ error_t *config_load(const char *config_path, config_t **out) {
     }
 
     /* Extract [output] section */
-    toml_datum_t output = toml_get(result.toptab, "output");
+    toml_datum_t output = toml_get(top, "output");
     if (output.type == TOML_TABLE) {
         static const char *known[] = { "verbosity", "color" };
-        err = validate_known_keys(output, "output", known, 2);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(output, "output", known, 2));
 
         toml_datum_t verbosity = toml_get(output, "verbosity");
         if (verbosity.type == TOML_STRING) {
-            err = set_string(&config->verbosity, verbosity.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->verbosity, verbosity.u.s));
         }
 
         toml_datum_t color = toml_get(output, "color");
         if (color.type == TOML_STRING) {
-            err = set_string(&config->color, color.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->color, color.u.s));
         }
     }
 
     /* Extract [commit] section */
-    toml_datum_t commit = toml_get(result.toptab, "commit");
+    toml_datum_t commit = toml_get(top, "commit");
     if (commit.type == TOML_TABLE) {
         static const char *known[] = { "title", "body" };
-        err = validate_known_keys(commit, "commit", known, 2);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(commit, "commit", known, 2));
 
         toml_datum_t title = toml_get(commit, "title");
         if (title.type == TOML_STRING) {
-            err = set_string(&config->commit_title, title.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->commit_title, title.u.s));
         }
 
         toml_datum_t body = toml_get(commit, "body");
         if (body.type == TOML_STRING) {
-            err = set_string(&config->commit_body, body.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->commit_body, body.u.s));
         }
     }
 
     /* Extract [sync] section */
-    toml_datum_t sync = toml_get(result.toptab, "sync");
+    toml_datum_t sync = toml_get(top, "sync");
     if (sync.type == TOML_TABLE) {
         static const char *known[] = { "auto_pull", "diverged_strategy" };
-        err = validate_known_keys(sync, "sync", known, 2);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(sync, "sync", known, 2));
 
         toml_datum_t auto_pull = toml_get(sync, "auto_pull");
         if (auto_pull.type == TOML_BOOLEAN) {
@@ -567,19 +521,17 @@ error_t *config_load(const char *config_path, config_t **out) {
 
         toml_datum_t diverged_strategy = toml_get(sync, "diverged_strategy");
         if (diverged_strategy.type == TOML_STRING) {
-            err = set_string(&config->diverged_strategy, diverged_strategy.u.s);
-            if (err) goto cleanup;
+            RETURN_IF_ERROR(set_string(&config->diverged_strategy, diverged_strategy.u.s));
         }
     }
 
     /* Extract [encryption] section */
-    toml_datum_t encryption = toml_get(result.toptab, "encryption");
+    toml_datum_t encryption = toml_get(top, "encryption");
     if (encryption.type == TOML_TABLE) {
         static const char *known[] = {
             "enabled", "auto_encrypt", "session_timeout"
         };
-        err = validate_known_keys(encryption, "encryption", known, 3);
-        if (err) goto cleanup;
+        RETURN_IF_ERROR(validate_known_keys(encryption, "encryption", known, 3));
 
         toml_datum_t enabled = toml_get(encryption, "enabled");
         if (enabled.type == TOML_BOOLEAN) {
@@ -603,55 +555,79 @@ error_t *config_load(const char *config_path, config_t **out) {
                 auto_encrypt, &config->auto_encrypt_patterns,
                 &config->auto_encrypt_pattern_count
                 )) {
-                err = ERROR(
+                return ERROR(
                     ERR_INVALID_ARG,
                     "Invalid auto_encrypt patterns: all elements must be strings"
                 );
-                goto cleanup;
             }
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
         if (session_timeout.type == TOML_INT64) {
             if (session_timeout.u.int64 < -1 || session_timeout.u.int64 > INT32_MAX) {
-                err = ERROR(
+                return ERROR(
                     ERR_INVALID_ARG,
                     "Invalid session_timeout: %lld (must be -1, 0, or positive seconds)",
                     (long long) session_timeout.u.int64
                 );
-                goto cleanup;
             }
             config->session_timeout = (int32_t) session_timeout.u.int64;
         }
     }
 
-    /* Normal path: free TOML result, then validate config */
-    toml_free(result);
-
-    /* Validate */
-    err = config_validate(config);
-    if (err) {
-        config_free(config);
-        return err;
-    }
-
-    /* Materialize derived state (compiled auto-encrypt ruleset) after validation.
-     * Pattern-compile errors are real config errors — same failure class as an
-     * invalid verbosity. */
-    err = config_compile_auto_encrypt(config);
-    if (err) {
-        config_free(config);
-        return err;
-    }
-
-    *out = config;
     return NULL;
+}
 
-cleanup:
-    if (toml_needs_free) {
-        toml_free(result);
+/**
+ * The configuration file at `path` into `config`. No file is an empty one: every
+ * key keeps its default.
+ *
+ * The parse lives exactly as long as the read of its sections, and every result
+ * is freed with toml_free, as the library documents — a failed parse's too.
+ */
+static error_t *read_file(const char *path, config_t *config) {
+    /* No config file - every key keeps its default */
+    if (!fs_file_exists(path)) {
+        return NULL;
     }
-    config_free(config);
+
+    /* Parse TOML file */
+    toml_result_t result = toml_parse_file_ex(path);
+    error_t *err = result.ok
+        ? read_sections(result.toptab, config)
+        : ERROR(ERR_INVALID_ARG, "Failed to parse config: %s", result.errmsg);
+    toml_free(result);
+    return err;
+}
+
+error_t *config_load(config_t **out) {
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    char *path = NULL;
+    RETURN_IF_ERROR(config_get_path(&path));
+
+    /* Start with defaults */
+    config_t *config = config_create_default();
+    if (!config) {
+        free(path);
+        return ERROR(ERR_MEMORY, "Failed to create config");
+    }
+
+    /* Read, validate, then materialize derived state (compiled auto-encrypt
+     * ruleset). Pattern-compile errors are real config errors — same failure
+     * class as an invalid verbosity. */
+    error_t *err = read_file(path, config);
+    if (!err) err = config_validate(config);
+    if (!err) err = config_compile_auto_encrypt(config);
+
+    if (err) {
+        config_free(config);
+    } else {
+        *out = config;
+    }
+    free(path);
     return err;
 }
 

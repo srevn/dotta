@@ -14,12 +14,11 @@
 /**
  * Load configuration from file
  *
- * If config_path is NULL, uses default location:
- *   $DOTTA_CONFIG_FILE or ~/.config/dotta/config.toml
+ * From $DOTTA_CONFIG_FILE, or ~/.config/dotta/config.toml when it is unset.
  *
  * Returns default config if file doesn't exist (not an error).
  */
-error_t *config_load(const char *config_path, config_t **out);
+error_t *config_load(config_t **out);
 
 /**
  * Create config with default values
@@ -30,11 +29,6 @@ config_t *config_create_default(void);
  * Free configuration
  */
 void config_free(config_t *config);
-
-/**
- * Get config file path (checks env vars and defaults)
- */
-error_t *config_get_path(char **out);
 
 /**
  * Validate configuration

@@ -511,7 +511,7 @@ int main(int argc, char **argv) {
      * unknown key, invalid value, or a malformed auto-encrypt pattern — and must
      * surface, not fall back silently to defaults that hide the user's mistake. */
     config_t *config = NULL;
-    error_t *cfg_err = config_load(NULL, &config);
+    error_t *cfg_err = config_load(&config);
     if (cfg_err) {
         fprintf(
             stderr, "Failed to load configuration: %s\n",

@@ -930,9 +930,9 @@ static error_t *test_path_ignore(
         }
     }
 
-    /* Layered-rules builder — baseline + config once, each profile's ruleset
-     * memoised on first request. */
-    err = ignore_rules_create(repo, config, NULL, 0, ctx->arena, &ignore_rules);
+    /* Layered-rules builder — the baseline compiled once, each profile's ruleset
+     * composed on first request; no CLI layer, for --test takes no -e. */
+    err = ignore_rules_create(repo, config, NULL, ctx->arena, &ignore_rules);
     if (err) {
         err = error_wrap(err, "Failed to build ignore rules");
         goto cleanup;

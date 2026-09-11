@@ -1,20 +1,20 @@
 /**
  * ignore.c - Layered `.dottaignore` ruleset builder and persistence.
  *
- * The builder pre-loads the three "common" layers (baseline or builtin, config
- * patterns, CLI excludes) into an arena at creation time, and lazily assembles
- * a fresh per-profile ruleset on first call to `ignore_rules_for_profile`.
- * Subsequent calls with the same profile name return the cached pointer —
- * memoisation lives in the builder, not in any caller bookkeeping.
+ * The builder holds the layers every profile shares — the baseline, compiled at
+ * creation; the config's patterns, read into each ruleset as it is built; the
+ * CLI layer, compiled once by ignore_excludes_compile and handed in — and lazily
+ * assembles a fresh per-profile ruleset on first call to
+ * `ignore_rules_for_profile`. Subsequent calls with the same profile name return
+ * the cached pointer — memoisation lives in the builder, not in any caller
+ * bookkeeping.
  *
- * Why re-append common layers instead of sharing one base ruleset: `base/gitignore`
- * rulesets are append-only values in an arena. Composing a base + profile cheaply
- * across multiple profiles would need a clone primitive in the engine. Re-appending
- * from the saved sources (static `DEFAULT_DOTTAIGNORE` string, Git-loaded baseline
- * content, caller-borrowed config and CLI arrays) parses each input once per
- * profile for a few-hundred-byte cost; trivial next to the SQLite + Git work
- * the surrounding commands do. Option kept on the shelf: if someone ever profiles
- * this as hot, add a `clone_into` to the engine and short-circuit.
+ * A compiled layer is composed by copying (gitignore_ruleset_append_rules): each
+ * per-profile ruleset copies the baseline's and the CLI's rules around the
+ * profile's own .dottaignore and borrows their strings, so what was read once
+ * is not read again. The layers make one ruleset, not four verdicts: a later
+ * layer's `!` has to be asked at the same rung as the earlier layer's directory
+ * it re-opens (ignore.h).
  *
  * Source-tree `.gitignore` (a foreign repo the user is adding files from) is a
  * separate mechanism — see `sys/source.h`. Consumers compose the two explicitly.
@@ -159,36 +159,24 @@ static const char *const PROFILE_DOTTAIGNORE =
     "\n"
     "# Add your profile-specific patterns below:\n";
 
-/**
- * One entry in the profile-ruleset memoisation table.
- *
- * `name` is the canonicalised key (empty string "" stands for the baseline-only
- * ruleset — NULL and "" collapse to the same entry).
- */
+/* One entry in the per-profile memo (ignore_rules_for_profile) */
 typedef struct {
-    const char *name;
+    const char *name;             /* the key; "" for baseline-only */
     gitignore_ruleset_t *ruleset;
 } profile_entry_t;
 
 struct ignore_rules {
-    arena_t *arena;                 /* borrowed; backs the builder and everything it holds */
-    git_repository *repo;           /* borrowed; used only by lazy profile loads */
+    arena_t *arena;                            /* borrowed; backs all of it */
+    git_repository *repo;                      /* borrowed; profile blobs */
 
-    /* Common layers. `baseline_content` is either an arena-owned copy of the
-     * Git blob (origin=BASELINE) or a pointer to the static DEFAULT_DOTTAIGNORE
-     * string (origin=BUILTIN). Either is valid for the builder's lifetime. */
-    const char *baseline_content;
-    ignore_origin_t baseline_origin;
-
-    /* Borrowed pattern arrays. Callers guarantee they outlive the builder
-     * (command-scoped config and CLI). */
-    char *const *config_patterns;
+    /* The layers every profile shares (ignore_rules_create) */
+    const gitignore_ruleset_t *baseline_rules; /* compiled at creation */
+    ignore_origin_t baseline_origin;           /* BASELINE, or BUILTIN */
+    char *const *config_patterns;              /* borrowed from the config */
     size_t config_count;
-    char *const *cli_patterns;
-    size_t cli_count;
+    const gitignore_ruleset_t *cli_rules;      /* borrowed; NULL when no -e */
 
-    /* Memoised per-profile rulesets. Linear scan — profile counts are small
-     * (typical <= 5, hard cap at the scope of an enabled set). */
+    /* Memoised per-profile rulesets: a linear scan, as profiles are few */
     profile_entry_t *profiles;
     size_t profile_count;
     size_t profile_capacity;
@@ -225,8 +213,10 @@ static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
  * Build a fresh ruleset for `profile` in the builder's arena.
  *
  * Appends the four layers in precedence order (baseline/builtin, profile, config,
- * CLI). `gitignore_eval` scans in reverse insertion order, so CLI wins last-match
- * and the ordering here establishes the documented precedence for free.
+ * CLI) — the baseline's and the CLI's compiled rules copied, the profile's
+ * .dottaignore and the config's patterns read. `gitignore_eval` scans in reverse
+ * insertion order, so CLI wins last-match and the ordering here establishes the
+ * documented precedence for free.
  *
  * `profile` is the canonicalised key ("" means baseline-only).
  */
@@ -240,10 +230,8 @@ static error_t *build_profile_ruleset(
 
     /* 1. Baseline / builtin fallback (lowest precedence). */
     RETURN_IF_ERROR(
-        gitignore_ruleset_append_file(
-        rs,
-        r->baseline_content,
-        (gitignore_origin_t) r->baseline_origin
+        gitignore_ruleset_append_rules(
+        rs, r->baseline_rules, (gitignore_origin_t) r->baseline_origin
         )
     );
 
@@ -276,28 +264,21 @@ static error_t *build_profile_ruleset(
     }
 
     /* 3. Config patterns. */
-    if (r->config_count > 0) {
-        RETURN_IF_ERROR(
-            gitignore_ruleset_append_patterns(
-            rs,
-            (const char *const *) r->config_patterns,
-            r->config_count,
-            (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
-            )
-        );
-    }
+    RETURN_IF_ERROR(
+        gitignore_ruleset_append_patterns(
+        rs,
+        (const char *const *) r->config_patterns,
+        r->config_count,
+        (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
+        )
+    );
 
     /* 4. CLI excludes — highest precedence, appended last. */
-    if (r->cli_count > 0) {
-        RETURN_IF_ERROR(
-            gitignore_ruleset_append_patterns(
-            rs,
-            (const char *const *) r->cli_patterns,
-            r->cli_count,
-            (gitignore_origin_t) IGNORE_ORIGIN_CLI
-            )
-        );
-    }
+    RETURN_IF_ERROR(
+        gitignore_ruleset_append_rules(
+        rs, r->cli_rules, (gitignore_origin_t) IGNORE_ORIGIN_CLI
+        )
+    );
 
     *out = rs;
     return NULL;
@@ -399,11 +380,38 @@ error_t *ignore_blob_write(
     return err;
 }
 
+error_t *ignore_excludes_compile(
+    char *const *patterns,
+    size_t count,
+    arena_t *arena,
+    const gitignore_ruleset_t **out
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+    if (count == 0) return NULL;
+
+    gitignore_ruleset_t *rules = NULL;
+    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &rules));
+
+    for (size_t i = 0; i < count; i++) {
+        error_t *err = gitignore_ruleset_append_pattern(
+            rules, patterns[i], (gitignore_origin_t) IGNORE_ORIGIN_CLI
+        );
+        if (err) {
+            return error_wrap(err, "Invalid --exclude pattern");
+        }
+    }
+
+    *out = rules;
+    return NULL;
+}
+
 error_t *ignore_rules_create(
     git_repository *repo,
     const config_t *config,
-    char *const *cli_excludes,
-    size_t cli_count,
+    const gitignore_ruleset_t *cli_rules,
     arena_t *arena,
     ignore_rules_t **out
 ) {
@@ -413,6 +421,32 @@ error_t *ignore_rules_create(
 
     *out = NULL;
 
+    /* The baseline, compiled once for every profile the builder composes: the
+     * blob, or the compiled defaults when the read answers none (ref missing,
+     * file missing, or empty blob — all non-errors).
+     *
+     * Load errors are fatal: a corrupted or unreadable baseline must surface,
+     * not silently drop safety defaults. The rules hold their own copies of every
+     * string, so the Git buffer is freed as soon as they are made. */
+    gitignore_ruleset_t *baseline = NULL;
+    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &baseline));
+
+    char *blob = NULL;
+    error_t *err = ignore_blob_read(repo, BASELINE_REF, &blob, NULL);
+    if (err) {
+        return error_wrap(err, "Failed to load baseline .dottaignore");
+    }
+
+    ignore_origin_t origin = blob ? IGNORE_ORIGIN_BASELINE : IGNORE_ORIGIN_BUILTIN;
+    err = gitignore_ruleset_append_file(
+        baseline, blob ? blob : DEFAULT_DOTTAIGNORE, (gitignore_origin_t) origin
+    );
+    free(blob);
+    if (err) {
+        return error_wrap(err, "Failed to parse baseline .dottaignore");
+    }
+
+    /* The builder is published last, once every layer it holds is in hand. */
     ignore_rules_t *r = arena_calloc(arena, 1, sizeof(*r));
     if (!r) {
         return ERROR(ERR_MEMORY, "Failed to allocate ignore rules builder");
@@ -420,45 +454,13 @@ error_t *ignore_rules_create(
 
     r->arena = arena;
     r->repo = repo;
-
-    /* Load baseline; fall back to compiled defaults when absent.
-     *
-     * Load errors are fatal: a corrupted or unreadable baseline must surface,
-     * not silently drop safety defaults. The BUILTIN fallback only fires when
-     * the load returned NULL content (ref missing, file missing, or empty blob
-     * — all non-errors). */
-    char *baseline = NULL;
-    error_t *err = ignore_blob_read(repo, BASELINE_REF, &baseline, NULL);
-    if (err) {
-        return error_wrap(err, "Failed to load baseline .dottaignore");
-    }
-
-    if (baseline) {
-        /* Arena-copy so the Git heap buffer can be freed immediately and the
-         * content outlives the function frame. */
-        r->baseline_content = arena_strdup(r->arena, baseline);
-        free(baseline);
-        if (!r->baseline_content) {
-            return ERROR(ERR_MEMORY, "Failed to copy baseline content");
-        }
-        r->baseline_origin = IGNORE_ORIGIN_BASELINE;
-    } else {
-        /* Static string — no copy needed; always valid. */
-        r->baseline_content = DEFAULT_DOTTAIGNORE;
-        r->baseline_origin = IGNORE_ORIGIN_BUILTIN;
-    }
-
-    /* Borrow config/CLI arrays. The caller guarantees command-scoped lifetime,
-     * which is longer than the builder's. */
-    if (config && config->ignore_patterns &&
-        config->ignore_pattern_count > 0) {
+    r->baseline_rules = baseline;
+    r->baseline_origin = origin;
+    if (config) {
         r->config_patterns = config->ignore_patterns;
         r->config_count = config->ignore_pattern_count;
     }
-    if (cli_excludes && cli_count > 0) {
-        r->cli_patterns = cli_excludes;
-        r->cli_count = cli_count;
-    }
+    r->cli_rules = cli_rules;
 
     *out = r;
     return NULL;

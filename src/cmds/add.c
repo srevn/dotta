@@ -1653,6 +1653,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         if (err) goto cleanup;
     }
 
+    /* The -e layer, compiled once: a pattern the grammar refuses is refused here,
+     * under the flag's name and before the pre-add hook runs. The same rules
+     * are the builder's top layer. */
+    const gitignore_ruleset_t *excludes = NULL;
+    err = ignore_excludes_compile(
+        opts->exclude_patterns, opts->exclude_count, ctx->arena, &excludes
+    );
+    if (err) goto cleanup;
+
     /* Build ignore rules once per command.
      *
      * Fatal on failure: if we cannot build the ignore rules, proceeding would
@@ -1663,11 +1672,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * on top of the common layers) is resolved below, after the branch exists —
      * for a brand-new profile the builder would otherwise try to load a
      * non-existent branch (a non-error, but no point walking that code path). */
-    err = ignore_rules_create(
-        repo, config,
-        opts->exclude_patterns, opts->exclude_count,
-        ctx->arena, &ignore_rules
-    );
+    err = ignore_rules_create(repo, config, excludes, ctx->arena, &ignore_rules);
     if (err) {
         err = error_wrap(err, "Failed to build ignore rules");
         goto cleanup;

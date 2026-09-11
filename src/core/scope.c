@@ -10,6 +10,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/mount.h"
@@ -24,9 +25,9 @@
  * it post-free).
  *
  * `paths` and `excludes_ruleset` are arena-borrowed (typically from `ctx->arena`);
- * released by arena_destroy, not scope_free. Exclude matching goes through
- * base/gitignore for full `!`-negation, directory walk-up, and anchoring semantics
- * — the same engine that powers the layered `.dottaignore` ruleset in core/ignore.
+ * released by arena_destroy, not scope_free. The excludes are the -e layer
+ * core/ignore compiles (ignore_excludes_compile) — the rules add's builder takes
+ * as its top layer, asked alone here (scope_is_excluded).
  *
  * The mount table is supplied by the caller (typically `ctx->run.mounts`) and
  * consumed by pathspec_create only. scope_t does not store it — per-machine
@@ -35,7 +36,7 @@
 struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
     string_array_t *filter;             /* CLI filter; NULL when no -p */
-    gitignore_ruleset_t *excludes_ruleset; /* Compiled -e patterns; arena-borrowed; NULL when no excludes */
+    const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; arena-borrowed; NULL when no excludes */
     pathspec_t *paths;                  /* CLI path filter; arena-borrowed; NULL when no positional args */
     const string_array_t *active;       /* Borrowed: filter if set, else enabled */
 };
@@ -67,43 +68,6 @@ static error_t *resolve_enabled_lenient(
         return ERROR(ERR_MEMORY, "Failed to allocate empty enabled array");
     }
 
-    return NULL;
-}
-
-/**
- * Compile exclude patterns into a gitignore ruleset in the caller's arena.
- *
- * Pre-compiling the ruleset (rather than storing raw strings) lets
- * scope_is_excluded reduce to a single gitignore_is_ignored call per query, with
- * full gitignore semantics: `!`-negation, directory walk-up, anchoring, and `**`
- * recursive globs. The engine and the subject are .dottaignore's — the
- * mount-relative path — so `-e` means the same on add, apply and update.
- *
- * The ruleset is borrowed from `arena`; the caller's arena lifetime governs it.
- * Leaves *out_rules NULL when the input array is empty — the zero-excludes case
- * touches the arena only when patterns exist.
- */
-static error_t *compile_excludes(
-    char *const *patterns, size_t count, arena_t *arena,
-    gitignore_ruleset_t **out_rules
-) {
-    *out_rules = NULL;
-    if (count == 0) return NULL;
-
-    gitignore_ruleset_t *rules = NULL;
-    error_t *err = gitignore_ruleset_create(arena, &rules);
-    if (err) {
-        return error_wrap(err, "Failed to allocate excludes ruleset");
-    }
-
-    err = gitignore_ruleset_append_patterns(
-        rules, (const char *const *) patterns, count, 0
-    );
-    if (err) {
-        return error_wrap(err, "Failed to compile CLI exclude patterns");
-    }
-
-    *out_rules = rules;
     return NULL;
 }
 
@@ -177,8 +141,9 @@ error_t *scope_build(
         }
     }
 
-    /* 5. Compile excludes into a ruleset borrowed from the caller's arena. */
-    err = compile_excludes(
+    /* 5. The -e layer, compiled once (core/ignore): a pattern the grammar refuses
+     *    refuses the scope, under the flag's name. */
+    err = ignore_excludes_compile(
         in->exclude_patterns, in->exclude_count, arena, &s->excludes_ruleset
     );
     if (err) goto fail;

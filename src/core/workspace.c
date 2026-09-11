@@ -2083,20 +2083,17 @@ static error_t *analyze_untracked_files(
         }
     }
 
-    /* Layered-rules builder — one per scan. Baseline and config are loaded here;
-     * each profile's `.dottaignore` is parsed once on first use and cached, so
-     * the profile loop below amortises the cost across the whole status (the
+    /* Layered-rules builder — one per scan. The baseline is read and compiled
+     * here, once; each profile's ruleset is composed on first use and cached,
+     * so the profile loop below amortises the cost across the whole status (the
      * previous shape rebuilt an entire context per profile, re-loading the baseline
-     * each time). */
+     * each time). No CLI layer: the scan reads no -e, and update's excludes filter
+     * the items it nominates, afterwards (scope_is_excluded). */
     ignore_rules_t *ignore_rules = NULL;
-    {
-        error_t *init_err = ignore_rules_create(
-            ws->repo, config, NULL, 0, ws->arena, &ignore_rules
-        );
-        if (init_err) {
-            source_filter_free(source_filter);
-            return error_wrap(init_err, "Failed to build ignore rules");
-        }
+    err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
+    if (err) {
+        source_filter_free(source_filter);
+        return error_wrap(err, "Failed to build ignore rules");
     }
 
     /* Iterate the active directory partition, filtering by profile per outer

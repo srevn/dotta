@@ -116,8 +116,8 @@ typedef struct scope_inputs {
  *      listing and the fetch). A filter never narrows in silence.
  *   3. If in->file_count > 0, build the pathspec consuming the caller-supplied
  *      mount table.
- *   4. If in->exclude_count > 0, compile patterns into a borrowed-arena gitignore
- *      ruleset.
+ *   4. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
+ *      the grammar refuses refuses the build, under the flag's name.
  *
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
@@ -251,9 +251,14 @@ bool scope_accepts_path(
  * directory can be re-included (base/gitignore.h). The escape is git's own idiom:
  * name the contents rather than the directory — `build/` with a star after the
  * slash — and the `!` beneath it stands, because a pattern that matches no
- * directory builds no barrier. One flag, one grammar: the same patterns are the
- * CLI layer of `.dottaignore`'s ruleset on `add`, where the walk is a real
- * traversal, so `-e` cannot read one program here and another there.
+ * directory builds no barrier. One flag, one compile (ignore_excludes_compile),
+ * one program — exclusion, as add's walk reads it — and two roles. Here the rules
+ * are asked alone, of paths the command already holds, which `.dottaignore` has
+ * no say over: a `!` answers only the -e rules before it. On `add`, whose walk
+ * discovers paths, the same rules are the top layer of `.dottaignore`'s ruleset,
+ * and a `!` also re-admits what a lower layer excluded. update's discovery scan
+ * reads no -e (core/workspace), so on update a new file a lower layer excluded
+ * is never nominated, whatever -e says.
  */
 bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind

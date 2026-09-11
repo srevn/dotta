@@ -86,9 +86,9 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
 /**
  * Layered-ruleset builder — command-scoped.
  *
- * Loads the common layers (baseline / builtin, config, CLI) once on construction
- * and builds per-profile rulesets lazily. Each ruleset returned by
- * `ignore_rules_for_profile` is a self-contained evaluator usable with any
+ * Compiles the baseline once on construction, borrows the config's patterns and
+ * the CLI layer, and builds per-profile rulesets lazily. Each ruleset returned
+ * by `ignore_rules_for_profile` is a self-contained evaluator usable with any
  * `base/gitignore` primitive.
  *
  * Lifetime: the arena's. The builder, its profile cache and every ruleset
@@ -105,8 +105,9 @@ typedef struct ignore_rules ignore_rules_t;
  * Origin of the rule that decided a match.
  *
  * Declared in ascending precedence so a larger numeric value means "this layer
- * overrides lower ones." Values round-trip through gitignore_origin_t (8-bit)
- * when the builder tags rules during append.
+ * overrides lower ones." Values round-trip through gitignore_origin_t (8-bit):
+ * a layer's rules are tagged at its compile, and again where the builder composes
+ * it.
  */
 typedef enum {
     IGNORE_ORIGIN_NONE = 0,   /* No rule matched */
@@ -118,43 +119,72 @@ typedef enum {
 } ignore_origin_t;
 
 /**
+ * Compile the `--exclude` patterns into the CLI layer: once per command, so every
+ * question asked of them is one walk over compiled rules.
+ *
+ * Each pattern is one rule (gitignore_ruleset_append_pattern), tagged
+ * IGNORE_ORIGIN_CLI. One the grammar refuses is refused under "Invalid --exclude
+ * pattern", in the grammar's words, before the command acts — so a bad -e reads
+ * the same on add, apply and update. Its readers: scope_build, whose filter apply
+ * and update ask alone (scope_is_excluded says how), and add, which hands the
+ * layer to ignore_rules_create as the builder's top layer.
+ *
+ * @param patterns The -e arguments (may be NULL when count is 0)
+ * @param count    Number of patterns
+ * @param arena    Arena the rules are compiled into (must not be NULL); it must
+ *                 outlive every ruleset composed from the layer
+ * @param out      The layer; NULL when count is 0 (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *ignore_excludes_compile(
+    char *const *patterns,
+    size_t count,
+    arena_t *arena,
+    const gitignore_ruleset_t **out
+);
+
+/**
  * Create the layered-ruleset builder.
  *
- * Loads the baseline `.dottaignore` from BASELINE_REF (falling back to compiled
- * defaults when absent) and captures the config and CLI pattern arrays for
- * per-profile composition. Does not touch the profile branch until
- * `ignore_rules_for_profile` is called.
+ * Reads and compiles the baseline `.dottaignore` at BASELINE_REF — the compiled
+ * defaults when it is absent — once, for every profile the builder composes,
+ * and borrows the config's patterns and the CLI layer. Does not touch the profile
+ * branch until `ignore_rules_for_profile` is called.
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
- *   - `arena` is borrowed; the builder allocates itself, the baseline copy, the
- *     profile cache and per-profile rulesets into it, and every one of them lives
- *     until the arena is destroyed. In practice the arena is command-scoped
+ *   - `arena` is borrowed; the builder allocates itself, the baseline's rules,
+ *     the profile cache and per-profile rulesets into it, and every one of them
+ *     lives until the arena is destroyed. In practice the arena is command-scoped
  *     (`ctx->arena`).
- *   - `config->ignore_patterns` and `cli_excludes` are borrowed; the backing
- *     arrays and their string entries must outlive the builder. In practice both
- *     are command-scoped.
+ *   - `config->ignore_patterns` is borrowed, the array and its strings.
+ *   - `cli_rules` is borrowed, and so are the strings its rules hold: every
+ *     per-profile ruleset copies those rules, so the arena they were compiled
+ *     into must outlive every ruleset the builder returns. In practice both are
+ *     command-scoped.
+ *
+ * Refused here: a baseline Git cannot read ("Failed to load baseline .dottaignore")
+ * and one that does not compile ("Failed to parse baseline .dottaignore"). Refused
+ * at the first profile query: a profile's .dottaignore that does not load or
+ * compile, a config pattern the grammar refuses, and a composed ruleset past
+ * the cap.
  *
  * Input validation (enforced by the underlying gitignore engine):
- *   - Each config and CLI pattern is one rule, refused where it makes none, at
- *     the first profile query (gitignore_ruleset_append_patterns).
  *   - Per-pattern length: 4096 bytes.
  *   - Per-ruleset rule count: 10,000.
  *   - `.dottaignore` blob size: 1 MB.
  *
- * @param repo         Repository (must not be NULL)
- * @param config       Configuration (may be NULL)
- * @param cli_excludes CLI --exclude patterns (may be NULL when count == 0)
- * @param cli_count    Number of CLI patterns
- * @param arena        Borrowed allocator for builder-owned data (must not be NULL)
- * @param out          Output handle (must not be NULL)
+ * @param repo      Repository (must not be NULL)
+ * @param config    Configuration (may be NULL)
+ * @param cli_rules The CLI layer (ignore_excludes_compile); NULL when no -e
+ * @param arena     Borrowed allocator for builder-owned data (must not be NULL)
+ * @param out       Output handle (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *ignore_rules_create(
     git_repository *repo,
     const config_t *config,
-    char *const *cli_excludes,
-    size_t cli_count,
+    const gitignore_ruleset_t *cli_rules,
     arena_t *arena,
     ignore_rules_t **out
 );

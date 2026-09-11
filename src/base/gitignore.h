@@ -150,8 +150,8 @@ error_t *gitignore_ruleset_append_pattern(
  * nothing. A refusal leaves the entries before it appended, and every caller
  * drops the set; a NULL array with a count of 0 appends nothing.
  *
- * Callers wrap the returned error with their source (e.g. "Failed to compile
- * CLI exclude patterns").
+ * Callers wrap the returned error with their source (e.g. "Invalid auto-encrypt
+ * patterns").
  *
  * @param ruleset  Ruleset to append into (must not be NULL)
  * @param patterns Array of NUL-terminated patterns (may be NULL when count == 0)

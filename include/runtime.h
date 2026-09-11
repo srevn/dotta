@@ -398,9 +398,10 @@ typedef struct dotta_run {
  * ---------------
  * The codebase has exactly two arena lifetimes:
  *
- *   - Process-scope. `config->arena` holds the configuration's two compiled pattern
- *     rulesets, allocated once at config_load and read-only thereafter. Lives
- *     the whole process; outlives every dispatch.
+ *   - Process-scope. `config->arena` holds the configuration — the struct, every
+ *     value read into it and its two compiled pattern rulesets — made by
+ *     config_create_default, read-only once config_load returns, and destroyed
+ *     whole by config_free. Lives the whole process; outlives every dispatch.
  *
  *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created
  *     and destroyed by `run_spec`. Handlers allocate into it directly or thread

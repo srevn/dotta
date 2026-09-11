@@ -105,17 +105,7 @@ static error_t *hook_get_path(
 
     /* Get hooks directory */
     char *hooks_dir = NULL;
-    error_t *err = NULL;
-
-    if (config->hooks_dir) {
-        err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
-    } else {
-        /* Fallback when config->hooks_dir is NULL. Backstops an unchecked strdup
-         * in config_create_default (see DOTTA_DEFAULT_HOOKS_DIR's docblock in
-         * include/config.h). */
-        err = fs_expand_tilde(DOTTA_DEFAULT_HOOKS_DIR, &hooks_dir);
-    }
-
+    error_t *err = fs_expand_tilde(config->hooks_dir, &hooks_dir);
     if (err) {
         return error_wrap(err, "Failed to resolve hooks directory");
     }

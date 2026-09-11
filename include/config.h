@@ -13,11 +13,6 @@
 
 #include "base/output.h"
 
-/**
- * Default hooks directory
- */
-#define DOTTA_DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
-
 /* Forward declaration — kept opaque so consumers of struct config do not
  * transitively pull in the gitignore engine. The full type lives in
  * base/gitignore.h; utils/config.c compiles the two rulesets at load, and
@@ -45,13 +40,13 @@ typedef enum {
  */
 struct config {
     /* [core] */
-    char *repo_dir;              /* Repository directory path */
+    const char *repo_dir;        /* Repository directory path */
     bool strict_mode;            /* Refuse where the repo's state would otherwise be proceeded past */
     bool strict_ownership;       /* An ownership claim this system cannot resolve aborts */
     bool auto_detect_new_files;  /* Auto-detect new files in tracked directories */
 
     /* [hooks] */
-    char *hooks_dir;              /* Directory containing hook scripts */
+    const char *hooks_dir;        /* Directory containing hook scripts */
     int32_t hook_timeout;         /* Hook execution timeout in seconds (default: 30, 0 = no timeout) */
     bool pre_apply;               /* Enable pre-apply hook */
     bool post_apply;              /* Enable post-apply hook */
@@ -77,8 +72,8 @@ struct config {
     output_color_mode_t color;    /* auto, always or never (base/output) */
 
     /* [commit] */
-    char *commit_title;           /* Title template for commits */
-    char *commit_body;            /* Body template for commits */
+    const char *commit_title;     /* Title template for commits */
+    const char *commit_body;      /* Body template for commits */
 
     /* [sync] */
     bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
@@ -92,7 +87,7 @@ struct config {
     int32_t session_timeout;                         /* default: 3600, 0 = always prompt, -1 = never expire */
 
     /* The configuration's own, for the process (include/runtime.h) */
-    arena_t *arena;                                  /* backs both compiled rulesets */
+    arena_t *arena;                                  /* backs this struct and all it holds */
 };
 
 #endif /* DOTTA_CONFIG_DEF_H */

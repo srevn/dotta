@@ -17,23 +17,17 @@
 
 /* Default values */
 #define DEFAULT_REPO_DIR "~/.local/share/dotta/repo"
+#define DEFAULT_HOOKS_DIR "~/.config/dotta/hooks"
 #define DEFAULT_CONFIG_DIR "~/.config/dotta"
 #define DEFAULT_CONFIG_FILE "config.toml"
 
 /**
- * Helper: Safe string field assignment with allocation check
- *
- * Duplicates value first, then frees old content. This order is safe even if
- * *field and value alias (cannot happen here, but defensive).
+ * A string value, copied into the configuration's arena over the default — a
+ * literal, which nothing frees.
  */
-static error_t *set_string(char **field, const char *value) {
-    char *copy = strdup(value);
-    if (!copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate config string");
-    }
-    free(*field);
-    *field = copy;
-    return NULL;
+static error_t *set_string(config_t *config, const char **field, const char *value) {
+    *field = arena_strdup(config->arena, value);
+    return *field ? NULL : ERROR(ERR_MEMORY, "Failed to allocate config string");
 }
 
 /**
@@ -133,21 +127,27 @@ static error_t *validate_known_keys(
 }
 
 config_t *config_create_default(void) {
-    config_t *config = calloc(1, sizeof(config_t));
-    if (!config) {
+    /* The configuration is its arena's: the struct, every value read into it
+     * and both compiled rulesets, gone at once with config_free. A default is a
+     * literal, so nothing below can fail but the arena and the struct. */
+    arena_t *arena = arena_create(0);
+    if (!arena) {
         return NULL;
     }
-
-    /* The compiled pattern rulesets are the arena's, for the process. */
-    config->arena = arena_create(0);
+    config_t *config = arena_calloc(arena, 1, sizeof(*config));
+    if (!config) {
+        arena_destroy(arena);
+        return NULL;
+    }
+    config->arena = arena;
 
     /* Set defaults */
-    config->repo_dir = strdup(DEFAULT_REPO_DIR);
+    config->repo_dir = DEFAULT_REPO_DIR;
     config->strict_mode = false;
     config->strict_ownership = false;
     config->auto_detect_new_files = true;  /* Default: detect new files */
 
-    config->hooks_dir = strdup(DOTTA_DEFAULT_HOOKS_DIR);
+    config->hooks_dir = DEFAULT_HOOKS_DIR;
     config->hook_timeout = 30;  /* Default: 30 seconds */
     config->pre_apply = true;
     config->post_apply = true;
@@ -170,8 +170,8 @@ config_t *config_create_default(void) {
     config->color = OUTPUT_COLOR_AUTO;
 
     /* [commit] defaults - match current hardcoded behavior */
-    config->commit_title = strdup("{host}: {action} {profile}");
-    config->commit_body = strdup(
+    config->commit_title = "{host}: {action} {profile}";
+    config->commit_body =
         "Date: {datetime}\n"
         "User: {user}\n"
         "Host: {host}\n"
@@ -179,8 +179,7 @@ config_t *config_create_default(void) {
         "Files: {count}\n"
         "\n"
         "{action_past}:\n"
-        "{files}"
-    );
+        "{files}";
 
     /* [sync] defaults */
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
@@ -191,33 +190,14 @@ config_t *config_create_default(void) {
     config->encryption_enabled = false;            /* Default: disabled (opt-in) */
     config->session_timeout = 3600;                /* 1 hour */
 
-    /* One check for every allocation above: a default that failed to allocate
-     * would reach config_validate as the wrong reason, or a reader as a NULL. */
-    if (!config->arena || !config->repo_dir || !config->hooks_dir ||
-        !config->commit_title || !config->commit_body) {
-        config_free(config);
-        return NULL;
-    }
-
     return config;
 }
 
 void config_free(config_t *config) {
-    if (!config) {
-        return;
+    /* The struct is the arena's too: one destroy, and nothing freed by field. */
+    if (config) {
+        arena_destroy(config->arena);
     }
-
-    free(config->repo_dir);
-
-    free(config->hooks_dir);
-
-    free(config->commit_title);
-    free(config->commit_body);
-
-    /* Both compiled rulesets are the arena's; arena_destroy is NULL-safe. */
-    arena_destroy(config->arena);
-
-    free(config);
 }
 
 /**
@@ -268,7 +248,7 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 
         toml_datum_t repo_dir = toml_get(core, "repo_dir");
         if (repo_dir.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->repo_dir, repo_dir.u.s));
+            RETURN_IF_ERROR(set_string(config, &config->repo_dir, repo_dir.u.s));
         }
 
         toml_datum_t strict_mode = toml_get(core, "strict_mode");
@@ -299,7 +279,7 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 
         toml_datum_t hooks_dir = toml_get(hooks, "hooks_dir");
         if (hooks_dir.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->hooks_dir, hooks_dir.u.s));
+            RETURN_IF_ERROR(set_string(config, &config->hooks_dir, hooks_dir.u.s));
         }
 
         toml_datum_t hook_timeout = toml_get(hooks, "timeout");
@@ -435,12 +415,12 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 
         toml_datum_t title = toml_get(commit, "title");
         if (title.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->commit_title, title.u.s));
+            RETURN_IF_ERROR(set_string(config, &config->commit_title, title.u.s));
         }
 
         toml_datum_t body = toml_get(commit, "body");
         if (body.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->commit_body, body.u.s));
+            RETURN_IF_ERROR(set_string(config, &config->commit_body, body.u.s));
         }
     }
 
@@ -626,7 +606,7 @@ error_t *config_get_repo_dir(const config_t *config, char **out) {
     }
 
     /* Priority 2: Config file */
-    if (config && config->repo_dir) {
+    if (config) {
         return fs_expand_tilde(config->repo_dir, out);
     }
 

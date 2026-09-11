@@ -35,12 +35,16 @@
 error_t *config_load(config_t **out);
 
 /**
- * Create config with default values
+ * The configuration with every key at its default
+ *
+ * Made in an arena of its own, which holds the struct, every value config_load
+ * reads into it and both compiled rulesets; a default is a literal. NULL when
+ * the arena or the struct cannot be allocated.
  */
 config_t *config_create_default(void);
 
 /**
- * Free configuration
+ * Free the configuration: its arena, and with it everything it holds (NULL-safe)
  */
 void config_free(config_t *config);
 

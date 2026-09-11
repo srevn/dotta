@@ -931,22 +931,13 @@ static error_t *add_file_to_stage(
     metadata_item_t *item = NULL;  /* Will be created from captured metadata */
     struct stat file_stat;         /* Captured from content layer */
 
-    /* The entry the profile already holds at this path, if any: the stage was
-     * seeded from the branch's tree, so an entry here is the committed one —
-     * read here, before the capture's put overwrites it in place with the staged
-     * one. A first-time add finds none. */
-    const git_index_entry *prior = git_index_get_bypath(
-        stage_index(stage), storage_path, 0
-    );
-    if (prior && !opts->force) {
-        return ERROR(
-            ERR_EXISTS, "File '%s' (as '%s') already exists in profile '%s'. "
-            "Use --force to overwrite.", filesystem_path, storage_path,
-            opts->profile
-        );
-    }
-
-    /* Encryption policy priority-3 source: prior committed bytes.
+    /* Encryption policy priority-3 source: the bytes the profile already holds
+     * under this name. The stage was seeded from the branch's tree, and no earlier
+     * capture put at this name — a listed name resolves to one location (add.h,
+     * THE KEY INVARIANT) and the listing holds one entry per location — so an
+     * entry here is the committed one, read before the put below replaces it in
+     * place with the staged one. Only a --force add finds one: without the flag,
+     * the pre-flight in cmd_add refused every held name before a byte was read.
      *
      * The prior entry's blob is the cheapest source of byte truth for priority-3
      * — classified by its own header, never by a claim. A first-time add has no
@@ -954,6 +945,9 @@ static error_t *add_file_to_stage(
      * cannot be read is an error, not "not encrypted": a sniff that defaulted
      * would flip the policy silently. Only consumed in the regular-file branch
      * below (symlinks carry no encryption state to maintain). */
+    const git_index_entry *prior = git_index_get_bypath(
+        stage_index(stage), storage_path, 0
+    );
     bool previously_encrypted = false;
     if (prior) {
         content_kind_t prior_kind = CONTENT_PLAINTEXT;

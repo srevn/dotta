@@ -80,6 +80,41 @@ static error_t *require_patterns(const char *flag, char **patterns, size_t count
 }
 
 /**
+ * Refuse a rule named by both --add and --remove, before the file is opened.
+ *
+ * The edit would write it and take it back — two receipts for a file that ends
+ * as it began, or differs by a separator newline alone. Compared as rules, as
+ * pattern_exists compares them: `--add foo --remove 'foo   '` names one rule.
+ * Every span is nonzero here, since require_patterns refused the rest, and the
+ * rule is quoted as written — its span, the spelling a verdict reports it under.
+ */
+static error_t *require_disjoint(
+    char **add_patterns,
+    size_t add_count,
+    char **remove_patterns,
+    size_t remove_count
+) {
+    for (size_t i = 0; i < add_count; i++) {
+        const char *p = add_patterns[i];
+        size_t span = gitignore_rule_span(p, strlen(p));
+
+        for (size_t j = 0; j < remove_count; j++) {
+            const char *q = remove_patterns[j];
+            if (gitignore_rule_span(q, strlen(q)) == span &&
+                memcmp(p, q, span) == 0) {
+                return ERROR(
+                    ERR_INVALID_ARG,
+                    "Cannot use --add and --remove on one rule: '%.*s'",
+                    (int) span, p
+                );
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Add patterns to .dottaignore content
  *
  * Appends each pattern as it was given, and its newline — the line require_patterns
@@ -1131,12 +1166,19 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     }
 
     /* A pattern is checked before its file is opened: an argument that names no
-     * rule, or names two, is refused by name rather than written. */
+     * rule, or names two, is refused by name rather than written, and so is a
+     * rule both added and removed, which the edit would write and take back. */
     RETURN_IF_ERROR(
         require_patterns("--add", opts->add_patterns, opts->add_count)
     );
     RETURN_IF_ERROR(
         require_patterns("--remove", opts->remove_patterns, opts->remove_count)
+    );
+    RETURN_IF_ERROR(
+        require_disjoint(
+        opts->add_patterns, opts->add_count,
+        opts->remove_patterns, opts->remove_count
+        )
     );
 
     /* The scope for edit / modify: the file's home, its name on the screen, and

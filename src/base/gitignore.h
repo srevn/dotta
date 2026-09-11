@@ -103,11 +103,11 @@ error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out);
  * a newline or skip as a comment.
  *
  * Blank and comment lines are skipped. A UTF-8 byte-order mark at the head of
- * `content` is shed before the first line — it is the file's, not its first rule's;
- * one anywhere else is pattern content. A final line needs no terminator. Empty
- * content is accepted (no rules appended). Returns ERR_VALIDATION if any line
- * exceeds 4096 bytes or the cumulative rule count exceeds 10000; ERR_MEMORY on
- * arena exhaustion.
+ * `content` is shed before the first line (gitignore_file_lines) — it is the
+ * file's, not its first rule's; one anywhere else is pattern content. A final
+ * line needs no terminator. Empty content is accepted (no rules appended). Returns
+ * ERR_VALIDATION if any line exceeds 4096 bytes or the cumulative rule count
+ * exceeds 10000; ERR_MEMORY on arena exhaustion.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param content Gitignore source text (must not be NULL; may be empty)
@@ -119,6 +119,22 @@ error_t *gitignore_ruleset_append_file(
     const char *content,
     gitignore_origin_t origin
 );
+
+/**
+ * Where a gitignore file's lines begin: past a UTF-8 byte-order mark at its head,
+ * which is the file's and not its first rule's (git's skip_utf8_bom, once per
+ * buffer); at `content` itself otherwise. A mark anywhere else is pattern content,
+ * and so is a head that only begins like one.
+ *
+ * Every reader of a file's lines starts here — gitignore_ruleset_append_file,
+ * and an editor finding or dropping a rule (cmds/ignore) — so no two can disagree
+ * about which rule the first line names. An editor that rewrites the file keeps
+ * the bytes before the answer: they are the file's.
+ *
+ * @param content A gitignore file's text (must not be NULL)
+ * @return The first line, inside `content`
+ */
+const char *gitignore_file_lines(const char *content);
 
 /**
  * Append one pattern as one rule, tagged with `origin`.

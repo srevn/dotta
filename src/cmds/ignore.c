@@ -33,16 +33,17 @@
 /**
  * Does any line of content name the same rule as pattern? (zero-allocation)
  *
- * Rules, not text: each line is read as base/gitignore reads it, and two lines
- * are one rule iff their spans are equal byte for byte — so `foo` and `foo   `
- * are one rule while `foo` and `  foo` are two, and a blank or comment line
- * names none. `span` is the pattern's own, which the caller has already asked
- * for — never zero, since require_patterns refused every argument that makes no
- * rule. A span is the rule's identity, not its line: the caller writes the pattern
- * whole.
+ * Rules, not text: the lines are read from where the file's begin, past a
+ * byte-order mark at its head (gitignore_file_lines), each as base/gitignore
+ * reads it, and two lines are one rule iff their spans are equal byte for byte —
+ * so `foo` and `foo   ` are one rule while `foo` and `  foo` are two, and a
+ * blank or comment line names none. `span` is the pattern's own, which the caller
+ * has already asked for — never zero, since require_patterns refused every argument
+ * that makes no rule. A span is the rule's identity, not its line: the caller
+ * writes the pattern whole.
  */
 static bool pattern_exists(const char *content, const char *pattern, size_t span) {
-    const char *line = content;
+    const char *line = gitignore_file_lines(content);
 
     /* A line and its newline are one step; the last line needs no newline. */
     while (*line) {
@@ -173,7 +174,8 @@ static error_t *add_patterns_to_content(
  *
  * Filters existing_content line-by-line, dropping every line that names the same
  * rule as an entry in patterns — equal spans, byte for byte, as pattern_exists
- * reads them; a blank or comment line names none and is always kept.
+ * reads them; a blank or comment line names none and is always kept, and so are
+ * the bytes before the first line (gitignore_file_lines), which are the file's.
  * `*not_found_count` reports how many requested patterns were absent from the
  * input and is always populated regardless of whether the buffer changed.
  *
@@ -219,11 +221,17 @@ static error_t *remove_patterns_from_content(
         return ERROR(ERR_MEMORY, "Failed to allocate pattern tracking");
     }
 
+    /* The lines begin where the grammar says, and the bytes before them — a
+     * byte-order mark — are the file's: copied through whatever is removed behind
+     * them, so removing the first rule never removes the mark, nor makes the
+     * file's a mark the next line holds as pattern content. */
+    const char *line = gitignore_file_lines(existing_content);
+    size_t head = (size_t) (line - existing_content);
+    memcpy(result, existing_content, head);
+    char *pos = result + head;
+
     /* Line by line, zero-allocation: a line and its newline are one step, and
      * the last line needs no newline. */
-    char *pos = result;
-    const char *line = existing_content;
-
     while (*line) {
         size_t len = strcspn(line, "\n");
         size_t step = len + (line[len] == '\n');

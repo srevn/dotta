@@ -539,15 +539,7 @@ error_t *gitignore_ruleset_append_file(
     CHECK_NULL(set);
     CHECK_NULL(content);
 
-    /* A byte-order mark belongs to the file, not to the rule its bytes sit in
-     * front of — an editor that writes one would otherwise cost the caller its
-     * first pattern, silently. One at the head is shed and any other is content,
-     * which is git's own rule (dir.c:1226 add_patterns_from_buffer, calling
-     * skip_utf8_bom once over the whole buffer). strncmp, not memcmp: a content
-     * shorter than the mark is a content that does not carry one. */
-    const char *line = content;
-    if (strncmp(line, "\xEF\xBB\xBF", 3) == 0)
-        line += 3;
+    const char *line = gitignore_file_lines(content);
 
     /* A line and its newline are one step; the last line needs no newline. */
     while (*line) {
@@ -568,6 +560,16 @@ error_t *gitignore_ruleset_append_file(
     }
 
     return NULL;
+}
+
+const char *gitignore_file_lines(const char *content) {
+    /* A byte-order mark belongs to the file, not to the rule its bytes sit in
+     * front of — an editor that writes one would otherwise cost the file its
+     * first rule, silently. One at the head is shed and any other is content,
+     * which is git's own rule (dir.c:1226 add_patterns_from_buffer, calling
+     * skip_utf8_bom once over the whole buffer). strncmp, not memcmp: a content
+     * shorter than the mark is a content that does not carry one. */
+    return strncmp(content, "\xEF\xBB\xBF", 3) == 0 ? content + 3 : content;
 }
 
 error_t *gitignore_ruleset_append_pattern(

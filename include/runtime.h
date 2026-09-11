@@ -398,8 +398,8 @@ typedef struct dotta_run {
  * ---------------
  * The codebase has exactly two arena lifetimes:
  *
- *   - Process-scope. `config->auto_encrypt.arena` holds the compiled auto-encrypt
- *     ruleset, allocated once at config_load and read-only thereafter. Lives
+ *   - Process-scope. `config->arena` holds the configuration's two compiled pattern
+ *     rulesets, allocated once at config_load and read-only thereafter. Lives
  *     the whole process; outlives every dispatch.
  *
  *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created

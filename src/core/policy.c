@@ -78,8 +78,13 @@ static bool is_protected_meta_file(const char *storage_path) {
  * `home/.ssh/id_*`; `.ssh/id_*` is anchored (no match under `backup/`), `*.key`
  * matches by basename, `secrets/` matches by directory walk-up.
  *
- * Never fails. Returns false when config is NULL, auto-encrypt is inactive,
- * storage_path is NULL, no rule matches, or the winning rule is a negation.
+ * The list is compiled at load whether or not encryption is enabled, so the switch
+ * is read here: priority 4 is the one priority it gates (the header says why 1
+ * and 3 answer without it), and this is the one reader both of 4's callers share.
+ *
+ * Never fails. Returns false when config is NULL, encryption is disabled,
+ * storage_path is NULL, no rule matches — an absent list has none — or the winning
+ * rule is a negation.
  *
  * @param config Configuration (can be NULL)
  * @param storage_path File path in profile (e.g., "home/.bashrc")
@@ -89,7 +94,7 @@ static bool encryption_policy_matches_auto_patterns(
     const config_t *config,
     const char *storage_path
 ) {
-    if (!config || !config->auto_encrypt.rules || !storage_path) {
+    if (!config || !config->encryption_enabled || !storage_path) {
         return false;
     }
 
@@ -102,7 +107,7 @@ static bool encryption_policy_matches_auto_patterns(
      * wants: `*.key` + `!public.key` correctly excludes `public.key` from
      * auto-encryption. */
     return gitignore_is_selected(
-        config->auto_encrypt.rules, path_for_matching, false
+        config->auto_encrypt_ruleset, path_for_matching, false
     );
 }
 

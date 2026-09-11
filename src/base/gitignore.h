@@ -46,9 +46,8 @@
  * matches a file named `#foo`); a pattern here cannot be, because `ignore --add`
  * writes it into a file as a line and `--exclude` is promised the file's meaning.
  * So `foo ` means `foo`, and a name that begins with `#` is matched by `\#`. A
- * list of patterns is patterns, one rule each (gitignore_ruleset_append_patterns),
- * never the lines of a file: no mark is shed from an entry and no newline splits
- * one.
+ * list of patterns is its caller's to walk, each entry one pattern — never the
+ * lines of a file: no mark is shed from an entry and no newline splits one.
  *
  * And a ruleset takes a third input, which the grammar never reads again: the
  * rules another ruleset compiled (gitignore_ruleset_append_rules), copied in
@@ -139,30 +138,6 @@ error_t *gitignore_ruleset_append_file(
 error_t *gitignore_ruleset_append_pattern(
     gitignore_ruleset_t *ruleset,
     const char *pattern,
-    gitignore_origin_t origin
-);
-
-/**
- * Append an array of patterns, each through gitignore_ruleset_append_pattern in
- * order: every entry one rule tagged with `origin`, refused as that door refuses
- * one. An entry is not a line of a file — no mark is shed from the first, no
- * newline splits one, and one that makes no rule is refused rather than read as
- * nothing. A refusal leaves the entries before it appended, and every caller
- * drops the set; a NULL array with a count of 0 appends nothing.
- *
- * Callers wrap the returned error with their source (e.g. "Invalid auto-encrypt
- * patterns").
- *
- * @param ruleset  Ruleset to append into (must not be NULL)
- * @param patterns Array of NUL-terminated patterns (may be NULL when count == 0)
- * @param count    Number of entries in patterns
- * @param origin   Caller-chosen origin tag applied to every rule
- * @return Error or NULL on success
- */
-error_t *gitignore_ruleset_append_patterns(
-    gitignore_ruleset_t *ruleset,
-    const char *const *patterns,
-    size_t count,
     gitignore_origin_t origin
 );
 
@@ -290,6 +265,19 @@ bool gitignore_is_selected(
  * @return Rule count, or 0 if ruleset is NULL
  */
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
+
+/**
+ * The index-th rule as written, in the order appended — the bytes
+ * gitignore_rule_span answers for its line — for a listing of the rules a set
+ * holds (`dotta key status -v`). A span, not a line: a trailing space the grammar
+ * trimmed is not in it, and written back alone it may name another rule. Borrowed
+ * from the arena the rule was parsed into.
+ *
+ * @param ruleset Ruleset (must not be NULL)
+ * @param index   Below gitignore_ruleset_size(ruleset)
+ * @return The rule's source (never NULL)
+ */
+const char *gitignore_ruleset_source(const gitignore_ruleset_t *ruleset, size_t index);
 
 /* -------------------------------------------------------------------- */
 /* The rule alone                                                       */

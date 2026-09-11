@@ -151,6 +151,10 @@ confirm_new_files = true
 #
 # Note: These patterns complement (don't replace) the repository's .dottaignore
 #
+# Each entry is one pattern, read as the line it would be in .dottaignore; an
+# entry that would make no rule there (a comment, a blank, two lines) refuses
+# the load, and the error names its line and column.
+#
 # Default: No personal patterns
 patterns = [
     # Personal IDE/editor files
@@ -429,6 +433,10 @@ enabled = false
 #
 #   [".ssh/", "!.ssh/*.pub"]   the public keys stay plaintext
 #   ["!.ssh/*.pub", ".ssh/"]   the directory rule came last, so it wins
+#
+# Each entry is one pattern, read as the line it would be in .dottaignore; an
+# entry that would make no rule there refuses the load, whether or not
+# encryption is enabled.
 #
 # Common sensitive file patterns:
 auto_encrypt = [

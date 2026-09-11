@@ -10,6 +10,7 @@
 
 #include "base/args.h"
 #include "base/error.h"
+#include "base/gitignore.h"
 #include "base/output.h"
 #include "core/manifest.h"
 #include "core/state.h"
@@ -215,16 +216,18 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             );
         }
 
-        /* Show auto-encrypt patterns */
-        if (config->auto_encrypt_pattern_count > 0) {
+        /* The rules the policy reads, in the order configured, each as written:
+         * a trailing space the grammar trims is not the rule's, and is not
+         * shown. */
+        size_t count = gitignore_ruleset_size(config->auto_encrypt_ruleset);
+        if (count > 0) {
             output_print(
-                out, OUTPUT_VERBOSE, "  Auto-encrypt patterns: %zu\n",
-                config->auto_encrypt_pattern_count
+                out, OUTPUT_VERBOSE, "  Auto-encrypt patterns: %zu\n", count
             );
-            for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
+            for (size_t i = 0; i < count; i++) {
                 output_print(
                     out, OUTPUT_VERBOSE, "    - %s\n",
-                    config->auto_encrypt_patterns[i]
+                    gitignore_ruleset_source(config->auto_encrypt_ruleset, i)
                 );
             }
         }

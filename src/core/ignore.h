@@ -86,9 +86,9 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
 /**
  * Layered-ruleset builder — command-scoped.
  *
- * Compiles the baseline once on construction, borrows the config's patterns and
- * the CLI layer, and builds per-profile rulesets lazily. Each ruleset returned
- * by `ignore_rules_for_profile` is a self-contained evaluator usable with any
+ * Compiles the baseline once on construction, borrows the config's layer and
+ * the CLI's, and builds per-profile rulesets lazily. Each ruleset returned by
+ * `ignore_rules_for_profile` is a self-contained evaluator usable with any
  * `base/gitignore` primitive.
  *
  * Lifetime: the arena's. The builder, its profile cache and every ruleset
@@ -148,8 +148,8 @@ error_t *ignore_excludes_compile(
  *
  * Reads and compiles the baseline `.dottaignore` at BASELINE_REF — the compiled
  * defaults when it is absent — once, for every profile the builder composes,
- * and borrows the config's patterns and the CLI layer. Does not touch the profile
- * branch until `ignore_rules_for_profile` is called.
+ * and borrows the config's layer and the CLI's. Does not touch the profile branch
+ * until `ignore_rules_for_profile` is called.
  *
  * Lifetime / ownership:
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
@@ -157,7 +157,9 @@ error_t *ignore_excludes_compile(
  *     the profile cache and per-profile rulesets into it, and every one of them
  *     lives until the arena is destroyed. In practice the arena is command-scoped
  *     (`ctx->arena`).
- *   - `config->ignore_patterns` is borrowed, the array and its strings.
+ *   - `config->ignore_ruleset` is borrowed, and so are the strings its rules
+ *     hold: config_load compiled the layer into the config's arena, which lives
+ *     for the process and so outlives every ruleset the builder returns.
  *   - `cli_rules` is borrowed, and so are the strings its rules hold: every
  *     per-profile ruleset copies those rules, so the arena they were compiled
  *     into must outlive every ruleset the builder returns. In practice both are
@@ -166,8 +168,8 @@ error_t *ignore_excludes_compile(
  * Refused here: a baseline Git cannot read ("Failed to load baseline .dottaignore")
  * and one that does not compile ("Failed to parse baseline .dottaignore"). Refused
  * at the first profile query: a profile's .dottaignore that does not load or
- * compile, a config pattern the grammar refuses, and a composed ruleset past
- * the cap.
+ * compile, and a composed ruleset past the cap. The config's layer was refused,
+ * if at all, where the file was loaded.
  *
  * Input validation (enforced by the underlying gitignore engine):
  *   - Per-pattern length: 4096 bytes.

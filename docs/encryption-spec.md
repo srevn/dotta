@@ -448,7 +448,7 @@ auto_encrypt = [
 ]
 ```
 
-Patterns compile once into a `gitignore_ruleset_t` at `config_load` and live on the config handle (`config->auto_encrypt.rules`). Per-file matching runs in `encryption_policy_matches_auto_patterns`, which strips the storage prefix (`home/`, `root/`, `custom/`) before evaluation so users can write `.ssh/id_*` rather than `home/.ssh/id_*`.
+Patterns compile once into a `gitignore_ruleset_t` at `config_load` — whether or not encryption is enabled, so a bad entry refuses the load either way — and live on the config handle (`config->auto_encrypt_ruleset`). Per-file matching runs in `encryption_policy_matches_auto_patterns`, which reads the list only when encryption is enabled, and strips the storage prefix (`home/`, `root/`, `custom/`) before evaluation so users can write `.ssh/id_*` rather than `home/.ssh/id_*`.
 
 The grammar is gitignore's — `!` negation, directory-only patterns, anchoring, and `**` recursive globs (via `base/gitignore`) — but the program is *selection*, not exclusion: the last rule that reaches the path decides, where a rule reaches a path when it matches the path itself or any directory above it. A `!` stands wherever the user put it and nothing is final, so `[".ssh/", "!.ssh/*.pub"]` leaves the public keys plaintext while `["!.ssh/*.pub", ".ssh/"]` does not. `.dottaignore` reads the other program (an excluded directory is final), and `base/gitignore.h` states both.
 
@@ -636,8 +636,8 @@ Validation is performed at the boundary where parameters enter the system:
 
 | Field | Location | Rule | Error |
 |---|---|---|---|
-| `session_timeout` | Config load | `-1`, `0`, or `1..INT32_MAX` | `ERR_INVALID_CONFIG` |
-| `auto_encrypt[i]` | Config load | Valid gitignore pattern | `ERR_INVALID_CONFIG` |
+| `session_timeout` | Config load | `-1`, `0`, or `1..INT32_MAX` | `ERR_INVALID_ARG` |
+| `auto_encrypt[i]` | Config load, enabled or not | A string with no NUL, making one gitignore rule | `ERR_INVALID_ARG` (the value), `ERR_VALIDATION` (the rule) |
 | `epoch.memory_mib` | `epoch_load` / `epoch_fetch` | `8..4096` | `ERR_CRYPTO` |
 | `epoch.passes` | `epoch_load` / `epoch_fetch` | `1..20` | `ERR_CRYPTO` |
 

@@ -21,6 +21,11 @@
  * the path is — a file that cannot be read, no regular file, a document that
  * does not parse or holds a key or a value the schema refuses — is an error,
  * wrapped once with the file's path.
+ *
+ * The two pattern lists, [ignore] patterns and [encryption] auto_encrypt, are
+ * compiled here, auto_encrypt whether or not encryption is enabled: a list that
+ * is no array, and an entry that is no string, holds a NUL or makes no rule
+ * (base/gitignore.h), refuse the load, the entry named by its line and column.
  */
 error_t *config_load(config_t **out);
 

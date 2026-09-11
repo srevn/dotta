@@ -14,14 +14,15 @@
  * 1. Explicit --encrypt flag → ENCRYPT (highest priority)
  * 2. Explicit --no-encrypt flag → PLAINTEXT, or ERROR over stored ciphertext
  * 3. File previously encrypted (byte truth) → ENCRYPT (maintain state)
- * 4. Auto-encrypt patterns → ENCRYPT (a selector — the last rule that reaches
- *    the path wins; base/gitignore.h)
+ * 4. Auto-encrypt patterns, when encryption is enabled → ENCRYPT (a selector —
+ *    the last rule that reaches the path wins; base/gitignore.h)
  * 5. Default → PLAINTEXT (safe default)
  *
  * Ruleset ownership:
  *   The compiled auto-encrypt ruleset lives on the config handle
- *   (config->auto_encrypt.rules), materialized once at config_load and destroyed
- *   by config_free. Policy calls read it directly from config — callers never
+ *   (config->auto_encrypt_ruleset), compiled once at config_load whether or not
+ *   encryption is enabled, and destroyed by config_free. Policy calls read it
+ *   directly from config, and only when encryption is enabled — callers never
  *   build, thread, or free the compiled form themselves.
  */
 
@@ -76,14 +77,15 @@ typedef enum {
  *    update` on already-encrypted file Rationale: Preserve encryption state to
  *    avoid accidental decryption
  *
- * 4. If file matches auto-encrypt patterns → ENCRYPT (pattern match) Example:
- *    File matches config pattern like ".ssh/id_*"
+ * 4. If encryption is enabled and the file matches auto-encrypt patterns → ENCRYPT
+ *    (pattern match) Example: File matches config pattern like ".ssh/id_*"
  *
  * 5. Otherwise → PLAINTEXT (default) Rationale: Encryption is opt-in, not opt-out
  *    (safer default)
  *
  * Implementation notes:
- * - NULL config (or config without compiled rules) disables priority-4
+ * - NULL config, or encryption disabled, disables priority 4; an absent list
+ *   selects nothing
  * - The refusal at priority 2 states the route out (remove, then add again) in
  *   words rather than in commands: the profile and the path as the user typed
  *   them are the command's to know, and a decision function that took them only

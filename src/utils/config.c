@@ -21,51 +21,6 @@
 #define DEFAULT_CONFIG_FILE "config.toml"
 
 /**
- * Helper: Extract string array from TOML array
- */
-static bool extract_string_array(toml_datum_t arr, char ***out_items, size_t *out_count) {
-    if (arr.type != TOML_ARRAY) {
-        return false;
-    }
-
-    int32_t size = arr.u.arr.size;
-    if (size == 0) {
-        *out_items = NULL;
-        *out_count = 0;
-        return true;
-    }
-
-    char **items = malloc((size_t) size * sizeof(char *));
-    if (!items) {
-        return false;
-    }
-
-    for (int32_t i = 0; i < size; i++) {
-        toml_datum_t elem = arr.u.arr.elem[i];
-        if (elem.type != TOML_STRING) {
-            /* Free allocated items on error */
-            for (int32_t j = 0; j < i; j++) {
-                free(items[j]);
-            }
-            free(items);
-            return false;
-        }
-        items[i] = strdup(elem.u.s);
-        if (!items[i]) {
-            for (int32_t j = 0; j < i; j++) {
-                free(items[j]);
-            }
-            free(items);
-            return false;
-        }
-    }
-
-    *out_items = items;
-    *out_count = (size_t) size;
-    return true;
-}
-
-/**
  * Helper: Safe string field assignment with allocation check
  *
  * Duplicates value first, then frees old content. This order is safe even if
@@ -82,49 +37,59 @@ static error_t *set_string(char **field, const char *value) {
 }
 
 /**
- * Helper: Compile config->auto_encrypt_patterns into a gitignore ruleset.
+ * A pattern list from its TOML value, compiled into `arena` in the order written:
+ * each entry one rule of the grammar (base/gitignore.h), the line it would be
+ * in a .dottaignore.
  *
- * Populates config->auto_encrypt.{arena,rules}. Leaves both NULL when encryption
- * is disabled or no patterns are configured — consumers treat NULL rules as the
- * "no auto-encrypt applies" sentinel.
- *
- * Eager compile at load time: an entry the grammar refuses — one that makes no
- * rule, holds a newline or runs past 4096 bytes — or a rule count past the cap
- * surfaces once, at startup, via the existing config_load error path — no
- * per-command deferred failures.
+ * Read while the parse is alive, because the value still has what a C string
+ * loses: its length — a NUL inside an entry is refused, never a truncation —
+ * and its position, which names the entry in the refusal. Compiled once, at load,
+ * so a list is refused before any command acts, and whatever reads it borrows
+ * the rules. The origin is not the config's to choose: core/ignore tags the
+ * [ignore] layer where it composes it, and auto_encrypt reads no attribution.
+ * Published only whole.
  */
-static error_t *config_compile_auto_encrypt(config_t *config) {
-    if (!config->encryption_enabled || !config->auto_encrypt_patterns ||
-        config->auto_encrypt_pattern_count == 0) {
-        return NULL;
-    }
-
-    arena_t *arena = arena_create(0);
-    if (!arena) {
-        return ERROR(ERR_MEMORY, "Failed to allocate auto-encrypt arena");
+static error_t *read_patterns(
+    toml_datum_t value,
+    const char *section,
+    const char *key,
+    arena_t *arena,
+    const gitignore_ruleset_t **out
+) {
+    if (value.type != TOML_ARRAY) {
+        return ERROR(
+            ERR_INVALID_ARG, "Invalid [%s] %s: expected an array of strings",
+            section, key
+        );
     }
 
     gitignore_ruleset_t *rules = NULL;
-    error_t *err = gitignore_ruleset_create(arena, &rules);
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Failed to allocate auto-encrypt ruleset");
+    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &rules));
+
+    for (int32_t i = 0; i < value.u.arr.size; i++) {
+        toml_datum_t entry = value.u.arr.elem[i];
+        if (entry.type != TOML_STRING) {
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid [%s] %s: the entry at line %d, column %d "
+                "is not a string", section, key, entry.lineno, entry.colno
+            );
+        }
+        if (memchr(entry.u.str.ptr, '\0', (size_t) entry.u.str.len)) {
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid [%s] %s: the entry at line %d, column %d "
+                "holds a NUL byte", section, key, entry.lineno, entry.colno
+            );
+        }
+        error_t *err = gitignore_ruleset_append_pattern(rules, entry.u.s, 0);
+        if (err) {
+            return error_wrap(
+                err, "Invalid [%s] %s: the entry at line %d, column %d",
+                section, key, entry.lineno, entry.colno
+            );
+        }
     }
 
-    /* Origin tag is unused — auto-encrypt has no per-rule attribution. */
-    err = gitignore_ruleset_append_patterns(
-        rules,
-        (const char *const *) config->auto_encrypt_patterns,
-        config->auto_encrypt_pattern_count,
-        0
-    );
-    if (err) {
-        arena_destroy(arena);
-        return error_wrap(err, "Invalid auto-encrypt patterns");
-    }
-
-    config->auto_encrypt.arena = arena;
-    config->auto_encrypt.rules = rules;
+    *out = rules;
     return NULL;
 }
 
@@ -173,6 +138,9 @@ config_t *config_create_default(void) {
         return NULL;
     }
 
+    /* The compiled pattern rulesets are the arena's, for the process. */
+    config->arena = arena_create(0);
+
     /* Set defaults */
     config->repo_dir = strdup(DEFAULT_REPO_DIR);
     config->strict_mode = false;
@@ -196,9 +164,7 @@ config_t *config_create_default(void) {
     config->confirm_new_files = true;  /* Default: confirm before adding new files */
 
     /* [ignore] defaults */
-    config->ignore_patterns = NULL;
-    config->ignore_pattern_count = 0;
-    config->respect_gitignore = true;                  /* Default: respect .gitignore */
+    config->respect_gitignore = true;                 /* Default: respect .gitignore */
 
     config->verbosity = strdup("normal");
     config->color = strdup("auto");
@@ -223,15 +189,13 @@ config_t *config_create_default(void) {
     /* [encryption] defaults. The Argon2id pair is not a config value: it is the
      * repository's epoch, minted by `dotta init --strength` (crypto/kdf.h). */
     config->encryption_enabled = false;            /* Default: disabled (opt-in) */
-    config->auto_encrypt_patterns = NULL;
-    config->auto_encrypt_pattern_count = 0;
     config->session_timeout = 3600;                /* 1 hour */
 
-    /* One check for every copy above: a default that failed to allocate would
-     * reach config_validate as the wrong reason, or a reader as a NULL. */
-    if (!config->repo_dir || !config->hooks_dir || !config->verbosity ||
-        !config->color || !config->commit_title || !config->commit_body ||
-        !config->diverged_strategy) {
+    /* One check for every allocation above: a default that failed to allocate
+     * would reach config_validate as the wrong reason, or a reader as a NULL. */
+    if (!config->arena || !config->repo_dir || !config->hooks_dir ||
+        !config->verbosity || !config->color || !config->commit_title ||
+        !config->commit_body || !config->diverged_strategy) {
         config_free(config);
         return NULL;
     }
@@ -248,14 +212,6 @@ void config_free(config_t *config) {
 
     free(config->hooks_dir);
 
-    /* Free ignore patterns */
-    if (config->ignore_patterns) {
-        for (size_t i = 0; i < config->ignore_pattern_count; i++) {
-            free(config->ignore_patterns[i]);
-        }
-        free(config->ignore_patterns);
-    }
-
     free(config->verbosity);
     free(config->color);
 
@@ -264,17 +220,8 @@ void config_free(config_t *config) {
 
     free(config->diverged_strategy);
 
-    /* Free encryption patterns */
-    if (config->auto_encrypt_patterns) {
-        for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
-            free(config->auto_encrypt_patterns[i]);
-        }
-        free(config->auto_encrypt_patterns);
-    }
-
-    /* Drop the compiled auto-encrypt ruleset. arena_destroy is NULL-safe and
-     * owns the ruleset storage — no separate rules free needed. */
-    arena_destroy(config->auto_encrypt.arena);
+    /* Both compiled rulesets are the arena's; arena_destroy is NULL-safe. */
+    arena_destroy(config->arena);
 
     free(config);
 }
@@ -448,26 +395,13 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
         RETURN_IF_ERROR(validate_known_keys(ignore, "ignore", known, 2));
 
         toml_datum_t patterns = toml_get(ignore, "patterns");
-        if (patterns.type == TOML_ARRAY) {
-            /* Free existing default patterns, then reset to safe state before
-             * extraction (prevents double-free on failure) */
-            if (config->ignore_patterns) {
-                for (size_t i = 0; i < config->ignore_pattern_count; i++) {
-                    free(config->ignore_patterns[i]);
-                }
-                free(config->ignore_patterns);
-                config->ignore_patterns = NULL;
-                config->ignore_pattern_count = 0;
-            }
-            if (!extract_string_array(
-                patterns, &config->ignore_patterns,
-                &config->ignore_pattern_count
-                )) {
-                return ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid ignore patterns: all elements must be strings"
-                );
-            }
+        if (patterns.type != TOML_UNKNOWN) {
+            RETURN_IF_ERROR(
+                read_patterns(
+                patterns, "ignore", "patterns", config->arena,
+                &config->ignore_ruleset
+                )
+            );
         }
 
         toml_datum_t respect_gitignore = toml_get(ignore, "respect_gitignore");
@@ -540,28 +474,14 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
             config->encryption_enabled = enabled.u.boolean;
         }
 
-        /* Parse auto_encrypt patterns */
         toml_datum_t auto_encrypt = toml_get(encryption, "auto_encrypt");
-        if (auto_encrypt.type == TOML_ARRAY) {
-            /* Free existing patterns, then reset to safe state before extraction
-             * (prevents double-free on failure) */
-            if (config->auto_encrypt_patterns) {
-                for (size_t i = 0; i < config->auto_encrypt_pattern_count; i++) {
-                    free(config->auto_encrypt_patterns[i]);
-                }
-                free(config->auto_encrypt_patterns);
-                config->auto_encrypt_patterns = NULL;
-                config->auto_encrypt_pattern_count = 0;
-            }
-            if (!extract_string_array(
-                auto_encrypt, &config->auto_encrypt_patterns,
-                &config->auto_encrypt_pattern_count
-                )) {
-                return ERROR(
-                    ERR_INVALID_ARG,
-                    "Invalid auto_encrypt patterns: all elements must be strings"
-                );
-            }
+        if (auto_encrypt.type != TOML_UNKNOWN) {
+            RETURN_IF_ERROR(
+                read_patterns(
+                auto_encrypt, "encryption", "auto_encrypt", config->arena,
+                &config->auto_encrypt_ruleset
+                )
+            );
         }
 
         toml_datum_t session_timeout = toml_get(encryption, "session_timeout");
@@ -628,12 +548,9 @@ error_t *config_load(config_t **out) {
         return ERROR(ERR_MEMORY, "Failed to create config");
     }
 
-    /* Read, validate, then materialize derived state (compiled auto-encrypt
-     * ruleset). Pattern-compile errors are real config errors — same failure
-     * class as an invalid verbosity. */
+    /* Read the file over the defaults, then validate the result. */
     error_t *err = read_file(path, config);
     if (!err) err = config_validate(config);
-    if (!err) err = config_compile_auto_encrypt(config);
 
     /* Every failure is wrapped once, with the file: the chain beneath it names
      * what in the file, and why. */

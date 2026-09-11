@@ -18,23 +18,9 @@
 
 /* Forward declaration — kept opaque so consumers of struct config do not
  * transitively pull in the gitignore engine. The full type lives in
- * base/gitignore.h; only utils/config.c and core/policy.c touch the rules
- * directly. */
+ * base/gitignore.h; utils/config.c compiles the two rulesets at load, and
+ * core/ignore.c, core/policy.c and cmds/key.c read them. */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
-
-/**
- * Compiled auto-encrypt ruleset.
- *
- * Materialized once at config_load from config->auto_encrypt_patterns and destroyed
- * by config_free. Arena owns the ruleset storage; destroying the arena drops
- * both. Both fields are NULL when encryption is disabled or no patterns are
- * configured — consumers treat a NULL rules pointer as the fast "no auto-encrypt
- * applies" sentinel.
- */
-typedef struct config_auto_encrypt_rules {
-    arena_t *arena;
-    const gitignore_ruleset_t *rules;  /* NULL when inactive */
-} config_auto_encrypt_rules_t;
 
 /**
  * Configuration structure
@@ -65,9 +51,8 @@ struct config {
     bool confirm_new_files;       /* Require confirmation before adding new files */
 
     /* [ignore] */
-    char **ignore_patterns;       /* Array of patterns from config */
-    size_t ignore_pattern_count;
-    bool respect_gitignore;       /* Check .gitignore in source directories */
+    const gitignore_ruleset_t *ignore_ruleset; /* patterns, compiled at load; NULL when absent */
+    bool respect_gitignore;                    /* Check .gitignore in source directories */
 
     /* [output] */
     char *verbosity;              /* "quiet", "normal", "verbose" */
@@ -82,13 +67,14 @@ struct config {
     char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
 
     /* [encryption] */
-    bool encryption_enabled;                  /* Enable encryption feature (default: false) */
-    char **auto_encrypt_patterns;             /* Auto-encrypt patterns (gitignore-style) */
-    size_t auto_encrypt_pattern_count;
-    config_auto_encrypt_rules_t auto_encrypt; /* Compiled form of auto_encrypt_patterns */
+    bool encryption_enabled;                         /* Enable encryption feature (default: false) */
+    const gitignore_ruleset_t *auto_encrypt_ruleset; /* compiled at load, enabled or not */
 
     /* Key cache timeout in seconds */
-    int32_t session_timeout;                  /* default: 3600, 0 = always prompt, -1 = never expire */
+    int32_t session_timeout;                         /* default: 3600, 0 = always prompt, -1 = never expire */
+
+    /* The configuration's own, for the process (include/runtime.h) */
+    arena_t *arena;                                  /* backs both compiled rulesets */
 };
 
 #endif /* DOTTA_CONFIG_DEF_H */

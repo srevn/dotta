@@ -2,19 +2,19 @@
  * ignore.c - Layered `.dottaignore` ruleset builder and persistence.
  *
  * The builder holds the layers every profile shares — the baseline, compiled at
- * creation; the config's patterns, read into each ruleset as it is built; the
- * CLI layer, compiled once by ignore_excludes_compile and handed in — and lazily
+ * creation; the config's, compiled at load (utils/config) and borrowed; the CLI
+ * layer, compiled once by ignore_excludes_compile and handed in — and lazily
  * assembles a fresh per-profile ruleset on first call to
  * `ignore_rules_for_profile`. Subsequent calls with the same profile name return
  * the cached pointer — memoisation lives in the builder, not in any caller
  * bookkeeping.
  *
  * A compiled layer is composed by copying (gitignore_ruleset_append_rules): each
- * per-profile ruleset copies the baseline's and the CLI's rules around the
- * profile's own .dottaignore and borrows their strings, so what was read once
- * is not read again. The layers make one ruleset, not four verdicts: a later
- * layer's `!` has to be asked at the same rung as the earlier layer's directory
- * it re-opens (ignore.h).
+ * per-profile ruleset copies the baseline's, the config's and the CLI's rules
+ * around the profile's own .dottaignore and borrows their strings, so what was
+ * read once is not read again. The layers make one ruleset, not four verdicts:
+ * a later layer's `!` has to be asked at the same rung as the earlier layer's
+ * directory it re-opens (ignore.h).
  *
  * Source-tree `.gitignore` (a foreign repo the user is adding files from) is a
  * separate mechanism — see `sys/source.h`. Consumers compose the two explicitly.
@@ -172,8 +172,7 @@ struct ignore_rules {
     /* The layers every profile shares (ignore_rules_create) */
     const gitignore_ruleset_t *baseline_rules; /* compiled at creation */
     ignore_origin_t baseline_origin;           /* BASELINE, or BUILTIN */
-    char *const *config_patterns;              /* borrowed from the config */
-    size_t config_count;
+    const gitignore_ruleset_t *config_rules;   /* borrowed; compiled at load */
     const gitignore_ruleset_t *cli_rules;      /* borrowed; NULL when no -e */
 
     /* Memoised per-profile rulesets: a linear scan, as profiles are few */
@@ -213,10 +212,10 @@ static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
  * Build a fresh ruleset for `profile` in the builder's arena.
  *
  * Appends the four layers in precedence order (baseline/builtin, profile, config,
- * CLI) — the baseline's and the CLI's compiled rules copied, the profile's
- * .dottaignore and the config's patterns read. `gitignore_eval` scans in reverse
- * insertion order, so CLI wins last-match and the ordering here establishes the
- * documented precedence for free.
+ * CLI) — the baseline's, the config's and the CLI's compiled rules copied, the
+ * profile's .dottaignore read. `gitignore_eval` scans in reverse insertion order,
+ * so CLI wins last-match and the ordering here establishes the documented
+ * precedence for free.
  *
  * `profile` is the canonicalised key ("" means baseline-only).
  */
@@ -263,13 +262,10 @@ static error_t *build_profile_ruleset(
         }
     }
 
-    /* 3. Config patterns. */
+    /* 3. The config's patterns, compiled at load. */
     RETURN_IF_ERROR(
-        gitignore_ruleset_append_patterns(
-        rs,
-        (const char *const *) r->config_patterns,
-        r->config_count,
-        (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
+        gitignore_ruleset_append_rules(
+        rs, r->config_rules, (gitignore_origin_t) IGNORE_ORIGIN_CONFIG
         )
     );
 
@@ -456,10 +452,7 @@ error_t *ignore_rules_create(
     r->repo = repo;
     r->baseline_rules = baseline;
     r->baseline_origin = origin;
-    if (config) {
-        r->config_patterns = config->ignore_patterns;
-        r->config_count = config->ignore_pattern_count;
-    }
+    r->config_rules = config ? config->ignore_ruleset : NULL;
     r->cli_rules = cli_rules;
 
     *out = r;

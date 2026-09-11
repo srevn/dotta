@@ -77,6 +77,7 @@
 
 #include "base/gitignore.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -582,18 +583,6 @@ error_t *gitignore_ruleset_append_pattern(
     return push_rule(set, rule, origin);
 }
 
-error_t *gitignore_ruleset_append_patterns(
-    gitignore_ruleset_t *set, const char *const *patterns, size_t count,
-    gitignore_origin_t origin
-) {
-    CHECK_NULL(set);
-
-    for (size_t i = 0; i < count; i++)
-        RETURN_IF_ERROR(gitignore_ruleset_append_pattern(set, patterns[i], origin));
-
-    return NULL;
-}
-
 error_t *gitignore_ruleset_append_rules(
     gitignore_ruleset_t *set, const gitignore_ruleset_t *from,
     gitignore_origin_t origin
@@ -749,6 +738,15 @@ bool gitignore_is_selected(
 
 size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
     return set ? set->count : 0;
+}
+
+const char *gitignore_ruleset_source(
+    const gitignore_ruleset_t *set, size_t index
+) {
+    assert(set != NULL);
+    assert(index < set->count);
+
+    return set->rules[index].source;
 }
 
 /* --- The rule alone -------------------------------------------------- */

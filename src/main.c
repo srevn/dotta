@@ -507,16 +507,15 @@ int main(int argc, char **argv) {
     /* Load configuration once for entire process.
      *
      * config_load handles the missing-config-file case internally (returns defaults
-     * with no error). Any error returned here is a real failure — parse error,
-     * unknown key, invalid value, or a malformed auto-encrypt pattern — and must
-     * surface, not fall back silently to defaults that hide the user's mistake. */
+     * with no error). Any error returned here is a real failure — a file that
+     * cannot be read, parse error, unknown key, invalid value, or a malformed
+     * auto-encrypt pattern — and must surface, not fall back silently to defaults
+     * that hide the user's mistake. It renders as every failure here does, the
+     * chain whole: the file, what in it, and the rule it broke. */
     config_t *config = NULL;
     error_t *cfg_err = config_load(&config);
     if (cfg_err) {
-        fprintf(
-            stderr, "Failed to load configuration: %s\n",
-            error_message(cfg_err)
-        );
+        error_print(cfg_err, stderr);
         error_free(cfg_err);
         gitops_shutdown();
         return 1;

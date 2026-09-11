@@ -2,6 +2,8 @@
 
 Dotta is configured through `~/.config/dotta/config.toml`. A fully annotated sample is available at [`etc/config.example.toml`](../etc/config.example.toml).
 
+A missing file means the defaults. A file that cannot be read, does not parse, or holds a key or value dotta refuses stops every command, and the error names the file and the reason.
+
 ## Environment Variables
 
 ```bash

@@ -131,8 +131,8 @@ bool fs_eaccess(const char *path, int amode);
  * Read entire file into buffer
  *
  * Opens the path and delegates to fs_read_fd: follows symlinks (the fd's fstat
- * sees the resolved target), refuses non-regular files through the primitive's
- * own gate.
+ * sees the resolved target), refuses non-regular files and files past 256 MB
+ * through the primitive's own gates.
  *
  * @param path File path (must not be NULL)
  * @param out Output buffer (must not be NULL)
@@ -149,9 +149,10 @@ error_t *fs_read_file(const char *path, buffer_t *out);
  * a different file.
  *
  * Refuses descriptors that are not regular files — "the entire file" is defined
- * only for a file with an extent; a FIFO or device would drain without bound.
- * Reads from the descriptor's current offset to EOF; never closes it. Errors
- * carry no path (an fd has none): callers wrap with the name they opened.
+ * only for a file with an extent; a FIFO or device would drain without bound —
+ * and files past 256 MB (FS_MAX_READ_SIZE). Reads from the descriptor's current
+ * offset to EOF; never closes it. Errors carry no path (an fd has none): callers
+ * wrap with the name they opened.
  *
  * @param fd Readable file descriptor
  * @param out Output buffer (must not be NULL)

@@ -10,6 +10,7 @@
 #include <tomlc17.h>
 
 #include "base/arena.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "sys/filesystem.h"
@@ -582,20 +583,31 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
  * The configuration file at `path` into `config`. No file is an empty one: every
  * key keeps its default.
  *
- * The parse lives exactly as long as the read of its sections, and every result
- * is freed with toml_free, as the library documents — a failed parse's too.
+ * Read through the funnel (sys/filesystem), so whether the file is there and
+ * whether it can be read are one answer at the run's one reach: absence is the
+ * read's own ERR_NOT_FOUND, and a file that is there but cannot be read, or is
+ * no regular file, is refused rather than read as absent. The parse lives exactly
+ * as long as the read of its sections, and every result is freed with toml_free,
+ * as the library documents — a failed parse's too.
  */
 static error_t *read_file(const char *path, config_t *config) {
-    /* No config file - every key keeps its default */
-    if (!fs_file_exists(path)) {
+    buffer_t text = BUFFER_INIT;
+    error_t *err = fs_read_file(path, &text);
+    if (err && err->code == ERR_NOT_FOUND) {
+        /* No config file - every key keeps its default */
+        error_free(err);
         return NULL;
     }
+    RETURN_IF_ERROR(err);
 
-    /* Parse TOML file */
-    toml_result_t result = toml_parse_file_ex(path);
-    error_t *err = result.ok
+    /* A read is capped at 256 MB, far below INT_MAX, and ends in the NUL the
+     * parser checks for; the parse copies what it keeps. */
+    toml_result_t result = toml_parse_named(text.data, (int) text.size, path);
+    buffer_free(&text);
+
+    err = result.ok
         ? read_sections(result.toptab, config)
-        : ERROR(ERR_INVALID_ARG, "Failed to parse config: %s", result.errmsg);
+        : ERROR(ERR_INVALID_ARG, "%s", result.errmsg);
     toml_free(result);
     return err;
 }
@@ -622,8 +634,11 @@ error_t *config_load(config_t **out) {
     if (!err) err = config_validate(config);
     if (!err) err = config_compile_auto_encrypt(config);
 
+    /* Every failure is wrapped once, with the file: the chain beneath it names
+     * what in the file, and why. */
     if (err) {
         config_free(config);
+        err = error_wrap(err, "Failed to load configuration '%s'", path);
     } else {
         *out = config;
     }

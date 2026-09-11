@@ -14,9 +14,13 @@
 /**
  * Load configuration from file
  *
- * From $DOTTA_CONFIG_FILE, or ~/.config/dotta/config.toml when it is unset.
+ * From $DOTTA_CONFIG_FILE, or ~/.config/dotta/config.toml when it is unset, read
+ * through sys/filesystem at the run's reach.
  *
- * Returns default config if file doesn't exist (not an error).
+ * Returns default config if file doesn't exist (not an error). Anything else
+ * the path is — a file that cannot be read, no regular file, a document that
+ * does not parse or holds a key or a value the schema refuses — is an error,
+ * wrapped once with the file's path.
  */
 error_t *config_load(config_t **out);
 

@@ -230,7 +230,7 @@ error_t *stage_admit_blob(stage_admission_t *adm, const char *path);
  * Git will not hold is refused at its own admission.
  *
  * Readers: add's walk and add's argument arm, before either lists a directory;
- * and add's read of its finished sheet.
+ * and add's sweep, with the selection complete.
  *
  * @param adm Admission (must not be NULL)
  * @param path Storage path (must not be NULL)

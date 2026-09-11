@@ -86,14 +86,16 @@ typedef struct {
  * the tree as this command has chosen it so far (sys/stage.h, the admission)
  * and the branch's claims — so a walked entry the commit has no room for, or
  * whose name Git will not hold, is skipped with its subtree and a named one is
- * refused; and the finished sheet is read against the finished tree before anything
- * durable is written, which is what covers a directory this command listed beneath
- * a blob it chose after it. A branch that arrived carrying the contradiction
- * refuses too — `dotta remove <profile> <path>` gives the claim up. The kind a
- * profile's own claim gives a location is the location's question and is asked
- * of the view: a path whose kind changed under a claim is refused by name and
- * skipped by a walk, and `--force` lifts neither — overwriting bytes under a
- * name the profile holds is not re-shaping the tree.
+ * refused; and with the selection complete, before a byte is read, every directory
+ * the commit will claim is read against every name its tree will hold. That covers
+ * a blob chosen above a directory this command listed first, which refuses the
+ * command whichever of the two was walked. A branch that arrived carrying the
+ * contradiction refuses too — `dotta remove <profile> <path>` gives the claim
+ * up — and a file captured at a directory claim's own name takes the claim's
+ * place. The kind a profile's own claim gives a location is the location's question
+ * and is asked of the view: a path whose kind changed under a claim is refused
+ * by name and skipped by a walk, and `--force` lifts neither — overwriting bytes
+ * under a name the profile holds is not re-shaping the tree.
  *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the location it was read at. A typed name is

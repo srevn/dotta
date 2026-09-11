@@ -494,7 +494,8 @@ static error_t *list_path(
  * The subject is the commit as this command has chosen it so far: the admission
  * — the branch's tree and every blob listed before this one — and the branch's
  * sheet. A directory this command listed is in neither until its capture, so a
- * blob chosen above one is asked about once more at the end (cmd_add).
+ * blob chosen above one is asked about once more, with the selection complete
+ * (cmd_add).
  *
  * One producer, two voices: every refusal is ERR_CONFLICT and says which name
  * stands in the way, and the callers give it their own — the argument arm wraps
@@ -1739,7 +1740,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The profile's sheet, from the tree the stage opened at: the branch's own
      * bytes, an empty sheet for a new profile (the loader's contract). Read before
      * the walk, which asks it what the branch already claims beneath a name
-     * (admit_name); mutated as the captures go, and saved once. A sheet that
+     * (admit_name). The decide phase gives up a claim a listed file takes the
+     * place of, the captures write the rest, and it is saved once. A sheet that
      * will not load refuses the add here rather than after the arguments have
      * been diagnosed — the branch's own state is the earlier question.
      */
@@ -2111,15 +2113,98 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Check if we have anything to add (files or directories). A named path the
      * rules refused was an error above, so this is a mount root the walk found
      * nothing listable beneath — either because nothing is there, or because
-     * every entry was excluded, unsupported, or a name the branch has no room
+     * every entry was excluded, unsupported, or a name the commit has no room
      * for. */
     if (walk.files.count == 0 && walk.directories.count == 0) {
         err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
         goto cleanup;
     }
 
-    /* The selection is complete, so the one question its parts cannot answer is
-     * asked here: does this command abandon a name it moves? */
+    /* A file listed at a name the sheet claims a directory at takes that claim's
+     * place: its capture replaces the item, kind and all (metadata_add_item),
+     * or retires it where the capture claims nothing (a link). The kind question
+     * the listing asked of the view is why that is the whole story — a claim
+     * the view held at this location would have refused a file here — so what
+     * gives way is a claim the view already reads as no claim, the tree holding
+     * a blob at its name, or as another name's, the settle having kept another
+     * member. Given up here, with the selection complete, so that the sheet the
+     * sweep below reads is the one the commit will carry. */
+    for (size_t i = 0; i < walk.files.count; i++) {
+        const add_path_t *path = walk.files.items[i];
+        const metadata_item_t *standing = metadata_lookup(
+            metadata, path->claim.storage_path
+        );
+        if (standing && standing->kind == PATH_KIND_DIRECTORY) {
+            metadata_remove_item(metadata, path->claim.storage_path);
+        }
+    }
+
+    /* The two documents this commit carries name one namespace, and this is where
+     * they meet: with the selection complete, before any byte is read. The tree
+     * holds every blob and the sheet the directories a tree cannot, and a blob
+     * leaves no room for a directory at its name or for anything beneath it.
+     *
+     * Every listing met both documents as the command stood when it was made
+     * (admit_name): the admission held the branch's entries and every blob listed
+     * before, and the sheet held the branch's claims. Two readings remain, and
+     * they are this pass's two loops:
+     *   - the branch's own claims, against every name the tree will hold. A blob
+     *     this command chose above one was refused at its name, and a file listed
+     *     at one's own name has just taken its place, so what refuses here is a
+     *     contradiction the branch arrived with. Nothing repairs it silently,
+     *     and its remedies are two — `dotta remove` gives up a claim beneath a
+     *     blob, and a forced re-capture of the file takes the place of one at
+     *     the blob's own name — so no one line names them;
+     *   - this command's own directories, against the blobs chosen after them.
+     *     The sheet holds them only once they are captured, so no listing could
+     *     see them.
+     *
+     * That is every directory the commit's sheet will claim, and nothing the
+     * captures do can escape it. The directory loop writes the keys the second
+     * loop asks about, under the same kind. The file captures write file items,
+     * which claim no room beneath them, at keys where no directory claim still
+     * stands. The ancestry pass claims proper prefixes of names this command
+     * captured (metadata_capture_ancestors: the mount root is excluded by where
+     * the scan starts and the leaf by where it ends); a blob at or above such a
+     * prefix is a proper prefix of the captured name itself, which that name's
+     * own admission refused. It also retires claims, and giving one up cannot
+     * make room narrower.
+     */
+    size_t item_count = 0;
+    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
+    for (size_t i = 0; i < item_count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+
+        err = stage_admit_subtree(admission, items[i]->key);
+        if (err) {
+            /* The stage names the storage path and the obstruction; the wrap
+             * says whose claim it is and that a claim is the subject, so an add
+             * of one path does not answer with a sentence about another the user
+             * never typed. */
+            err = error_wrap(
+                err, "Profile '%s' claims a directory its tree cannot hold",
+                opts->profile
+            );
+            goto cleanup;
+        }
+    }
+    for (size_t i = 0; i < walk.directories.count; i++) {
+        const add_path_t *path = walk.directories.items[i];
+
+        err = stage_admit_subtree(admission, path->claim.storage_path);
+        if (err) {
+            /* A pair this command made, named by its directory — as the argument
+             * arm names it in the other order, where the directory's own admission
+             * met the blob first. */
+            char shown[PATH_MAX];
+            output_format_path(path->location, identity()->home, shown, sizeof(shown));
+            err = error_wrap(err, "Cannot add '%s'", shown);
+            goto cleanup;
+        }
+    }
+
+    /* The selection is complete, so the question of names its parts cannot answer
+     * is asked here: does this command abandon a name it moves? */
     err = refuse_moved_name(&walk);
     if (err) goto cleanup;
 
@@ -2263,37 +2348,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             out, OUTPUT_VERBOSE, "Captured %zu ancestor director%s",
             ancestors_captured, ancestors_captured == 1 ? "y" : "ies"
         );
-    }
-
-    /* The two documents this commit carries name one namespace, and this is where
-     * they meet — once, with both of them final. The tree holds every blob; the
-     * sheet holds the directories a tree cannot, since an empty one has no entry.
-     * A blob and a directory cannot stand at one name, and nothing stands beneath
-     * a blob. Every listing was admitted against the commit as this command had
-     * chosen it so far (admit_name), and the admission holds every name it chose;
-     * the sheet has gained this command's own claims since — so what the listing
-     * could not see is exactly what this pass reads. A contradiction the branch
-     * already carried is refused here too: nothing repairs it silently, and `dotta
-     * remove` is the verb that gives a claim up.
-     */
-    size_t item_count = 0;
-    const metadata_item_t *const *items = metadata_items(metadata, &item_count);
-    for (size_t i = 0; i < item_count; i++) {
-        if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-
-        err = stage_admit_subtree(admission, items[i]->key);
-        if (err) {
-            /* The stage names the storage path and the obstruction; the wrap
-             * says whose claim it is and that a claim is the subject, so an add
-             * of one path does not answer with a sentence about another the user
-             * never typed. No remedy line: where both sides are this command's
-             * own, nothing is committed for a `dotta remove` to take. */
-            err = error_wrap(
-                err, "Profile '%s' claims a directory its tree cannot hold",
-                opts->profile
-            );
-            goto cleanup;
-        }
     }
 
     /* A new profile's .dottaignore: the template, on the stage beside the sheet

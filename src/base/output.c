@@ -23,6 +23,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/error.h"
+
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
  *
@@ -438,26 +440,42 @@ void output_set_stream(output_t *ctx, FILE *stream) {
     ctx->color_enabled = should_enable_colors(ctx->color_mode, stream);
 }
 
-output_verbosity_t output_parse_verbosity(const char *str) {
-    if (!str) return OUTPUT_NORMAL;
+error_t *output_parse_verbosity(const char *word, output_verbosity_t *out) {
+    CHECK_NULL(word);
+    CHECK_NULL(out);
 
-    if (strcmp(str, "normal") == 0)    return OUTPUT_NORMAL;
-    if (strcmp(str, "quiet") == 0)     return OUTPUT_QUIET;
-    if (strcmp(str, "verbose") == 0)   return OUTPUT_VERBOSE;
-
-    /* Invalid value, use default */
-    return OUTPUT_NORMAL;
+    if (strcmp(word, "quiet") == 0) {
+        *out = OUTPUT_QUIET;
+    } else if (strcmp(word, "normal") == 0) {
+        *out = OUTPUT_NORMAL;
+    } else if (strcmp(word, "verbose") == 0) {
+        *out = OUTPUT_VERBOSE;
+    } else {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Unknown verbosity '%s' (valid: quiet, normal, verbose)", word
+        );
+    }
+    return NULL;
 }
 
-output_color_mode_t output_parse_color_mode(const char *str) {
-    if (!str) return OUTPUT_COLOR_AUTO;
+error_t *output_parse_color_mode(const char *word, output_color_mode_t *out) {
+    CHECK_NULL(word);
+    CHECK_NULL(out);
 
-    if (strcmp(str, "auto") == 0)      return OUTPUT_COLOR_AUTO;
-    if (strcmp(str, "always") == 0)    return OUTPUT_COLOR_ALWAYS;
-    if (strcmp(str, "never") == 0)     return OUTPUT_COLOR_NEVER;
-
-    /* Invalid value, use default */
-    return OUTPUT_COLOR_AUTO;
+    if (strcmp(word, "auto") == 0) {
+        *out = OUTPUT_COLOR_AUTO;
+    } else if (strcmp(word, "always") == 0) {
+        *out = OUTPUT_COLOR_ALWAYS;
+    } else if (strcmp(word, "never") == 0) {
+        *out = OUTPUT_COLOR_NEVER;
+    } else {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Unknown color mode '%s' (valid: auto, always, never)", word
+        );
+    }
+    return NULL;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

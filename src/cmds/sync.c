@@ -28,6 +28,7 @@
 #include "sys/resolve.h"
 #include "sys/transfer.h"
 #include "sys/upstream.h"
+#include "utils/config.h"
 #include "utils/hooks.h"
 
 #define LIST_LIMIT 20  /* Every capped list in this file trims here. */
@@ -110,49 +111,6 @@ static void mark_result_failed(
 ) {
     result->outcome = SYNC_OUTCOME_FAILED;
     result->error = err;
-}
-
-/**
- * The divergence strategies by the word `--diverged` and the config take — the
- * one spelling the parser, the receipts and completion share.
- */
-static const struct {
-    const char *name;
-    sync_strategy_t strategy;
-    const char *summary;
-} sync_strategies[] = {
-    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
-    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
-    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
-    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
-    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
-};
-
-#define SYNC_STRATEGY_COUNT (sizeof(sync_strategies) / sizeof(*sync_strategies))
-
-/**
- * Parse divergence strategy from string
- *
- * @param str Strategy string (NULL defaults to DIVERGE_WARN)
- * @param out_strategy Parsed strategy (set only on success)
- * @return true if valid (or NULL), false if unrecognized
- */
-static bool parse_divergence_strategy(
-    const char *str,
-    sync_strategy_t *out_strategy
-) {
-    if (!str) {
-        *out_strategy = DIVERGE_WARN;
-        return true;
-    }
-
-    for (size_t i = 0; i < SYNC_STRATEGY_COUNT; i++) {
-        if (strcmp(str, sync_strategies[i].name) == 0) {
-            *out_strategy = sync_strategies[i].strategy;
-            return true;
-        }
-    }
-    return false;
 }
 
 /**
@@ -849,14 +807,20 @@ static error_t *handle_diverged(
 
     switch (strategy) {
         case DIVERGE_WARN: {
+            /* The strategies that resolve, each in the phrase completion shows
+             * for it: the vocabulary's rows, read, not spelled again here. */
             output_hint(
                 out, OUTPUT_NORMAL,
-                "    Use --diverged=<strategy> or set diverged_strategy in config"
+                "    Use --diverged=<strategy> or set diverged_strategy in config:"
             );
-            output_hintline(
-                out, OUTPUT_NORMAL,
-                "    Strategies: rebase, merge, ours (keep local), theirs (keep remote)"
-            );
+            for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
+                if (config_strategies[s].strategy != DIVERGE_WARN) {
+                    output_hintline(
+                        out, OUTPUT_NORMAL, "      %s: %s",
+                        config_strategies[s].name, config_strategies[s].summary
+                    );
+                }
+            }
             result->outcome = SYNC_OUTCOME_DIVERGED;
             break;
         }
@@ -1079,9 +1043,9 @@ static error_t *sync_push_phase(
                         result->profile, result->ahead, result->behind
                     );
                     const char *name = "?";
-                    for (size_t s = 0; s < SYNC_STRATEGY_COUNT; s++) {
-                        if (sync_strategies[s].strategy == diverged_strategy) {
-                            name = sync_strategies[s].name;
+                    for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
+                        if (config_strategies[s].strategy == diverged_strategy) {
+                            name = config_strategies[s].name;
                         }
                     }
 
@@ -1616,6 +1580,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
+    /* The divergence strategy: the config's, unless --diverged overrides it in
+     * the same words. A word the vocabulary does not know is refused here, before
+     * the sync reads or runs anything — the pre-sync hook included. */
+    sync_strategy_t diverged_strategy = config->diverged_strategy;
+    if (opts->diverged) {
+        err = config_parse_strategy(opts->diverged, &diverged_strategy);
+        if (err) {
+            err = error_wrap(err, "Invalid --diverged strategy");
+            goto cleanup;
+        }
+    }
+
     /* Build operation scope
      *
      *   scope_enabled — the persistent enabled set, the CLI filter's bound and
@@ -2042,17 +2018,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     /* Determine auto_pull setting: CLI --no-pull overrides config */
     bool auto_pull = opts->no_pull ? false : config->auto_pull;
 
-    /* Determine divergence strategy: CLI overrides config */
-    const char *strategy = opts->diverged ? opts->diverged : config->diverged_strategy;
-    sync_strategy_t diverged_strategy;
-    if (!parse_divergence_strategy(strategy, &diverged_strategy)) {
-        err = ERROR(
-            ERR_INVALID_ARG, "Invalid divergence strategy '%s' "
-            "(valid: warn, rebase, merge, ours, theirs)", strategy
-        );
-        goto cleanup;
-    }
-
     /* Reconcile the repository epoch with the remote. Placed before the fetch
      * phase so the divergence's census cannot see pulled remote ciphertext. */
     epoch_reconcile(ctx, remote_name, xfer, opts);
@@ -2370,10 +2335,10 @@ static args_want_t sync_complete(
     const dotta_ctx_t *ctx = ctx_v;
 
     if (ARGS_VALUE_IS(at, cmd_sync_options_t, diverged)) {
-        for (size_t i = 0; i < SYNC_STRATEGY_COUNT; i++) {
+        for (size_t i = 0; i < CONFIG_STRATEGY_COUNT; i++) {
             fprintf(
                 out, "%s\t%s\n",
-                sync_strategies[i].name, sync_strategies[i].summary
+                config_strategies[i].name, config_strategies[i].summary
             );
         }
         return ARGS_WANT_NONE;

@@ -11,6 +11,8 @@
 
 #include <types.h>
 
+#include "base/output.h"
+
 /**
  * Default hooks directory
  */
@@ -21,6 +23,22 @@
  * base/gitignore.h; utils/config.c compiles the two rulesets at load, and
  * core/ignore.c, core/policy.c and cmds/key.c read them. */
 typedef struct gitignore_ruleset gitignore_ruleset_t;
+
+/**
+ * What sync does with a diverged branch: the [sync] diverged_strategy setting,
+ * which `sync --diverged` overrides — both in the words of config_strategies
+ * (utils/config.h).
+ *
+ * A choice, not a mechanism: sys/resolve's resolve_strategy_t carries out the
+ * four that resolve a divergence, and cmds/sync maps one onto the other.
+ */
+typedef enum {
+    DIVERGE_WARN,         /* Warn user, manual resolution (default) */
+    DIVERGE_REBASE,       /* Rebase local onto remote */
+    DIVERGE_MERGE,        /* Create merge commit */
+    DIVERGE_OURS,         /* Keep local, force push (destructive) */
+    DIVERGE_THEIRS        /* Keep remote, reset local (destructive) */
+} sync_strategy_t;
 
 /**
  * Configuration structure
@@ -55,8 +73,8 @@ struct config {
     bool respect_gitignore;                    /* Check .gitignore in source directories */
 
     /* [output] */
-    char *verbosity;              /* "quiet", "normal", "verbose" */
-    char *color;                  /* "auto", "always", "never" */
+    output_verbosity_t verbosity; /* quiet, normal or verbose (base/output) */
+    output_color_mode_t color;    /* auto, always or never (base/output) */
 
     /* [commit] */
     char *commit_title;           /* Title template for commits */
@@ -64,7 +82,7 @@ struct config {
 
     /* [sync] */
     bool auto_pull;               /* Auto-pull when remote is ahead (default: true) */
-    char *diverged_strategy;      /* Strategy for diverged branches: warn, rebase, merge, ours, theirs */
+    sync_strategy_t diverged_strategy; /* What sync does with a diverged branch */
 
     /* [encryption] */
     bool encryption_enabled;                         /* Enable encryption feature (default: false) */

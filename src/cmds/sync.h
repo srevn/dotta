@@ -14,20 +14,6 @@
 #include <types.h>
 
 /**
- * Divergence resolution strategy for sync command
- *
- * Note: This is a sync-level enum. The core/divergence module has its own strategy
- * enum. These are mapped in sync.c's switch statements.
- */
-typedef enum {
-    DIVERGE_WARN,         /* Warn user, manual resolution (default) */
-    DIVERGE_REBASE,       /* Rebase local onto remote */
-    DIVERGE_MERGE,        /* Create merge commit */
-    DIVERGE_OURS,         /* Keep local, force push (destructive) */
-    DIVERGE_THEIRS        /* Keep remote, reset local (destructive) */
-} sync_strategy_t;
-
-/**
  * Sync command options
  */
 typedef struct {

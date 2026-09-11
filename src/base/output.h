@@ -58,20 +58,30 @@ typedef struct output {
 } output_t;
 
 /**
- * Parse verbosity string from config
+ * The verbosity a word names: "quiet", "normal" or "verbose".
  *
- * Converts config verbosity string ("quiet", "normal", "verbose") to enum. Returns
- * OUTPUT_NORMAL for NULL or unrecognized values.
+ * An unknown word is refused (ERR_INVALID_ARG) with the three it could be. Its
+ * reader is the configuration's [output] verbosity, read at load (utils/config),
+ * which names the key around the refusal.
+ *
+ * @param word The word (must not be NULL)
+ * @param out  The verbosity (must not be NULL)
+ * @return Error or NULL on success
  */
-output_verbosity_t output_parse_verbosity(const char *str);
+error_t *output_parse_verbosity(const char *word, output_verbosity_t *out);
 
 /**
- * Parse color mode string from config
+ * The color mode a word names: "auto", "always" or "never".
  *
- * Converts config color string ("auto", "always", "never") to enum. Returns
- * OUTPUT_COLOR_AUTO for NULL or unrecognized values.
+ * An unknown word is refused (ERR_INVALID_ARG) with the three it could be. Its
+ * reader is the configuration's [output] color, read at load (utils/config),
+ * which names the key around the refusal.
+ *
+ * @param word The word (must not be NULL)
+ * @param out  The color mode (must not be NULL)
+ * @return Error or NULL on success
  */
-output_color_mode_t output_parse_color_mode(const char *str);
+error_t *output_parse_color_mode(const char *word, output_color_mode_t *out);
 
 /**
  * Create output context

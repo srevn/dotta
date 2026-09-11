@@ -523,11 +523,7 @@ int main(int argc, char **argv) {
 
     /* Create output context once from config settings. All commands share this
      * context and may override verbosity via CLI flags. */
-    output_t *out = output_create(
-        stdout,
-        output_parse_verbosity(config->verbosity),
-        output_parse_color_mode(config->color)
-    );
+    output_t *out = output_create(stdout, config->verbosity, config->color);
     if (!out) {
         fprintf(stderr, "Failed to create output context\n");
         config_free(config);

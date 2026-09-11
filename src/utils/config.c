@@ -166,8 +166,8 @@ config_t *config_create_default(void) {
     /* [ignore] defaults */
     config->respect_gitignore = true;                 /* Default: respect .gitignore */
 
-    config->verbosity = strdup("normal");
-    config->color = strdup("auto");
+    config->verbosity = OUTPUT_NORMAL;
+    config->color = OUTPUT_COLOR_AUTO;
 
     /* [commit] defaults - match current hardcoded behavior */
     config->commit_title = strdup("{host}: {action} {profile}");
@@ -184,7 +184,7 @@ config_t *config_create_default(void) {
 
     /* [sync] defaults */
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
-    config->diverged_strategy = strdup("warn"); /* Default: warn on divergence */
+    config->diverged_strategy = DIVERGE_WARN;   /* Default: warn on divergence */
 
     /* [encryption] defaults. The Argon2id pair is not a config value: it is the
      * repository's epoch, minted by `dotta init --strength` (crypto/kdf.h). */
@@ -194,8 +194,7 @@ config_t *config_create_default(void) {
     /* One check for every allocation above: a default that failed to allocate
      * would reach config_validate as the wrong reason, or a reader as a NULL. */
     if (!config->arena || !config->repo_dir || !config->hooks_dir ||
-        !config->verbosity || !config->color || !config->commit_title ||
-        !config->commit_body || !config->diverged_strategy) {
+        !config->commit_title || !config->commit_body) {
         config_free(config);
         return NULL;
     }
@@ -212,13 +211,8 @@ void config_free(config_t *config) {
 
     free(config->hooks_dir);
 
-    free(config->verbosity);
-    free(config->color);
-
     free(config->commit_title);
     free(config->commit_body);
-
-    free(config->diverged_strategy);
 
     /* Both compiled rulesets are the arena's; arena_destroy is NULL-safe. */
     arena_destroy(config->arena);
@@ -418,12 +412,18 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 
         toml_datum_t verbosity = toml_get(output, "verbosity");
         if (verbosity.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->verbosity, verbosity.u.s));
+            error_t *err = output_parse_verbosity(verbosity.u.s, &config->verbosity);
+            if (err) {
+                return error_wrap(err, "Invalid [output] verbosity");
+            }
         }
 
         toml_datum_t color = toml_get(output, "color");
         if (color.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->color, color.u.s));
+            error_t *err = output_parse_color_mode(color.u.s, &config->color);
+            if (err) {
+                return error_wrap(err, "Invalid [output] color");
+            }
         }
     }
 
@@ -457,7 +457,12 @@ static error_t *read_sections(toml_datum_t top, config_t *config) {
 
         toml_datum_t diverged_strategy = toml_get(sync, "diverged_strategy");
         if (diverged_strategy.type == TOML_STRING) {
-            RETURN_IF_ERROR(set_string(&config->diverged_strategy, diverged_strategy.u.s));
+            error_t *err = config_parse_strategy(
+                diverged_strategy.u.s, &config->diverged_strategy
+            );
+            if (err) {
+                return error_wrap(err, "Invalid [sync] diverged_strategy");
+            }
         }
     }
 
@@ -574,48 +579,6 @@ error_t *config_validate(const config_t *config) {
         );
     }
 
-    /* Validate verbosity */
-    if (config->verbosity) {
-        if (strcmp(config->verbosity, "quiet") != 0 &&
-            strcmp(config->verbosity, "normal") != 0 &&
-            strcmp(config->verbosity, "verbose") != 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "Invalid verbosity: %s (must be quiet/normal/verbose)",
-                config->verbosity
-            );
-        }
-    }
-
-    /* Validate color */
-    if (config->color) {
-        if (strcmp(config->color, "auto") != 0 &&
-            strcmp(config->color, "always") != 0 &&
-            strcmp(config->color, "never") != 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "Invalid color: %s (must be auto/always/never)",
-                config->color
-            );
-        }
-    }
-
-    /* Validate diverged_strategy */
-    if (config->diverged_strategy) {
-        if (strcmp(config->diverged_strategy, "warn") != 0 &&
-            strcmp(config->diverged_strategy, "rebase") != 0 &&
-            strcmp(config->diverged_strategy, "merge") != 0 &&
-            strcmp(config->diverged_strategy, "ours") != 0 &&
-            strcmp(config->diverged_strategy, "theirs") != 0) {
-            return ERROR(
-                ERR_INVALID_ARG,
-                "Invalid diverged_strategy: %s "
-                "(must be warn/rebase/merge/ours/theirs)",
-                config->diverged_strategy
-            );
-        }
-    }
-
     /* Validate hook_timeout */
     if (config->hook_timeout < 0) {
         return ERROR(
@@ -669,4 +632,29 @@ error_t *config_get_repo_dir(const config_t *config, char **out) {
 
     /* Priority 3: Default */
     return fs_expand_tilde(DEFAULT_REPO_DIR, out);
+}
+
+const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {
+    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
+    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
+    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
+    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
+    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
+};
+
+error_t *config_parse_strategy(const char *word, sync_strategy_t *out) {
+    CHECK_NULL(word);
+    CHECK_NULL(out);
+
+    for (size_t i = 0; i < CONFIG_STRATEGY_COUNT; i++) {
+        if (strcmp(word, config_strategies[i].name) == 0) {
+            *out = config_strategies[i].strategy;
+            return NULL;
+        }
+    }
+    return ERROR(
+        ERR_INVALID_ARG,
+        "Unknown divergence strategy '%s' (valid: warn, rebase, merge, ours, theirs)",
+        word
+    );
 }

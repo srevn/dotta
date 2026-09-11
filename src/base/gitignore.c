@@ -62,9 +62,10 @@
  * tree that travels between machines rather than a name on this filesystem.
  *
  * What is this file's own, which git has no need for: the per-rule origin tag,
- * the source line kept verbatim for the verdict's report, arena lifetime,
- * `decided`, the rule parsed and asked alone that infra/pathspec reads, and the
- * selection program beside the exclusion one (gitignore.h has both).
+ * the rule as written kept for the verdict's report, arena lifetime and the
+ * composition it allows (a ruleset's compiled rules copied into another, their
+ * strings shared), `decided`, the rule parsed and asked alone that infra/pathspec
+ * reads, and the selection program beside the exclusion one (gitignore.h has both).
  *
  * Adaptations of shape only: drops macros, attributes and assignments
  * (gitignore-only, no gitattributes), drops the file-source abstraction — rules
@@ -95,14 +96,17 @@
 #define GITIGNORE_FLAG_FULLPATH  (1U << 2)
 #define GITIGNORE_FLAG_ENDSWITH  (1U << 3)
 
+/* One rule. The record is copied wherever a ruleset takes it — push_rule, and
+ * through it gitignore_ruleset_append_rules — and its two strings are not: they
+ * stay in the arena the parse put them in, shared by every copy. */
 struct gitignore_rule {
-    const char *pattern;              /* arena-owned, NUL-terminated */
+    const char *pattern;              /* NUL-terminated */
     size_t len;                       /* strlen(pattern), after the escapes */
     size_t prefix;                    /* its literal head (git's nowildcardlen);
                                        * == len when nothing in it can glob */
     unsigned int flags;               /* GITIGNORE_FLAG_* bitmask */
-    gitignore_origin_t origin;        /* the ruleset's tag; 0 for a rule alone */
-    const char *source;               /* the rule as written, its line's span (arena-owned) */
+    gitignore_origin_t origin;        /* the holding ruleset's tag; 0 for a rule alone */
+    const char *source;               /* the rule as written, its line's span */
 };
 
 struct gitignore_ruleset {
@@ -528,7 +532,7 @@ error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out) {
     return NULL;
 }
 
-error_t *gitignore_ruleset_append(
+error_t *gitignore_ruleset_append_file(
     gitignore_ruleset_t *set, const char *content, gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
@@ -586,6 +590,22 @@ error_t *gitignore_ruleset_append_patterns(
 
     for (size_t i = 0; i < count; i++)
         RETURN_IF_ERROR(gitignore_ruleset_append_pattern(set, patterns[i], origin));
+
+    return NULL;
+}
+
+error_t *gitignore_ruleset_append_rules(
+    gitignore_ruleset_t *set, const gitignore_ruleset_t *from,
+    gitignore_origin_t origin
+) {
+    CHECK_NULL(set);
+
+    /* The count is read once: `from` may be `set` itself, and the pushes move
+     * its count. Each rule reaches push_rule as a copy, so a growth that retires
+     * the block it was read from cannot reach it. */
+    size_t count = from ? from->count : 0;
+    for (size_t i = 0; i < count; i++)
+        RETURN_IF_ERROR(push_rule(set, from->rules[i], origin));
 
     return NULL;
 }

@@ -240,7 +240,7 @@ static error_t *build_profile_ruleset(
 
     /* 1. Baseline / builtin fallback (lowest precedence). */
     RETURN_IF_ERROR(
-        gitignore_ruleset_append(
+        gitignore_ruleset_append_file(
         rs,
         r->baseline_content,
         (gitignore_origin_t) r->baseline_origin
@@ -262,7 +262,7 @@ static error_t *build_profile_ruleset(
             );
         }
         if (content) {
-            err = gitignore_ruleset_append(
+            err = gitignore_ruleset_append_file(
                 rs, content, (gitignore_origin_t) IGNORE_ORIGIN_PROFILE
             );
             free(content);

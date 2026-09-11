@@ -35,8 +35,8 @@
  * itself.
  *
  * Two kinds of input reach the grammar. A *file* is lines
- * (gitignore_ruleset_append): a byte-order mark at its head is the file's, a
- * comment or a blank line makes no rule, and a `\r` that ends a line is its
+ * (gitignore_ruleset_append_file): a byte-order mark at its head is the file's,
+ * a comment or a blank line makes no rule, and a `\r` that ends a line is its
  * terminator. A *pattern* is one line of that grammar meant as one rule
  * (gitignore_validate_pattern, gitignore_rule_parse,
  * gitignore_ruleset_append_pattern): it is read as the line it would be in a
@@ -50,8 +50,16 @@
  * never the lines of a file: no mark is shed from an entry and no newline splits
  * one.
  *
- * Lifetime: the ruleset and every rule are arena-backed. All memory (rule array,
- * pattern copies) lives until arena_destroy; there is no separate free.
+ * And a ruleset takes a third input, which the grammar never reads again: the
+ * rules another ruleset compiled (gitignore_ruleset_append_rules), copied in
+ * order and re-tagged, their strings borrowed — how a caller compiles a layer
+ * once and composes it into as many rulesets as it needs.
+ *
+ * Lifetime: every ruleset and rule is arena-backed, and there is no separate
+ * free. A rule's strings live in the arena it was parsed into; a ruleset composed
+ * from another holds copies of the records and borrows those strings, so every
+ * arena a ruleset borrows from must outlive it — resetting or destroying one
+ * invalidates every ruleset that borrows it.
  *
  * Thread safety: concurrent readers of a ruleset are safe once every append to
  * it has returned. Concurrent appends are not safe.
@@ -65,7 +73,8 @@
 /*
  * Origin tag - an opaque identifier assigned by the caller when appending rules,
  * returned verbatim by gitignore_eval to identify which source decided the match.
- * Dotta uses 0=builtin, 1=baseline, 2=profile; callers are free to choose.
+ * Its values are the caller's (core/ignore's ignore_origin_t); a rule parsed
+ * alone carries 0.
  */
 typedef uint8_t gitignore_origin_t;
 
@@ -75,7 +84,7 @@ typedef struct {
     bool decided;                  /* true if any rule matched */
     bool ignored;                  /* winning rule's effect (negation-aware) */
     gitignore_origin_t origin;     /* origin of winning rule */
-    const char *source;            /* winning rule as written (arena-owned); NULL when undecided */
+    const char *source;            /* winning rule as written, borrowed; NULL when undecided */
 } gitignore_match_t;
 
 /**
@@ -90,7 +99,9 @@ error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out);
 /**
  * Parse `content` as a gitignore file and append the resulting rules, each tagged
  * with `origin`. Safe to call repeatedly to layer sources (e.g. baseline then
- * profile).
+ * profile). A file, not a pattern: one string meant as one rule goes through
+ * gitignore_ruleset_append_pattern, which refuses what this door would split on
+ * a newline or skip as a comment.
  *
  * Blank and comment lines are skipped. A UTF-8 byte-order mark at the head of
  * `content` is shed before the first line — it is the file's, not its first rule's;
@@ -104,7 +115,7 @@ error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out);
  * @param origin  Caller-chosen origin tag
  * @return Error or NULL on success
  */
-error_t *gitignore_ruleset_append(
+error_t *gitignore_ruleset_append_file(
     gitignore_ruleset_t *ruleset,
     const char *content,
     gitignore_origin_t origin
@@ -156,6 +167,32 @@ error_t *gitignore_ruleset_append_patterns(
 );
 
 /**
+ * Append another ruleset's rules: each record copied, in order, and re-tagged
+ * with `origin`.
+ *
+ * A compiled ruleset is not read again. The strings its records hold are borrowed,
+ * not copied — whatever arena backs them must outlive `ruleset`, and transitively:
+ * a ruleset that was itself composed lends strings it borrowed. Appending to
+ * `from` later does not reach `ruleset`; resetting or destroying a backing arena
+ * invalidates it. `from` may be `ruleset` itself, and a NULL `from` is an absent
+ * layer that appends nothing.
+ *
+ * The cap counts the composed ruleset: one already holding 10 000 rules refuses
+ * the next (ERR_VALIDATION), and the rules before it stay appended — a caller
+ * publishes a ruleset only once every append to it has returned.
+ *
+ * @param ruleset Ruleset to append into (must not be NULL)
+ * @param from    Rules to copy (can be NULL: nothing)
+ * @param origin  Caller-chosen origin tag applied to every copy
+ * @return Error or NULL on success
+ */
+error_t *gitignore_ruleset_append_rules(
+    gitignore_ruleset_t *ruleset,
+    const gitignore_ruleset_t *from,
+    gitignore_origin_t origin
+);
+
+/**
  * Evaluate `path` against the ruleset.
  *
  * Exclusion, attributed — the reading `gitignore_is_ignored` answers as a bool.
@@ -184,7 +221,8 @@ error_t *gitignore_ruleset_append_patterns(
  * the deepest rule that matched and excluded nothing (git reports no pattern at
  * all for that path), and no caller reads them there. `source` is the rule as
  * written — the bytes gitignore_rule_span answers for its line (`!build/`,
- * `/.cache/`); it borrows the ruleset's arena.
+ * `/.cache/`); it borrows the arena the rule was parsed into — for a rule composed
+ * in from another ruleset (gitignore_ruleset_append_rules), not this one's.
  *
  * @param ruleset Ruleset (must not be NULL)
  * @param path    Relative path (must not be NULL)

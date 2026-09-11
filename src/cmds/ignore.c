@@ -176,8 +176,9 @@ static error_t *add_patterns_to_content(
  * rule as an entry in patterns — equal spans, byte for byte, as pattern_exists
  * reads them; a blank or comment line names none and is always kept, and so are
  * the bytes before the first line (gitignore_file_lines), which are the file's.
- * `*not_found_count` reports how many requested patterns were absent from the
- * input and is always populated regardless of whether the buffer changed.
+ * Requests are counted by rule, as --add counts them: two that name one rule —
+ * `foo` and `foo   ` — are one request, removed or not found once.
+ * `*not_found_count` is always populated, whether or not the buffer changed.
  *
  * Contract: on success, *new_content is NULL iff *removed_count == 0. Callers
  * can treat NULL as "nothing changed" without a content compare.
@@ -190,6 +191,7 @@ static error_t *remove_patterns_from_content(
     size_t *removed_count,
     size_t *not_found_count
 ) {
+    CHECK_NULL(existing_content);
     CHECK_NULL(patterns);
     CHECK_NULL(new_content);
     CHECK_NULL(removed_count);
@@ -199,26 +201,19 @@ static error_t *remove_patterns_from_content(
     *removed_count = 0;
     *not_found_count = 0;
 
-    if (!existing_content || pattern_count == 0) {
-        /* Nothing to filter: no new buffer produced. All requested patterns are
-         * vacuously "not found" so the caller can report accurately. */
-        *not_found_count = pattern_count;
-        return NULL;
-    }
-
-    /* Create buffer for new content (same size or smaller) */
-    size_t existing_len = strlen(existing_content);
-    char *result = malloc(existing_len + 1);
-    if (!result) {
+    /* The new content (the same size or smaller); each request's rule, its span
+     * asked once and read on every line; and whether a line named it */
+    char *result = malloc(strlen(existing_content) + 1);
+    size_t *spans = calloc(pattern_count, sizeof(*spans));
+    bool *found = calloc(pattern_count, sizeof(*found));
+    if (!result || !spans || !found) {
+        free(result);
+        free(spans);
+        free(found);
         return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
     }
-    result[0] = '\0';
-
-    /* Track which patterns were found */
-    bool *pattern_found = calloc(pattern_count, sizeof(bool));
-    if (!pattern_found) {
-        free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate pattern tracking");
+    for (size_t i = 0; i < pattern_count; i++) {
+        spans[i] = gitignore_rule_span(patterns[i], strlen(patterns[i]));
     }
 
     /* The lines begin where the grammar says, and the bytes before them — a
@@ -237,23 +232,20 @@ static error_t *remove_patterns_from_content(
         size_t step = len + (line[len] == '\n');
         size_t span = gitignore_rule_span(line, len);
 
-        /* Check if this line names the rule of any pattern to remove. A blank
-         * or comment line names none and stays. */
-        bool should_remove = false;
-        if (span > 0) {
-            for (size_t i = 0; i < pattern_count; i++) {
-                const char *p = patterns[i];
-                if (gitignore_rule_span(p, strlen(p)) == span &&
-                    memcmp(line, p, span) == 0) {
-                    should_remove = true;
-                    pattern_found[i] = true;
-                    break;
-                }
+        /* The first request that names this line's rule, in the order given. A
+         * blank or comment line's span is zero, which no request's is:
+         * require_patterns refused every argument that makes no rule. */
+        size_t i;
+        for (i = 0; i < pattern_count; i++) {
+            if (spans[i] == span && memcmp(line, patterns[i], span) == 0) {
+                break;
             }
         }
 
-        /* Keep line if not removing (preserves original formatting) */
-        if (!should_remove) {
+        if (i < pattern_count) {
+            found[i] = true;
+        } else {
+            /* Not removed: kept as written (preserves original formatting) */
             memcpy(pos, line, step);
             pos += step;
         }
@@ -262,16 +254,30 @@ static error_t *remove_patterns_from_content(
     }
     *pos = '\0';
 
-    /* Count removed and not found */
+    /* Counted by rule, as --add counts: a request naming the rule of an earlier
+     * one is that request again — the walk marked the earlier — and is neither
+     * removed nor missing a second time. */
     for (size_t i = 0; i < pattern_count; i++) {
-        if (pattern_found[i]) {
+        size_t first;
+        for (first = 0; first < i; first++) {
+            if (spans[first] == spans[i] &&
+                memcmp(patterns[first], patterns[i], spans[i]) == 0) {
+                break;
+            }
+        }
+        if (first < i) {
+            continue;
+        }
+
+        if (found[i]) {
             (*removed_count)++;
         } else {
             (*not_found_count)++;
         }
     }
 
-    free(pattern_found);
+    free(spans);
+    free(found);
 
     /* No line matched — the seeded buffer would be identical to the input. Drop
      * it and signal "no change" via NULL so the caller can skip a free().

@@ -210,8 +210,9 @@ static error_t *ensure_capacity(gitignore_ruleset_t *set) {
  * `\n` split leaves as the last byte) and then the trailing spaces
  * trailing_space_length counts — in that order, so a mixed `pattern\r   ` does
  * not swallow the `\r` inside the pattern (parity with attr_file.c:791-798).
- * Zero for a line that makes no rule: empty, a comment, or a head with nothing
- * left behind it. */
+ * Zero for a line that makes no rule: empty, a comment, a head with nothing left
+ * behind it, or a directory marker with nothing to mark — and zero is exactly
+ * where the parse makes none. */
 static size_t rule_span(const char *line, size_t len) {
     /* A comment is `#` at column 0 only. Leading whitespace is pattern content
      * (libgit2 ALLOWSPACE semantics), so `  # literal` is a two-space-indented
@@ -231,12 +232,20 @@ static size_t rule_span(const char *line, size_t len) {
 
     body -= trailing_space_length(line + head, body);
 
+    /* A directory marker with nothing to mark: `//`, `!//` — the head took the
+     * anchor, and the one slash behind it marks no name. git reads such a line
+     * as a rule that matches nothing; answering none changes no answer, and makes
+     * zero mean exactly "no rule" for every reader. Reachable only past a consumed
+     * anchor: an unconsumed leading `/` is the anchor. */
+    if (body == 1 && line[head] == '/')
+        return 0;
+
     return body == 0 ? 0 : head + body;
 }
 
 /* --- Per-line parse ------------------------------------------------- */
 
-/* A line that makes no rule — blank, a comment, trimmed to nothing — leaves
+/* A line that makes no rule — rule_span's zero, and nothing else — leaves
  * out_rule->pattern NULL, which is what the module's public door already answers
  * for one (gitignore_rule_parse: *out = NULL). The origin is not the line's:
  * the ruleset tags the rule after the parse, and a rule alone carries none. Returns
@@ -285,9 +294,6 @@ static error_t *parse_one_rule(
         if (--slash_count <= 0)
             flags &= ~GITIGNORE_FLAG_FULLPATH;
     }
-
-    if (length == 0)                     /* `//`: a body of separators alone */
-        return NULL;
 
     /* The rule as written — the `!` and the anchor slash included, what the span
      * left off the back excluded — kept for the verdict's report. */

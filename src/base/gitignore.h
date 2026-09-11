@@ -299,8 +299,10 @@ bool gitignore_rule_negated(const gitignore_rule_t *rule);
  * So the span is the *identity* of a rule for anyone editing the file it lives
  * in: two lines name the same rule iff their spans are equal byte for byte,
  * which makes `foo` and `foo   ` one rule and `foo` and `  foo` two. Zero says
- * the line makes no rule at all — empty, a comment (`#` at column 0), or a head
- * with nothing left behind it — and zero equals nothing, itself included.
+ * the line makes no rule at all — empty, a comment (`#` at column 0), a head
+ * with nothing left behind it, or a directory marker with nothing to mark (`//`)
+ * — and is exactly where the parse makes none; zero equals nothing, itself
+ * included.
  *
  * `line` is one line: a `\n` inside it is pattern content here, where the ruleset's
  * own door would have split on it. A caller holding a whole file splits first;

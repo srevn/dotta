@@ -712,6 +712,11 @@ error_t *fs_create_symlink(
 /**
  * Read symbolic link target
  *
+ * The target whole, or a refusal: readlink(2) cuts a target longer than its buffer
+ * short without a word, so a read that fills the PATH_MAX bytes offered is refused
+ * as the name too long it is (ENAMETOOLONG, ERR_FS) rather than taken for a shorter
+ * target.
+ *
  * @param linkpath Link path (must not be NULL, must be a symlink)
  * @param out Target path (must not be NULL, caller must free)
  * @return Error or NULL on success

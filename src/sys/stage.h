@@ -71,7 +71,8 @@
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
  * (add, update, remove, revert, bootstrap), by core/metadata's sheet writer,
  * core/ignore's two writers (a profile's .dottaignore, the machine's baseline),
- * infra/content's capture and infra/epoch's mint; add alone creates an admission.
+ * infra/content's two captures and infra/epoch's mint; add alone creates an
+ * admission.
  */
 
 #ifndef DOTTA_STAGE_H

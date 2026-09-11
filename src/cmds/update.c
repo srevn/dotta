@@ -46,8 +46,8 @@
  * @param previously_encrypted Whether the file's prior bytes (the branch's HEAD
  *                             blob) were encrypted — the caller's to source
  * @param out_was_encrypted Set to true if the file was encrypted (must not be NULL)
- * @param out_stat The capture's stat: one lstat for a link, the fstat beside
- *                 the bytes for a file (must not be NULL)
+ * @param out_stat The capture's own stat (infra/content.h): the lstat before a
+ *                 link's target, the fstat beside a file's bytes (must not be NULL)
  */
 static error_t *capture_file(
     const dotta_ctx_t *ctx,
@@ -68,34 +68,20 @@ static error_t *capture_file(
 
     keymgr *keymgr = ctx->run.keymgr;
 
-    /* One lstat decides the kind and is the stat a symlink capture keeps, so
-     * the kind and the triple come from the same observation. A regular file's
-     * authoritative stat is taken inside content_stage_file, beside the bytes
-     * it reads. */
+    /* One lstat chooses the capture. Each capture takes its own stat — a link's
+     * before its target, a file's beside its bytes — and refuses the other's
+     * occupant, so a path that changed after this look is refused rather than
+     * read as what it has become (infra/content.h). */
     struct stat src_stat;
     if (fs_lstat(filesystem_path, &src_stat) != 0) {
         return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
     }
 
     if (S_ISLNK(src_stat.st_mode)) {
-        /* Handle symlink — the entry is its target, never encrypted */
-        char *target = NULL;
-        error_t *err = fs_read_symlink(filesystem_path, &target);
-        if (err) {
-            return error_wrap(err, "Failed to read symlink");
-        }
-
-        err = stage_put(
-            stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
+        /* The entry is the link's target, never encrypted */
+        RETURN_IF_ERROR(
+            content_stage_link(stage, filesystem_path, storage_path, out_stat)
         );
-        free(target);
-        if (err) {
-            return err;
-        }
-
-        /* The lstat above is the capture: metadata_capture_from_file detects
-         * S_ISLNK from it. */
-        *out_stat = src_stat;
         *out_was_encrypted = false;
         return NULL;
     }

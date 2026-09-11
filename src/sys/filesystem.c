@@ -1563,11 +1563,19 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
     RETURN_IF_ERROR(validate_path(linkpath));
     CHECK_NULL(out);
 
+    /* The whole buffer is offered, and a read that fills it is refused: readlink
+     * cuts a longer target short without a word, so a full buffer cannot tell a
+     * target of that length from one cut to it (the header). */
     char buf[PATH_MAX];
-    ssize_t len = fs_readlink(linkpath, buf, sizeof(buf) - 1);
+    ssize_t len = fs_readlink(linkpath, buf, sizeof(buf));
 
     if (len < 0) {
         return error_from_errno(errno, "Failed to read symlink '%s'", linkpath);
+    }
+    if ((size_t) len == sizeof(buf)) {
+        return error_from_errno(
+            ENAMETOOLONG, "Failed to read symlink '%s'", linkpath
+        );
     }
 
     buf[len] = '\0';

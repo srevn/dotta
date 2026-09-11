@@ -551,9 +551,9 @@ error_t *content_stage_file(
      * The reported stat is the fstat of that fd, so the stat and the bytes are
      * one inode by construction; the old shape (lstat, then a path re-open inside
      * the read) let a swap between the two looks bind one file's triple to another
-     * file's blob. O_NOFOLLOW refuses a symlink (callers route symlinks to their
-     * own capture before this call), O_NONBLOCK keeps a FIFO with no writer from
-     * wedging the open (harmless for a regular file), O_CLOEXEC is hygiene. */
+     * file's blob. O_NOFOLLOW refuses a symlink (a link is content_stage_link's),
+     * O_NONBLOCK keeps a FIFO with no writer from wedging the open (harmless
+     * for a regular file), O_CLOEXEC is hygiene. */
     int fd = fs_open(
         filesystem_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0
     );
@@ -579,9 +579,9 @@ error_t *content_stage_file(
     if (!S_ISREG(st.st_mode)) {
         if (fd >= 0) close(fd);
 
-        /* This capture's own requirement, not a product rule: a symlink is the
-         * caller's put (the header), and the walk lists one as a leaf; what cannot
-         * be captured at all is a special file. */
+        /* This capture's own requirement, not a product rule: a symlink is
+         * content_stage_link's (the header), and the walk lists one as a leaf;
+         * what cannot be captured at all is a special file. */
         return ERROR(
             ERR_INVALID_ARG,
             "Cannot capture '%s': it is a %s, not a regular file.",
@@ -663,6 +663,60 @@ error_t *content_stage_file(
     /* Cleanup (secure: plaintext may contain sensitive data) */
     if (content.data) secure_wipe(content.data, content.size);
     buffer_free(&content);
+
+    return err;
+}
+
+error_t *content_stage_link(
+    stage_t *stage,
+    const char *filesystem_path,
+    const char *storage_path,
+    struct stat *out_stat
+) {
+    CHECK_NULL(stage);
+    CHECK_NULL(filesystem_path);
+    CHECK_NULL(storage_path);
+    CHECK_NULL(out_stat);
+
+    /* The look: what stands here, and the stat the capture keeps */
+    struct stat st;
+    if (fs_lstat(filesystem_path, &st) != 0) {
+        return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
+    }
+    if (!S_ISLNK(st.st_mode)) {
+        /* This capture's own requirement, as content_stage_file's is: a regular
+         * file is that capture's, and what cannot be captured at all is a special
+         * file. */
+        return ERROR(
+            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a symlink.",
+            filesystem_path, fs_stat_noun(&st)
+        );
+    }
+
+    /* The read, after the look */
+    char *target = NULL;
+    RETURN_IF_ERROR(fs_read_symlink(filesystem_path, &target));
+
+    /* The same link, looked at again: another renamed over it is another inode,
+     * and a new one at a freed inode carries a ctime of its own (the header). */
+    struct stat again;
+    if (fs_lstat(filesystem_path, &again) != 0 || again.st_dev != st.st_dev ||
+        again.st_ino != st.st_ino || again.st_ctime != st.st_ctime) {
+        free(target);
+        return ERROR(
+            ERR_CONFLICT, "Cannot capture '%s': it changed while it was read",
+            filesystem_path
+        );
+    }
+
+    /* Copied before the put, as content_stage_file copies before its read: the
+     * caller reads it on success alone. */
+    memcpy(out_stat, &st, sizeof(struct stat));
+
+    error_t *err = stage_put(
+        stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
+    );
+    free(target);
 
     return err;
 }

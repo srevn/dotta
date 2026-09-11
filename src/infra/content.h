@@ -38,7 +38,7 @@
  *   and decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
  *   reads, policy's byte truth), commands (show, diff, export, revert, list;
- *   add and update through the capture)
+ *   add and update through the two captures)
  */
 
 #ifndef DOTTA_CONTENT_H
@@ -226,14 +226,15 @@ error_t *content_get_from_blob_oid(
  * is refused (ERR_INTERNAL) rather than copied — an unbound blob's id travels
  * unchanged, and the caller that reads the kind for its own claim already knows
  * which it holds, the way content_stage_file refuses everything but a regular
- * file and leaves a link's bytes to its caller. UNSUPPORTED_VERSION is refused
+ * file and content_stage_link everything but a link. UNSUPPORTED_VERSION is refused
  * in get_plaintext_from_blob's own words: this build cannot open the bytes, so
  * it cannot seal them under another name, and entering them under one would leave
  * a claim no key will ever read.
  *
  * A link is not content and never reaches here: its bytes are a target path,
- * and Git's filemode is the authority on that at every boundary (cmds/add.c's
- * put, core/manifest.c's link row, cmds/revert.c's claim).
+ * and Git's filemode is the authority on that at every boundary
+ * (content_stage_link's capture, core/manifest.c's link row, cmds/revert.c's
+ * claim).
  *
  * The write-boundary invariant content_stage_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
@@ -391,11 +392,11 @@ void content_cache_free(content_cache_t *cache);
  *    magic, else stage the plaintext
  *
  * The entry's mode is Git's reading of the fstat: executable iff the owner's
- * execute bit is set (index.c's git_index__create_mode), regular otherwise.
- * Symlinks are the caller's own put (a link's bytes are its target); this capture
- * refuses everything but a regular file. The caller still decides policy via
- * should_encrypt; use encryption_policy_should_encrypt() to compute it. Encryption
- * asked with no key in reach is refused before the file is read.
+ * execute bit is set (index.c's git_index__create_mode), regular otherwise. A
+ * symlink is content_stage_link's; this capture refuses everything but a regular
+ * file. The caller still decides policy via should_encrypt; use
+ * encryption_policy_should_encrypt() to compute it. Encryption asked with no
+ * key in reach is refused before the file is read.
  *
  * Write-time invariant: the bytes staged classify (content_classify_bytes) as
  * `should_encrypt` says — ENCRYPTED iff true. An encrypt writes the magic, and
@@ -436,6 +437,51 @@ error_t *content_stage_file(
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
+    struct stat *out_stat
+);
+
+/**
+ * Capture a symlink onto a stage
+ *
+ * The capture's other half: a link's bytes are its target, stored as read and
+ * never sealed — deploy's symlink(2) and every readlink expose the target whatever
+ * the branch holds, so a secret target belongs in an encrypted regular file
+ * (core/policy.h) — under GIT_FILEMODE_LINK.
+ *
+ * One lstat names the occupant and is the stat the capture keeps; the target is
+ * read after it. So the stat is the earlier look, which is the order the record
+ * needs: a link that changes after it leaves a triple the next load cannot mistake
+ * for the new one (core/state.h stat_cache_t). A second lstat then holds the
+ * look and the read to one link — the same device and inode, and a ctime that
+ * has not moved, since a new link at a freed inode carries its own — so the target,
+ * the stat and the ownership a claim takes from it are one link's, as
+ * content_stage_file's are one inode's by its descriptor. A link has no descriptor
+ * to pin it, and this is the portable spelling of one. Residue, accepted: a link
+ * made, read and replaced within one second, on a filesystem that hands a freed
+ * inode straight back — the tree reads no sub-second field, and the record's
+ * safety is the order's, not this check's.
+ *
+ * The capture's own refusals — not a link, or a link that changed — come before
+ * anything is staged or stored.
+ *
+ * @param stage The stage the entry goes on (must not be NULL)
+ * @param filesystem_path The link (must not be NULL; never followed)
+ * @param storage_path Storage path in profile (must not be NULL; the entry's path)
+ * @param out_stat The capture's stat: the lstat taken before the target was read
+ *                 (must not be NULL; set on every success)
+ * @return Error or NULL on success
+ *
+ * Errors:
+ * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a symlink
+ * - ERR_CONFLICT: The link changed while it was read, or the stage refused the
+ *   entry (a file/directory collision, or a name Git will not hold)
+ * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The look or the read, by its errno
+ *   (a target too long to read whole is ENAMETOOLONG)
+ */
+error_t *content_stage_link(
+    stage_t *stage,
+    const char *filesystem_path,
+    const char *storage_path,
     struct stat *out_stat
 );
 

@@ -968,33 +968,13 @@ static error_t *add_file_to_stage(
 
     /* Capture onto the stage */
     if (fs_is_symlink(filesystem_path)) {
-        /* Handle symlink: the entry is the link's target, as its bytes */
-        char *target = NULL;
-        err = fs_read_symlink(filesystem_path, &target);
-        if (err) {
-            return error_wrap(
-                err, "Failed to read symlink '%s'",
-                filesystem_path
-            );
-        }
-
-        err = stage_put(
-            stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
-        );
-        free(target);
+        /* The link's own capture: its target, and the lstat taken before the
+         * target was read (infra/content.h) — the link's uid/gid, not the target's,
+         * and the triple the record binds. */
+        struct stat link_stat;
+        err = content_stage_link(stage, filesystem_path, storage_path, &link_stat);
         if (err) {
             return err;
-        }
-
-        /* Capture the link's claim from its own lstat (the link's uid/gid, not
-         * the target's). The link was read and staged lines above, so a failed
-         * look here is a mid-add race — refused, the way the regular arm's capture
-         * fails on its equivalent. */
-        struct stat link_stat;
-        if (fs_lstat(filesystem_path, &link_stat) != 0) {
-            return error_from_errno(
-                errno, "Failed to stat symlink '%s'", filesystem_path
-            );
         }
         err = metadata_capture_from_file(
             filesystem_path, storage_path, &link_stat, &item

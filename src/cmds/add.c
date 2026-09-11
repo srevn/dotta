@@ -956,7 +956,7 @@ static error_t *add_file_to_stage(
     bool previously_encrypted = false;
     if (prior) {
         content_kind_t prior_kind = CONTENT_PLAINTEXT;
-        err = content_classify(repo, &prior->id, &prior_kind, NULL);
+        err = content_classify(repo, &prior->id, prior->mode, &prior_kind, NULL);
         if (err) {
             return error_wrap(
                 err, "Failed to classify the committed bytes of '%s'",

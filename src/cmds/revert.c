@@ -425,7 +425,9 @@ static error_t *entry_to_restore(
  * Uses content layer to transparently decrypt encrypted files before diffing,
  * so users see readable plaintext diffs instead of encrypted gibberish. The content
  * layer classifies each blob by its own bytes, so blobs with different encryption
- * states across commits are routed correctly without any caller-supplied flag.
+ * states across commits are routed correctly without any caller-supplied flag —
+ * as the entry each stands in, which is why both filemodes come in: a link's
+ * bytes are its target, never a seal (infra/content.h).
  *
  * Each blob is read under its own name, because a name is what an encrypted blob
  * is sealed under (crypto/cipher.h "Path binding") and the two names differ
@@ -451,8 +453,10 @@ static error_t *entry_to_restore(
  * @param standing_name The tip's binding, and the label on both sides (must not
  *                     be NULL)
  * @param standing_oid The blob standing at the tip (must not be NULL)
+ * @param standing_mode Its filemode at the tip
  * @param target_name The commit's binding: how its bytes open (must not be NULL)
  * @param target_oid The committed object (must not be NULL)
+ * @param target_mode Its filemode at the commit
  * @return Error or NULL on success
  */
 static error_t *show_diff_preview(
@@ -460,8 +464,10 @@ static error_t *show_diff_preview(
     const char *profile,
     const char *standing_name,
     const git_oid *standing_oid,
+    git_filemode_t standing_mode,
     const char *target_name,
-    const git_oid *target_oid
+    const git_oid *target_oid,
+    git_filemode_t target_mode
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
@@ -476,13 +482,14 @@ static error_t *show_diff_preview(
 
     /* Get decrypted plaintext content from both blobs.
      *
-     * Each call classifies its own blob's bytes — the routing decision lives
-     * with the blob, so encryption-state changes between commits are handled by
-     * the content layer with no caller participation. */
+     * Each call classifies its own blob's bytes, as the entry it stands in —
+     * the routing decision lives with the blob, so encryption-state changes between
+     * commits are handled by the content layer with no caller participation. */
     buffer_t standing_plaintext = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
         repo,
         standing_oid,
+        standing_mode,
         standing_name,
         profile,
         keymgr,
@@ -496,6 +503,7 @@ static error_t *show_diff_preview(
     err = content_get_from_blob_oid(
         repo,
         target_oid,
+        target_mode,
         target_name,
         profile,
         keymgr,
@@ -908,11 +916,11 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * the repository holds the object — which every filemode needs and only the
      * regular-file arm used to make: a link whose blob was gone passed the dry
      * run and failed at the tree write, after the preview had promised the restore.
-     * A link's bytes are its target path and no claim reads their kind (cmds/add.c
-     * stages them raw) — classification is a fact about bytes, and whether it
-     * applies is the filemode's question. */
+     * A link's bytes are its target path, never a seal, and the classify is told
+     * the filemode, so a link's kind is PLAINTEXT whatever its target begins
+     * with (infra/content.h). */
     content_kind_t target_kind = CONTENT_PLAINTEXT;
-    err = content_classify(repo, target_blob, &target_kind, NULL);
+    err = content_classify(repo, target_blob, restored_mode, &target_kind, NULL);
     if (err) {
         err = error_wrap(
             err, "Cannot read '%s' at commit %s", target_name, oid_str
@@ -990,9 +998,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * (crypto/cipher.h "Path binding"), so bytes that carry a binding cannot
      * travel by id to another name — no read under the new name could open them.
      * Plaintext carries none, and a link's bytes are its target path rather than
-     * content, so Git's filemode decides that one as it does at capture
-     * (infra/content.h content_stage_file): both re-enter the tree as the id
-     * the repository already holds.
+     * content — step 9's kind is PLAINTEXT for one, the filemode having decided
+     * it (infra/content.h) — so both re-enter the tree as the id the repository
+     * already holds.
      *
      * The bytes are hashed, not written: what the gate compares and what the
      * preview describes must be the object the commit would store, and a dry
@@ -1001,8 +1009,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * that a cross-name restore of an encrypted file needs the key even where
      * the whole write turns out to already stand: there is no id to compare until
      * the reseal has made one. */
-    if (restored_mode != GIT_FILEMODE_LINK &&
-        target_kind != CONTENT_PLAINTEXT &&
+    if (target_kind != CONTENT_PLAINTEXT &&
         strcmp(target_name, restored_name) != 0) {
         err = content_rebind(
             repo, target_blob, target_name, restored_name, profile,
@@ -1180,12 +1187,14 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         );
     } else {
         /* Detailed diff preview with decryption support. The content layer
-         * classifies each blob by its own bytes, so the "current vs target may
-         * differ in encryption state" case is handled inside show_diff_preview
-         * without caller-side metadata gymnastics. */
+         * classifies each blob by its own bytes, as the entry its filemode says
+         * it is, so the "current vs target may differ in encryption state" case
+         * is handled inside show_diff_preview without caller-side metadata
+         * gymnastics. */
         err = show_diff_preview(
             ctx, profile, restored_name, git_tree_entry_id(standing_entry),
-            target_name, target_blob
+            git_tree_entry_filemode(standing_entry), target_name, target_blob,
+            restored_mode
         );
         if (err) {
             /* Non-fatal: the revert itself doesn't need decryption (copies blobs).

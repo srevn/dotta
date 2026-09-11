@@ -1687,8 +1687,8 @@ static error_t *deploy_file(
 
     /* Handle symlinks - these are never encrypted, so handle separately */
     if (file->type == PATH_TYPE_SYMLINK) {
-        /* For symlinks, we load the blob directly since the content layer is
-         * designed for regular files with potential encryption. */
+        /* A link's blob is its target, never sealed (infra/content.h), so it is
+         * read raw and handed to symlink(2) as it stands. */
         size_t target_len = 0;
         err = gitops_read_blob_content(
             run->repo, &file->blob_oid, (void **) &target_str, &target_len
@@ -1723,6 +1723,7 @@ static error_t *deploy_file(
     err = content_cache_get_from_blob_oid(
         run->cache,
         &file->blob_oid,
+        path_type_to_git_filemode(file->type),
         file->storage_path,
         file->profile,
         &content_buffer

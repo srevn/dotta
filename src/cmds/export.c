@@ -1179,7 +1179,8 @@ static error_t *validate_content(
 
         if (e->kind == EXPORT_ENTRY_SYMLINK) {
             err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, profile, keymgr, &e->content
+                repo, &e->blob_oid, GIT_FILEMODE_LINK, e->storage_path, profile,
+                keymgr, &e->content
             );
             if (err) {
                 return error_wrap(
@@ -1197,7 +1198,7 @@ static error_t *validate_content(
         }
 
         content_kind_t ckind;
-        err = content_classify(repo, &e->blob_oid, &ckind, NULL);
+        err = content_classify(repo, &e->blob_oid, GIT_FILEMODE_BLOB, &ckind, NULL);
         if (err) {
             return error_wrap(err, "Failed to read '%s'", e->storage_path);
         }
@@ -1208,7 +1209,8 @@ static error_t *validate_content(
          * "Cannot decrypt '<path>'" over the cause is the whole story. */
         e->encrypted = (ckind == CONTENT_ENCRYPTED);
         err = content_get_from_blob_oid(
-            repo, &e->blob_oid, e->storage_path, profile, keymgr, &e->content
+            repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path, profile,
+            keymgr, &e->content
         );
         if (err) {
             return err;
@@ -1273,7 +1275,8 @@ static error_t *materialize_entries(
                 const buffer_t *bytes = &e->content;
                 if (!e->content_held) {
                     err = content_get_from_blob_oid(
-                        repo, &e->blob_oid, e->storage_path, profile, keymgr, &local
+                        repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
+                        profile, keymgr, &local
                     );
                     if (err) {
                         return error_wrap(err, "Failed to read '%s'", e->storage_path);
@@ -1642,10 +1645,11 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (e->content_held) {
             err = write_bytes_stdout(&e->content);
         } else {
+            /* A file's: a link's target is held since phase 1 (validate_content) */
             buffer_t local = BUFFER_INIT;
             err = content_get_from_blob_oid(
-                repo, &e->blob_oid, e->storage_path, opts->profile,
-                keymgr, &local
+                repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
+                opts->profile, keymgr, &local
             );
             if (!err) err = write_bytes_stdout(&local);
             buffer_free(&local);

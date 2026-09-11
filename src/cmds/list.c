@@ -488,15 +488,18 @@ static error_t *list_files(
             git_tree_entry *entry = NULL;
             int git_err = git_tree_entry_bypath(&entry, tree, file_path);
             if (git_err == 0) {
-                /* The blob's own bytes say whether it is ciphertext: the indicator
-                 * and the size read one classification, never the claim sheet's
-                 * flag. The size shown is the plaintext's — the cipher's framing
-                 * taken off a blob this build can open — through the helper that
-                 * keeps crypto/cipher.h out of the command layer. */
+                /* The blob's own bytes say whether it is ciphertext, read as
+                 * the entry it is — a link's are its target, never a seal: the
+                 * indicator and the size read one classification, never the claim
+                 * sheet's flag. The size shown is the plaintext's — the cipher's
+                 * framing taken off a blob this build can open — through the
+                 * helper that keeps crypto/cipher.h out of the command layer. */
                 const git_oid *blob_oid = git_tree_entry_id(entry);
                 content_kind_t kind = CONTENT_PLAINTEXT;
                 size_t size = 0;
-                error_t *blob_err = content_classify(repo, blob_oid, &kind, NULL);
+                error_t *blob_err = content_classify(
+                    repo, blob_oid, git_tree_entry_filemode(entry), &kind, NULL
+                );
                 if (!blob_err) {
                     blob_err = stats_get_blob_size(repo, blob_oid, &size);
                 }

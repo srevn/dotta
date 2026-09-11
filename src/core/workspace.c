@@ -890,6 +890,7 @@ static error_t *analyze_file_divergence(
                 err = content_cache_get_from_blob_oid(
                     ws->content_cache,
                     blob_oid_ptr,
+                    expected_filemode,
                     storage_path,
                     profile,
                     &expected_content

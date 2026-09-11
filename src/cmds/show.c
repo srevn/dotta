@@ -112,7 +112,8 @@ static error_t *print_blob_content(
     output_t *out = ctx->out;
 
     /* Get plaintext content (handles encryption transparently — the content layer
-     * classifies by bytes, no caller-supplied flag needed).
+     * classifies by bytes, no caller-supplied flag needed, and by the filemode,
+     * which says a link's bytes are its target: they are read as they stand).
      *
      * The metadata-derived `encrypted` bool below is read for display only (the
      * "(encrypted)" annotation): it is byte-truth via the write-time invariant
@@ -122,7 +123,7 @@ static error_t *print_blob_content(
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
-        repo, blob_oid, storage_path, profile, keymgr, &content
+        repo, blob_oid, filemode, storage_path, profile, keymgr, &content
     );
     if (err) {
         return error_wrap(err, "Failed to get file content");

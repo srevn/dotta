@@ -29,7 +29,7 @@
 struct content_cache {
     git_repository *repo;     /* Borrowed reference */
     keymgr *keymgr;           /* Borrowed reference (can be NULL) */
-    hashmap_t *cache_map;     /* binding (profile:path@oid) -> buffer_t* (owned) */
+    hashmap_t *cache_map;     /* binding and mode (profile:path@oid:mode) -> buffer_t* (owned) */
 };
 
 /**
@@ -94,9 +94,23 @@ content_kind_t content_classify_bytes(
         : CONTENT_UNSUPPORTED_VERSION;
 }
 
+/**
+ * The judgement every function here makes of an entry: its bytes, unless it is
+ * a link — whose bytes are its target and never a seal, whatever they begin with
+ * (the header). Every other mode is judged, so one dotta never writes fails closed.
+ */
+static content_kind_t classify_entry(
+    const uint8_t *data, size_t size, git_filemode_t mode
+) {
+    return mode == GIT_FILEMODE_LINK
+        ? CONTENT_PLAINTEXT
+        : content_classify_bytes(data, size);
+}
+
 error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     content_kind_t *out_kind,
     uint8_t *out_epoch_fp
 ) {
@@ -104,15 +118,14 @@ error_t *content_classify(
     CHECK_NULL(blob_oid);
     CHECK_NULL(out_kind);
 
+    /* Loaded whatever the mode: the load is the proof the object is there. */
     gitops_blob_view_t view;
     error_t *err = gitops_blob_view_open(repo, blob_oid, &view);
     if (err) {
         return error_wrap(err, "Failed to load blob for classification");
     }
 
-    *out_kind = content_classify_bytes(
-        (const uint8_t *) view.data, view.size
-    );
+    *out_kind = classify_entry((const uint8_t *) view.data, view.size, mode);
 
     /* Attribution rides the same parse: an ENCRYPTED verdict means the detect
      * window matched, and the fingerprint sits a few bytes further into the
@@ -162,8 +175,9 @@ static const char ENCRYPTION_DISABLED[] =
 /**
  * Get plaintext from blob (internal workhorse)
  *
- * Classifies the blob by magic header (the single source of truth for encryption
- * state) and routes accordingly:
+ * Classifies the blob as its entry (classify_entry: the magic header, the single
+ * source of truth for a content entry's encryption state; a link's bytes are
+ * its target) and routes accordingly:
  *   - PLAINTEXT           → copy bytes
  *   - ENCRYPTED           → decrypt via keymgr
  *   - UNSUPPORTED_VERSION → ERR_CRYPTO naming the version pair
@@ -183,6 +197,7 @@ static const char ENCRYPTION_DISABLED[] =
  *
  * @param blob_data Raw blob bytes (must not be NULL unless blob_size == 0)
  * @param blob_size Raw blob size in bytes
+ * @param mode The entry's filemode
  * @param storage_path File path in profile (used as AAD when encrypted)
  * @param profile Profile name (used for key derivation when encrypted)
  * @param keymgr Key manager (can be NULL for plaintext files)
@@ -190,8 +205,9 @@ static const char ENCRYPTION_DISABLED[] =
  * @return Error or NULL on success
  */
 static error_t *get_plaintext_from_blob(
-    const uint8_t *blob_data, size_t blob_size, const char *storage_path,
-    const char *profile, keymgr *keymgr, buffer_t *out_content
+    const uint8_t *blob_data, size_t blob_size, git_filemode_t mode,
+    const char *storage_path, const char *profile, keymgr *keymgr,
+    buffer_t *out_content
 ) {
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
@@ -199,9 +215,11 @@ static error_t *get_plaintext_from_blob(
 
     *out_content = (buffer_t){ 0 };
 
-    /* Bytes are authoritative. content_classify_bytes is total: every blob lands
-     * in exactly one of three states regardless of any external claim. */
-    content_kind_t kind = content_classify_bytes(blob_data, blob_size);
+    /* Bytes are authoritative, as the entry they stand in: classify_entry is
+     * total, so every blob lands in exactly one of three states regardless of
+     * any external claim — a link's target in PLAINTEXT, whatever it begins
+     * with. */
+    content_kind_t kind = classify_entry(blob_data, blob_size, mode);
 
     switch (kind) {
         case CONTENT_PLAINTEXT: {
@@ -247,7 +265,7 @@ static error_t *get_plaintext_from_blob(
         }
     }
 
-    /* Unreachable: content_classify_bytes returns one of three values. */
+    /* Unreachable: classify_entry returns one of three values. */
     return ERROR(
         ERR_INTERNAL,
         "Unknown content kind %d for '%s'", (int) kind, storage_path
@@ -257,6 +275,7 @@ static error_t *get_plaintext_from_blob(
 error_t *content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
@@ -281,7 +300,7 @@ error_t *content_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile, keymgr, out_content
+        view.data, view.size, mode, storage_path, profile, keymgr, out_content
     );
 
     gitops_blob_view_close(&view);
@@ -324,9 +343,11 @@ error_t *content_rebind(
         );
     }
 
+    /* A content entry by the domain (the header): a link never reaches here. */
     buffer_t plaintext = BUFFER_INIT;
     err = get_plaintext_from_blob(
-        view.data, view.size, from_storage_path, profile, keymgr, &plaintext
+        view.data, view.size, GIT_FILEMODE_BLOB, from_storage_path, profile,
+        keymgr, &plaintext
     );
     gitops_blob_view_close(&view);
     if (err) {
@@ -382,6 +403,7 @@ content_cache_t *content_cache_create(
 error_t *content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     const char *storage_path,
     const char *profile,
     const buffer_t **out_content
@@ -400,12 +422,20 @@ error_t *content_cache_get_from_blob_oid(
      * cipher verified for exactly this binding; a second row naming the same
      * ciphertext under another path or profile misses and runs its own decrypt,
      * which the cipher refuses. A plaintext blob shared by two rows is read twice
-     * — one inflate of a dotfile; the cache exists for the decrypt. */
+     * — one inflate of a dotfile; the cache exists for the decrypt.
+     *
+     * The entry's filemode closes the key: a link's bytes are copied where a
+     * content entry's are judged, so one binding read both ways is two entries.
+     * It is printed at a filemode's six octal digits, so the OID and the mode
+     * are one fixed-width suffix. */
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), blob_oid);
 
-    char key[DOTTA_REFNAME_MAX + PATH_MAX + sizeof(oid_str) + 2];
-    int n = snprintf(key, sizeof(key), "%s:%s@%s", profile, storage_path, oid_str);
+    char key[DOTTA_REFNAME_MAX + PATH_MAX + sizeof(oid_str) + sizeof(":@:000000")];
+    int n = snprintf(
+        key, sizeof(key), "%s:%s@%s:%06o", profile, storage_path, oid_str,
+        (unsigned int) mode
+    );
     if (n < 0 || (size_t) n >= sizeof(key)) {
         return ERROR(
             ERR_INVALID_ARG, "Content key too long for '%s'", storage_path
@@ -437,7 +467,7 @@ error_t *content_cache_get_from_blob_oid(
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
-        view.data, view.size, storage_path, profile, cache->keymgr, content
+        view.data, view.size, mode, storage_path, profile, cache->keymgr, content
     );
 
     gitops_blob_view_close(&view);
@@ -481,11 +511,13 @@ error_t *content_compare_blob_to_disk(
     CHECK_NULL(cache);
     CHECK_NULL(out_result);
 
-    /* Bytes are authoritative: classify the blob, route by the answer. No proxy
-     * field can disagree with this — there is no proxy. The routing-on-stale-flag
-     * bug class is structurally impossible here. */
+    /* Bytes are authoritative: classify the blob as an entry of the mode compared
+     * under and route by the answer — a link takes the fast path, its target
+     * hashed as it stands. No proxy field can disagree with this — there is no
+     * proxy. The routing-on-stale-flag bug class is structurally impossible
+     * here. */
     content_kind_t kind;
-    error_t *err = content_classify(repo, blob_oid, &kind, NULL);
+    error_t *err = content_classify(repo, blob_oid, expected_mode, &kind, NULL);
     if (err) {
         return err;  /* Already wrapped by content_classify */
     }
@@ -504,7 +536,7 @@ error_t *content_compare_blob_to_disk(
      * actionable error directly. */
     const buffer_t *content = NULL;
     err = content_cache_get_from_blob_oid(
-        cache, blob_oid, storage_path, profile, &content
+        cache, blob_oid, expected_mode, storage_path, profile, &content
     );
     if (err) {
         return err;

@@ -308,10 +308,12 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* Get content from cache via the row's blob_oid (borrowed reference - don't free) */
+    /* Get content from cache via the row's blob_oid (borrowed reference - don't
+     * free), read as the entry the row's type says it is */
+    git_filemode_t mode = path_type_to_git_filemode(file->type);
     const buffer_t *content = NULL;
     error_t *err = content_cache_get_from_blob_oid(
-        cache, &file->blob_oid, file->storage_path, file->profile, &content
+        cache, &file->blob_oid, mode, file->storage_path, file->profile, &content
     );
     if (err) {
         return error_wrap(
@@ -321,7 +323,6 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Generate diff */
-    git_filemode_t mode = path_type_to_git_filemode(file->type);
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
                                 ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
@@ -750,7 +751,7 @@ static error_t *compare_tree_files_to_filesystem(
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
             err = content_cache_get_from_blob_oid(
-                cache, &entry->blob_oid, storage_path, profile, &hist_content
+                cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
             );
             if (err) {
                 err = error_wrap(
@@ -779,7 +780,7 @@ static error_t *compare_tree_files_to_filesystem(
         /* Full diff output */
         const buffer_t *hist_content = NULL;
         err = content_cache_get_from_blob_oid(
-            cache, &entry->blob_oid, storage_path, profile, &hist_content
+            cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
         );
         if (err) {
             err = error_wrap(

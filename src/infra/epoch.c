@@ -726,9 +726,13 @@ static int epoch_walk_cb(
         return 0;  /* first visit: descend */
     }
 
+    /* Judged as the entry it stands in: a link's bytes are its target, never a
+     * ciphertext, whatever they begin with (infra/content.h). */
     content_kind_t kind;
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    err = content_classify(walk->repo, oid, &kind, fp);
+    err = content_classify(
+        walk->repo, oid, git_tree_entry_filemode(entry), &kind, fp
+    );
     if (err) {
         walk->error = err;
         return -1;

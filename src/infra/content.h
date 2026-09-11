@@ -10,15 +10,17 @@
  * - Transparent decryption (callers always get plaintext)
  * - Caching for batch operations (avoid redundant decryption)
  * - Type-safe ownership (const for borrowed references)
- * - Magic header is the single source of truth for encryption state; callers do
- *   NOT pass an "expected encrypted" flag and the read path does NOT cross-check
- *   against any external claim. Bytes win.
+ * - Magic header is the single source of truth for a content entry's encryption
+ *   state; callers do NOT pass an "expected encrypted" flag and the read path
+ *   does NOT cross-check against any external claim. Bytes win. What callers do
+ *   pass is the entry's filemode, which says whether the bytes are judged at
+ *   all: a link's are its target, never a seal, whatever they begin with.
  *
  * Two-tier API:
  *
  * Simple API (single-file operations):
  *   buffer_t content = BUFFER_INIT;
- *   content_get_from_blob_oid(repo, &oid, path, profile, keymgr, &content);
+ *   content_get_from_blob_oid(repo, &oid, mode, path, profile, keymgr, &content);
  *   // ... use content ...
  *   buffer_free(&content);  // Caller owns buffer
  *
@@ -26,7 +28,7 @@
  *   content_cache_t *cache = content_cache_create(repo, keymgr);
  *   for (each file) {
  *       const buffer_t *content;  // Note: const
- *       content_cache_get_from_blob_oid(cache, &oid, path, profile, &content);
+ *       content_cache_get_from_blob_oid(cache, &oid, mode, path, profile, &content);
  *       // ... use content (don't free - cache owns it) ...
  *   }
  *   content_cache_free(cache);  // Frees all cached buffers
@@ -58,14 +60,18 @@ typedef struct metadata metadata_t;
 /**
  * Classification of a Git blob's content kind.
  *
- * Determined by inspecting the blob's magic header. The cipher's MAC binds the
- * magic header into authentication, so blob bytes are the authoritative source
- * of truth for encryption state. Any external record (metadata.json, the view
- * row's flag) is by definition a cache that derives from byte sniffing.
+ * Determined by inspecting the blob's magic header, for a content entry. The
+ * cipher's MAC binds the magic header into authentication, so a content entry's
+ * bytes are the authoritative source of truth for its encryption state. A link's
+ * bytes are its target — stored as read and never sealed (content_stage_link) —
+ * so a link is PLAINTEXT whatever they begin with, and every function below that
+ * answers for a blob takes the filemode of the entry it stands in. Any external
+ * record (metadata.json, the view row's flag) is by definition a cache that derives
+ * from byte sniffing.
  *
  * Three-way discrimination matches the cipher format's contract:
  *   - CONTENT_PLAINTEXT: blob does not begin with the cipher magic prefix, or
- *                        is too short to carry one.
+ *                        is too short to carry one — or the entry is a link.
  *   - CONTENT_ENCRYPTED: blob begins with `"DOTTA" || CIPHER_VERSION`; this build
  *                        can decrypt it given the key.
  *   - CONTENT_UNSUPPORTED_VERSION: blob begins with `"DOTTA"` but the version
@@ -95,11 +101,19 @@ typedef enum {
 content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
 
 /**
- * Classify a Git blob by sniffing its magic header.
+ * Classify a Git blob by sniffing its magic header, as the entry it stands in.
  *
- * Bytes are the authoritative source of truth for encryption state; this is the
- * canonical entry point for the question "is this blob encrypted?". Header-only
- * inspection — no keymgr required.
+ * Bytes are the authoritative source of truth for a content entry's encryption
+ * state; this is the canonical entry point for the question "is this entry
+ * encrypted?". Header-only inspection — no keymgr required.
+ *
+ * The filemode says whether the header is read at all. A link's bytes are its
+ * target, so a link is PLAINTEXT whatever they begin with; every other mode is
+ * judged by its bytes — the regular kinds dotta writes and any other a foreign
+ * tree carries — so an unfamiliar mode fails closed, and a sealed blob under it
+ * still reads as sealed. The blob is loaded whatever the mode: the load is the
+ * proof the repository holds the object, which cmds/revert reads as one for every
+ * filemode.
  *
  * When `out_epoch_fp` is non-NULL and the blob classifies ENCRYPTED, the header's
  * epoch fingerprint (KDF_EPOCH_FP_SIZE bytes — which repository epoch keyed this
@@ -110,6 +124,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  *
  * @param repo Repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
+ * @param mode The entry's filemode, as its tree or index records it
  * @param out_kind Output kind on success (must not be NULL)
  * @param out_epoch_fp Optional epoch fingerprint out (KDF_EPOCH_FP_SIZE bytes;
  *          filled only for CONTENT_ENCRYPTED; can be NULL)
@@ -123,6 +138,7 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
 error_t *content_classify(
     git_repository *repo,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     content_kind_t *out_kind,
     uint8_t *out_epoch_fp
 );
@@ -161,7 +177,9 @@ size_t content_estimated_plaintext_size(
  * blob, the storage path the SIV absorbed, and the blob — and the key names the
  * whole binding (`profile:path@oid`, the refspec grammar with the blob's OID
  * where a commit would stand), so a row naming the same ciphertext under another
- * path or profile never reads an entry the cipher did not verify for it.
+ * path or profile never reads an entry the cipher did not verify for it. The
+ * entry's filemode closes the key (`:mode`): a link's bytes are copied where a
+ * content entry's are judged, so one binding read both ways is two entries.
  *
  * Ownership:
  * - Cache owns all buffers
@@ -180,13 +198,15 @@ typedef struct content_cache content_cache_t;
  *
  * Process:
  * 1. Load blob from OID
- * 2. Classify by magic header (the authoritative source of encryption state)
- * 3. PLAINTEXT      → copy bytes
+ * 2. Classify as the entry it stands in (content_classify): a link's bytes are
+ *    its target
+ * 3. PLAINTEXT      → copy bytes (a link's, whatever they begin with)
  *    ENCRYPTED      → decrypt using profile key from keymgr
  *    UNSUPPORTED_VERSION → ERR_CRYPTO with version-skew diagnostic
  *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
+ * @param mode The entry's filemode, as its tree or index records it
  * @param storage_path Path in profile (must not be NULL)
  *          SECURITY: Used as AAD in encryption. Must match Git tree path.
  * @param profile Profile name for key derivation (must not be NULL)
@@ -207,6 +227,7 @@ typedef struct content_cache content_cache_t;
 error_t *content_get_from_blob_oid(
     git_repository *repo,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
@@ -233,8 +254,8 @@ error_t *content_get_from_blob_oid(
  *
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
- * (content_stage_link's capture, core/manifest.c's link row, cmds/revert.c's
- * claim).
+ * (content_stage_link's capture, every read here — each takes the entry's filemode
+ * — core/manifest.c's link row, cmds/revert.c's claim).
  *
  * The write-boundary invariant content_stage_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
@@ -283,9 +304,9 @@ error_t *content_rebind(
  * Compare a Git blob against a filesystem path (encryption-aware).
  *
  * The single seam for "is this blob equal to this disk file?". Internally
- * classifies the blob by magic header and routes:
+ * classifies the blob as an entry of `expected_mode` (content_classify) and routes:
  *   - PLAINTEXT           → fast path: stream-hash disk, compare to OID.
- *                           Avoids inflating the stored Git blob.
+ *                           Avoids inflating the stored Git blob. A link always.
  *   - ENCRYPTED           → slow path: decrypt via cache, byte-compare to disk.
  *   - UNSUPPORTED_VERSION → slow path; surfaces ERR_CRYPTO with a clear
  *                           version-skew message via the content reader.
@@ -343,16 +364,18 @@ content_cache_t *content_cache_create(
  * Use for batch operations (e.g., status, workspace analysis). Returns borrowed
  * reference valid until cache is freed.
  *
- * On first access for a given binding (profile, storage path, blob):
- * - Loads and classifies the blob (PLAINTEXT / ENCRYPTED / UNSUPPORTED_VERSION)
+ * On first access for a given binding (profile, storage path, blob) and filemode:
+ * - Loads and classifies the blob as its entry (PLAINTEXT / ENCRYPTED /
+ *   UNSUPPORTED_VERSION; a link's bytes are its target, content_classify)
  * - Decrypts if needed; UNSUPPORTED_VERSION surfaces ERR_CRYPTO
  * - Stores plaintext in cache
  *
- * On subsequent access for the same binding:
+ * On subsequent access for the same binding and filemode:
  * - Returns cached buffer (O(1) lookup)
  *
  * @param cache Content cache (must not be NULL)
  * @param blob_oid Blob OID (must not be NULL)
+ * @param mode The entry's filemode, as its tree or index records it
  * @param storage_path Path in profile (must not be NULL, used as AAD for
  *                     encryption)
  * @param profile Profile name (must not be NULL)
@@ -362,6 +385,7 @@ content_cache_t *content_cache_create(
 error_t *content_cache_get_from_blob_oid(
     content_cache_t *cache,
     const git_oid *blob_oid,
+    git_filemode_t mode,
     const char *storage_path,
     const char *profile,
     const buffer_t **out_content

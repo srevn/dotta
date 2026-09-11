@@ -378,6 +378,11 @@ bool gitignore_rule_negated(const gitignore_rule_t *rule);
  * — and is exactly where the parse makes none; zero equals nothing, itself
  * included.
  *
+ * The span is not a line. Read back alone, a span that ends in a `\r` — one a
+ * trailing space kept inside the rule, `foo<CR><SP>` — names another rule, the
+ * `\r` then its terminator. An editor compares by span and writes the line it
+ * was given.
+ *
  * `line` is one line: a `\n` inside it is pattern content here, where the ruleset's
  * own door would have split on it. A caller holding a whole file splits first;
  * a caller holding one string it means as a single rule should put it through

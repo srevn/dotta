@@ -38,7 +38,8 @@
  * are one rule while `foo` and `  foo` are two, and a blank or comment line
  * names none. `span` is the pattern's own, which the caller has already asked
  * for — never zero, since require_patterns refused every argument that makes no
- * rule: it is also the bytes the caller writes.
+ * rule. A span is the rule's identity, not its line: the caller writes the pattern
+ * whole.
  */
 static bool pattern_exists(const char *content, const char *pattern, size_t span) {
     const char *line = content;
@@ -80,10 +81,17 @@ static error_t *require_patterns(const char *flag, char **patterns, size_t count
 /**
  * Add patterns to .dottaignore content
  *
- * Appends each pattern as the rule it names — its span, so what the grammar would
- * trim off the back is not written and nothing else is lost — skipping a pattern
- * whose rule is already present, in the file or earlier in the batch. Deduplication
- * is by rule (pattern_exists), against the accumulating buffer.
+ * Appends each pattern as it was given, and its newline — the line require_patterns
+ * read it as, so the file reads back the rule the pattern was checked as — skipping
+ * a pattern whose rule is already present, in the file or earlier in the batch.
+ * Deduplication is by rule (pattern_exists), against the accumulating buffer.
+ * The pattern, never its span: `foo<CR><SP>` is the rule foo<CR>, and its span
+ * written back alone would be the rule foo.
+ *
+ * `existing_content` is the file as read, or the seed — never empty, since
+ * ignore_blob_text answers an empty blob as absent and modify_dottaignore seeds
+ * the absent one — so no pattern lands at the head of the file, where a byte-order
+ * mark in front of it would be the file's and not the pattern's.
  *
  * Contract: on success, *new_content is NULL iff *added_count == 0. The helper
  * never hands back a buffer that is byte-identical to its input, so callers can
@@ -96,6 +104,7 @@ static error_t *add_patterns_to_content(
     char **new_content,
     size_t *added_count
 ) {
+    CHECK_NULL(existing_content);
     CHECK_NULL(patterns);
     CHECK_NULL(new_content);
     CHECK_NULL(added_count);
@@ -103,14 +112,9 @@ static error_t *add_patterns_to_content(
     *new_content = NULL;
     *added_count = 0;
 
-    if (pattern_count == 0) {
-        return NULL;
-    }
+    size_t existing_len = strlen(existing_content);
 
-    /* Calculate required buffer size */
-    size_t existing_len = existing_content ? strlen(existing_content) : 0;
-
-    /* Upper-bound allocation: a span is never longer than its pattern */
+    /* Upper bound: as if every pattern were written */
     size_t max_size = existing_len + 1;      /* +1 for possible separator */
     for (size_t i = 0; i < pattern_count; i++) {
         max_size += strlen(patterns[i]) + 1; /* pattern + newline */
@@ -123,16 +127,11 @@ static error_t *add_patterns_to_content(
         );
     }
 
-    /* Seed result with existing content */
-    char *pos = result;
-
-    if (existing_content && existing_len > 0) {
-        memcpy(pos, existing_content, existing_len);
-        pos += existing_len;
-
-        if (existing_content[existing_len - 1] != '\n') {
-            *pos++ = '\n';
-        }
+    /* Seed result with existing content, ended by a newline */
+    memcpy(result, existing_content, existing_len);
+    char *pos = result + existing_len;
+    if (existing_content[existing_len - 1] != '\n') {
+        *pos++ = '\n';
     }
     *pos = '\0';
 
@@ -145,13 +144,13 @@ static error_t *add_patterns_to_content(
      */
     for (size_t i = 0; i < pattern_count; i++) {
         const char *p = patterns[i];
-        size_t span = gitignore_rule_span(p, strlen(p));
-        if (pattern_exists(result, p, span)) {
+        size_t length = strlen(p);
+        if (pattern_exists(result, p, gitignore_rule_span(p, length))) {
             continue;
         }
 
-        memcpy(pos, p, span);
-        pos += span;
+        memcpy(pos, p, length);
+        pos += length;
         *pos++ = '\n';
         *pos = '\0';  /* Keep result valid for next pattern_exists call */
         (*added_count)++;

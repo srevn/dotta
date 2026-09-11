@@ -47,6 +47,13 @@
  * `decided && !ignored`, which is what core/ignore's source-tree ladder turns
  * on. The parity suite compares patterns only where both answers ignore.
  *
+ * And one at the door, which the parity suite cannot see, for it asks only about
+ * files: git hands a command-line entry to its list unread (`ls-files -x '#foo'`
+ * matches a file named `#foo`, `-x 'foo '` keeps the space, `-x ''` is taken
+ * and matches nothing), where a pattern here is read as the line it would be in
+ * a file, and refused where that line makes no rule (validate_pattern; gitignore.h
+ * says why).
+ *
  * What git has and this file must not take, for want of a subject: per-pattern
  * base/baselen (git reads a .gitignore per directory; dotta stores one at each
  * root), the exclude_list_group / exclude_stack / untracked cache, resolve_dtype
@@ -245,12 +252,12 @@ static size_t rule_span(const char *line, size_t len) {
 
 /* --- Per-line parse ------------------------------------------------- */
 
-/* A line that makes no rule — rule_span's zero, and nothing else — leaves
- * out_rule->pattern NULL, which is what the module's public door already answers
- * for one (gitignore_rule_parse: *out = NULL). The origin is not the line's:
+/* One line into the rule it makes. A line that makes no rule — rule_span's zero,
+ * and nothing else — leaves out_rule->pattern NULL: a file skips it, and a pattern
+ * never arrives as one (validate_pattern refused it). The origin is not the line's:
  * the ruleset tags the rule after the parse, and a rule alone carries none. Returns
  * an error on arena exhaustion. */
-static error_t *parse_one_rule(
+static error_t *parse_line(
     arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule
 ) {
     out_rule->pattern = NULL;
@@ -323,6 +330,33 @@ static error_t *parse_one_rule(
     out_rule->source = source;
 
     return NULL;
+}
+
+/* --- One pattern ---------------------------------------------------- */
+
+/* One pattern — a string meant as one rule — refused unless it is one. It is
+ * read as the line it would be in a file (parse_line reads it so): it must be
+ * one line, no longer than a pattern may be, and make a rule. The refusals speak
+ * the pattern's noun. One about what the pattern says quotes it — the checks
+ * before it bound the quote to one line of at most 4096 bytes — and one about
+ * its shape does not. `#` is tested beside rule_span's own test of it: one module,
+ * one definition of a comment. */
+static error_t *validate_pattern(const char *pattern, size_t len) {
+    if (memchr(pattern, '\n', len))
+        return ERROR(ERR_VALIDATION, "gitignore: a pattern is one line");
+    if (len > MAX_PATTERN_LENGTH)
+        return ERROR(
+            ERR_VALIDATION, "gitignore: a pattern exceeds %d bytes",
+            MAX_PATTERN_LENGTH
+        );
+    if (rule_span(pattern, len) > 0)
+        return NULL;
+    if (*pattern == '#')
+        return ERROR(
+            ERR_VALIDATION, "gitignore: '%s' is a comment, not a pattern\n"
+            "Hint: Escape the '#' to match it: '\\%s'", pattern, pattern
+        );
+    return ERROR(ERR_VALIDATION, "gitignore: '%s' names no pattern", pattern);
 }
 
 /* --- The match at one rung ------------------------------------------ */
@@ -499,7 +533,7 @@ error_t *gitignore_ruleset_append(
             );
 
         gitignore_rule_t rule = { 0 };
-        RETURN_IF_ERROR(parse_one_rule(set->arena, cursor, line_len, &rule));
+        RETURN_IF_ERROR(parse_line(set->arena, cursor, line_len, &rule));
 
         /* Gate MAX_RULES only when we're actually about to store — a blank/comment
          * line at index 10 000 must not falsely trip the limit. */
@@ -706,28 +740,26 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
 
 /* --- The rule alone -------------------------------------------------- */
 
+error_t *gitignore_validate_pattern(const char *pattern) {
+    CHECK_NULL(pattern);
+
+    return validate_pattern(pattern, strlen(pattern));
+}
+
 error_t *gitignore_rule_parse(
-    arena_t *arena, const char *line, gitignore_rule_t **out
+    arena_t *arena, const char *pattern, gitignore_rule_t **out
 ) {
     CHECK_NULL(arena);
-    CHECK_NULL(line);
+    CHECK_NULL(pattern);
     CHECK_NULL(out);
 
     *out = NULL;
 
-    size_t len = strlen(line);
-    if (len > MAX_PATTERN_LENGTH)
-        return ERROR(
-            ERR_VALIDATION,
-            "gitignore: line exceeds %d bytes", MAX_PATTERN_LENGTH
-        );
-    if (memchr(line, '\n', len))
-        return ERROR(ERR_VALIDATION, "gitignore: a rule is one line");
+    size_t len = strlen(pattern);
+    RETURN_IF_ERROR(validate_pattern(pattern, len));
 
     gitignore_rule_t rule = { 0 };
-    RETURN_IF_ERROR(parse_one_rule(arena, line, len, &rule));
-    if (!rule.pattern)
-        return NULL;
+    RETURN_IF_ERROR(parse_line(arena, pattern, len, &rule));
 
     gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));
     if (!copy)

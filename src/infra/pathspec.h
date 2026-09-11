@@ -76,8 +76,9 @@ typedef struct {
  *     and is refused.
  *   - The shape is read past a leading '!', so a negation is a rule in either
  *     vocabulary
- *   - A pattern that makes no rule — gitignore reads a leading '#' as a comment
- *     — is refused rather than compiled to nothing
+ *   - A glob the grammar refuses — a comment (a leading '#'), two lines, one
+ *     past 4096 bytes — is refused in the grammar's words rather than compiled
+ *     to nothing
  *
  * NULL / empty inputs short-circuit: `*out` is NULL (matches all). A NULL pathspec
  * passed to pathspec_matches matches all paths.

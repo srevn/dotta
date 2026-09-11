@@ -34,6 +34,19 @@
  * infra/pathspec, which reads its rules in its own order and walks the rungs
  * itself.
  *
+ * Two kinds of input reach the grammar. A *file* is lines
+ * (gitignore_ruleset_append): a byte-order mark at its head is the file's, a
+ * comment or a blank line makes no rule, and a `\r` that ends a line is its
+ * terminator. A *pattern* is one line of that grammar meant as one rule
+ * (gitignore_validate_pattern, gitignore_rule_parse): it is read as the line it
+ * would be in a file — trailing spaces trimmed, a final `\r` a terminator, a
+ * leading `#` a comment — and where that line would make no rule, the pattern
+ * is refused, never read as nothing. git reads a command-line entry unread
+ * (`ls-files -x '#foo'` matches a file named `#foo`); a pattern here cannot be,
+ * because `ignore --add` writes it into a file as a line and `--exclude` is
+ * promised the file's meaning. So `foo ` means `foo`, and a name that begins
+ * with `#` is matched by `\#`.
+ *
  * Lifetime: the ruleset and every rule are arena-backed. All memory (rule array,
  * pattern copies) lives until arena_destroy; there is no separate free.
  *
@@ -233,23 +246,38 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *ruleset);
 typedef struct gitignore_rule gitignore_rule_t;
 
 /**
- * Parse one line into a rule.
+ * Refuse a pattern that is not one rule.
  *
- * The line as the ruleset's parser reads one: the `!` and the anchor slash, the
- * trailing slash as the directory marker, escapes, trailing whitespace trimmed.
- * A line that makes no rule — blank, a comment (`#` first), whitespace only,
- * trimmed to nothing — answers NULL with no error; a line past 4096 bytes, or
- * one holding a newline (a rule is one line), is refused (ERR_VALIDATION). The
- * rule is the arena's.
+ * gitignore_rule_parse's refusals with nothing kept, for a caller that writes
+ * the pattern itself and asks the grammar first (cmds/ignore's --add and --remove).
+ * In order: a newline (a pattern is one line), a length past 4096 bytes, and a
+ * line that would make no rule — a comment, in its own words and with the escape
+ * that makes it a pattern; anything else as naming nothing. A refusal about what
+ * the pattern says quotes it, bounded by that order to one line of at most 4096
+ * bytes; one about its shape quotes nothing. The caller names its source around
+ * the refusal and repeats none of it.
  *
- * @param arena Arena providing storage (borrowed; must outlive the rule)
- * @param line  One line of gitignore grammar (must not be NULL)
- * @param out   The rule, or NULL when the line makes none (must not be NULL)
+ * @param pattern One pattern (must not be NULL)
+ * @return Error (ERR_VALIDATION), or NULL when the pattern is one rule
+ */
+error_t *gitignore_validate_pattern(const char *pattern);
+
+/**
+ * Parse one pattern into a rule of its own.
+ *
+ * The pattern is read as the line it would be in a file — the `!` and the anchor
+ * slash, the trailing slash as the directory marker, escapes, trailing spaces
+ * trimmed, a final `\r` its terminator — and must make a rule: it is refused
+ * exactly as gitignore_validate_pattern refuses it. The rule is the arena's.
+ *
+ * @param arena   Arena providing storage (borrowed; must outlive the rule)
+ * @param pattern One pattern (must not be NULL)
+ * @param out     The rule; NULL on a refusal (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *gitignore_rule_parse(
     arena_t *arena,
-    const char *line,
+    const char *pattern,
     gitignore_rule_t **out
 );
 
@@ -307,8 +335,9 @@ bool gitignore_rule_negated(const gitignore_rule_t *rule);
  * `line` is one line: a `\n` inside it is pattern content here, where the ruleset's
  * own door would have split on it. A caller holding a whole file splits first;
  * a caller holding one string it means as a single rule should put it through
- * `gitignore_rule_parse`, which refuses an embedded newline and an over-long
- * line by name.
+ * `gitignore_validate_pattern` (or `gitignore_rule_parse`, which keeps the rule),
+ * which refuses an embedded newline, an over-long line and a line that makes no
+ * rule, by name.
  *
  * Allocates nothing, never fails. Safe on a NULL line (0).
  *

@@ -37,13 +37,10 @@
  * are one rule iff their spans are equal byte for byte — so `foo` and `foo   `
  * are one rule while `foo` and `  foo` are two, and a blank or comment line
  * names none. `span` is the pattern's own, which the caller has already asked
- * for: it is also the bytes the caller writes.
+ * for — never zero, since require_patterns refused every argument that makes no
+ * rule: it is also the bytes the caller writes.
  */
 static bool pattern_exists(const char *content, const char *pattern, size_t span) {
-    if (!content || span == 0) {
-        return false;
-    }
-
     const char *line_start = content;
 
     while (*line_start) {
@@ -71,40 +68,20 @@ static bool pattern_exists(const char *content, const char *pattern, size_t span
 }
 
 /**
- * Refuse an argument that names no pattern, before anything is read or written.
+ * Refuse an argument that is not one pattern, before anything is read or written.
  *
- * Each goes through the grammar's own single-rule door, which refuses a newline
- * (a pattern is one line; two would land in the file as two rules) and an over-long
- * line by name. A line that makes no rule is refused here, where the flag and
- * the argument can still be named, rather than landing in the file as a comment
- * or as nothing and being reported as "no changes". A NULL entry is not an argument
- * and is skipped.
+ * The grammar's refusing verb reads each as the line it would be in the file: a
+ * newline (two lines would land as two rules), an over-long line, and a line
+ * that makes no rule — which would land as a comment or as nothing, reported as
+ * "no changes" — are refused in its words, which quote the argument where its
+ * words are the reason. The flag is named here.
  */
-static error_t *require_patterns(
-    arena_t *arena, const char *flag, char **patterns, size_t count
-) {
+static error_t *require_patterns(const char *flag, char **patterns, size_t count) {
     for (size_t i = 0; i < count; i++) {
-        const char *p = patterns[i];
-        if (!p) {
-            continue;
-        }
-
-        gitignore_rule_t *rule = NULL;
-        error_t *err = gitignore_rule_parse(arena, p, &rule);
+        error_t *err = gitignore_validate_pattern(patterns[i]);
         if (err) {
-            return error_wrap(err, "Invalid %s pattern '%s'", flag, p);
+            return error_wrap(err, "Invalid %s pattern", flag);
         }
-        if (rule) {
-            continue;
-        }
-
-        if (*p == '#') {
-            return ERROR(
-                ERR_INVALID_ARG, "%s '%s' is a comment, not a pattern\n"
-                "Escape the '#' to match it: '\\%s'", flag, p, p
-            );
-        }
-        return ERROR(ERR_INVALID_ARG, "%s '%s' names no pattern", flag, p);
     }
 
     return NULL;
@@ -144,11 +121,9 @@ static error_t *add_patterns_to_content(
     size_t existing_len = existing_content ? strlen(existing_content) : 0;
 
     /* Upper-bound allocation: a span is never longer than its pattern */
-    size_t max_size = existing_len + 1;  /* +1 for possible separator */
+    size_t max_size = existing_len + 1;      /* +1 for possible separator */
     for (size_t i = 0; i < pattern_count; i++) {
-        if (patterns[i]) {
-            max_size += strlen(patterns[i]) + 1;  /* pattern + newline */
-        }
+        max_size += strlen(patterns[i]) + 1; /* pattern + newline */
     }
 
     char *result = malloc(max_size + 1);  /* +1 for null terminator */
@@ -180,8 +155,8 @@ static error_t *add_patterns_to_content(
      */
     for (size_t i = 0; i < pattern_count; i++) {
         const char *p = patterns[i];
-        size_t span = p ? gitignore_rule_span(p, strlen(p)) : 0;
-        if (span == 0 || pattern_exists(result, p, span)) {
+        size_t span = gitignore_rule_span(p, strlen(p));
+        if (pattern_exists(result, p, span)) {
             continue;
         }
 
@@ -278,7 +253,7 @@ static error_t *remove_patterns_from_content(
         if (span > 0) {
             for (size_t i = 0; i < pattern_count; i++) {
                 const char *p = patterns[i];
-                if (p && gitignore_rule_span(p, strlen(p)) == span &&
+                if (gitignore_rule_span(p, strlen(p)) == span &&
                     memcmp(line_start, p, span) == 0) {
                     should_remove = true;
                     pattern_found[i] = true;
@@ -1168,14 +1143,10 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
     /* A pattern is checked before its file is opened: an argument that names no
      * rule, or names two, is refused by name rather than written. */
     RETURN_IF_ERROR(
-        require_patterns(
-        ctx->arena, "--add", opts->add_patterns, opts->add_count
-        )
+        require_patterns("--add", opts->add_patterns, opts->add_count)
     );
     RETURN_IF_ERROR(
-        require_patterns(
-        ctx->arena, "--remove", opts->remove_patterns, opts->remove_count
-        )
+        require_patterns("--remove", opts->remove_patterns, opts->remove_count)
     );
 
     /* The scope for edit / modify: the file's home, its name on the screen, and

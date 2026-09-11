@@ -132,21 +132,15 @@ static error_t *compile_rule(
         prefix_location(out, anchor.location);
     }
 
-    gitignore_rule_t *rule = NULL;
-    error_t *err = gitignore_rule_parse(arena, line, &rule);
+    /* The grammar quotes a pattern only where its words are the refusal, which
+     * a rewritten tail — a metacharacter behind an anchor — never is: what it
+     * quotes is the text the user typed, and the wrap names the kind of input
+     * without repeating it. */
+    error_t *err = gitignore_rule_parse(arena, line, &out->rule);
     if (err) {
-        return error_wrap(err, "Failed to compile glob pattern '%s'", input);
-    }
-    if (!rule) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Glob pattern '%s' makes no rule "
-            "(gitignore reads a leading '#' as a comment)",
-            input
-        );
+        return error_wrap(err, "Invalid glob pattern");
     }
 
-    out->rule = rule;
     return NULL;
 }
 

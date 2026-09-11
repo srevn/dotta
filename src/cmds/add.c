@@ -2389,19 +2389,20 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * capture loops are total over their lists, so there is always something to
      * report here. */
 
-    /* Primary success message */
-    if (!committed && walk.files.count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Nothing changed in profile '%s' (%zu file%s already as captured)",
-            opts->profile, walk.files.count, walk.files.count == 1 ? "" : "s"
+    /* What the capture took, both kinds. A commit that moved nothing names what
+     * it found already standing, both kinds in one phrase — the directories were
+     * captured as surely as the files were. One that landed names its files on
+     * the ✓ line and its directories beneath them, or on a ✓ line of their own
+     * when they are all it took. */
+    if (!committed) {
+        char counts[64];
+        output_format_counts(
+            walk.files.count, walk.directories.count, counts, sizeof(counts)
         );
-    } else if (!committed) {
         output_info(
             out, OUTPUT_NORMAL,
-            "Nothing changed in profile '%s' (%zu director%s already as tracked)",
-            opts->profile, walk.directories.count,
-            walk.directories.count == 1 ? "y" : "ies"
+            "Nothing changed in profile '%s' (%s already as captured)",
+            opts->profile, counts
         );
     } else if (walk.files.count > 0) {
         output_success(
@@ -2409,6 +2410,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             walk.files.count, walk.files.count == 1 ? "" : "s",
             opts->profile
         );
+        if (walk.directories.count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
+                walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
+            );
+        }
     } else {
         /* Directory-only add */
         output_success(
@@ -2428,16 +2435,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             record.enabled ? "Profile '%s' created and enabled"
                            : "Profile '%s' created",
             opts->profile
-        );
-    }
-
-    /* Show directory tracking info only when files were also added — and only
-     * when the commit landed: under "Nothing changed" the directories were already
-     * tracked as claimed. */
-    if (committed && walk.files.count > 0 && walk.directories.count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL, "Tracking %zu director%s for change detection",
-            walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
         );
     }
 

@@ -729,6 +729,11 @@ static void free_profile_entries(state_t *state) {
  * where the table becomes this handle's, and answering every per-profile question
  * thereafter as a linear peek over the cache — no per-question SQL.
  *
+ * The cache is allocated at the statement's own count: the table's size rides
+ * in the last column, counted by the statement that reads the rows it sizes, so
+ * the two are one snapshot and nothing another connection commits while this
+ * one steps can make them disagree.
+ *
  * A handle with no database is a load of zero rows: a repository that has never
  * been written has no enabled profile, which is an answer and not a special case.
  * A read that fails leaves the cache empty and says so to its caller.
@@ -740,51 +745,33 @@ static error_t *load_profile_entries(state_t *state) {
 
     if (!state->db) return NULL;
 
-    /* Probe the row count first so we can allocate exactly once. */
-    sqlite3_stmt *count_stmt = NULL;
-    int rc = sqlite3_prepare_v2(
-        state->db, "SELECT COUNT(*) FROM enabled_profiles;", -1, &count_stmt, NULL
-    );
+    /* Every row in position order, and the table's size beside each: the first
+     * row sizes the allocation. */
+    const char *sql =
+        "SELECT name, target, (SELECT count(*) FROM enabled_profiles) "
+        "FROM enabled_profiles ORDER BY position ASC;";
+
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare profile count query");
+        return sqlite_error(state->db, "Failed to prepare profile query");
     }
-    size_t row_count = 0;
-    if (sqlite3_step(count_stmt) == SQLITE_ROW) {
-        sqlite3_int64 n = sqlite3_column_int64(count_stmt, 0);
-        if (n > 0) row_count = (size_t) n;
-    }
-    sqlite3_finalize(count_stmt);
+
+    rc = sqlite3_step(stmt);
+    size_t row_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 2) : 0;
 
     state_profile_entry_t *entries = NULL;
     if (row_count > 0) {
         entries = calloc(row_count, sizeof(*entries));
         if (!entries) {
+            sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to allocate profile row cache");
         }
     }
 
-    /* Read all rows in position order. */
-    const char *sql =
-        "SELECT name, target FROM enabled_profiles "
-        "ORDER BY position ASC;";
-
-    sqlite3_stmt *stmt = NULL;
-    rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        free(entries);
-        return sqlite_error(state->db, "Failed to prepare profile query");
-    }
-
     error_t *err = NULL;
     size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-        if (i >= row_count) {
-            /* Concurrent INSERT between COUNT and SELECT would be unusual under
-             * our write-lock discipline, but guard anyway. */
-            err = ERROR(ERR_STATE_INVALID, "Profile row count changed during load");
-            break;
-        }
-
+    while (rc == SQLITE_ROW && i < row_count) {
         const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
         const char *target_db = (const char *) sqlite3_column_text(stmt, 1);
 
@@ -809,6 +796,7 @@ static error_t *load_profile_entries(state_t *state) {
         }
 
         i++;
+        rc = sqlite3_step(stmt);
     }
 
     sqlite3_finalize(stmt);
@@ -1485,8 +1473,10 @@ void state_free(state_t *state) {
 /**
  * Get every anchor, in filesystem_path order
  *
- * Count, allocate, one full-table SELECT — a local prepare+finalize: a single-pass
- * scan run once per command gains nothing from a cached statement.
+ * One full-table SELECT — a local prepare+finalize: a single-pass scan run once
+ * per command gains nothing from a cached statement — whose last column is the
+ * table's size, so the arena allocation is exact and the count and the rows are
+ * one snapshot (load_profile_entries).
  */
 error_t *state_get_all_anchors(
     const state_t *state,
@@ -1505,52 +1495,39 @@ error_t *state_get_all_anchors(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* Count first (arena allocation wants the size up front) */
-    const char *sql_count = "SELECT COUNT(*) FROM path_anchors;";
-    sqlite3_stmt *stmt_count = NULL;
+    /* The one read (13 columns: 3 identity + 4 metadata + 6 record), and the
+     * table's size in a 14th: the first row sizes the allocation */
+    const char *sql_anchors =
+        "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
+        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, "
+        "(SELECT count(*) FROM path_anchors) "
+        "FROM path_anchors ORDER BY filesystem_path;";
 
-    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, sql_anchors, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare anchor count query");
+        return sqlite_error(state->db, "Failed to prepare anchors query");
     }
 
-    rc = sqlite3_step(stmt_count);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt_count);
-        return sqlite_error(state->db, "Failed to count anchors");
-    }
-
-    size_t anchor_count = (size_t) sqlite3_column_int64(stmt_count, 0);
-    sqlite3_finalize(stmt_count);
-
-    if (anchor_count == 0) {
-        return NULL;  /* Success, no anchors */
-    }
+    rc = sqlite3_step(stmt);
+    size_t anchor_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 13) : 0;
 
     /* Allocate array */
-    anchor_t *anchors = arena_calloc(arena, anchor_count, sizeof(anchor_t));
-    if (!anchors) {
-        return ERROR(ERR_MEMORY, "Failed to allocate anchors array");
+    anchor_t *anchors = NULL;
+    if (anchor_count > 0) {
+        anchors = arena_calloc(arena, anchor_count, sizeof(anchor_t));
+        if (!anchors) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to allocate anchors array");
+        }
     }
 
     /* Helper macros: route allocations through arena */
     #define DUP(s)      arena_strdup(arena, (s))
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
-    /* The one read (13 columns: 3 identity + 4 metadata + 6 record) */
-    const char *sql_anchors =
-        "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
-        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at "
-        "FROM path_anchors ORDER BY filesystem_path;";
-
-    sqlite3_stmt *stmt = NULL;
-    rc = sqlite3_prepare_v2(state->db, sql_anchors, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare anchors query");
-    }
-
     size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < anchor_count) {
+    while (rc == SQLITE_ROW && i < anchor_count) {
         /* Column layout matches sql_anchors:
          *   0-2:  identity (filesystem_path, storage_path, profile)
          *   3-6:  what dotta set (type, mode, owner, group)
@@ -1608,6 +1585,7 @@ error_t *state_get_all_anchors(
         }
 
         i++;
+        rc = sqlite3_step(stmt);
     }
 
     sqlite3_finalize(stmt);
@@ -1914,8 +1892,9 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path) {
 /**
  * Get every ordered path, in filesystem_path order
  *
- * The prune_orders read, the shape of state_get_all_anchors: count, allocate
- * once, hydrate into the caller's arena.
+ * The prune_orders read, the shape of state_get_all_anchors: one SELECT that
+ * carries the table's size, the allocation exact, the rows hydrated into the
+ * caller's arena.
  */
 error_t *state_get_prune_orders(
     const state_t *state,
@@ -1934,43 +1913,30 @@ error_t *state_get_prune_orders(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    const char *sql_count = "SELECT COUNT(*) FROM prune_orders;";
-    sqlite3_stmt *stmt_count = NULL;
-
-    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare order count query");
-    }
-
-    rc = sqlite3_step(stmt_count);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt_count);
-        return sqlite_error(state->db, "Failed to count orders");
-    }
-
-    size_t order_count = (size_t) sqlite3_column_int64(stmt_count, 0);
-    sqlite3_finalize(stmt_count);
-
-    if (order_count == 0) {
-        return NULL;  /* Success, no orders */
-    }
-
-    char **paths = arena_calloc(arena, order_count, sizeof(char *));
-    if (!paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate order paths array");
-    }
-
     const char *sql_orders =
-        "SELECT filesystem_path FROM prune_orders ORDER BY filesystem_path;";
+        "SELECT filesystem_path, (SELECT count(*) FROM prune_orders) "
+        "FROM prune_orders ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
-    rc = sqlite3_prepare_v2(state->db, sql_orders, -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(state->db, sql_orders, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare orders query");
     }
 
+    rc = sqlite3_step(stmt);
+    size_t order_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 1) : 0;
+
+    char **paths = NULL;
+    if (order_count > 0) {
+        paths = arena_calloc(arena, order_count, sizeof(char *));
+        if (!paths) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to allocate order paths array");
+        }
+    }
+
     size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < order_count) {
+    while (rc == SQLITE_ROW && i < order_count) {
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
         if (!fs_path) {
             sqlite3_finalize(stmt);
@@ -1984,6 +1950,7 @@ error_t *state_get_prune_orders(
         }
 
         i++;
+        rc = sqlite3_step(stmt);
     }
 
     sqlite3_finalize(stmt);
@@ -2051,8 +2018,9 @@ error_t *state_release(state_t *state, const char *filesystem_path) {
 /**
  * Get every released copy, in filesystem_path order
  *
- * The released_copies read, the shape of state_get_all_anchors: count, allocate
- * once, hydrate into the caller's arena.
+ * The released_copies read, the shape of state_get_all_anchors: one SELECT that
+ * carries the table's size, the allocation exact, the rows hydrated into the
+ * caller's arena.
  */
 error_t *state_get_released_copies(
     const state_t *state,
@@ -2071,47 +2039,34 @@ error_t *state_get_released_copies(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    const char *sql_count = "SELECT COUNT(*) FROM released_copies;";
-    sqlite3_stmt *stmt_count = NULL;
-
-    int rc = sqlite3_prepare_v2(state->db, sql_count, -1, &stmt_count, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare released count query");
-    }
-
-    rc = sqlite3_step(stmt_count);
-    if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt_count);
-        return sqlite_error(state->db, "Failed to count released copies");
-    }
-
-    size_t released_count = (size_t) sqlite3_column_int64(stmt_count, 0);
-    sqlite3_finalize(stmt_count);
-
-    if (released_count == 0) {
-        return NULL;  /* Success, no released copies */
-    }
-
-    released_copy_t *rows = arena_calloc(arena, released_count, sizeof(released_copy_t));
-    if (!rows) {
-        return ERROR(ERR_MEMORY, "Failed to allocate released copies array");
-    }
-
-    /* Column layout: 0-2 identity, 3-7 the confirmed pair. Every column is NOT
-     * NULL by schema; the blob is 20 bytes by CHECK. */
+    /* Column layout: 0-2 identity, 3-7 the confirmed pair, 8 the table's size
+     * (the first row sizes the allocation). Every column is NOT NULL by schema;
+     * the blob is 20 bytes by CHECK. */
     const char *sql_released =
         "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
-        "stat_mtime, stat_size, stat_ino "
+        "stat_mtime, stat_size, stat_ino, (SELECT count(*) FROM released_copies) "
         "FROM released_copies ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
-    rc = sqlite3_prepare_v2(state->db, sql_released, -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(state->db, sql_released, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
         return sqlite_error(state->db, "Failed to prepare released query");
     }
 
+    rc = sqlite3_step(stmt);
+    size_t released_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 8) : 0;
+
+    released_copy_t *rows = NULL;
+    if (released_count > 0) {
+        rows = arena_calloc(arena, released_count, sizeof(released_copy_t));
+        if (!rows) {
+            sqlite3_finalize(stmt);
+            return ERROR(ERR_MEMORY, "Failed to allocate released copies array");
+        }
+    }
+
     size_t i = 0;
-    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW && i < released_count) {
+    while (rc == SQLITE_ROW && i < released_count) {
         released_copy_t *row = &rows[i];
 
         const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -2143,6 +2098,7 @@ error_t *state_get_released_copies(
         }
 
         i++;
+        rc = sqlite3_step(stmt);
     }
 
     sqlite3_finalize(stmt);

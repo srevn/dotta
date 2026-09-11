@@ -93,10 +93,11 @@ typedef enum {
  * - Priorities 1 and 3 are NOT gated on `config->encryption_enabled`. This is
  *   intentional: if the user explicitly asked to encrypt or a file's prior state
  *   says "encrypted", the policy says so, and the content layer is the single
- *   enforcement point. When encryption is disabled, `content_store_*` surfaces
- *   ERR_CRYPTO with a friendly "enable encryption" message. We never silently
- *   coerce a request to plaintext, because doing so on a previously-encrypted
- *   file would leak its content.
+ *   enforcement point. When encryption is disabled it refuses the seal
+ *   (content_require_encryption: ERR_LOCKED, naming the path and the switch) —
+ *   at the capture, or ahead of it where a command decides before it reads
+ *   (cmds/add). We never silently coerce a request to plaintext, because doing
+ *   so on a previously-encrypted file would leak its content.
  *
  * Source of `previously_encrypted`:
  *   The caller computes this from byte truth: content_classify on the entry the

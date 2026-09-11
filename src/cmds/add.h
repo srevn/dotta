@@ -68,16 +68,21 @@ typedef struct {
  * own `.gitignore` keeps reading where the path stands, that repository's rules
  * being relative to its own root. Prior ciphertext is preserved by the policy's
  * read of the committed bytes and not by a pattern, so a re-capture under a name
- * no pattern matches stays sealed.
+ * no pattern matches stays sealed. The encryption verdict is decided with the
+ * name, before any capture runs: a verdict that seals on a machine with encryption
+ * turned off refuses the command before a byte of it is stored, and a link —
+ * whose entry is its target — is never sealed, nor keeps a name sealed
+ * (infra/content.h).
  *
  * **What the selection promises**: a command that succeeds captures every path
- * it listed, files and directories alike. That is what lets the listing stand
- * in for the commit while the command is still naming — and it is load-bearing,
- * since a directory this command lists is the name its walk composed beneath.
- * So one refusal is owed by the completed selection and cannot be reached path
- * by path: where the command's own directory claims would move which of a profile's
- * two names stands at a location, the name that will stand must be a name this
- * command captured.
+ * it listed, files and directories alike, each as the kind it was listed as — a
+ * path whose kind changed after its listing is refused by its capture, never
+ * read as the other. That is what lets the listing stand in for the commit while
+ * the command is still naming — and it is load-bearing, since a directory this
+ * command lists is the name its walk composed beneath. So one refusal is owed
+ * by the completed selection and cannot be reached path by path: where the
+ * command's own directory claims would move which of a profile's two names stands
+ * at a location, the name that will stand must be a name this command captured.
  *
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty

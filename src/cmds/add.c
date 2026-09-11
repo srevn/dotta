@@ -52,13 +52,25 @@
  * be named beneath it. The listing indexes it by location, so every path beneath
  * one already listed is named from it and the walk carries no frame of its own.
  *
- * `stat` is the file capture's own triple — the fstat of the descriptor the bytes
- * came off — so the record binds the committed blob to it. A directory's stays
- * unset, as apply records them.
+ * `occupant` is what the listing's lstat found there, and it chooses the capture:
+ * a link's (content_stage_link) or a regular file's (content_stage_file), each
+ * refusing the other's occupant, so a path is captured as the kind it was listed
+ * as or not at all. The claim's kind is derived from it where the path is listed
+ * (list_path), so the two cannot disagree.
+ *
+ * `should_encrypt` is the decision pass's verdict (cmd_add), reached with the
+ * name before any capture runs — false but for a regular file, since a link's
+ * entry is its target and the policy is never asked about one.
+ *
+ * `stat` is the capture's own triple — the fstat beside a file's bytes, the lstat
+ * before a link's target — so the record binds the committed blob to it. A
+ * directory's stays unset, as apply records them.
  */
 typedef struct {
     const char *location;         /* Where the claim stands (arena) */
     manifest_claim_t claim;       /* The name and kind it was listed under (arena) */
+    fs_occupant_t occupant;       /* What the listing found there: chooses the capture */
+    bool should_encrypt;          /* The decision pass's verdict; false but for a regular file */
     stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
 } add_path_t;
 
@@ -448,13 +460,17 @@ static bool is_excluded(
 }
 
 /**
- * List `location` under `claim`: the item, its bucket, and the listing's index
+ * List `location` under the name it was given: the item, its bucket, and the
+ * listing's index
  *
  * The item is the arena's and stable, which is what lets the index borrow its
  * claim rather than a loop-local pair — and that is what makes every path beneath
  * this one nameable from it (core/manifest.h manifest_name, the `pending` layer).
- * The claim's kind chooses the bucket: the walk is the sole source of directory
- * tracking, and every phase after reads the two lists apart.
+ * The claim's kind is the occupant's reading — a directory is a directory, and
+ * anything else the listing keeps is a file, a link among them — so the kind
+ * and the occupant the capture is chosen by are one fact. The kind chooses the
+ * bucket: the walk is the sole source of directory tracking, and every phase
+ * after reads the two lists apart.
  *
  * Both fallible steps are checked. The listing is what this command promises to
  * capture, so an entry lost to a failed push and captured anyway would break
@@ -462,18 +478,23 @@ static bool is_excluded(
  * listing after one.
  */
 static error_t *list_path(
-    add_walk_t *walk, const char *location, manifest_claim_t claim
+    add_walk_t *walk, const char *location, const char *storage_path,
+    fs_occupant_t occupant
 ) {
     add_path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
     if (!path) {
         return ERROR(ERR_MEMORY, "Failed to allocate path entry");
     }
     path->location = location;
-    path->claim = claim;
+    path->claim = (manifest_claim_t){
+        storage_path,
+        occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE
+    };
+    path->occupant = occupant;
     path->stat = STAT_CACHE_UNSET;
 
     error_t *err = ptr_array_push(
-        claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
+        path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
         path
     );
     if (err) return err;
@@ -616,7 +637,8 @@ static error_t *collect_tree(
          * it and take every sibling with it. */
         struct stat st;
         path_kind_t kind = PATH_KIND_FILE;
-        switch (fs_lstat_occupant(child_fs, &st)) {
+        const fs_occupant_t occupant = fs_lstat_occupant(child_fs, &st);
+        switch (occupant) {
             case FS_OCCUPANT_NONE:
                 output_info(out, OUTPUT_VERBOSE, "Skipped absent: %s", child_fs);
                 continue;
@@ -751,9 +773,7 @@ static error_t *collect_tree(
                 continue;
             }
 
-            err = list_path(
-                walk, child_fs, (manifest_claim_t){ child_storage, kind }
-            );
+            err = list_path(walk, child_fs, child_storage, occupant);
         }
 
         /* Settled either way, so the descent is one statement: a listed directory
@@ -890,193 +910,97 @@ static void report_capture(
 }
 
 /**
- * Add single file to the stage and capture metadata
+ * Capture one listed path onto the stage, and its claim onto the sheet
  *
- * Handles file storage, encryption, and metadata capture in a single operation.
- * Uses stat data from content layer to eliminate race conditions.
+ * As the kind it was listed as: the occupant chooses the capture, and each capture
+ * refuses the other's (infra/content.h), so a path whose kind changed after its
+ * listing is refused rather than read as what it has become — and the verdict
+ * the decision pass reached for a regular file is read by a regular file's capture
+ * alone. Sealed as that pass decided. The claim comes from the capture's own
+ * stat, which is also the triple the record binds (path->stat).
  *
- * @param ctx Dispatch context (must not be NULL; reads ctx->run.keymgr for
- *            encryption — NULL when encryption is disabled — and ctx->config
- *            for the encryption policy)
+ * @param ctx Dispatch context (must not be NULL; the key manager for a seal,
+ *            and the output)
  * @param stage The profile's stage (must not be NULL)
- * @param filesystem_path Source path on filesystem
- * @param storage_path Pre-computed storage path (e.g., "home/.bashrc")
- * @param opts Command options
- * @param metadata Metadata collection (captured entry will be added here)
- * @param out_stat The capture's stat triple — taken from the same stat as the
- *                 bytes staged, so the record can bind the committed blob to it
- *                 (must not be NULL; set on every success)
+ * @param profile The profile, for the seal's key (must not be NULL)
+ * @param path The listed path (must not be NULL; its stat is set on success)
+ * @param metadata The sheet the claim goes onto (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *add_file_to_stage(
     const dotta_ctx_t *ctx,
     stage_t *stage,
-    const char *filesystem_path,
-    const char *storage_path,
-    const cmd_add_options_t *opts,
-    metadata_t *metadata,
-    stat_cache_t *out_stat
+    const char *profile,
+    add_path_t *path,
+    metadata_t *metadata
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(stage);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(opts);
+    CHECK_NULL(profile);
+    CHECK_NULL(path);
     CHECK_NULL(metadata);
-    CHECK_NULL(out_stat);
 
-    git_repository *repo = ctx->run.repo;
-    keymgr *keymgr = ctx->run.keymgr;  /* NULL if encryption disabled */
-    const config_t *config = ctx->config;
     output_t *out = ctx->out;
+    const char *location = path->location;
+    const char *storage_path = path->claim.storage_path;
 
-    *out_stat = STAT_CACHE_UNSET;
-
+    /* The capture the path was listed for, fulfilled or refused. Each takes its
+     * own stat — a link's before its target, the link's uid/gid and not the
+     * target's; a file's the fstat of the descriptor its bytes came off, bytes
+     * and triple one inode by construction — and that stat is the claim's and
+     * the record's both. */
+    struct stat st;
     error_t *err = NULL;
-    metadata_item_t *item = NULL;  /* Will be created from captured metadata */
-    struct stat file_stat;         /* Captured from content layer */
-
-    /* Encryption policy priority-3 source: the bytes the profile already holds
-     * under this name. The stage was seeded from the branch's tree, and no earlier
-     * capture put at this name — a listed name resolves to one location (add.h,
-     * THE KEY INVARIANT) and the listing holds one entry per location — so an
-     * entry here is the committed one, read before the put below replaces it in
-     * place with the staged one. Only a --force add finds one: without the flag,
-     * the pre-flight in cmd_add refused every held name before a byte was read.
-     *
-     * The prior entry's blob is the cheapest source of byte truth for priority-3
-     * — classified by its own header, never by a claim. A first-time add has no
-     * prior and the flag stays false; priorities 4/5 then decide. A blob that
-     * cannot be read is an error, not "not encrypted": a sniff that defaulted
-     * would flip the policy silently. Only consumed in the regular-file branch
-     * below (symlinks carry no encryption state to maintain). */
-    const git_index_entry *prior = git_index_get_bypath(
-        stage_index(stage), storage_path, 0
-    );
-    bool previously_encrypted = false;
-    if (prior) {
-        content_kind_t prior_kind = CONTENT_PLAINTEXT;
-        err = content_classify(repo, &prior->id, prior->mode, &prior_kind, NULL);
-        if (err) {
-            return error_wrap(
-                err, "Failed to classify the committed bytes of '%s'",
-                storage_path
-            );
-        }
-        previously_encrypted = (prior_kind != CONTENT_PLAINTEXT);
-    }
-
-    /* Capture onto the stage */
-    if (fs_is_symlink(filesystem_path)) {
-        /* The link's own capture: its target, and the lstat taken before the
-         * target was read (infra/content.h) — the link's uid/gid, not the target's,
-         * and the triple the record binds. */
-        struct stat link_stat;
-        err = content_stage_link(stage, filesystem_path, storage_path, &link_stat);
-        if (err) {
-            return err;
-        }
-        err = metadata_capture_from_file(
-            filesystem_path, storage_path, &link_stat, &item
-        );
-        if (err) {
-            return error_wrap(
-                err, "Failed to capture symlink metadata for '%s'",
-                filesystem_path
-            );
-        }
-        *out_stat = stat_cache_from_stat(&link_stat);
-
-        /* The capture claims nothing (a link with no ownership to track): an
-         * item standing at the key is the replaced state's — retire it. */
-        if (!item) {
-            metadata_remove_item(metadata, storage_path);
-        }
-
-        output_info(
-            out, OUTPUT_VERBOSE, "Added symlink: %s -> %s",
-            filesystem_path, storage_path
-        );
+    if (path->occupant == FS_OCCUPANT_SYMLINK) {
+        err = content_stage_link(stage, location, storage_path, &st);
     } else {
-        /* Regular file. previously_encrypted was classified from the prior
-         * committed blob above (force re-add) or stays false (first-time add);
-         * priority-3 in the encryption policy reads byte truth either way. */
-        bool should_encrypt = false;
-        err = encryption_policy_should_encrypt(
-            config,
-            storage_path,
-            opts->encrypt_mode,
-            previously_encrypted,
-            &should_encrypt
-        );
-        /* Returned as it is. The policy's refusals are the user's to read — they
-         * name the path, the fact that stood and the way on — and a wrap saying
-         * the policy could not be determined would say the opposite of what
-         * happened. */
-        if (err) {
-            return err;
-        }
-
-        /* Capture onto the stage (read → encrypt → the entry) and take the stat.
-         * SECURITY: the stat is the fstat of the fd the capture read — bytes
-         * and triple one inode by construction. */
         err = content_stage_file(
-            stage,
-            filesystem_path,
-            storage_path,
-            opts->profile,
-            keymgr,
-            should_encrypt,
-            &file_stat
-        );
-        if (err) {
-            return err;
-        }
-
-        /* Capture metadata from file using stat data from content layer
-         * SECURITY: Single stat() call eliminates race condition */
-        err = metadata_capture_from_file(
-            filesystem_path, storage_path, &file_stat, &item
-        );
-        if (err) {
-            return error_wrap(
-                err, "Failed to capture metadata for '%s'",
-                filesystem_path
-            );
-        }
-        *out_stat = stat_cache_from_stat(&file_stat);
-
-        /* The capture's write-time invariant: the bytes it staged classify as
-         * the decision says (a plaintext that would not is refused there), so
-         * the claim is stamped from the decision and every reader of the bytes
-         * agrees with it. */
-        if (item) item->encrypted = should_encrypt;
-
-        /* Verbose output */
-        if (should_encrypt) {
-            output_info(
-                out, OUTPUT_VERBOSE, "Encrypted: %s -> %s",
-                filesystem_path, storage_path
-            );
-        }
-        output_info(
-            out, OUTPUT_VERBOSE, "Added: %s -> %s",
-            filesystem_path, storage_path
+            stage, location, storage_path, profile, ctx->run.keymgr,
+            path->should_encrypt, &st
         );
     }
+    if (err) {
+        return err;
+    }
+    path->stat = stat_cache_from_stat(&st);
 
-    /* Add metadata item to collection (NULL for home/ prefix symlinks) */
-    if (item) {
-        report_capture(out, "metadata", filesystem_path, item);
+    metadata_item_t *item = NULL;
+    err = metadata_capture_from_file(location, storage_path, &st, &item);
+    if (err) {
+        return error_wrap(err, "Failed to capture metadata for '%s'", location);
+    }
 
-        err = metadata_add_item(metadata, &item);
-        if (err) {
-            metadata_item_free(item);
-            return error_wrap(
-                err, "Failed to add metadata item for '%s'",
-                filesystem_path
-            );
-        }
+    if (path->should_encrypt) {
+        output_info(
+            out, OUTPUT_VERBOSE, "Encrypted: %s -> %s", location, storage_path
+        );
+    }
+    output_info(
+        out, OUTPUT_VERBOSE,
+        path->occupant == FS_OCCUPANT_SYMLINK ? "Added symlink: %s -> %s"
+                                              : "Added: %s -> %s",
+        location, storage_path
+    );
+
+    /* NULL is a links-only answer (core/metadata.h): the capture claims nothing
+     * — a link with no ownership to track — and an item standing at the key is
+     * the replaced state's, retired. */
+    if (!item) {
+        metadata_remove_item(metadata, storage_path);
+        return NULL;
+    }
+
+    /* The capture's write-time invariant: the bytes it staged classify as the
+     * decision says (a plaintext that would not is refused there), so the claim
+     * is stamped from the decision and every reader of the bytes agrees with it
+     * — false for a link, which the decision never seals. */
+    item->encrypted = path->should_encrypt;
+    report_capture(out, "metadata", location, item);
+
+    err = metadata_add_item(metadata, &item);
+    if (err) {
+        metadata_item_free(item);
+        return error_wrap(err, "Failed to add metadata item for '%s'", location);
     }
 
     return NULL;
@@ -1839,7 +1763,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * before a capture would refuse it in the same breath as its siblings. */
         struct stat st;
         path_kind_t kind = PATH_KIND_FILE;
-        switch (fs_lstat_occupant(location, &st)) {
+        const fs_occupant_t occupant = fs_lstat_occupant(location, &st);
+        switch (occupant) {
             case FS_OCCUPANT_NONE:
                 if (typed) {
                     err = ERROR(
@@ -2054,9 +1979,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            err = list_path(
-                &walk, location, (manifest_claim_t){ storage_path, kind }
-            );
+            err = list_path(&walk, location, storage_path, occupant);
             if (err) goto cleanup;
         }
 
@@ -2193,9 +2116,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * does not leave the first four in the object database. Keyed by the name
      * and not by the location: at a location the profile names twice, a typed
      * re-capture of the loser must be gated by the name the user typed, not by
-     * the row that happens to stand there. The capture keeps its own
-     * git_index_get_bypath for the encryption policy's priority-3 read — two
-     * questions, one lookup each. */
+     * the row that happens to stand there. The decision pass below keeps its
+     * own git_index_get_bypath for the encryption policy's priority-3 read —
+     * two questions, one lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
             const add_path_t *path = walk.files.items[i];
@@ -2210,6 +2133,62 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 path->claim.storage_path, opts->profile
             );
             goto cleanup;
+        }
+    }
+
+    /* The encryption decision, taken with the name and never with a source byte.
+     * Its inputs are the config, the name this command chose, the request, and
+     * the entry the branch holds at that name — judged by its mode and its header
+     * through the index the stage opened on, never by a claim, with no key and
+     * no source file (infra/content.h content_classify) — so it is a decision
+     * and is made with the others, before any capture runs. The capture is told
+     * (add_file_to_stage).
+     *
+     * A regular file alone: a link's entry is its target and carries no seal
+     * (core/policy.h), so the policy is never asked about one; and the capture
+     * a link was listed for is the link's — a regular file standing there by
+     * then is refused by it, never stored under a verdict nobody reached.
+     *
+     * After the held-entry gate, so an entry is met here only under --force;
+     * with none there are no prior bytes, and priorities 4 and 5 decide. A blob
+     * that cannot be read is an error, not "not encrypted": a sniff that defaulted
+     * would flip the policy silently. And a verdict that seals is refused here
+     * when this run can never seal — encryption turned off — rather than at a
+     * capture the others would already have preceded into the object database. */
+    for (size_t i = 0; i < walk.files.count; i++) {
+        add_path_t *path = walk.files.items[i];
+        if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
+
+        const char *storage_path = path->claim.storage_path;
+        const git_index_entry *prior = git_index_get_bypath(
+            stage_index(stage), storage_path, 0
+        );
+        content_kind_t prior_kind = CONTENT_PLAINTEXT;
+        if (prior) {
+            err = content_classify(repo, &prior->id, prior->mode, &prior_kind, NULL);
+            if (err) {
+                err = error_wrap(
+                    err, "Failed to classify the committed bytes of '%s'",
+                    storage_path
+                );
+                goto cleanup;
+            }
+        }
+
+        /* Returned as they are. The policy's refusals are the user's to read —
+         * they name the path, the fact that stood and the way on — and a wrap
+         * saying the verdict could not be reached would say the opposite of what
+         * happened; the encryption switch's refusal names the path and its cause
+         * the same way. */
+        err = encryption_policy_should_encrypt(
+            config, storage_path, opts->encrypt_mode,
+            prior_kind != CONTENT_PLAINTEXT, &path->should_encrypt
+        );
+        if (err) goto cleanup;
+
+        if (path->should_encrypt) {
+            err = content_require_encryption(ctx->run.keymgr, storage_path);
+            if (err) goto cleanup;
         }
     }
 
@@ -2281,20 +2260,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* Single-pass: add files and capture metadata inline. Each capture's stat
-     * triple is kept on the path, for the record: it is the stat of the bytes
-     * committed, which a later lstat could not promise. */
+    /* Every file, as it was listed and as the decision pass sealed it
+     * (add_file_to_stage). Each capture's stat triple is kept on the path, for
+     * the record: it is the stat of the bytes committed, which a later lstat
+     * could not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
         add_path_t *path = walk.files.items[i];
 
-        /* Add file to the stage and capture metadata
-         * ARCHITECTURE: add_file_to_stage handles both operations atomically,
-         * sharing stat() data between content and metadata layers to eliminate
-         * TOCTOU */
-        err = add_file_to_stage(
-            ctx, stage, path->location, path->claim.storage_path, opts, metadata,
-            &path->stat
-        );
+        err = add_file_to_stage(ctx, stage, opts->profile, path, metadata);
         if (err) {
             err = error_wrap(err, "Failed to add file '%s'", path->location);
             goto cleanup;

@@ -243,9 +243,10 @@ typedef enum dotta_crypto_mode {
  * `run.keymgr` stays NULL regardless of the need; the cache is still created
  * with a NULL keymgr so callers deal with one shape. Handlers forward `run.keymgr`
  * to the content layer unconditionally — it refuses with a message naming the
- * file if a per-file operation asks to encrypt (ERR_CRYPTO) or decrypt (ERR_LOCKED:
- * no key in reach) without a keymgr, so commands never need to gate on "do I
- * have a key?" before calling through.
+ * file if a per-file operation asks to encrypt or decrypt without a keymgr (both
+ * ERR_LOCKED: no key in reach), so a command never gates on the key itself: it
+ * calls through, or asks `content_require_encryption` ahead of a capture it has
+ * not begun (`cmds/add`'s decision pass).
  *
  * manifest
  * --------

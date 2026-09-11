@@ -563,6 +563,22 @@ void content_cache_free(content_cache_t *cache) {
     free(cache);
 }
 
+error_t *content_require_encryption(
+    const keymgr *keymgr,
+    const char *storage_path
+) {
+    CHECK_NULL(storage_path);
+
+    if (keymgr) {
+        return NULL;
+    }
+
+    return error_wrap(
+        ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED), "Cannot encrypt '%s'",
+        storage_path
+    );
+}
+
 error_t *content_stage_file(
     stage_t *stage,
     const char *filesystem_path,
@@ -577,6 +593,12 @@ error_t *content_stage_file(
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
     CHECK_NULL(out_stat);
+
+    /* The capture's twin of the read's locked root, asked before anything is
+     * opened: a seal on a run with no key in reach at all. */
+    if (should_encrypt) {
+        RETURN_IF_ERROR(content_require_encryption(keymgr, storage_path));
+    }
 
     /* Step 1: One look — open the descriptor whose bytes will be staged
      *
@@ -618,16 +640,6 @@ error_t *content_stage_file(
             ERR_INVALID_ARG,
             "Cannot capture '%s': it is a %s, not a regular file.",
             filesystem_path, fs_stat_noun(&st)
-        );
-    }
-
-    /* The capture's twin of the read's locked root: no key is in reach because
-     * the feature is off. Refused before the bytes are read — nothing to wipe. */
-    if (should_encrypt && !keymgr) {
-        close(fd);
-        return error_wrap(
-            ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
-            "Cannot encrypt '%s'", storage_path
         );
     }
 

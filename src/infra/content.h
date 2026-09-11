@@ -402,6 +402,27 @@ error_t *content_cache_get_from_blob_oid(
 void content_cache_free(content_cache_t *cache);
 
 /**
+ * Refuse a seal on a run that can never make one
+ *
+ * Encryption turned off leaves the run with no key manager (include/runtime.h),
+ * so a seal is refused under "Cannot encrypt '<path>'" over the line the read's
+ * own locked root carries (ERR_LOCKED). The subject is the run, not the path:
+ * with a key manager present this answers NULL, and whether it obtains a master
+ * is its ladder's question, asked at the seal, where a prompt belongs.
+ *
+ * Readers: content_stage_file, before it opens anything; cmds/add's decision
+ * pass, before any capture has begun — so a refusal there stores nothing.
+ *
+ * @param keymgr The run's key manager (NULL when encryption is turned off)
+ * @param storage_path The path the seal was for (must not be NULL)
+ * @return ERR_LOCKED under the path, or NULL when a seal can be attempted
+ */
+error_t *content_require_encryption(
+    const keymgr *keymgr,
+    const char *storage_path
+);
+
+/**
  * Capture a regular file onto a stage, encrypting it or not
  *
  * The capture add and update share: read the file → encrypt (if asked) → the
@@ -419,8 +440,9 @@ void content_cache_free(content_cache_t *cache);
  * execute bit is set (index.c's git_index__create_mode), regular otherwise. A
  * symlink is content_stage_link's; this capture refuses everything but a regular
  * file. The caller still decides policy via should_encrypt; use
- * encryption_policy_should_encrypt() to compute it. Encryption asked with no
- * key in reach is refused before the file is read.
+ * encryption_policy_should_encrypt() to compute it. Encryption asked on a run
+ * with no key manager is refused before anything is opened
+ * (content_require_encryption).
  *
  * Write-time invariant: the bytes staged classify (content_classify_bytes) as
  * `should_encrypt` says — ENCRYPTED iff true. An encrypt writes the magic, and

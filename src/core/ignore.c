@@ -106,7 +106,7 @@ static const char *const DEFAULT_DOTTAIGNORE =
     "dist/\n"
     "\n"
     "# Version control\n"
-    ".git/\n"
+    ".git\n"   /* no slash: a worktree's or a submodule's .git is a file */
     ".svn/\n"
     ".hg/\n"
     "\n"

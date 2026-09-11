@@ -2,7 +2,7 @@
  * config.h - Configuration file parsing
  *
  * Handles loading and parsing dotta configuration files. Config file format is
- * TOML-like with sections and key=value pairs.
+ * TOML, with sections and key = value pairs.
  *
  * A setting whose value is one of a few words is read as the value the word names,
  * in the words of whoever owns them: base/output's for verbosity and color, and
@@ -76,16 +76,18 @@ error_t *config_get_repo_dir(const config_t *config, char **out);
 /**
  * The divergence strategies, by the word [sync] diverged_strategy and `sync
  * --diverged` take — the one spelling the config's read, the flag's parse
- * (config_parse_strategy), sync's receipts and hint, and completion share. Adding
- * a strategy is a row here and an enumerator of sync_strategy_t (include/config.h).
+ * (config_parse_strategy), sync's receipts and hint, and completion share. Indexed
+ * by the strategy each names, so a strategy's word is a lookup, never a search:
+ * adding one is an enumerator of sync_strategy_t (include/config.h), a row here
+ * and an arm in cmds/sync. `sync --help` restates the phrases, and a test holds
+ * it to them.
  */
 typedef struct config_strategy {
     const char *name;
-    sync_strategy_t strategy;
     const char *summary;          /* what it does, in a phrase */
 } config_strategy_t;
 
-#define CONFIG_STRATEGY_COUNT 5
+#define CONFIG_STRATEGY_COUNT (SYNC_STRATEGY_THEIRS + 1)
 
 extern const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT];
 

@@ -2,8 +2,8 @@
  * config.h - Configuration type definition
  *
  * Defines the config struct layout. Include this header when you need to access
- * config fields directly. For config lifecycle functions (load, free, validate),
- * include "utils/config.h" instead.
+ * config fields directly. For config lifecycle functions (load, free), include
+ * "utils/config.h" instead.
  */
 
 #ifndef DOTTA_CONFIG_DEF_H
@@ -22,17 +22,20 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
 /**
  * What sync does with a diverged branch: the [sync] diverged_strategy setting,
  * which `sync --diverged` overrides — both in the words of config_strategies
- * (utils/config.h).
+ * (utils/config.h), which is indexed by it.
+ *
+ * Sync's, and defined here: the configuration refuses an unknown word at load,
+ * utils/ does not see cmds/, and core reads this header and no utils/ one.
  *
  * A choice, not a mechanism: sys/resolve's resolve_strategy_t carries out the
  * four that resolve a divergence, and cmds/sync maps one onto the other.
  */
 typedef enum {
-    DIVERGE_WARN,         /* Warn user, manual resolution (default) */
-    DIVERGE_REBASE,       /* Rebase local onto remote */
-    DIVERGE_MERGE,        /* Create merge commit */
-    DIVERGE_OURS,         /* Keep local, force push (destructive) */
-    DIVERGE_THEIRS        /* Keep remote, reset local (destructive) */
+    SYNC_STRATEGY_WARN,           /* Warn user, manual resolution (default) */
+    SYNC_STRATEGY_REBASE,         /* Rebase local onto remote */
+    SYNC_STRATEGY_MERGE,          /* Create merge commit */
+    SYNC_STRATEGY_OURS,           /* Keep local, force push (destructive) */
+    SYNC_STRATEGY_THEIRS          /* Keep remote, reset local (destructive) */
 } sync_strategy_t;
 
 /**

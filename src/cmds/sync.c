@@ -523,7 +523,7 @@ static void handle_remote_ahead(
 /**
  * Resolve divergence via rebase or merge, then push
  *
- * Unified handler for DIVERGE_REBASE and DIVERGE_MERGE strategies (structurally
+ * Unified handler for SYNC_STRATEGY_REBASE and SYNC_STRATEGY_MERGE (structurally
  * identical — only the strategy enum and log strings differ).
  *
  * Returns critical error only on rollback failure (caller must propagate). All
@@ -548,7 +548,7 @@ static error_t *resolve_and_push_divergence(
 
     output_info(
         out, OUTPUT_NORMAL,
-        "    Resolving with %s strategy...",
+        "    Resolving with '%s' strategy...",
         strategy_name
     );
 
@@ -640,7 +640,7 @@ static error_t *resolve_and_push_divergence(
 }
 
 /**
- * Handle DIVERGE_OURS: force push local branch to remote
+ * Handle SYNC_STRATEGY_OURS: force push local branch to remote
  */
 static error_t *handle_diverged_ours(
     git_repository *repo,
@@ -651,7 +651,10 @@ static error_t *handle_diverged_ours(
     transfer_context_t *xfer,
     bool no_push
 ) {
-    output_info(out, OUTPUT_NORMAL, "    Resolving with 'ours' strategy (force push)...");
+    output_info(
+        out, OUTPUT_NORMAL, "    Resolving with '%s' strategy (force push)...",
+        config_strategies[SYNC_STRATEGY_OURS].name
+    );
 
     if (no_push) {
         output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
@@ -697,7 +700,7 @@ static error_t *handle_diverged_ours(
 }
 
 /**
- * Handle DIVERGE_THEIRS: reset local branch to remote
+ * Handle SYNC_STRATEGY_THEIRS: reset local branch to remote
  */
 static error_t *handle_diverged_theirs(
     git_repository *repo,
@@ -708,7 +711,8 @@ static error_t *handle_diverged_theirs(
 ) {
     output_info(
         out, OUTPUT_NORMAL,
-        "    Resolving with 'theirs' strategy (reset to remote)..."
+        "    Resolving with '%s' strategy (reset to remote)...",
+        config_strategies[SYNC_STRATEGY_THEIRS].name
     );
 
     /* Get user confirmation for destructive operation */
@@ -806,7 +810,7 @@ static error_t *handle_diverged(
     );
 
     switch (strategy) {
-        case DIVERGE_WARN: {
+        case SYNC_STRATEGY_WARN: {
             /* The strategies that resolve, each in the phrase completion shows
              * for it: the vocabulary's rows, read, not spelled again here. */
             output_hint(
@@ -814,7 +818,7 @@ static error_t *handle_diverged(
                 "    Use --diverged=<strategy> or set diverged_strategy in config:"
             );
             for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
-                if (config_strategies[s].strategy != DIVERGE_WARN) {
+                if (s != SYNC_STRATEGY_WARN) {
                     output_hintline(
                         out, OUTPUT_NORMAL, "      %s: %s",
                         config_strategies[s].name, config_strategies[s].summary
@@ -826,28 +830,28 @@ static error_t *handle_diverged(
         }
 
         /* Non-WARN strategies own their outcome inside the inner handler. */
-        case DIVERGE_REBASE: {
+        case SYNC_STRATEGY_REBASE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, out, RESOLVE_STRATEGY_REBASE,
-                "rebase", xfer, no_push
+                config_strategies[strategy].name, xfer, no_push
             );
         }
 
-        case DIVERGE_MERGE: {
+        case SYNC_STRATEGY_MERGE: {
             return resolve_and_push_divergence(
                 repo, remote_name, result, out, RESOLVE_STRATEGY_MERGE,
-                "merge", xfer, no_push
+                config_strategies[strategy].name, xfer, no_push
             );
         }
 
-        case DIVERGE_OURS: {
+        case SYNC_STRATEGY_OURS: {
             return handle_diverged_ours(
                 repo, remote_name, result, out, confirm_destructive,
                 xfer, no_push
             );
         }
 
-        case DIVERGE_THEIRS: {
+        case SYNC_STRATEGY_THEIRS: {
             return handle_diverged_theirs(
                 repo, remote_name, result, out, confirm_destructive
             );
@@ -912,9 +916,9 @@ static error_t *sync_push_phase(
             }
 
             case UPSTREAM_LOCAL_AHEAD: {
-                /* theirs: discard local commits, reset to remote Blocked by
+                /* theirs: discard local commits, reset to remote. Blocked by
                  * --no-pull since resetting to remote incorporates remote state */
-                if (diverged_strategy == DIVERGE_THEIRS && !no_pull) {
+                if (diverged_strategy == SYNC_STRATEGY_THEIRS && !no_pull) {
                     output_colored(
                         out, OUTPUT_NORMAL, upstream_state_color(result->state),
                         "  %s %s: %zu commit%s ahead of remote\n",
@@ -1003,7 +1007,7 @@ static error_t *sync_push_phase(
 
             case UPSTREAM_REMOTE_AHEAD: {
                 /* ours: force push local, discard remote commits */
-                if (diverged_strategy == DIVERGE_OURS) {
+                if (diverged_strategy == SYNC_STRATEGY_OURS) {
 
                     output_colored(
                         out, OUTPUT_NORMAL, upstream_state_color(result->state),
@@ -1033,8 +1037,8 @@ static error_t *sync_push_phase(
 
             case UPSTREAM_DIVERGED: {
                 /* --no-pull blocks strategies that incorporate remote changes */
-                if (no_pull && diverged_strategy != DIVERGE_WARN &&
-                    diverged_strategy != DIVERGE_OURS) {
+                if (no_pull && diverged_strategy != SYNC_STRATEGY_WARN &&
+                    diverged_strategy != SYNC_STRATEGY_OURS) {
 
                     output_styled(
                         out, OUTPUT_NORMAL,
@@ -1042,17 +1046,11 @@ static error_t *sync_push_phase(
                         "(%zu local, %zu remote commits)\n",
                         result->profile, result->ahead, result->behind
                     );
-                    const char *name = "?";
-                    for (size_t s = 0; s < CONFIG_STRATEGY_COUNT; s++) {
-                        if (config_strategies[s].strategy == diverged_strategy) {
-                            name = config_strategies[s].name;
-                        }
-                    }
-
                     output_hint(
                         out, OUTPUT_NORMAL,
                         "    '%s' resolution skipped (--no-pull prevents "
-                        "incorporating remote changes)", name
+                        "incorporating remote changes)",
+                        config_strategies[diverged_strategy].name
                     );
                     result->outcome = SYNC_OUTCOME_DIVERGED;
                     break;
@@ -2407,11 +2405,16 @@ const args_command_t spec_sync = {
         "update' to commit pending filesystem changes first.\n",
     .notes        =
         "Diverged Strategies:\n"
-        "  warn          Report and stop (default).\n"
-        "  rebase        Replay local commits atop remote.\n"
-        "  merge         Create a merge commit.\n"
-        "  ours          Keep local side; overwrite remote on push.\n"
-        "  theirs        Keep remote side; drop local commits.\n",
+        "  warn          Report the divergence, resolve by hand (the default)\n"
+        "  rebase        Rebase local commits onto the remote\n"
+        "  merge         Merge the remote into the local branch\n"
+        "  ours          Keep local, force-push over the remote\n"
+        "  theirs        Keep remote, reset the local branch\n"
+        "\n"
+        "  The strategy is [sync] diverged_strategy's, or --diverged's for one\n"
+        "  run. ours and theirs act on a branch that is only behind or only\n"
+        "  ahead as well: ours force-pushes over the newer remote commits, and\n"
+        "  theirs resets the local ones away.\n",
     .examples     =
         "  %s sync                    # All enabled profiles\n"
         "  %s sync global             # Single profile\n"

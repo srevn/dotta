@@ -222,13 +222,16 @@ auto_pull = true
 # Divergence Strategy
 # How to handle branches that have diverged (both local and remote have unique commits)
 # Options:
-#   - "warn"   - Show warning and stop (default, safest)
-#   - "rebase" - Rebase local changes on top of remote
-#   - "merge"  - Create a merge commit
-#   - "ours"   - Keep local version (discard remote changes)
-#   - "theirs" - Take remote version (discard local changes)
+#   - "warn"   - Report the divergence, resolve by hand (default, safest)
+#   - "rebase" - Rebase local commits onto the remote
+#   - "merge"  - Merge the remote into the local branch
+#   - "ours"   - Keep local, force-push over the remote
+#   - "theirs" - Keep remote, reset the local branch
 #
-# WARNING: "ours" and "theirs" are destructive and will lose commits!
+# WARNING: "ours" and "theirs" are destructive and will lose commits! They act
+# on a branch that is only behind or only ahead as well: "ours" force-pushes
+# over the newer remote commits, "theirs" resets the local ones away.
+# `dotta sync --diverged <strategy>` overrides this for one run.
 # Default: warn
 diverged_strategy = "warn"
 

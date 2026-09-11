@@ -261,7 +261,7 @@ config_t *config_create_default(void) {
 
     /* [sync] defaults */
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */
-    config->diverged_strategy = DIVERGE_WARN;   /* Default: warn on divergence */
+    config->diverged_strategy = SYNC_STRATEGY_WARN; /* Default: warn on divergence */
 
     /* [encryption] defaults. The Argon2id pair is not a config value: it is the
      * repository's epoch, minted by `dotta init --strength` (crypto/kdf.h). */
@@ -307,10 +307,7 @@ static error_t *config_get_path(char **out) {
  * never ignored.
  */
 static error_t *read_key(
-    toml_datum_t value,
-    const char *section,
-    const char *key,
-    config_t *config
+    toml_datum_t value, const char *section, const char *key, config_t *config
 ) {
     arena_t *arena = config->arena;
 
@@ -523,11 +520,11 @@ error_t *config_get_repo_dir(const config_t *config, char **out) {
 }
 
 const config_strategy_t config_strategies[CONFIG_STRATEGY_COUNT] = {
-    { "warn",   DIVERGE_WARN,   "Report the divergence, resolve by hand" },
-    { "rebase", DIVERGE_REBASE, "Rebase local commits onto the remote"   },
-    { "merge",  DIVERGE_MERGE,  "Merge the remote into the local branch" },
-    { "ours",   DIVERGE_OURS,   "Keep local, force-push over the remote" },
-    { "theirs", DIVERGE_THEIRS, "Keep remote, reset the local branch"    },
+    [SYNC_STRATEGY_WARN] =   { "warn",   "Report the divergence, resolve by hand" },
+    [SYNC_STRATEGY_REBASE] = { "rebase", "Rebase local commits onto the remote"   },
+    [SYNC_STRATEGY_MERGE] =  { "merge",  "Merge the remote into the local branch" },
+    [SYNC_STRATEGY_OURS] =   { "ours",   "Keep local, force-push over the remote" },
+    [SYNC_STRATEGY_THEIRS] = { "theirs", "Keep remote, reset the local branch"    },
 };
 
 error_t *config_parse_strategy(const char *word, sync_strategy_t *out) {
@@ -536,7 +533,7 @@ error_t *config_parse_strategy(const char *word, sync_strategy_t *out) {
 
     for (size_t i = 0; i < CONFIG_STRATEGY_COUNT; i++) {
         if (strcmp(word, config_strategies[i].name) == 0) {
-            *out = config_strategies[i].strategy;
+            *out = (sync_strategy_t) i;
             return NULL;
         }
     }

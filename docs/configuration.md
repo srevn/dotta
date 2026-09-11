@@ -40,6 +40,11 @@ auto_pull = true              # Auto-pull when remote is ahead
 diverged_strategy = "warn"    # warn, rebase, merge, ours, theirs
 ```
 
+`dotta sync --diverged <strategy>` overrides the setting for one run. `ours` and
+`theirs` are destructive, and act on a branch that is only behind or only ahead
+as well: `ours` force-pushes over the newer remote commits, `theirs` resets the
+local ones away.
+
 ### [encryption]
 
 ```toml
@@ -110,13 +115,15 @@ pre_remove = false
 post_remove = false
 pre_update = false
 post_update = false
+pre_sync = false
+post_sync = false
 ```
 
 ## Hooks
 
 Hook scripts run before/after operations. Place executable scripts in the hooks directory.
 
-**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`
+**Available hooks:** `pre-apply`, `post-apply`, `pre-add`, `post-add`, `pre-remove`, `post-remove`, `pre-update`, `post-update`, `pre-sync`, `post-sync`
 
 **Behavior:**
 - Pre-hooks can abort operations by exiting with a non-zero status
@@ -124,9 +131,10 @@ Hook scripts run before/after operations. Place executable scripts in the hooks 
 
 **Environment variables passed to hooks:**
 - `DOTTA_REPO_DIR` -- repository path
-- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`)
-- `DOTTA_PROFILE` -- comma-separated profile list
-- `DOTTA_DRY_RUN` -- `"1"` if dry-run, `"0"` otherwise
+- `DOTTA_COMMAND` -- operation name (`apply`, `add`, `remove`, `update`, `sync`)
+- `DOTTA_PROFILE` -- the profile for add and remove; the space-separated list of profiles for apply, update and sync
+- `DOTTA_REMOTE` -- the remote's name (sync hooks)
+- `DOTTA_DRY_RUN` -- `"1"` if dry-run, `"0"` otherwise (a post-hook never runs on a dry run)
 - `DOTTA_FILE_COUNT` -- number of files (add/remove/update hooks)
 - `DOTTA_FILE_0`, `DOTTA_FILE_1`, ... -- individual file paths
 

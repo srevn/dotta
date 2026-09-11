@@ -198,8 +198,7 @@ struct ignore_rules {
  * Grow the profile cache array if we're at capacity.
  *
  * Arena allocators have no in-place realloc, so growth allocates a larger block
- * and copies. The old block is reclaimed on arena_destroy. Mirrors the pattern
- * in base/gitignore.c.
+ * and copies. The old block is reclaimed on arena_destroy.
  */
 static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
     if (r->profile_count < r->profile_capacity) return NULL;

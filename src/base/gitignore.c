@@ -181,27 +181,39 @@ static size_t unescape_spaces(char *str) {
     return (size_t) (pos - str);
 }
 
-/* --- Rule storage growth -------------------------------------------- */
+/* --- Rule storage ---------------------------------------------------- */
 
-/* Arena allocators have no in-place realloc, so growth allocates a larger block
- * and copies. The old block is reclaimed on arena_destroy. */
-static error_t *ensure_capacity(gitignore_ruleset_t *set) {
-    if (set->count < set->capacity)
-        return NULL;
+/* The one way a rule enters a set: the cap, the growth, the copy, the tag. The
+ * cap counts rules stored, never lines read — a blank or comment line at index
+ * 10 000 must not falsely trip the limit. Arena allocators have no in-place
+ * realloc, so growth allocates a larger block and copies; the old block is
+ * reclaimed on arena_destroy. The rule comes by value: the caller's copy, taken
+ * before any growth runs, so the block it was read from need not outlive the
+ * push. */
+static error_t *push_rule(
+    gitignore_ruleset_t *set, gitignore_rule_t rule, gitignore_origin_t origin
+) {
+    if (set->count >= MAX_RULES)
+        return ERROR(ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES);
 
-    size_t new_cap = set->capacity ? set->capacity * 2 : INITIAL_CAPACITY;
+    if (set->count == set->capacity) {
+        size_t new_cap = set->capacity ? set->capacity * 2 : INITIAL_CAPACITY;
 
-    gitignore_rule_t *resized = arena_alloc(
-        set->arena, new_cap * sizeof(*resized)
-    );
-    if (!resized)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
+        gitignore_rule_t *resized = arena_alloc(
+            set->arena, new_cap * sizeof(*resized)
+        );
+        if (!resized)
+            return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 
-    if (set->count > 0)
-        memcpy(resized, set->rules, set->count * sizeof(*resized));
+        if (set->count > 0)
+            memcpy(resized, set->rules, set->count * sizeof(*resized));
 
-    set->rules = resized;
-    set->capacity = new_cap;
+        set->rules = resized;
+        set->capacity = new_cap;
+    }
+
+    rule.origin = origin;
+    set->rules[set->count++] = rule;
 
     return NULL;
 }
@@ -357,6 +369,16 @@ static error_t *validate_pattern(const char *pattern, size_t len) {
             "Hint: Escape the '#' to match it: '\\%s'", pattern, pattern
         );
     return ERROR(ERR_VALIDATION, "gitignore: '%s' names no pattern", pattern);
+}
+
+/* One pattern into one rule: refused as validate_pattern refuses, and a rule
+ * whenever it is not — rule_span's zero is exactly "no rule". */
+static error_t *parse_rule(
+    arena_t *arena, const char *pattern, gitignore_rule_t *out
+) {
+    size_t len = strlen(pattern);
+    RETURN_IF_ERROR(validate_pattern(pattern, len));
+    return parse_line(arena, pattern, len, out);
 }
 
 /* --- The match at one rung ------------------------------------------ */
@@ -534,18 +556,8 @@ error_t *gitignore_ruleset_append(
 
         gitignore_rule_t rule = { 0 };
         RETURN_IF_ERROR(parse_line(set->arena, cursor, line_len, &rule));
-
-        /* Gate MAX_RULES only when we're actually about to store — a blank/comment
-         * line at index 10 000 must not falsely trip the limit. */
-        if (rule.pattern) {
-            rule.origin = origin;
-            if (set->count >= MAX_RULES)
-                return ERROR(
-                    ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES
-                );
-            RETURN_IF_ERROR(ensure_capacity(set));
-            set->rules[set->count++] = rule;
-        }
+        if (rule.pattern)
+            RETURN_IF_ERROR(push_rule(set, rule, origin));
 
         if (!nl)
             break;
@@ -555,46 +567,27 @@ error_t *gitignore_ruleset_append(
     return NULL;
 }
 
+error_t *gitignore_ruleset_append_pattern(
+    gitignore_ruleset_t *set, const char *pattern, gitignore_origin_t origin
+) {
+    CHECK_NULL(set);
+    CHECK_NULL(pattern);
+
+    gitignore_rule_t rule = { 0 };
+    RETURN_IF_ERROR(parse_rule(set->arena, pattern, &rule));
+    return push_rule(set, rule, origin);
+}
+
 error_t *gitignore_ruleset_append_patterns(
     gitignore_ruleset_t *set, const char *const *patterns, size_t count,
     gitignore_origin_t origin
 ) {
     CHECK_NULL(set);
 
-    if (!patterns || count == 0)
-        return NULL;
+    for (size_t i = 0; i < count; i++)
+        RETURN_IF_ERROR(gitignore_ruleset_append_pattern(set, patterns[i], origin));
 
-    /* Compute buffer size in one pass; NULL entries are skipped. Each pattern
-     * contributes strlen + 1 (for the trailing '\n' separator). */
-    size_t total = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (!patterns[i])
-            continue;
-        total += strlen(patterns[i]) + 1;
-    }
-    if (total == 0)
-        return NULL;
-
-    /* Join into an arena-backed buffer. The buffer is transient — only used during
-     * the append call — but using the ruleset's arena keeps the allocator path
-     * consistent with the rest of gitignore.c. The extra bytes are reclaimed at
-     * arena_destroy alongside the rules. */
-    char *joined = arena_alloc(set->arena, total + 1);
-    if (!joined)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
-
-    size_t offset = 0;
-    for (size_t i = 0; i < count; i++) {
-        if (!patterns[i])
-            continue;
-        size_t len = strlen(patterns[i]);
-        memcpy(joined + offset, patterns[i], len);
-        offset += len;
-        joined[offset++] = '\n';
-    }
-    joined[offset] = '\0';
-
-    return gitignore_ruleset_append(set, joined, origin);
+    return NULL;
 }
 
 void gitignore_eval(
@@ -755,11 +748,8 @@ error_t *gitignore_rule_parse(
 
     *out = NULL;
 
-    size_t len = strlen(pattern);
-    RETURN_IF_ERROR(validate_pattern(pattern, len));
-
     gitignore_rule_t rule = { 0 };
-    RETURN_IF_ERROR(parse_line(arena, pattern, len, &rule));
+    RETURN_IF_ERROR(parse_rule(arena, pattern, &rule));
 
     gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));
     if (!copy)

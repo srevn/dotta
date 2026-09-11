@@ -134,6 +134,8 @@ typedef enum {
  *     are command-scoped.
  *
  * Input validation (enforced by the underlying gitignore engine):
+ *   - Each config and CLI pattern is one rule, refused where it makes none, at
+ *     the first profile query (gitignore_ruleset_append_patterns).
  *   - Per-pattern length: 4096 bytes.
  *   - Per-ruleset rule count: 10,000.
  *   - `.dottaignore` blob size: 1 MB.

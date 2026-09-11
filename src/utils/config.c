@@ -88,9 +88,10 @@ static error_t *set_string(char **field, const char *value) {
  * is disabled or no patterns are configured — consumers treat NULL rules as the
  * "no auto-encrypt applies" sentinel.
  *
- * Eager compile at load time: any per-pattern length or per-ruleset rule-count
- * violation surfaces once, at startup, via the existing config_load error path
- * — no per-command deferred failures.
+ * Eager compile at load time: an entry the grammar refuses — one that makes no
+ * rule, holds a newline or runs past 4096 bytes — or a rule count past the cap
+ * surfaces once, at startup, via the existing config_load error path — no
+ * per-command deferred failures.
  */
 static error_t *config_compile_auto_encrypt(config_t *config) {
     if (!config->encryption_enabled || !config->auto_encrypt_patterns ||

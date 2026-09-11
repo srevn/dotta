@@ -38,20 +38,23 @@
  * (gitignore_ruleset_append): a byte-order mark at its head is the file's, a
  * comment or a blank line makes no rule, and a `\r` that ends a line is its
  * terminator. A *pattern* is one line of that grammar meant as one rule
- * (gitignore_validate_pattern, gitignore_rule_parse): it is read as the line it
- * would be in a file — trailing spaces trimmed, a final `\r` a terminator, a
- * leading `#` a comment — and where that line would make no rule, the pattern
- * is refused, never read as nothing. git reads a command-line entry unread
- * (`ls-files -x '#foo'` matches a file named `#foo`); a pattern here cannot be,
- * because `ignore --add` writes it into a file as a line and `--exclude` is
- * promised the file's meaning. So `foo ` means `foo`, and a name that begins
- * with `#` is matched by `\#`.
+ * (gitignore_validate_pattern, gitignore_rule_parse,
+ * gitignore_ruleset_append_pattern): it is read as the line it would be in a
+ * file — trailing spaces trimmed, a final `\r` a terminator, a leading `#` a
+ * comment — and where that line would make no rule, the pattern is refused, never
+ * read as nothing. git reads a command-line entry unread (`ls-files -x '#foo'`
+ * matches a file named `#foo`); a pattern here cannot be, because `ignore --add`
+ * writes it into a file as a line and `--exclude` is promised the file's meaning.
+ * So `foo ` means `foo`, and a name that begins with `#` is matched by `\#`. A
+ * list of patterns is patterns, one rule each (gitignore_ruleset_append_patterns),
+ * never the lines of a file: no mark is shed from an entry and no newline splits
+ * one.
  *
  * Lifetime: the ruleset and every rule are arena-backed. All memory (rule array,
  * pattern copies) lives until arena_destroy; there is no separate free.
  *
- * Thread safety: concurrent readers of a ruleset are safe once all
- * gitignore_ruleset_append calls have returned. Concurrent appends are not safe.
+ * Thread safety: concurrent readers of a ruleset are safe once every append to
+ * it has returned. Concurrent appends are not safe.
  */
 
 #ifndef DOTTA_GITIGNORE_H
@@ -108,22 +111,39 @@ error_t *gitignore_ruleset_append(
 );
 
 /**
- * Append an array of single-line patterns, each becoming one rule tagged with
- * `origin`. Convenience form for callers holding patterns as an array (CLI flags,
- * config arrays) rather than a gitignore file body.
+ * Append one pattern as one rule, tagged with `origin`.
  *
- * Semantically equivalent to joining `patterns[i]` with '\n' and calling
- * `gitignore_ruleset_append` — including that door's byte-order mark, which a
- * pattern has no occasion to carry. NULL entries in the array are skipped. Empty
- * arrays (NULL array or count==0, or all entries NULL) are a successful no-op.
+ * The pattern is read as gitignore_rule_parse reads one — the line it would be
+ * in a file — and refused exactly as it refuses one: a newline, a length past
+ * 4096 bytes, a line that makes no rule. It is not a file: no byte-order mark
+ * is shed from it and no newline is split. A refusal stores nothing, and a set
+ * already holding 10 000 rules refuses the next (ERR_VALIDATION). The rule's
+ * strings are the set's arena's.
  *
- * Per-pattern length (4096) and cumulative rule count (10000) caps are enforced
- * by the underlying parser; callers are expected to wrap the returned error with
- * caller-specific context (e.g. "Failed to compile CLI exclude patterns").
+ * @param ruleset Ruleset to append into (must not be NULL)
+ * @param pattern One pattern (must not be NULL)
+ * @param origin  Caller-chosen origin tag
+ * @return Error or NULL on success
+ */
+error_t *gitignore_ruleset_append_pattern(
+    gitignore_ruleset_t *ruleset,
+    const char *pattern,
+    gitignore_origin_t origin
+);
+
+/**
+ * Append an array of patterns, each through gitignore_ruleset_append_pattern in
+ * order: every entry one rule tagged with `origin`, refused as that door refuses
+ * one. An entry is not a line of a file — no mark is shed from the first, no
+ * newline splits one, and one that makes no rule is refused rather than read as
+ * nothing. A refusal leaves the entries before it appended, and every caller
+ * drops the set; a NULL array with a count of 0 appends nothing.
+ *
+ * Callers wrap the returned error with their source (e.g. "Failed to compile
+ * CLI exclude patterns").
  *
  * @param ruleset  Ruleset to append into (must not be NULL)
- * @param patterns Array of NUL-terminated pattern strings (may be NULL when count
- *                 == 0; individual entries may be NULL)
+ * @param patterns Array of NUL-terminated patterns (may be NULL when count == 0)
  * @param count    Number of entries in patterns
  * @param origin   Caller-chosen origin tag applied to every rule
  * @return Error or NULL on success

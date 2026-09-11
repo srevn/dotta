@@ -33,6 +33,10 @@ struct stage {
     git_index *index;       /* ownerless, seeded from tree */
 };
 
+struct stage_admission {
+    git_index *index;       /* ownerless: the opened tree, and every blob admitted since */
+};
+
 /**
  * The stage on `refname`, seeded: the tree at `tip` in a private index with the
  * tip as the parent-to-be, or — when `tip` is NULL, the orphan's stage — the
@@ -181,14 +185,15 @@ error_t *stage_put(
 /**
  * Can anything at all be named at this path — the shape, and no blob above it?
  *
- * The identical beginning of both admissions: what libgit2 would refuse later
- * with a worse message, and then a proper prefix that names an entry, which puts
- * the path inside a file. Neither answer depends on what is being put there.
+ * The identical beginning of both sides of the rule, a blob's and a subtree's:
+ * what libgit2 would refuse later with a worse message, and then a proper prefix
+ * that names an entry, which puts the path inside a file. Neither answer depends
+ * on what is being put there.
  *
  * The scratch is this function's, NUL-terminated at each slash in turn; the
  * sentence prints from `path`, which is whole throughout.
  */
-static error_t *admit_tree_path(const stage_t *st, const char *path) {
+static error_t *admit_tree_path(git_index *index, const char *path) {
     size_t len = strlen(path);
     if (len == 0 || path[0] == '/' || path[len - 1] == '/' || strstr(path, "//")) {
         return ERROR(
@@ -207,7 +212,7 @@ static error_t *admit_tree_path(const stage_t *st, const char *path) {
     /* A file where a directory is needed: a proper prefix naming an entry. */
     for (char *slash = strchr(scratch, '/'); slash; slash = strchr(slash + 1, '/')) {
         *slash = '\0';
-        if (git_index_get_bypath(st->index, scratch, 0)) {
+        if (git_index_get_bypath(index, scratch, 0)) {
             int prefix_len = (int) (slash - scratch);
             free(scratch);
             return ERROR(
@@ -223,10 +228,39 @@ static error_t *admit_tree_path(const stage_t *st, const char *path) {
     return NULL;
 }
 
-error_t *stage_admit_blob(const stage_t *st, const char *path) {
-    CHECK_NULL(st);
-    CHECK_NULL(path);
-    RETURN_IF_ERROR(admit_tree_path(st, path));
+/**
+ * Put an entry into `index`: the mode, the shape, the two collisions, then
+ * libgit2's add
+ *
+ * The one door into an index here — the stage's, and an admission's — and its
+ * order is the header's first rule: git_index_add REPLACES on a file/directory
+ * collision (index.c check_file_directory_collision with ok_to_replace), so an
+ * entry added past a refusal would take another away. Both collisions are refused
+ * first, in this module's own sentences.
+ *
+ * What git_index_add can refuse after that is libgit2's own path rule — `.git`
+ * as a component in every spelling libgit2 protects, `.` and `..` — validated
+ * with mode 0 whatever the entry carries (index_entry_dup passes no stat), and
+ * an allocation. Nothing else remains on an ownerless index: the object check
+ * is the owner's, and the collision check replaces (index_insert). A name the
+ * rule refuses is a verdict about the name, as a collision is, and is spelled
+ * as one — here, because nothing later can: error_wrap keeps its cause's code,
+ * and error_from_git is always ERR_GIT.
+ */
+static error_t *put_entry(git_index *index, const git_index_entry *entry) {
+    const char *path = entry->path;
+
+    if (entry->mode != GIT_FILEMODE_BLOB &&
+        entry->mode != GIT_FILEMODE_BLOB_EXECUTABLE &&
+        entry->mode != GIT_FILEMODE_LINK) {
+        return ERROR(
+            ERR_INVALID_ARG,
+            "Cannot stage '%s' with mode 0%o: not a blob or link mode",
+            path, (unsigned int) entry->mode
+        );
+    }
+
+    RETURN_IF_ERROR(admit_tree_path(index, path));
 
     /* A directory where the file goes: any entry beneath the path. The index is
      * sorted, so one prefix probe answers. */
@@ -239,7 +273,7 @@ error_t *stage_admit_blob(const stage_t *st, const char *path) {
     beneath[len] = '/';
     beneath[len + 1] = '\0';
 
-    int rc = git_index_find_prefix(NULL, st->index, beneath);
+    int rc = git_index_find_prefix(NULL, index, beneath);
     free(beneath);
 
     if (rc == 0) {
@@ -258,24 +292,94 @@ error_t *stage_admit_blob(const stage_t *st, const char *path) {
         );
     }
 
+    /* The same path already an entry: replaced — the upsert every writer wants. */
+    rc = git_index_add(index, entry);
+    if (rc == 0) {
+        return NULL;
+    }
+
+    /* The index class is exact here: the mode is checked above and both collisions
+     * refused, so on this path it is raised by the path rule alone. The 1.5 floor
+     * may answer NULL. */
+    const git_error *cause = git_error_last();
+    if (cause && cause->klass == GIT_ERROR_INDEX) {
+        return ERROR(
+            ERR_CONFLICT, "Cannot stage '%s': Git refuses the name (%s)", path,
+            cause->message
+        );
+    }
+
+    return error_wrap(error_from_git(rc), "Failed to stage '%s'", path);
+}
+
+error_t *stage_admission_create(const stage_t *st, stage_admission_t **out) {
+    CHECK_NULL(st);
+    CHECK_NULL(out);
+    *out = NULL;
+
+    stage_admission_t *adm = calloc(1, sizeof(*adm));
+    if (!adm) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the admission");
+    }
+
+    /* Ownerless, for the reason the stage's own index is: the path rule runs at
+     * every add, and the object check waits for a tree write that never comes.
+     * The index holds its own copies of the entries, so the stage is not borrowed
+     * past this call. */
+    int rc = git_index_new(&adm->index);
+    if (rc == 0) {
+        rc = git_index_read_tree(adm->index, st->tree);
+    }
+    if (rc < 0) {
+        stage_admission_free(adm);
+        return error_wrap(
+            error_from_git(rc), "Failed to read the tree of '%s'", st->refname
+        );
+    }
+
+    *out = adm;
     return NULL;
 }
 
-error_t *stage_admit_subtree(const stage_t *st, const char *path) {
-    CHECK_NULL(st);
+error_t *stage_admit_blob(stage_admission_t *adm, const char *path) {
+    CHECK_NULL(adm);
     CHECK_NULL(path);
-    RETURN_IF_ERROR(admit_tree_path(st, path));
+
+    /* Recorded as a blob under the null id. The mode is the put's caller's word,
+     * and a caller asking about a path it has not read yet has no mode to offer
+     * — nor needs one: libgit2 validates a path with mode 0 (put_entry). */
+    git_index_entry entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.mode = GIT_FILEMODE_BLOB;
+    entry.path = path;
+
+    return put_entry(adm->index, &entry);
+}
+
+error_t *stage_admit_subtree(const stage_admission_t *adm, const char *path) {
+    CHECK_NULL(adm);
+    CHECK_NULL(path);
+    RETURN_IF_ERROR(admit_tree_path(adm->index, path));
 
     /* A file at the path itself: a blob and a subtree cannot both stand there,
      * and nothing beneath it could be committed either. Entries beneath the path
      * are the subtree already standing, and need no asking. */
-    if (git_index_get_bypath(st->index, path, 0)) {
+    if (git_index_get_bypath(adm->index, path, 0)) {
         return ERROR(
             ERR_CONFLICT, "Cannot stage '%s': it is a file in this tree", path
         );
     }
 
     return NULL;
+}
+
+void stage_admission_free(stage_admission_t *adm) {
+    if (!adm) {
+        return;
+    }
+
+    git_index_free(adm->index);
+    free(adm);
 }
 
 error_t *stage_put_blob(
@@ -285,34 +389,13 @@ error_t *stage_put_blob(
     CHECK_NULL(path);
     CHECK_NULL(blob);
 
-    if (mode != GIT_FILEMODE_BLOB &&
-        mode != GIT_FILEMODE_BLOB_EXECUTABLE &&
-        mode != GIT_FILEMODE_LINK) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Cannot stage '%s' with mode 0%o: not a blob or link mode",
-            path, (unsigned int) mode
-        );
-    }
-
-    /* The shape and the two collisions, before anything is added (see the header):
-     * the mode above is the put's own, since a caller asking about a path it
-     * has not read yet has no mode to offer. */
-    RETURN_IF_ERROR(stage_admit_blob(st, path));
-
-    /* The same path already an entry: replaced — the upsert every writer wants. */
     git_index_entry entry;
     memset(&entry, 0, sizeof(entry));
     entry.mode = (uint32_t) mode;
     entry.path = path;
     git_oid_cpy(&entry.id, blob);
 
-    int rc = git_index_add(st->index, &entry);
-    if (rc < 0) {
-        return error_wrap(error_from_git(rc), "Failed to stage '%s'", path);
-    }
-
-    return NULL;
+    return put_entry(st->index, &entry);
 }
 
 error_t *stage_remove(stage_t *st, const char *path) {

@@ -81,17 +81,19 @@ typedef struct {
  *
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty
- * one has no entry — and a blob at a name is incompatible with anything at that
- * name and with everything beneath it. Every path is tested against both before
- * it is listed, so a walked entry the branch has no room for is skipped with
- * its subtree and a named one is refused; and the finished sheet is read against
- * the finished tree before anything durable is written, which is what covers
- * the pair this command itself creates. A branch that arrived carrying the
- * contradiction refuses too — `dotta remove <profile> <path>` gives the claim
- * up. The kind a profile's own claim gives a location is the location's question
- * and is asked of the view: a path whose kind changed under a claim is refused
- * by name and skipped by a walk, and `--force` lifts neither — overwriting bytes
- * under a name the profile holds is not re-shaping the tree.
+ * one has no entry — and a blob leaves no room for a directory at its name or
+ * for anything beneath it. Every path is tested against both as it is listed —
+ * the tree as this command has chosen it so far (sys/stage.h, the admission)
+ * and the branch's claims — so a walked entry the commit has no room for, or
+ * whose name Git will not hold, is skipped with its subtree and a named one is
+ * refused; and the finished sheet is read against the finished tree before anything
+ * durable is written, which is what covers a directory this command listed beneath
+ * a blob it chose after it. A branch that arrived carrying the contradiction
+ * refuses too — `dotta remove <profile> <path>` gives the claim up. The kind a
+ * profile's own claim gives a location is the location's question and is asked
+ * of the view: a path whose kind changed under a claim is refused by name and
+ * skipped by a walk, and `--force` lifts neither — overwriting bytes under a
+ * name the profile holds is not re-shaping the tree.
  *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
  * the claim it was listed under is the location it was read at. A typed name is

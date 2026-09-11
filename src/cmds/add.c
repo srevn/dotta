@@ -85,13 +85,15 @@ typedef struct {
  * question reads it (manifest_lookup_claim), and so does the one refusal the
  * completed selection owes (refuse_moved_name).
  *
- * `stage` and `sheet` are the two documents one commit carries, and the walk
- * asks both whether the branch has room for a name before a byte is read: the
- * tree holds every blob (sys/stage.h, the two admissions), and the sheet holds
- * the directories a tree cannot — an empty one has no entry, so a claim the index
- * cannot see is the sheet's to answer for (core/metadata.h
- * metadata_directory_beneath). Both are the branch as this command found it;
- * what the command itself authors is read once at the end, where both are final.
+ * `admission` and `sheet` are the two documents one commit carries, and the walk
+ * asks both whether the commit has room for a name before a byte is read. The
+ * tree holds every blob (sys/stage.h, the admission: the branch's entries and
+ * every blob this command listed before), and the sheet holds the directories a
+ * tree cannot — an empty one has no entry, so a claim the index cannot see is
+ * the sheet's to answer for (core/metadata.h metadata_directory_beneath). The
+ * admission grows with every blob listed; the sheet is the branch's and holds
+ * no directory this command lists, so those are read once more with the selection
+ * complete (cmd_add).
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
@@ -100,7 +102,7 @@ typedef struct {
     const manifest_t *view;              /* The branch as this command opened it */
     const gitignore_ruleset_t *rules;    /* The profile's .dottaignore layers */
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
-    const stage_t *stage;                /* The branch's tree, asked once per listing */
+    stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
     hashmap_t *listing;                  /* location -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
@@ -480,18 +482,19 @@ static error_t *list_path(
 }
 
 /**
- * Has the branch room for this name — in its tree, and in its sheet?
+ * Has the commit room for this name — in its tree, and in its sheet?
  *
  * One commit carries two documents, and they name one namespace: the tree holds
  * every blob, and the sheet holds the directories a tree cannot, since an empty
- * one has no entry at all. A blob at a name is incompatible with anything standing
- * at that name and with everything standing beneath it, whichever document the
- * thing beneath it lives in — so a blob asks both and a subtree asks the tree,
- * a directory claim beneath another being ordinary.
+ * one has no entry at all. A blob leaves no room for a directory at its name or
+ * for anything beneath it, whichever document the thing beneath it lives in —
+ * so a blob asks both and a subtree asks the tree, a directory claim beneath
+ * another being ordinary.
  *
- * The subject is the branch as this command found it: the index seeded at the
- * open, and the sheet loaded from the same tree. What this command itself authors
- * is read once at the end, where both are final (cmd_add).
+ * The subject is the commit as this command has chosen it so far: the admission
+ * — the branch's tree and every blob listed before this one — and the branch's
+ * sheet. A directory this command listed is in neither until its capture, so a
+ * blob chosen above one is asked about once more at the end (cmd_add).
  *
  * One producer, two voices: every refusal is ERR_CONFLICT and says which name
  * stands in the way, and the callers give it their own — the argument arm wraps
@@ -502,11 +505,11 @@ static error_t *admit_name(
     const add_walk_t *walk, const char *storage_path, path_kind_t kind
 ) {
     if (kind == PATH_KIND_DIRECTORY) {
-        return stage_admit_subtree(walk->stage, storage_path);
+        return stage_admit_subtree(walk->admission, storage_path);
     }
 
     /* The sheet first: a directory it claims beneath this name has no tree entry
-     * to find, so the index cannot answer for it. */
+     * to find, so the admission cannot answer for it. */
     const metadata_item_t *claimed = metadata_directory_beneath(
         walk->sheet, storage_path
     );
@@ -518,7 +521,7 @@ static error_t *admit_name(
         );
     }
 
-    return stage_admit_blob(walk->stage, storage_path);
+    return stage_admit_blob(walk->admission, storage_path);
 }
 
 /**
@@ -548,14 +551,14 @@ static error_t *admit_name(
  * when it is a directory, and skipped otherwise.
  *
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
- * kind the profile's own claim at the location contradicts, and a name the branch
- * has no room for (admit_name). Neither may fail the command — a stale claim
- * deep inside $HOME must not fail `dotta add p ~`, and the capture that would
- * have refused it arrives too late to skip anything. `depth` bounds the recursion
- * at FS_WALK_MAX_DEPTH, and that is the one walked verdict that refuses rather
- * than skips — collection precedes capture, so a refusal there costs nothing,
- * where a skip would leave the profile permanently short of a subtree that can
- * in fact be captured.
+ * kind the profile's own claim at the location contradicts, and a name the commit
+ * has no room for, or one Git will not hold (admit_name). Neither may fail the
+ * command — a stale claim deep inside $HOME must not fail `dotta add p ~`, and
+ * the capture that would have refused it arrives too late to skip anything. `depth`
+ * bounds the recursion at FS_WALK_MAX_DEPTH, and that is the one walked verdict
+ * that refuses rather than skips — collection precedes capture, so a refusal
+ * there costs nothing, where a skip would leave the profile permanently short
+ * of a subtree that can in fact be captured.
  *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
@@ -730,10 +733,11 @@ static error_t *collect_tree(
                 continue;
             }
 
-            /* What the branch can hold, asked before a byte is read. Only a shape
-             * conflict is a verdict about the path; a failure to decide is the
-             * run failing, and publishing a selection past one would commit a
-             * silently partial capture. */
+            /* What the commit can hold, asked before a byte is read. Only a
+             * conflict is a verdict about the path — a name the tree or the sheet
+             * has no room for, or one Git will not hold (sys/stage.h); a failure
+             * to decide is the run failing, and publishing a selection past one
+             * would commit a silently partial capture. */
             err = admit_name(walk, child_storage, kind);
             if (err) {
                 if (error_code(err) != ERR_CONFLICT) goto cleanup;
@@ -1520,6 +1524,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const gitignore_ruleset_t *profile_rules = NULL;
     source_filter_t *source_filter = NULL;
     stage_t *stage = NULL;
+    stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
     manifest_t *view = NULL;             /* The branch as the stage opened it: see below */
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
     bool profile_exists = false;         /* The pre-flight's question, read above the open */
@@ -1755,6 +1760,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     );
     if (err) goto cleanup;
 
+    /* The tree this commit will write, as its names are chosen: the branch's
+     * entries, and every blob this command lists from here on (sys/stage.h).
+     * The walk and the argument arm record into it as they list; the sheet's
+     * directories are read against it once more, below. */
+    err = stage_admission_create(stage, &admission);
+    if (err) goto cleanup;
+
     /* Collect every path to add, expanding directories. Each listing is named
      * once, by the claim standing at it; what the walk finds beneath one already
      * listed is named from that claim. */
@@ -1763,7 +1775,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.view = view;
     walk.rules = profile_rules;
     walk.source_filter = source_filter;
-    walk.stage = stage;
+    walk.admission = admission;
     walk.sheet = metadata;
     walk.listing = hashmap_borrow(0);
     if (!walk.listing) {
@@ -2050,7 +2062,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 goto cleanup;
             }
 
-            /* What the branch can hold, before a byte is read. The verdict a
+            /* What the commit can hold, before a byte is read. The verdict a
              * walked entry answers with a skip is an error here: the user asked
              * for this path by name, and working around a claim they did not
              * mention is not this command's to do. */
@@ -2257,9 +2269,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * they meet — once, with both of them final. The tree holds every blob; the
      * sheet holds the directories a tree cannot, since an empty one has no entry.
      * A blob and a directory cannot stand at one name, and nothing stands beneath
-     * a blob. Every listing was admitted against the branch as this command found
-     * it (admit_name); the index has moved since, by this command's own puts,
-     * and the sheet has gained this command's own claims — so what the listing
+     * a blob. Every listing was admitted against the commit as this command had
+     * chosen it so far (admit_name), and the admission holds every name it chose;
+     * the sheet has gained this command's own claims since — so what the listing
      * could not see is exactly what this pass reads. A contradiction the branch
      * already carried is refused here too: nothing repairs it silently, and `dotta
      * remove` is the verb that gives a claim up.
@@ -2269,7 +2281,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     for (size_t i = 0; i < item_count; i++) {
         if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
 
-        err = stage_admit_subtree(stage, items[i]->key);
+        err = stage_admit_subtree(admission, items[i]->key);
         if (err) {
             /* The stage names the storage path and the obstruction; the wrap
              * says whose claim it is and that a claim is the subject, so an add
@@ -2548,6 +2560,7 @@ cleanup:
     ptr_array_deinit(&walk.files);
     hashmap_free(walk.listing, NULL);
     manifest_free(view);
+    stage_admission_free(admission);
     stage_free(stage);
     source_filter_free(source_filter);
 

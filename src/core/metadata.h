@@ -312,9 +312,9 @@ const metadata_item_t *metadata_lookup(
  * The sheet's half of the tree's one namespace rule, read from a blob's side. A
  * tree holds no empty directory, so a directory this profile claims and nothing
  * fills lives in this sheet alone — the index has no entry for it, and sys/stage's
- * stage_admit_blob therefore cannot see it. A blob standing at an ancestor of
- * such a claim leaves it nowhere to stand: the two could never be deployed
- * together, and the commit would carry a namespace that contradicts itself.
+ * admission therefore cannot see it. A blob standing at an ancestor of such a
+ * claim leaves it nowhere to stand: the two could never be deployed together,
+ * and the commit would carry a namespace that contradicts itself.
  *
  * Strictly beneath, and only that: a directory claim AT the path is the conversion
  * a re-capture makes — the item is replaced and the blob lands — and one above

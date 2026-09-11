@@ -425,7 +425,8 @@ void content_cache_free(content_cache_t *cache);
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
  * - ERR_CRYPTO: Encryption failed
- * - ERR_CONFLICT: The stage refused the entry (a file/directory collision)
+ * - ERR_CONFLICT: The stage refused the entry (a file/directory collision, or a
+ *   name Git will not hold)
  * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a regular file
  */
 error_t *content_stage_file(

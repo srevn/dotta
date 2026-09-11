@@ -32,17 +32,19 @@
  * refuses both collisions itself, and stage_remove is the only verb that takes
  * an entry away. Paths are canonical tree paths (no leading or trailing slash,
  * no empty component): libgit2 refuses `..`, `.` and `.git` components at the
- * put and `a//b` at the tree write, but writes `/a` as a tree with an empty-named
+ * put — a verdict about the name, as a collision is, so both are ERR_CONFLICT —
+ * and `a//b` at the tree write, but writes `/a` as a tree with an empty-named
  * component, so the stage checks the shape at the door.
  *
- * That rule is askable without writing. stage_admit_blob and stage_admit_subtree
- * are the two sides of it — a blob at N is incompatible with anything at N and
- * with everything beneath N — and both answer about the index as it stands: the
- * branch's tree at the open, plus whatever this stage has already put. A caller
- * that must know before it reads a file's bytes asks; the put asks again and
- * stays the authority, since two names one caller chooses can collide with each
- * other after both were admitted. Neither verb reserves a name, writes an entry
- * or is undone.
+ * That rule is askable before a byte is read, of the tree one writer intends
+ * (stage_admission_t): the ref's own entries, and every blob the writer has
+ * admitted since. stage_admit_blob and stage_admit_subtree are its two sides —
+ * a blob at N leaves no room for a subtree at N or for anything beneath it, and
+ * another blob at N replaces it — and a blob is recorded as it is admitted, so
+ * a writer that chooses several names learns whether they can stand together
+ * before it reads any of them. The put asks again, of the index it writes, and
+ * is the authority there; an admission reserves nothing in the stage and is never
+ * committed.
  *
  * Every entry names a blob the ODB holds by commit time: stage_put writes it,
  * stage_put_blob trusts the caller (revert's target blob is looked up from a
@@ -56,20 +58,20 @@
  * — the way apply writes them back; the mode is the caller's word.
  *
  * Nothing here touches HEAD, a working directory, or the repository's own index,
- * and an open writes nothing at all — the ref is resolved and its tree read, an
- * orphan's empty tree included — so a stage freed before its first put leaves
- * the repository exactly as it found it. A put writes its blob at once: a stage
- * freed after one without a commit, or whose commit was refused, leaves loose
- * objects and no ref, and a refused put may leave its blob the same way. One
- * commit per stage: after it the ref names the commit and the stage still describes
- * the tree it opened on, so a second commit is refused by the tip check — a writer
- * with more to write opens another.
+ * and neither an open nor an admission writes anything — the ref is resolved
+ * and its tree read, an orphan's empty tree included — so a stage freed before
+ * its first put leaves the repository exactly as it found it. A put writes its
+ * blob at once: a stage freed after one without a commit, or whose commit was
+ * refused, leaves loose objects and no ref, and a refused put may leave its blob
+ * the same way. One commit per stage: after it the ref names the commit and the
+ * stage still describes the tree it opened on, so a second commit is refused by
+ * the tip check — a writer with more to write opens another.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
  * (add, update, remove, revert, bootstrap), by core/metadata's sheet writer,
  * core/ignore's two writers (a profile's .dottaignore, the machine's baseline),
- * infra/content's capture and infra/epoch's mint.
+ * infra/content's capture and infra/epoch's mint; add alone creates an admission.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -144,30 +146,70 @@ const git_tree *stage_tree(const stage_t *st);
 git_index *stage_index(stage_t *st);
 
 /**
- * Can a blob stand at this path — the shape and the two collisions, without writing
- * anything?
+ * The tree one writer intends: the ref's own entries, and every blob admitted
+ * since (opaque)
  *
- * What stage_put_blob refuses before it adds an entry, asked on its own so a
- * caller can find out before it reads a file's bytes: the tree-path shape libgit2
- * would reject later with a worse message, a proper prefix that names an entry
- * (a file where a directory is needed), and an entry beneath the path (a directory
- * where the file goes). An entry at the path itself is the upsert every writer
- * wants and is admitted.
+ * A writer that chooses several names — add, whose arguments and walk can reach
+ * one place twice through a link — asks here before it reads a byte for any of
+ * them. A blob is recorded as it is admitted, so the next question is asked of
+ * a tree that already holds it: that is the whole of what makes a set admissible
+ * rather than each name on its own. A subtree records nothing. The tree holds
+ * no directory claim, and a writer that keeps one (the sheet, core/metadata.h)
+ * asks its own document about a blob chosen above it.
  *
- * It is not a dry run of the put: libgit2's own path validator is the put's
- * (`home/.git` passes the framing rule and is refused by git_index_add), and so
- * is the mode admission, which a caller listing a path does not yet have.
+ * Seeded from the tree the stage opened at — Git's empty tree for an orphan's,
+ * read and never written (stage_orphan) — and never from the stage's index: the
+ * stage's puts and removals, made before the admission or after, move no answer
+ * it gives.
  *
- * Readers: add's walk and add's argument arm, before either lists a name; and
- * stage_put_blob itself. cmds/revert deliberately does not read it — it holds
- * the id and the mode, so it hoists the whole put before its preview and needs
- * the actual index operation's refusal there, not a question about it.
- *
- * @param st Stage (must not be NULL)
- * @param path Storage path (must not be NULL)
- * @return Error naming the collision, or NULL when a blob may stand there
+ * An index and never a stage: ownerless, as the stage's own is, so libgit2 skips
+ * the entry's object check (index.c index_insert), and every admitted entry names
+ * the null id. Nothing here writes an object, moves a ref or can be committed:
+ * an admission that is freed leaves the repository as it found it.
  */
-error_t *stage_admit_blob(const stage_t *st, const char *path);
+typedef struct stage_admission stage_admission_t;
+
+/**
+ * An admission over the tree the stage opened at
+ *
+ * @param st Stage (must not be NULL; read by the call, not borrowed — the admission
+ *           holds its own entries and may outlive it)
+ * @param out Admission (must not be NULL; freed with stage_admission_free)
+ * @return Error or NULL on success
+ */
+error_t *stage_admission_create(const stage_t *st, stage_admission_t **out);
+
+/**
+ * Can a blob stand at this path, beside every name admitted before it? Recorded
+ * when it can
+ *
+ * What stage_put_blob refuses before it adds an entry, asked of the admission
+ * so a writer can find out before it reads a file's bytes:
+ *   - the tree-path shape, which libgit2 would reject later with a worse message
+ *     (ERR_INVALID_ARG);
+ *   - a proper prefix that names an entry — a file where a directory is needed;
+ *   - an entry beneath the path — a directory where the file goes;
+ *   - a name Git will not hold at all — `.git` as a component, in every spelling
+ *     libgit2 protects — which is libgit2's own rule, asked through the door
+ *     the put uses.
+ * The last three are ERR_CONFLICT: a verdict about the name, which a caller that
+ * walks skips and a caller that was named refuses. An entry at the path itself
+ * is the upsert every writer wants, and is admitted.
+ *
+ * The mode is not asked. libgit2 validates a path with mode 0 whatever the entry
+ * carries (index.c index_entry_dup passes no stat), so nothing a mode could change
+ * is reachable through this door or the put's.
+ *
+ * Readers: add's walk and add's argument arm, before either lists a name.
+ * cmds/revert deliberately does not read it — it holds the id and the mode, so
+ * it hoists the whole put before its preview and needs the actual index operation's
+ * refusal there, not a question about it.
+ *
+ * @param adm Admission (must not be NULL)
+ * @param path Storage path (must not be NULL)
+ * @return Error naming the obstruction, or NULL when the blob stands, recorded
+ */
+error_t *stage_admit_blob(stage_admission_t *adm, const char *path);
 
 /**
  * Can a subtree stand at this path — the shape, and the one collision?
@@ -175,18 +217,36 @@ error_t *stage_admit_blob(const stage_t *st, const char *path);
  * The other half of the index's file/directory rule, for the caller that has no
  * put to make: dotta's empty directories live in the sheet alone (core/metadata.h),
  * so a profile can claim a directory the tree holds no entry for. A blob at the
- * path, or at any proper prefix of it, leaves no room for entries beneath — nor
- * for a claim about the directory itself. Entries beneath the path are the subtree
- * already standing, and are admitted.
+ * path, or at any proper prefix of it — the ref's own or one admitted since —
+ * leaves no room for entries beneath it, nor for a claim about the directory
+ * itself. Entries beneath the path are the subtree already standing, and are
+ * admitted.
+ *
+ * Nothing is recorded, which is what the const says: the tree holds no directory
+ * claim, so a subtree admitted here moves no answer this admission gives. A blob
+ * chosen above it later is the claiming document's to refuse, or its caller's
+ * to ask about once more with the selection complete (cmds/add). libgit2's own
+ * path rule is not asked here: a claim needs no entry, and a blob beneath a name
+ * Git will not hold is refused at its own admission.
  *
  * Readers: add's walk and add's argument arm, before either lists a directory;
- * and add's read of its finished sheet against its finished index.
+ * and add's read of its finished sheet.
  *
- * @param st Stage (must not be NULL)
+ * @param adm Admission (must not be NULL)
  * @param path Storage path (must not be NULL)
  * @return Error naming the collision, or NULL when a subtree may stand there
  */
-error_t *stage_admit_subtree(const stage_t *st, const char *path);
+error_t *stage_admit_subtree(const stage_admission_t *adm, const char *path);
+
+/**
+ * Free the admission
+ *
+ * Safe with NULL. Nothing in the repository is touched: an admission never wrote
+ * anything.
+ *
+ * @param adm Admission (can be NULL)
+ */
+void stage_admission_free(stage_admission_t *adm);
 
 /**
  * A blob from bytes, then the entry at `path`
@@ -194,9 +254,10 @@ error_t *stage_admit_subtree(const stage_t *st, const char *path);
  * `mode` is the caller's — a capture's own stat mapped by the caller, never a
  * re-stat here — and one of GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE or
  * GIT_FILEMODE_LINK; a link's bytes are its target. An entry already at the path
- * is replaced. A file where a directory is needed, or a directory where the file
- * goes, is refused (ERR_CONFLICT) and the index is unchanged; a mode or a path
- * shape outside the contract is refused (ERR_INVALID_ARG).
+ * is replaced. A file where a directory is needed, a directory where the file
+ * goes, or a name Git will not hold, is refused (ERR_CONFLICT) and the index is
+ * unchanged; a mode or a path shape outside the contract is refused
+ * (ERR_INVALID_ARG).
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

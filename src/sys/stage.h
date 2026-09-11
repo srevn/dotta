@@ -16,14 +16,16 @@
  * A writer says what it expects of the ref, and the open refuses the other state:
  * stage_open wants the ref (a profile the view listed, the branch a command
  * resolved) and is refused ERR_NOT_FOUND without it; stage_orphan wants its absence
- * (a profile being created, the epoch's mint) and is refused ERR_EXISTS by its
- * presence. An orphan's stage stands on the empty tree, so every reader of the
- * opened tree — the sheet loader, add's --force gate — sees a tree. The expectation
- * is checked once more where it matters, at the commit: a tip that moved, or a
- * ref that appeared where the open found none, reads as ERR_CONFLICT and nothing
- * is committed. A ref deleted between open and commit is recreated at the commit;
- * that one is not guarded — the other actor's delete and this writer's commit
- * are two intents, and the commit's is the one with content.
+ * (a profile being created, the epoch's mint, the machine's baseline) and is
+ * refused ERR_EXISTS by its presence. An orphan's stage stands on the empty tree
+ * — Git's own, which every repository answers for without holding it — so every
+ * reader of the opened tree sees a tree, and a ref that does not exist yet reads
+ * as one with nothing in it. The expectation is checked once more where it matters,
+ * at the commit: a tip that moved, or a ref that appeared where the open found
+ * none, reads as ERR_CONFLICT and nothing is committed. A ref deleted between
+ * open and commit is recreated at the commit; that one is not guarded — the other
+ * actor's delete and this writer's commit are two intents, and the commit's is
+ * the one with content.
  *
  * A put never removes another path. libgit2's index REPLACES on a file/directory
  * collision — `git_index_add` of `a/x` over blob `a` drops `a` — so the stage
@@ -53,18 +55,21 @@
  * Bytes are stored as given — no clean filter, no autocrlf, no filemode config
  * — the way apply writes them back; the mode is the caller's word.
  *
- * Nothing here touches HEAD, a working directory, or the repository's own index.
- * A stage that is freed without a commit, or whose commit was refused, leaves
- * loose objects and no ref; a refused put may leave its blob the same way. One
+ * Nothing here touches HEAD, a working directory, or the repository's own index,
+ * and an open writes nothing at all — the ref is resolved and its tree read, an
+ * orphan's empty tree included — so a stage freed before its first put leaves
+ * the repository exactly as it found it. A put writes its blob at once: a stage
+ * freed after one without a commit, or whose commit was refused, leaves loose
+ * objects and no ref, and a refused put may leave its blob the same way. One
  * commit per stage: after it the ref names the commit and the stage still describes
  * the tree it opened on, so a second commit is refused by the tip check — a writer
  * with more to write opens another.
  *
  * Layer: sys/. The module knows libgit2 and sys/gitops' signature, nothing of
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
- * (add, update, remove, revert, bootstrap, ignore), by core/metadata's sheet
- * writer, core/ignore's blob writer, infra/content's capture and infra/epoch's
- * mint.
+ * (add, update, remove, revert, bootstrap), by core/metadata's sheet writer,
+ * core/ignore's two writers (a profile's .dottaignore, the machine's baseline),
+ * infra/content's capture and infra/epoch's mint.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -113,8 +118,12 @@ error_t *stage_orphan(git_repository *repo, const char *refname, stage_t **out);
 /**
  * The tree the stage opened at — the ref's own bytes at open
  *
- * The sheet loader reads it, and add's --force gate. Never NULL: the empty tree
- * for an orphan's stage. Borrowed; valid until stage_free.
+ * Readers: the sheet loader (add, update, revert); add's view of its own branch
+ * (manifest_build_tree); and the questions revert and remove ask of the branch
+ * as it stood — the claim at a location, the entry at a name, a second name,
+ * the claims an argument removes. Never NULL: an orphan's stage stands on the
+ * empty tree, and add — the one reader that opens one — reads it as a profile
+ * with nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree

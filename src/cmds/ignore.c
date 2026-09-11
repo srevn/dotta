@@ -41,27 +41,17 @@
  * rule: it is also the bytes the caller writes.
  */
 static bool pattern_exists(const char *content, const char *pattern, size_t span) {
-    const char *line_start = content;
+    const char *line = content;
 
-    while (*line_start) {
-        /* Find end of line */
-        const char *line_end = strchr(line_start, '\n');
-        if (!line_end) {
-            line_end = line_start + strlen(line_start);
-        }
-
-        size_t line_len = (size_t) (line_end - line_start);
-        if (gitignore_rule_span(line_start, line_len) == span &&
-            memcmp(line_start, pattern, span) == 0) {
+    /* A line and its newline are one step; the last line needs no newline. */
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        if (gitignore_rule_span(line, len) == span &&
+            memcmp(line, pattern, span) == 0) {
             return true;
         }
 
-        /* Move to next line */
-        if (*line_end == '\n') {
-            line_start = line_end + 1;
-        } else {
-            break;
-        }
+        line += len + (line[len] == '\n');
     }
 
     return false;
@@ -230,22 +220,15 @@ static error_t *remove_patterns_from_content(
         return ERROR(ERR_MEMORY, "Failed to allocate pattern tracking");
     }
 
-    /* Parse content line by line using zero-allocation approach */
+    /* Line by line, zero-allocation: a line and its newline are one step, and
+     * the last line needs no newline. */
     char *pos = result;
-    const char *line_start = existing_content;
+    const char *line = existing_content;
 
-    while (*line_start) {
-        /* Find end of line */
-        const char *line_end = strchr(line_start, '\n');
-        bool has_newline = (line_end != NULL);
-        if (!line_end) {
-            line_end = line_start + strlen(line_start);
-        }
-
-        /* Extract line */
-        size_t line_len = (size_t) (line_end - line_start);
-
-        size_t span = gitignore_rule_span(line_start, line_len);
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        size_t step = len + (line[len] == '\n');
+        size_t span = gitignore_rule_span(line, len);
 
         /* Check if this line names the rule of any pattern to remove. A blank
          * or comment line names none and stays. */
@@ -254,7 +237,7 @@ static error_t *remove_patterns_from_content(
             for (size_t i = 0; i < pattern_count; i++) {
                 const char *p = patterns[i];
                 if (gitignore_rule_span(p, strlen(p)) == span &&
-                    memcmp(line_start, p, span) == 0) {
+                    memcmp(line, p, span) == 0) {
                     should_remove = true;
                     pattern_found[i] = true;
                     break;
@@ -264,19 +247,11 @@ static error_t *remove_patterns_from_content(
 
         /* Keep line if not removing (preserves original formatting) */
         if (!should_remove) {
-            memcpy(pos, line_start, line_len);
-            pos += line_len;
-            if (has_newline) {
-                *pos++ = '\n';
-            }
+            memcpy(pos, line, step);
+            pos += step;
         }
 
-        /* Move to next line */
-        if (has_newline) {
-            line_start = line_end + 1;
-        } else {
-            break;
-        }
+        line += step;
     }
     *pos = '\0';
 

@@ -545,28 +545,26 @@ error_t *gitignore_ruleset_append_file(
      * which is git's own rule (dir.c:1226 add_patterns_from_buffer, calling
      * skip_utf8_bom once over the whole buffer). strncmp, not memcmp: a content
      * shorter than the mark is a content that does not carry one. */
-    const char *cursor = content;
-    if (strncmp(cursor, "\xEF\xBB\xBF", 3) == 0)
-        cursor += 3;
+    const char *line = content;
+    if (strncmp(line, "\xEF\xBB\xBF", 3) == 0)
+        line += 3;
 
-    while (*cursor) {
-        const char *nl = strchr(cursor, '\n');
-        size_t line_len = nl ? (size_t) (nl - cursor) : strlen(cursor);
+    /* A line and its newline are one step; the last line needs no newline. */
+    while (*line) {
+        size_t len = strcspn(line, "\n");
 
-        if (line_len > MAX_PATTERN_LENGTH)
+        if (len > MAX_PATTERN_LENGTH)
             return ERROR(
                 ERR_VALIDATION,
                 "gitignore: line exceeds %d bytes", MAX_PATTERN_LENGTH
             );
 
         gitignore_rule_t rule = { 0 };
-        RETURN_IF_ERROR(parse_line(set->arena, cursor, line_len, &rule));
+        RETURN_IF_ERROR(parse_line(set->arena, line, len, &rule));
         if (rule.pattern)
             RETURN_IF_ERROR(push_rule(set, rule, origin));
 
-        if (!nl)
-            break;
-        cursor = nl + 1;
+        line += len + (line[len] == '\n');
     }
 
     return NULL;

@@ -113,9 +113,8 @@ struct workspace {
     const manifest_t *manifest;                  /* Borrowed — NOT freed in workspace_free */
 
     /* Active slices, both kinds, each in filesystem_path order — the view's rows
-     * split by kind and sorted, so deploy's parent-before-child walk and the
-     * untracked scan's ancestor suppression see prefix order. Pointer arrays
-     * into the view (arena-allocated). */
+     * split by kind and sorted, so deploy's parent-before-child walk sees prefix
+     * order. Pointer arrays into the view (arena-allocated). */
     const manifest_row_t **active_files;         /* Active file rows (arena-allocated array) */
     size_t active_file_count;                    /* Number of active file rows */
     const manifest_row_t **active_dirs;          /* Active directory rows (arena-allocated array) */
@@ -153,11 +152,11 @@ struct workspace {
     size_t released_count;                       /* Number of released copies */
     hashmap_t *released_index;                   /* fs_path → released_copy_t * (heap-allocated) */
 
-    /* State and profile set — the view's profiles (manifest_profiles), in
-     * precedence order: the untracked scan walks them in that order. */
+    /* The record's handle: the store's database, borrowed from the caller
+     * (workspace_load). Read once at the partition for the three snapshots above,
+     * then written through by the two live writers (workspace_observe,
+     * workspace_anchor) and the flush, each patching the snapshot it persists. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
-    const char *const *profiles;                 /* The view's names (arena); valid for workspace lifetime */
-    size_t profile_count;                        /* Number of profiles */
 
     /* Content cache for encrypted blob reads during divergence analysis */
     content_cache_t *content_cache;              /* Borrowed — NOT freed in workspace_free */
@@ -200,17 +199,12 @@ struct workspace {
 
 /**
  * Create empty workspace
- *
- * The profile set is the view's (manifest_profiles): the names are the arena's,
- * so the workspace borrows nothing that a caller has to keep alive beside it.
  */
 static error_t *workspace_create_empty(
     git_repository *repo,
-    const manifest_t *manifest,
     workspace_t **out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(manifest);
     CHECK_NULL(out);
 
     workspace_t *ws = calloc(1, sizeof(workspace_t));
@@ -219,7 +213,6 @@ static error_t *workspace_create_empty(
     }
 
     ws->repo = repo;
-    ws->profiles = manifest_profiles(manifest, &ws->profile_count);
 
     ws->diverged_index = hashmap_borrow(256);  /* Keys: arena-backed filesystem_path */
     if (!ws->diverged_index) {
@@ -400,14 +393,19 @@ static error_t *workspace_add_diverged(
  * them rather than aliasing: the location the walk joined and the name the namer
  * answered live in a frame's scratch arena that the frame's next entry reclaims,
  * while ws->diverged_index borrows the key it is handed (base/hashmap.h) and
- * the item outlives every frame. The profile is the view's profile list's — the
- * profile whose tracked directory the scan walked — and is the workspace's arena's
- * already.
+ * the item outlives every frame. The profile is the owner's — the row's own,
+ * whose tracked directory the walk began at — and is the view's arena's already.
+ *
+ * No earlier item stands at the path: the view's and the record's paths were
+ * skipped at the leaf guard, and no directory is enumerated twice (one scan root
+ * per directory, analyze_untracked_files), so the index takes the key fresh.
+ * Stated rather than guarded — hashmap_set overwrites in silence — and pinned
+ * by the exactly-once fixtures (tests/test-scan.sh).
  *
  * @param ws Workspace context (must not be NULL)
  * @param filesystem_path The location the walk joined (must not be NULL)
  * @param storage_path The name the namer answered (must not be NULL)
- * @param profile The view's profile list's (must not be NULL)
+ * @param profile The owner's, the view's row's (must not be NULL)
  * @param occupant What the scan's lstat found at the path (workspace.h)
  */
 static error_t *workspace_add_untracked(
@@ -1959,20 +1957,67 @@ static error_t *blob_over(
 }
 
 /**
- * What one walk of a tracked directory runs under
+ * One scan root: a directory a tracked row stands at, and the row that owns it
  *
- * `profile` is the profile whose tracked directory the walk began at: its own
- * contribution names what the walk finds (core/manifest.h manifest_name, `pending`
- * NULL — the scan admits nothing, and an offer is a file, never an authority
- * another offer composes under), its ignore layers decide what is offered, and
- * every offer is attributed to it. Nothing here is written by a frame; the struct
- * is one value the recursion passes down, and the strings a frame makes live in
- * an allocator of its own.
+ * Keyed by the directory's identity — the (dev, ino) of the row's own key, from
+ * the driver's look — because that is the one fact a string cannot carry: two
+ * tracked rows spelled through different links stand at one directory (a link
+ * no binding names, a firmlink, a bind mount), and a walk reaches a directory
+ * by whatever spelling its frame joined. One entry per directory, so the array
+ * is both the boundaries — a walk stops at any of them it meets, by whichever
+ * string (find_scan_root) — and the walks: the driver enumerates each once, from
+ * a depth 0 of its own. Where several rows stand at one directory the later-enabled
+ * profile's is the one kept, the index's rule for a contested location
+ * (core/manifest.c manifest_layer) applied where the keys differ; among one
+ * profile's, the later in path order.
  */
 typedef struct {
-    workspace_t *ws;                   /* The view, the index, the arena offers live in */
+    dev_t dev;                     /* The directory's identity */
+    ino_t ino;
+    const manifest_row_t *row;     /* The tracked row that owns it */
+} scan_root_t;
+
+/**
+ * The scan root standing at a directory, or NULL
+ *
+ * Asked by the driver as it registers each tracked directory — is one already
+ * standing here? — and by the walk of every directory child — is this another
+ * root's? — each against one lstat the caller already took. Linear: every tracked
+ * directory is a root and is met once as some root's child, so the compares are
+ * the square of their count — three hundred is nothing, ten thousand is some
+ * twenty milliseconds. A map keyed by the formatted pair is the upgrade if a
+ * machine ever shows it.
+ */
+static scan_root_t *find_scan_root(
+    scan_root_t *roots, size_t count, dev_t dev, ino_t ino
+) {
+    for (size_t i = 0; i < count; i++) {
+        if (roots[i].dev == dev && roots[i].ino == ino) return &roots[i];
+    }
+
+    return NULL;
+}
+
+/**
+ * What one walk of a tracked directory runs under
+ *
+ * `profile` is the owner of the scan root the walk began at: its own contribution
+ * names what the walk finds (core/manifest.h manifest_name, `pending` NULL —
+ * the scan admits nothing, and an offer is a file, never an authority another
+ * offer composes under), its ignore layers decide what is offered, and every
+ * offer is attributed to it. A walk that meets a directory another scan root
+ * stands at — by identity, whatever spelling the frame joined — has reached that
+ * root and does not enter it: the driver reaches every root directly, from a
+ * depth 0 of its own. Nothing here is written by a frame; the struct is one value
+ * the recursion passes down, the roots are read through it and never written,
+ * and the strings a frame makes live in an allocator of its own.
+ */
+typedef struct {
+    workspace_t *ws;                   /* The view, the record, the arena offers live in */
     const mount_table_t *mounts;       /* The view's own table (manifest_mounts) */
-    const char *profile;               /* Whose tracked directory this walk began at */
+    scan_root_t *roots;                /* Every scan root — the boundaries — and how many */
+    size_t root_count;
+    const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
     source_filter_t *source_filter;    /* The source tree's .gitignore, or NULL */
 } scan_t;
@@ -1986,6 +2031,17 @@ typedef struct {
  * the key the view holds. A directory child is the one join that is not, and is
  * read through here before the frame below it enumerates.
  *
+ * The walk descends only into directories the view does not track. A directory
+ * child that is a scan root — by identity, whatever spelling this frame joined
+ * — is the driver's to enumerate, and the walk stops at it before asking its
+ * name or any rule: an owner's exclusion is the owner's, and a walk from outside
+ * inherits none of it. Two walks can meet only where their roots are physically
+ * nested or coincident, because a walk never follows a link and a joined child
+ * is inside the directory that was listed, whatever the spelling. The one entry
+ * that is a directory elsewhere is a bind mount inside a tracked directory: it
+ * reaches a directory outside every root's subtree, which two walks may then
+ * enumerate — the limit a visited set would close, left stated.
+ *
  * Each kind asks the view its own question before the name, and they are not
  * the same question: a leaf asks whether its own path is already spoken for, a
  * directory whether anything beneath it can be (blob_over). That is why neither
@@ -1994,13 +2050,14 @@ typedef struct {
  * directory asks no record. A directory the record remembers is entered like
  * any other: a record bounds what is offered, never where the walk goes.
  *
- * The order is the order. The lstat first, because the kind decides every arm;
- * the occupant skip before any lookup, because nothing can hold what it names;
- * the locate before the climb and the namer, both exact only at a location; the
- * guards before the name, because an ascent is paid only where a name is used
- * and in a tracked directory most leaves are managed; the name before the ignore
- * layers, the name being the first layer's subject; the layers before the descent,
- * because an excluded directory is not entered.
+ * The order is the order. The lstat first, because the kind and the identity
+ * decide every arm; the occupant skip before any lookup, because nothing can
+ * hold what it names; identity before the locate, because another root's directory
+ * needs no string; the locate before the climb and the namer, both exact only
+ * at a location; the guards before the name, because an ascent is paid only where
+ * a name is used and in a tracked directory most leaves are managed; the name
+ * before the ignore layers, the name being the first layer's subject; the layers
+ * before the descent, because an excluded directory is not entered.
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
  * can hold at an offered name is update's question at its capture (cmds/update.c).
@@ -2008,12 +2065,12 @@ typedef struct {
  * other — a name the branch's tree or its claim sheet cannot hold is still the
  * capture's to refuse.
  *
- * One arrangement the climb cannot reach: where a later profile's explicit
- * DIRECTORY claim wins a location an earlier one holds a blob at, the index answers
- * with the directory row and the walk enters under the earlier profile's name,
- * whose stage then refuses the capture. That row is necessarily tracked — a derived
- * row never takes a held location — so it is a boundary of its own, and the walk
- * stopping there is the enumeration's question, not this one's.
+ * One arrangement the climb does not reach, and need not: where a later profile's
+ * explicit DIRECTORY claim wins a location an earlier one holds a blob at, the
+ * index answers with the directory row. That row is necessarily tracked — a derived
+ * row never takes a held location — so it is a scan root, and the walk stops at
+ * it by identity before the climb is asked; the directory is the winner's to
+ * enumerate, under the winner's name.
  *
  * What the filesystem refuses is said where it happens and the siblings go on,
  * absence is silent, and an allocation anywhere is the run failing. The lines
@@ -2101,15 +2158,16 @@ static error_t *scan_directory_for_untracked(
             goto cleanup;
         }
 
-        /* One lstat names what stands there, and the kind follows from it: a
-         * symlink is never a directory here. Absence is a skip — the listing
-         * and this look are two moments. A look that failed is said, its errno
-         * read in the line itself (sys/filesystem.h: it is lstat's until something
-         * else runs): nothing downstream can name a path it could not see. What
-         * no branch can hold — a device, a socket, a FIFO — is not a new file;
-         * offered, the capture refuses it by its noun and takes the whole profile's
-         * update with it (cmds/add.c reads it the same way). */
-        fs_occupant_t occupant = fs_lstat_occupant(child, NULL);
+        /* One lstat names what stands there — its kind, and for a directory its
+         * identity: a symlink is never a directory here. Absence is a skip —
+         * the listing and this look are two moments. A look that failed is said,
+         * its errno read in the line itself (sys/filesystem.h: it is lstat's
+         * until something else runs): nothing downstream can name a path it could
+         * not see. What no branch can hold — a device, a socket, a FIFO — is
+         * not a new file; offered, the capture refuses it by its noun and takes
+         * the whole profile's update with it (cmds/add.c reads it the same way). */
+        struct stat st;
+        fs_occupant_t occupant = fs_lstat_occupant(child, &st);
         switch (occupant) {
             case FS_OCCUPANT_NONE:
                 continue;
@@ -2133,6 +2191,13 @@ static error_t *scan_directory_for_untracked(
         bool is_dir = occupant == FS_OCCUPANT_DIRECTORY;
 
         if (is_dir) {
+            /* Another scan root's directory — by identity, whatever this frame
+             * joined — is that root's to enumerate, from a depth 0 of its own
+             * and under its owner's names and rules. Asked before the name and
+             * before any rule: an owner's exclusion is the owner's, and a walk
+             * from outside inherits none of it. */
+            if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) continue;
+
             /* Where the child stands. A directory met at a binder's own spelling
              * — a target declared through a link no binding names — is read through
              * to the physical, so this frame's join and every one below it is a
@@ -2158,9 +2223,7 @@ static error_t *scan_directory_for_untracked(
             err = blob_over(ws->manifest, child, joined, scratch, &blob);
             if (err) goto cleanup;
             if (blob) continue;
-        } else if (manifest_lookup(ws->manifest, child) ||
-            workspace_get_anchor(ws, child) ||
-            hashmap_get(ws->diverged_index, child)) {
+        } else if (manifest_lookup(ws->manifest, child) || workspace_get_anchor(ws, child)) {
             /* Whether anything already speaks for the leaf, in descending order
              * of standing. The view holds it: a claim of any kind puts a row at
              * the location, a directory row at a file's path being the [type]
@@ -2170,10 +2233,7 @@ static error_t *scan_directory_for_untracked(
              * and still remembers — never a discovery, and a discovery again
              * only once the record is retired. Both are the load's own facts,
              * built before any analysis runs (workspace_partition), so status,
-             * sync and update read one answer whatever else each ran. The third
-             * is this load's own items, not a fact of the same standing: two
-             * located roots still enumerate one directory, and it is what holds
-             * that to one offer. */
+             * sync and update read one answer whatever else each ran. */
             continue;
         }
 
@@ -2237,12 +2297,17 @@ cleanup:
  *
  * Every regular file and symlink beneath a tracked directory that no enabled
  * profile manages and dotta has no record of, offered to the profile whose tracked
- * directory it lies in, under the name that profile's own claims give it
- * (core/manifest.h manifest_name), minus what that profile's ignore layers and
- * the source tree exclude — and nothing at all beneath a path the view holds a
- * blob at, a tracked root of its own included (blob_over). A best-effort look,
+ * directory it lies in — the nearest, by the directory's own identity; the
+ * later-enabled where two stand at one — under the name that profile's own claims
+ * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
+ * and the source tree exclude — and nothing at all beneath a path the view holds
+ * a blob at, a tracked root of its own included (blob_over). A best-effort look,
  * said once per directory it could not list and once per path it could not look
- * at; only the profiles in the enabled profile list are scanned.
+ * at: not a snapshot, and not an admission — what the commit can hold at that
+ * name is update's question at its capture (cmds/update.c).
+ *
+ * The driver enumerates the view's tracked directories, one scan each, and the
+ * walk descends only into directories the view does not track (scan_root_t).
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -2250,19 +2315,64 @@ static error_t *analyze_untracked_files(
 ) {
     CHECK_NULL(ws);
 
+    manifest_rows_t dirs = workspace_directories(ws);
+
+    /* The scan roots: every tracked directory that is a directory on disk, one
+     * per directory. An ancestor claim is not one — the profile passes through
+     * the directory on the way to something beneath it, and what it does manage
+     * inside has its own tracked row, registered here on its own. A row beneath
+     * a displaced ancestor is not one either, whatever a look at its key would
+     * find: the key resolves through the squatter, so the directory found is
+     * one the claim has no standing at — apply refuses beneath a squatter by
+     * the same probe — and registering it would make that directory a boundary
+     * no honest walk may enter. Asked of the key, the workspace's fact about
+     * it, before the look. The look is at the row's own key, never at where the
+     * key locates: a claim of a directory that is a declared final link now is
+     * the [type] the directory analysis said, and enumerating the link's target
+     * would offer that directory's files as this row's. Registered in the view's
+     * order, lowest profile first, so a later profile's row standing at a directory
+     * an earlier one already stands at takes it — the index's own rule for a
+     * contested location (core/manifest.c manifest_layer), applied where the
+     * keys differ — and within one profile the later row in path order. */
+    scan_root_t *roots = arena_calloc(ws->arena, dirs.count, sizeof(*roots));
+    if (!roots) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the scan's roots");
+    }
+    size_t root_count = 0;
+
+    size_t profile_count = 0;
+    const char *const *profiles = manifest_profiles(ws->manifest, &profile_count);
+
+    for (size_t p = 0; p < profile_count; p++) {
+        for (size_t i = 0; i < dirs.count; i++) {
+            const manifest_row_t *row = dirs.entries[i];
+            struct stat st;
+
+            if (!row->tracked || strcmp(row->profile, profiles[p]) != 0) continue;
+            if (workspace_displaced_ancestor(ws, row->filesystem_path)) continue;
+            if (fs_lstat_occupant(row->filesystem_path, &st) != FS_OCCUPANT_DIRECTORY) continue;
+
+            scan_root_t *held = find_scan_root(roots, root_count, st.st_dev, st.st_ino);
+            if (held) {
+                held->row = row;
+            } else {
+                roots[root_count++] = (scan_root_t){
+                    .dev = st.st_dev, .ino = st.st_ino, .row = row,
+                };
+            }
+        }
+    }
+    if (root_count == 0) return NULL;
+
     error_t *err = NULL;
     source_filter_t *source_filter = NULL;
 
-    if (ws->profile_count == 0) {
-        return NULL;  /* No profiles to analyze */
-    }
-
     /* Source-tree .gitignore filter — built once for the whole scan so the
-     * discovered source-repo handle is reused across every profile and directory.
-     * Driven by config; policy decision lives here, not in the ignore module.
-     * Fatal on failure: it can only fail on allocation (sys/source.c), and a
-     * scan that ran without the layer it was told to consult would offer what
-     * the source tree excludes. Unwrapped — the failure names its own subject. */
+     * discovered source-repo handle is reused across every root. Driven by config;
+     * policy decision lives here, not in the ignore module. Fatal on failure:
+     * it can only fail on allocation (sys/source.c), and a scan that ran without
+     * the layer it was told to consult would offer what the source tree excludes.
+     * Unwrapped — the failure names its own subject. */
     if (config && config->respect_gitignore) {
         err = source_filter_create(&source_filter);
         if (err) return err;
@@ -2270,9 +2380,9 @@ static error_t *analyze_untracked_files(
 
     /* Layered-rules builder — one per scan. The baseline is read and compiled
      * here, once; each profile's ruleset is composed on first use and cached,
-     * so the profile loop below amortises the cost across the whole status (the
-     * previous shape rebuilt an entire context per profile, re-loading the baseline
-     * each time). No CLI layer: the scan reads no -e, and update's excludes filter
+     * so the roots below amortise the cost across the whole status (the previous
+     * shape rebuilt an entire context per profile, re-loading the baseline each
+     * time). No CLI layer: the scan reads no -e, and update's excludes filter
      * the items it nominates, afterwards (scope_is_excluded). */
     ignore_rules_t *ignore_rules = NULL;
     err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
@@ -2281,135 +2391,61 @@ static error_t *analyze_untracked_files(
         goto cleanup;
     }
 
-    /* Iterate the active directory partition, filtering by profile per outer
-     * iteration. The outer loop runs in the view's profile order — the user's
-     * enabled-precedence position, lowest first — so when two profiles share an
-     * ancestor directory the lowest-precedence one scans first and claims the
-     * new files it finds via ws->diverged_index (the higher profiles' scans meet
-     * them there and skip, through the leaf guard in scan_directory_for_untracked).
-     *
-     * The dirs.count × ws->profile_count strcmp filter below is trivially
-     * negligible (P ≤ 10, D ≤ 10²) and replaces a per-profile SQL query. */
     const mount_table_t *mounts = manifest_mounts(ws->manifest);
-    manifest_rows_t dirs = workspace_directories(ws);
 
-    for (size_t p = 0; p < ws->profile_count; p++) {
-        const char *profile = ws->profiles[p];
+    for (size_t r = 0; r < root_count; r++) {
+        const manifest_row_t *row = roots[r].row;
 
-        /* Resolve the profile-specific ruleset (memoised in the builder).
-         *
-         * Fatal on failure: scanning a profile without its ignore rules risks
-         * reporting genuinely ignored files as untracked, which the user could
-         * then `dotta add` by accident. A corrupt .dottaignore must surface so
-         * the user can fix it. */
-        const gitignore_ruleset_t *profile_rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, profile, &profile_rules);
+        /* Where this machine enumerates the row. One string for every row but a
+         * claim of a declared alias's own spelling, which stands at the spelling
+         * while everything beneath it stands where the link reaches (infra/mount.h
+         * mount_resolve): locating here is what makes every join below a location,
+         * and every probe over them exact. */
+        const char *directory = NULL;
+        err = mount_locate(mounts, row->filesystem_path, ws->arena, &directory);
+        if (err) {
+            err = error_wrap(err, "Failed to locate '%s'", row->filesystem_path);
+            goto cleanup;
+        }
+
+        /* The same question at a root the driver reached directly: an independent
+         * scan root beneath a file claim is as much beneath it as a child the
+         * walk would have stopped at. An owner that cannot be enumerated is not
+         * replaced: the directory stays a boundary and is not scanned, whatever
+         * a lower row standing at it under a cleaner spelling could have offered
+         * — the view's word about the directory is its owner's. */
+        const manifest_row_t *blob = NULL;
+        err = blob_over(ws->manifest, directory, row->filesystem_path, ws->arena, &blob);
+        if (err) goto cleanup;
+        if (blob) continue;
+
+        /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
+         * a profile without its ignore rules risks reporting genuinely ignored
+         * files as untracked, which the user could then `dotta add` by accident.
+         * A corrupt .dottaignore must surface so the user can fix it. */
+        const gitignore_ruleset_t *rules = NULL;
+        err = ignore_rules_for_profile(ignore_rules, row->profile, &rules);
         if (err) {
             err = error_wrap(
-                err, "Failed to load ignore patterns for profile '%s'", profile
+                err, "Failed to load ignore patterns for profile '%s'", row->profile
             );
             goto cleanup;
         }
 
-        /* What every one of this profile's walks runs under: the rows it meets
-         * are named by this profile's contribution and excluded by its layers,
-         * whichever of its tracked directories a walk began at. */
+        /* What this root's walk runs under: the rows it meets are named by the
+         * owner's contribution and excluded by its layers, and the roots are
+         * where it stops. */
         const scan_t scan = {
             .ws            = ws,
             .mounts        = mounts,
-            .profile       = profile,
-            .rules         = profile_rules,
+            .roots         = roots,
+            .root_count    = root_count,
+            .profile       = row->profile,
+            .rules         = rules,
             .source_filter = source_filter,
         };
-
-        /* Per-profile ancestor-suppression cursor — resets per outer iteration.
-         * Profiles with shared-ancestor directories use independent ignore rules,
-         * so each profile's tree must scan from a clean cursor. */
-        const char *last_scanned = NULL;
-
-        for (size_t i = 0; i < dirs.count; i++) {
-            const manifest_row_t *row = dirs.entries[i];
-
-            /* Filter to this profile's rows. dirs is in (filesystem_path) order
-             * from the snapshot; rows for this profile remain in that relative
-             * order, so the ancestor-first invariant the last_scanned suppression
-             * depends on holds within each profile slice. */
-            if (strcmp(row->profile, profile) != 0) continue;
-
-            /* An ancestor claim is not a scan root. The profile passes through
-             * the directory on the way to something beneath it; its contents
-             * are not the profile's to offer, and the nested-scan suppression
-             * below would make the claim *replace* its own tracked descendants
-             * as the root — so ~/.local/share, derived from one file under it,
-             * would be walked whole and the walk would offer dotta's own repository
-             * for adding. What the profile does manage inside such a directory
-             * has its own tracked row, and this loop reaches that row directly. */
-            if (!row->tracked) continue;
-
-            /* The claim's key, which is what the two probes and the cursor below
-             * are about; where this machine enumerates it is a question of its
-             * own, asked once the row has passed them. */
-            const char *filesystem_path = row->filesystem_path;
-
-            /* The tracked directory must BE a directory, and must not stand beneath
-             * a displaced one: anything else and every entry a listing returns
-             * comes from a tree that is not this path's, offered as new files
-             * of this profile — a claim of a directory that is a declared final
-             * link now is the [type] the directory analysis said, and enumerating
-             * the link's target would offer that directory's files as this row's,
-             * while beneath a displaced ancestor the whole path resolves through
-             * the squatter. Asked of the key itself, before any locate: locating
-             * first would read the final link through and lose the very difference
-             * the first probe is for. The displaced probe's reach is the key's
-             * ancestry, which parts from the walk's at that one row shape and
-             * only there — where a claim standing at a binder's own spelling is
-             * enumerated at what the link reaches. */
-            if (fs_lstat_occupant(filesystem_path, NULL) != FS_OCCUPANT_DIRECTORY) continue;
-            if (workspace_displaced_ancestor(ws, filesystem_path)) continue;
-
-            /* Nested-scan suppression: if the previously-scanned directory is a
-             * strict directory-prefix ancestor, this subtree was already walked.
-             * Boundary-aware ('/' terminator) to avoid false matches like /foo/bar
-             * vs /foo/barn. Order guarantees ancestor-first. */
-            if (last_scanned) {
-                size_t plen = strlen(last_scanned);
-                if (strncmp(last_scanned, filesystem_path, plen) == 0 &&
-                    filesystem_path[plen] == '/') {
-                    continue;
-                }
-            }
-
-            /* Where this machine enumerates the row. One string for every row
-             * but a claim of a declared alias's own spelling, which stands at
-             * the spelling while everything beneath it stands where the link
-             * reaches (infra/mount.h mount_resolve): locating here is what makes
-             * every join below a location, and every probe over them exact. */
-            const char *directory = NULL;
-            err = mount_locate(mounts, filesystem_path, ws->arena, &directory);
-            if (err) {
-                err = error_wrap(err, "Failed to locate '%s'", filesystem_path);
-                goto cleanup;
-            }
-
-            /* The same question at a root the driver reached directly: an
-             * independent tracked root beneath a file claim is as much beneath
-             * it as a child the walk would have stopped at. The cursor below is
-             * left where it was — nothing here was walked — and a row nested
-             * inside this one meets the same blob and skips on its own account. */
-            const manifest_row_t *blob = NULL;
-            err = blob_over(ws->manifest, directory, filesystem_path, ws->arena, &blob);
-            if (err) goto cleanup;
-            if (blob) continue;
-
-            err = scan_directory_for_untracked(&scan, directory, 0);
-            if (err) goto cleanup;
-
-            /* Record this scan root. The cursor is the row's key — what the rows
-             * are sorted by, and what the next row's key is compared against —
-             * where the walk's own subject is the located directory; locate is
-             * the identity on every row but the one above. */
-            last_scanned = filesystem_path;
-        }
+        err = scan_directory_for_untracked(&scan, directory, 0);
+        if (err) goto cleanup;
     }
 
 cleanup:
@@ -2749,8 +2785,8 @@ static error_t *collect_displaced(workspace_t *ws) {
  *
  * strcmp order is SQLite's BINARY order, which the slices carried when they were
  * read from a table: a parent sorts before every path beneath it, which deploy's
- * parent-before-child walk and the untracked scan's ancestor suppression both
- * rely on.
+ * parent-before-child walk relies on, and the untracked scan's registration reads
+ * for the tie among one profile's rows standing at one directory.
  */
 static int compare_rows_by_path(const void *a, const void *b) {
     const manifest_row_t *const *ra = a;
@@ -2949,10 +2985,7 @@ error_t *workspace_load(
     workspace_t *ws = NULL;
     error_t *err = NULL;
 
-    /* The workspace's profile set is the view's — the persistent enabled set
-     * the view was built over, never a CLI filter: `dotta status -p global` loads
-     * the whole workspace and filters at display time. */
-    err = workspace_create_empty(repo, manifest, &ws);
+    err = workspace_create_empty(repo, &ws);
     if (err) {
         return err;
     }
@@ -2962,7 +2995,9 @@ error_t *workspace_load(
      * ctx->run.content_cache (command-scoped, wraps ctx->run.keymgr); manifest
      * is ctx->run.manifest (the view the dispatcher built over the enabled set,
      * command-scoped); arena is ctx->arena (command-scoped). All four must outlive
-     * workspace_free. */
+     * workspace_free. The view is the persistent enabled set's, never a CLI
+     * filter's: `dotta status -p global` loads the whole workspace and filters
+     * at display time. */
     ws->state = state;
     ws->content_cache = content_cache;
     ws->manifest = manifest;

@@ -506,13 +506,15 @@ typedef struct {
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
  * symlink beneath a tracked directory that no enabled profile manages and dotta
- * has no record of, offered to the profile whose tracked directory it lies in,
- * under the name that profile's own claims give it and minus what its ignore
- * layers exclude — and nothing beneath a path the view holds a blob at, where
- * no apply could ever place it. A best-effort look that says what it could not
- * list or look at and goes on with the siblings (analyze_untracked_files). The
- * record's half is a load fact, not an analysis's: a path dotta remembers is no
- * discovery on any surface, whichever of the analyses above the caller asked for.
+ * has no record of, offered to the profile whose tracked directory it lies in —
+ * the nearest by the directory's own identity, the later-enabled where two stand
+ * at one directory — under the name that profile's own claims give it and minus
+ * what its ignore layers exclude — and nothing beneath a path the view holds a
+ * blob at, where no apply could ever place it. A best-effort look that says what
+ * it could not list or look at and goes on with the siblings
+ * (analyze_untracked_files). The record's half is a load fact, not an analysis's:
+ * a path dotta remembers is no discovery on any surface, whichever of the analyses
+ * above the caller asked for.
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an
@@ -521,12 +523,12 @@ typedef struct {
  * still load the full workspace and apply the filter at display time via
  * scope_accepts_profile).
  *
- * Profile set: the view's (manifest_profiles — the enabled profiles whose branch
- * existed at build, in precedence order), read for the orphan label's membership
- * set and the untracked scan's order. The view itself is the dispatcher's, built
- * over the enabled set at the start of the command and borrowed here — one tree
- * walk per enabled profile, once per command — so the workspace borrows nothing
- * a caller must keep alive beside it.
+ * The workspace keeps no copy of the profile set: the view itself is the
+ * dispatcher's, built over the enabled set at the start of the command and borrowed
+ * here — one tree walk per enabled profile, once per command — and what needs
+ * the set's order reads it from the view (manifest_profiles: the untracked scan's
+ * registration of its roots), so the workspace borrows nothing a caller must
+ * keep alive beside it.
  *
  * @param repo Git repository (must not be NULL)
  * @param state State handle (must not be NULL, borrowed from caller;

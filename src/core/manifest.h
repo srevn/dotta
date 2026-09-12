@@ -493,8 +493,9 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * Every enabled profile whose branch existed at build, lowest precedence first
  * — the set the rows came from, as the enabled set reads once the branches that
  * are gone (and contributed nothing) are left out; for a tree view, the one
- * profile. The workspace reads its profile set here: the untracked scan's order
- * and the orphan label's membership are the view's, by construction.
+ * profile. The untracked scan's registration reads it (core/workspace.c
+ * analyze_untracked_files): a later profile's tracked directory takes a directory
+ * an earlier one stands at, the index's own rule read from the same order.
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.

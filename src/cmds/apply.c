@@ -1647,15 +1647,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* Persist deployment-anchor advances for files verified clean via the slow
-     * path, and observations of paths seen with no record. Within apply's
-     * transaction — committed atomically with deployment changes. Routed through
-     * workspace_anchor / workspace_observe, so each persisted update also lands
-     * in the workspace's anchors snapshot — downstream readers in this run see
-     * DB and memory agreeing. */
+     * path, and observations of paths seen with no record. A run's land in its
+     * dispatch transaction — committed atomically with deployment changes; a
+     * preview holds none, so the flush takes and commits a scoped one of its
+     * own, exactly as it does for status, diff, sync and update (state_locked,
+     * in core/state.h). Routed through workspace_anchor / workspace_observe, so
+     * each persisted update also lands in the workspace's anchors snapshot —
+     * downstream readers in this run see DB and memory agreeing. */
     err = workspace_flush_updates(ws);
     if (err) {
-        err = error_wrap(err, "Failed to flush anchor updates");
-        goto cleanup;
+        /* A run's flush writes into the transaction the run will commit, so a
+         * failure there poisons everything it has left to do. A preview holds
+         * no such transaction, and a reading it could not persist is one the
+         * next load establishes again — the stance the other four already take. */
+        if (opts->dry_run) {
+            error_free(err);
+            err = NULL;
+        } else {
+            err = error_wrap(err, "Failed to flush anchor updates");
+            goto cleanup;
+        }
     }
 
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
@@ -2031,8 +2042,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
-     * any anchor-writer. The writes land in the dispatch transaction, which the
-     * checkpoint below commits — on every path, the early exit included.
+     * any anchor-writer. A run's writes land in the dispatch transaction, which
+     * the checkpoint below commits — on every path, the early exit included; a
+     * preview writes nothing here at all, by the gate below.
      *
      * Write gated by !dry_run: stamping deployed_at is a write-effect that
      * contradicts dry-run's read-only ownership contract, so the workspace_anchor
@@ -2195,8 +2207,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * The dispatch transaction is committed here so that none of those exits
      * rolls the present back — "Adopted N files" has already been said, and the
      * record must say it too, or the next run adopts them again and the next
-     * status reads a path the load observed as never seen. Dry run included:
-     * its flush is as true as a real run's, and status persists the same writes.
+     * status reads a path the load observed as never seen. A preview has no
+     * dispatch transaction to commit — its flush took and committed its own,
+     * and this save closes nothing — but the reading is as true as a run's and
+     * is persisted the same way, which is what status does with it too.
      *
      * The record of the run's own effects — the anchors the deployment writes,
      * the records cleanup retires — is the run's second transaction, begun past
@@ -2245,11 +2259,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * at the end. Begun here rather than at the first write so the lock the
      * dispatcher took is this process's again across the preview, the prompt
      * and the execution — two applies must not interleave, and a status must
-     * not record paths this run is rewriting. */
-    err = state_begin(state);
-    if (err) {
-        err = error_wrap(err, "Failed to begin the run's state transaction");
-        goto cleanup;
+     * not record paths this run is rewriting.
+     *
+     * A preview begins none. It executes nothing, its prompt is gated above,
+     * and the transaction it would hold across the exit below is one close_run
+     * would roll back unread — while another process's writer waited on it. */
+    if (!opts->dry_run) {
+        err = state_begin(state);
+        if (err) {
+            err = error_wrap(err, "Failed to begin the run's state transaction");
+            goto cleanup;
+        }
     }
 
     /* Decide deploy's verdicts from the plan, and the skips the run reports
@@ -2788,7 +2808,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Commit the run's transaction: the anchors the deployment wrote and the
      * records cleanup retired (partial success model — a cleanup failure leaves
      * the record's writes to commit). The present was committed at the checkpoint;
-     * a dry run's transaction is empty and the save only closes it. */
+     * a preview began no transaction here, and the save closes nothing. */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -3004,7 +3024,7 @@ const args_command_t spec_apply = {
     .complete     = apply_complete,
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,
-        .state    = DOTTA_STATE_WRITE,
+        .state    = DOTTA_STATE_DRYRUN,
         .mounts   = true,
         .crypto   = DOTTA_CRYPTO_OBTAIN,
         .manifest = true,

@@ -129,21 +129,22 @@ typedef enum dotta_repo_mode {
  * — two applies must not interleave — and is why a hook of a WRITE command cannot
  * itself run a `dotta` command that needs the write lock (etc/hooks/README.md).
  *
- * DRYRUN is a policy over those two rather than a third shape: WRITE for the
- * run, READ for the invocation the command's own `--dry-run` flag makes a preview.
- * It is resolved before the first open, from the flag row the spec itself declares,
- * so nothing below acquisition ever meets it — every consumer reads a handle in
- * one of the three shapes and never asks which word declared it
- * (`main.c::open_run`). The commands whose whole dispatch is one transaction
- * and whose preview writes nothing declare it (`cmds/add`, `profile enable`,
- * `profile disable`); `cmds/apply` does not, its dry run committing the
- * observations its load established.
+ * A preview of a WRITE command opens READ. The dispatcher asks the spec's own
+ * `--dry-run` row before the first open and narrows the mode when this invocation
+ * set it (`main.c::open_run`), so nothing below acquisition ever meets a fourth
+ * word — every consumer reads a handle in one of the three shapes and never asks
+ * how it was decided. A writing command with no preview (`profile reorder`) carries
+ * no such row, answers NULL and keeps its shape; nothing is declared anywhere,
+ * and a spec that grows a `--dry-run` gets the rule by growing it.
  *
- * It narrows acquisition and nothing else. What skips a mutation is the command's
- * own preview branch, and READ permits a scoped `state_begin` by contract — so
- * a command that writes at a moment rather than across its dispatch declares
- * READ and promotes there (`profile validate --fix`, update, remove, revert),
- * and one whose preview writes what its run writes declares WRITE.
+ * The rule is that a preview holds nothing, not that it writes nothing. What
+ * skips a mutation is the command's own preview branch, and READ permits a scoped
+ * `state_begin` by contract — so a command that writes at a moment rather than
+ * across its dispatch declares READ and promotes there (`profile validate --fix`,
+ * update, remove, revert), and a preview that records what it read does so through
+ * the same scoped transaction status and diff use (the workspace flush,
+ * `core/workspace.h`): an observation is a reading, and the next load would have
+ * to establish it again.
  *
  * CREATE-style commands (init, clone) declare NONE and open state themselves,
  * because the database file does not exist before dispatch runs — there is nothing
@@ -153,8 +154,7 @@ typedef enum dotta_repo_mode {
 typedef enum dotta_state_mode {
     DOTTA_STATE_NONE,    /* No state handle */
     DOTTA_STATE_READ,    /* state_load; scoped writes via state_begin/state_commit */
-    DOTTA_STATE_WRITE,   /* state_open (BEGIN IMMEDIATE); the command calls state_save */
-    DOTTA_STATE_DRYRUN   /* WRITE, and READ for the --dry-run invocation of it */
+    DOTTA_STATE_WRITE    /* state_open (BEGIN IMMEDIATE); the command calls state_save */
 } dotta_state_mode_t;
 
 /**
@@ -208,10 +208,10 @@ typedef enum dotta_crypto_mode {
  * state
  * -----
  * The handle in the declared shape (`dotta_state_mode_t`). Requires `repo` at
- * OPEN — state lives in the repository dotta opened, not beside its path. A spec
- * that declares DRYRUN has its mode resolved from this invocation's `--dry-run`
- * flag before the first open, and the closure above is tested against what it
- * resolved to.
+ * OPEN — state lives in the repository dotta opened, not beside its path. A WRITE
+ * spec whose `--dry-run` flag this invocation set opens READ instead. The closure
+ * above is tested against what the spec declares: narrowing yields READ and never
+ * NONE, so nothing it checks can come out differently for a preview.
  *
  * mounts
  * ------
@@ -314,7 +314,7 @@ typedef enum dotta_crypto_mode {
  */
 typedef struct dotta_needs {
     dotta_repo_mode_t repo;     /* NONE, PATH or OPEN */
-    dotta_state_mode_t state;   /* NONE, READ, WRITE or DRYRUN. Requires repo OPEN */
+    dotta_state_mode_t state;   /* NONE, READ or WRITE. Requires repo OPEN */
     bool mounts;                /* This machine's topology over the enabled set. Requires state */
     dotta_crypto_mode_t crypto; /* NONE, CACHED or OBTAIN: the content cache */
     bool manifest;              /* The view at dispatch. Requires state */

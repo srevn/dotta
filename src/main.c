@@ -92,13 +92,13 @@ const args_command_t *const *dotta_registry(void) {
 /**
  * Open the run: every member the spec declares, in dependency order.
  *
- * The state mode is resolved first — a spec may declare that a dry run narrows
- * it (runtime.h) — and the needs are then checked for closure: the spec names
- * the full set its handler reads, and the set must hold its own inputs. Then
- * the repository, state, the crypto handles, the view and the mount table — the
- * view's own where both are declared — each iff declared; every member starts
- * NULL and is populated in place, so on an error the members already opened are
- * exactly what `close_run` releases.
+ * The needs are checked for closure first: the spec names the full set its handler
+ * reads, and the set must hold its own inputs. Then the repository, state — in
+ * the shape the spec declares, narrowed to READ where this invocation is a preview
+ * (runtime.h) — the crypto handles, the view and the mount table, the view's
+ * own where both are declared; each iff declared. Every member starts NULL and
+ * is populated in place, so on an error the members already opened are exactly
+ * what `close_run` releases.
  *
  * State opens before crypto, so a run that holds the store's write lock reads
  * the repository's epoch inside it. Nothing depends on that today — the one command
@@ -123,31 +123,13 @@ static error_t *open_run(
     const dotta_needs_t *needs = spec->payload;
     if (needs == NULL) return NULL;
 
-    /* The one shape an invocation decides, resolved before anything opens: from
-     * here down the mode is NONE, READ or WRITE, and every open reads it alone.
-     * WRITE is the whole-dispatch transaction these commands serialize on, and
-     * a dry run of one writes nothing — so it takes the handle and no lock, neither
-     * blocking a run nor waiting for one, and publishes no database where the
-     * store has none. The spec opts into the policy; the lookup only locates
-     * its input, which is the row the spec itself declares. */
-    dotta_state_mode_t state = needs->state;
-    if (state == DOTTA_STATE_DRYRUN) {
-        CHECK_ARG(
-            opts != NULL,
-            "Spec declares a dry-run state mode without parsed options"
-        );
-        const bool *dry_run = args_flag_value(spec, opts, "dry-run");
-        CHECK_ARG(
-            dry_run != NULL,
-            "Spec declares a dry-run state mode without a --dry-run flag"
-        );
-        state = *dry_run ? DOTTA_STATE_READ : DOTTA_STATE_WRITE;
-    }
-
     /* Closure: a derived member's input is declared beside it. An incoherent
-     * spec is a programming error, caught on the command's first run. */
+     * spec is a programming error, caught on the command's first run. What the
+     * spec declares is what is checked: the narrowing below turns WRITE into
+     * READ and never into NONE, so no closure here can tell a preview from the
+     * run it previews. */
     CHECK_ARG(
-        state == DOTTA_STATE_NONE || needs->repo == DOTTA_REPO_OPEN,
+        needs->state == DOTTA_STATE_NONE || needs->repo == DOTTA_REPO_OPEN,
         "Spec declares state without the repository handle"
     );
     CHECK_ARG(
@@ -155,11 +137,11 @@ static error_t *open_run(
         "Spec declares crypto without the repository handle"
     );
     CHECK_ARG(
-        !needs->mounts || state != DOTTA_STATE_NONE,
+        !needs->mounts || needs->state != DOTTA_STATE_NONE,
         "Spec declares mounts without state"
     );
     CHECK_ARG(
-        !needs->manifest || state != DOTTA_STATE_NONE,
+        !needs->manifest || needs->state != DOTTA_STATE_NONE,
         "Spec declares manifest without state"
     );
 
@@ -183,12 +165,27 @@ static error_t *open_run(
         }
     }
 
-    /* State, in the shape resolved above. A WRITE handle holds BEGIN IMMEDIATE
-     * for the whole dispatch; the command calls state_save, and close_run's
-     * state_free rolls back anything it did not. */
-    if (state != DOTTA_STATE_NONE) {
-        err = (state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
-                                           : state_load(run->repo, &run->state);
+    /* State, in the shape the spec declares — narrowed where this invocation is
+     * a preview. WRITE is the whole-dispatch transaction these commands serialize
+     * on, and a preview has nothing to serialize: it takes the handle and no
+     * lock, neither blocking a run nor waiting for one, and publishes no database
+     * where the store has none. A WRITE handle holds BEGIN IMMEDIATE for the
+     * whole dispatch; the command calls state_save, and close_run's state_free
+     * rolls back anything it did not. */
+    if (needs->state != DOTTA_STATE_NONE) {
+        /* The spec's own flag row, asked of a WRITE spec alone: args_flag_value
+         * answers NULL for a command whose table carries none, so a writing command
+         * with no preview keeps its shape, and a passthrough — which parses no
+         * options at all — has none to read. The value is the effective one, so
+         * a --dry-run that init_defaults seeded or post_parse rewrote binds
+         * acquisition too (base/args.h). */
+        const bool *dry_run = (needs->state == DOTTA_STATE_WRITE && opts != NULL)
+            ? args_flag_value(spec, opts, "dry-run")
+            : NULL;
+
+        err = (needs->state == DOTTA_STATE_WRITE && (dry_run == NULL || !*dry_run))
+            ? state_open(run->repo, &run->state)
+            : state_load(run->repo, &run->state);
         if (err) goto done;
     }
 

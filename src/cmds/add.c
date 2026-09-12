@@ -2970,7 +2970,7 @@ const args_command_t spec_add = {
     .complete    = add_complete,
     .payload     = &(const dotta_needs_t){
         .repo    = DOTTA_REPO_OPEN,
-        .state   = DOTTA_STATE_DRYRUN,
+        .state   = DOTTA_STATE_WRITE,
         .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch    = add_dispatch,

@@ -19,6 +19,9 @@ dotta add global ~/.config/nvim --exclude '*.log' --exclude 'node_modules/*'
 
 # Custom commit message
 dotta add global ~/.bashrc -m "Add shell config"
+
+# Preview: what would be added, and under which names, with nothing written
+dotta add --dry-run -v global ~/.config/nvim
 ```
 
 ### Deploying

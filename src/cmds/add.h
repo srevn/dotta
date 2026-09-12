@@ -28,6 +28,7 @@ typedef struct {
     char **exclude_patterns; /* Exclude patterns (glob) - read-only */
     size_t exclude_count;    /* Number of exclude patterns */
     bool force;              /* Overwrite existing files in profile */
+    bool dry_run;            /* Preview without writing */
     bool verbose;            /* Print verbose output */
     int encrypt_mode;        /* encryption_request_t (int for ARGS_FLAG_SET) */
 
@@ -108,7 +109,11 @@ typedef struct {
  * resolved into its location by construction; a walked one is named from the
  * claim standing at the location the walk reached. That is what lets the record
  * join by the location without a round trip through the name — and it holds while
- * the topology does not move, so the join tests it rather than assuming it.
+ * the topology does not move, so the join tests it rather than assuming it. A
+ * run holds the store's write lock from dispatch, so the rows its table was built
+ * from are the rows the record's view is built from; what can still move is the
+ * disk — a pre-add hook re-pointing a declared link — and that is what the join
+ * catches.
  *
  * **What the record records**: every capture is an ownership event — the path
  * was put there from disk, so the record binds the committed blob to the stat
@@ -120,6 +125,20 @@ typedef struct {
  * standing, leaves the record exactly as it was, says so, and names the retry —
  * `--force`, over a branch that now holds the name, because an apply re-earns
  * the event for a file it adopts and never for a directory.
+ *
+ * **-n previews the add and writes nothing of dotta's.** Every decision this
+ * command makes runs and no capture does, so an add refused over a name is a
+ * preview refused in the same words and with the same status: the listing, the
+ * admission of every name together, the name a directory claim would abandon,
+ * the entries a chosen name already holds, and each file's encryption verdict.
+ * What only a source or a later writer can say is the run's alone — bytes that
+ * cannot be read, the key a seal needs, an owner a claim cannot name, a kind
+ * that changed since its listing, the chain above each path, whether the commit
+ * moves anything, and the record. Its lines are the capture's in the future tense;
+ * it captures no file's contents, writes no object, ref, row or database, and
+ * takes no write lock (include/runtime.h), so it neither blocks a run nor waits
+ * for one. The pre-add hook runs under DOTTA_DRY_RUN=1 and the post-add hook
+ * does not (utils/hooks.h).
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

@@ -910,6 +910,35 @@ static void report_capture(
 }
 
 /**
+ * Name the command that gives a profile no row holds its place here
+ *
+ * The one remedy an add into such a profile leaves, whichever screen says it:
+ * the receipt's, where the record phase found no row, and the preview's, where
+ * the rows it read say the same. Enable is the verb, taking the target as the
+ * user typed it when the run brought one — and "here" is where they typed it.
+ *
+ * @param out     Output context (must not be NULL)
+ * @param profile The profile (must not be NULL)
+ * @param target  The --target the run brought, as typed; NULL without one
+ */
+static void report_enable_hint(
+    output_t *out, const char *profile, const char *target
+) {
+    if (target) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta profile enable %s --target %s' to deploy it here",
+            profile, target
+        );
+    } else {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta profile enable %s' to activate and deploy", profile
+        );
+    }
+}
+
+/**
  * Say which labels the captured paths landed under
  *
  * A capture's name is the one typed for it, or the claim standing at its location
@@ -1474,7 +1503,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
-    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
+    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE; READ under -n) */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -1489,8 +1518,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
     manifest_t *view = NULL;             /* The branch as the stage opened it: see below */
     add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
-    bool profile_exists = false;         /* The pre-flight's question, read above the open */
-    bool profile_created = false;        /* This run's act, read below it */
+    bool profile_exists = false;         /* The pre-flight's question, read by both modes */
+    bool profile_created = false;        /* The orphan open's answer, read below the commit */
     bool committed = false;
     metadata_t *metadata = NULL;
     mount_table_t *mounts = NULL;         /* The command's table: see below */
@@ -1653,8 +1682,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * Built once per command and shared across the whole collection walk so the
      * discovered source-repo handle is reused for every file under the same source
-     * tree. A non-fatal build failure leaves source_filter NULL, which
-     * is_excluded() treats as "layer skipped". */
+     * tree. A build that fails refuses the command, as the ignore rules above
+     * do; what degrades is a query — is_excluded reads one that fails as "not
+     * excluded", so an odd source repository never blocks a path the user named. */
     if (config && config->respect_gitignore) {
         err = source_filter_create(&source_filter);
         if (err) {
@@ -1669,7 +1699,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         .profile    = opts->profile,
         .files      = opts->files,
         .file_count = opts->file_count,
-        .dry_run    = false,
+        .dry_run    = opts->dry_run,
     };
 
     /* Execute pre-add hook */
@@ -1688,7 +1718,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = stage_open(repo, refname, &stage);
     } else {
         err = stage_orphan(repo, refname, &stage);
-        profile_created = true;   /* This add is what brought the branch */
+        profile_created = true;   /* This add is what brings the branch */
     }
 
     if (err) {
@@ -2259,6 +2289,104 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
+    /* A preview ends here, and this is the whole of the difference between the
+     * two modes: everything above decided, and everything below reads the sources
+     * and writes.
+     *
+     * So a preview answers what the selection answers — every name, admitted
+     * together against the tree and the sheet the commit would carry (sys/stage.h,
+     * the admission); the name a directory claim would abandon; the entries the
+     * branch holds under a chosen name; and each file's encryption verdict, with
+     * whether this run could seal at all — and a run refused over any of them
+     * is a preview refused in the same words. What only a source, or a later
+     * writer, can say is below: bytes that cannot be read, a plaintext that would
+     * read as ciphertext, the key a seal needs, an owner a claim cannot name, a
+     * kind that changes before its capture, the chain above each path, whether
+     * the commit moves anything, and the record (cmds/add.h).
+     *
+     * And nothing above wrote anything of dotta's: the state was opened in the
+     * read shape and holds no lock (include/runtime.h), the stage and the admission
+     * are indexes in memory over the tree the open read — Git's empty tree for
+     * a profile that does not exist yet, read and never written (sys/stage.h) —
+     * and the sheet's edit is dropped unsaved. The pre-add hook was told it is
+     * a dry run; the post-add hook is below. */
+    if (opts->dry_run) {
+        /* The captures' own lines, in their order and in the future tense: every
+         * directory, then every file, by the capture its listed occupant chooses
+         * and sealed as the decision pass said. What a capture reads off its
+         * source — the mode and the owner a claim takes — is the capture's. */
+        for (size_t i = 0; i < walk.directories.count; i++) {
+            const add_path_t *path = walk.directories.items[i];
+            output_info(
+                out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
+                path->location, path->claim.storage_path
+            );
+        }
+        for (size_t i = 0; i < walk.files.count; i++) {
+            const add_path_t *path = walk.files.items[i];
+            if (path->should_encrypt) {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
+                    path->location, path->claim.storage_path
+                );
+            }
+            output_info(
+                out, OUTPUT_VERBOSE,
+                path->occupant == FS_OCCUPANT_SYMLINK ? "Would add symlink: %s -> %s"
+                                                      : "Would add: %s -> %s",
+                path->location, path->claim.storage_path
+            );
+        }
+
+        /* The receipt's block in the future tense, arm for arm but one: whether
+         * the commit moves anything is the bytes' to say, so a preview counts
+         * what it would capture and "Nothing changed" is the run's alone. */
+        if (walk.files.count > 0) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would add %zu file%s to profile '%s'",
+                walk.files.count, walk.files.count == 1 ? "" : "s", opts->profile
+            );
+            if (walk.directories.count > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Would track %zu director%s for change detection",
+                    walk.directories.count, walk.directories.count == 1 ? "y" : "ies"
+                );
+            }
+        } else {
+            output_info(
+                out, OUTPUT_NORMAL, "Would track %zu director%s in profile '%s'",
+                walk.directories.count, walk.directories.count == 1 ? "y" : "ies",
+                opts->profile
+            );
+        }
+        report_labels(&walk, target ? target : bound);
+        if (!profile_exists) {
+            output_info(
+                out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
+                opts->profile
+            );
+        }
+        output_newline(out, OUTPUT_NORMAL);
+
+        /* The one fact of the record a preview has: no row holds the profile
+         * and this add does not create it — the receipt's `enabled`, read before
+         * any phase has run, off the rows the dispatcher loaded. What the rows
+         * would take otherwise is the post-commit view's to say, and a preview
+         * builds none. */
+        if (profile_exists && !state_has_profile(state, opts->profile)) {
+            output_info(
+                out, OUTPUT_NORMAL,
+                "Profile not enabled - nothing would be marked as deployed"
+            );
+            report_enable_hint(out, opts->profile, opts->target);
+            output_newline(out, OUTPUT_NORMAL);
+        }
+
+        output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
+        goto cleanup;                                    /* err is NULL */
+    }
+
     /* Capture directory metadata for every directory this command listed.
      *
      * The walk lists every directory it walks into — including the argument itself
@@ -2596,29 +2724,16 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    /* The remedy the run leaves, at one site and keyed on the one fact that decides
-     * it. No row holding this profile makes enable the first verb whichever fate
-     * brought the run here — the tree is shaped and enable is what gives it a
-     * place, taking the target as the user typed it when the run brought one. A
-     * row that does hold it leaves only a failure to answer, and the retry is
-     * this add again with --force over a branch that now holds the bytes: an
-     * apply re-earns the event for the files it adopts and never for a directory,
-     * and an unowned directory is released at scope exit where an owned one is
-     * pruned. */
+    /* The remedy the run leaves, keyed on the one fact that decides it. No row
+     * holding this profile makes enable the first verb whichever fate brought
+     * the run here — the tree is shaped and enable is what gives it a place
+     * (report_enable_hint, which the preview's screen reads too). A row that
+     * does hold it leaves only a failure to answer, and the retry is this add
+     * again with --force over a branch that now holds the bytes: an apply re-earns
+     * the event for the files it adopts and never for a directory, and an unowned
+     * directory is released at scope exit where an owned one is pruned. */
     if (!record.enabled) {
-        if (opts->target) {
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s --target %s' to deploy it here",
-                opts->profile, opts->target
-            );
-        } else {
-            output_hint(
-                out, OUTPUT_NORMAL,
-                "Run 'dotta profile enable %s' to activate and deploy",
-                opts->profile
-            );
-        }
+        report_enable_hint(out, opts->profile, opts->target);
     } else if (record_err) {
         output_hint(
             out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"
@@ -2769,6 +2884,11 @@ static const args_opt_t add_opts[] = {
         "Overwrite existing entries in the profile"
     ),
     ARGS_FLAG(
+        "n dry-run",
+        cmd_add_options_t,           dry_run,
+        "Preview without writing"
+    ),
+    ARGS_FLAG(
         "v verbose",
         cmd_add_options_t,           verbose,
         "Verbose output"
@@ -2820,7 +2940,12 @@ const args_command_t spec_add = {
         "../x) is read where you stand.\n"
         "\n"
         "Modes are captured for every file and directory; ownership only\n"
-        "under root/ and custom/.\n",
+        "under root/ and custom/.\n"
+        "\n"
+        "-n shows what the add would do and writes nothing. It refuses what\n"
+        "the add would refuse about names, but captures no file's contents,\n"
+        "so a file that cannot be read or needs a key is only found by the\n"
+        "add. -v lists each path with the name it would take.\n",
     .notes       =
         "Exclude Patterns:\n"
         "  Glob syntax with *, ?, [abc]. Flag is repeatable.\n"
@@ -2830,6 +2955,7 @@ const args_command_t spec_add = {
     .examples    =
         "  %s add global ~/.bashrc                   # Basic add\n"
         "  %s add darwin ~/.config/nvim              # Directory\n"
+        "  %s add -n -v darwin ~/.config/nvim        # Preview the names\n"
         "  %s add global ~/.ssh/config -e '*.pub'    # With exclude\n"
         "  %s add global ~/.ssh/id_rsa --encrypt     # Force encryption\n"
         "  %s add web /mnt/jails/web/nginx.conf --target /mnt/jails/web\n"
@@ -2844,7 +2970,7 @@ const args_command_t spec_add = {
     .complete    = add_complete,
     .payload     = &(const dotta_needs_t){
         .repo    = DOTTA_REPO_OPEN,
-        .state   = DOTTA_STATE_WRITE,
+        .state   = DOTTA_STATE_DRYRUN,
         .crypto  = DOTTA_CRYPTO_OBTAIN,
     },
     .dispatch    = add_dispatch,

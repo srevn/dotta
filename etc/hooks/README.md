@@ -343,6 +343,12 @@ the moment they write.
 If a hook needs to write state, run it from a `post-` hook — by then the command
 has finished its transaction either way, including when its record write failed.
 
+`dotta add -n` is the exception, and it is one by design: a preview takes no lock
+at all, so a `pre-add` hook of one may run a `dotta` command that writes state. The
+preview has already read the profiles it names paths under by the time the hook
+fires, so what such a command changes is the next command's answer, not this
+preview's.
+
 ### Best Practices
 
 1. **Always use `set -euo pipefail`** at the top of bash scripts

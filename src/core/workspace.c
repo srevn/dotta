@@ -1895,6 +1895,70 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 }
 
 /**
+ * The blob the view holds over a directory — at it, or at a rung above it
+ *
+ * A directory standing where the view holds a blob is the [type] the file analysis
+ * said, and nothing beneath it can stand: the view says a file belongs there,
+ * so anything offered beneath is something no apply can ever place. Whichever
+ * profile's blob, precedence applied (core/manifest.h manifest_lookup) — the
+ * question is what stands at the location, not what the scanning profile holds.
+ * A directory row of either kind stops nothing: an ancestor claim names neither
+ * itself nor anything beneath it (manifest_is_derived), which is why a derived
+ * row at one key is no answer about the other.
+ *
+ * Both of a directory's keys are climbed when they differ, and independently:
+ * the view keys by mount_resolve and the walk reaches by mount_locate, and the
+ * two part at exactly one input — a claim of a declared alias's own spelling
+ * (infra/mount.h) — so a blob can stand at the spelling with nothing at the
+ * location, or the other way round. Each step is the last separator's index, or
+ * 1 beneath the root, so a rung is strictly shorter than the one before it and
+ * "/" ends the climb — where no name spells a mount root anyway. Both keys are
+ * absolute; the copy the climb truncates is the caller's scratch, and abandoned.
+ *
+ * Readers: the walk, of every directory child, and the driver, of every tracked
+ * directory it is about to enumerate — an independent tracked root beneath a
+ * file claim is as much beneath it as a child the walk would have stopped at.
+ *
+ * @param view     The precedence-resolved view (must not be NULL)
+ * @param location Where the directory stands (must not be NULL)
+ * @param spelling The key the caller reached it by (must not be NULL)
+ * @param scratch  Arena the climb's copies are taken in (must not be NULL)
+ * @param out      The blob standing over it, or NULL (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *blob_over(
+    const manifest_t *view,
+    const char *location,
+    const char *spelling,
+    arena_t *scratch,
+    const manifest_row_t **out
+) {
+    *out = NULL;
+
+    const char *keys[] = { location, spelling };
+    size_t count = strcmp(location, spelling) == 0 ? 1 : 2;
+
+    for (size_t k = 0; k < count; k++) {
+        char *rung = arena_strdup(scratch, keys[k]);
+        if (!rung) {
+            return ERROR(ERR_MEMORY, "Failed to copy path");
+        }
+
+        while (rung[1]) {
+            const manifest_row_t *row = manifest_lookup(view, rung);
+            if (row && row->type != PATH_TYPE_DIRECTORY) {
+                *out = row;
+                return NULL;
+            }
+
+            rung[str_path_parent_len(rung)] = '\0';
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * What one walk of a tracked directory runs under
  *
  * `profile` is the profile whose tracked directory the walk began at: its own
@@ -1922,9 +1986,17 @@ typedef struct {
  * the key the view holds. A directory child is the one join that is not, and is
  * read through here before the frame below it enumerates.
  *
+ * Each kind asks the view its own question before the name, and they are not
+ * the same question: a leaf asks whether its own path is already spoken for, a
+ * directory whether anything beneath it can be (blob_over). That is why neither
+ * needs the other's — a leaf's container was cleared before this frame entered
+ * it, so a leaf climbs nothing; no offer is ever made *at* a directory, so a
+ * directory asks no record. A directory the record remembers is entered like
+ * any other: a record bounds what is offered, never where the walk goes.
+ *
  * The order is the order. The lstat first, because the kind decides every arm;
  * the occupant skip before any lookup, because nothing can hold what it names;
- * the locate before the namer, which is exact only at a location; the leaf's
+ * the locate before the climb and the namer, both exact only at a location; the
  * guards before the name, because an ascent is paid only where a name is used
  * and in a tracked directory most leaves are managed; the name before the ignore
  * layers, the name being the first layer's subject; the layers before the descent,
@@ -1932,6 +2004,17 @@ typedef struct {
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
  * can hold at an offered name is update's question at its capture (cmds/update.c).
+ * The climb closes the one class the view can decide for itself and closes no
+ * other — a name the branch's tree or its claim sheet cannot hold is still the
+ * capture's to refuse.
+ *
+ * One arrangement the climb cannot reach: where a later profile's explicit
+ * DIRECTORY claim wins a location an earlier one holds a blob at, the index answers
+ * with the directory row and the walk enters under the earlier profile's name,
+ * whose stage then refuses the capture. That row is necessarily tracked — a derived
+ * row never takes a held location — so it is a boundary of its own, and the walk
+ * stopping there is the enumeration's question, not this one's.
+ *
  * What the filesystem refuses is said where it happens and the siblings go on,
  * absence is silent, and an allocation anywhere is the run failing. The lines
  * go to stderr, as the driver's do — core has no output handle.
@@ -2063,6 +2146,18 @@ static error_t *scan_directory_for_untracked(
                 err = error_wrap(err, "Failed to locate '%s'", joined);
                 goto cleanup;
             }
+
+            /* A blob the view holds at the directory or above it, under either
+             * of its keys. Asked before the name and before any rule: an offer
+             * beneath it is one no apply can place, whoever would name it, and
+             * committing it turns a view-versus-disk conflict the user can resolve
+             * into a view-versus-view one only `remove` can. Said on its own
+             * screen rather than here — the file analysis stands the [type] at
+             * the blob's own path, with the remedies beside it. */
+            const manifest_row_t *blob = NULL;
+            err = blob_over(ws->manifest, child, joined, scratch, &blob);
+            if (err) goto cleanup;
+            if (blob) continue;
         } else if (manifest_lookup(ws->manifest, child) ||
             workspace_get_anchor(ws, child) ||
             hashmap_get(ws->diverged_index, child)) {
@@ -2144,9 +2239,10 @@ cleanup:
  * profile manages and dotta has no record of, offered to the profile whose tracked
  * directory it lies in, under the name that profile's own claims give it
  * (core/manifest.h manifest_name), minus what that profile's ignore layers and
- * the source tree exclude. A best-effort look, said once per directory it could
- * not list and once per path it could not look at; only the profiles in the enabled
- * profile list are scanned.
+ * the source tree exclude — and nothing at all beneath a path the view holds a
+ * blob at, a tracked root of its own included (blob_over). A best-effort look,
+ * said once per directory it could not list and once per path it could not look
+ * at; only the profiles in the enabled profile list are scanned.
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -2294,6 +2390,16 @@ static error_t *analyze_untracked_files(
                 err = error_wrap(err, "Failed to locate '%s'", filesystem_path);
                 goto cleanup;
             }
+
+            /* The same question at a root the driver reached directly: an
+             * independent tracked root beneath a file claim is as much beneath
+             * it as a child the walk would have stopped at. The cursor below is
+             * left where it was — nothing here was walked — and a row nested
+             * inside this one meets the same blob and skips on its own account. */
+            const manifest_row_t *blob = NULL;
+            err = blob_over(ws->manifest, directory, filesystem_path, ws->arena, &blob);
+            if (err) goto cleanup;
+            if (blob) continue;
 
             err = scan_directory_for_untracked(&scan, directory, 0);
             if (err) goto cleanup;

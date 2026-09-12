@@ -21,7 +21,6 @@
 #include "core/workspace.h"
 
 #include <config.h>
-#include <dirent.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -394,13 +393,19 @@ static error_t *workspace_add_diverged(
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
  * view does not claim the path), no record (dotta never observed it while managed).
- * Identity aliases the scan's arena copies; the profile is the view's profile
- * list's — the profile whose tracked directory the scan walked. State, divergence
- * and kind are the constants of the state.
+ * State, divergence and kind are the constants of the state.
+ *
+ * This is the one door the walk's strings leave their frame through, and it copies
+ * them rather than aliasing: the location the walk joined and the name the namer
+ * answered live in a frame's scratch arena that the frame's next entry reclaims,
+ * while ws->diverged_index borrows the key it is handed (base/hashmap.h) and
+ * the item outlives every frame. The profile is the view's profile list's — the
+ * profile whose tracked directory the scan walked — and is the workspace's arena's
+ * already.
  *
  * @param ws Workspace context (must not be NULL)
- * @param filesystem_path The scan's arena copy (must not be NULL)
- * @param storage_path The scan's arena copy (must not be NULL)
+ * @param filesystem_path The location the walk joined (must not be NULL)
+ * @param storage_path The name the namer answered (must not be NULL)
  * @param profile The view's profile list's (must not be NULL)
  * @param occupant What the scan's lstat found at the path (workspace.h)
  */
@@ -422,10 +427,12 @@ static error_t *workspace_add_untracked(
     }
     memset(entry, 0, sizeof(*entry));
 
-    /* The casts discard the const the scan's read-only views carry. */
-    entry->filesystem_path = (char *) filesystem_path;
-    entry->storage_path = (char *) storage_path;
-    entry->profile = (char *) profile;
+    entry->filesystem_path = arena_strdup(ws->arena, filesystem_path);
+    entry->storage_path = arena_strdup(ws->arena, storage_path);
+    entry->profile = (char *) profile;   /* the cast discards the view's const */
+    if (!entry->filesystem_path || !entry->storage_path) {
+        return ERROR(ERR_MEMORY, "Failed to copy untracked paths");
+    }
 
     entry->state = WORKSPACE_STATE_UNTRACKED;
     entry->divergence = DIVERGENCE_NONE;
@@ -1887,172 +1894,247 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 }
 
 /**
- * Recursively scan directory for untracked files
+ * What one walk of a tracked directory runs under
  *
- * Depth-limited at FS_WALK_MAX_DEPTH, the bound add's own walk is held to
- * (sys/filesystem.h): the scan stops silently there, where a capture refuses,
- * and sharing the value is what keeps the two from disagreeing about how deep
- * this machine goes.
+ * `profile` is the profile whose tracked directory the walk began at: its own
+ * contribution names what the walk finds (core/manifest.h manifest_name, `pending`
+ * NULL — the scan admits nothing, and an offer is a file, never an authority
+ * another offer composes under), its ignore layers decide what is offered, and
+ * every offer is attributed to it. Nothing here is written by a frame; the struct
+ * is one value the recursion passes down, and the strings a frame makes live in
+ * an allocator of its own.
+ */
+typedef struct {
+    workspace_t *ws;                   /* The view, the index, the arena offers live in */
+    const mount_table_t *mounts;       /* The view's own table (manifest_mounts) */
+    const char *profile;               /* Whose tracked directory this walk began at */
+    const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
+    source_filter_t *source_filter;    /* The source tree's .gitignore, or NULL */
+} scan_t;
+
+/**
+ * Scan one tracked directory for untracked files, and everything beneath it
+ *
+ * `directory` is a location — mount_locate's answer — and every join beneath it
+ * is one too (infra/mount.h: a child joined beneath a location is a location),
+ * which is what makes the namer's input exact and a leaf's managed probe hit
+ * the key the view holds. A directory child is the one join that is not, and is
+ * read through here before the frame below it enumerates.
+ *
+ * The order is the order. The lstat first, because the kind decides every arm;
+ * the occupant skip before any lookup, because nothing can hold what it names;
+ * the locate before the namer, which is exact only at a location; the leaf's
+ * guards before the name, because an ascent is paid only where a name is used
+ * and in a tracked directory most leaves are managed; the name before the ignore
+ * layers, the name being the first layer's subject; the layers before the descent,
+ * because an excluded directory is not entered.
+ *
+ * A best-effort look, and neither a snapshot nor an admission: what the commit
+ * can hold at an offered name is update's question at its capture (cmds/update.c).
+ * What the filesystem refuses is said where it happens and the siblings go on,
+ * absence is silent, and an allocation anywhere is the run failing. The lines
+ * go to stderr, as the driver's do — core has no output handle.
+ *
+ * @param scan      What the walk runs under (must not be NULL)
+ * @param directory The location this frame enumerates (must not be NULL)
+ * @param depth     Frames beneath the tracked directory the driver started at
+ * @return Error or NULL on success
  */
 static error_t *scan_directory_for_untracked(
-    const char *dir_path,
-    const char *storage_prefix,
-    const char *profile,
-    const gitignore_ruleset_t *rules,
-    source_filter_t *source_filter,
-    workspace_t *ws,
-    int depth
+    const scan_t *scan, const char *directory, size_t depth
 ) {
-    CHECK_NULL(dir_path);
-    CHECK_NULL(storage_prefix);
-    CHECK_NULL(profile);
-    CHECK_NULL(ws);
+    CHECK_NULL(scan);
+    CHECK_NULL(directory);
 
+    workspace_t *ws = scan->ws;
+
+    /* The bound is the walk's own: `depth` counts frames beneath the tracked
+     * directory the driver started at, so a tracked directory 200 deep on disk
+     * is still scanned from its own 0 (sys/filesystem.h FS_WALK_MAX_DEPTH). Said,
+     * not an error — the siblings of a deep subtree are still this profile's,
+     * where add refuses the argument whole. */
     if (depth >= FS_WALK_MAX_DEPTH) {
-        return NULL;
-    }
-
-    DIR *dir = fs_opendir(dir_path);
-    if (!dir) {
-        /* Non-fatal: directory might have been deleted or permissions issue */
-        return NULL;
-    }
-
-    struct dirent *entry;
-    errno = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            errno = 0;  /* Clear before next readdir() — see post-loop check */
-            continue;
-        }
-
-        /* Build both names: the filesystem path, and the storage path beneath
-         * the row's — the tracked directory is the authority for what lies under
-         * it. */
-        char *full_path = str_format("%s/%s", dir_path, entry->d_name);
-        char *storage_path = str_format("%s/%s", storage_prefix, entry->d_name);
-        if (!full_path || !storage_path) {
-            free(full_path);
-            free(storage_path);
-            closedir(dir);
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
-
-        /* What stands there, from one lstat (don't follow symlinks) */
-        fs_occupant_t occupant = fs_lstat_occupant(full_path, NULL);
-        if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
-            /* Deleted since readdir listed it (a race), or unstattable: nothing
-             * this scan can say about it. */
-            free(full_path);
-            free(storage_path);
-            errno = 0;
-            continue;
-        }
-
-        /* Check if ignored: the rules on the mount-relative path; where no layer
-         * decided, the source tree's .gitignore on the filesystem path (its root
-         * is that repo's) — the lowest layer, so a `!` rule above it wins. */
-        bool is_dir = (occupant == FS_OCCUPANT_DIRECTORY);
-        gitignore_match_t match;
-        gitignore_eval(rules, mount_strip_label(storage_path), is_dir, &match);
-        bool ignored = match.decided && match.ignored;
-        if (!match.decided && source_filter) {
-            error_t *err = source_filter_is_excluded(
-                source_filter, full_path, is_dir, &ignored
-            );
-            error_free(err);  /* Non-fatal: layer-5 errors fall through */
-        }
-        if (ignored) {
-            free(full_path);
-            free(storage_path);
-            errno = 0;
-            continue;
-        }
-
-        if (is_dir) {
-            /* Recurse into subdirectory */
-            error_t *err = scan_directory_for_untracked(
-                full_path,
-                storage_path,
-                profile,
-                rules,
-                source_filter,
-                ws,
-                depth + 1
-            );
-
-            free(storage_path);
-            free(full_path);
-
-            if (err) {
-                closedir(dir);
-                return err;
-            }
-        } else {
-            /* Check if this file is already tracked.
-             *
-             * Two checks needed:
-             * 1. The view: the path is managed by an enabled profile — as a file,
-             *    or as a directory a file now sits in
-             *    place of (the directory analysis reports that as [type];
-             *    it is not a new file)
-             * 2. Diverged index: file already classified (e.g., as released or
-             *    orphaned by prior analysis phases). Orphans are not in the view
-             *    but already have diverged entries — adding them as untracked
-             *    would create duplicates.
-             */
-            bool already_tracked =
-                (manifest_lookup(ws->manifest, full_path) != NULL) ||
-                (hashmap_get(ws->diverged_index, full_path) != NULL);
-
-            if (!already_tracked) {
-                /* This is an untracked file! Arena-copy heap strings — originals
-                 * freed immediately after */
-                char *arena_fp = arena_strdup(ws->arena, full_path);
-                char *arena_sp = arena_strdup(ws->arena, storage_path);
-                free(storage_path);
-                free(full_path);
-
-                if (!arena_fp || !arena_sp) {
-                    closedir(dir);
-                    return ERROR(ERR_MEMORY, "Failed to arena-copy untracked paths");
-                }
-
-                error_t *err = workspace_add_untracked(
-                    ws, arena_fp, arena_sp, profile, occupant
-                );
-
-                if (err) {
-                    closedir(dir);
-                    return err;
-                }
-            } else {
-                free(storage_path);
-                free(full_path);
-            }
-        }
-        errno = 0;
-    }
-
-    /* readdir() returns NULL on both end-of-directory and error. With errno cleared
-     * before each call, non-zero errno means I/O error. */
-    if (errno != 0) {
-        int saved_errno = errno;
-        closedir(dir);
-        return error_from_errno(
-            saved_errno, "Error reading directory '%s'", dir_path
+        fprintf(
+            stderr,
+            "warning: '%s' is %d directories inside the tracked directory it "
+            "stands in; new files beneath it are not listed\n",
+            directory, FS_WALK_MAX_DEPTH
         );
+        return NULL;
     }
 
-    closedir(dir);
-    return NULL;
+    /* The whole listing, and the stream closed with it: one open at a time down
+     * the recursion rather than one per frame, and the errno discipline is
+     * fs_list_dir's. The frames hold entry names where they held directory streams,
+     * which is the trade add's walk already made — a deep walk no longer holds
+     * one descriptor per level, and pays for the names instead. */
+    string_array_t *entries = NULL;
+    error_t *err = fs_list_dir(directory, &entries);
+    if (err) {
+        switch (error_code(err)) {
+            case ERR_MEMORY:     /* the run failing; error_wrap keeps the cause's code */
+                return err;
+
+            case ERR_NOT_FOUND:  /* it left between the look that found it and this listing */
+                break;
+
+            default:             /* it would not open, or the read failed */
+                fprintf(
+                    stderr, "warning: %s; new files beneath it are not listed\n",
+                    error_message(err)
+                );
+                break;
+        }
+        error_free(err);
+        return NULL;
+    }
+
+    /* The frame's strings — one entry's join, its located form, the namer's copy
+     * and its answer — reset before the next entry. What outlives the frame is
+     * an offer's, copied at its door (workspace_add_untracked); a frame beneath
+     * this one allocates in a scratch of its own, so this frame's `child` stands
+     * as that frame's `directory` for the whole subtree (include/runtime.h). */
+    arena_t *scratch = arena_create(0);
+    if (!scratch) {
+        string_array_free(entries);
+        return ERROR(ERR_MEMORY, "Failed to allocate the scan's scratch");
+    }
+
+    /* "/" is the one directory whose spelling ends in its separator. No tracked
+     * directory stands there on any table this machine can build, and the join
+     * does not lean on it: add's walk, whose frame 0 is a typed argument, reads
+     * the same rule (cmds/add.c collect_tree). */
+    const char *separator = directory[1] ? "/" : "";
+
+    for (size_t i = 0; i < entries->count; i++) {
+        arena_reset(scratch);
+
+        const char *child = arena_str_format(
+            scratch, "%s%s%s", directory, separator, entries->items[i]
+        );
+        if (!child) {
+            err = ERROR(ERR_MEMORY, "Failed to allocate path");
+            goto cleanup;
+        }
+
+        /* One lstat names what stands there, and the kind follows from it: a
+         * symlink is never a directory here. Absence is a skip — the listing
+         * and this look are two moments. A look that failed is said, its errno
+         * read in the line itself (sys/filesystem.h: it is lstat's until something
+         * else runs): nothing downstream can name a path it could not see. What
+         * no branch can hold — a device, a socket, a FIFO — is not a new file;
+         * offered, the capture refuses it by its noun and takes the whole profile's
+         * update with it (cmds/add.c reads it the same way). */
+        fs_occupant_t occupant = fs_lstat_occupant(child, NULL);
+        switch (occupant) {
+            case FS_OCCUPANT_NONE:
+                continue;
+
+            case FS_OCCUPANT_UNKNOWN:
+                fprintf(
+                    stderr, "warning: Failed to stat '%s': %s; it is not listed\n",
+                    child, strerror(errno)
+                );
+                continue;
+
+            case FS_OCCUPANT_OTHER:
+                continue;
+
+            case FS_OCCUPANT_DIRECTORY:
+            case FS_OCCUPANT_REGULAR:
+            case FS_OCCUPANT_SYMLINK:
+                break;
+        }
+
+        bool is_dir = occupant == FS_OCCUPANT_DIRECTORY;
+
+        /* Where the child stands, or whether anything already does. A directory
+         * met at a binder's own spelling — a target declared through a link no
+         * binding names — is read through to the physical, so this frame's join
+         * and every one below it is a location, which is what the namer's input
+         * and the leaf probe must be; a leaf keeps the spelling it stands under,
+         * the very link a binding is declared through being a claim of the link
+         * (infra/mount.h), and the walk does not follow one. A leaf the view
+         * holds is managed by someone — a claim of any kind puts a row at the
+         * location, a directory row at a file's path being the [type] the directory
+         * analysis said — and one an earlier analysis classified would be a second
+         * item at one key. */
+        if (is_dir) {
+            const char *joined = child;
+            err = mount_locate(scan->mounts, joined, scratch, &child);
+            if (err) {
+                err = error_wrap(err, "Failed to locate '%s'", joined);
+                goto cleanup;
+            }
+        } else if (manifest_lookup(ws->manifest, child) ||
+            hashmap_get(ws->diverged_index, child)) {
+            continue;
+        }
+
+        /* What this profile calls the child — the claim standing there, else
+         * the composition beneath the nearest directory claim above it, else
+         * the label of the root it lies under — or nothing when the child is
+         * one of this profile's own roots, which has no name in the namespace
+         * and so is neither excludable nor offerable. */
+        const char *name = NULL;
+        err = manifest_name(ws->manifest, scan->profile, child, NULL, scratch, &name);
+        if (err) {
+            err = error_wrap(err, "Failed to name '%s'", child);
+            goto cleanup;
+        }
+
+        if (!name) {
+            /* A root of this profile: entered when it is a directory, and asked
+             * of no ignore layer — a verdict is about entries the scan would
+             * offer, and a root is entered, never offered. A symlink standing
+             * at one is skipped: the walk does not follow a link, and the root
+             * has no name to offer it under. */
+            if (!is_dir) continue;
+        } else {
+            /* Check if ignored: the rules on the mount-relative path; where no
+             * layer decided, the source tree's .gitignore on the location (its
+             * root is that repo's) — the lowest layer, so a `!` rule above it
+             * wins. The layer's own failure leaves no verdict, as today; its
+             * allocation failure is the run's. */
+            gitignore_match_t match;
+            gitignore_eval(scan->rules, mount_strip_label(name), is_dir, &match);
+            bool ignored = match.decided && match.ignored;
+            if (!match.decided && scan->source_filter) {
+                error_t *layer = source_filter_is_excluded(
+                    scan->source_filter, child, is_dir, &ignored
+                );
+                if (error_code(layer) == ERR_MEMORY) {
+                    err = layer;
+                    goto cleanup;
+                }
+                error_free(layer);
+            }
+            if (ignored) continue;
+        }
+
+        /* Settled either way, so the descent is one statement: a directory descends
+         * whether it was named or entered as a root, and nothing else does. */
+        err = is_dir ? scan_directory_for_untracked(scan, child, depth + 1)
+                     : workspace_add_untracked(ws, child, name, scan->profile, occupant);
+        if (err) goto cleanup;
+    }
+
+cleanup:
+    arena_destroy(scratch);
+    string_array_free(entries);
+
+    return err;
 }
 
 /**
  * Analyze tracked directories for untracked files
  *
- * Only scans tracked directories for profiles in the enabled profile list.
+ * Every regular file and symlink beneath a tracked directory that no enabled
+ * profile manages, offered to the profile whose tracked directory it lies in,
+ * under the name that profile's own claims give it (core/manifest.h manifest_name),
+ * minus what that profile's ignore layers and the source tree exclude. A
+ * best-effort look, said once per directory it could not list and once per path
+ * it could not look at; only the profiles in the enabled profile list are scanned.
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -2061,6 +2143,7 @@ static error_t *analyze_untracked_files(
     CHECK_NULL(ws);
 
     error_t *err = NULL;
+    source_filter_t *source_filter = NULL;
 
     if (ws->profile_count == 0) {
         return NULL;  /* No profiles to analyze */
@@ -2069,19 +2152,12 @@ static error_t *analyze_untracked_files(
     /* Source-tree .gitignore filter — built once for the whole scan so the
      * discovered source-repo handle is reused across every profile and directory.
      * Driven by config; policy decision lives here, not in the ignore module.
-     * Non-fatal on build failure: we continue without layer-5 filtering rather
-     * than blocking status. */
-    source_filter_t *source_filter = NULL;
+     * Fatal on failure: it can only fail on allocation (sys/source.c), and a
+     * scan that ran without the layer it was told to consult would offer what
+     * the source tree excludes. Unwrapped — the failure names its own subject. */
     if (config && config->respect_gitignore) {
-        error_t *sf_err = source_filter_create(&source_filter);
-        if (sf_err) {
-            fprintf(
-                stderr,
-                "warning: failed to build source .gitignore filter: %s\n",
-                sf_err->message
-            );
-            error_free(sf_err);
-        }
+        err = source_filter_create(&source_filter);
+        if (err) return err;
     }
 
     /* Layered-rules builder — one per scan. The baseline is read and compiled
@@ -2093,19 +2169,20 @@ static error_t *analyze_untracked_files(
     ignore_rules_t *ignore_rules = NULL;
     err = ignore_rules_create(ws->repo, config, NULL, ws->arena, &ignore_rules);
     if (err) {
-        source_filter_free(source_filter);
-        return error_wrap(err, "Failed to build ignore rules");
+        err = error_wrap(err, "Failed to build ignore rules");
+        goto cleanup;
     }
 
     /* Iterate the active directory partition, filtering by profile per outer
      * iteration. The outer loop runs in the view's profile order — the user's
-     * enabled-precedence position — so when two profiles share an ancestor
-     * directory, the highest-precedence profile scans first and claims new files
-     * via ws->diverged_index (subsequent profiles' scans skip the entry via the
-     * dedup check in scan_directory_for_untracked).
+     * enabled-precedence position, lowest first — so when two profiles share an
+     * ancestor directory the lowest-precedence one scans first and claims the
+     * new files it finds via ws->diverged_index (the higher profiles' scans meet
+     * them there and skip, through the leaf guard in scan_directory_for_untracked).
      *
      * The dirs.count × ws->profile_count strcmp filter below is trivially
      * negligible (P ≤ 10, D ≤ 10²) and replaces a per-profile SQL query. */
+    const mount_table_t *mounts = manifest_mounts(ws->manifest);
     manifest_rows_t dirs = workspace_directories(ws);
 
     for (size_t p = 0; p < ws->profile_count; p++) {
@@ -2120,11 +2197,22 @@ static error_t *analyze_untracked_files(
         const gitignore_ruleset_t *profile_rules = NULL;
         err = ignore_rules_for_profile(ignore_rules, profile, &profile_rules);
         if (err) {
-            source_filter_free(source_filter);
-            return error_wrap(
+            err = error_wrap(
                 err, "Failed to load ignore patterns for profile '%s'", profile
             );
+            goto cleanup;
         }
+
+        /* What every one of this profile's walks runs under: the rows it meets
+         * are named by this profile's contribution and excluded by its layers,
+         * whichever of its tracked directories a walk began at. */
+        const scan_t scan = {
+            .ws            = ws,
+            .mounts        = mounts,
+            .profile       = profile,
+            .rules         = profile_rules,
+            .source_filter = source_filter,
+        };
 
         /* Per-profile ancestor-suppression cursor — resets per outer iteration.
          * Profiles with shared-ancestor directories use independent ignore rules,
@@ -2150,22 +2238,24 @@ static error_t *analyze_untracked_files(
              * has its own tracked row, and this loop reaches that row directly. */
             if (!row->tracked) continue;
 
-            /* Directory rows carry:
-             * - filesystem_path: Already resolved with target (mount table)
-             * - storage_path: Portable path for storage
-             */
-
-            /* Use filesystem path directly from the row (already resolved) */
+            /* The claim's key, which is what the two probes and the cursor below
+             * are about; where this machine enumerates it is a question of its
+             * own, asked once the row has passed them. */
             const char *filesystem_path = row->filesystem_path;
 
             /* The tracked directory must BE a directory, and must not stand beneath
-             * a displaced one: anything else and every entry the readdir returns
+             * a displaced one: anything else and every entry a listing returns
              * comes from a tree that is not this path's, offered as new files
-             * of this profile — opendir follows a symlinked root that lstat would
-             * not, and beneath a displaced ancestor the whole path resolves through
-             * the squatter. The lstat replaces the old existence probe (absence
-             * still reads NONE) and closes the direct case whatever the command's
-             * analyses; the displaced probe closes the nested one. */
+             * of this profile — a claim of a directory that is a declared final
+             * link now is the [type] the directory analysis said, and enumerating
+             * the link's target would offer that directory's files as this row's,
+             * while beneath a displaced ancestor the whole path resolves through
+             * the squatter. Asked of the key itself, before any locate: locating
+             * first would read the final link through and lose the very difference
+             * the first probe is for. The displaced probe's reach is the key's
+             * ancestry, which parts from the walk's at that one row shape and
+             * only there — where a claim standing at a binder's own spelling is
+             * enumerated at what the link reaches. */
             if (fs_lstat_occupant(filesystem_path, NULL) != FS_OCCUPANT_DIRECTORY) continue;
             if (workspace_displaced_ancestor(ws, filesystem_path)) continue;
 
@@ -2181,36 +2271,33 @@ static error_t *analyze_untracked_files(
                 }
             }
 
-            /* Scan this directory for untracked files */
-            err = scan_directory_for_untracked(
-                filesystem_path,           /* Already resolved filesystem path */
-                row->storage_path,         /* Portable storage path */
-                profile,
-                profile_rules,
-                source_filter,
-                ws,
-                0                          /* Initial depth */
-            );
-
+            /* Where this machine enumerates the row. One string for every row
+             * but a claim of a declared alias's own spelling, which stands at
+             * the spelling while everything beneath it stands where the link
+             * reaches (infra/mount.h mount_resolve): locating here is what makes
+             * every join below a location, and every probe over them exact. */
+            const char *directory = NULL;
+            err = mount_locate(mounts, filesystem_path, ws->arena, &directory);
             if (err) {
-                /* Non-fatal: continue with other directories */
-                fprintf(
-                    stderr, "warning: failed to scan directory '%s' in profile '%s': %s\n",
-                    filesystem_path, profile, err->message
-                );
-                error_free(err);
-                err = NULL;
+                err = error_wrap(err, "Failed to locate '%s'", filesystem_path);
+                goto cleanup;
             }
 
-            /* Record this scan root regardless of outcome — a failed scan still
-             * visited the subtree, so deeper entries are redundant. */
+            err = scan_directory_for_untracked(&scan, directory, 0);
+            if (err) goto cleanup;
+
+            /* Record this scan root. The cursor is the row's key — what the rows
+             * are sorted by, and what the next row's key is compared against —
+             * where the walk's own subject is the located directory; locate is
+             * the identity on every row but the one above. */
             last_scanned = filesystem_path;
         }
     }
 
+cleanup:
     source_filter_free(source_filter);
 
-    return NULL;
+    return err;
 }
 
 /**

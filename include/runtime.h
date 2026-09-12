@@ -418,7 +418,9 @@ typedef struct dotta_run {
  *
  * Arena lifetimes
  * ---------------
- * The codebase has exactly two arena lifetimes:
+ * The codebase has exactly three arena lifetimes, two of which are threaded through
+ * the layers as a parameter and one of which never leaves the function that made
+ * it:
  *
  *   - Process-scope. `config->arena` holds the configuration — the struct, every
  *     value read into it and its two compiled pattern rulesets — made by
@@ -432,11 +434,20 @@ typedef struct dotta_run {
  *     mount table, the view's rows) lives in it. Handlers and every layer beneath
  *     borrow the pointer — never call `arena_destroy(ctx->arena)`.
  *
- * Adding a third arena requires evidence of a genuinely sub-command lifetime in
- * code — an interactive REPL with per-iteration scope, for example. Hypothesised
- * need is not enough; a primitive exists when a real consumer exists.
- * Single-threaded by design (no pthread, no async I/O loop), so concurrent
- * allocation is not a concern.
+ *   - Frame-scope. `core/workspace.c`'s untracked walk creates one arena per
+ *     directory frame and resets it before each entry, because an entry that is
+ *     named and then excluded is neither an offer nor a row, and its joined path,
+ *     its located form and the namer's two strings all outlive the decision that
+ *     discarded it: 20,000 ignored files beneath one tracked directory measured
+ *     4.1 MB of peak RSS at the shape that composed names by hand, 20.3 MB against
+ *     `ctx->arena`, and 4.1 MB with the frame's own. The pointer never leaves
+ *     the frame that made it, and every string that outlives a frame is copied
+ *     at the one door it leaves through (workspace_add_untracked).
+ *
+ * Adding a fourth requires the evidence that one has: a genuinely sub-command
+ * lifetime in code, and a number. Hypothesised need is not enough; a primitive
+ * exists when a real consumer exists. Single-threaded by design (no pthread, no
+ * async I/O loop), so concurrent allocation is not a concern.
  *
  * Exit-code override
  * ------------------

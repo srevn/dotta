@@ -911,10 +911,9 @@ typedef struct {
  * of the kind is the enum's zero.
  *
  * Readers: the ascent's rung (core/manifest.c manifest_ascend), which is now
- * the whole of it for add — its walk carries no frame and composes nothing, every
- * listing asking the namer for its own name (cmds/add.c). The scan that offers
- * a tracked directory's untracked children still asks the same question by hand,
- * down a climb of its own.
+ * the whole of it for both walkers — neither carries a frame and neither composes
+ * anything, every listing and every offer asking the namer for its own name
+ * (cmds/add.c, core/workspace.c).
  */
 static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
     return claim.kind == PATH_KIND_DIRECTORY ? claim.storage_path : NULL;
@@ -973,9 +972,11 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the
  * prospective name a claim search falls through to (core/profiles.c
  * profile_claim_name); the settle of a contribution's collisions (core/manifest.c);
- * and the name every capture lands under — add's argument arm, its walk, and
- * the one refusal its completed selection owes, all over the command's own listing
- * (cmds/add.c).
+ * the name every capture lands under — add's argument arm, its walk, and the
+ * one refusal its completed selection owes, all over the command's own listing
+ * (cmds/add.c); and the name the untracked scan offers a new path under, one
+ * per entry its guards let through, with no pending layer — the scan admits nothing
+ * (core/workspace.c).
  *
  * @param manifest Manifest (must not be NULL)
  * @param profile The asker, or NULL for the shared roots alone

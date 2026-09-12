@@ -504,8 +504,12 @@ typedef struct {
  * - The record: the path_anchors in the store's dotta.db
  * - The filesystem: actual files on disk
  *
- * Additionally scans tracked directories for untracked files (new files that
- * appeared in directories previously added via 'dotta add').
+ * Additionally, where `analyze_untracked` asks for it: every regular file and
+ * symlink beneath a tracked directory that no enabled profile manages, offered
+ * to the profile whose tracked directory it lies in, under the name that profile's
+ * own claims give it and minus what its ignore layers exclude — a best-effort
+ * look that says what it could not list or look at and goes on with the siblings
+ * (analyze_untracked_files).
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an

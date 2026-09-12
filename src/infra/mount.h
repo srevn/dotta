@@ -354,15 +354,19 @@ error_t *mount_table_build(
  * `fs_path` is absolute and lexically normalized (path_input_normalize); the
  * fold is established there, not re-checked here. The answer is the arena's, or
  * the table's own when the spelling is a root's — both outlive the call, and
- * every caller locates through a table its own arena built.
+ * every caller locates through a table its own arena built. The untracked scan
+ * locates into a frame's scratch that the view's table outlives, which is the
+ * shortest lifetime any answer of this is asked to have.
  *
  * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
  * key an argument is matched by; add's argument arm, its `--target` boundary,
  * every directory its walk descends into, and the directory it enumerates beneath
  * a claim's key — the one asking about an answer of mount_resolve's, which is
- * the same string but for the exception above (cmds/add.c); `ignore --test`'s
- * filesystem arm (cmds/ignore.c). The namer does not locate — its input is a
- * location, and this is what makes one.
+ * the same string but for the exception above (cmds/add.c); the untracked scan's
+ * tracked-directory roots, which is that same question again, and every directory
+ * child its walk meets (core/workspace.c); `ignore --test`'s filesystem arm
+ * (cmds/ignore.c). The namer does not locate — its input is a location, and this
+ * is what makes one.
  *
  * @param table        Mount table (must not be NULL)
  * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)

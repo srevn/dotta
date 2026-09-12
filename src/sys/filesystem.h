@@ -535,13 +535,13 @@ error_t *fs_list_dir(const char *path, string_array_t **out);
 /* The depth a recursive walk of this filesystem is bounded to. The directory a
  * walk starts at is depth 0, frames 0 through 127 enumerate, and a frame at depth
  * 128 opens nothing: a file listed inside frame 127 is taken, a directory found
- * there is not entered. What each reader does at the bound is its own — add
- * refuses, the untracked scan stops silently — and one shared value is what makes
- * the pair coherent: add's frame 0 is the argument and the scan's is a tracked
- * directory row, which add itself authors one frame below its own or deeper, so
- * nothing captured lies below the depth status can reach. It bounds recursion
- * and the per-frame resources a walk holds while it enumerates; it is not a
- * path-length limit and not a total memory bound.
+ * there is not entered. What each reader does at the bound is its own — add refuses
+ * the argument whole, the untracked scan says so and goes on with the siblings
+ * — and one shared value is what makes the pair coherent: add's frame 0 is the
+ * argument and the scan's is a tracked directory row, which add itself authors
+ * one frame below its own or deeper, so nothing captured lies below the depth
+ * status can reach. It bounds recursion and the per-frame resources a walk holds
+ * while it enumerates; it is not a path-length limit and not a total memory bound.
  *
  * Read by cmds/add's collect_tree and by core/workspace's untracked scan, which
  * is where the arithmetic comes from. */

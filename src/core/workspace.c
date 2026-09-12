@@ -392,8 +392,9 @@ static error_t *workspace_add_diverged(
  * Add an untracked item — the one producer with neither source
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
- * view does not claim the path), no record (dotta never observed it while managed).
- * State, divergence and kind are the constants of the state.
+ * view does not claim the path), no record (dotta has no memory of having managed
+ * it). The walk's leaf guard asks both, so a path either of them holds never
+ * reaches here. State, divergence and kind are the constants of the state.
  *
  * This is the one door the walk's strings leave their frame through, and it copies
  * them rather than aliasing: the location the walk joined and the name the namer
@@ -2048,18 +2049,14 @@ static error_t *scan_directory_for_untracked(
 
         bool is_dir = occupant == FS_OCCUPANT_DIRECTORY;
 
-        /* Where the child stands, or whether anything already does. A directory
-         * met at a binder's own spelling — a target declared through a link no
-         * binding names — is read through to the physical, so this frame's join
-         * and every one below it is a location, which is what the namer's input
-         * and the leaf probe must be; a leaf keeps the spelling it stands under,
-         * the very link a binding is declared through being a claim of the link
-         * (infra/mount.h), and the walk does not follow one. A leaf the view
-         * holds is managed by someone — a claim of any kind puts a row at the
-         * location, a directory row at a file's path being the [type] the directory
-         * analysis said — and one an earlier analysis classified would be a second
-         * item at one key. */
         if (is_dir) {
+            /* Where the child stands. A directory met at a binder's own spelling
+             * — a target declared through a link no binding names — is read through
+             * to the physical, so this frame's join and every one below it is a
+             * location, which is what the namer's input and the leaf probe must
+             * be. A leaf keeps the spelling it stands under, the very link a
+             * binding is declared through being a claim of the link
+             * (infra/mount.h), and the walk does not follow one. */
             const char *joined = child;
             err = mount_locate(scan->mounts, joined, scratch, &child);
             if (err) {
@@ -2067,7 +2064,21 @@ static error_t *scan_directory_for_untracked(
                 goto cleanup;
             }
         } else if (manifest_lookup(ws->manifest, child) ||
+            workspace_get_anchor(ws, child) ||
             hashmap_get(ws->diverged_index, child)) {
+            /* Whether anything already speaks for the leaf, in descending order
+             * of standing. The view holds it: a claim of any kind puts a row at
+             * the location, a directory row at a file's path being the [type]
+             * the directory analysis said. The record holds it: dotta managed
+             * the path and has not let go — an orphan for cleanup to prune or
+             * release, or a path `remove --delete-files` has ordered deleted
+             * and still remembers — never a discovery, and a discovery again
+             * only once the record is retired. Both are the load's own facts,
+             * built before any analysis runs (workspace_partition), so status,
+             * sync and update read one answer whatever else each ran. The third
+             * is this load's own items, not a fact of the same standing: two
+             * located roots still enumerate one directory, and it is what holds
+             * that to one offer. */
             continue;
         }
 
@@ -2130,11 +2141,12 @@ cleanup:
  * Analyze tracked directories for untracked files
  *
  * Every regular file and symlink beneath a tracked directory that no enabled
- * profile manages, offered to the profile whose tracked directory it lies in,
- * under the name that profile's own claims give it (core/manifest.h manifest_name),
- * minus what that profile's ignore layers and the source tree exclude. A
- * best-effort look, said once per directory it could not list and once per path
- * it could not look at; only the profiles in the enabled profile list are scanned.
+ * profile manages and dotta has no record of, offered to the profile whose tracked
+ * directory it lies in, under the name that profile's own claims give it
+ * (core/manifest.h manifest_name), minus what that profile's ignore layers and
+ * the source tree exclude. A best-effort look, said once per directory it could
+ * not list and once per path it could not look at; only the profiles in the enabled
+ * profile list are scanned.
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -3030,6 +3042,10 @@ const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path
  * O(1) hashmap probe over the anchors snapshot. The map's value is a mutable
  * record pointer (workspace_observe and workspace_anchor patch in place); external
  * callers receive a const view.
+ *
+ * The analyses pair each row with its record through this; the untracked scan
+ * asks it of a leaf the view has no row for, a path dotta remembers being no
+ * discovery of the scan's.
  */
 const anchor_t *workspace_get_anchor(
     const workspace_t *ws,

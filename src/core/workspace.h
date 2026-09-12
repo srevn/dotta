@@ -505,11 +505,13 @@ typedef struct {
  * - The filesystem: actual files on disk
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
- * symlink beneath a tracked directory that no enabled profile manages, offered
- * to the profile whose tracked directory it lies in, under the name that profile's
- * own claims give it and minus what its ignore layers exclude — a best-effort
- * look that says what it could not list or look at and goes on with the siblings
- * (analyze_untracked_files).
+ * symlink beneath a tracked directory that no enabled profile manages and dotta
+ * has no record of, offered to the profile whose tracked directory it lies in,
+ * under the name that profile's own claims give it and minus what its ignore
+ * layers exclude — a best-effort look that says what it could not list or look
+ * at and goes on with the siblings (analyze_untracked_files). The record's half
+ * is a load fact, not an analysis's: a path dotta remembers is no discovery on
+ * any surface, whichever of the analyses above the caller asked for.
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an

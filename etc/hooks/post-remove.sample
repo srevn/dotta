@@ -16,15 +16,10 @@
 #   DOTTA_FILE_0      - First file path (0-indexed)
 #   DOTTA_FILE_1      - Second file path
 #   DOTTA_FILE_N      - Nth file path (where N = 0 to COUNT-1)
-#   DOTTA_DRY_RUN     - "1" if dry-run, "0" otherwise
+#   DOTTA_DRY_RUN     - Always "0" — post-remove does not fire on dry-run
 #
 
 set -euo pipefail
-
-if [[ "${DOTTA_DRY_RUN:-0}" == "1" ]]; then
-    echo "Post-remove: dry-run, nothing to record."
-    exit 0
-fi
 
 # Example: Append an audit-log line
 audit_log="$HOME/.local/state/dotta/remove.log"

@@ -92,12 +92,20 @@ const args_command_t *const *dotta_registry(void) {
 /**
  * Open the run: every member the spec declares, in dependency order.
  *
- * The needs are checked for closure first — the spec names the full set its handler
- * reads, and the set must hold its own inputs (runtime.h). Then the repository,
- * state, the crypto handles, the view and the mount table — the view's own where
- * both are declared — each iff declared; every member starts NULL and is populated
- * in place, so on an error the members already opened are exactly what `close_run`
- * releases.
+ * The state mode is resolved first — a spec may declare that a dry run narrows
+ * it (runtime.h) — and the needs are then checked for closure: the spec names
+ * the full set its handler reads, and the set must hold its own inputs. Then
+ * the repository, state, the crypto handles, the view and the mount table — the
+ * view's own where both are declared — each iff declared; every member starts
+ * NULL and is populated in place, so on an error the members already opened are
+ * exactly what `close_run` releases.
+ *
+ * State opens before crypto, so a run that holds the store's write lock reads
+ * the repository's epoch inside it. Nothing depends on that today — the one command
+ * that moves `refs/dotta/epoch` mid-run takes no lock (`cmds/sync`) — but it is
+ * the order any repair of that window would need, and it is why a command whose
+ * write intent its user decides declares the mode here rather than promoting a
+ * READ handle after the epoch has been copied.
  *
  * The first open that fails returns its own error — it names the resource and,
  * for the epoch and the view, the repair — and the run stays partially open for
@@ -106,14 +114,40 @@ const args_command_t *const *dotta_registry(void) {
  */
 static error_t *open_run(
     dotta_run_t *run,
-    const dotta_needs_t *needs,
+    const args_command_t *spec,
+    const void *opts,
     const config_t *config,
     arena_t *arena
 ) {
+    /* A spec without a payload opens nothing (init, clone, completion). */
+    const dotta_needs_t *needs = spec->payload;
+    if (needs == NULL) return NULL;
+
+    /* The one shape an invocation decides, resolved before anything opens: from
+     * here down the mode is NONE, READ or WRITE, and every open reads it alone.
+     * WRITE is the whole-dispatch transaction these commands serialize on, and
+     * a dry run of one writes nothing — so it takes the handle and no lock, neither
+     * blocking a run nor waiting for one, and publishes no database where the
+     * store has none. The spec opts into the policy; the lookup only locates
+     * its input, which is the row the spec itself declares. */
+    dotta_state_mode_t state = needs->state;
+    if (state == DOTTA_STATE_DRYRUN) {
+        CHECK_ARG(
+            opts != NULL,
+            "Spec declares a dry-run state mode without parsed options"
+        );
+        const bool *dry_run = args_flag_value(spec, opts, "dry-run");
+        CHECK_ARG(
+            dry_run != NULL,
+            "Spec declares a dry-run state mode without a --dry-run flag"
+        );
+        state = *dry_run ? DOTTA_STATE_READ : DOTTA_STATE_WRITE;
+    }
+
     /* Closure: a derived member's input is declared beside it. An incoherent
      * spec is a programming error, caught on the command's first run. */
     CHECK_ARG(
-        needs->state == DOTTA_STATE_NONE || needs->repo == DOTTA_REPO_OPEN,
+        state == DOTTA_STATE_NONE || needs->repo == DOTTA_REPO_OPEN,
         "Spec declares state without the repository handle"
     );
     CHECK_ARG(
@@ -121,11 +155,11 @@ static error_t *open_run(
         "Spec declares crypto without the repository handle"
     );
     CHECK_ARG(
-        !needs->mounts || needs->state != DOTTA_STATE_NONE,
+        !needs->mounts || state != DOTTA_STATE_NONE,
         "Spec declares mounts without state"
     );
     CHECK_ARG(
-        !needs->manifest || needs->state != DOTTA_STATE_NONE,
+        !needs->manifest || state != DOTTA_STATE_NONE,
         "Spec declares manifest without state"
     );
 
@@ -149,12 +183,12 @@ static error_t *open_run(
         }
     }
 
-    /* State, in the shape the spec declared. A WRITE handle holds BEGIN IMMEDIATE
+    /* State, in the shape resolved above. A WRITE handle holds BEGIN IMMEDIATE
      * for the whole dispatch; the command calls state_save, and close_run's
      * state_free rolls back anything it did not. */
-    if (needs->state != DOTTA_STATE_NONE) {
-        err = (needs->state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
-                                                  : state_load(run->repo, &run->state);
+    if (state != DOTTA_STATE_NONE) {
+        err = (state == DOTTA_STATE_WRITE) ? state_open(run->repo, &run->state)
+                                           : state_load(run->repo, &run->state);
         if (err) goto done;
     }
 
@@ -373,8 +407,7 @@ static int run_spec(
         .exit_code = &exit_override,
     };
 
-    const dotta_needs_t *needs = resolved->payload;
-    error_t *err = needs != NULL ? open_run(&ctx.run, needs, config, arena) : NULL;
+    error_t *err = open_run(&ctx.run, resolved, opts, config, arena);
     if (err == NULL) err = resolved->dispatch(&ctx, opts);
 
     close_run(&ctx.run);

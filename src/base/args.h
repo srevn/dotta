@@ -667,7 +667,7 @@ error_t *args_export_completion_fish(
 );
 
 /* ══════════════════════════════════════════════════════════════════
- * Utilities exposed for hooks
+ * Utilities exposed outside the parse
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
@@ -680,6 +680,34 @@ error_t *args_export_completion_fish(
  * @return NULL on success; `error_t *` (caller frees) on failure.
  */
 error_t *args_parse_long(const char *text, long min, long max, long *out);
+
+/**
+ * The bool a FLAG row targets, in a parsed options buffer
+ *
+ * For a caller that must read one flag without the options struct's type: the
+ * dispatcher, resolving the state mode a spec declares for this invocation
+ * (include/runtime.h). The name is matched as the token stream matches one — a
+ * single character is a short spelling, anything longer a long one — against
+ * every name the row lists, so "dry-run" and "n" both name `-n dry-run`.
+ *
+ * NULL is the answer when no FLAG row of this command carries that name: a
+ * declaration error in the caller's own table, never an absent value, so a caller
+ * that can refuse checks for it. Otherwise the pointer borrows the bool at the
+ * offset the row carries, and lives as long as `opts` does.
+ *
+ * The value is the effective one, which is what a caller reading it before dispatch
+ * wants: `init_defaults` may have seeded the field ahead of the parse and
+ * `post_parse` may have rewritten it after, so true does not certify that a token
+ * was seen.
+ *
+ * @param cmd  Command whose table holds the row (must not be NULL)
+ * @param opts The buffer `args_parse` filled for that command (must not be NULL)
+ * @param flag One of the row's names, without dashes (must not be NULL)
+ * @return Borrowed pointer to the bool, or NULL if no FLAG row carries the name
+ */
+const bool *args_flag_value(
+    const args_command_t *cmd, const void *opts, const char *flag
+);
 
 /**
  * For a completion hook: true when the cursor is the value of the option row

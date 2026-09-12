@@ -2065,7 +2065,7 @@ static const args_command_t spec_profile_enable = {
     .complete      = profile_enable_complete,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
-        .state     = DOTTA_STATE_WRITE,
+        .state     = DOTTA_STATE_DRYRUN,
         .manifest  = true,
     },
     .dispatch      = profile_dispatch,
@@ -2130,7 +2130,7 @@ static const args_command_t spec_profile_disable = {
     .complete      = profile_disable_complete,
     .payload       = &(const dotta_needs_t){
         .repo      = DOTTA_REPO_OPEN,
-        .state     = DOTTA_STATE_WRITE,
+        .state     = DOTTA_STATE_DRYRUN,
     },
     .dispatch      = profile_dispatch,
 };

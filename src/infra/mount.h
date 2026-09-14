@@ -51,8 +51,7 @@
  *
  * A row's target is normalized and validated where it is written (the binders,
  * mount_validate_target); the build asks only what an entry is — an absolute
- * path that is not the root, `/` being the one spelling that ends in its own
- * separator, which the sentinel spells "" for the join's sake — and a row that
+ * path, `/` included, which it spells "" for the join's sake — and a row that
  * came through no binder keys its claims at whatever it spells, which no argument
  * can spell back. The repair is a re-bind: at a different directory, or a disable
  * and an enable, since the binders keep a row's spelling for its own directory
@@ -60,7 +59,8 @@
  *
  * The root directory is spelled "" in the table — the one spelling that joins a
  * tail with one slash and encloses every absolute path at depth zero: the
- * sentinel's, and HOME's when HOME is "/" (a container's bare uid).
+ * sentinel's, HOME's when HOME is "/" (a container's bare uid), and a binding's
+ * when its target is "/" (a container's own root; mount_table_build).
  *
  * One table, one reading
  * ----------------------
@@ -273,11 +273,12 @@ typedef struct mount_table mount_table_t;
  *   and `/`"), which is the machine-wide name this module does not produce.
  *   mount_table_build refuses one.
  * - target: where the profile's custom/ tree stands, as its binder wrote it —
- *   absolute, folded, no trailing slash (mount_validate_target) — and the key
- *   of every custom/ path beneath it. NULL or empty contributes no mount, and
- *   neither does a relative spelling or "/": the entry is dropped at build time,
- *   and the profile is bound nowhere in that table. Those two are the whole of
- *   the build's question (the table's paragraph above).
+ *   absolute, folded, no trailing slash (mount_validate_target), "/" included,
+ *   which the table spells "" — and the key of every custom/ path beneath it.
+ *   NULL or empty contributes no mount, and neither does a relative spelling:
+ *   the entry is dropped at build time, and the profile is bound nowhere in that
+ *   table. Those two are the whole of the build's question (the table's paragraph
+ *   above).
  */
 typedef struct {
     const char *profile;
@@ -298,12 +299,13 @@ typedef struct {
  *
  * A mount with no profile is refused (ERR_INVALID_ARG): a binding is a profile's,
  * and the invariant is established here so the readers need no per-read check
- * (mount_t above). A mount whose target is NULL, empty, relative or "/" contributes
- * nothing and is dropped: the first two name no target, and the last two are
- * spellings the table cannot hold as a root — "/" ends in its own separator, so
- * the join would double it, and the sentinel already stands there — which no
- * binder writes and a hand-edited row can. Dropped and not refused because the
- * profile is then merely bound nowhere, which the view records (core/manifest.h
+ * (mount_t above). A mount whose target is NULL or empty contributes nothing
+ * and is dropped — it names no target — and so does a relative one, a spelling
+ * the table cannot hold as a root, which no binder writes and a hand-edited row
+ * can. A target of "/" is a root like any other, spelled "" for the join's sake
+ * (the table's paragraph above), and takes the tie from the sentinel: every path
+ * of that profile outside a deeper root is custom/. Dropped and not refused because
+ * the profile is then merely bound nowhere, which the view records (core/manifest.h
  * manifest_unbound) and a re-bind repairs, where a refusal would fail the command
  * that repairs it.
  *
@@ -346,12 +348,13 @@ error_t *mount_table_build(
  * name, and the tree standing there is its label's. Another profile's target is
  * invisible here (the "One table, one reading" paragraph above). At a tie — two
  * of the profile's own roots at one directory — a binding wins, because it is
- * the more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`);
- * between HOME and `/` at one directory the portable name wins (a HOME of "/"
- * yields to the sentinel, so `/etc/x` is `root/etc/x` — `home/` there would name
- * the whole filesystem on every other machine). A NULL `profile` names through
- * HOME and `/` alone: a profile with no binding on this machine, or no profile
- * at all.
+ * the more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`;
+ * `/etc/x` under a binding at "/" is `custom/etc/x`, and nothing under HOME is,
+ * HOME being the deeper root); between HOME and `/` at one directory the portable
+ * name wins (a HOME of "/" yields to the sentinel, so `/etc/x` is `root/etc/x`
+ * — `home/` there would name the whole filesystem on every other machine). A
+ * NULL `profile` names through HOME and `/` alone: a profile with no binding on
+ * this machine, or no profile at all.
  *
  * `location` is a key — a row's, a record's, an argument's as the normalizer
  * spelled it, a walk's join — and the test is a string's: a root encloses the

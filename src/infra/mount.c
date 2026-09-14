@@ -279,9 +279,10 @@ bool mount_same_target(const char *a, const char *b) {
  * name, backward resolve) walk this same array.
  *
  * - spelling: as its binder typed it — HOME as the identity spells it, "" for a
- *           root at "/" (the sentinel's, and HOME's when HOME is "/"). The key
- *           of every location beneath it: a location is this joined with a tail,
- *           and nothing is read through (infra/mount.h).
+ *           root at "/" (the sentinel's, HOME's when HOME is "/", and a binding's
+ *           when its target is "/"). The key of every location beneath it: a
+ *           location is this joined with a tail, and nothing is read through
+ *           (infra/mount.h).
  * - kind:   mount kind for this entry's storage label.
  * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
  *           namespace. For CUSTOM mounts, the owning profile name — always set,
@@ -358,10 +359,13 @@ static const char *tail_under_root(const char *location, const char *root) {
  * takes it — a binding over the shared roots, and the sentinel over a HOME that
  * is "/": `~/.rc` under a binding at $HOME is `custom/.rc`, and a capture at
  * `/etc/x` on a machine whose HOME is "/" (a container's bare uid) is `root/etc/x`,
- * the reading that means the same directory on every other machine. Those are
- * the only two ties there are: the build drops a row at "/" — the one directory
- * the sentinel already stands at — so a binding never meets the sentinel, and
- * one profile has one binding.
+ * the reading that means the same directory on every other machine. Three roots
+ * can stand at "": the sentinel always, HOME when it is "/", and a binding whose
+ * target is "/". The binding takes both ties by the rule above — every path of
+ * that profile outside a deeper root is `custom/`, which is what binding a profile
+ * at the root means: a container's own root here, and the same profile bound at
+ * a jail on the host — and between HOME and the sentinel the portable name wins.
+ * One profile has one binding.
  *
  * A root encloses the location iff its spelling is a prefix of it on a component
  * boundary (tail_under_root), the root itself included with the empty tail: every
@@ -436,15 +440,11 @@ error_t *mount_table_build(
      * every namespace — the machine-wide name this module does not produce.
      * Establishing it here is what lets namespace_holds read `m->profile` as
      * the whole of whose an entry is, for both views at once. The target is a
-     * row's, and the build asks only what an entry is: an absolute path that is
-     * not the root. "/" is the one absolute spelling that ends in its own separator
-     * — the sentinel spells it "" so that the join reads "/x" — and a row spelling
-     * it would join "//x", a key no argument can spell, and stand beside the
-     * sentinel as a per-profile root of the root directory itself; a relative
+     * row's, and the build asks only what an entry is: an absolute path. A relative
      * row spells a location nothing can match, and deploy would write beside
-     * the process. Neither comes through a binder (mount_validate_target), so a
-     * row with either — a hand edit — contributes no mount, as an empty target
-     * does: the profile is bound nowhere here, which the view already records
+     * the process; it comes through no binder (mount_validate_target), so a row
+     * holding one — a hand edit — contributes no mount, as an empty target does:
+     * the profile is bound nowhere here, which the view already records
      * (core/manifest.h manifest_unbound). Dropped and not refused because a refusal
      * would fail the command that repairs it; a row spelled otherwise keys its
      * claims at whatever it spells. */
@@ -456,12 +456,15 @@ error_t *mount_table_build(
             );
         }
         const char *raw = mounts[i].target;
-        if (!raw || raw[0] != '/' || raw[1] == '\0') continue;
+        if (!raw || raw[0] != '/') continue;
 
         /* Copied like the name: the table keeps nothing of the caller's past
          * the call, so it stands for the arena's lifetime whatever happens to
-         * the rows it was built from. */
-        const char *spelling = arena_strdup(arena, raw);
+         * the rows it was built from. "/" is spelled "" as a HOME of "/" is below
+         * — the one spelling that joins a tail with one slash and encloses every
+         * absolute path at depth zero, which is the sentinel's own; the tie between
+         * the three is deepest_root's. */
+        const char *spelling = arena_strdup(arena, raw[1] ? raw : "");
         const char *profile = arena_strdup(arena, mounts[i].profile);
         if (!spelling || !profile) {
             return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
@@ -608,11 +611,11 @@ error_t *mount_resolve(
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
      * `tail` is non-empty (mount_validate_storage rejects trailing slashes) and
-     * no spelling ends in a slash: the sentinel's and a HOME of "/" are "", HOME
-     * is folded by the identity (sys/identity), and a target passed
-     * mount_validate_target at its binder. The build guarantees only that a
-     * spelling is absolute and not the root (mount_table_build); a row that came
-     * through no binder joins as it is, and keys its claims so. */
+     * no spelling ends in a slash: the sentinel's, a HOME of "/" and a binding
+     * at "/" are "", HOME is folded by the identity (sys/identity), and a target
+     * passed mount_validate_target at its binder. The build guarantees only that
+     * a spelling is absolute (mount_table_build); a row that came through no
+     * binder joins as it is, and keys its claims so. */
     *out_location = arena_str_format(arena, "%s/%s", entry->spelling, tail);
     if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");

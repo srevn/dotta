@@ -445,7 +445,7 @@ static bool tree_entry_content_path(
     }
 
     /* The entry name is Git's, not this machine's. A tree can name a subtree
-     * "..", and every consumer of a path from here joins it onto a mount's physical
+     * "..", and every consumer of a path from here joins it onto a root's spelling
      * (infra/mount.h mount_resolve) on the strength of its having been validated
      * where it was written — which holds for a branch this machine authored and
      * not for one that arrived by clone, sync or foreign push. So the shape is

@@ -61,12 +61,12 @@ static void prefix_location(entry_t *e, const char *location) {
  * resolved to its location and compared literally, and the rest is the pattern,
  * rooted there as a .gitignore is rooted in its directory — a leading slash on
  * the tail so gitignore anchors it. The split is what keeps filesystem bytes
- * out of pattern syntax: what HOME, the working directory or an alias inserts
- * is never read as a class or a wildcard, while what the user typed past the
- * split is, as a shell would read it. A wildcard in the first component leaves
- * no head: under `/` the anchor is the root, and under `.` the working directory
- * — the resolver's own reading of a leading dot, so `.<star>/x` typed from HOME
- * is the dotdirs' x there — while `~<star>/x` is no tilde path and is refused;
+ * out of pattern syntax: what HOME or the working directory inserts is never
+ * read as a class or a wildcard, while what the user typed past the split is,
+ * as a shell would read it. A wildcard in the first component leaves no head:
+ * under `/` the anchor is the root, and under `.` the working directory — the
+ * resolver's own reading of a leading dot, so `.<star>/x` typed from HOME is
+ * the dotdirs' x there — while `~<star>/x` is no tilde path and is refused;
  * anything else — a bare `conf<star>/x` could mean either vocabulary — is refused
  * toward the self-announcing spellings. The shape is read past a leading '!',
  * so a negated rule is a rule in either vocabulary. */
@@ -145,9 +145,9 @@ static error_t *compile_rule(
 }
 
 /* Is the key already an exact entry? Two spellings of one location — a tilde
- * form beside its absolute, the binder's spelling beside the physical — are one
- * entry, as the count and the coverage lines read them; a name beside a location
- * is two, since they are two keys. A rule's anchor is no entry. */
+ * form beside its absolute, `./x` beside `~/x` from inside HOME — are one entry,
+ * as the count and the coverage lines read them; a name beside a location is
+ * two, since they are two keys. A rule's anchor is no entry. */
 static bool listed(const pathspec_t *spec, const entry_t *entry) {
     for (size_t i = 0; i < spec->count; i++) {
         const entry_t *e = &spec->entries[i];

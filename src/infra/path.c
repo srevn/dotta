@@ -4,9 +4,9 @@
  * Two readings of a flexible CLI path argument:
  *
  *   path_input_resolve    - the key the input names: a location (a filesystem
- *                           shape, normalized and located) or a storage path
- *                           (validated, as typed) — the pathspec, and every verb
- *                           that takes a path from the command line
+ *                           shape, normalized) or a storage path (validated, as
+ *                           typed) — the pathspec, and every verb that takes a
+ *                           path from the command line
  *
  *   path_input_normalize  - filesystem path -> absolute filesystem path, a
  *                           relative one's working directory spelled under HOME
@@ -15,11 +15,11 @@
  *                            completion)
  *
  * One dispatch: the resolver reads the storage label itself and hands every
- * filesystem spelling (absolute, tilde, relative) to the normalizer, then asks
- * the table where the spelling stands. The topology (mount_spec_for_path,
- * mount_validate_storage, mount_locate), the filesystem primitives
- * (fs_expand_tilde, fs_working_directory, fs_path_join, fs_normalize_path) and
- * HOME's two spellings (sys/identity) are delegated to the layers below.
+ * filesystem spelling (absolute, tilde, relative) to the normalizer, whose answer
+ * is the key. The topology (mount_spec_for_path, mount_validate_storage), the
+ * filesystem primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
+ * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
+ * the layers below.
  */
 
 #include "infra/path.h"
@@ -99,17 +99,18 @@ error_t *path_input_resolve(
 
     /* A filesystem shape — absolute, tilde, or relative to the working directory
      * — through the normalizer (one arm for the three spellings, with `.`, `..`
-     * and the directory spelling folded there), then located: where the spelling
-     * stands, physical as far as the table knows its roots, so the answer keys
-     * with the view's rows by strcmp whichever spelling was typed. */
+     * and the directory spelling folded there), and its answer is the key. The
+     * copy is the resolver's because the answer outlives the call and the
+     * normalizer's is malloc's by contract (path.h). */
     char *normalized = NULL;
     error_t *err = path_input_normalize(input, &normalized);
     if (err) return err;
 
-    const char *location = NULL;
-    err = mount_locate(table, normalized, arena, &location);
+    const char *location = arena_strdup(arena, normalized);
     free(normalized);
-    if (err) return err;
+    if (!location) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the location");
+    }
 
     out->key = PATH_KEY_LOCATION;
     out->location = location;

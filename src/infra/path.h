@@ -10,8 +10,7 @@
  * key from the other, and no surface below offers to.
  *
  * The single chokepoint for input-shape dispatch; the topology primitives
- * (mount_locate, mount_resolve, mount_table_build) live one layer down in
- * infra/mount.
+ * (mount_resolve, mount_table_build) live one layer down in infra/mount.
  */
 
 #ifndef DOTTA_PATH_H
@@ -40,7 +39,7 @@ typedef enum {
 typedef struct {
     path_key_t key;
     union {
-        const char *location;       /* PATH_KEY_LOCATION: absolute, normalized, located */
+        const char *location;       /* PATH_KEY_LOCATION: absolute, normalized */
         const char *storage_path;   /* PATH_KEY_STORAGE: validated, the directory spelling shed */
     };
 } path_input_t;
@@ -52,20 +51,21 @@ typedef struct {
  * UI's listings print directory claims slash-marked, and the filesystem arm sheds
  * its own inside the normalizer; the two surface forms resolve alike). A filesystem
  * shape is normalized (path_input_normalize: tilde, the working directory,
- * `.`/`..`/`//` folded) and located (mount_locate): the answer is where the
- * spelling stands, physical as far as the table knows its roots. No profile, no
- * name, no stat: the argument need not exist, and a root is a location like any
- * other — the verb that cannot take one refuses it in its own words. A bare name
- * is refused: add's grammar reads one as the jail's or the working directory's
- * (cmds/add.c spell_argument); the resolver does not, because its callers' first
- * positional may be a profile.
+ * `.`/`..`/`//` folded), and that spelling is the key: a location is a string
+ * of its own, a link in it a component, so the answer keys against the view's
+ * rows by strcmp when it was spelled the way the rows were (infra/mount.h). No
+ * profile, no name, no stat: the argument need not exist, and a root is a location
+ * like any other — the verb that cannot take one refuses it in its own words. A
+ * bare name is refused: add's grammar reads one as the jail's or the working
+ * directory's (cmds/add.c spell_argument); the resolver does not, because its
+ * callers' first positional may be a profile.
  *
- *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (physical, under a symlinked HOME)
+ *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (HOME as the identity spells it)
  *   ./config    (in /etc)     -> LOCATION  /etc/config
  *   .bashrc     (in $HOME)    -> LOCATION  $HOME/.bashrc
- *   ~/link/x    (q bound at ~/link -> ~/real)
- *                             -> LOCATION  $HOME/real/x     (the alias above it read through)
- *   ~/link      (q bound so)  -> LOCATION  $HOME/real       (a binder's spelling is the binding's)
+ *   ~/link/x    (~/link -> ~/real, bound or not)
+ *                             -> LOCATION  $HOME/link/x     (the link is a component)
+ *   ~/link/../x               -> LOCATION  $HOME/x          ('..' pops the link's spelling)
  *   ~                         -> LOCATION  $HOME            (a root is a location; the verb decides)
  *   home/.config/nvim/        -> STORAGE   home/.config/nvim
  *   home/../x                 -> refused   (mount_validate_storage)
@@ -130,18 +130,18 @@ error_t *path_input_resolve(
  *   home/../c   (in HOME's parent, spelled physically)
  *                             -> <parent>/c    (the tail is the user's)
  *
- * The filesystem arm of path_input_resolve is this function followed by
- * mount_locate; the commands that read a filesystem spelling and walk it (add),
- * bind it (the binders' --target), test it (ignore --test) or complete beneath
- * it (the completion's root) call it directly. A target given as an absolute or
- * tilde path is the user's own; one given relatively is spelled by the rule above
- * like any other relative argument. Storage-path inputs ("home/", "root/",
- * "custom/") are not this function's — they are validated and placed at the call
- * site (mount_validate_storage, mount_resolve). add's re-rooting under --target
- * is add's own grammar, spelled around this call (cmds/add.c, spell_argument).
- * The answer is malloc's: three of the callers own it — the interactive save's
- * per-edit target, the completion, the binder that frees at its label — and the
- * rest hand it on and free it.
+ * The filesystem arm of path_input_resolve is this function and a copy; the
+ * commands that read a filesystem spelling and walk it (add), bind it (the binders'
+ * --target), test it (ignore --test) or complete beneath it (the completion's
+ * root) call it directly. A target given as an absolute or tilde path is the
+ * user's own; one given relatively is spelled by the rule above like any other
+ * relative argument. Storage-path inputs ("home/", "root/", "custom/") are not
+ * this function's — they are validated and placed at the call site
+ * (mount_validate_storage, mount_resolve). add's re-rooting under --target is
+ * add's own grammar, spelled around this call (cmds/add.c, spell_argument). The
+ * answer is malloc's: three of the callers own it — the interactive save's per-edit
+ * target, the completion, the binder that frees at its label — and the rest hand
+ * it on and free it.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL)
  * @param out   Normalized absolute path (caller must free, must not be NULL)

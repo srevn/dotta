@@ -481,9 +481,14 @@ bool completion_commits_at(
 bool completion_paths_under(FILE *out, const char *root, const char *current) {
     /* Mirrors spell_argument (cmds/add.c): no root, a tilde token, a token spelled
      * from here, or a token already inside the root — the path is what the shell
-     * sees. Inside is the root as typed here: spell_argument also reads the
-     * spelling realpath gives it, and a completion that resolved the root per
-     * keystroke would pay a syscall for a token the shell will re-offer anyway. */
+     * sees. Inside is the root as typed on this command line, where the command
+     * asks the same question against the row's spelling when one is bound
+     * (cmds/add.c takes the row's before it reads an argument). The two part
+     * for a `--target` naming the row's directory another way: the offer is under
+     * the typed spelling, the capture under the row's, and the token lands on
+     * add's re-rooted not-found sentence. A completion with the state in hand
+     * would close it; this one has no ctx and would pay a syscall per keystroke
+     * for a token the shell will re-offer anyway. */
     if (root == NULL || root[0] == '\0' || current[0] == '~' || current[0] == '.') {
         return false;
     }

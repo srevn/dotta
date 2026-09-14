@@ -292,10 +292,10 @@ error_t *profile_has_custom_files(
  * a verb that means everything at a place selects rows by location (cmds/export.c)
  * and never walks this answer's subtree.
  *
- * `mounts` is the table the argument was located through: the rows are placed
- * by it and the location keys against them by strcmp. The answer is the arena's
- * — the view's own row string, or the namer's — and outlives the view this call
- * builds and frees.
+ * `mounts` is the table the rows are placed by, and a location argument keys
+ * against them by strcmp (infra/mount.h). The answer is the arena's — the view's
+ * own row string, or the namer's — and outlives the view this call builds and
+ * frees.
  *
  * Cost: one tree walk and one sheet load per location argument. Its other face:
  * a profile whose sheet will not load refuses a location argument where a name
@@ -311,7 +311,7 @@ error_t *profile_has_custom_files(
  * @param repo Repository the tree's blobs (the sheet among them) are read from
  *             (must not be NULL)
  * @param tree The tree the claim is looked for in (must not be NULL)
- * @param mounts The table the argument was located through (must not be NULL)
+ * @param mounts The table the rows are placed by (must not be NULL)
  * @param profile Whose claims these are (must not be NULL)
  * @param arg The argument, in the key it named (must not be NULL)
  * @param arena Arena that owns the answer (must not be NULL)

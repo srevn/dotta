@@ -275,21 +275,13 @@ bool mount_same_target(const char *a, const char *b) {
 }
 
 /**
- * One mount: the spellings it is known by, and where it is. Both views (forward
- * classify, backward resolve) walk this same array.
+ * One mount: the spelling it is known by, and whose it is. Both views (forward
+ * name, backward resolve) walk this same array.
  *
  * - spelling: as its binder typed it — HOME as the identity spells it, "" for a
- *           root at "/" — read through every enclosing alias the table knows: a
- *           target typed `~/link` under a HOME that is itself a link is known
- *           as `<HOME's physical>/link`, which is how a path read through HOME
- *           meets it (mount_table_build).
- * - physical: what it reaches, as realpath spells it — and, when realpath cannot
- *           answer (a target gone since it was bound, EACCES), the entry's own
- *           settled spelling, which is as far as the table knows it reaches.
- *           NULL between the two, inside mount_table_build alone: the alias rounds
- *           read it that way, and no reader outside the build meets one. An alias
- *           is a mount whose spelling is not its physical; the sentinel and a
- *           mount bound under no link are not one.
+ *           root at "/" (the sentinel's, and HOME's when HOME is "/"). The key
+ *           of every location beneath it: a location is this joined with a tail,
+ *           and nothing is read through (infra/mount.h).
  * - kind:   mount kind for this entry's storage label.
  * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
  *           namespace. For CUSTOM mounts, the owning profile name — always set,
@@ -298,12 +290,11 @@ bool mount_same_target(const char *a, const char *b) {
  *           roots (deepest_root).
  *
  * Every string is the arena's — copied at build — so the table borrows nothing
- * and stands for the arena's lifetime; the sentinel's two are the literal "",
- * which outlives every arena.
+ * and stands for the arena's lifetime; the sentinel's is the literal "", which
+ * outlives every arena.
  */
 typedef struct {
-    const char *spelling;    /* As its binder typed it, enclosing aliases resolved */
-    const char *physical;    /* What it reaches, as realpath spells it */
+    const char *spelling;    /* As its binder typed it */
     mount_kind_t kind;       /* The storage label paths under it take */
     const char *profile;     /* The binding's owner; NULL for HOME and ROOT */
 } mount_entry_t;
@@ -314,149 +305,31 @@ struct mount_table {
 };
 
 /**
- * A directory's spelling in the table: an arena copy, the root directory as "".
- *
- * "" is the one spelling that joins a tail with one slash and encloses every
- * absolute path at depth zero — the sentinel's, and HOME's when HOME is "/" (a
- * container's bare uid) or reaches it through a link.
- */
-static const char *table_spelling(arena_t *arena, const char *path) {
-    return arena_strdup(arena, strcmp(path, "/") == 0 ? "" : path);
-}
-
-/**
- * Where a spelling reaches, as realpath spells it, or NULL when realpath cannot
- * answer — a target deleted since it was bound, EACCES.
- *
- * The entry's physical is then settled from its own spelling, once the rounds
- * have read every declared alias above it through (mount_table_build): that is
- * as far as the table can say it reaches, and it is the same reading a claim
- * beneath the binding gets (mount_resolve), so name and resolve place one location.
- * Handing the spelling back here instead would settle it before the rounds and
- * make the entry look like a non-alias to them — the alias test is the two fields
- * — so a binding under a declared link would be resolved through the link and
- * named through HOME.
- *
- * A root spelled "" is asked for as "/", the one spelling of it realpath takes.
- * ERR_MEMORY on arena exhaustion — the one failure that is not "cannot answer".
- */
-static error_t *physical_spelling(
-    arena_t *arena, const char *spelling, const char **out
-) {
-    *out = NULL;
-
-    char *resolved = NULL;
-    error_t *err = fs_canonicalize_path(*spelling ? spelling : "/", &resolved);
-    if (err) {
-        error_free(err);
-        return NULL;
-    }
-
-    *out = table_spelling(arena, resolved);
-    free(resolved);
-
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to copy physical path into arena");
-    }
-
-    return NULL;
-}
-
-/**
- * Is this mount known by two spellings?
- *
- * The sentinel and a mount bound under no link have one spelling for one directory.
- * So has one whose physical is not known yet: nothing may be read through a
- * spelling whose destination the table does not have, and inside mount_table_build
- * that entry is the rounds' subject, never their source.
- */
-static bool mount_is_alias(const mount_entry_t *m) {
-    return m->physical && strcmp(m->spelling, m->physical) != 0;
-}
-
-/**
- * The tail of `absolute` past `root`, on a component boundary.
+ * The tail of `location` past `root`, on a component boundary.
  *
  *   /home/user encloses /home/user/.bashrc; it does NOT enclose
  *   /home/username/.bashrc
  *
- * `root` is any of the table's — a mount's spelling or its physical, HOME, or
- * the sentinel's "" — never a `--target` as such, so the parameter is named for
- * what the table calls it. Returns NULL when `root` does not enclose `absolute`
- * or the boundary fails; otherwise a pointer into `absolute` — the empty string
- * when the two name one directory, the tail past it otherwise. The root's ""
- * encloses every absolute path at depth zero, and only those: a relative path's
- * first byte is no boundary.
+ * `root` is any of the table's — a mount's spelling, HOME's, or the sentinel's
+ * "" — never a `--target` as such, so the parameter is named for what the table
+ * calls it. Returns NULL when `root` does not enclose `location` or the boundary
+ * fails; otherwise a pointer into `location` — the empty string when the two
+ * name one directory, the tail past it otherwise. The root's "" encloses every
+ * absolute path at depth zero, and only those: a relative path's first byte is
+ * no boundary.
  */
-static const char *tail_under_root(const char *absolute, const char *root) {
+static const char *tail_under_root(const char *location, const char *root) {
     size_t root_len = strlen(root);
-    if (strncmp(absolute, root, root_len) != 0) return NULL;
+    if (strncmp(location, root, root_len) != 0) return NULL;
 
     /* Boundary: next character must be '/' or '\0'. */
-    char boundary = absolute[root_len];
+    char boundary = location[root_len];
     if (boundary != '/' && boundary != '\0') return NULL;
 
-    const char *tail = absolute + root_len;
+    const char *tail = location + root_len;
     if (*tail == '/') tail++;
 
     return tail;  /* "" when the two name one directory, non-empty otherwise */
-}
-
-/**
- * The deepest alias enclosing the path with something beneath it, and the tail
- * past its spelling. NULL when none does, and `*out_tail` is then untouched.
- *
- * A path that is an alias's own spelling is not enclosed by it — the tail must
- * be non-empty, which is how the final component stays out of the pass below.
- */
-static const mount_entry_t *deepest_alias(
-    const mount_table_t *table, const char *path, const char **out_tail
-) {
-    const mount_entry_t *alias = NULL;
-    const char *deepest = NULL;
-
-    for (size_t i = 0; i < table->entry_count; i++) {
-        const mount_entry_t *m = &table->entries[i];
-        if (!mount_is_alias(m)) continue;
-        const char *tail = tail_under_root(path, m->spelling);
-        if (!tail || *tail == '\0') continue;
-        /* Every tail points into `path` at its spelling's length, so pointer
-         * order is depth order: the later one stands under the longer spelling. */
-        if (alias && tail <= deepest) continue;
-        alias = m;
-        deepest = tail;
-    }
-
-    if (alias) *out_tail = deepest;
-
-    return alias;
-}
-
-/**
- * A path's ancestors spelled physically, as far as the table knows them.
- *
- * A declared alias enclosing the path with something beneath it is read through
- * what it reaches, the deepest first, again until none does. The final component
- * is never rewritten: a path that is an alias's own spelling names the link
- * standing there, not the directory it reaches, so a claim of the link stays a
- * claim of the link. A path spelled physically, or one through a link no binding
- * names, is left as it is: `*path` is replaced only when an ancestor was read
- * through, by an arena string. Every pass moves one declared link into the physical
- * prefix and adds none — a physical has no link in it — so it ends.
- */
-static error_t *spell_ancestors(
-    const mount_table_t *table, arena_t *arena, const char **path
-) {
-    for (;;) {
-        const char *tail = NULL;
-        const mount_entry_t *alias = deepest_alias(table, *path, &tail);
-        if (!alias) return NULL;
-
-        *path = arena_str_format(arena, "%s/%s", alias->physical, tail);
-        if (!*path) {
-            return ERROR(ERR_MEMORY, "Failed to spell the path physically");
-        }
-    }
 }
 
 /**
@@ -468,27 +341,16 @@ static error_t *spell_ancestors(
  * roots stand at one directory, and the more specific statement takes it — a
  * binding over the shared roots, and the sentinel over a HOME that is "/": `~/.rc`
  * under a binding at $HOME is `custom/.rc`, and a capture at `/etc/x` on a machine
- * whose HOME is "/" (a container's bare uid, or a HOME that reaches "/" through
- * a link) is `root/etc/x`, the reading that means the same directory on every
- * other machine. Those are the only two ties there are: mount_validate_target
- * refuses "/", so a binding never meets the sentinel, and one profile has one
+ * whose HOME is "/" (a container's bare uid) is `root/etc/x`, the reading that
+ * means the same directory on every other machine. Those are the only two ties
+ * there are: the build drops a row at "/" — the one directory the sentinel already
+ * stands at — so a binding never meets the sentinel, and one profile has one
  * binding.
  *
- * A location is matched against the root's physical, which is what every location
- * is spelled as — and, when the location *is* the binder's own spelling, against
- * that. Two questions hand over such a spelling: a walk joins `<parent
- * location>/<name>` for a leaf without locating, and mount_resolve answers a
- * claim of a declared alias's own spelling with that spelling. Both leave at
- * most the last component unresolved (mount_table_build reads every enclosing
- * alias through, and so do locate and resolve), so exact equality is the whole
- * test and no prefix match over a spelling is owed.
- *
- * The spelling branch yields the end-of-string pointer, which is deeper than
- * any enclosing root's tail — so a root reached by its binder's spelling beats
- * HOME and the sentinel exactly as reaching it by its physical does. It is also
- * the empty tail, so the branch can only ever answer "the root itself": a *name*
- * is composed beneath a physical alone, which is what lets mount_resolve place
- * one back at the location it was composed from.
+ * A root encloses the location iff its spelling is a prefix of it on a component
+ * boundary (tail_under_root), the root itself included with the empty tail: every
+ * key is a string of the rows' own (infra/mount.h), so no second spelling of a
+ * root is owed a match.
  *
  * `*out_tail` is empty when the location is the root itself, and is written only
  * when an entry matched — NULL when none did, which with the sentinel present
@@ -510,11 +372,7 @@ static const mount_spec_t *deepest_root(
             continue;
         }
 
-        const char *tail = tail_under_root(location, m->physical);
-        if (!tail && strcmp(location, m->spelling) == 0) {
-            /* The root itself, by its binder's own spelling. */
-            tail = location + strlen(location);
-        }
+        const char *tail = tail_under_root(location, m->spelling);
         if (!tail) continue;
 
         /* Every tail points into `location` at its root's length, so pointer
@@ -548,159 +406,78 @@ error_t *mount_table_build(
 
     *out = NULL;
 
-    /* Count CUSTOM mounts: input mounts with a non-empty target. Drop those with
-     * NULL/empty target — they were dead weight in the prior architecture (their
-     * profile-only entries served no observable purpose).
+    /* Slot reserve: every mount, whether or not it contributes, plus HOME and
+     * the sentinel — a reservation, not a count, so the rows are read once. */
+    mount_table_t *table = arena_calloc(arena, 1, sizeof(*table));
+    mount_entry_t *entries = arena_calloc(arena, mount_count + 2U, sizeof(*entries));
+    if (!table || !entries) {
+        return ERROR(ERR_MEMORY, "Failed to allocate mount table");
+    }
+
+    /* Customs first (input order), then HOME, then the sentinel; no reader depends
+     * on the order — deepest_root breaks its ties on the kinds.
      *
-     * The profile is required by the type's contract and not by the entry's fate,
-     * so it is checked whatever the target: a nameless binding would be a root
-     * of every namespace, which is the machine-wide name this module does not
-     * produce (infra/mount.h mount_t). Establishing it here is what lets
-     * deepest_root and find_entry read `m->profile` as a fact. */
-    size_t custom_count = 0;
+     * The profile is the type's contract (mount_t) and is refused whatever the
+     * target: a nameless binding is a caller's bug, and it would be a root of
+     * every namespace — the machine-wide name this module does not produce.
+     * Establishing it here is what lets deepest_root and find_entry read
+     * `m->profile` as a fact. The target is a row's, and the build asks only
+     * what an entry is: an absolute path that is not the root. "/" is the one
+     * absolute spelling that ends in its own separator — the sentinel spells it
+     * "" so that the join reads "/x" — and a row spelling it would join "//x",
+     * a key no argument can spell, and stand beside the sentinel as a per-profile
+     * root of the root directory itself; a relative row spells a location nothing
+     * can match, and deploy would write beside the process. Neither comes through
+     * a binder (mount_validate_target), so a row with either — a hand edit —
+     * contributes no mount, as an empty target does: the profile is bound nowhere
+     * here, which the view already records (core/manifest.h manifest_unbound).
+     * Dropped and not refused because a refusal would fail the command that repairs
+     * it; a row spelled otherwise keys its claims at whatever it spells. */
+    size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
         if (!mounts[i].profile) {
             return ERROR(
                 ERR_INVALID_ARG, "A binding names its profile (entry %zu)", i
             );
         }
-        if (mounts[i].target && mounts[i].target[0] != '\0') custom_count++;
-    }
-
-    /* Slot reserve: one entry per custom + HOME + ROOT sentinel. */
-    size_t cap = custom_count + 1U + 1U;
-
-    mount_table_t *table = arena_calloc(arena, 1, sizeof(*table));
-    if (!table) {
-        return ERROR(ERR_MEMORY, "Failed to allocate mount table");
-    }
-
-    mount_entry_t *entries = arena_calloc(arena, cap, sizeof(*entries));
-    if (!entries) {
-        return ERROR(ERR_MEMORY, "Failed to allocate mount entries");
-    }
-
-    /* Populate: customs first (input order), then HOME, then ROOT sentinel. Each
-     * mount is spelled as its binder typed it and as realpath reads it; the
-     * enclosing aliases are read below, once every spelling is in. No reader
-     * depends on this order — deepest_root breaks its ties on the kinds. */
-    size_t n = 0;
-    for (size_t i = 0; i < mount_count; i++) {
         const char *raw = mounts[i].target;
-        if (!raw || raw[0] == '\0') continue;
+        if (!raw || raw[0] != '/' || raw[1] == '\0') continue;
 
-        const char *spelling = table_spelling(arena, raw);
-        if (!spelling) {
-            return ERROR(ERR_MEMORY, "Failed to copy path into arena");
+        /* Copied like the name: the table keeps nothing of the caller's past
+         * the call, so it stands for the arena's lifetime whatever happens to
+         * the rows it was built from. */
+        const char *spelling = arena_strdup(arena, raw);
+        const char *profile = arena_strdup(arena, mounts[i].profile);
+        if (!spelling || !profile) {
+            return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
         }
-        const char *physical = NULL;
-        error_t *err = physical_spelling(arena, spelling, &physical);
-        if (err) return err;
-
-        /* The name is copied like the target: the table keeps nothing of the
-         * caller's past the call, so it stands for the arena's lifetime whatever
-         * happens to the rows it was built from. */
-        const char *profile = NULL;
-        if (mounts[i].profile) {
-            profile = arena_strdup(arena, mounts[i].profile);
-            if (!profile) {
-                return ERROR(ERR_MEMORY, "Failed to copy profile name into arena");
-            }
-        }
-
         entries[n++] = (mount_entry_t){
-            .spelling = spelling, .physical = physical, .kind = MOUNT_CUSTOM,
-            .profile = profile,
+            .spelling = spelling, .kind = MOUNT_CUSTOM, .profile = profile,
         };
     }
 
-    /* The invoker's HOME (sys/identity), and what it reaches: a symlinked HOME
-     * (macOS's /tmp -> /private/tmp, an NFS bind mount) is one root under both
-     * spellings, keyed by the physical. */
-    const char *home = table_spelling(arena, identity()->home);
+    /* The invoker's HOME as the identity spells it (sys/identity) — "" when it
+     * is "/", a container's bare uid: the one spelling that joins a tail with
+     * one slash and encloses every absolute path at depth zero, which is the
+     * sentinel's own; the tie between the two is deepest_root's. */
+    const identity_t *id = identity();
+    const char *home = arena_strdup(arena, id->home[1] ? id->home : "");
     if (!home) {
-        return ERROR(ERR_MEMORY, "Failed to copy path into arena");
+        return ERROR(ERR_MEMORY, "Failed to copy the home directory into the arena");
     }
-    const char *home_physical = NULL;
-    error_t *err = physical_spelling(arena, home, &home_physical);
-    if (err) return err;
-
     entries[n++] = (mount_entry_t){
-        .spelling = home, .physical = home_physical, .kind = MOUNT_HOME,
-        .profile = NULL,
+        .spelling = home, .kind = MOUNT_HOME, .profile = NULL,
     };
     /* The sentinel: "" encloses every absolute path at depth zero and joins a
-     * tail with one slash, so the fallback needs no case of its own anywhere.
-     * Its two spellings are literals, not the arena's. */
+     * tail with one slash, so the fallback needs no case of its own anywhere. A
+     * literal, not the arena's. */
     entries[n++] = (mount_entry_t){
-        .spelling = "", .physical = "", .kind = MOUNT_ROOT, .profile = NULL,
+        .spelling = "", .kind = MOUNT_ROOT, .profile = NULL,
     };
 
     table->entries = entries;
     table->entry_count = n;
-
-    /* The spellings, read through every enclosing alias: each spelling read through
-     * the table, once per custom — a round settles the outermost unresolved entry
-     * of every chain, and no chain of entries is longer than the table. Every
-     * custom is asked: a spelling with no declared alias above it is already
-     * its own answer, and one whose physical realpath could not give is exactly
-     * the entry that must not be skipped — it is no alias, so a guard on that
-     * test would exclude the one class this pass exists for. */
-    for (size_t round = 0; round < custom_count; round++) {
-        for (size_t i = 0; i < custom_count; i++) {
-            err = spell_ancestors(table, arena, &entries[i].spelling);
-            if (err) return err;
-        }
-    }
-
-    /* Where a binding realpath could not answer reaches, as far as the table
-     * knows: its own settled spelling. Asked after the rounds, whose alias test
-     * reads the physicals — and past this line no reader meets an unknown one. */
-    for (size_t i = 0; i < n; i++) {
-        if (!entries[i].physical) entries[i].physical = entries[i].spelling;
-    }
-
     *out = table;
-
-    return NULL;
-}
-
-error_t *mount_locate(
-    const mount_table_t *table, const char *fs_path, arena_t *arena,
-    const char **out_location
-) {
-    CHECK_NULL(table);
-    CHECK_NULL(fs_path);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_location);
-
-    *out_location = NULL;
-
-    /* The typed spelling, its declared aliases resolved above its final component.
-     * The copy is the answer's lifetime: a spelling nothing was read through is
-     * handed back as the arena's, like one that was. */
-    const char *location = arena_strdup(arena, fs_path);
-    if (!location) {
-        return ERROR(ERR_MEMORY, "Failed to copy path into arena");
-    }
-    error_t *err = spell_ancestors(table, arena, &location);
-    if (err) return err;
-
-    /* A root's own spelling — a target typed through the link its binder declared,
-     * HOME as the identity spells it under links no binding names — is what the
-     * ancestor pass leaves to the final component, and is the directory the binding
-     * names: every binding of that directory stands there for the tie, and a
-     * row keyed beneath the physical is reached from it. */
-    for (size_t i = 0; i < table->entry_count; i++) {
-        if (strcmp(table->entries[i].spelling, location) == 0) {
-            /* Two bindings at one directory share a physical, so the first match
-             * answers for both. */
-            location = table->entries[i].physical;
-            break;
-        }
-    }
-
-    *out_location = location;
 
     return NULL;
 }
@@ -764,6 +541,11 @@ const char *mount_root_describe(
  * NULL caller profile places no custom/ claim. Returns NULL when no entry satisfies
  * the query.
  *
+ * The asker filter deepest_root reads off the data — an entry with a profile is
+ * that profile's — is this one read off the type, and the two answer alike because
+ * the build sets a profile on the per_profile kind and on no other. One rule,
+ * read the way each verb already has its subject in hand.
+ *
  * Sole consumer today is mount_resolve.
  */
 static const mount_entry_t *find_entry(
@@ -818,26 +600,23 @@ error_t *mount_resolve(
     const mount_entry_t *entry = find_entry(table, kind, profile);
     if (!entry) return NULL;
 
-    /* The join: the mount's physical, "/", the tail. Uniform across the three
-     * kinds — the sentinel's "" and a HOME of "/" join with one slash:
+    /* The join: the root's spelling, "/", the tail — the key of the claim, which
+     * every producer of a key agrees on because every one is this join over the
+     * same strings (infra/mount.h). Uniform across the three kinds — the sentinel's
+     * "" and a HOME of "/" join with one slash:
      *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
      * `tail` is non-empty (mount_validate_storage rejects trailing slashes) and
-     * no physical ends in a slash (realpath's, or a spelling that passed
-     * mount_validate_target; HOME is normalised by the identity). */
-    const char *location = arena_str_format(arena, "%s/%s", entry->physical, tail);
-    if (!location) {
+     * no spelling ends in a slash: the sentinel's and a HOME of "/" are "", HOME
+     * is folded by the identity (sys/identity), and a target passed
+     * mount_validate_target at its binder. The build guarantees only that a
+     * spelling is absolute and not the root (mount_table_build); a row that came
+     * through no binder joins as it is, and keys its claims so. */
+    *out_location = arena_str_format(arena, "%s/%s", entry->spelling, tail);
+    if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }
-
-    /* A claim beneath a declared alias — a target some profile is bound at through
-     * a link inside this mount — stands where the link reaches, so p's home/link/x
-     * and q's custom/x are one key; a claim at the alias's own spelling is the
-     * link standing there, and stands as joined. */
-    error_t *err = spell_ancestors(table, arena, &location);
-    if (err) return err;
-    *out_location = location;
 
     return NULL;
 }

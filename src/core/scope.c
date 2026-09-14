@@ -130,9 +130,10 @@ error_t *scope_build(
      *    as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build path filter consuming the caller-supplied mount table — its
-     *    filesystem shapes located through it, no intermediate round-trip. The
-     *    mount table is borrowed for this call only; scope_t does not store it. */
+    /* 4. Build path filter consuming the caller-supplied mount table — handed
+     *    to the resolver for its filesystem shapes, no intermediate round-trip.
+     *    The mount table is borrowed for this call only; scope_t does not store
+     *    it. */
     if (in->file_count > 0) {
         err = pathspec_create(in->files, in->file_count, mounts, arena, &s->paths);
         if (err) {

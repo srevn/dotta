@@ -17,67 +17,77 @@
  * The table
  * ---------
  * The machine's topology: its roots — the invoker's HOME, `/`, and one target
- * per binding — each by the spelling its binder typed and by the physical spelling
- * realpath gives it. Built at the boundary where the binding source is in scope
- * (CLI options, state row cache), then consulted many times; a value — the topology
- * at the instant it was built — for the arena's lifetime.
+ * per binding — each by one spelling, the one its binder typed (HOME as the
+ * identity spells it, a target as the row holds it). Built at the boundary where
+ * the binding source is in scope (CLI options, state row cache), then consulted
+ * many times; a value — the topology at the instant it was built — for the arena's
+ * lifetime. The build reads no disk: the table is a pure function of the rows
+ * and the identity, and every verb over it is string work.
  *
  * A location — where a claim stands on this machine: the key the view's rows,
- * the record and every screen share — is the physical spelling as far as the
- * table knows its roots. A mount is known by the spelling its binder typed (HOME
- * as the identity spells it), read through every enclosing alias the table holds,
- * and by what it reaches as realpath spells it; both views spell a location from
- * the physical, whichever spelling reached them. A binding realpath cannot answer
- * — its directory gone since it was bound — is known by that one spelling, which
- * is as far as the table can say it reaches and is the very location a claim
- * beneath it resolves to, so name and resolve place one location there too. So
- * one file has one location for every alias a binder declared — a root's two
- * spellings, a root beneath another root's alias, a claim beneath a root's alias
- * — and a root is a root under any of them. A tail is Git's and is joined as
- * written: a link
- * inside one that no binding names is a leaf of its own, as `~/.config ->
- * ~/dotfiles/config` must stay, and two claims through and around it are two
- * claims. A bind mount or a firmlink is two physicals for one directory: the
- * binders' compare (mount_same_target) reads the inode, this table the spelling.
+ * the record and every screen share — is a root's spelling joined with a tail.
+ * A key is the spelling its writer typed, and the four producers of one agree
+ * because they read the same strings: mount_resolve (a root's spelling and a
+ * claim's tail), the normalizer (an argument, folded; infra/path.h), a walk's
+ * join (a parent and a name) and a climb's cut — a key truncated at a separator,
+ * which is a root's spelling and a shorter tail whichever label named it, so an
+ * ancestor's key is never manufactured a second way (core/manifest.c
+ * manifest_ascend, core/workspace.c blob_over, core/cleanup.c, infra/pathspec.c).
+ * So two locations are one path iff they are one string, and a symlink anywhere
+ * in a path is a component like any other:
+ * nothing here reads through one, `~/.config -> ~/dotfiles/config` stays the
+ * entry it is, and two claims through and around it are two claims. A filesystem
+ * that folds case or normalization can stand one entry at two strings; the two
+ * readers that act on an entry read the entry and not the string (core/workspace.c
+ * standing_row, for cleanup and discovery alone).
+ *
+ * Identity is read at two kinds of place, neither of them this table. Where a
+ * spelling is made from a source that did not spell it under a root: the binders
+ * (mount_same_target — one directory under two spellings is one binding, and
+ * the row keeps the spelling it has) and the normalizer's working directory
+ * (infra/path.h). And where acting on a string alone would duplicate or destroy:
+ * the scan's roots and its leaf probe, cleanup's guard (core/workspace.c), and
+ * add's refusal of a root that reaches the filesystem root (cmds/add.c).
+ *
+ * A row's target is normalized and validated where it is written (the binders,
+ * mount_validate_target); the build asks only what an entry is — an absolute
+ * path that is not the root, `/` being the one spelling that ends in its own
+ * separator, which the sentinel spells "" for the join's sake — and a row that
+ * came through no binder keys its claims at whatever it spells, which no argument
+ * can spell back. The repair is a re-bind: at a different directory, or a disable
+ * and an enable, since the binders keep a row's spelling for its own directory
+ * (mount_table_build).
  *
  * The root directory is spelled "" in the table — the one spelling that joins a
  * tail with one slash and encloses every absolute path at depth zero: the
- * sentinel's, and HOME's when HOME is "/" (a container's bare uid) or reaches
- * it through a link.
+ * sentinel's, and HOME's when HOME is "/" (a container's bare uid).
  *
- * One table, two readings
- * -----------------------
- * The machine's — where a spelling stands (mount_locate) and where a claim stands
- * (mount_resolve) — reads every entry, whoever asks: an alias is a spelling of
- * a directory for everyone, and a claim beneath another profile's declared link
- * keys with that link's own claims. The namespace's — what a profile would call
- * a location (mount_name) and whether a location is one of its roots (mount_root)
- * — reads the asker's own entries alone: its target if it is bound, HOME, `/`,
- * and no other profile's target. That is why the asker is a parameter and not a
- * table of its own: locate must see every binding, and name must see one.
+ * One table, one reading
+ * ----------------------
+ * Every verb reads the asker's own entries — its target if it is bound, HOME,
+ * `/` — and no other profile's: another profile's target is an ordinary directory
+ * in this namespace, named portably, and a table holding one profile's binding
+ * would answer that profile exactly as the whole table does. The table holds
+ * every binding because one build serves every asker of the view (core/manifest),
+ * each contribution its own asker; that is why the asker is a parameter and not
+ * a table of its own.
  *
  * A namespace is one profile's view over the table. N profiles may claim one
  * location under N names; the view layers them by precedence (core/manifest),
  * and within one profile the view keeps one. Nothing is exclusive: a binding
  * says where a profile's names resolve, not who owns the files there.
  *
- * Four questions over the same data:
- *   - Where a spelling stands (filesystem -> location): mount_locate, the
- *     physical spelling as far as the table knows its roots — asked once per
- *     argument and once per directory a walk enters, never per child (and per
- *     component of an argument whose jail boundary must be found), and no other
- *     question's first step.
+ * Three questions over the same data:
  *   - What a profile would call a location it holds no claim at (location ->
  *     storage): mount_name, beneath the deepest of that profile's own roots;
  *     nothing at a root itself. The fuller question — a claim of the profile
  *     standing at or above the location, and only then this — is core/manifest.h's
  *     manifest_name, whose last rung this is.
  *   - Whether a location is one of a profile's roots: mount_root, the walkers'
- *     and the climb's question, and the one place either spelling of a root
- *     answers.
+ *     and the climb's question.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
- *     mount_resolve. A name is composed beneath a root's physical alone, so
- *     resolving one places it back at the very location it was composed from.
+ *     mount_resolve. A name is composed beneath a root's spelling, so resolving
+ *     one places it back at the very location it was composed from.
  *
  * SECURITY CRITICAL: All conversions validate against path traversal.
  */
@@ -99,10 +109,10 @@ typedef enum {
 } mount_kind_t;
 
 /**
- * The kinds' arity, for a walk over the labels (cmds/export.c) and for an array
- * with one slot per kind. A macro, not an enumerator, for the reason
- * WORKSPACE_ROUTE_COUNT is one (core/workspace.h): a switch over the kinds must
- * not have to name a sentinel.
+ * The kinds' arity, for a walk over the labels (cmds/export.c's tree, cmds/add.c's
+ * receipt) and for an array with one slot per kind. A macro, not an enumerator,
+ * for the reason WORKSPACE_ROUTE_COUNT is one (core/workspace.h): a switch over
+ * the kinds must not have to name a sentinel.
  */
 #define MOUNT_KIND_COUNT (MOUNT_CUSTOM + 1)
 
@@ -202,18 +212,22 @@ error_t *mount_validate_target(const char *target);
 /**
  * Do two target spellings name one directory?
  *
- * The table keys a location by the physical spelling, so two spellings of one
- * directory classify alike and key alike; the binders ask the same of a target
- * typed against the row's, so an alias of the row's own directory is never written
- * as a move — the row keeps the spelling its binder typed, the one the screens
- * print. A move re-keys every record under the profile — the relocation read
- * (core/workspace) meets one file under two keys and releases the old — and one
- * that changes only the row's spelling buys that churn for nothing. A spelling
- * that stands is named by its directory: the two are one when they have one device
- * and inode, through a symlink standing at either (a target is validated through
- * realpath, so a link there is the directory it reaches). One that does not stand
- * — a stale row, its directory gone — is named by its spelling, and a differing
- * one is a move.
+ * A binding names a place, not a spelling, and the row keeps the spelling its
+ * binder typed — the key of every path beneath it (the table's paragraph above).
+ * So the binders ask this of a target typed against the row's, and a second
+ * spelling of the row's own directory is never written as a move: a move re-keys
+ * every record under the profile — each becomes a stale key the guard releases
+ * and the next apply re-owns (core/workspace) — and one that changes only the
+ * row's spelling buys that churn for nothing. A spelling that stands is named
+ * by its directory: the two are one when they have one device and inode, through
+ * a symlink standing at either (a target is validated through realpath, so a
+ * link there is the directory it reaches). One that does not stand — a stale
+ * row, its directory gone — is named by its spelling, and a differing one is a
+ * move. One of the two places identity is read where a spelling is made (the
+ * other is the normalizer's working directory, infra/path.h); the two CLI binders
+ * say at NORMAL which spelling they kept (cmds/profile.c, cmds/add.c). The
+ * interactive save says nothing: its screen is built once, so the spelling it
+ * discarded is the one still shown (cmds/interactive.c).
  *
  * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
  * classify.
@@ -258,8 +272,12 @@ typedef struct mount_table mount_table_t;
  *   (mount_name and mount_root read a NULL profile as "the shared roots — HOME
  *   and `/`"), which is the machine-wide name this module does not produce.
  *   mount_table_build refuses one.
- * - target: Absolute filesystem path with no trailing slash. NULL or empty
- *   contributes no mount; the entry is dropped at build time.
+ * - target: where the profile's custom/ tree stands, as its binder wrote it —
+ *   absolute, folded, no trailing slash (mount_validate_target) — and the key
+ *   of every custom/ path beneath it. NULL or empty contributes no mount, and
+ *   neither does a relative spelling or "/": the entry is dropped at build time,
+ *   and the profile is bound nowhere in that table. Those two are the whole of
+ *   the build's question (the table's paragraph above).
  */
 typedef struct {
     const char *profile;
@@ -269,27 +287,25 @@ typedef struct {
 /**
  * Build a mount table from a flat array of mounts.
  *
- * Each mount is known by two spellings — its binder's, read through every enclosing
- * alias the table holds, and the physical, what it reaches as realpath spells
- * it (the settled spelling itself when realpath agrees, or cannot answer) — so
- * a path typed through either classifies under it, and the location either view
- * spells is the physical: one key per file for every alias a binder declared
- * (the "Mount table" paragraph above).
+ * Each mount is known by one spelling, its binder's, and every location beneath
+ * it is that spelling joined with a tail (the table's paragraph above). The build
+ * reads no disk: the table is a pure function of `mounts` and the identity.
  *
  * The table is augmented internally with:
- *   - A HOME mount whose target is the invoker's home (sys/identity), in both
- *     spellings, so a symlinked HOME (macOS's /tmp -> /private/tmp) is one root
- *     under either without leaking a separate row into the table.
+ *   - A HOME mount at the invoker's home as the identity spells it (sys/identity).
  *   - A ROOT mount whose target is the empty string (universal fallback for
  *     absolute paths that match no other mount).
  *
  * A mount with no profile is refused (ERR_INVALID_ARG): a binding is a profile's,
  * and the invariant is established here so the readers need no per-read check
- * (mount_t above). Mounts with NULL or empty `target` contribute nothing — they
- * are filtered at build time. (The previous binding-table architecture recorded
- * such entries to distinguish "profile not in table" from "profile in table but
- * no target on this machine"; both cases were indistinguishable at every call
- * site, so the entries were dead.)
+ * (mount_t above). A mount whose target is NULL, empty, relative or "/" contributes
+ * nothing and is dropped: the first two name no target, and the last two are
+ * spellings the table cannot hold as a root — "/" ends in its own separator, so
+ * the join would double it, and the sentinel already stands there — which no
+ * binder writes and a hand-edited row can. Dropped and not refused because the
+ * profile is then merely bound nowhere, which the view records (core/manifest.h
+ * manifest_unbound) and a re-bind repairs, where a refusal would fail the command
+ * that repairs it.
  *
  * Lifetime:
  *   - Output is allocated entirely from `arena`, every string included: the table
@@ -304,8 +320,10 @@ typedef struct {
  *
  * One production reader: core/manifest.h's manifest_mount_table, which shapes
  * the state's rows — and a command's own binding, where the run brought one —
- * into the array. A command builds no table of its own; two builds from two arrays
- * are two topologies, and a location keyed under one is not a key under the other.
+ * into the array. Every verb reads the asker's own entries, so a table holding
+ * one binding would answer its profile as the whole table does; the one derivation
+ * is kept because the rows a command's table is built from are the rows the view
+ * it later joins by is built from (cmds/add.c).
  *
  * @param arena       Arena for the table and its internal storage
  * @param mounts      Caller-declared mounts (may be NULL when count is 0)
@@ -321,94 +339,27 @@ error_t *mount_table_build(
 );
 
 /**
- * Where a filesystem spelling stands on this machine: its location.
- *
- * The physical spelling as far as the table knows its roots. Every declared alias
- * above the final component is read through what it reaches, the deepest first,
- * again until none does; and a spelling that is a root's own — as its binder
- * typed it, or that spelling read through the aliases above it — is the directory
- * the binding names, whoever asks: `~/jail/link` where q is bound through the
- * link is q's target, and HOME typed as the identity spells it is HOME's physical
- * however many links stand above it (`/tmp -> /private/tmp`). A spelling through
- * a link no binding names is left as written: a tail is Git's.
- *
- * Pure string work over the table — no stat, no realpath — so the spelling need
- * not exist (show, revert, remove, a filter for a path not yet deployed), and
- * it is asked once per argument and once per directory a walk enters, never per
- * child: a child joined beneath a location is a location, the walkers' rule,
- * and a directory that is a binder's own spelling is the one join that is not —
- * read through here, so the walk goes on inside it under the physical. One question
- * asks per component instead, and it asks about an argument's own ancestors rather
- * than its children: where a `--target` jail's boundary falls in an argument
- * spelled from outside it, which no pair of strings can answer because a target
- * has as many spellings as the aliases above it (cmds/add.c). Every location
- * the table produces — a resolve's, a row's, a child joined beneath one — is
- * its own answer, which is what makes a location a key the resolver's answer
- * and the view's rows share by strcmp. The one exception is stated here, not
- * hidden: a claim of the very link a binding is declared through (a stranger's
- * `home/jail/link`) stands at the link (mount_resolve), and that spelling, located,
- * is the binding's directory — the row is reached beneath its parent and by its
- * name, never by its own spelling, and a walk that meets the link offers it as
- * the leaf it is rather than asking here.
- *
- * `fs_path` is absolute and lexically normalized (path_input_normalize); the
- * fold is established there, not re-checked here. The answer is the arena's, or
- * the table's own when the spelling is a root's — both outlive the call, and
- * every caller locates through a table its own arena built. The untracked scan
- * locates into a frame's scratch that the view's table outlives, which is the
- * shortest lifetime any answer of this is asked to have.
- *
- * Readers: the resolver's filesystem arm (infra/path path_input_resolve), the
- * key an argument is matched by; add's argument arm, its `--target` boundary,
- * every directory its walk descends into, and the directory it enumerates beneath
- * a claim's key — the one asking about an answer of mount_resolve's, which is
- * the same string but for the exception above (cmds/add.c); the untracked scan's
- * tracked-directory roots, which is that same question again, and every directory
- * child its walk meets (core/workspace.c); `ignore --test`'s filesystem arm
- * (cmds/ignore.c). The namer does not locate — its input is a location, and this
- * is what makes one.
- *
- * @param table        Mount table (must not be NULL)
- * @param fs_path      Absolute, normalized filesystem spelling (must not be NULL)
- * @param arena        Arena that owns `*out_location`
- * @param out_location Arena-borrowed location (must not be NULL; NULL after an
- *                     error)
- * @return Error or NULL on success
- */
-error_t *mount_locate(
-    const mount_table_t *table,
-    const char *fs_path,
-    arena_t *arena,
-    const char **out_location
-);
-
-/**
  * What `profile` would call a location it holds no claim at.
  *
  * "<label>/<tail>" beneath the deepest of the profile's own roots — its target,
  * HOME, `/` — or NULL when the location *is* that root: a root has no canonical
  * name, and the tree standing there is its label's. Another profile's target is
- * invisible here (the "One table, two readings" paragraph above). At a tie —
- * two of the profile's own roots at one directory — a binding wins, because it
- * is the
- * more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`);
+ * invisible here (the "One table, one reading" paragraph above). At a tie — two
+ * of the profile's own roots at one directory — a binding wins, because it is
+ * the more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`);
  * between HOME and `/` at one directory the portable name wins (a HOME of "/"
  * yields to the sentinel, so `/etc/x` is `root/etc/x` — `home/` there would name
  * the whole filesystem on every other machine). A NULL `profile` names through
  * HOME and `/` alone: a profile with no binding on this machine, or no profile
  * at all.
  *
- * `location` is a location — mount_locate's answer — or the one spelling that
- * is not: one whose *last component* is a declared alias's own, which is what a
- * walk's join at a leaf and mount_resolve's answer at such a claim both produce.
- * Nothing above the last component is ever left unresolved, so mount_root's
- * either-spelling test is exact equality. Nothing is respelled here: locate is
- * asked once per argument and once per directory a walk enters, and the walkers
- * join.
+ * `location` is a key — a row's, a record's, an argument's as the normalizer
+ * spelled it, a walk's join — and the test is a string's: a root encloses the
+ * location iff its spelling is a prefix of it on a component boundary, the root
+ * itself included. Nothing is respelled here and nothing is read through.
  *
- * A name is composed beneath a root's *physical* — the last component's spelling
- * can only answer "the root itself", which has no name — so mount_resolve places
- * an answer of this one back at the very location it was composed from.
+ * A name is composed beneath a root's spelling, so mount_resolve places an answer
+ * of this one back at the very location it was composed from.
  *
  * This is the *last* rung of the question a command actually asks. A claim of
  * the profile standing at or above the location outranks every root, and
@@ -452,27 +403,24 @@ error_t *mount_name(
 /**
  * The root of `profile` standing exactly at `location`, or NULL when none does.
  *
- * By either spelling — the physical, or the binder's own — because the two
- * questions that reach it hand over a spelling locate would have read through:
- * a walk joins `<parent location>/<name>` for a leaf without locating, and
- * mount_resolve answers a claim of a declared alias's own spelling with that
- * spelling (its own stated exception). Both leave at most the last component
- * unresolved, so exact equality is the whole test. An argument is located before
- * it gets here, and a located root's spelling is its physical.
+ * By the root's one spelling: exact equality is the whole test, a key being a
+ * string of the rows' own (the table's paragraph above).
  *
  * A root met from above is entered unlisted and its children are named from
- * `->label`; a symlink standing at one is skipped; a claim the climb would author
- * at one is not authored (core/metadata.c). Asked once per directory entry and
- * once per chain rung. Never fails, allocates nothing; `table` and `location`
+ * `->label`; a symlink standing at one is skipped by a walk and followed by the
+ * argument that names it (cmds/add.c, find -H's rule); a claim the climb would
+ * author at one is not authored (core/metadata.c). Asked once per directory entry
+ * and once per chain rung. Never fails, allocates nothing; `table` and `location`
  * must not be NULL, `profile` may be — a NULL asker meets the shared roots (HOME,
  * `/`) alone, so the answer is never a per_profile spec.
  *
  * Readers: the namer's ascent, which asks it at every rung rather than once per
- * argument — the location itself included, where mount_resolve's exception can
- * hand it an alias's own spelling (core/manifest.c manifest_ascend); the climb's
- * root guard (core/metadata.c capture_ancestor), add's argument-arm refusal
- * (cmds/add.c), `ignore --test`'s root line (cmds/ignore.c) and the claim search's
- * root refusal (core/profiles.c profile_claim_name).
+ * argument (core/manifest.c manifest_ascend); the climb's root guard
+ * (core/metadata.c capture_ancestor), add's two root refusals — the argument
+ * arm and the already-walked arm (cmds/add.c), `ignore --test`'s root line
+ * (cmds/ignore.c), the claim search's root refusal (core/profiles.c
+ * profile_claim_name) and revert's, asked directly where its own search answered
+ * nothing at the location (cmds/revert.c).
  */
 const mount_spec_t *mount_root(
     const mount_table_t *table,
@@ -504,8 +452,8 @@ const mount_spec_t *mount_root(
  * it, so it is non-NULL exactly when it is read.
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
- * than through a statement of its own: four sites print this sentence and would
- * otherwise spell it four ways — the message that a location has no name is the
+ * than through a statement of its own: five sites print this sentence and would
+ * otherwise spell it five ways — the message that a location has no name is the
  * same message whether a pattern, an argument, a search or a revert asked.
  *
  * Truncates rather than fails: a screen noun, not a key.
@@ -525,12 +473,10 @@ const char *mount_root_describe(
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
  *
- * The location is the physical spelling as far as the table knows: the mount's
- * physical, "/", the tail, and a declared alias inside the tail — a target some
- * profile is bound at through a link inside this mount — read through what it
- * reaches, so a claim captured through that link keys with the target's own claims.
- * A claim at the alias's own spelling is the link standing there, and stands as
- * joined.
+ * The location is the root's spelling, "/", and the tail: the key of the claim,
+ * and the one every producer of a key agrees on (the table's paragraph above).
+ * A link anywhere in it is a component — a claim captured through one stands
+ * where its spelling says, and so does a claim of the link itself.
  *
  * Absence is NULL, as every lookup in the tree answers it (manifest_lookup,
  * state_peek_profile_target, hashmap_get): `*out_location` is NULL when the claim

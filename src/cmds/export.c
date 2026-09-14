@@ -803,16 +803,15 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
  * laid out beneath it.
  *
  * One profile's view of one tree (core/manifest.h manifest_build_tree), built
- * under the table the argument was located through — the run's, so a location
- * keys against a row by strcmp (infra/path.h: located, physical as far as the
- * table knows its roots) — and read for two questions: what stands at the location,
- * and what stands strictly beneath it. Everything the entries carry is the rows':
- * the mode is the claim or the floor the builder already resolved, which is
- * export_entry_mode's rule under another name, so no sheet is read here; the
- * source name is the row's own, which is the name its blob was sealed under (the
- * AAD, infra/content.h). A name the contribution did not keep is no row and is
- * not copied — the copy is what the profile would place, and that is what the
- * view answers.
+ * under the run's table — so a location keys against a row by strcmp, both being
+ * spellings (infra/mount.h) — and read for two questions: what stands at the
+ * location, and what stands strictly beneath it. Everything the entries carry
+ * is the rows': the mode is the claim or the floor the builder already resolved,
+ * which is export_entry_mode's rule under another name, so no sheet is read here;
+ * the source name is the row's own, which is the name its blob was sealed under
+ * (the AAD, infra/content.h). A name the contribution did not keep is no row
+ * and is not copied — the copy is what the profile would place, and that is what
+ * the view answers.
  *
  * The row standing at the location decides the shape. A directory row is a claimed
  * root at its mode; no row at all is an unclaimed root at the default, the same
@@ -1515,8 +1514,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         /* Read the argument in the key the user named — a location or a storage
          * path, neither manufactured from the other (infra/path.h) — and hand
          * it to the arm that answers in that key. A storage shape was validated
-         * as typed and carries no trailing slash; a filesystem shape was normalized
-         * and located. So the only shapes needing a word here are the ones the
+         * as typed and carries no trailing slash; a filesystem shape was
+         * normalized. So the only shapes needing a word here are the ones the
          * resolver refused. */
         path_input_t arg;
         err = path_input_resolve(mounts, opts->file_path, arena, &arg);

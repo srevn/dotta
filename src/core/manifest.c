@@ -1378,12 +1378,12 @@ static error_t *manifest_allocate(
  * The table the enabled rows describe
  *
  * State-aware adapter that materializes enabled_profiles' (name, target) rows
- * into mount_t entries and delegates the augmentation (HOME, canonical HOME,
- * root sentinel) to mount_table_build. The one derivation of this machine's
- * topology from the rows: manifest_build runs it below before it places a row,
- * the dispatcher runs it alone for a command that declares `mounts` without the
- * view, and a command that brought a binding of its own runs it with that, so
- * every one of them reads one value from one instant's rows.
+ * into mount_t entries and delegates the augmentation (HOME, the root sentinel)
+ * to mount_table_build. The one derivation of this machine's topology from the
+ * rows: manifest_build runs it below before it places a row, the dispatcher runs
+ * it alone for a command that declares `mounts` without the view, and a command
+ * that brought a binding of its own runs it with that, so every one of them reads
+ * one value from one instant's rows.
  */
 error_t *manifest_mount_table(
     const state_t *state,

@@ -165,7 +165,7 @@ typedef struct anchor anchor_t;
  */
 typedef struct manifest_row {
     /* Identity */
-    char *filesystem_path;      /* Deployed path (/home/user/.bashrc): physical spelling */
+    char *filesystem_path;      /* Deployed path (/home/user/.bashrc): the location, as spelled */
     char *storage_path;         /* Path in profile (home/.bashrc) */
     char *profile;              /* The profile whose claim the row is */
 
@@ -514,11 +514,11 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * arena's, and a tree view's caller keeps its table alive as long as the view.
  * Rule 1, never cache a cache: a consumer that holds the view and needs the
  * topology it was placed by reads it here rather than building a second table
- * from the same rows, so the arguments it locates and the rows it selects read
- * one value. Readers: the dispatcher (`run.mounts` for a command that declares
- * the view, include/runtime.h); show and list without a profile, and a filesystem
- * argument to `ignore --test`, which build the view themselves and locate the
- * argument through its table.
+ * from the same rows, so the names it places and the rows it selects read one
+ * value. Readers: the dispatcher (`run.mounts` for a command that declares the
+ * view, include/runtime.h); show and list without a profile, and a filesystem
+ * argument to `ignore --test`, which build the view themselves and read the table
+ * back from it.
  *
  * Pure value return — no allocation, no error path.
  *
@@ -535,8 +535,7 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * machine's $HOME and the empty-prefix root sentinel (infra/mount.h) — offered
  * without a view, for a command that declares `mounts` and not `manifest`
  * (include/runtime.h). A command declaring both reads manifest_mounts instead
- * and gets the view's own: one build, one value, and the arguments it locates
- * read the topology its rows were placed by. Rule 1, never cache a cache.
+ * and gets the view's own: one build, one value. Rule 1, never cache a cache.
  *
  * `binding` is NULL for a reader describing the machine as it stands — the
  * dispatcher's build and the view's own. A command that declares a binding of
@@ -544,11 +543,11 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest);
  * one), passes it here rather than building a table beside this one: the
  * substitution is total and by name — the profile's own row is not read, so a
  * binding with no target says that profile is bound nowhere in this run (mount_t)
- * — and it is the only difference between the two topologies. A command whose
- * arguments are located under one table and whose rows are placed under another
- * has no key at all: with a second profile bound through a link inside the target,
- * a table holding one binding leaves `<target>/link/x` as written where the view
- * reads it through, and the ownership event is written nowhere.
+ * — and it is the only difference between the two tables. Every verb over a table
+ * reads the asker's own entries (infra/mount.h), so a table holding the binding
+ * alone would answer the command the same; what the one derivation buys is that
+ * the rows the command's table is built from are the rows the view it later joins
+ * by is built from (cmds/add.c).
  *
  * The derivation itself stays the builder's, never a parameter of it — a binding
  * is one pairing the run declares, not a table handed in: a re-target is in the
@@ -884,9 +883,7 @@ bool manifest_holds_name(
  *
  * The map is keyed by location in the spelling the view's own rows carry — where
  * a claim of this profile stands, which is mount_resolve's answer for its name
- * (and the one place that is not a mount_locate fixed point is the stated
- * exception: a claim of the very link a binding is declared through stands at
- * the link, infra/mount.h). That is the key the ascent truncates to reach a rung;
+ * (infra/mount.h). That is the key the ascent truncates to reach a rung;
  * and the map is the asking profile's own listing, a claim of it standing in
  * for that profile's committed row at the same place and for no other profile's.
  *

@@ -860,12 +860,13 @@ static error_t *capture_ancestor(
         return NULL;
     }
 
-    /* Where the rung stands is where its own name resolves, never the leaf's
-     * location cut short: a declared alias — a target some profile is bound at
-     * through a link inside this mount — is read through beneath itself and not
-     * at itself, so `home/link` is the link and `home/link/sub` the directory
-     * that link names. The two are one rung apart and one link apart, which is
-     * exactly what arithmetic over a shared tail cannot see. */
+    /* Where the rung stands is where its own name resolves. The climb carries
+     * one string, not a pair that must agree: a resolve is a root's spelling
+     * and a tail, and truncating the leaf's location would land the same bytes
+     * — at the cost of a second string the caller must have got right, which is
+     * what the cross-check this shape deleted used to assert. One producer places
+     * a name (infra/mount.h mount_resolve); the cost is one table scan per rung
+     * per leaf, bounded by the profile count. */
     const char *filesystem_path = NULL;
     RETURN_IF_ERROR(
         mount_resolve(mounts, profile, storage_path, arena, &filesystem_path)
@@ -883,12 +884,9 @@ static error_t *capture_ancestor(
      * is not sheet noise — the row makes the profile's own deployment target
      * one of its managed paths (status prints it `[ancestor]`), and deploy's
      * ancestors pass creates it with the claim's mode and ownership on a machine
-     * where it is absent. Either spelling answers: a rung of a chain through a
-     * declared alias resolves to the link standing there (mount_resolve's stated
-     * exception), which is the binder's own spelling when the binder is the asker.
-     * Asker-keyed, and that is the point — another profile's target is an ordinary
-     * directory in this one's namespace, and this profile tracks the chain through
-     * it.
+     * where it is absent. Asker-keyed, and that is the point — another profile's
+     * target is an ordinary directory in this one's namespace, and this profile
+     * tracks the chain through it.
      *
      * The guard authors nothing and retires nothing: a claim already standing
      * at a root from an older table is the sheet's business

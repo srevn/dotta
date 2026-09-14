@@ -216,20 +216,18 @@ typedef enum dotta_crypto_mode {
  * mounts
  * ------
  * This machine's topology over the enabled set — `manifest_mount_table` over
- * the state's rows and `$HOME` — for locating the command's input
- * (`path_input_resolve`, `scope_build`). Requires `state`. A command that reads
- * a CLI path declares it — unless it brings a binding of its own that no row
- * need hold (`add --target`), which builds the same table with that binding
- * standing for its profile's row (`core/manifest.h` `manifest_mount_table`) and
- * reads that: the dispatcher's would be a second topology, and the one thing
- * worse than no table is two. A command that declares the view as well borrows
- * the view's table — `manifest_mounts`, the one the builder derived from the
- * rows it read — so the arguments it locates and the rows it selects read one
- * topology; a command that declares `mounts` alone gets its own build from the
- * same rows. Every location the run spells — a row's, a record's, a located
- * argument's — is the physical spelling as far as the table knows its roots
- * (`infra/mount.h`), whichever spelling the binder or the user typed; the rows
- * keep the binder's for the screens.
+ * the state's rows and `$HOME` — for placing a storage path the command reads
+ * (`mount_resolve`) and naming beneath its roots (`mount_root`). Requires `state`.
+ * A command that reads a CLI path declares it — unless it brings a binding of
+ * its own that no row need hold (`add --target`), which builds the same table
+ * with that binding standing for its profile's row (`core/manifest.h`
+ * `manifest_mount_table`) and reads that: the dispatcher's would be a second
+ * build of the same rows. A command that declares the view as well borrows the
+ * view's table — `manifest_mounts`, the one the builder derived from the rows
+ * it read — so the names it places and the rows it selects read one value; a
+ * command that declares `mounts` alone gets its own build from the same rows.
+ * Every location the run spells — a row's, a record's, an argument's — is a root's
+ * spelling and a tail, the binder's or the user's own (`infra/mount.h`).
  *
  * crypto
  * ------
@@ -436,13 +434,13 @@ typedef struct dotta_run {
  *
  *   - Frame-scope. `core/workspace.c`'s untracked walk creates one arena per
  *     directory frame and resets it before each entry, because an entry that is
- *     named and then excluded is neither an offer nor a row, and its joined path,
- *     its located form and the namer's two strings all outlive the decision that
- *     discarded it: 20,000 ignored files beneath one tracked directory measured
- *     4.1 MB of peak RSS at the shape that composed names by hand, 20.3 MB against
- *     `ctx->arena`, and 4.1 MB with the frame's own. The pointer never leaves
- *     the frame that made it, and every string that outlives a frame is copied
- *     at the one door it leaves through (workspace_add_untracked).
+ *     named and then excluded is neither an offer nor a row, and its joined path
+ *     and the namer's two strings all outlive the decision that discarded it:
+ *     20,000 ignored files beneath one tracked directory measured 4.1 MB of peak
+ *     RSS at the shape that composed names by hand, 20.3 MB against `ctx->arena`,
+ *     and 4.1 MB with the frame's own. The pointer never leaves the frame that
+ *     made it, and every string that outlives a frame is copied at the one door
+ *     it leaves through (workspace_add_untracked).
  *
  * Adding a fourth requires the evidence that one has: a genuinely sub-command
  * lifetime in code, and a number. Hypothesised need is not enough; a primitive

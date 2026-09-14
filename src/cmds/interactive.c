@@ -493,9 +493,13 @@ static error_t *plan_classify(
         }
         /* Retained: re-enable only when the pending target names a directory
          * the row does not hold — the row's own under another spelling is the
-         * same binding (mount_same_target), and the row keeps its spelling. A
-         * NULL can change nothing — the UPSERT keeps the row's target for one
-         * (state_enable_profile), and no key unbinds. */
+         * same binding (mount_same_target), and the row keeps its spelling, the
+         * key of every path beneath it (infra/mount.h). The two CLI binders say
+         * so in a line; this editor says nothing and shows nothing — its items
+         * are built once, at open, and the target it renders is the one the prompt
+         * wrote, so a spelling the save discarded stays on screen until the editor
+         * is reopened. A NULL can change nothing — the UPSERT keeps the row's
+         * target for one (state_enable_profile), and no key unbinds. */
         plan->needs_enable[i] = it->target != NULL && (persisted_target == NULL ||
             !mount_same_target(persisted_target, it->target));
     }

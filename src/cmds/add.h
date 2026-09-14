@@ -108,12 +108,12 @@ typedef struct {
  * the claim it was listed under is the location it was read at. A typed name is
  * resolved into its location by construction; a walked one is named from the
  * claim standing at the location the walk reached. That is what lets the record
- * join by the location without a round trip through the name — and it holds while
- * the topology does not move, so the join tests it rather than assuming it. A
- * run holds the store's write lock from dispatch, so the rows its table was built
- * from are the rows the record's view is built from; what can still move is the
- * disk — a pre-add hook re-pointing a declared link — and that is what the join
- * catches.
+ * join by the location without a round trip through the name. It holds by
+ * construction and nothing moves it: a run holds the store's write lock from
+ * dispatch, so the rows its table was built from are the rows the record's view
+ * is built from, and a key is a string of those rows' own (infra/mount.h), which
+ * the disk cannot move. The join still tests it, the test being the NULL-row
+ * guard the record's counts rest on.
  *
  * **What the record records**: every capture is an ownership event — the path
  * was put there from disk, so the record binds the committed blob to the stat

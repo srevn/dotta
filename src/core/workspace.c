@@ -1738,10 +1738,10 @@ static bool stat_parent(const char *path, struct stat *st) {
  * standing on the (dev, ino) `st` names. A file with one name is one entry however
  * it is spelled — st_nlink counts the names — and so is a directory, whatever
  * its st_nlink says (2 + children: the '.' and '..' links, never a second name,
- * POSIX forbidding user-created directory hard links). So the symlink alias,
- * the declared alias, the dangling link under two spellings and a name the volume
- * folds (case, Unicode normalization: one entry at two strings, measured deleting
- * a managed file through a name compare) all pair here.
+ * POSIX forbidding user-created directory hard links). So a link no binding names,
+ * a target bound through a link, the dangling link under two spellings and a
+ * name the volume folds (case, Unicode normalization: one entry at two strings,
+ * measured deleting a managed file through a name compare) all pair here.
  *
  * A multiply-linked regular file has several names, and two of its spellings
  * are one entry only when they name it the same way in one directory: the names
@@ -2334,53 +2334,45 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * itself nor anything beneath it (manifest_is_derived), which is why a derived
  * row at one key is no answer about the other.
  *
- * Both of a directory's keys are climbed when they differ, and independently:
- * the view keys by mount_resolve and the walk reaches by mount_locate, and the
- * two part at exactly one input — a claim of a declared alias's own spelling
- * (infra/mount.h) — so a blob can stand at the spelling with nothing at the
- * location, or the other way round. Each step is the last separator's index, or
- * 1 beneath the root, so a rung is strictly shorter than the one before it and
- * "/" ends the climb — where no name spells a mount root anyway. Both keys are
- * absolute; the copy the climb truncates is the caller's scratch, and abandoned.
+ * A directory has one key — the one its frame joined, which is the one the view
+ * holds a row at: the two producers of a key, mount_resolve and the walk's join,
+ * agree by construction (infra/mount.h) — so one climb answers. Each step is
+ * the last separator's index, or 1 beneath the root, so a rung is strictly shorter
+ * than the one before it and "/" ends the climb — where no name spells a mount
+ * root anyway. The key is absolute; the copy the climb truncates is the caller's
+ * scratch, and abandoned.
  *
  * Readers: the walk, of every directory child, and the driver, of every tracked
  * directory it is about to enumerate — an independent tracked root beneath a
  * file claim is as much beneath it as a child the walk would have stopped at.
  *
- * @param view     The precedence-resolved view (must not be NULL)
- * @param location Where the directory stands (must not be NULL)
- * @param spelling The key the caller reached it by (must not be NULL)
- * @param scratch  Arena the climb's copies are taken in (must not be NULL)
- * @param out      The blob standing over it, or NULL (must not be NULL)
+ * @param view      The precedence-resolved view (must not be NULL)
+ * @param directory The directory's key (must not be NULL)
+ * @param scratch   Arena the climb's copy is taken in (must not be NULL)
+ * @param out       The blob standing over it, or NULL (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *blob_over(
     const manifest_t *view,
-    const char *location,
-    const char *spelling,
+    const char *directory,
     arena_t *scratch,
     const manifest_row_t **out
 ) {
     *out = NULL;
 
-    const char *keys[] = { location, spelling };
-    size_t count = strcmp(location, spelling) == 0 ? 1 : 2;
+    char *rung = arena_strdup(scratch, directory);
+    if (!rung) {
+        return ERROR(ERR_MEMORY, "Failed to copy path");
+    }
 
-    for (size_t k = 0; k < count; k++) {
-        char *rung = arena_strdup(scratch, keys[k]);
-        if (!rung) {
-            return ERROR(ERR_MEMORY, "Failed to copy path");
+    while (rung[1]) {
+        const manifest_row_t *row = manifest_lookup(view, rung);
+        if (row && row->type != PATH_TYPE_DIRECTORY) {
+            *out = row;
+            return NULL;
         }
 
-        while (rung[1]) {
-            const manifest_row_t *row = manifest_lookup(view, rung);
-            if (row && row->type != PATH_TYPE_DIRECTORY) {
-                *out = row;
-                return NULL;
-            }
-
-            rung[str_path_parent_len(rung)] = '\0';
-        }
+        rung[str_path_parent_len(rung)] = '\0';
     }
 
     return NULL;
@@ -2390,16 +2382,21 @@ static error_t *blob_over(
  * One scan root: a directory a tracked row stands at, and the row that owns it
  *
  * Keyed by the directory's identity — the (dev, ino) of the row's own key, from
- * the driver's look — because that is the one fact a string cannot carry: two
- * tracked rows spelled through different links stand at one directory (a link
- * no binding names, a firmlink, a bind mount), and a walk reaches a directory
- * by whatever spelling its frame joined. One entry per directory, so the array
- * is both the boundaries — a walk stops at any of them it meets, by whichever
- * string (find_scan_root) — and the walks: the driver enumerates each once, from
- * a depth 0 of its own. Where several rows stand at one directory the later-enabled
- * profile's is the one kept, the index's rule for a contested location
- * (core/manifest.c manifest_layer) applied where the keys differ; among one
- * profile's, the later in path order.
+ * the driver's look — because a traversal must not enumerate one directory twice,
+ * and which directory a frame stands in is a fact about the filesystem, not about
+ * naming: two tracked rows spelled through different links stand at one directory
+ * (a link a binding is declared through, one no binding names, a firmlink, a
+ * bind mount), and a walk reaches a directory by whatever spelling its frame
+ * joined. Two keys at one directory are two paths to the view and one walk to
+ * the scan. One entry per directory, so the array is both the boundaries — a
+ * walk stops at any of them it meets, by whichever string (find_scan_root) —
+ * and the walks: the driver enumerates each once, from a depth 0 of its own.
+ * Where several rows stand at one directory the later-enabled profile's is the
+ * one kept, the index's rule for a contested location (core/manifest.c
+ * manifest_layer) applied where the keys differ; among one profile's, the later
+ * in path order. The consequence: where two tracked rows stand at one directory
+ * under two spellings, the later-enabled profile's walk is the one that runs,
+ * and the other's namespace never sees an offer beneath it.
  *
  * The entries index (entry_t) reads the same fact off the same rows, for the
  * two verbs that act on an entry through a string, and the two are not one
@@ -2449,7 +2446,6 @@ static scan_root_t *find_scan_root(
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
-    const mount_table_t *mounts;       /* The view's own table (manifest_mounts) */
     scan_root_t *roots;                /* Every scan root — the boundaries — and how many */
     size_t root_count;
     const char *profile;               /* The owner of the root this walk began at */
@@ -2460,11 +2456,9 @@ typedef struct {
 /**
  * Scan one tracked directory for untracked files, and everything beneath it
  *
- * `directory` is a location — mount_locate's answer — and every join beneath it
- * is one too (infra/mount.h: a child joined beneath a location is a location),
- * which is what makes the namer's input exact and a leaf's managed probe hit
- * the key the view holds. A directory child is the one join that is not, and is
- * read through here before the frame below it enumerates.
+ * `directory` is a key — a tracked row's own — and every join beneath it is one
+ * too (infra/mount.h: a child joined onto a key is a key), which is what makes
+ * the namer's input exact and a leaf's managed probe hit the key the view holds.
  *
  * The walk descends only into directories the view does not track. A directory
  * child that is a scan root — by identity, whatever spelling this frame joined
@@ -2488,12 +2482,12 @@ typedef struct {
  *
  * The order is the order. The lstat first, because the kind and the identity
  * decide every arm; the occupant skip before any lookup, because nothing can
- * hold what it names; identity before the locate, because another root's directory
- * needs no string; the locate before the climb and the namer, both exact only
- * at a location; the guards before the name, because an ascent is paid only where
- * a name is used and in a tracked directory most leaves are managed; the name
- * before the ignore layers, the name being the first layer's subject; the layers
- * before the descent, because an excluded directory is not entered.
+ * hold what it names; identity before the climb and the namer, because another
+ * root's directory needs no string; the guards before the name, because an ascent
+ * is paid only where a name is used and in a tracked directory most leaves are
+ * managed; the name before the ignore layers, the name being the first layer's
+ * subject; the layers before the descent, because an excluded directory is not
+ * entered.
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
  * can hold at an offered name is update's question at its capture (cmds/update.c).
@@ -2566,11 +2560,11 @@ static error_t *scan_directory_for_untracked(
         return NULL;
     }
 
-    /* The frame's strings — one entry's join, its located form, the namer's copy
-     * and its answer — reset before the next entry. What outlives the frame is
-     * an offer's, copied at its door (workspace_add_untracked); a frame beneath
-     * this one allocates in a scratch of its own, so this frame's `child` stands
-     * as that frame's `directory` for the whole subtree (include/runtime.h). */
+    /* The frame's strings — one entry's join, the namer's copy and its answer —
+     * reset before the next entry. What outlives the frame is an offer's, copied
+     * at its door (workspace_add_untracked); a frame beneath this one allocates
+     * in a scratch of its own, so this frame's `child` stands as that frame's
+     * `directory` for the whole subtree (include/runtime.h). */
     arena_t *scratch = arena_create(0);
     if (!scratch) {
         string_array_free(listing);
@@ -2634,29 +2628,15 @@ static error_t *scan_directory_for_untracked(
              * from outside inherits none of it. */
             if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) continue;
 
-            /* Where the child stands. A directory met at a binder's own spelling
-             * — a target declared through a link no binding names — is read through
-             * to the physical, so this frame's join and every one below it is a
-             * location, which is what the namer's input and the leaf probe must
-             * be. A leaf keeps the spelling it stands under, the very link a
-             * binding is declared through being a claim of the link
-             * (infra/mount.h), and the walk does not follow one. */
-            const char *joined = child;
-            err = mount_locate(scan->mounts, joined, scratch, &child);
-            if (err) {
-                err = error_wrap(err, "Failed to locate '%s'", joined);
-                goto cleanup;
-            }
-
-            /* A blob the view holds at the directory or above it, under either
-             * of its keys. Asked before the name and before any rule: an offer
-             * beneath it is one no apply can place, whoever would name it, and
-             * committing it turns a view-versus-disk conflict the user can resolve
-             * into a view-versus-view one only `remove` can. Said on its own
-             * screen rather than here — the file analysis stands the [type] at
-             * the blob's own path, with the remedies beside it. */
+            /* A blob the view holds at the directory or above it. Asked before
+             * the name and before any rule: an offer beneath it is one no apply
+             * can place, whoever would name it, and committing it turns a
+             * view-versus-disk conflict the user can resolve into a
+             * view-versus-view one only `remove` can. Said on its own screen
+             * rather than here — the file analysis stands the [type] at the blob's
+             * own path, with the remedies beside it. */
             const manifest_row_t *blob = NULL;
-            err = blob_over(ws->manifest, child, joined, scratch, &blob);
+            err = blob_over(ws->manifest, child, scratch, &blob);
             if (err) goto cleanup;
             if (blob) continue;
         } else if (manifest_lookup(ws->manifest, child) || workspace_get_anchor(ws, child) ||
@@ -2771,8 +2751,8 @@ static error_t *analyze_untracked_files(
      * one the claim has no standing at — apply refuses beneath a squatter by
      * the same probe — and registering it would make that directory a boundary
      * no honest walk may enter. Asked of the key, the workspace's fact about
-     * it, before the look. The look is at the row's own key, never at where the
-     * key locates: a claim of a directory that is a declared final link now is
+     * it, before the look. The look is at the row's own key, the link itself
+     * and never what it reaches: a claim of a directory that is a link now is
      * the [type] the directory analysis said, and enumerating the link's target
      * would offer that directory's files as this row's. Registered in the view's
      * order, lowest profile first, so a later profile's row standing at a directory
@@ -2836,22 +2816,8 @@ static error_t *analyze_untracked_files(
         goto cleanup;
     }
 
-    const mount_table_t *mounts = manifest_mounts(ws->manifest);
-
     for (size_t r = 0; r < root_count; r++) {
         const manifest_row_t *row = roots[r].row;
-
-        /* Where this machine enumerates the row. One string for every row but a
-         * claim of a declared alias's own spelling, which stands at the spelling
-         * while everything beneath it stands where the link reaches (infra/mount.h
-         * mount_resolve): locating here is what makes every join below a location,
-         * and every probe over them exact. */
-        const char *directory = NULL;
-        err = mount_locate(mounts, row->filesystem_path, ws->arena, &directory);
-        if (err) {
-            err = error_wrap(err, "Failed to locate '%s'", row->filesystem_path);
-            goto cleanup;
-        }
 
         /* The same question at a root the driver reached directly: an independent
          * scan root beneath a file claim is as much beneath it as a child the
@@ -2860,7 +2826,7 @@ static error_t *analyze_untracked_files(
          * a lower row standing at it under a cleaner spelling could have offered
          * — the view's word about the directory is its owner's. */
         const manifest_row_t *blob = NULL;
-        err = blob_over(ws->manifest, directory, row->filesystem_path, ws->arena, &blob);
+        err = blob_over(ws->manifest, row->filesystem_path, ws->arena, &blob);
         if (err) goto cleanup;
         if (blob) continue;
 
@@ -2882,14 +2848,13 @@ static error_t *analyze_untracked_files(
          * where it stops. */
         const scan_t scan = {
             .ws            = ws,
-            .mounts        = mounts,
             .roots         = roots,
             .root_count    = root_count,
             .profile       = row->profile,
             .rules         = rules,
             .source_filter = source_filter,
         };
-        err = scan_directory_for_untracked(&scan, directory, 0);
+        err = scan_directory_for_untracked(&scan, row->filesystem_path, 0);
         if (err) goto cleanup;
     }
 

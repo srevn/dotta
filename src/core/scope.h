@@ -123,8 +123,8 @@ typedef struct scope_inputs {
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
  * @param mounts Per-machine mount table covering enabled profiles (must not be
- *               NULL; arena-borrowed; consumed by pathspec_create only, to locate
- *               the filesystem shapes — scope_t does not store it)
+ *               NULL; arena-borrowed; consumed by pathspec_create only, which
+ *               hands it to the resolver — scope_t does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
  *               and the path filter; must outlive the returned scope (must not
  *               be NULL)

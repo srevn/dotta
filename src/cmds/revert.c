@@ -868,12 +868,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Step 7: the place both trees may be asked about. A location argument is
      * one already; a typed name resolves to one through the profile's own binding.
      *
-     * The location argument's own spelling is used rather than resolving a name
-     * back through the table: the two agree everywhere but the stated edge
-     * (infra/mount.h mount_resolve — a claim of the very link a binding is declared
-     * through stands at the link, where locate reads the link through to the
-     * target), and where they part it is the argument that is right.
-     *
      * NULL is a custom/ name this machine cannot place. Then the name is the
      * only key there is: the commit is asked for it alone, nothing can be shown
      * to collide with it, and two such names are both manifest_unbound — the

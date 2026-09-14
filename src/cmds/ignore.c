@@ -822,15 +822,13 @@ static bool stands_as_directory(
  *     only where nothing of the profile's stands above the location do its roots
  *     answer. That is the whole reason a view is built here.
  *
- * The shape is read by mount_spec_for_path and not by the resolver, for two
- * reasons. A bare name is a filesystem argument here — `dotta ignore --test
- * foo.log` reads it against the working directory, as add's grammar does — and
- * path_input_resolve refuses one, its callers' first positional being a profile.
- * And the resolver answers the shape and locates in one call, where the shape
- * is what says whether there is a view to locate through: the location has to
- * key against the view's rows by strcmp, and the rows were placed by the view's
- * own table (core/manifest.h manifest_mounts). The one question that can be asked
- * before the table is chosen is the pure label test, which touches none.
+ * The shape is read by mount_spec_for_path and not by the resolver: a bare name
+ * is a filesystem argument here — `dotta ignore --test foo.log` reads it against
+ * the working directory, as add's grammar does — and path_input_resolve refuses
+ * one, its callers' first positional being a profile. The key is then the
+ * normalizer's own answer, which is what the view's rows are keyed by too
+ * (infra/mount.h), so it is read before the view is built and a refusal is a
+ * plain return.
  *
  * The path need not exist: a trailing slash on one that does not is the directory
  * hint, so directory-only patterns (`cache/`) can be tested. The rules are
@@ -919,8 +917,22 @@ static error_t *test_path_ignore(
         argument_name = input;
         argument_subject = mount_strip_label(input);
     } else {
+        /* The key as the normalizer spells it: absolute, folded, nothing read
+         * through. The copy is the command's because the answer outlives the
+         * call and the normalizer's is malloc's by contract (infra/path.h). */
+        char *normalized = NULL;
+        err = path_input_normalize(input, &normalized);
+        if (err) {
+            return error_wrap(err, "Failed to resolve path '%s'", input);
+        }
+        argument_location = arena_strdup(ctx->arena, normalized);
+        free(normalized);
+        if (!argument_location) {
+            return ERROR(ERR_MEMORY, "Failed to allocate path");
+        }
+
         /* Both builders free their own partial view and leave *out NULL, so this
-         * returns; from the locate on, the view is owned and every failure leaves
+         * returns; from the build on, the view is owned and every failure leaves
          * by cleanup. */
         if (specific_profile) {
             err = manifest_build_branch(
@@ -934,16 +946,6 @@ static error_t *test_path_ignore(
         /* The table the rows were placed by — the named profile's arm hands in
          * the very table this lends back (core/manifest.h manifest_mounts). */
         mounts = manifest_mounts(view);
-
-        char *absolute = NULL;
-        err = path_input_normalize(input, &absolute);
-        if (err) {
-            err = error_wrap(err, "Failed to resolve path '%s'", input);
-            goto cleanup;
-        }
-        err = mount_locate(mounts, absolute, ctx->arena, &argument_location);
-        free(absolute);
-        if (err) goto cleanup;
     }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
@@ -1000,11 +1002,11 @@ static error_t *test_path_ignore(
         }
     }
 
-    /* The kind a located argument is asked with: one reading for every asker,
+    /* The kind a filesystem argument is asked with: one reading for every asker,
      * so one observation and no asker to name it. Taken after the preamble rather
-     * than at the locate, so the note it may print stands under the same header
-     * the per-asker notes of a storage name stand under — one command saying
-     * one thing in one order. */
+     * than where the key was read, so the note it may print stands under the
+     * same header the per-asker notes of a storage name stand under — one command
+     * saying one thing in one order. */
     if (argument_location) {
         argument_is_directory = stands_as_directory(
             "", test_path, argument_location, trailing_slash, out

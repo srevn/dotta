@@ -83,6 +83,10 @@ Files already stored stay where they are; only new ones follow the directory. (I
 
 Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of `root/` and `custom/` paths that belong to someone else. A path the invoker owns needs no owner recorded — every machine reads that absence as "whoever is running dotta". Metadata is captured during `add`/`update` and restored during `apply`.
 
+### Spellings and Symlinks
+
+A path is keyed by the spelling it was given: your home as `$HOME` spells it, `/`, and a target as you gave it to `--target`. A symlink in a path is part of the path — dotta never reads through one, and a `..` after a link pops the link's spelling, not the directory it reaches. A working directory your shell did not spell (`sudo`, `cron`) is read back under your home. A path dotta walks is spelled the way it walked there. Two profiles that reach one file through two spellings are two paths, both deployed; dotta never unlinks or re-offers a file it manages under another spelling, and a filesystem that folds case or Unicode normalization is read the same way. A profile's target keeps the spelling you bound it with — `dotta profile enable --target` with another spelling of the same directory says so and keeps the row — and `profile disable` tells you that spelling back.
+
 ## Directories
 
 Dotta remembers two kinds of directory, and treats them very differently.

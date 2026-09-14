@@ -559,10 +559,10 @@ error_t *metadata_capture_from_directory(
  *
  * The name is the whole input, and every rung stands where its own name resolves
  * (mount_resolve, under `profile`'s bindings): the chain's own separators spell
- * every ancestor, and the table says where each one of them is. A location cut
- * short would not do — a declared alias is read through beneath itself and not
- * at itself, so `home/link` is the link and `home/link/sub` the directory that
- * link names, two rungs at two places no shared tail relates.
+ * every ancestor, and the table says where each one of them is. The climb carries
+ * one string, not a pair that must agree — a resolve is a root's spelling and a
+ * tail, so the leaf's location cut short would land the same bytes, at the cost
+ * of a second string the caller must have got right; one producer places a name.
  *
  * Per rung, root-first:
  *   - a tracked claim standing at the key is the walk's own word and is left

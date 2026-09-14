@@ -16,9 +16,9 @@
  * has a subject — has none here, and each rule is parsed and asked on its own
  * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
  * a tail: the components before the first that holds a wildcard are a directory
- * spelling, located and compared literally; the rest is the pattern, rooted there
- * as a `.gitignore` is rooted in its directory. The rungs are the matcher's own
- * walk.
+ * spelling, normalized and compared literally; the rest is the pattern, rooted
+ * there as a `.gitignore` is rooted in its directory. The rungs are the matcher's
+ * own walk.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
@@ -53,27 +53,26 @@ typedef struct {
  *
  * An input holding a glob metacharacter ('*', '?', '[') is a rule; any other is
  * an exact entry in the key it names (path_input_resolve: a filesystem shape
- * located through `table`, a storage path validated and kept as typed). Two inputs
- * naming one key — two spellings of one location, one storage path typed twice
- * — are one exact entry; a name beside a location is two, since they are two
- * keys. Rules are never collapsed: their order is their meaning.
+ * normalized, a storage path validated and kept as typed). Two inputs naming
+ * one key — two spellings of one location, one storage path typed twice — are
+ * one exact entry; a name beside a location is two, since they are two keys.
+ * Rules are never collapsed: their order is their meaning.
  *
  * Glob rules:
  *   - Basename-only globs ("*.vim") match at any depth
  *   - Patterns containing '/' must use storage format (home/, root/, custom/),
  *     start with doublestar (recursive) or single star, or be a filesystem shape
  *     (absolute, tilde, relative dot): the components before the first that holds
- *     a wildcard are a directory, located through `table` and compared literally,
- *     and the rest is the pattern rooted there — `~/<star>.conf` is the conf
- *     files directly under HOME, `~/.config/<star><star>/<star>.lua` every lua
- *     beneath `.config`, `~/myd<star>/` the directories directly under HOME whose
- *     name says so (the trailing '/' is gitignore's directory marker, and the
- *     tail is never normalized). What HOME, the working directory or a declared
- *     alias insert is never pattern syntax; what the user typed past the wildcard
- *     is. A wildcard in the first component is rooted where the first byte says:
- *     `/<star>/etc` at the root, `.<star>/x` at the working directory (a leading
- *     dot is relative, as the resolver reads it); `~<star>/x` is no tilde path
- *     and is refused.
+ *     a wildcard are a directory, normalized and compared literally, and the
+ *     rest is the pattern rooted there — `~/<star>.conf` is the conf files directly
+ *     under HOME, `~/.config/<star><star>/<star>.lua` every lua beneath `.config`,
+ *     `~/myd<star>/` the directories directly under HOME whose name says so (the
+ *     trailing '/' is gitignore's directory marker, and the tail is never
+ *     normalized). What HOME or the working directory inserts is never pattern
+ *     syntax; what the user typed past the wildcard is. A wildcard in the first
+ *     component is rooted where the first byte says: `/<star>/etc` at the root,
+ *     `.<star>/x` at the working directory (a leading dot is relative, as the
+ *     resolver reads it); `~<star>/x` is no tilde path and is refused.
  *   - The shape is read past a leading '!', so a negation is a rule in either
  *     vocabulary
  *   - A glob the grammar refuses — a comment (a leading '#'), two lines, one
@@ -83,16 +82,16 @@ typedef struct {
  * NULL / empty inputs short-circuit: `*out` is NULL (matches all). A NULL pathspec
  * passed to pathspec_matches matches all paths.
  *
- * `table` must be non-NULL even when no custom mounts are configured — callers
- * without state pass a zero-decl table so HOME and the root sentinel are still
- * available for locating a filesystem shape.
+ * `table` must be non-NULL even when no custom mounts are configured — the
+ * resolver's own precondition (infra/path.h); a location is the normalizer's
+ * answer, and the table is otherwise unread.
  *
  * The pathspec and everything in it are the arena's; nothing is freed.
  *
  * @param inputs User-provided strings, each NUL-terminated (may be NULL when
  *               count is 0)
  * @param count  Number of inputs
- * @param table  Mount table for locating filesystem shapes (must not be NULL)
+ * @param table  Mount table, handed to the resolver (must not be NULL)
  * @param arena  Arena backing the pathspec (must not be NULL, must outlive it)
  * @param out    Pathspec or NULL when inputs were empty (must not be NULL)
  * @return Error or NULL on success
@@ -129,11 +128,7 @@ error_t *pathspec_create(
  * written in, which two rulesets OR'd would have broken. The last storage rung
  * is the label, as gitignore's walk stops at the last component: `*.conf` reaches
  * a conf at any depth, `cache/` a file beneath any cache directory, and a bare
- * rule meets the label itself at the last rung. Beneath a declared alias whose
- * physical depth differs from its spelling's, the rungs above the alias drift
- * apart; each rule still reads its own subject at its own rung, and only a tie
- * between a location rule and a storage rule deciding at one count is then between
- * two directories.
+ * rule meets the label itself at the last rung.
  *
  * `kind` is the manifest's kind of the path (a tracked directory squatted by a
  * file is still a directory): gitignore's directory-only rules (`dir/`) match a

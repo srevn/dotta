@@ -830,7 +830,7 @@ static error_t *profile_enable(
              * verb's subject, and state_enable_profile's UPSERT arm updates it
              * in place. Only another directory is work — the row's own, under
              * its spelling or another (mount_same_target), is an idempotent re-run
-             * and stays the quiet skip below, the row's spelling kept. */
+             * and stays the skip below, the row's spelling kept. */
             if (target) {
                 const char *current = state_peek_profile_target(state, profile);
                 if (!current || !mount_same_target(current, target)) {
@@ -843,6 +843,19 @@ static error_t *profile_enable(
                         goto cleanup;
                     }
                     continue;
+                }
+                /* The row's own directory, spelled another way: the binding stands
+                 * and keeps the spelling its binder typed, because that spelling
+                 * is the key of every path beneath it (infra/mount.h). Said at
+                 * NORMAL: the user typed a flag and it was not written, and the
+                 * row's spelling — not theirs — is the one their next argument
+                 * is read under. */
+                if (strcmp(current, target) != 0) {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "  %s is already bound at %s — the same directory, "
+                        "spelled another way", profile, current
+                    );
                 }
             }
             output_info(out, OUTPUT_VERBOSE, "  %s already enabled", profile);

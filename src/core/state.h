@@ -852,7 +852,11 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
  * read verifies against live disk before trusting it, and the sweep retires what
  * disk provably left. A rekey'd repository leaves old released rows permanently
  * UNVERIFIED at the read; they die by the same sweep or the flush's join when
- * the path is re-owned.
+ * the path is re-owned. A copy written at a stale key — a path still standing
+ * under another spelling, released because a row of the view stands on its very
+ * entry (core/workspace.c) — is true and unread for as long as the file stands:
+ * it dies when the file goes through that other spelling, or when the record
+ * returns to this key.
  *
  * A missing record is success: nothing observed, nothing to remember.
  *

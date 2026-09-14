@@ -31,8 +31,9 @@
  * - what becomes of a present orphan, either kind: cleanup_verdict, from the
  *   item — RELEASED ⇒ released (left on disk, record retires — never pruned,
  *   --force included: dotta removes what it deployed and Git still backs, and
- *   lets go of what Git lost, of what it never deployed, and of a path another
- *   kind of node stands at); a relocated home/ claim ⇒ skipped unless --force,
+ *   lets go of what Git lost, of what it never deployed, of a path another kind
+ *   of node stands at, and of a key that spells a path a row stands on under
+ *   another spelling); a relocated home/ claim ⇒ skipped unless --force,
  *   either kind (the copy is the claim's old home — see the verdict table);
  *   a file with a cleanup_skip_reason ⇒ skipped unless --force; a directory the
  *   workspace could not verify ⇒ skipped, --force included; else prunable, a

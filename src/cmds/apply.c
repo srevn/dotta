@@ -1342,9 +1342,14 @@ static void print_cleanup_preview(
      * — not a remedy, which stands off — and that closing line carries the half
      * the header cannot: pruned removes and released keeps, and only the line
      * under the rows says which. The causes are not listed: a release is the
-     * workspace's verdict (state RELEASED), and cleanup has no per-row reason
-     * for it the way cleanup_skip_reason answers for a skip, so the only honest
-     * form would be a disjunction naming all three at every row. */
+     * workspace's verdict (state RELEASED) and has four — Git let go, dotta never
+     * deployed it, another kind of path stands there, or the record is a stale
+     * key of a path a row stands on under another spelling — and cleanup has no
+     * per-row reason for it the way cleanup_skip_reason answers for a skip, so
+     * the only honest form would be a disjunction naming all four at every row.
+     * Hence the one thing true of all four: nothing on disk was touched. The
+     * old second half ("no longer managed by dotta") was false of the fourth,
+     * which is about a file this same run may adopt eleven lines above. */
     if (released.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Released files");
 
@@ -1357,7 +1362,7 @@ static void print_cleanup_preview(
 
         output_info(
             out, OUTPUT_NORMAL,
-            "  These paths are left on disk, no longer managed by dotta."
+            "  Nothing on disk was touched; dotta's records of these paths are released."
         );
     }
 }
@@ -2052,7 +2057,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * "Would adopt N file(s)".
      *
      * deploy_plan->files.clean IS "in scope ∧ no work" — no gates re-derived
-     * here. */
+     * here. Which is what decides the row a release left standing: the workspace's
+     * guard releases the record of a path a row stands on under another spelling
+     * (core/workspace.c standing_row), and this loop adopts that row only where
+     * it reads clean. A release beside a [modified] row, or a conflict, adopts
+     * nothing, and the path leaves the ownership gate until a forced apply or
+     * an update converges it; [stale] alone is deployed and anchored by the same
+     * run. */
     size_t adopted_count = 0;
     size_t acknowledged_count = 0;
     manifest_rows_t adoptable = manifest_rows_view(&deploy_plan->files.clean);
@@ -2138,7 +2149,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * event for a directory, apply's observation is not — an apply that adopted
      * every pre-existing clean parent would own it and prune it at scope exit.
      * A recordless clean directory stays the flush's observation, exactly as
-     * before. */
+     * before — and a directory record the workspace's guard released comes back
+     * observed for the same reason, where an owned one was pruned. */
     manifest_rows_t ackable = manifest_rows_view(&deploy_plan->directories.clean);
 
     for (size_t i = 0; i < ackable.count; i++) {

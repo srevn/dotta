@@ -23,6 +23,7 @@
 #include <config.h>
 #include <errno.h>
 #include <grp.h>
+#include <limits.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,6 +94,30 @@ typedef struct {
     size_t len;                   /* strlen(path), hoisted for str_path_beneath */
     workspace_displaced_t claim;  /* TRACKED / DERIVED (a view row's), RECORD (a record's) */
 } displaced_dir_t;
+
+/**
+ * One entry the load knows, and what stands on it
+ *
+ * An entry is a name in a directory; a key is one spelling of it, and the two
+ * facts the load holds about a path — a row of the view, a record — are keyed
+ * by spelling. This is the one place the load reads the entry itself: the (dev,
+ * ino) one lstat of the key gave, beside the row observed at that key or the
+ * orphan record that remembers it. Exactly one of the two is set, because the
+ * index is filled in two passes over two disjoint sets — the view's rows stand
+ * at their own keys, and an orphan record is by definition a key no row stands at.
+ *
+ * Built once per load for the two verbs that act on an entry through a string
+ * (index_entries), met by identity (find_entries) and never by string: both readers
+ * asked the strings first, and this answers only where they could not. The
+ * carriers' `.entries` (manifest_rows_t, workspace_items_t) are their own elements;
+ * these are the disk's.
+ */
+typedef struct {
+    dev_t dev;                     /* The entry, from one lstat of the key */
+    ino_t ino;
+    const manifest_row_t *row;     /* The view's row standing on it, or NULL */
+    const anchor_t *anchor;        /* The orphan record standing on it, or NULL */
+} entry_t;
 
 /**
  * Workspace structure
@@ -180,6 +205,15 @@ struct workspace {
      * (workspace_displaced_ancestor) free. */
     displaced_dir_t *displaced;                  /* One per displaced directory; NULL until the first */
     size_t displaced_count;
+
+    /* The entries: every winning row observed at its own key and every orphan
+     * record, by the (dev, ino) that key names — the load's one look at the disk
+     * by identity, for the two verbs that act on an entry through a string:
+     * cleanup's unlink (the orphan analysis's guard) and the scan's offer (the
+     * leaf probe). Sorted by identity; built by index_entries only on a load
+     * one of the two may ask in, else NULL and none. */
+    entry_t *entries;                            /* Arena; sorted by (dev, ino) */
+    size_t entry_count;
 
     /* Confirmations accumulated during divergence analysis */
     confirmation_t *confirmations;               /* Pending slow-path confirmations (owned) */
@@ -388,8 +422,9 @@ static error_t *workspace_add_diverged(
  *
  * The untracked scan found a new file inside a tracked directory: no row (the
  * view does not claim the path), no record (dotta has no memory of having managed
- * it). The walk's leaf guard asks both, so a path either of them holds never
- * reaches here. State, divergence and kind are the constants of the state.
+ * it). The walk's leaf guard asks the view and the record, by string and by entry,
+ * so a path either of them holds under any spelling never reaches here. State,
+ * divergence and kind are the constants of the state.
  *
  * This is the one door the walk's strings leave their frame through, and it copies
  * them rather than aliasing: the location the walk joined and the name the namer
@@ -1602,6 +1637,321 @@ static void compute_orphan_authority(
 }
 
 /**
+ * Order two entries by identity (qsort callback): device, then inode
+ *
+ * The pair one lstat names, so every entry standing on one file is adjacent and
+ * find_entries reads the run. Compared and never subtracted: dev_t is signed on
+ * some platforms and unsigned on others, and a difference is not an order.
+ *
+ * No axis in the name, where compare_rows_by_path carries one: a row can be ordered
+ * by any of the things it holds, and an entry is its identity.
+ */
+static int compare_entries(const void *a, const void *b) {
+    const entry_t *ea = a;
+    const entry_t *eb = b;
+
+    if (ea->dev != eb->dev) return ea->dev < eb->dev ? -1 : 1;
+    if (ea->ino != eb->ino) return ea->ino < eb->ino ? -1 : 1;
+
+    return 0;
+}
+
+/**
+ * The entries standing on one file: the first, and how many
+ *
+ * The lower bound of the identity the caller's lstat gave, then the run of equals
+ * — two rows on one file through a hard link, or two spellings of one entry both
+ * enabled (the two-writers class, infra/mount.h), are adjacent by the sort, in
+ * an order within the run the sort does not fix (qsort is not stable, and the
+ * comparator reads identity alone) and no reader may depend on.
+ *
+ * An empty answer is the empty index's and never a mode: the gate that builds
+ * the index is the two readers' own preconditions spelled once (workspace_load),
+ * so every ask is made on a load it exists in. A reader outside that gate would
+ * read "nothing stands here" for "nobody looked", which on the orphan arm means
+ * prunable. find_scan_root's verb, for the same question over the other (dev,
+ * ino) array.
+ *
+ * @param ws    Workspace (must not be NULL)
+ * @param st    The subject's own lstat; its identity is the key (must not be NULL)
+ * @param count Receives how many entries stand there (must not be NULL)
+ * @return The first of the run, or NULL when none stands there
+ */
+static const entry_t *find_entries(
+    const workspace_t *ws, const struct stat *st, size_t *count
+) {
+    const entry_t key = { .dev = st->st_dev, .ino = st->st_ino };
+    size_t lo = 0;
+    size_t hi = ws->entry_count;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+
+        if (compare_entries(&ws->entries[mid], &key) < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    size_t n = 0;
+    while (lo + n < ws->entry_count &&
+        compare_entries(&ws->entries[lo + n], &key) == 0) {
+        n++;
+    }
+
+    *count = n;
+    return n > 0 ? &ws->entries[lo] : NULL;
+}
+
+/**
+ * The directory a path is an entry of, by identity
+ *
+ * stat(2) of the parent, through a link standing at any rung — the chain two
+ * spellings of one entry differ in (cleanup's parent_accepts_removal takes the
+ * parent the same way). A path this cannot take apart — not absolute, or longer
+ * than any the kernel takes — cannot happen to a key that was just lstat'ed,
+ * and answers as a look that did not happen, which is its one caller's rule for it.
+ *
+ * @param path Canonical absolute path (must not be NULL)
+ * @param st Receives the parent's stat (must not be NULL)
+ * @return true when the parent was stat'd
+ */
+static bool stat_parent(const char *path, struct stat *st) {
+    size_t len = str_path_parent_len(path);
+    char parent[PATH_MAX];
+
+    if (len == 0 || len >= sizeof(parent)) {
+        return false;
+    }
+
+    memcpy(parent, path, len);
+    parent[len] = '\0';
+
+    return fs_stat(parent, st) == 0;
+}
+
+/**
+ * Do two spellings that reach one file name one directory entry?
+ *
+ * Asked only once the file is one: the caller met `other` among the entries
+ * standing on the (dev, ino) `st` names. A file with one name is one entry however
+ * it is spelled — st_nlink counts the names — and so is a directory, whatever
+ * its st_nlink says (2 + children: the '.' and '..' links, never a second name,
+ * POSIX forbidding user-created directory hard links). So the symlink alias,
+ * the declared alias, the dangling link under two spellings and a name the volume
+ * folds (case, Unicode normalization: one entry at two strings, measured deleting
+ * a managed file through a name compare) all pair here.
+ *
+ * A multiply-linked regular file has several names, and two of its spellings
+ * are one entry only when they name it the same way in one directory: the names
+ * by bytes, the directories by identity. Two hard links are two entries — unlinking
+ * one leaves the other — so the one that is this name in this directory is this
+ * path, and no other is. A parent that cannot be stat'd pairs nothing: the orphan
+ * stays an orphan, the leaf stays an offer, the way every failed look in this
+ * file is the item's and never the load's.
+ *
+ * The one shape the bytes cannot see: a multiply-linked file spelled two ways
+ * in one directory by the volume's own fold. Two hard links cannot bear such
+ * names in one directory — the volume refuses the second — so it takes a hard
+ * link elsewhere as well, and the pair reads as two entries. Stated, not closed.
+ *
+ * @param path The subject's key (must not be NULL)
+ * @param other A key standing on the same (dev, ino) (must not be NULL)
+ * @param st The subject's lstat — nlink and the mode are the inode's, which both
+ *           spellings share (must not be NULL)
+ */
+static bool same_entry(const char *path, const char *other, const struct stat *st) {
+    if (st->st_nlink == 1 || S_ISDIR(st->st_mode)) {
+        return true;
+    }
+
+    const char *name = strrchr(path, '/');
+    const char *other_name = strrchr(other, '/');
+    if (!name || !other_name || strcmp(name + 1, other_name + 1) != 0) {
+        return false;
+    }
+
+    struct stat parent;
+    struct stat other_parent;
+
+    return stat_parent(path, &parent) && stat_parent(other, &other_parent) &&
+           parent.st_dev == other_parent.st_dev && parent.st_ino == other_parent.st_ino;
+}
+
+/**
+ * The winning row standing on the entry a path names, under another spelling
+ *
+ * The partition asked by string — no row stands at the path, or it would not be
+ * an orphan; the scan's leaf probe asked the view by the walk's spelling — and
+ * this asks of the entry: is there a row of the view whose file is this file
+ * (find_entries), whose key is a spelling of this very entry (same_entry)? `st`
+ * is the caller's own lstat of `path`, which both readers hold, so an ask costs
+ * a binary search and, for a hard link, two stats of parents. It allocates nothing
+ * and cannot fail: a failure here would have to read as "no row", which on the
+ * orphan arm means prunable.
+ *
+ * Any row that pairs, in an order the sort does not fix: both readers ask whether
+ * one stands, never which — a scan root is a selection with a winner (scan_root_t);
+ * this is not.
+ *
+ * Readers: the orphan analysis's BACKED arm — a stale key of a managed path is
+ * released, never pruned, whoever's row; the record's own claim standing on the
+ * same entry was the special case of this the compare here used to make — and
+ * the untracked scan's leaf probe: a file managed under another spelling of its
+ * path is no discovery.
+ */
+static const manifest_row_t *standing_row(
+    const workspace_t *ws, const char *path, const struct stat *st
+) {
+    size_t count = 0;
+    const entry_t *entries = find_entries(ws, st, &count);
+
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i].row && same_entry(path, entries[i].row->filesystem_path, st)) {
+            return entries[i].row;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * The orphan record standing on the entry a path names, under another spelling
+ *
+ * standing_row's twin over the record: a path dotta remembers is no discovery
+ * (workspace_get_anchor at the leaf probe), and this is that rule read by identity
+ * — a record at another spelling of the child's entry is an orphan cleanup is
+ * about to prune, release or hold, and it holds the child back until it is retired
+ * exactly as the same record at the child's own spelling does. Without it one
+ * screen promised a commit and a deletion of one file.
+ *
+ * Its own loop rather than a flag on the one above: each is a question with its
+ * own reader, and the leaf probe wants probes that read alike in one chain. Neither
+ * could return the first entry of the run instead — the guard needs the first
+ * entry *with a row*, and an orphan's own record can sort ahead of the row in
+ * the run.
+ *
+ * Reader: the untracked scan's leaf probe.
+ */
+static const anchor_t *standing_record(
+    const workspace_t *ws, const char *path, const struct stat *st
+) {
+    size_t count = 0;
+    const entry_t *entries = find_entries(ws, st, &count);
+
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i].anchor &&
+            same_entry(path, entries[i].anchor->filesystem_path, st)) {
+            return entries[i].anchor;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * The load's look at where every row and every orphan record stands
+ *
+ * One lstat per winning row of either kind and per orphan record, the entry it
+ * found kept beside its source and sorted by identity, so a reader's ask is a
+ * binary search (find_entries). Two passes over two disjoint sets — the view's
+ * rows all stand at their own keys, and an orphan is exactly a record no row
+ * stands at — which is what makes each element one or the other (entry_t).
+ *
+ * Three looks decide whether a key names an entry its claim may vouch by, and
+ * each of them drops rather than keeps:
+ *   - a key beneath a displaced directory: its lstat reached the squatter's target,
+ *     which every verdict refuses to act on, so it must vouch for nothing — the
+ *     scan driver's own rule for a root (workspace_displaced_ancestor, complete
+ *     for the view's claims once the
+ *     directory analysis has run, which is why this phase follows it);
+ *   - a key that does not stand — [undeployed], a chain the invoker cannot read:
+ *     an absent row is not the entry a present orphan stands on;
+ *   - a key another kind of node holds — a directory claim with a symlink or a
+ *     file in its place, a file claim with a directory: a squatted claim's own
+ *     lstat is the squatter's, so the entry it names is exactly the one the
+ *     verdicts refuse. The retyped arm's rule read at the build (analyze_orphans:
+ *     two occupants cannot share an inode, a claim and an occupant can), and
+ *     the probe above is why it is needed — that one answers for proper ancestors
+ *     alone, so a claim whose own path is squatted is one rung past its reach.
+ *
+ * Dropping withholds — a release where a prune was right, an offer deferred a
+ * run; keeping wrongly prunes a managed file or offers one twice. That direction
+ * is why each look is named here, and why a fourth would have to be argued rather
+ * than added. The record's own squatters need no look of their own: the orphan
+ * analysis notes those and has not run yet, and a record-side squatter is by
+ * definition a directory record another kind of node stands at — the third look.
+ * A record *beneath* one keeps its entry and withholds an offer for the run,
+ * which is the direction above.
+ *
+ * The lstats are this phase's own. Not the analyses': a look taken there is the
+ * item's, and its answer must not depend on which analyses a caller asked for
+ * (the leaf probe's record guard learned that, workspace_load_t). Not the scan's:
+ * its roots are a selection over the tracked directories — the later profile
+ * wins a directory — not an index (scan_root_t). One allocation sized by the
+ * view's rows and the orphans; the cost is rows + orphans syscalls once, on a
+ * load a reader will run in, and nothing at all on any other. A later shape that
+ * kept one look per path on the join would replace the two fs_lstat lines here
+ * and move no reader.
+ *
+ * Readers: standing_row (the orphan analysis's BACKED arm, the untracked scan's
+ * leaf probe), standing_record (the leaf probe).
+ *
+ * @param ws Workspace (must not be NULL)
+ * @return Error or NULL on success
+ */
+static error_t *index_entries(workspace_t *ws) {
+    manifest_rows_t rows = manifest_rows(ws->manifest);
+    size_t cap = rows.count + ws->orphan_count;
+
+    if (cap == 0) {
+        return NULL;
+    }
+
+    ws->entries = arena_calloc(ws->arena, cap, sizeof(*ws->entries));
+    if (!ws->entries) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the entries");
+    }
+
+    for (size_t i = 0; i < rows.count; i++) {
+        const manifest_row_t *row = rows.entries[i];
+        struct stat st;
+
+        if (workspace_displaced_ancestor(ws, row->filesystem_path)) continue;
+        if (fs_lstat(row->filesystem_path, &st) != 0) continue;
+
+        bool is_dir = S_ISDIR(st.st_mode);
+        if (is_dir != (row->type == PATH_TYPE_DIRECTORY)) continue;
+
+        ws->entries[ws->entry_count++] = (entry_t){
+            .dev = st.st_dev, .ino = st.st_ino, .row = row,
+        };
+    }
+
+    for (size_t i = 0; i < ws->orphan_count; i++) {
+        const anchor_t *anchor = ws->orphans[i];
+        struct stat st;
+
+        if (workspace_displaced_ancestor(ws, anchor->filesystem_path)) continue;
+        if (fs_lstat(anchor->filesystem_path, &st) != 0) continue;
+
+        bool is_dir = S_ISDIR(st.st_mode);
+        if (is_dir != (anchor->type == PATH_TYPE_DIRECTORY)) continue;
+
+        ws->entries[ws->entry_count++] = (entry_t){
+            .dev = st.st_dev, .ino = st.st_ino, .anchor = anchor,
+        };
+    }
+
+    qsort(
+        ws->entries, ws->entry_count, sizeof(*ws->entries), compare_entries
+    );
+
+    return NULL;
+}
+
+/**
  * Analyze the orphans — the records whose path the view lacks
  *
  * Each was set aside by workspace_partition because no active row names its path:
@@ -1642,18 +1992,19 @@ static void compute_orphan_authority(
  *     to prune, divergence permitting — and carries the relocation read: a BACKED
  *     orphan whose claim still has a row elsewhere in the view rides that row
  *     on the item, and the storage label picks the fate (cleanup_verdict).
- *     Elsewhere is another file, by inode, never merely another string: a row
- *     standing on the record's own file under another spelling of its path (a
- *     target bound through a symlink, a HOME spelled two ways) makes the record
- *     a stale key, RELEASED, so the one copy is never pruned as the old one —
- *     apply adopts the row under its spelling and retires the key; UNVERIFIED
- *     holds the orphan until Git answers — either kind: LOST would retire the
- *     record, BACKED would remove the copy, and neither is a guess to make about
- *     an empty directory any more than about a file. Held and not measured: no
- *     reader shows a bit beside UNVERIFIED, so a compare would only give the
- *     item a second reason for the one fate it already has. The probe raises
- *     nothing, so a lookup it could not make is this orphan's hold and never
- *     the load's — the rule the file analyzer takes for its own looks.
+ *     Elsewhere is another entry, never merely another string, and the guard is
+ *     asked first: a row standing on the record's very entry under another spelling
+ *     of its path — whoever's — makes the record a stale key, RELEASED, so the
+ *     one copy is never pruned as the old one (standing_row). A target bound
+ *     through a symlink, a HOME spelled two ways, a name the volume folds; apply
+ *     adopts the row under its spelling and retires the key; UNVERIFIED holds
+ *     the orphan until Git answers — either kind: LOST would retire the record,
+ *     BACKED would remove the copy, and neither is a guess to make about an empty
+ *     directory any more than about a file. Held and not measured: no reader
+ *     shows a bit beside UNVERIFIED, so a compare would only give the item a
+ *     second reason for the one fate it already has. The probe raises nothing,
+ *     so a lookup it could not make is this orphan's hold and never the load's
+ *     — the rule the file analyzer takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
@@ -1671,9 +2022,9 @@ static void compute_orphan_authority(
  * - DIVERGENCE_CONTENT/TYPE -> Modified, apply will skip
  * - DIVERGENCE_MODE/OWNERSHIP -> Metadata changed, apply will skip
  * - DIVERGENCE_UNVERIFIED -> Cannot verify, apply will skip
- * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, the row
- *   stands on this file under another spelling of its path, or (with
- *   DIVERGENCE_TYPE) another kind of path stands there; apply releases
+ * - WORKSPACE_STATE_RELEASED -> Git let go, dotta never deployed it, a row of
+ *   the view stands on this very entry under another spelling of its path, or
+ *   (with DIVERGENCE_TYPE) another kind of path stands there; apply releases
  *
  * Presence comes first, so an absent record never reaches a RELEASED arm: whatever
  * Git would have said, it reads [orphaned] [absent] and apply reclaims it. The
@@ -1722,9 +2073,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         divergence_type_t divergence = DIVERGENCE_NONE;
         workspace_fault_t fault = WORKSPACE_FAULT_NONE;
 
-        /* The relocated claim's row, set only where the probe answers BACKED:
-         * the record's own (profile, storage path) claim, still in the view,
-         * standing at a different file. See the read below. */
+        /* The relocated claim's row, set only where the probe answers BACKED
+         * and no row of the view stands on this very entry: the record's own
+         * (profile, storage path) claim, still in the view, standing at another
+         * file. See the reads below. */
         const manifest_row_t *row = NULL;
 
         /* Whether the copy can be measured at all: a directory against cleanup's
@@ -1812,49 +2164,46 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 /* Git cannot back the path. Left on disk, record retires — so
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
+            } else if (occupant != FS_OCCUPANT_UNKNOWN &&
+                standing_row(ws, fs_path, &orphan_stat)) {
+                /* The guard — BACKED only, which is what these two arms are. A
+                 * row of the view stands on this very entry under another spelling
+                 * of its path: this profile's own claim after its root was
+                 * re-spelled, another profile's through a link no binding names,
+                 * a name the volume folds. The record is a stale key of a managed
+                 * path, not a copy left behind — released, and the path stays
+                 * for the row standing on it; what becomes of that row is apply's
+                 * adoption, which reads its own gates (cmds/apply.c).
+                 *
+                 * By the entry and never by a name compare: a volume that folds
+                 * case or normalization stands one entry at two strings, and
+                 * cleanup was measured deleting a managed file through that fold.
+                 * An occupant that could not be stat'd is not asked and falls
+                 * through: orphan_stat is filled for a present occupant alone
+                 * (fs_lstat_occupant), so the two conjuncts keep this order. */
+                item_state = WORKSPACE_STATE_RELEASED;
             } else {
-                /* The relocation read — BACKED only, which is what this arm is:
-                 * a relocated orphan is an orphan whose claim still has a row.
-                 * The record's own (profile, storage path) pair is asked of the
-                 * view; a row found here always projects to another string —
-                 * the partition orphaned this record precisely because no view
-                 * row stands at its filesystem path, this row included — so the
-                 * claim deploys at a new location now: a moved custom/ target,
-                 * a different $HOME. The item carries it (item->row non-NULL on
+                /* The relocation read: a relocated orphan is an orphan whose
+                 * claim still has a row, standing at another file. The record's
+                 * own (profile, storage path) pair is asked of the view; a row
+                 * found here always projects to another string — the partition
+                 * orphaned this record precisely because no view row stands at
+                 * its filesystem path, this row included — and, after the guard
+                 * above, to another entry: a root re-spelled under another name
+                 * of one directory is the guard's, not a relocation. So the claim
+                 * deploys at a new location now: a moved custom/ target, a
+                 * different $HOME. The item carries it (item->row non-NULL on
                  * an ORPHANED item IS the relocation; the label picks the fate
                  * at cleanup_verdict, and root/ never gets here — its projection
                  * is fixed). Strictly the record's own profile: a claim shadowed
                  * by another profile at its new home is not "relocated" — the
                  * copy here is simply no longer active — and the same-profile
                  * rule is what keeps workspace_reassigned false by construction
-                 * on every orphan (the profiles are equal). A LOST or unanswered
-                 * probe carries nothing: the first releases, the second holds,
-                 * and neither fate reads the row. */
-                const manifest_row_t *claim =
-                    manifest_lookup_storage(ws->manifest, storage_path, profile);
-
-                /* Another string is not always another file: a record written
-                 * under a spelling the table no longer keys by (a root that was
-                 * moved physically with a link left behind, a record from before
-                 * locations were physical), and the row stands on the very file
-                 * the record names. Only the ancestors can differ between two
-                 * spellings of one path — the tail is the claim's — so lstat on
-                 * both compares the entry itself, whatever its kind. One file:
-                 * the record is a stale key, not a copy left behind, and is
-                 * released — the path stays, and apply's adoption anchors the
-                 * row under its own spelling as owned. Two files, or a look that
-                 * could not be made: the relocation stands, and cleanup holds
-                 * or prunes the copy as any other. */
-                struct stat at_claim;
-                if (claim && occupant != FS_OCCUPANT_UNKNOWN &&
-                    fs_lstat(claim->filesystem_path, &at_claim) == 0 &&
-                    at_claim.st_dev == orphan_stat.st_dev &&
-                    at_claim.st_ino == orphan_stat.st_ino) {
-                    item_state = WORKSPACE_STATE_RELEASED;
-                } else {
-                    prunable = true;
-                    row = claim;
-                }
+                 * on every orphan (the profiles are equal). Asked on this arm
+                 * alone: it is a linear scan of the view, and the three arms
+                 * above read no row. */
+                prunable = true;
+                row = manifest_lookup_storage(ws->manifest, storage_path, profile);
             }
         }
 
@@ -2051,6 +2400,11 @@ static error_t *blob_over(
  * profile's is the one kept, the index's rule for a contested location
  * (core/manifest.c manifest_layer) applied where the keys differ; among one
  * profile's, the later in path order.
+ *
+ * The entries index (entry_t) reads the same fact off the same rows, for the
+ * two verbs that act on an entry through a string, and the two are not one
+ * structure: a root is a selection with a winner and a mutable registration, an
+ * entry an observation with a run of equals.
  */
 typedef struct {
     dev_t dev;                     /* The directory's identity */
@@ -2124,12 +2478,13 @@ typedef struct {
  * enumerate — the limit a visited set would close, left stated.
  *
  * Each kind asks the view its own question before the name, and they are not
- * the same question: a leaf asks whether its own path is already spoken for, a
- * directory whether anything beneath it can be (blob_over). That is why neither
- * needs the other's — a leaf's container was cleared before this frame entered
- * it, so a leaf climbs nothing; no offer is ever made *at* a directory, so a
- * directory asks no record. A directory the record remembers is entered like
- * any other: a record bounds what is offered, never where the walk goes.
+ * the same question: a leaf asks whether its own path is already spoken for —
+ * by its string, then by its entry — a directory whether anything beneath it
+ * can be (blob_over). That is why neither needs the other's — a leaf's container
+ * was cleared before this frame entered it, so a leaf climbs nothing; no offer
+ * is ever made *at* a directory, so a directory asks no record. A directory the
+ * record remembers is entered like any other: a record bounds what is offered,
+ * never where the walk goes.
  *
  * The order is the order. The lstat first, because the kind and the identity
  * decide every arm; the occupant skip before any lookup, because nothing can
@@ -2304,17 +2659,26 @@ static error_t *scan_directory_for_untracked(
             err = blob_over(ws->manifest, child, joined, scratch, &blob);
             if (err) goto cleanup;
             if (blob) continue;
-        } else if (manifest_lookup(ws->manifest, child) || workspace_get_anchor(ws, child)) {
-            /* Whether anything already speaks for the leaf, in descending order
-             * of standing. The view holds it: a claim of any kind puts a row at
-             * the location, a directory row at a file's path being the [type]
-             * the directory analysis said. The record holds it: dotta managed
-             * the path and has not let go — an orphan for cleanup to prune or
-             * release, or a path `remove --delete-files` has ordered deleted
-             * and still remembers — never a discovery, and a discovery again
-             * only once the record is retired. Both are the load's own facts,
-             * built before any analysis runs (workspace_partition), so status,
-             * sync and update read one answer whatever else each ran. */
+        } else if (manifest_lookup(ws->manifest, child) || workspace_get_anchor(ws, child) ||
+            standing_row(ws, child, &st) || standing_record(ws, child, &st)) {
+            /* Whether anything already speaks for the leaf — by its spelling
+             * and then by its entry, in descending order of standing. The view
+             * holds it: a claim of any kind puts a row at the location, a directory
+             * row at a file's path being the [type] the directory analysis said.
+             * The record holds it: dotta managed the path and has not let go —
+             * an orphan for cleanup to prune or release, or a path `remove
+             * --delete-files` has ordered deleted and still remembers — never a
+             * discovery, and a discovery again only once the record is retired.
+             * And either of the two under another spelling of the same entry: a
+             * row or a record standing on the very file this frame joined its
+             * way to — a link no binding names, a root two profiles spell two
+             * ways, a name the volume folds — is managed or remembered however
+             * it is spelled, and offering it would commit one file twice or promise
+             * a commit of a copy cleanup is about to prune. All four are the
+             * load's own facts, built before any analysis runs
+             * (workspace_partition, index_entries), so status, sync and update
+             * read one answer whatever else each ran. The two identity probes
+             * are paid only for a child neither string claimed — the offers. */
             continue;
         }
 
@@ -3075,8 +3439,25 @@ error_t *workspace_load(
         }
     }
 
+    /* The entries — where every row and every orphan record stands, by identity
+     * — for the two verbs that act on an entry through a string. After the
+     * directory analysis, whose displaced set says which rows were observed at
+     * their own path; before the orphan analysis, whose guard reads it; and only
+     * where a reader may ask, which is this gate said once for both: the orphan
+     * analysis returns at its first line with no orphan, and the scan asks per
+     * offer. Every ask below is therefore made on a load this built the index
+     * in (find_entries). */
+    if ((options->analyze_orphans && ws->orphan_count > 0) || options->analyze_untracked) {
+        err = index_entries(ws);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to index the entries");
+        }
+    }
+
     /* Optional: the orphans (records of either kind the view lacks); notes the
-     * displaced directories only a record remembers */
+     * displaced directories only a record remembers, and its guard reads the
+     * entries */
     if (options->analyze_orphans) {
         err = analyze_orphans(ws);
         if (err) {

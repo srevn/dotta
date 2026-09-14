@@ -40,6 +40,23 @@
  *   for its own reads and lends none of them (include/runtime.h, "Members not
  *   welcome" #3). A core step that acts on the workspace's plan and reads Git
  *   or content takes those handles by name beside the workspace (deploy_execute).
+ *
+ * Identity:
+ *   The join is by spelling, and so is every fact the workspace holds about a
+ *   path but one: where each row and each orphan record stands, read once per
+ *   load as a (dev, ino) index for the two verbs that act on an entry through a
+ *   string and could otherwise act on a spelling the load knows the entry by
+ *   another name of — cleanup's unlink (an owned, backed orphan whose entry a
+ *   row stands on is a stale key: released, never pruned) and the scan's offer
+ *   (a child whose entry a row or a record stands on is no discovery). An entry
+ *   is a name in a directory; a key is one spelling of it, and a filesystem can
+ *   reach one entry through as many spellings as there are links above it, folds
+ *   it performs on the name, and roots the table spells two ways (infra/mount.h).
+ *
+ *   The scan's roots read identity for a third reason of their own — one walk
+ *   per directory (analyze_untracked_files). No other reader asks the disk which
+ *   entry a string names; a filter, a namer or a join that wanted to is asking
+ *   a question the model does not answer.
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -208,9 +225,10 @@ typedef struct {
      *   row     the view's claim. NULL for an orphan (the view lacks the path)
      *           and for UNTRACKED — except a relocated orphan, where it is the
      *           record's own claim's row at another file (the orphan analysis
-     *           carried it, after comparing the two by inode, so two spellings
-     *           of one path never read as a move: non-NULL on an ORPHANED item
-     *           IS the relocation, and the new location is printable from it).
+     *           carried it after its guard found no row standing on the record's
+     *           own entry, so two spellings of one path never read as a move:
+     *           non-NULL on an ORPHANED item IS the relocation, and the new
+     *           location is printable from it).
      *   anchor  the record — always the live snapshot record, the same pointer
      *           workspace_get_anchor returns: the writers patch it in place
      *           (workspace_anchor) or create it and backfill this field
@@ -514,7 +532,9 @@ typedef struct {
  * it could not list or look at and goes on with the siblings
  * (analyze_untracked_files). The record's half is a load fact, not an analysis's:
  * a path dotta remembers is no discovery on any surface, whichever of the analyses
- * above the caller asked for.
+ * above the caller asked for — and so is the entry each row and each record stands
+ * on, so a path dotta manages or remembers under another spelling is no discovery
+ * either (see Identity above).
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an

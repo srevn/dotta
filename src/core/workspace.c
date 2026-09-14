@@ -338,44 +338,44 @@ static error_t *workspace_add_diverged(
 
     /* Arena-allocated: the item's address is stable for the workspace's lifetime,
      * whatever the spine's growth does. */
-    workspace_item_t *entry = arena_alloc(ws->arena, sizeof(*entry));
-    if (!entry) {
+    workspace_item_t *item = arena_alloc(ws->arena, sizeof(*item));
+    if (!item) {
         return ERROR(ERR_MEMORY, "Failed to allocate diverged item");
     }
-    memset(entry, 0, sizeof(*entry));
+    memset(item, 0, sizeof(*item));
 
-    entry->row = row;
-    entry->anchor = anchor;
+    item->row = row;
+    item->anchor = anchor;
 
     /* The state names the identity source: ORPHANED/RELEASED are record-defined
      * — the view lacks the path — and every other state here is a row's. */
     if (state == WORKSPACE_STATE_ORPHANED || state == WORKSPACE_STATE_RELEASED) {
         CHECK_NULL(anchor);
-        entry->filesystem_path = anchor->filesystem_path;
-        entry->storage_path = anchor->storage_path;
-        entry->profile = anchor->profile;
-        entry->item_kind = path_type_kind(anchor->type);
+        item->filesystem_path = anchor->filesystem_path;
+        item->storage_path = anchor->storage_path;
+        item->profile = anchor->profile;
+        item->item_kind = path_type_kind(anchor->type);
     } else {
         CHECK_NULL(row);
-        entry->filesystem_path = row->filesystem_path;
-        entry->storage_path = row->storage_path;
-        entry->profile = row->profile;
-        entry->item_kind = path_type_kind(row->type);
+        item->filesystem_path = row->filesystem_path;
+        item->storage_path = row->storage_path;
+        item->profile = row->profile;
+        item->item_kind = path_type_kind(row->type);
     }
 
-    entry->state = state;
-    entry->divergence = divergence;
-    entry->occupant = occupant;
-    entry->fault = fault;
+    item->state = state;
+    item->divergence = divergence;
+    item->occupant = occupant;
+    item->fault = fault;
 
-    error_t *err = ptr_array_push(&ws->diverged, entry);
+    error_t *err = ptr_array_push(&ws->diverged, item);
     if (err) {
         return error_wrap(err, "Failed to append diverged item");
     }
 
-    err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
+    err = hashmap_set(ws->diverged_index, item->filesystem_path, item);
     if (err) {
-        return error_wrap(err, "Failed to index diverged entry");
+        return error_wrap(err, "Failed to index diverged item");
     }
 
     return NULL;
@@ -420,32 +420,32 @@ static error_t *workspace_add_untracked(
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
 
-    workspace_item_t *entry = arena_alloc(ws->arena, sizeof(*entry));
-    if (!entry) {
+    workspace_item_t *item = arena_alloc(ws->arena, sizeof(*item));
+    if (!item) {
         return ERROR(ERR_MEMORY, "Failed to allocate untracked item");
     }
-    memset(entry, 0, sizeof(*entry));
+    memset(item, 0, sizeof(*item));
 
-    entry->filesystem_path = arena_strdup(ws->arena, filesystem_path);
-    entry->storage_path = arena_strdup(ws->arena, storage_path);
-    entry->profile = (char *) profile;   /* the cast discards the view's const */
-    if (!entry->filesystem_path || !entry->storage_path) {
+    item->filesystem_path = arena_strdup(ws->arena, filesystem_path);
+    item->storage_path = arena_strdup(ws->arena, storage_path);
+    item->profile = (char *) profile;   /* the cast discards the view's const */
+    if (!item->filesystem_path || !item->storage_path) {
         return ERROR(ERR_MEMORY, "Failed to copy untracked paths");
     }
 
-    entry->state = WORKSPACE_STATE_UNTRACKED;
-    entry->divergence = DIVERGENCE_NONE;
-    entry->item_kind = PATH_KIND_FILE;
-    entry->occupant = occupant;
+    item->state = WORKSPACE_STATE_UNTRACKED;
+    item->divergence = DIVERGENCE_NONE;
+    item->item_kind = PATH_KIND_FILE;
+    item->occupant = occupant;
 
-    error_t *err = ptr_array_push(&ws->diverged, entry);
+    error_t *err = ptr_array_push(&ws->diverged, item);
     if (err) {
         return error_wrap(err, "Failed to append untracked item");
     }
 
-    err = hashmap_set(ws->diverged_index, entry->filesystem_path, entry);
+    err = hashmap_set(ws->diverged_index, item->filesystem_path, item);
     if (err) {
-        return error_wrap(err, "Failed to index untracked entry");
+        return error_wrap(err, "Failed to index untracked item");
     }
 
     return NULL;
@@ -1366,13 +1366,13 @@ typedef struct {
  * Free an authority cache entry (hashmap value callback)
  */
 static void authority_cache_free(void *value) {
-    authority_cache_t *entry = value;
-    if (!entry) {
+    authority_cache_t *cached = value;
+    if (!cached) {
         return;
     }
-    metadata_free(entry->metadata);   /* NULL-safe */
-    git_tree_free(entry->tree);       /* NULL-safe */
-    free(entry);
+    metadata_free(cached->metadata);   /* NULL-safe */
+    git_tree_free(cached->tree);       /* NULL-safe */
+    free(cached);
 }
 
 /**
@@ -1444,8 +1444,8 @@ static void compute_orphan_authority(
 ) {
     *out = ORPHAN_AUTHORITY_UNVERIFIED;
 
-    authority_cache_t *entry = hashmap_get(cache, profile);
-    if (!entry) {
+    authority_cache_t *cached = hashmap_get(cache, profile);
+    if (!cached) {
         /* First row of this profile: does the branch still exist? A ref lookup,
          * not a tree load — most profiles answer here. Git errors are not cached:
          * a transient failure must stay retryable. */
@@ -1456,26 +1456,26 @@ static void compute_orphan_authority(
             return;                         /* UNVERIFIED */
         }
 
-        entry = calloc(1, sizeof(*entry));
-        if (!entry) {
+        cached = calloc(1, sizeof(*cached));
+        if (!cached) {
             return;                         /* UNVERIFIED */
         }
-        entry->exists = exists;
+        cached->exists = exists;
 
-        err = hashmap_set(cache, profile, entry);
+        err = hashmap_set(cache, profile, cached);
         if (err) {
             error_free(err);
-            authority_cache_free(entry);
+            authority_cache_free(cached);
             return;                         /* UNVERIFIED */
         }
     }
 
-    if (!entry->exists) {
+    if (!cached->exists) {
         *out = ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
         return;
     }
 
-    if (!entry->tree) {
+    if (!cached->tree) {
         /* Lazy-load the HEAD tree on the first in-tree question for this profile;
          * stored only on success, so a failure is retried by the next row instead
          * of condemning the whole profile. */
@@ -1485,7 +1485,7 @@ static void compute_orphan_authority(
             error_free(err);
             return;                         /* UNVERIFIED */
         }
-        entry->tree = tree;                 /* Ownership transfers to the cache */
+        cached->tree = tree;                /* Ownership transfers to the cache */
     }
 
     if (kind == PATH_KIND_DIRECTORY) {
@@ -1495,20 +1495,20 @@ static void compute_orphan_authority(
          * one loads as an empty collection — "no metadata" is a settled answer
          * (no directory is backed), not a failure to look — so every error here
          * is a failure to look. */
-        if (!entry->metadata) {
+        if (!cached->metadata) {
             metadata_t *metadata = NULL;
-            error_t *err = metadata_load_from_tree(repo, entry->tree, profile, &metadata);
+            error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
             if (err) {
                 error_free(err);
                 return;                         /* UNVERIFIED */
             }
-            entry->metadata = metadata;         /* Ownership transfers to the cache */
+            cached->metadata = metadata;        /* Ownership transfers to the cache */
         }
 
         /* Backed iff metadata still claims the path as a directory. An item of
          * another kind at the key is a path Git turned into a blob: the directory
          * dotta made is no longer claimed as one. */
-        const metadata_item_t *item = metadata_lookup(entry->metadata, storage_path);
+        const metadata_item_t *item = metadata_lookup(cached->metadata, storage_path);
         *out = (item && item->kind == PATH_KIND_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
                                                            : ORPHAN_AUTHORITY_LOST;
 
@@ -1523,7 +1523,7 @@ static void compute_orphan_authority(
      * than RELEASED — preserving the record is more conservative than removing it.
      */
     git_tree_entry *tree_entry = NULL;
-    int rc = git_tree_entry_bypath(&tree_entry, entry->tree, storage_path);
+    int rc = git_tree_entry_bypath(&tree_entry, cached->tree, storage_path);
 
     if (rc == 0) {
         git_tree_entry_free(tree_entry);
@@ -2109,8 +2109,8 @@ static error_t *scan_directory_for_untracked(
      * fs_list_dir's. The frames hold entry names where they held directory streams,
      * which is the trade add's walk already made — a deep walk no longer holds
      * one descriptor per level, and pays for the names instead. */
-    string_array_t *entries = NULL;
-    error_t *err = fs_list_dir(directory, &entries);
+    string_array_t *listing = NULL;
+    error_t *err = fs_list_dir(directory, &listing);
     if (err) {
         switch (error_code(err)) {
             case ERR_MEMORY:     /* the run failing; error_wrap keeps the cause's code */
@@ -2137,7 +2137,7 @@ static error_t *scan_directory_for_untracked(
      * as that frame's `directory` for the whole subtree (include/runtime.h). */
     arena_t *scratch = arena_create(0);
     if (!scratch) {
-        string_array_free(entries);
+        string_array_free(listing);
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's scratch");
     }
 
@@ -2147,11 +2147,11 @@ static error_t *scan_directory_for_untracked(
      * the same rule (cmds/add.c collect_tree). */
     const char *separator = directory[1] ? "/" : "";
 
-    for (size_t i = 0; i < entries->count; i++) {
+    for (size_t i = 0; i < listing->count; i++) {
         arena_reset(scratch);
 
         const char *child = arena_str_format(
-            scratch, "%s%s%s", directory, separator, entries->items[i]
+            scratch, "%s%s%s", directory, separator, listing->items[i]
         );
         if (!child) {
             err = ERROR(ERR_MEMORY, "Failed to allocate path");
@@ -2287,7 +2287,7 @@ static error_t *scan_directory_for_untracked(
 
 cleanup:
     arena_destroy(scratch);
-    string_array_free(entries);
+    string_array_free(listing);
 
     return err;
 }

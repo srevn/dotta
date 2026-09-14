@@ -165,7 +165,7 @@ typedef enum {
 #define WORKSPACE_FAULT_COUNT (WORKSPACE_FAULT_UNVERIFIED + 1)
 
 /**
- * Diverged item entry
+ * Diverged item
  *
  * Represents a single item (file or directory) with divergence between states.
  *

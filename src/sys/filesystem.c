@@ -1315,10 +1315,10 @@ error_t *fs_make_absolute(const char *path, char **out) {
         return NULL;
     }
 
-    char *directory = NULL;
-    RETURN_IF_ERROR(fs_working_directory(&directory));
-    error_t *err = fs_path_join(directory, path, out);
-    free(directory);
+    char *cwd = NULL;
+    RETURN_IF_ERROR(fs_working_directory(&cwd));
+    error_t *err = fs_path_join(cwd, path, out);
+    free(cwd);
 
     return err;
 }

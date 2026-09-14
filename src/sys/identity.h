@@ -44,6 +44,15 @@
  * table (195 §8), so `home/` classifies under any spelling. Whether the directory
  * exists is not asked here.
  *
+ * HOME may have a second spelling: the one the kernel writes — realpath's, and
+ * so getcwd's beneath it — where the directory is reached through a link (macOS's
+ * /tmp, an NFS bind mount). It is read once, after the drop so the look is any
+ * other read of the run's, and published as home_physical for one reader and
+ * one question: a relative argument's working directory, which the shell spelled
+ * under HOME or the kernel spelled physically, is spelled back under HOME
+ * (infra/path.h path_input_normalize). Nothing composes a path from it, and nothing
+ * else reads it. A HOME that does not stand has one spelling.
+ *
  * The answer is published back into the environment, on every run and not only
  * a sudo'd one: $HOME becomes the ruled, normalised spelling, and USER and LOGNAME
  * name the invoker wherever the passwd database can. libgit2 reads $HOME at its
@@ -114,13 +123,14 @@
  * nothing frees them, and nothing needs to.
  */
 typedef struct identity {
-    uid_t uid;               /* The invoker */
-    gid_t gid;               /* The invoker's primary group (the passwd entry's) */
-    const gid_t *groups;     /* The kernel's supplementary list for this process */
-    int ngroups;             /* Its length; 0 when there is none to read */
-    const char *name;        /* The passwd entry's name; NULL when it has no entry */
-    const char *home;        /* The HOME rule above; absolute, normalised, never NULL */
-    bool privileged;         /* Root is held: the effective user started as uid 0 */
+    uid_t uid;                 /* The invoker */
+    gid_t gid;                 /* The invoker's primary group (the passwd entry's) */
+    const gid_t *groups;       /* The kernel's supplementary list for this process */
+    int ngroups;               /* Its length; 0 when there is none to read */
+    const char *name;          /* The passwd entry's name; NULL when it has no entry */
+    const char *home;          /* The HOME rule above; absolute, normalised, never NULL */
+    const char *home_physical; /* HOME as realpath spells it; NULL when it does not stand */
+    bool privileged;           /* Root is held: the effective user started as uid 0 */
 } identity_t;
 
 /**

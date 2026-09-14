@@ -102,26 +102,46 @@ error_t *path_input_resolve(
 /**
  * Normalize a CLI filesystem-path argument to an absolute path
  *
- * The shell's reading: a tilde path expands under $HOME, a relative one — `./x`,
- * `../x`, a dotfile's `.x`, `path/to/file` — resolves against the working directory
- * as the shell spells it, and an absolute one stands; then `.`, `..`, a run of
- * slashes and the directory spelling are folded lexically. No symlink is resolved
- * and the path need not exist: the fold is string work over the spelling, so a
- * symlink argument stays the link.
+ * The shell's reading, with the working directory spelled for a key: a tilde
+ * path expands under $HOME, an absolute one stands, and a relative one — `./x`,
+ * `../x`, a dotfile's `.x`, `path/to/file` — is the working directory's, which
+ * the shell spelled as the user reached it ($PWD, pwd -L's rule) or the kernel
+ * spelled physically (getcwd, where the shell set none — sudo, cron, env -i —
+ * or a stale one). A working directory beneath HOME is spelled under HOME as
+ * the identity spells it whichever of the two spelled it: the argument spelled
+ * no directory, and a key under HOME is HOME's spelling (infra/mount.h). The
+ * argument's own tail is the user's and stands, so `home/../c` typed above HOME's
+ * directory is the shell's `<parent>/c` and never HOME's parent. Then `.`, `..`,
+ * a run of slashes and the directory spelling fold lexically. No symlink is
+ * resolved and the path need not exist: the fold is string work over the spelling,
+ * so a symlink argument stays the link, and a `..` after one pops the link's
+ * spelling, not the directory it reaches. A working directory reached through a
+ * link no root names — beneath HOME, or above it through a link that is not HOME's
+ * own — keeps the kernel's spelling of that link's target, as a typed absolute
+ * path through it would.
  *
- *   ~/file       -> $HOME/file
- *   /etc/foo     -> /etc/foo
- *   rel/file     -> $CWD/rel/file
- *   ./a/../b/    -> $CWD/b
+ *   ~/file                    -> $HOME/file
+ *   /etc/foo                  -> /etc/foo
+ *   rel/file                  -> $CWD/rel/file
+ *   ./a/../b/                 -> $CWD/b
+ *   ./x         (in ~/sub, however the shell spelled it, or spelled nothing)
+ *                             -> $HOME/sub/x
+ *   ~/link/../x               -> $HOME/x       ('..' pops the link's spelling)
+ *   home/../c   (in HOME's parent, spelled physically)
+ *                             -> <parent>/c    (the tail is the user's)
  *
  * The filesystem arm of path_input_resolve is this function followed by
  * mount_locate; the commands that read a filesystem spelling and walk it (add),
  * bind it (the binders' --target), test it (ignore --test) or complete beneath
- * it (the completion's root) call it directly. Storage-path inputs ("home/",
- * "root/", "custom/") are not this function's — they are validated and placed
- * at the call site (mount_validate_storage, mount_resolve). add's re-rooting
- * under --target is add's own grammar, spelled around this call (cmds/add.c,
- * spell_argument).
+ * it (the completion's root) call it directly. A target given as an absolute or
+ * tilde path is the user's own; one given relatively is spelled by the rule above
+ * like any other relative argument. Storage-path inputs ("home/", "root/",
+ * "custom/") are not this function's — they are validated and placed at the call
+ * site (mount_validate_storage, mount_resolve). add's re-rooting under --target
+ * is add's own grammar, spelled around this call (cmds/add.c, spell_argument).
+ * The answer is malloc's: three of the callers own it — the interactive save's
+ * per-edit target, the completion, the binder that frees at its label — and the
+ * rest hand it on and free it.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL)
  * @param out   Normalized absolute path (caller must free, must not be NULL)

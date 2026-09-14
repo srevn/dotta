@@ -6,9 +6,10 @@
  * holds any — has not been given away; who the invoker is, by the invoker rule,
  * the passwd entry read last so its fields outlive every other lookup, and the
  * HOME rule, normalised; the drop to that invoker where root was obtained for
- * one, and then the group list it left; and the environment the identity implies.
- * Every stanza runs on every run — only the transition is conditional. Written
- * once into file scope, read for the life of the process.
+ * one, and then the group list it left and the one look at the disk, HOME as
+ * the kernel spells it; and the environment the identity implies. Every stanza
+ * runs on every run — only the transition is conditional. Written once into file
+ * scope, read for the life of the process.
  */
 
 #include "sys/identity.h"
@@ -228,6 +229,23 @@ error_t *identity_init(void) {
     self.ngroups = groups ? getgroups(n, groups) : 0;
     if (self.ngroups < 0) self.ngroups = 0;
     self.groups = groups;
+
+    /* HOME as the kernel spells it — what getcwd hands back beneath a HOME reached
+     * through a link — for the one reader that spells a working directory back
+     * under HOME (infra/path.c working_directory). After the drop, so the look
+     * is any other read of the run's: the invoker's, root's on a refusal
+     * (sys/filesystem's tier). A HOME that does not stand has one spelling: a
+     * fact about the run, not a failure of it — whether the directory exists is
+     * not this module's question (the HOME rule). */
+    char physical[PATH_MAX];
+    if (fs_realpath(self.home, physical)) {
+        self.home_physical = strdup(physical);
+        if (!self.home_physical) {
+            return ERROR(
+                ERR_MEMORY, "Failed to copy the home directory's physical spelling"
+            );
+        }
+    }
 
     /* The environment the identity implies, for libgit2 — which reads $HOME at
      * its init to find the global config — and for every child: a hook and a

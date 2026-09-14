@@ -583,7 +583,9 @@ error_t *fs_ensure_parent_dirs(const char *path);
  * typed through it does. Physical only where nothing spelled it — a sudo that
  * dropped $PWD, a cron, an env -i.
  *
- * Readers: fs_make_absolute, which joins a relative path onto it.
+ * Readers: fs_make_absolute, which joins a relative path onto it; and the
+ * normalizer (infra/path.h path_input_normalize), which spells it under HOME
+ * before it joins — the one reader that reads the kernel's spelling back.
  *
  * @param out The directory (caller frees, must not be NULL)
  * @return Error or NULL on success
@@ -601,7 +603,8 @@ error_t *fs_working_directory(char **out);
  * are kept for the caller's fs_normalize_path.
  *
  * Readers: the store's own path (utils/repo.c, a relative repository path
- * configured or positional) and the normalizer (infra/path.h).
+ * configured or positional). A CLI argument that names a key is the normalizer's
+ * (infra/path.h), which spells the working directory for a key before it joins.
  *
  * Examples:
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)

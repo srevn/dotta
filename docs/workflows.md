@@ -20,9 +20,14 @@ dotta add global ~/.config/nvim --exclude '*.log' --exclude 'node_modules/*'
 # Custom commit message
 dotta add global ~/.bashrc -m "Add shell config"
 
-# Preview: what would be added, and under which names, with nothing written
+# Preview: what would be added, and where each path would be stored
 dotta add --dry-run -v global ~/.config/nvim
+
+# Point a profile at a directory of its own and capture from inside it
+dotta add web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
 ```
+
+Where each path lands inside the profile is covered in [How Files Are Stored](concepts.md#how-files-are-stored) and [Targets](profiles.md#targets).
 
 ### Deploying
 
@@ -88,19 +93,15 @@ dotta status -p global
 dotta status -v
 ```
 
-**Status indicators:**
-- `[undeployed]` -- file in manifest but never deployed
-- `[clean]` -- deployed file matches expected state
-- `[modified]` -- deployed file has been changed on disk
-- `[deleted]` -- deployed file was removed from disk
-- `[orphaned]` -- file's profile was disabled, pending removal
+`dotta status` groups paths by what to do about them and tags each one -- `[undeployed]`, `[clean]`, `[modified]`, `[deleted]`, `[orphaned]` and more. A path can carry several tags at once (`[orphaned] [relocated]`), and where a tag needs explaining, status prints a short legend under the group. `dotta status --full` lists every managed path with its state and the profile it comes from.
 
-**Remote indicators:**
-- `=` up-to-date
-- `↑n` n commits ahead (ready to push)
-- `↓n` n commits behind (run `dotta sync`)
-- `↕` diverged
-- `•` no remote tracking
+**Remote indicators** -- `dotta list --remote` prints these compact markers; `dotta status` spells the same states out in words (`↑ 2 ahead`):
+
+- `[=]` up-to-date
+- `[↑n]` n commits ahead (ready to push)
+- `[↓n]` n commits behind (run `dotta sync`)
+- `[↕n+m]` diverged
+- `[•]` no remote tracking branch
 
 ## Viewing Differences
 

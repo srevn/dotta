@@ -6,7 +6,7 @@ Declarative, Git-based configuration management for heterogeneous Unix estates.
 
 Manage a single repository with independent, versioned profiles across laptops, servers, workstations and containers. Deploy actual files with correct ownership and atomic rollbacks, optional transparent encryption, and a bidirectional workflow that lets you edit in place.
 
-Profiles layer by scope (global, OS-specific, host-specific) so shared settings propagate naturally while machine-specific overrides stay isolated. Files are stored with location prefixes (`home/`, `root/`) and deployed to their filesystem targets on demand.
+Profiles layer by scope (global, OS-specific, host-specific) so shared settings propagate naturally while machine-specific overrides stay isolated. Every file is stored under `home/`, `root/` or `custom/` — that first part says which directory on the machine it belongs to — and deploys there on demand.
 
 ## Commands
 
@@ -17,7 +17,7 @@ Commands:
   init           Initialize a new dotta repository
   clone          Clone an existing dotta repository
   add            Add files or directories to a profile
-  remove         Remove files from a profile or delete profile
+  remove         Remove paths from a profile or delete profile
   update         Commit filesystem changes back to profiles
   apply          Deploy enabled profiles to the filesystem
   revert         Revert a file to a previous version
@@ -33,11 +33,19 @@ Commands:
   bootstrap      Execute profile bootstrap scripts
   key            Manage encryption keys and passphrases
   git            Execute git commands within repository
+  completion     Print the shell completion script
+
+Shortcuts:
+  fetch          profile fetch
+  enable         profile enable
+  disable        profile disable
+  reorder        profile reorder
+  validate       profile validate
 
 Options:
-  -h, --help     Show help (use <command> --help for details)
-  -v, --version  Show version information
-  --interactive  TUI for profile management
+  -h, --help        Show help (use <command> --help for details)
+  -v, --version     Show version information
+  -i, --interactive Interactive profile management and ordering
 
 Run 'dotta <command> --help' for more information on a command.
 ```
@@ -111,7 +119,7 @@ Key environment variables:
 
 Detailed guides are available in [`docs/`](docs/):
 
-- [**Concepts**](docs/concepts.md) -- How dotta works: the profile model, file storage, virtual working directory
+- [**Concepts**](docs/concepts.md) -- How dotta works: the profile model, how files are stored, how directories are handled, the view and the record
 - [**Profiles**](docs/profiles.md) -- Profile management, layering, hierarchical organization
 - [**Workflows**](docs/workflows.md) -- Common workflows: add/apply/update cycle, sync, diff, revert
 - [**Encryption**](docs/encryption.md) -- Transparent file encryption setup and usage

@@ -428,7 +428,7 @@ The MAC covers bytes `[0..81)` under domain `CRYPTO_DOMAIN_SESSION_MAC`. It dete
 
 4. Deploy:
    - Copy plaintext to target path.
-   - Restore mode (and ownership for root/ files) from metadata.
+   - Restore mode (and ownership for root/ and custom/ paths that carry it) from metadata.
    - Update the record.
 ```
 

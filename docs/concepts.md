@@ -29,33 +29,69 @@ Profiles support **hierarchical organization** for both OS-specific and host-spe
 
 See [Profiles](profiles.md) for the full profile management guide.
 
-## File Storage
+## How Files Are Stored
 
-Files are stored with **location prefixes** inside profile branches:
+A profile branch stores every file under a path that begins with `home/`, `root/` or `custom/`. That first part says which directory on this machine the rest of the path hangs from:
 
 ```
 home/.bashrc                  → deploys to $HOME/.bashrc
 home/.config/fish/config.fish → deploys to $HOME/.config/fish/config.fish
 root/etc/hosts                → deploys to /etc/hosts
-custom/etc/nginx.conf         → deploys to <custom_prefix>/etc/nginx.conf
+custom/etc/nginx.conf         → deploys to <this profile's target>/etc/nginx.conf
 ```
 
-**Prefix rules:**
-- Paths under `$HOME` are stored as `home/<relative_path>`
-- Absolute paths outside `$HOME` are stored as `root/<relative_path>`
-- Paths under a custom prefix are stored as `custom/<relative_path>`
+The stored path travels with the repository. The directory it hangs from belongs to the machine: `home/` is the home directory and `root/` is `/`, the same for every profile, while `custom/` is the one directory *this* profile is pointed at on this machine — its **target**, which each machine chooses for itself (see [Targets](profiles.md#targets)). Without a target, a profile has nowhere to put `custom/` files here, and one profile's target means nothing to another profile.
 
-Each profile also maintains a `.dotta/metadata.json` file that tracks file permissions (mode) and ownership (user/group for `root/` files). Metadata is captured during `add`/`update` and restored during `apply`.
+### Where a File Goes
 
-## Directory Claims
+Dotta uses the first of these rules that applies:
 
-The metadata sheet holds a claim for every directory on the way to a managed path, and one field says which kind of claim it is.
+1. **A file the profile already has stays where it is.** Giving a profile a target later never moves what it already stores.
+2. Otherwise the file goes under **the closest directory you have added to the profile** — after `dotta add web home/jail/etc`, everything new inside it is stored under `home/jail/etc/...`.
+3. Otherwise it goes under **the directory it actually sits in** — the profile's target if it is inside one, else the home directory, else `/`.
 
-A directory you **named** — `dotta add p ~/.config/nvim` — is **tracked**: the profile manages the directory itself. It is created even when empty, its mode (and ownership, for `root/` paths) is converged on apply, its drift is reported by status, and `update --include-new` scans it for new files.
+`dotta update` puts a newly found file exactly where `dotta add` would have put it.
 
-A directory dotta only **passes through** — every ancestor of a captured path that was a real directory at capture time — carries an **ancestor claim**: a creation template, nothing more. When dotta has to create the path on the way to content, it creates it with the captured attributes; one that already stands is never touched, never converged, never scanned. A component that was a symlink at capture time authors no claim at all — a symlinked configuration directory stays your own arrangement, and dotta writes through it.
+Each profile decides for itself, so two profiles can store one file in two different places:
 
-Claims are re-derived only with consent: the chain above a leaf rides that leaf's own capture (`add`, `update`), and naming a path — `dotta update ~/.config` — re-derives every in-scope chain beneath it. The named form is also the remedy when the world moves under a claim: replace a passed-through directory with a symlink and apply refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the contradicted claim, and the next apply trusts your arrangement.
+```bash
+dotta add web --target ~/jail ~/jail/etc/x   # web:    custom/etc/x
+dotta add global ~/jail/etc/x                # global: home/jail/etc/x
+```
+
+Which of them actually deploys the file is a question of precedence, not of storage — see [Layering and Precedence](profiles.md#layering-and-precedence).
+
+A profile stores a given file in **one** place. Ask it to store the same file somewhere else and dotta refuses, shows where the file already lives, and names the two commands that settle it: `dotta add --force` to re-capture it where it is, or `dotta remove` to give that place up first.
+
+By rule 3, a file inside the profile's target is stored under `custom/`, with or without `--target` on the command:
+
+```bash
+dotta add web ~/jail/etc/x                    # no target yet → home/jail/etc/x
+dotta add web --target ~/jail ~/jail/etc/y    # sets one, and → custom/etc/y
+dotta add web ~/jail/etc/z                    # inside it too → custom/etc/z
+```
+
+`x` was stored before the target existed, so rule 1 leaves it exactly where it is.
+
+To settle a whole directory one way, add the directory itself:
+
+```bash
+dotta add web home/jail/etc     # everything new inside it is home/jail/etc/...
+```
+
+Files already stored stay where they are; only new ones follow the directory. (If the directory already holds files the profile has, dotta stops and asks for `--force`.)
+
+Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of `root/` and `custom/` paths that belong to someone else. A path the invoker owns needs no owner recorded — every machine reads that absence as "whoever is running dotta". Metadata is captured during `add`/`update` and restored during `apply`.
+
+## Directories
+
+Dotta remembers two kinds of directory, and treats them very differently.
+
+**A directory you added** — `dotta add p ~/.config/nvim` — is one the profile manages in its own right. Dotta creates it even when it would be empty, and restores its permissions on `apply` (its owner too, under `root/` and `custom/`). It reports the directory in `dotta status` when it drifts, and looks inside it for new files under `dotta update --include-new`.
+
+**A directory dotta passed through** on its way to a file you added is just a recipe for re-creating it. When dotta has to make that directory to put a file in it, it uses the permissions it saw at the time; a directory that already exists is never touched, never checked and never searched. And if part of the path was a symlink when the file was added, dotta records nothing for that component at all — a symlinked config directory is left alone, and dotta writes straight through it.
+
+Dotta only revisits any of this when asked. Adding or updating a file refreshes the directories above it, and pointing `dotta update` at a directory — `dotta update ~/.config` — refreshes everything beneath it. That is also the fix when things move. Swap a passed-through directory for a symlink and `apply` refuses to write through it (`~/.config/nvim is not a directory`); `dotta update <dir>` drops the stale expectation, and the next `apply` trusts the arrangement on disk.
 
 ## Repository Structure
 
@@ -67,41 +103,43 @@ Claims are re-derived only with consent: the chain above a leaf rides that leaf'
 │   ├── darwin             # Profile branch
 │   └── hosts/laptop       # Profile branch — one branch per profile, nothing else
 ├── refs/dotta/
-│   ├── epoch              # the derivation epoch (synced)
+│   ├── epoch              # encryption parameters (synced across machines)
 │   └── baseline           # the baseline .dottaignore (this machine's)
 └── dotta.db               # the record
 ```
 
-Nothing is ever checked out. Every command reads the branches and writes commits to them, and the store is a bare repository: `git status` has nothing to say in it, and `HEAD` names an unborn branch dotta never reads. To look at a profile with your own tools: `dotta git worktree add <dir> <profile>`. What makes the directory dotta's store is the declaration `init` and `clone` write into its config (`dotta.store = true`); a repository without it is refused by every command, and `dotta init` takes an empty bare repository or refuses one with a working tree or a history it did not write.
+Nothing is ever checked out. Every command reads the branches and writes commits to them, and the store is a bare repository: `git status` has nothing to say in it, and `HEAD` names an unborn branch dotta never reads. To look at a profile with other tools: `dotta git worktree add <dir> <profile>`. What makes a directory dotta's store is a line `init` and `clone` write into its config: `dotta.store = true`. Without it, every command refuses the directory. `dotta init` will take over an empty bare repository, but refuses one with a working tree or a history it did not write.
 
-## The view and the record
+## The View and the Record
 
-Dotta stores only what it cannot recompute. What *should* stand at each path, and from which profile, is a pure function of Git, the enabled profiles and the machine's mount table — **the view** — and is computed from Git every time a command runs. What dotta *did* at a path — **the record** — is dotta's own and is the only per-path state it keeps, in the store's `dotta.db`.
+Dotta stores only what it cannot work out for itself.
+
+What *should* be at each path, and from which profile, is **the view**. Dotta rebuilds it on every command from the branches, the enabled profiles, and where this machine keeps the home directory and each profile's target. What dotta *did* at a path — **the record** — is the one thing it cannot recompute, so that is the one thing it keeps, in the store's `dotta.db`.
 
 The architecture mirrors Git's three-tree model:
 
 ```
-Git Branches (Source of Truth)  ×  enabled profiles  ×  mount table
+Git Branches (Source of Truth)  ×  enabled profiles  ×  this machine's directories
      ↓  computed at every run, never stored
-The View (one row per managed path, precedence resolved)
+The View (one entry per managed path, precedence resolved)
      ↓  joined with
 The Record (what dotta deployed, confirmed or observed at each path)
      ↓
-Workspace (Runtime Analysis)
+Workspace (the comparison, made when the command runs)
      ↓
 Filesystem (Live System)
 ```
 
-**The view** -- the single source of truth for which paths are managed and what is expected there (content, file type, mode, ownership, encryption flag), with precedence already resolved: later enabled profiles win, one row per path. It is never stale, because nothing caches it — every command builds it from the current branches.
+**The view** -- which paths are managed, and what belongs at each one: the contents, whether it is a file or a directory or a link, the permissions, the owner, whether it is encrypted. Precedence is already settled here, so there is one entry per path and a later profile has won any it shares. The view is never out of date, because nothing stores it — every command builds it fresh from the branches.
 
-**The record** -- for each managed path, the content dotta last confirmed on disk, whether dotta put it there (the *ownership* timestamp), and when it first saw it. A path dotta deployed or captured is *owned*; one that was merely found on disk is *observed*. On scope exit an owned copy is pruned and an observed one is left alone.
+**The record** -- for each managed path, what dotta last confirmed was on disk, whether dotta put it there, and when it first saw it. A path dotta deployed or captured is *owned*; one it merely found on disk is *observed*. When a path stops being managed, dotta removes an owned copy and leaves an observed one alone.
 
-**Workspace** -- runtime divergence analysis that compares the view against the actual filesystem, with the record as the reference for what dotta last confirmed. This comparison happens at execution time, so decisions are never stale.
+**Workspace** -- what dotta finds when it compares the view against the actual filesystem, with the record saying what it last confirmed. This is what `dotta status` reports, and it is worked out when the command runs, so nothing it decides is out of date.
 
-**Apply** -- iterates the view's rows, checks workspace divergence for each, deploys only what actually changed (content, mode, ownership, encryption), prunes or releases orphans according to the record, and then writes the record for what it did.
+**Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. It then removes or releases the leftovers according to the record, and writes the record for what it did.
 
 This design gives:
-- **Fast status checks** -- O(1) per-file divergence lookups via hashmap, and a stat fast path that skips content comparison for files whose record still matches
+- **Fast status checks** -- dotta looks each path up directly, and skips reading a file's contents when nothing has touched it since dotta last checked
 - **No stale decisions** -- always converges to current Git and current filesystem reality
 - **Explicit scope** -- `dotta status --full` shows exactly which paths are managed and by which profile
-- **One writer per fact** -- the view has none; the record is written only by the command that deployed, captured or observed the path
+- **Nothing to keep in sync** -- the view has no writer at all, and the record is written only by the command that deployed, captured or observed the path

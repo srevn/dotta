@@ -40,10 +40,7 @@ auto_pull = true              # Auto-pull when remote is ahead
 diverged_strategy = "warn"    # warn, rebase, merge, ours, theirs
 ```
 
-`dotta sync --diverged <strategy>` overrides the setting for one run. `ours` and
-`theirs` are destructive, and act on a branch that is only behind or only ahead
-as well: `ours` force-pushes over the newer remote commits, `theirs` resets the
-local ones away.
+`dotta sync --diverged <strategy>` overrides the setting for one run. `ours` and `theirs` are destructive, and act on a branch that is only behind or only ahead as well: `ours` force-pushes over the newer remote commits, `theirs` resets the local ones away.
 
 ### [encryption]
 
@@ -57,9 +54,7 @@ auto_encrypt = [              # Patterns for automatic encryption
 ]
 ```
 
-The list is a *selector*: the last rule that reaches a file decides, where a rule
-reaches a file when it matches the file itself or any directory above it. A `!`
-rule stands wherever you put it — nothing here is final, unlike `.dottaignore`.
+The list is a *selector*: the last rule that reaches a file decides, where a rule reaches a file when it matches the file itself or any directory above it. A `!` rule stands wherever you put it — nothing here is final, unlike `.dottaignore`.
 
 See [Encryption](encryption.md) for the full encryption guide.
 
@@ -150,7 +145,9 @@ Dotta uses a multi-layered ignore system (in precedence order):
 4. **Baseline `.dottaignore`** -- repository-wide, machine-local, version-controlled
 5. **Source `.gitignore`** -- from the directory being added (lowest priority)
 
-A pattern is matched against the path **relative to its mount root** — what a `.gitignore` sitting at `~` (for `home/` files), at `/` (for `root/` files) or at the deployment target (for `custom/` files) would see. Write `.config/Code/Cache/` for `~/.config/Code/Cache` and `etc/ssh/*_key` for `/etc/ssh/ssh_host_*_key`; the `home/` and `root/` labels never appear in a pattern, and nothing above the mount root takes part in a match (a `$HOME` under `/srv/build` is not caught by `build/`). `--exclude` on `add`, `apply` and `update` takes the same patterns with the same meaning. Each entry of a pattern list — an `--exclude`, an entry of `[ignore] patterns` or of `auto_encrypt` — is one pattern, read as the line it would be in `.dottaignore`; an entry that would make no rule there (a comment, a blank, two lines) is refused. The two config lists are compiled when the file is loaded, `auto_encrypt` whether or not encryption is enabled, so a bad entry stops every command and the error names its line and column. A `.dottaignore` is text: one that holds a NUL byte is refused wherever its rules are read, and `dotta ignore` opens it in your editor as it stands, to mend it.
+A pattern is matched against the path **as seen from the directory it deploys under** — exactly what a `.gitignore` sitting at `~` (for `home/` files), at `/` (for `root/` files) or at the profile's target (for `custom/` files) would see. So write `.config/Code/Cache/` for `~/.config/Code/Cache` and `etc/ssh/*_key` for `/etc/ssh/ssh_host_*_key`. The leading `home/`, `root/` and `custom/` never appear in a pattern, and nothing above that directory takes part in a match: a `$HOME` that happens to live under `/srv/build` is not caught by `build/`.
+
+`--exclude` on `add`, `apply` and `update` takes the same patterns with the same meaning. Every entry of a pattern list — an `--exclude`, an entry of `[ignore] patterns` or of `auto_encrypt` — is one pattern, read as the line it would be in a `.dottaignore`; an entry that would make no rule there (a comment, a blank, two lines) is refused. Both config lists are compiled when the file is loaded, `auto_encrypt` whether or not encryption is enabled, so a bad entry stops every command and the error names its line and column. `dotta ignore` opens a `.dottaignore` in the configured editor exactly as it stands, so a broken one can be mended.
 
 ```bash
 # Edit the baseline ignore file
@@ -171,7 +168,7 @@ dotta ignore --test ~/.config/nvim/node_modules
 dotta ignore --test home/.cache/x/
 ```
 
-**Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate), a trailing `/` for directories, a leading `/` to anchor at the mount root (`/.cache/` is `~/.cache` alone; `.cache/` is every `.cache` directory).
+**Pattern syntax** follows `.gitignore` conventions: `*` (wildcard), `?` (single char), `[abc]` (class), `!` (negate), a trailing `/` for directories, a leading `/` to anchor at the top of that directory (`/.cache/` is `~/.cache` alone; `.cache/` is every `.cache` directory).
 
 Profile `.dottaignore` files start empty and inherit all baseline patterns. Use `!pattern` in a profile to override a baseline ignore — a *pattern*, not a directory an earlier layer excluded. As in git, an excluded directory is final: with a baseline `.cache/`, `!.cache/keep.conf` does nothing and `!.cache/` is what re-opens it. The same holds for `--exclude`: `-e 'build/' -e '!build/keep'` keeps nothing, while `-e 'build/*' -e '!build/keep'` keeps the file, because a pattern that matches no directory builds no barrier. `dotta ignore --test` names the rule that excluded a path, which is the one to clear.
 
@@ -199,24 +196,10 @@ dotta bootstrap --dry-run
 Bootstrap scripts are stored as `.bootstrap` in each profile branch and receive:
 - `DOTTA_REPO_DIR`, `DOTTA_PROFILE`, `DOTTA_PROFILES`, `HOME`, `DOTTA_DRY_RUN`
 
-They run as the invoker, never as root: `HOME`, `USER` and `LOGNAME` name the
-user who typed the command even when the run obtained root through `sudo`, and
-`HOME` is the directory dotta resolved and classified `home/` paths against.
+They run as the invoker, never as root. `HOME`, `USER` and `LOGNAME` name the user who typed the command, even when the run obtained root through `sudo`, and `HOME` is the same home directory dotta resolved the `home/` paths against.
 
 Scripts execute in the enabled profiles' layering order, bottom layer first (on a fresh clone: global, then the OS, then the host); `--all` runs every profile's script in the layering convention's order, and named profiles run in the order given. After cloning, dotta prompts to run detected bootstrap scripts (override with `--bootstrap` or `--no-bootstrap`).
 
-## Custom Deployment Root
+## Deployment Targets
 
-Deploy files to arbitrary filesystem locations (containers, jails, chroots):
-
-```bash
-# Add files with a custom deployment root
-dotta add --profile jail/web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
-
-# Enable with the target root
-dotta profile enable jail/web --target /mnt/jails/web
-```
-
-Files are stored as `custom/<path>` and deployed under the specified target. Custom target requires exactly one profile per operation.
-
-A profile with `custom/` paths is enabled only with a target. `dotta clone` and `dotta profile enable --all` leave such a profile disabled and name the command; `dotta profile list` marks it `(custom)`, and prints a bound profile's target beside its name.
+A profile can be pointed at a directory of its own -- a container, a jail, a chroot -- so that files inside it deploy there on each machine. There is nothing to configure here: a target belongs to the machine, and `dotta profile enable --target` sets it. See [Targets](profiles.md#targets).

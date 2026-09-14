@@ -285,9 +285,9 @@ bool mount_same_target(const char *a, const char *b) {
  * - kind:   mount kind for this entry's storage label.
  * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
  *           namespace. For CUSTOM mounts, the owning profile name — always set,
- *           mount_table_build refusing a binding that names none; it keys the
- *           backward resolution and narrows the forward one to the asker's own
- *           roots (deepest_root).
+ *           mount_table_build refusing a binding that names none; it is the whole
+ *           of whose an entry is, and both views read it through one predicate
+ *           (namespace_holds).
  *
  * Every string is the arena's — copied at build — so the table borrows nothing
  * and stands for the arena's lifetime; the sentinel's is the literal "", which
@@ -303,6 +303,22 @@ struct mount_table {
     mount_entry_t *entries;    /* Customs in position order, then HOME, then ROOT */
     size_t entry_count;        /* The customs that named a target, plus those two */
 };
+
+/**
+ * Does the asker's namespace hold this entry?
+ *
+ * A binding is a profile's (mount_t); an entry with none — HOME, the sentinel —
+ * is every namespace's, and the build refuses a binding that names no profile
+ * (mount_table_build), so a missing profile reads as "shared" and never as
+ * "unknown". A NULL asker meets the shared roots alone: it names nothing beneath
+ * another profile's binding and places no custom/ claim.
+ *
+ * One rule, read by the forward name (deepest_root) and the backward resolve
+ * (find_entry).
+ */
+static bool namespace_holds(const char *profile, const mount_entry_t *m) {
+    return !m->profile || (profile && strcmp(m->profile, profile) == 0);
+}
 
 /**
  * The tail of `location` past `root`, on a component boundary.
@@ -337,15 +353,15 @@ static const char *tail_under_root(const char *location, const char *root) {
  *
  * A namespace is one profile's: the shared roots (HOME, the sentinel, both
  * profile-less) and its own binding; another profile's target is skipped before
- * it can win. Tightest container wins. At an equal depth two of the asker's own
- * roots stand at one directory, and the more specific statement takes it — a
- * binding over the shared roots, and the sentinel over a HOME that is "/": `~/.rc`
- * under a binding at $HOME is `custom/.rc`, and a capture at `/etc/x` on a machine
- * whose HOME is "/" (a container's bare uid) is `root/etc/x`, the reading that
- * means the same directory on every other machine. Those are the only two ties
- * there are: the build drops a row at "/" — the one directory the sentinel already
- * stands at — so a binding never meets the sentinel, and one profile has one
- * binding.
+ * it can win (namespace_holds). Tightest container wins. At an equal depth two
+ * of the asker's own roots stand at one directory, and the more specific statement
+ * takes it — a binding over the shared roots, and the sentinel over a HOME that
+ * is "/": `~/.rc` under a binding at $HOME is `custom/.rc`, and a capture at
+ * `/etc/x` on a machine whose HOME is "/" (a container's bare uid) is `root/etc/x`,
+ * the reading that means the same directory on every other machine. Those are
+ * the only two ties there are: the build drops a row at "/" — the one directory
+ * the sentinel already stands at — so a binding never meets the sentinel, and
+ * one profile has one binding.
  *
  * A root encloses the location iff its spelling is a prefix of it on a component
  * boundary (tail_under_root), the root itself included with the empty tail: every
@@ -366,11 +382,9 @@ static const mount_spec_t *deepest_root(
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
 
-        /* A binding is a profile's (mount_t); an entry with none — HOME, the
-         * sentinel — is every namespace's. */
-        if (m->profile && (!profile || strcmp(m->profile, profile) != 0)) {
-            continue;
-        }
+        /* The asker's own entries first: another profile's binding is an ordinary
+         * directory in this namespace, and never competes on depth. */
+        if (!namespace_holds(profile, m)) continue;
 
         const char *tail = tail_under_root(location, m->spelling);
         if (!tail) continue;
@@ -420,19 +434,20 @@ error_t *mount_table_build(
      * The profile is the type's contract (mount_t) and is refused whatever the
      * target: a nameless binding is a caller's bug, and it would be a root of
      * every namespace — the machine-wide name this module does not produce.
-     * Establishing it here is what lets deepest_root and find_entry read
-     * `m->profile` as a fact. The target is a row's, and the build asks only
-     * what an entry is: an absolute path that is not the root. "/" is the one
-     * absolute spelling that ends in its own separator — the sentinel spells it
-     * "" so that the join reads "/x" — and a row spelling it would join "//x",
-     * a key no argument can spell, and stand beside the sentinel as a per-profile
-     * root of the root directory itself; a relative row spells a location nothing
-     * can match, and deploy would write beside the process. Neither comes through
-     * a binder (mount_validate_target), so a row with either — a hand edit —
-     * contributes no mount, as an empty target does: the profile is bound nowhere
-     * here, which the view already records (core/manifest.h manifest_unbound).
-     * Dropped and not refused because a refusal would fail the command that repairs
-     * it; a row spelled otherwise keys its claims at whatever it spells. */
+     * Establishing it here is what lets namespace_holds read `m->profile` as
+     * the whole of whose an entry is, for both views at once. The target is a
+     * row's, and the build asks only what an entry is: an absolute path that is
+     * not the root. "/" is the one absolute spelling that ends in its own separator
+     * — the sentinel spells it "" so that the join reads "/x" — and a row spelling
+     * it would join "//x", a key no argument can spell, and stand beside the
+     * sentinel as a per-profile root of the root directory itself; a relative
+     * row spells a location nothing can match, and deploy would write beside
+     * the process. Neither comes through a binder (mount_validate_target), so a
+     * row with either — a hand edit — contributes no mount, as an empty target
+     * does: the profile is bound nowhere here, which the view already records
+     * (core/manifest.h manifest_unbound). Dropped and not refused because a refusal
+     * would fail the command that repairs it; a row spelled otherwise keys its
+     * claims at whatever it spells. */
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
         if (!mounts[i].profile) {
@@ -532,35 +547,20 @@ const char *mount_root_describe(
 }
 
 /**
- * Look up the entry for a (kind, profile) pair.
+ * The entry of `kind` in the asker's namespace, or NULL when none is.
  *
- * Profile-less kinds (per_profile == false: HOME, ROOT) contribute exactly one
- * entry; the first kind match wins. Profile-keyed kinds (per_profile == true:
- * CUSTOM) require a caller profile equal to the entry's stored one — which every
- * CUSTOM entry has, mount_table_build refusing a binding that names none — so a
- * NULL caller profile places no custom/ claim. Returns NULL when no entry satisfies
- * the query.
- *
- * The asker filter deepest_root reads off the data — an entry with a profile is
- * that profile's — is this one read off the type, and the two answer alike because
- * the build sets a profile on the per_profile kind and on no other. One rule,
- * read the way each verb already has its subject in hand.
+ * HOME and the sentinel are every asker's, so they answer whoever asks; a CUSTOM
+ * entry is its own profile's alone, so a NULL asker finds no binding and places
+ * no custom/ claim (namespace_holds).
  *
  * Sole consumer today is mount_resolve.
  */
 static const mount_entry_t *find_entry(
     const mount_table_t *table, mount_kind_t kind, const char *profile
 ) {
-    const mount_spec_t *spec = mount_spec_for_kind(kind);
-    if (!spec) return NULL;
-
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
-        if (m->kind != kind) continue;
-        if (!spec->per_profile) return m;
-        if (profile && strcmp(m->profile, profile) == 0) {
-            return m;
-        }
+        if (m->kind == kind && namespace_holds(profile, m)) return m;
     }
 
     return NULL;

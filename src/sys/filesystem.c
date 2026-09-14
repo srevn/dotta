@@ -1260,23 +1260,15 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
  * Path operations
  */
 
-/* pwd -L's rule: $PWD is the working directory when it is absolute, a fixed point
- * of the lexical fold — no `.` or `..` component, no empty one (a doubled slash,
- * a trailing one past the root) — and names the directory the process is in (one
- * device and inode with "."). It is carried as it stands, so anything the fold
- * would move is refused with it: a `..` behind a symlink folds to a directory
- * other than the one it named, and a doubled slash misses every prefix a reader
- * tests it against. Every shell writes a fixed point; only a hand-set variable
- * is refused here. */
+/* pwd -L's rule: $PWD is the working directory when it is the fold's own spelling
+ * (fs_is_folded) and names the directory the process is in — one device and inode
+ * with ".". It is carried as it stands, so anything the fold would move is refused
+ * with it: a `..` behind a symlink folds to a directory other than the one it
+ * named, and a doubled slash misses every prefix a reader tests it against. Every
+ * shell writes a fixed point; only a hand-set variable is refused here. */
 static bool pwd_is_here(const char *pwd) {
-    if (!pwd || pwd[0] != '/') return false;
-    for (const char *p = pwd; *p; p++) {
-        if (*p != '/') continue;
-        if (p[1] == '/' || (p[1] == '\0' && p != pwd)) return false;
-        if (p[1] != '.') continue;
-        if (p[2] == '\0' || p[2] == '/') return false;
-        if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
-    }
+    if (!fs_is_folded(pwd)) return false;
+
     struct stat named, here;
     return fs_stat(pwd, &named) == 0 && fs_stat(".", &here) == 0 &&
            named.st_dev == here.st_dev && named.st_ino == here.st_ino;
@@ -1409,6 +1401,24 @@ error_t *fs_normalize_path(const char *path, char **out) {
     free(stack);
     *out = result;
     return NULL;
+}
+
+bool fs_is_folded(const char *path) {
+    if (!path || path[0] != '/') return false;
+
+    /* Every separator decides the component that follows it: an empty one (a
+     * doubled slash, or a trailing one past the root), a `.` or a `..`. A component
+     * is one of those by its first bytes and whatever ends it, so the walk reads
+     * neither a length nor a token. */
+    for (const char *p = path; *p; p++) {
+        if (*p != '/') continue;
+        if (p[1] == '/' || (p[1] == '\0' && p != path)) return false;
+        if (p[1] != '.') continue;
+        if (p[2] == '\0' || p[2] == '/') return false;
+        if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
+    }
+
+    return true;
 }
 
 error_t *fs_get_parent_dir(const char *path, char **out) {

@@ -65,7 +65,7 @@ That is also why an enabled profile can hold files and still read `empty` under 
 
 ## Targets
 
-A **target** is the directory where a profile's `custom/` files belong on this machine — a jail, a container tree, or a second home. Each machine can choose a different directory:
+A **target** is the directory where a profile's `custom/` files belong on this machine — a jail, a container tree, a second home, or `/` itself inside a container, with the same profile bound at a jail on the host. Each machine can choose a different directory:
 
 ```bash
 # Set the target and capture a file from inside it, in one command

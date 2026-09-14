@@ -202,10 +202,10 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * binder normalized it, mount_validate_target) — `/a/..` is a spelling of nowhere.
  * The boundary is not always found before the first `..`, and does not need to
  * be: `/a/../<target>/x` meets one first, and the fold is per prefix, not per
- * argument. A `.` leaves the prefix as it was and a `..` returns it to one the
- * append that made it already asked about, so neither asks again; the root the
- * walk starts from is no binding's spelling (a binder refuses "/",
- * mount_validate_target), so it is not the boundary either.
+ * argument. The root the walk starts from is asked like every other prefix, which
+ * is what makes a target at "/" a prefix of every absolute argument; a `.` leaves
+ * the prefix as it was and a `..` returns it to one the walk already stood on,
+ * so neither can be the first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
  * bare relative path is the jail's without a question (spell_argument). The scratch
@@ -241,10 +241,13 @@ static error_t *inside_target(
     folded[1] = '\0';
     size_t len = 1;
 
+    /* Grown until it is the target, or the argument runs out: the loop's own
+     * condition is the question, asked of every prefix the walk stands on, the
+     * root it starts from first. */
     const char *cursor = input;
-    while (*cursor) {
+    while (strcmp(folded, target) != 0) {
         while (*cursor == '/') cursor++;
-        if (!*cursor) break;
+        if (!*cursor) return NULL;
 
         const char *component = cursor;
         while (*cursor && *cursor != '/') cursor++;
@@ -263,12 +266,9 @@ static error_t *inside_target(
         memcpy(folded + len, component, length);
         len += length;
         folded[len] = '\0';
-
-        if (strcmp(folded, target) == 0) {
-            *out_inside = true;   /* The tail is unread: past here it is Git's */
-            return NULL;
-        }
     }
+
+    *out_inside = true;   /* The tail is unread: past here it is Git's */
 
     return NULL;
 }
@@ -299,6 +299,8 @@ static error_t *inside_target(
  *                    <target>/../etc/secret  -> ERROR             (walked out)
  *                    ""                      -> ERROR             (no path in any
  *                                                                  grammar)
+ *   --target /;      /etc/foo, etc/foo       -> /etc/foo          (the root
+ *                                                                  encloses all)
  *
  * The refusal is lexical, on the spelling: what a path reaches through a link
  * is not this rule's business — a link inside the target that reaches outside
@@ -309,8 +311,9 @@ static error_t *inside_target(
  * (cmd_add).
  *
  * @param input  The argument as typed (must not be NULL)
- * @param target --target as the row spells it, absolute and folded, or NULL:
- *               nothing re-roots
+ * @param target --target as the row spells it, absolute and folded, "/" included
+ *               — nothing re-roots under it and nothing escapes it — or NULL:
+ *               nothing re-roots at all
  * @param arena  Arena the boundary reads through and the answer lives in
  * @param out    Normalized absolute path, the arena's; NULL after an error
  * @return Error or NULL on success
@@ -363,9 +366,11 @@ static error_t *spell_argument(
      * outside. The subject is folded (path_input_normalize), so the whole test
      * is a string's, where the boundary above had to be asked per prefix on the
      * bytes as typed. A tilde path is HOME's and is read against no target, even
-     * one beneath HOME. */
+     * one beneath HOME. The root's own slash is its separator, so as a prefix
+     * it is "" — the table's spelling of it (infra/mount.h) — and every absolute
+     * path is beneath it. */
     if (target && input[0] != '~' && strcmp(spelled, target) != 0 &&
-        !str_path_beneath(spelled, target, strlen(target))) {
+        !str_path_beneath(spelled, target, target[1] ? strlen(target) : 0)) {
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' resolves outside target root '%s'.\n"
@@ -1958,20 +1963,26 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * one rule with two halves, of which collect_tree's "Skipped root"
              * arm is the other (a link met in a walk is not followed). A link
              * to nothing, and anything that is not a directory, still cannot be
-             * added itself. A root whose link reaches the filesystem root is
-             * refused as a target at "/" is (mount_validate_target): a HOME that
-             * is a link to "/" would otherwise name the whole machine home/. A
-             * link is the only shape asked, that being what the command line
-             * brought; a root standing at the filesystem root as a directory in
-             * its own right — a bind mount at HOME — is entered like any other.
-             * A typed name never arrives here, the user's own name being the
-             * answer. */
+             * added itself. A HOME whose link reaches the filesystem root is
+             * refused: it would name the whole machine home/, a portable label
+             * that lands under the next machine's HOME. A target's link may reach
+             * it — the machine is then named custom/, which the next machine
+             * binds where it likes, a target at "/" being a binding like any
+             * other (infra/mount.h). A link is the only shape asked, that being
+             * what the command line brought; a root standing at the filesystem
+             * root as a directory in its own right — a bind mount at HOME — is
+             * entered like any other. A typed name never arrives here, the user's
+             * own name being the answer.
+             *
+             * `root` is non-NULL: manifest_name answered NULL, which it does
+             * only where mount_root answers (infra/mount.h mount_root_describe). */
+            const mount_spec_t *root = mount_root(mounts, opts->profile, location);
             struct stat reached;
             if (occupant == FS_OCCUPANT_SYMLINK && fs_stat(location, &reached) == 0 &&
                 S_ISDIR(reached.st_mode)) {
                 struct stat slash;
-                if (fs_stat("/", &slash) == 0 && reached.st_dev == slash.st_dev &&
-                    reached.st_ino == slash.st_ino) {
+                if (!root->per_profile && fs_stat("/", &slash) == 0 &&
+                    reached.st_dev == slash.st_dev && reached.st_ino == slash.st_ino) {
                     err = ERROR(
                         ERR_INVALID_ARG,
                         "'%s' reaches the filesystem root and cannot be added "
@@ -1984,8 +1995,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             if (kind != PATH_KIND_DIRECTORY) {
                 char buf[MOUNT_NOUN_MAX];
                 const char *noun = mount_root_describe(
-                    mount_root(mounts, opts->profile, location), opts->profile,
-                    buf, sizeof(buf)
+                    root, opts->profile, buf, sizeof(buf)
                 );
                 err = ERROR(
                     ERR_INVALID_ARG,

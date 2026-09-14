@@ -574,14 +574,13 @@ error_t *fs_ensure_parent_dirs(const char *path);
 /**
  * The working directory, spelled as the shell spells it
  *
- * $PWD by pwd -L's rule — absolute, a fixed point of the lexical fold (no `.`
- * or `..` component, no empty one), one device and inode with "." — and getcwd's
- * physical path when the shell set none, or it has gone stale, or it is not a
- * fixed point (every shell writes one; a hand-set variable may not). Logical,
- * because a path names the entry it is reached through: a link in the working
- * directory's path (`~/.config`) stays the entry it is, as an absolute argument
- * typed through it does. Physical only where nothing spelled it — a sudo that
- * dropped $PWD, a cron, an env -i.
+ * $PWD by pwd -L's rule — the fold's own spelling (fs_is_folded), one device
+ * and inode with "." — and getcwd's physical path when the shell set none, or
+ * it has gone stale, or it is not folded (every shell writes a fixed point; a
+ * hand-set variable may not). Logical, because a path names the entry it is reached
+ * through: a link in the working directory's path (`~/.config`) stays the entry
+ * it is, as an absolute argument typed through it does. Physical only where nothing
+ * spelled it — a sudo that dropped $PWD, a cron, an env -i.
  *
  * Readers: fs_make_absolute, which joins a relative path onto it; and the
  * normalizer (infra/path.h path_input_normalize), which spells it under HOME
@@ -667,6 +666,27 @@ error_t *fs_canonicalize_path(const char *path, char **out);
  * @return Error or NULL on success
  */
 error_t *fs_normalize_path(const char *path, char **out);
+
+/**
+ * Is this path the fold's own spelling?
+ *
+ * Absolute, with no empty, `.` or `..` component — "/" or "/a/b": what
+ * fs_normalize_path returns for an absolute input, and returns unchanged for
+ * one of these. The shape every key has (infra/mount.h): a root's spelling is
+ * one, and so is a root's spelling joined with a tail. A relative path answers
+ * no whatever it spells — the fold keeps a leading `..` on one, and every reader
+ * here asks of an absolute path, which the fold joins a relative one onto first
+ * (fs_make_absolute, infra/path.h path_input_normalize). NULL answers no: getenv's
+ * answer flows in (fs_working_directory).
+ *
+ * Pure: no allocation, no filesystem. Readers: the working directory's pwd -L
+ * rule (fs_working_directory), and a deployment target's shape at the binders
+ * (infra/mount.h mount_validate_target).
+ *
+ * @param path Path, or NULL
+ * @return true iff path is absolute and the fold would return it unchanged
+ */
+bool fs_is_folded(const char *path);
 
 /**
  * Get parent directory path

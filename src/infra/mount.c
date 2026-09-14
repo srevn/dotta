@@ -82,45 +82,11 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path) {
     return mount_spec_for_kind(kind);
 }
 
-/**
- * Reject `.` and `..` components in a slash-delimited path.
- *
- * Pure rule check shared by mount_validate_storage and mount_validate_target.
- * `components` is the substring to walk (storage paths start at byte 0; targets
- * start at byte 1 to skip the leading '/'); `display_path` is the original
- * user-visible string used only in error messages — separated so each caller
- * surfaces the form the user typed, not its tail.
- *
- * A component is `.` or `..` by its first bytes and whatever ends it, so the
- * walk reads neither a length nor a token. An empty component — the one a `//`
- * or a trailing `/` leaves — is neither, and passes here exactly as it passed
- * the tokenizer that used to skip it; both callers refuse those two shapes on
- * their own, in their own words.
- *
- * No filesystem access, no allocation: the tail is walked in place.
- */
-static error_t *validate_path_components(
-    const char *components, const char *display_path
-) {
-    for (const char *comp = components; comp != NULL;) {
-        if (comp[0] == '.' && comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
-            return ERROR(
-                ERR_INVALID_ARG, "Path traversal not allowed "
-                "(component '..' in '%s')", display_path
-            );
-        }
-        if (comp[0] == '.' && (comp[1] == '/' || comp[1] == '\0')) {
-            return ERROR(
-                ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
-                display_path
-            );
-        }
+const char *mount_strip_label(const char *storage_path) {
+    if (!storage_path) return NULL;
+    const char *tail = NULL;
 
-        const char *slash = strchr(comp, '/');
-        comp = slash ? slash + 1 : NULL;
-    }
-
-    return NULL;
+    return mount_decode_label(storage_path, NULL, &tail) ? tail : storage_path;
 }
 
 error_t *mount_validate_storage(const char *storage_path) {
@@ -163,105 +129,78 @@ error_t *mount_validate_storage(const char *storage_path) {
         );
     }
 
-    /* SECURITY: Tail components must not be `.`, `..`, or empty. The label itself
-     * ("home"/"root"/"custom") is constant and never a traversal token — walking
-     * only the tail saves one iteration. */
-    return validate_path_components(tail, storage_path);
-}
+    /* SECURITY: Tail components must not be `.` or `..`. A component is one by
+     * its first bytes and whatever ends it, so the walk reads neither a length
+     * nor a token; the label itself ("home"/"root"/"custom") is constant and
+     * never a traversal token, so only the tail is walked. An empty component —
+     * the one a `//` or a trailing `/` leaves — was refused above in its own
+     * words and does not reach here. The message names the path the user typed,
+     * not the tail it is walking. */
+    for (const char *comp = tail; comp != NULL;) {
+        if (comp[0] == '.' &&
+            comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
+            return ERROR(
+                ERR_INVALID_ARG, "Path traversal not allowed "
+                "(component '..' in '%s')", storage_path
+            );
+        }
+        if (comp[0] == '.' && (comp[1] == '/' || comp[1] == '\0')) {
+            return ERROR(
+                ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
+                storage_path
+            );
+        }
 
-const char *mount_strip_label(const char *storage_path) {
-    if (!storage_path) return NULL;
-    const char *tail = NULL;
-    return mount_decode_label(storage_path, NULL, &tail) ? tail : storage_path;
+        const char *slash = strchr(comp, '/');
+        comp = slash ? slash + 1 : NULL;
+    }
+
+    return NULL;
 }
 
 error_t *mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
-    /* 1. Must be absolute */
-    if (target[0] != '/') {
+    /* The shape: absolute and folded, as the normalizer spells every argument
+     * (infra/path.h), so of the binders' input only the interactive save's raw
+     * text — kept as typed where a resolve refused it — can fail here; the sentence
+     * names the whole rule for it. "/" is included: a target at the root is a
+     * binding like any other, spelled "" in the table (mount_table_build). */
+    if (!fs_is_folded(target)) {
         return ERROR(
             ERR_INVALID_ARG,
-            "Target must be absolute path (got '%s')\n"
-            "Example: --target /mnt/jails/web", target
+            "Target must be an absolute path with no '.', '..', '//' or "
+            "trailing slash (got '%s')\n", target
         );
     }
 
-    /* 2. No path traversal or redundant components */
-    if (strstr(target, "//") != NULL) {
-        return ERROR(
-            ERR_INVALID_ARG, "Target contains '//': '%s'",
-            target
-        );
-    }
-
-    /* 3. Validate each component (catches . and .. at any position). Skip the
-     *    leading '/' — a target is always absolute. */
-    error_t *comp_err = validate_path_components(target + 1, target);
-    if (comp_err) {
-        return error_wrap(
-            comp_err,
-            "Use canonical paths without '.', '..', or '//'"
-        );
-    }
-
-    /* 4. Must not end with slash */
-    size_t len = strlen(target);
-    if (len > 1 && target[len - 1] == '/') {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Target must not end with slash: '%s'\n"
-            "Use: %.*s", target, (int) (len - 1), target
-        );
-    }
-
-    /* 5. Normalize and verify existence through the canonical form */
-    char *resolved = NULL;
-    error_t *resolve_err = fs_canonicalize_path(target, &resolved);
-    if (resolve_err) {
-        if (error_code(resolve_err) == ERR_NOT_FOUND) {
-            error_free(resolve_err);
+    /* The place: it stands, and it is a directory — one stat, through a link
+     * standing at the spelling, because a binding means the directory the link
+     * reaches, which is what mount_same_target reads of it too. Absence has a
+     * remedy only when nothing is there: a link standing at the spelling reaches
+     * nothing, and a mkdir would meet the link rather than make the directory.
+     * Every other reason is the kernel's own words — a component that is a file
+     * reads "Not a directory", where a mkdir -p would fail too. */
+    struct stat st;
+    if (fs_stat(target, &st) != 0) {
+        if (errno != ENOENT) {
+            return error_from_errno(errno, "Cannot stat target '%s'", target);
+        }
+        if (fs_lstat(target, &st) == 0 && S_ISLNK(st.st_mode)) {
             return ERROR(
-                ERR_INVALID_ARG,
-                "Target directory does not exist: '%s'\n"
-                "Create it first: mkdir -p '%s'", target, target
+                ERR_INVALID_ARG, "Target '%s' is a link to nothing", target
             );
         }
-        return error_wrap(
-            resolve_err, "Cannot resolve target '%s'", target
-        );
-    }
-
-    /* 6. Reject the filesystem root, whatever spelling reaches it — "/" itself,
-     *    or a symlink to it, which the raw string would not show. A mount at
-     *    "/" is always a misconfiguration: its claims would re-root under every
-     *    path on the machine. */
-    if (resolved[1] == '\0') {
-        free(resolved);
         return ERROR(
-            ERR_INVALID_ARG,
-            "Target '%s' cannot be the filesystem root '/'\n"
-            "Choose a specific directory: --target /mnt/jails/web", target
-        );
-    }
-
-    /* 7. Verify it's a directory */
-    struct stat st;
-    if (fs_stat(resolved, &st) != 0) {
-        free(resolved);
-        return ERROR(
-            ERR_INVALID_ARG, "Cannot stat target: %s",
-            strerror(errno)
+            ERR_INVALID_ARG, "Target directory does not exist: '%s'\n"
+            "Create it first: mkdir -p '%s'", target, target
         );
     }
     if (!S_ISDIR(st.st_mode)) {
-        free(resolved);
         return ERROR(
-            ERR_INVALID_ARG, "Target must be a directory: '%s'",
-            target
+            ERR_INVALID_ARG, "Target must be a directory: '%s'", target
         );
     }
-    free(resolved);
 
     return NULL;
 }

@@ -135,12 +135,11 @@ error_t *path_input_resolve(
  * that link's target, as a typed absolute path would.
  *
  * HOME has two spellings, or it has one: the kernel's is the rule's, or it is
- * the filesystem root (a HOME linking to `/` would spell the machine under it;
- * a target at `/` is refused for the same reason, mount_validate_target), or it
- * encloses the rule's — a HOME reached through a link to its own ancestor, where
- * the substitution would nest the tail beneath itself; the other direction is a
- * link to its own descendant, which the kernel refuses as a loop. In each, the
- * directory stands as the shell spelled it.
+ * the filesystem root (a HOME linking to `/` would spell the machine under it),
+ * or it encloses the rule's — a HOME reached through a link to its own ancestor,
+ * where the substitution would nest the tail beneath itself; the other direction
+ * is a link to its own descendant, which the kernel refuses as a loop. In each,
+ * the directory stands as the shell spelled it.
  */
 static error_t *working_directory(char **out) {
     char *cwd = NULL;

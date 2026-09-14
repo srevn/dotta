@@ -47,7 +47,8 @@
  * the row keeps the spelling it has) and the normalizer's working directory
  * (infra/path.h). And where acting on a string alone would duplicate or destroy:
  * the scan's roots and its leaf probe, cleanup's guard (core/workspace.c), and
- * add's refusal of a root that reaches the filesystem root (cmds/add.c).
+ * add's refusal of a HOME that reaches the filesystem root through a link
+ * (cmds/add.c).
  *
  * A row's target is normalized and validated where it is written (the binders,
  * mount_validate_target); the build asks only what an entry is — an absolute
@@ -187,20 +188,25 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path);
 error_t *mount_validate_storage(const char *storage_path);
 
 /**
- * Validate a user-provided deployment target (the `--target` argument).
+ * Validate a deployment target (the `--target` argument) as the row will hold it.
  *
- * The binders resolve first (path_input_normalize: tilde, relative, `.`, `..`),
- * so the absolute path the row stores is what reaches this check; the syntactic
- * rules below are the boundary's own and hold for a caller that did not (the
- * interactive save's validate, on text a resolve refused).
+ * The binders normalize first (infra/path.h path_input_normalize: tilde, the
+ * working directory, `.`, `..`, `//`), so what reaches here is the absolute path
+ * the row stores; the shape rule holds for a caller that did not (the interactive
+ * save's validate, on text a resolve refused).
  *
- * Checks:
- *  - Absolute path (starts with '/')
- *  - No "..", ".", or empty component
- *  - No "//" (consecutive slashes)
- *  - No trailing slash
- *  - Resolves via realpath() and refers to an existing directory
- *  - Not the filesystem root '/', under any spelling that reaches it
+ * Refuses, in order, one message each:
+ *  - a spelling that is not absolute and folded (sys/filesystem.h fs_is_folded)
+ *    — the shape every key has
+ *  - a path that does not stand (a link to nothing named as such), or that is
+ *    not a directory — one stat, through a link standing at the spelling: a binding
+ *    means the directory the link reaches, as mount_same_target reads it
+ *
+ * The shape before the disk, so a traversal is refused by what it is and never
+ * by its absence. The filesystem root is a target like any other: a binding there
+ * names the machine custom/ for that profile, and the next machine binds the
+ * same profile where it likes (mount_table_build). Every target this admits is
+ * absolute and folded, which is the build's precondition.
  *
  * Filesystem access is required for the existence + directory checks.
  *
@@ -220,14 +226,15 @@ error_t *mount_validate_target(const char *target);
  * and the next apply re-owns (core/workspace) — and one that changes only the
  * row's spelling buys that churn for nothing. A spelling that stands is named
  * by its directory: the two are one when they have one device and inode, through
- * a symlink standing at either (a target is validated through realpath, so a
- * link there is the directory it reaches). One that does not stand — a stale
- * row, its directory gone — is named by its spelling, and a differing one is a
- * move. One of the two places identity is read where a spelling is made (the
- * other is the normalizer's working directory, infra/path.h); the two CLI binders
- * say at NORMAL which spelling they kept (cmds/profile.c, cmds/add.c). The
- * interactive save says nothing: its screen is built once, so the spelling it
- * discarded is the one still shown (cmds/interactive.c).
+ * a symlink standing at either (a target is validated by the directory it reaches,
+ * through a link standing at it — mount_validate_target — so a binding means
+ * that directory). One that does not stand — a stale row, its directory gone —
+ * is named by its spelling, and a differing one is a move. One of the two places
+ * identity is read where a spelling is made (the other is the normalizer's working
+ * directory, infra/path.h); the two CLI binders say at NORMAL which spelling
+ * they kept (cmds/profile.c, cmds/add.c). The interactive save says nothing:
+ * its screen is built once, so the spelling it discarded is the one still shown
+ * (cmds/interactive.c).
  *
  * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
  * classify.

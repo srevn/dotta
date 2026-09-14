@@ -64,7 +64,7 @@
  * where the reach ran — so a caller's classification of a failure (ENOENT read
  * as absence, EACCES as a refusal) stays its own. The primitives below are built
  * on these and never on the raw call, so a reader that wants an error_t and a
- * reader that wants the errno make the same call at the same site. The five here
+ * reader that wants the errno make the same call at the same site. The six here
  * have outside readers; the write kinds (mkdir, unlink, rename, …) are the
  * primitives' own and stay inside the module.
  */
@@ -123,6 +123,15 @@ DIR *fs_opendir(const char *path);
  *         path that went away
  */
 bool fs_eaccess(const char *path, int amode);
+
+/**
+ * realpath(3) — the path as the kernel spells it, every link resolved
+ *
+ * @param path Path (must not be NULL)
+ * @param resolved Receives the spelling, PATH_MAX bytes (must not be NULL)
+ * @return resolved, or NULL with errno
+ */
+char *fs_realpath(const char *path, char *resolved);
 
 /**
  * File operations
@@ -563,27 +572,36 @@ error_t *fs_ensure_parent_dirs(const char *path);
  */
 
 /**
+ * The working directory, spelled as the shell spells it
+ *
+ * $PWD by pwd -L's rule — absolute, a fixed point of the lexical fold (no `.`
+ * or `..` component, no empty one), one device and inode with "." — and getcwd's
+ * physical path when the shell set none, or it has gone stale, or it is not a
+ * fixed point (every shell writes one; a hand-set variable may not). Logical,
+ * because a path names the entry it is reached through: a link in the working
+ * directory's path (`~/.config`) stays the entry it is, as an absolute argument
+ * typed through it does. Physical only where nothing spelled it — a sudo that
+ * dropped $PWD, a cron, an env -i.
+ *
+ * Readers: fs_make_absolute, which joins a relative path onto it.
+ *
+ * @param out The directory (caller frees, must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *fs_working_directory(char **out);
+
+/**
  * Make path absolute without resolving symlinks
  *
  * Unlike fs_canonicalize_path() which uses realpath() and resolves all symlinks,
- * this function makes a path absolute while preserving symlink locations.
+ * this function makes a path absolute while preserving symlink locations: an
+ * absolute path stands, and a relative one is joined onto the working directory
+ * as the shell spells it (fs_working_directory). A pure string operation past
+ * that one look: the path need not exist, and the argument's own `.` and `..`
+ * are kept for the caller's fs_normalize_path.
  *
- * A relative path is the working directory's, spelled as the shell spells it:
- * $PWD by pwd -L's rule (absolute, no `.` or `..` component, one device and inode
- * with "."), getcwd's physical path when the shell set none or it has gone stale.
- * Logical, because a path names the entry it is reached through: a link in the
- * working directory's path (`~/.config`) stays the entry it is, as an absolute
- * argument typed through it does. The roots the mount table knows are matched
- * by their spellings and spelled physically there, whichever reached them
- * (infra/mount.h). A pure string operation past that one look: the path need
- * not exist — a command that names a file dotta manages but the disk no longer
- * has (apply to redeploy it, remove, revert, show) resolves it like any other.
- * Callers that need the path to exist check that themselves (add does, with
- * lexists); the argument's own `.` and `..` are kept for the caller's
- * fs_normalize_path.
- *
- * This preserves symlink locations for storage path determination, preventing
- * accidental tracking of symlink targets at unintended locations.
+ * Readers: the store's own path (utils/repo.c, a relative repository path
+ * configured or positional) and the normalizer (infra/path.h).
  *
  * Examples:
  *   /home/user/mylink -> /home/user/mylink (even if mylink is a symlink)

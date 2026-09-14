@@ -46,7 +46,7 @@ static inline error_t *validate_path(const char *path) {
  * nowhere else — the invoker's call, and on a refusal the same call once more
  * as root when the run holds it (sys/identity). Each wrapper is the whole of
  * one raise: the second call is the raw syscall, so no raise ever nests, spans
- * another wrapper, or outlives the return. The five with outside readers are
+ * another wrapper, or outlives the return. The six with outside readers are
  * filesystem.h's; the write kinds are static until one appears.
  */
 int fs_lstat(const char *path, struct stat *st) {
@@ -198,7 +198,7 @@ static int fs_mkstemp(char *tmpl) {
     return fd;
 }
 
-static char *fs_realpath(const char *path, char *resolved) {
+char *fs_realpath(const char *path, char *resolved) {
     char *out = realpath(path, resolved);
     if (!out && identity_raise_on_refusal(errno)) {
         out = realpath(path, resolved);
@@ -1260,14 +1260,20 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
  * Path operations
  */
 
-/* pwd -L's rule: $PWD is the working directory when it is absolute, carries no
- * `.` or `..` component and names the directory the process is in (one device
- * and inode with "."). It is carried as it stands, so a component the lexical
- * fold would move is refused with it. */
+/* pwd -L's rule: $PWD is the working directory when it is absolute, a fixed point
+ * of the lexical fold — no `.` or `..` component, no empty one (a doubled slash,
+ * a trailing one past the root) — and names the directory the process is in (one
+ * device and inode with "."). It is carried as it stands, so anything the fold
+ * would move is refused with it: a `..` behind a symlink folds to a directory
+ * other than the one it named, and a doubled slash misses every prefix a reader
+ * tests it against. Every shell writes a fixed point; only a hand-set variable
+ * is refused here. */
 static bool pwd_is_here(const char *pwd) {
     if (!pwd || pwd[0] != '/') return false;
     for (const char *p = pwd; *p; p++) {
-        if (p[0] != '/' || p[1] != '.') continue;
+        if (*p != '/') continue;
+        if (p[1] == '/' || (p[1] == '\0' && p != pwd)) return false;
+        if (p[1] != '.') continue;
         if (p[2] == '\0' || p[2] == '/') return false;
         if (p[2] == '.' && (p[3] == '\0' || p[3] == '/')) return false;
     }
@@ -1276,39 +1282,45 @@ static bool pwd_is_here(const char *pwd) {
            named.st_dev == here.st_dev && named.st_ino == here.st_ino;
 }
 
+error_t *fs_working_directory(char **out) {
+    CHECK_NULL(out);
+
+    /* The shell's spelling where it set one that stands, the kernel's otherwise. */
+    const char *cwd = getenv("PWD");
+    char physical[PATH_MAX];
+    if (!pwd_is_here(cwd)) {
+        if (getcwd(physical, sizeof(physical)) == NULL) {
+            return error_from_errno(errno, "Failed to get current directory");
+        }
+        cwd = physical;
+    }
+
+    *out = strdup(cwd);
+    if (!*out) {
+        return ERROR(ERR_MEMORY, "Failed to copy the working directory");
+    }
+
+    return NULL;
+}
+
 error_t *fs_make_absolute(const char *path, char **out) {
     RETURN_IF_ERROR(validate_path(path));
     CHECK_NULL(out);
 
-    char *absolute = NULL;
-
-    /* Check if already absolute */
     if (path[0] == '/') {
-        absolute = strdup(path);
-        if (!absolute) {
+        *out = strdup(path);
+        if (!*out) {
             return ERROR(ERR_MEMORY, "Failed to duplicate path");
         }
-    } else {
-        /* A relative path is the working directory's, spelled as the shell spells
-         * it: $PWD by pwd -L's rule, getcwd's physical path when the shell set
-         * none or it has gone stale. */
-        char physical[PATH_MAX];
-        const char *cwd = getenv("PWD");
-        if (!pwd_is_here(cwd)) {
-            if (getcwd(physical, sizeof(physical)) == NULL) {
-                return error_from_errno(errno, "Failed to get current directory");
-            }
-            cwd = physical;
-        }
-
-        error_t *err = fs_path_join(cwd, path, &absolute);
-        if (err) {
-            return error_wrap(err, "Failed to join paths");
-        }
+        return NULL;
     }
 
-    *out = absolute;
-    return NULL;
+    char *directory = NULL;
+    RETURN_IF_ERROR(fs_working_directory(&directory));
+    error_t *err = fs_path_join(directory, path, out);
+    free(directory);
+
+    return err;
 }
 
 error_t *fs_canonicalize_path(const char *path, char **out) {

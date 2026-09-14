@@ -234,9 +234,9 @@ error_t *mount_validate_target(const char *target);
  * is named by its spelling, and a differing one is a move. One of the two places
  * identity is read where a spelling is made (the other is the normalizer's working
  * directory, infra/path.h); the two CLI binders say at NORMAL which spelling
- * they kept (cmds/profile.c, cmds/add.c). The interactive save says nothing:
- * its screen is built once, so the spelling it discarded is the one still shown
- * (cmds/interactive.c).
+ * they kept (cmds/profile.c, cmds/add.c), and the interactive save, which has
+ * no line to say it in, puts the kept spelling back on the item its next screen
+ * renders (cmds/interactive.c plan_classify).
  *
  * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
  * classify.

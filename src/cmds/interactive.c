@@ -425,13 +425,14 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
     return NULL;
 }
 
-/* Phase: classify diff against the persisted set BEFORE any mutation.
+/* Phase: classify diff against the persisted set BEFORE any state mutation.
  *
  * state_peek_profiles lends the row cache. The first state_enable/disable call
- * re-reads it and frees the strings this slice points at. Both needs_enable
- * (additions plus retained rows whose target was edited in-session) and
- * removal_names must be decided here, while the borrows are live. Removal names
- * are arena-strdup'd so they survive the re-read. */
+ * re-reads it and frees the strings this slice points at, so everything a row
+ * has to give is decided or copied here, while the borrows are live: needs_enable
+ * (additions, plus retained rows whose target names another directory),
+ * removal_names (arena-strdup'd so they survive the re-read), and the spelling
+ * a retained binding keeps, copied onto the item that offered another for it. */
 static error_t *plan_classify(
     arena_t *arena, state_t *deploy_state, plan_t *plan
 ) {
@@ -491,27 +492,51 @@ static error_t *plan_classify(
             plan->needs_enable[i] = true;
             continue;
         }
-        /* Retained: re-enable only when the pending target names a directory
-         * the row does not hold — the row's own under another spelling is the
-         * same binding (mount_same_target), and the row keeps its spelling, the
-         * key of every path beneath it (infra/mount.h). The two CLI binders say
-         * so in a line; this editor says nothing and shows nothing — its items
-         * are built once, at open, and the target it renders is the one the prompt
-         * wrote, so a spelling the save discarded stays on screen until the editor
-         * is reopened. A NULL can change nothing — the UPSERT keeps the row's
-         * target for one (state_enable_profile), and no key unbinds. */
-        plan->needs_enable[i] = it->target != NULL && (persisted_target == NULL ||
-            !mount_same_target(persisted_target, it->target));
+        /* Retained with nothing pending: a NULL is no offer of a target — the
+         * UPSERT keeps the row's for one (state_enable_profile), and no key unbinds
+         * — so the row stands as it is and this flag keeps the zero it was
+         * allocated with. */
+        if (!it->target) continue;
+
+        /* Re-enable only when the pending target names a directory the row does
+         * not hold — the row's own under another spelling is the same binding
+         * (mount_same_target), and the row keeps its spelling, the key of every
+         * path beneath it (infra/mount.h). */
+        plan->needs_enable[i] = persisted_target == NULL ||
+            !mount_same_target(persisted_target, it->target);
+
+        /* A same-directory target is the one edit this save declines while the
+         * session goes on, and the row it is shown on is the only sentence this
+         * editor has: the two CLI binders answer one with a line at NORMAL
+         * (cmds/profile.c, cmds/add.c), while here the items are built once, at
+         * open, with nothing reloaded after the commit — so an item left holding
+         * the spelling the save threw away would render it on every screen after,
+         * and seed the next prompt with it. It takes the row's instead. Not a
+         * reconciliation with the store: what is put back is this save's own
+         * decision, which is why a NULL (no offer) and an equal string (nothing
+         * declined) are both left alone. The copy is taken before the old string
+         * goes, so an allocation that fails leaves the item owning what it already
+         * owned and free_items frees it once; strdup and not the arena, because
+         * free_items frees these with free(). */
+        if (!plan->needs_enable[i] && strcmp(it->target, persisted_target) != 0) {
+            char *kept = strdup(persisted_target);
+            if (!kept) {
+                return ERROR(ERR_MEMORY, "Failed to duplicate the row's target");
+            }
+            free(it->target);
+            it->target = kept;
+        }
     }
 
     return NULL;
 }
 
 /* Phase: validate user-supplied targets at the boundary, mirroring the check
- * `cmd profile enable` runs. NULL targets are legitimate for non-custom rows;
- * for custom rows the prompt is the source-of-truth gate, and manifest_build's
- * UNBOUND tripwire fires downstream (plan_check) if a bug ever breaches that
- * gate. No second guard here. */
+ * `cmd profile enable` runs. A NULL target is legitimate on every row: a non-custom
+ * one has nothing to place, and a custom one saved unbound is a normal lifecycle
+ * stage the health channel names (core/manifest.h manifest_unbound) — the OFF→ON
+ * prompt asks for a target, a row already enabled without one keeps that, and
+ * nothing downstream refuses either. No second guard here. */
 static error_t *plan_validate(const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
@@ -563,8 +588,10 @@ static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
  * the state now holds it, which is what the next load will read. The view is
  * computed, never stored — the build writes nothing and its result is discarded.
  * It is the tripwire that keeps the save from landing an enabled set the next
- * load cannot build: a custom/ row that breached the target gate (UNBOUND), a
- * branch that exists but will not load. */
+ * load cannot build: a branch that exists but will not load. Not a target gate
+ * — the build is total over a custom/ claim whose profile has no binding, which
+ * contributes no row and is recorded for the health channel to say (core/manifest.h
+ * manifest_unbound) — so an unbound row saves here as a clone's and a sync's do. */
 static error_t *plan_check(
     git_repository *repo, state_t *deploy_state, arena_t *arena
 ) {

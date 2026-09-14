@@ -95,10 +95,10 @@
  * which answers view-side and so agrees with the field on a DEPLOYED item by
  * construction.
  *
- * Established once at load, after every analysis has observed its slice
- * (collect_displaced), and trusted downstream: the route reads it first
- * (workspace_item_route), cleanup_verdict's displaced arm reads it, and the
- * displays name it ([displaced]).
+ * Noted by each analysis where it observed the squatter (note_displaced), stamped
+ * onto every present item once both have run (stamp_displaced), and trusted
+ * downstream: the route reads it first (workspace_item_route), cleanup_verdict's
+ * displaced arm reads it, and the displays name it ([displaced]).
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Observed at its own path, or absent */
@@ -476,7 +476,7 @@ typedef enum {
  *
  * Two of them are the join, and every command's load sets both: the file and
  * the directory analyses observe the view's rows, and the displaced fact
- * (collect_displaced) is complete only when every directory row has been observed
+ * (note_displaced) is complete only when every directory row has been observed
  * — a load that routes items (workspace_item_route) must never read NULL over a
  * squatter. The other two are optional because each has a cost and a reader that
  * may not exist: the orphan analysis (a Git probe per profile; read by the settle
@@ -703,7 +703,7 @@ const manifest_row_t *workspace_lookup(
  * occupant. So the answer is the view's claims alone, and on a DEPLOYED item it
  * is exactly the item's own displaced field.
  *
- * The answer is derived from the load's own observations (collect_displaced),
+ * The answer is noted by the analyses from their own observations (note_displaced),
  * and every command's load observes every directory row (workspace_load_t: a
  * load that routes items must never read NULL over a squatter), so it is complete
  * on every load. The outermost such ancestor is returned: the true offender,

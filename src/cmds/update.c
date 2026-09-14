@@ -2206,8 +2206,9 @@ const args_command_t spec_update = {
     .usage        = "%s update [options] [profile|file]...",
     .description  =
         "Commit filesystem modifications to the matching profile branches\n"
-        "(the reverse direction of 'apply'). Metadata changes on root/\n"
-        "files are captured alongside content.\n",
+        "(the reverse direction of 'apply'). Mode is captured alongside\n"
+        "content, and ownership for root/ and custom/ paths that are not\n"
+        "yours.\n",
     .notes        =
         "File Detection:\n"
         "  New files inside tracked directories are included based on\n"

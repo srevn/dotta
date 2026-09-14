@@ -1690,10 +1690,10 @@ const args_command_t spec_status = {
         "\n"
         "Remote State Indicators:\n"
         "  =    up-to-date with remote\n"
-        "  ^n   n commits ahead of remote (ready to push)\n"
-        "  vn   n commits behind remote (run '%s sync' to pull)\n"
-        "  <>   diverged from remote (needs resolution)\n"
-        "  .    no remote tracking branch\n",
+        "  ↑ n  n commits ahead of remote (ready to push)\n"
+        "  ↓ n  n commits behind remote (run '%s sync' to pull)\n"
+        "  ↕    diverged from remote (needs resolution)\n"
+        "  •    no remote tracking branch\n",
     .examples     =
         "  %s status                         # Local + remote\n"
         "  %s status --local                 # Filesystem only\n"

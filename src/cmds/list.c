@@ -1017,11 +1017,11 @@ const args_command_t spec_list = {
         "  Level 3    Full commit messages instead of oneline format.\n"
         "\n"
         "Remote State Indicators (with --remote):\n"
-        "  [=]    up-to-date with remote\n"
-        "  [^n]   n commits ahead of remote (run '%s sync' to push)\n"
-        "  [vn]   n commits behind remote (run '%s sync' to pull)\n"
-        "  [<>]   diverged from remote (manual resolution needed)\n"
-        "  [.]    no remote tracking branch (created on first sync)\n",
+        "  [=]      up-to-date with remote\n"
+        "  [↑n]     n commits ahead of remote (run '%s sync' to push)\n"
+        "  [↓n]     n commits behind remote (run '%s sync' to pull)\n"
+        "  [↕n+m]   diverged from remote (manual resolution needed)\n"
+        "  [•]      no remote tracking branch (created on first sync)\n",
     .examples    =
         "  %s list                           # L1 profiles: names only\n"
         "  %s list -v                        # L1 profiles: stats + last commit\n"

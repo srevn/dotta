@@ -1436,7 +1436,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
         }
 
-        /* Parse optional group (only present for root/ prefix) */
+        /* Parse optional group (only the labels that track ownership: root/, custom/) */
         cJSON *group_obj = cJSON_GetObjectItem(item_obj, "group");
         if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
             item->group = strdup(group_obj->valuestring);

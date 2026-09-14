@@ -6,9 +6,10 @@
  * would consume it, and the command's `complete` hook prints what its grammar
  * admits at that position. The sources the hooks draw on live here, one authority
  * each: the enabled set (state), the view (every enabled profile at HEAD,
- * precedence resolved), or Git (a branch's tree or history). The hooks compose
- * them per command; nothing here guesses which one a command wants. `dotta
- * completion <shell>` prints the script that asks.
+ * precedence resolved), Git (a branch's tree or history), or the filesystem (the
+ * paths a re-rooting flag reads under). The hooks compose them per command;
+ * nothing here guesses which one a command wants. `dotta completion <shell>`
+ * prints the script that asks.
  *
  * The sources fail silently: errors result in no output rather than messages to
  * stderr, and outside a repository every source prints nothing.
@@ -478,42 +479,58 @@ bool completion_commits_at(
 /**
  * Filesystem paths under a relocatable root
  */
-bool completion_paths_under(FILE *out, const char *root, const char *current) {
-    /* Mirrors spell_argument (cmds/add.c): no root, a tilde token, a token spelled
-     * from here, or a token already inside the root — the path is what the shell
-     * sees. Inside is the root as typed on this command line, where the command
-     * asks the same question against the row's spelling when one is bound
-     * (cmds/add.c takes the row's before it reads an argument). The two part
-     * for a `--target` naming the row's directory another way: the offer is under
-     * the typed spelling, the capture under the row's, and the token lands on
-     * add's re-rooted not-found sentence. A completion with the state in hand
-     * would close it; this one has no ctx and would pay a syscall per keystroke
-     * for a token the shell will re-offer anyway. */
-    if (root == NULL || root[0] == '\0' || current[0] == '~' || current[0] == '.') {
+bool completion_paths_under(
+    const dotta_ctx_t *ctx, FILE *out, const char *profile, const char *target,
+    const char *current
+) {
+    /* Mirrors spell_argument (cmds/add.c): no flag, a tilde token, or a token
+     * spelled from here — the path is what the shell sees. A saved binding alone
+     * re-roots nothing: without the flag the command reads an argument where it
+     * was typed, so there is no root here either. */
+    if (target == NULL || target[0] == '\0' ||
+        current[0] == '~' || current[0] == '.') {
         return false;
     }
 
-    /* The root as the command reads it — absolute, or relative to the working
-     * directory the shell completes in — so the "already inside" check reads a
-     * relative root against an absolute token. A root the command will refuse
-     * has nothing to offer under it. */
+    /* The flag as the command reads it — absolute, or relative to the working
+     * directory the shell completes in (infra/path.h) — so the token is compared
+     * against an absolute root, and the row's spelling against the flag's as
+     * the binders compare them. The arena's, as add's own pre-flight copies it,
+     * so the two spellings the root may take are one borrowed pointer with nothing
+     * to free between them. */
     char *absolute = NULL;
-    error_t *err = path_input_normalize(root, &absolute);
+    error_t *err = path_input_normalize(target, &absolute);
     if (err) {
         error_free(err);
         return false;
     }
+    const char *root = arena_strdup(ctx->arena, absolute);
+    free(absolute);
+    if (root == NULL) return true;
 
-    size_t root_len = strlen(absolute);
-    while (root_len > 0 && absolute[root_len - 1] == '/') root_len--;
-    if (root_len == 0) {
-        free(absolute);
-        return false;   /* `--target /` re-roots nothing */
-    }
+    /* The row's spelling wherever the profile is bound at the flag's directory:
+     * cmd_add takes it before it reads an argument and says so in a line, so a
+     * token the command reads is one spelled under the row's, and the flag's
+     * spelling of that same directory is outside by string and re-rooted
+     * (inside_target). Bound elsewhere the command refuses the add and the offer
+     * is the flag's — what the user is looking at; bound nowhere, the flag is
+     * the binding. The compare is the binders' own (mount_same_target): two stats
+     * beside the process start, the repository open and the state load a keystroke
+     * already pays, and none at all where the row is spelled as the flag is.
+     * Only the test below reads the spelling — one directory lists alike — so
+     * the substitution shows on an absolute token alone. Borrowed from the row
+     * cache, which nothing here moves (core/state.h); NULL outside a repository,
+     * where there is no row to ask. */
+    const char *bound = state_peek_profile_target(ctx->run.state, profile);
+    if (bound && mount_same_target(bound, root)) root = bound;
 
-    if (strncmp(current, absolute, root_len) == 0 &&
-        (current[root_len] == '\0' || current[root_len] == '/')) {
-        free(absolute);
+    /* At the root or beneath it the command reads the token as typed, so the
+     * path is the shell's: spell_argument's escape test over the same two strings,
+     * positive. The root's own slash is its separator, so as a prefix it is ""
+     * — the table's spelling of it (infra/mount.h) — every absolute token is
+     * inside it and a relative one lists beneath it. */
+    size_t root_len = root[1] ? strlen(root) : 0;
+    if (strcmp(current, root) == 0 || str_path_beneath(current, root, root_len)) {
         return false;
     }
 
@@ -528,17 +545,18 @@ bool completion_paths_under(FILE *out, const char *root, const char *current) {
     const char *name = slash ? slash + 1 : rel;
     size_t name_len = strlen(name);
 
-    char *dir = str_format(
-        "%.*s/%.*s", (int) root_len, absolute, (int) dir_len, rel
+    /* The listing's own paths are the arena's and abandoned, the module's idiom
+     * (cmds/add.c inside_target): the only thing freed here is what fs_list_dir
+     * allocated, and no candidate's path has a free to get wrong. */
+    const char *dir = arena_str_format(
+        ctx->arena, "%.*s/%.*s", (int) root_len, root, (int) dir_len, rel
     );
-    free(absolute);
     if (dir == NULL) return true;
 
     string_array_t *entries = NULL;
     err = fs_list_dir(dir, &entries);
     if (err) {
         error_free(err);   /* nothing under there: the root applies, nothing to offer */
-        free(dir);
         return true;
     }
 
@@ -547,19 +565,16 @@ bool completion_paths_under(FILE *out, const char *root, const char *current) {
         if (strncmp(entry, name, name_len) != 0) continue;
         if (entry[0] == '.' && name[0] != '.') continue;
 
-        char *path = str_format("%s%s", dir, entry);
+        const char *path = arena_str_format(ctx->arena, "%s%s", dir, entry);
         if (path == NULL) continue;
-        bool is_dir = fs_is_directory(path);
-        free(path);
 
         fprintf(
             out, "%s%.*s%s%s\n", leading, (int) dir_len, rel, entry,
-            is_dir ? "/" : ""
+            fs_is_directory(path) ? "/" : ""
         );
     }
 
     string_array_free(entries);
-    free(dir);
     return true;
 }
 

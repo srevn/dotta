@@ -44,11 +44,12 @@
  * Identity is read at two kinds of place, neither of them this table. Where a
  * spelling is made from a source that did not spell it under a root: the binders
  * (mount_same_target — one directory under two spellings is one binding, and
- * the row keeps the spelling it has) and the normalizer's working directory
- * (infra/path.h). And where acting on a string alone would duplicate or destroy:
- * the scan's roots and its leaf probe, cleanup's guard (core/workspace.c), and
- * add's refusal of a HOME that reaches the filesystem root through a link
- * (cmds/add.c).
+ * the row keeps the spelling it has), which add's path completion asks once more
+ * so its offer stands under the spelling the command will read its arguments
+ * under (cmds/completion.c), and the normalizer's working directory (infra/path.h).
+ * And where acting on a string alone would duplicate or destroy: the scan's roots
+ * and its leaf probe, cleanup's guard (core/workspace.c), and add's refusal of
+ * a HOME that reaches the filesystem root through a link (cmds/add.c).
  *
  * Every root's spelling is absolute and folded (sys/filesystem.h fs_is_folded),
  * each established where it is made: the sentinel's is the literal "", HOME's
@@ -234,12 +235,14 @@ error_t *mount_validate_target(const char *target);
  * is named by its spelling, and a differing one is a move. One of the two places
  * identity is read where a spelling is made (the other is the normalizer's working
  * directory, infra/path.h); the two CLI binders say at NORMAL which spelling
- * they kept (cmds/profile.c, cmds/add.c), and the interactive save, which has
- * no line to say it in, puts the kept spelling back on the item its next screen
- * renders (cmds/interactive.c plan_classify).
+ * they kept (cmds/profile.c, cmds/add.c), the interactive save, which has no
+ * line to say it in, puts the kept spelling back on the item its next screen
+ * renders (cmds/interactive.c plan_classify), and add's path completion, which
+ * has none either, lists under it (cmds/completion.c completion_paths_under) so
+ * the offer and the capture read one spelling.
  *
  * Readers: add's pre-flight, profile enable's retarget arm, the interactive save's
- * classify.
+ * classify, add's path completion.
  */
 bool mount_same_target(const char *a, const char *b);
 

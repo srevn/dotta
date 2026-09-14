@@ -22,9 +22,11 @@
  *       need none, come back.
  *
  * The sources print newline-separated candidates to a stream, one authority each:
- * a source reads the enabled set, the view, or Git, never a blend — a hook composes
- * sources, the library names them. One state read or one view build, never a
- * workspace load.
+ * a source reads the enabled set, the view, Git, or the filesystem, never a blend
+ * — a hook composes sources, the library names them. One state read or one view
+ * build, never a workspace load. The filesystem source asks the enabled set for
+ * the root it lists under — the one the command reads its arguments under — and
+ * never for the paths, which are the disk's alone (completion_paths_under).
  */
 
 #ifndef DOTTA_CMD_COMPLETION_H
@@ -146,17 +148,31 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out);
  * Filesystem paths under a relocatable root, as `add --target` reads them
  * (`spell_argument`, cmds/add.c): `etc/x` and `/etc/x` both mean `<root>/etc/x`,
  * so the candidates are listed under the root and printed in the style the token
- * was typed in. The root is read as the command reads it — relative to the working
- * directory when not absolute. Dotfiles are offered only when the name being
- * typed starts with '.', as the shell does.
+ * was typed in. Dotfiles are offered only when the name being typed starts with
+ * '.', as the shell does.
  *
+ * The root is the one the command reads its arguments under: the flag as the
+ * command reads it — relative to the working directory when not absolute — or,
+ * where `profile` is bound at the flag's directory, the row's own spelling, which
+ * cmd_add takes before it reads an argument and says so in a line
+ * (mount_same_target, infra/mount.h). Bound elsewhere the command refuses the
+ * add and the root is the flag's; bound nowhere, the flag is the binding.
+ *
+ * @param profile The profile the paths would be added to, whose row is asked
+ *                for the binding — as the line spells it, -p's or the first
+ *                positional
+ * @param target  `--target` as typed, or NULL: a saved binding alone re-roots
+ *                nothing, so without the flag there is no root here either
  * @return true when the root applies and the candidates were printed; false when
  *         the path is what the shell sees — no root, a tilde token (HOME's
  *         namespace, never re-rooted), a token spelled from here (`./x`, `../x`,
- *         `.x`: the working directory's), a token already inside the root — and
- *         native completion is the answer.
+ *         `.x`: the working directory's), a token at or beneath the root by string
+ *         — and native completion is the answer.
  */
-bool completion_paths_under(FILE *out, const char *root, const char *current);
+bool completion_paths_under(
+    const dotta_ctx_t *ctx, FILE *out, const char *profile, const char *target,
+    const char *current
+);
 
 /**
  * `dotta __complete` options: the line, as the shell's wrapper passes it.

@@ -593,9 +593,10 @@ state_profiles_t state_peek_profiles(const state_t *state);
  * Readers: the three binders and add's pre-flight (cmds/add.c, cmds/profile.c,
  * cmds/interactive.c), the two screens that print a binding beside its profile
  * (cmds/status.c, cmds/profile.c) and the disable receipt that names the one it
- * forgets, and the interactive editor's seed.
+ * forgets, the interactive editor's seed, and add's path completion, which asks
+ * outside a repository too (cmds/completion.c completion_paths_under).
  *
- * @param state State (must not be NULL)
+ * @param state State (NULL answers NULL: a run with no database holds no row)
  * @param profile Profile name to look up (must not be NULL)
  * @return Borrowed deployment target string, or NULL when the profile has no
  *         deployment target, is not enabled, or the state has no database.

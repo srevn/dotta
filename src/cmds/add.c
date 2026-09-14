@@ -2819,8 +2819,8 @@ static error_t *add_post_parse(
 /**
  * What can stand at the cursor, read off the buckets add_post_parse routes: a
  * local profile in the profile slot — the first positional, unless -p took it —
- * then filesystem paths, listed under --target when one re-roots them. A new
- * profile's name is typed, not offered.
+ * then filesystem paths, listed under the binding the command reads them under
+ * when --target re-roots them. A new profile's name is typed, not offered.
  */
 static args_want_t add_complete(
     const void *ctx_v, const void *opts_v, const args_completion_t *at, FILE *out
@@ -2843,7 +2843,8 @@ static args_want_t add_complete(
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         return ARGS_WANT_NONE;
     }
-    return completion_paths_under(out, o->target, at->current)
+    const char *profile = o->profile ? o->profile : o->positional_args[0];
+    return completion_paths_under(ctx, out, profile, o->target, at->current)
         ? ARGS_WANT_NONE : ARGS_WANT_FILES;
 }
 

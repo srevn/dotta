@@ -56,13 +56,20 @@ typedef struct {
  * Regular ASCII characters (a-z, 0-9, etc.) are returned as-is. These codes
  * represent special keys that need multi-byte sequences.
  *
+ * The sign says whether there is a key at all: zero and up is one, negative is
+ * none. A key the reader cannot name is still a key — the user pressed something
+ * — and belongs in the 1000+ band with the rest; the two negatives are what a
+ * read that gave nothing leaves behind, and neither clears, so a loop over
+ * terminal_read_key ends on one instead of asking again forever.
+ *
  * Every enumerator carries an explicit value so the split stays audit-friendly:
  * inserting a new synthetic key cannot silently shift neighbours into another
  * enumerator's slot, and the ASCII band cannot accidentally collide with the
  * 1000+ band.
  */
 typedef enum {
-    TERM_KEY_UNKNOWN   = -1,
+    TERM_KEY_EOF       = -1,     /* No key: the input stream ended */
+    TERM_KEY_ERROR     = -2,     /* No key: the read failed */
     TERM_KEY_UP        = 1000,
     TERM_KEY_DOWN      = 1001,
     TERM_KEY_LEFT      = 1002,
@@ -72,6 +79,7 @@ typedef enum {
     TERM_KEY_PAGE_UP   = 1006,
     TERM_KEY_PAGE_DOWN = 1007,
     TERM_KEY_DELETE    = 1008,
+    TERM_KEY_UNKNOWN   = 1009,   /* A key press whose sequence has no name */
     TERM_KEY_BACKSPACE = 127,
     TERM_KEY_ENTER     = '\r',
     TERM_KEY_ESCAPE    = 27,
@@ -200,8 +208,15 @@ void terminal_clear_line_to_end(void);
  * - Regular ASCII (0-127) for printable chars
  * - TERM_KEY_* codes for special keys
  * - TERM_KEY_UNKNOWN for unrecognized sequences
+ * - TERM_KEY_EOF or TERM_KEY_ERROR for no key at all: the input stream ended,
+ *   or the read failed. Which of the two a vanished terminal gives is the system's
+ *   — a pty whose master closed reads as end-of-input on one and as an error on
+ *   another — so they are one answer to a caller, and neither clears: the next
+ *   ask gives it again. A loop over this function ends on a negative rather than
+ *   taking it for a key it does not know (cmds/interactive.c view_handle_key,
+ *   the one reader, takes it as the quit Ctrl-D spells).
  *
- * @return Key code
+ * @return A key code, or a negative answer that is no key
  */
 int terminal_read_key(void);
 

@@ -916,6 +916,19 @@ static interactive_result_t view_handle_key(
     arena_t *arena, int key, error_t **out_err
 ) {
     *out_err = NULL;
+
+    /* No key at all — the input stream ended, or the read failed (base/terminal.h):
+     * the quit Ctrl-D already spells, taken above both dispatchers because each
+     * would take it for a key it does not know, ignore it, and read the same
+     * answer again for as long as the loop runs. The terminal going away usually
+     * sends SIGHUP first and the process ends there; a pty closed by something
+     * that is not the session leader sends nothing, and this is the whole of
+     * what stops the session. A prompt open at that moment is abandoned, as Esc
+     * then q abandons it. */
+    if (key < 0) {
+        return INTERACTIVE_EXIT_OK;
+    }
+
     if (view->prompt.active) {
         return handle_key_prompt(view, key);
     }

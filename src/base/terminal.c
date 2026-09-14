@@ -222,17 +222,18 @@ void terminal_clear_line_to_end(void) {
  *
  * Returns:
  * - Byte value (0-255) on success
- * - -1 on EOF
- * - -2 on error
+ * - TERM_KEY_EOF when the stream ended, TERM_KEY_ERROR when the read failed —
+ *   the two answers terminal_read_key hands its own caller, named here so the
+ *   negatives travel out of the module under one name (base/terminal.h)
  */
 static int read_byte(void) {
     unsigned char c;
     ssize_t n = read(STDIN_FILENO, &c, 1);
 
     if (n < 0) {
-        return -2; /* Error */
+        return TERM_KEY_ERROR;
     } else if (n == 0) {
-        return -1; /* EOF */
+        return TERM_KEY_EOF;
     }
 
     return c;
@@ -252,6 +253,11 @@ static int read_byte(void) {
  * - ESC [ H -> Home
  * - ESC [ F -> End
  * - ESC [ 3 ~ -> Delete
+ *
+ * A read that gives nothing part-way through a sequence answers as a key here —
+ * ESC alone, or one with no name — because the bytes already read were a key
+ * press. The end of input is met again at the next terminal_read_key, which is
+ * where it is answered as itself.
  */
 static int read_escape_sequence(void) {
     /* Check if more input is available without blocking. If not, this was just
@@ -326,7 +332,7 @@ int terminal_read_key(void) {
     int c = read_byte();
 
     if (c < 0) {
-        return c; /* EOF or error */
+        return c; /* No key: TERM_KEY_EOF or TERM_KEY_ERROR, as read_byte named it */
     }
 
     /* Handle escape sequences */

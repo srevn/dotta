@@ -40,52 +40,41 @@ root/etc/hosts                → deploys to /etc/hosts
 custom/etc/nginx.conf         → deploys to <this profile's target>/etc/nginx.conf
 ```
 
-The stored path travels with the repository. The directory it hangs from belongs to the machine: `home/` is the home directory and `root/` is `/`, the same for every profile, while `custom/` is the one directory *this* profile is pointed at on this machine — its **target**, which each machine chooses for itself (see [Targets](profiles.md#targets)). Without a target, a profile has nowhere to put `custom/` files here, and one profile's target means nothing to another profile.
+These names travel with the profile. Each machine supplies its home directory and each profile's [target](profiles.md#targets); `root/` paths stay absolute. A profile needs a target to deploy its `custom/` files.
 
 ### Where a File Goes
 
-Dotta uses the first of these rules that applies:
-
-1. **A file the profile already has stays where it is.** Giving a profile a target later never moves what it already stores.
-2. Otherwise the file goes under **the closest directory you have added to the profile** — after `dotta add web home/jail/etc`, everything new inside it is stored under `home/jail/etc/...`.
-3. Otherwise it goes under **the directory it actually sits in** — the profile's target if it is inside one, else the home directory, else `/`.
-
-`dotta update` puts a newly found file exactly where `dotta add` would have put it.
-
-Each profile decides for itself, so two profiles can store one file in two different places:
-
-```bash
-dotta add web --target ~/jail ~/jail/etc/x   # web:    custom/etc/x
-dotta add global ~/jail/etc/x                # global: home/jail/etc/x
-```
-
-Which of them actually deploys the file is a question of precedence, not of storage — see [Layering and Precedence](profiles.md#layering-and-precedence).
-
-A profile stores a given file in **one** place. Ask it to store the same file somewhere else and dotta refuses, shows where the file already lives, and names the two commands that settle it: `dotta add --force` to re-capture it where it is, or `dotta remove` to give that place up first.
-
-By rule 3, a file inside the profile's target is stored under `custom/`, with or without `--target` on the command:
+**An added pathname keeps its stored name.** Later captures update that entry; setting a target does not rename it. By default, new files are named relative to the closest root: your home, the profile's target, or `/`.
 
 ```bash
 dotta add web ~/jail/etc/x                    # no target yet → home/jail/etc/x
 dotta add web --target ~/jail ~/jail/etc/y    # sets one, and → custom/etc/y
-dotta add web ~/jail/etc/z                    # inside it too → custom/etc/z
+dotta add web ~/jail/etc/z                    # saved target → custom/etc/z
 ```
 
-`x` was stored before the target existed, so rule 1 leaves it exactly where it is.
+`x` keeps its `home/` name. The saved target gives `y` and `z` their `custom/` names.
 
-To settle a whole directory one way, add the directory itself:
+**Adding a directory gives its name to new children:**
 
 ```bash
-dotta add web home/jail/etc     # everything new inside it is home/jail/etc/...
+dotta add web --force home/jail/etc   # new children use home/jail/etc/...
 ```
 
-Files already stored stay where they are; only new ones follow the directory. (If the directory already holds files the profile has, dotta stops and asks for `--force`.)
+Existing children keep their names. A nested home or target starts fresh, unless you've explicitly named its directory. `update --include-new` uses the same naming rules for files it discovers.
+
+Use `add --force` to update an existing entry. To give the same pathname another stored name, remove its entry first.
+
+Each profile chooses its own names. For example, `web` can store `~/jail/etc/x` as `custom/etc/x` while `global` stores it as `home/jail/etc/x`. Because both deploy to the same pathname, [profile precedence](profiles.md#layering-and-precedence) decides which one wins.
 
 Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of `root/` and `custom/` paths that belong to someone else. A path the invoker owns needs no owner recorded — every machine reads that absence as "whoever is running dotta". Metadata is captured during `add`/`update` and restored during `apply`.
 
 ### Spellings and Symlinks
 
-A path is keyed by the spelling it was given: your home as `$HOME` spells it, `/`, and a target as you gave it to `--target`. A symlink in a path is part of the path — dotta never reads through one, and a `..` after a link pops the link's spelling, not the directory it reaches. A working directory your shell did not spell (`sudo`, `cron`) is read back under your home. A path dotta walks is spelled the way it walked there. Two profiles that reach one file through two spellings are two paths, both deployed; dotta never unlinks or re-offers a file it manages under another spelling, and a filesystem that folds case or Unicode normalization is read the same way. A profile's target keeps the spelling you bound it with — `dotta profile enable --target` with another spelling of the same directory says so and keeps the row — and `profile disable` tells you that spelling back.
+Dotta treats symlinks as path components. `home/.config/app.conf` keeps that name even if `~/.config` points to `~/dotfiles/config`. File access follows the link; the pathname keeps `.config`. Adding the link itself stores a symlink, while naming your home or target root enters its contents.
+
+Use the home or target spelling dotta knows, or a stored name such as `home/.config/app.conf`. Another spelling of the same file is a different path to dotta, even within one profile. Directory walks keep the pathnames they encounter, and profiles layer only where their destination pathnames match.
+
+Relative paths start at your working directory. `..` removes the preceding path component: `~/link/../x` means `~/x`.
 
 ## Directories
 
@@ -143,7 +132,8 @@ Filesystem (Live System)
 **Apply** -- walks the view and compares each path against disk, deploying only what actually changed: contents, permissions, owner, encryption. It then removes or releases the leftovers according to the record, and writes the record for what it did.
 
 This design gives:
+
 - **Fast status checks** -- dotta looks each path up directly, and skips reading a file's contents when nothing has touched it since dotta last checked
-- **No stale decisions** -- always converges to current Git and current filesystem reality
+- **Fresh comparisons** -- each command reads the current Git state and filesystem
 - **Explicit scope** -- `dotta status --full` shows exactly which paths are managed and by which profile
 - **Nothing to keep in sync** -- the view has no writer at all, and the record is written only by the command that deployed, captured or observed the path

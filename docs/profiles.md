@@ -36,7 +36,7 @@ Enabling a profile puts its files in play: dotta now expects them on disk, and a
 
 ## Layering and Precedence
 
-When multiple profiles contain the same file path, the profile enabled later wins. Precedence is this machine's enabled order, the one `dotta profile list` prints, and the repository knows nothing of it: the same two profiles can layer one way on one machine and the other way on another.
+When multiple profiles deploy to the same pathname, the profile enabled later wins. `dotta profile list` shows this machine's order; another machine can use a different order.
 
 The order is a list this machine keeps:
 
@@ -59,13 +59,13 @@ dotta profile reorder global darwin hosts/laptop
 
 An `<os>/<variant>` profile is detected on every machine of that OS; a per-machine variant is `hosts/<hostname>/<variant>`.
 
-Precedence decides **who deploys a path**, and nothing else. Where each profile *stores* the file is its own business -- decided by its target and what it already holds (see [How Files Are Stored](concepts.md#how-files-are-stored)). So two profiles can keep one file in two different places, and the higher one simply wins the spot on disk.
+Profiles can use different [stored names](concepts.md#how-files-are-stored) for the same destination pathname. Precedence chooses which profile deploys there. Different spellings remain separate paths, even when a symlink leads to the same file (see [Spellings and Symlinks](concepts.md#spellings-and-symlinks)).
 
 That is also why an enabled profile can hold files and still read `empty` under `dotta status -v`. The two commands count different things: `status` counts what a profile currently **wins**, while `dotta profile list` counts what it **holds**. When a higher profile takes a path over, `dotta add` says so -- `Note: 1 path taken over from other profiles` -- and `dotta status --full` names the winner beside every managed path.
 
 ## Targets
 
-Some profiles manage a tree that is not the home directory and not at the same absolute path everywhere -- a container, a jail, a chroot, a second home. A profile like that can be pointed at one directory per machine: its **target**. Files inside it are stored under `custom/` and deploy wherever the profile is pointed on that machine.
+A **target** is the directory where a profile's `custom/` files belong on this machine — a jail, a container tree, or a second home. Each machine can choose a different directory:
 
 ```bash
 # Set the target and capture a file from inside it, in one command
@@ -75,22 +75,26 @@ dotta add web --target /mnt/jails/web /mnt/jails/web/etc/nginx.conf
 dotta profile enable web --target /srv/web
 ```
 
-A profile has one target, and it belongs to this machine, not to the branch. It travels nowhere, and disabling the profile forgets it -- `dotta profile disable` prints the command that puts it back. `dotta profile list` shows a profile's target beside its name.
+A profile has at most one target per machine. `dotta profile list` shows it. Disabling the profile forgets its target and prints the command to restore it.
 
-**`--target` sets the target; it is not a per-command mode.** Once a profile has one, every later command reads it, flag or no flag:
+The target is saved, so later adds beneath it can use `custom/` without repeating the flag. Existing entries and directories you've added keep their [naming rules](concepts.md#where-a-file-goes).
+
+**On `add`, the flag also makes `etc/x` and `/etc/x` shortcuts into the target:**
 
 ```bash
-dotta add web --target ~/jail ~/jail/etc/y   # sets it → custom/etc/y
-dotta add web ~/jail/etc/z                   # no flag → custom/etc/z
+dotta add web --target ~/jail /etc/nginx.conf  # reads ~/jail/etc/nginx.conf
+dotta add web /etc/nginx.conf                 # reads /etc/nginx.conf
 ```
 
-**Moving a target** is `dotta profile enable <name> --target <new>` on a profile that is already enabled. Everything moves at once: the next `dotta status` shows the new paths as `[undeployed]` and the old copies as `[orphaned] [relocated]`, and `dotta apply` deploys the first and prunes the second.
+Use `./` or `../` for a path relative to your working directory; with the flag, it must stay inside the target. A quoted `'~/path'` refers to your home.
 
-**A profile with files under `custom/` is enabled only with a target.** `dotta clone` and `dotta profile enable --all` leave such a profile disabled and name the command; `dotta profile list` marks it `(custom)`. A profile that picks up `custom/` files from a sync *after* it was enabled here stays enabled, and `dotta status` keeps saying so until it has one.
+Keep using the target spelling shown by `profile list`. If you supply another spelling of the same directory, dotta keeps and reports the saved spelling. `add --target` reads its arguments under that spelling.
 
-A target is not ownership. Other profiles may keep files inside it in their own way, and dotta walks straight through it: `dotta add global ~` captures a file inside `web`'s target as `home/jail/etc/x`, because `web`'s target means nothing to `global`. A target says where a profile's files land, not who owns the files there.
+**To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 
-A path that is the same absolute path on every machine -- `/etc/hosts` -- belongs under `root/` and needs no target.
+Profiles with `custom/` files need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` files into an enabled profile, `status` asks you to choose a target.
+
+Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match.
 
 ## Hierarchical Organization
 

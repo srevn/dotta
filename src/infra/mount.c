@@ -170,7 +170,7 @@ error_t *mount_validate_target(const char *target) {
         return ERROR(
             ERR_INVALID_ARG,
             "Target must be an absolute path with no '.', '..', '//' or "
-            "trailing slash (got '%s')\n", target
+            "trailing slash (got '%s')", target
         );
     }
 
@@ -378,15 +378,17 @@ error_t *mount_table_build(
      * target: a nameless binding is a caller's bug, and it would be a root of
      * every namespace — the machine-wide name this module does not produce.
      * Establishing it here is what lets namespace_holds read `m->profile` as
-     * the whole of whose an entry is, for both views at once. The target is a
-     * row's, and the build asks only what an entry is: an absolute path. A relative
-     * row spells a location nothing can match, and deploy would write beside
-     * the process; it comes through no binder (mount_validate_target), so a row
-     * holding one — a hand edit — contributes no mount, as an empty target does:
-     * the profile is bound nowhere here, which the view already records
-     * (core/manifest.h manifest_unbound). Dropped and not refused because a refusal
-     * would fail the command that repairs it; a row spelled otherwise keys its
-     * claims at whatever it spells. */
+     * the whole of whose an entry is, for both views at once. The target is the
+     * type's contract too, and is refused when it is not absolute and folded
+     * (sys/filesystem.h fs_is_folded): a relative row is no path on this machine,
+     * and a `//`, a `.` or a trailing slash would key claims no argument can
+     * spell. Neither reaches here — a row's target is the store's, whose column
+     * holds no other shape (core/state.c), and a command's own binding passed
+     * mount_validate_target — so one arriving is a caller's bug, refused as a
+     * nameless binding is, naming the profile. Establishing both here is what
+     * lets mount_resolve join every spelling with one separator, unconditionally.
+     * NULL contributes no mount: the profile is bound nowhere in this table,
+     * which the view records (core/manifest.h manifest_unbound). */
     size_t n = 0;
     for (size_t i = 0; i < mount_count; i++) {
         if (!mounts[i].profile) {
@@ -395,7 +397,13 @@ error_t *mount_table_build(
             );
         }
         const char *raw = mounts[i].target;
-        if (!raw || raw[0] != '/') continue;
+        if (!raw) continue;
+        if (!fs_is_folded(raw)) {
+            return ERROR(
+                ERR_INVALID_ARG, "A binding's target is an absolute, folded path "
+                "(profile '%s': '%s')", mounts[i].profile, raw
+            );
+        }
 
         /* Copied like the name: the table keeps nothing of the caller's past
          * the call, so it stands for the arena's lifetime whatever happens to
@@ -552,9 +560,8 @@ error_t *mount_resolve(
      * `tail` is non-empty (mount_validate_storage rejects trailing slashes) and
      * no spelling ends in a slash: the sentinel's, a HOME of "/" and a binding
      * at "/" are "", HOME is folded by the identity (sys/identity), and a target
-     * passed mount_validate_target at its binder. The build guarantees only that
-     * a spelling is absolute (mount_table_build); a row that came through no
-     * binder joins as it is, and keys its claims so. */
+     * is absolute and folded, the build's own refusal (mount_table_build) — so
+     * the join is unconditional. */
     *out_location = arena_str_format(arena, "%s/%s", entry->spelling, tail);
     if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");

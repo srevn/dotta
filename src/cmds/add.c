@@ -198,8 +198,9 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * the tail is read as typed: a link inside the jail that reaches outside is typed
  * inside and named for where it lands.
  *
- * Every prefix is folded before it is asked, because the target is folded (its
- * binder normalized it, mount_validate_target) — `/a/..` is a spelling of nowhere.
+ * Every prefix is folded before it is asked, because the target is folded — its
+ * binder normalized it (mount_validate_target), and a row holds no other shape
+ * (core/state.c), so `bound` is folded too — and `/a/..` is a spelling of nowhere.
  * The boundary is not always found before the first `..`, and does not need to
  * be: `/a/../<target>/x` meets one first, and the fold is per prefix, not per
  * argument. The root the walk starts from is asked like every other prefix, which

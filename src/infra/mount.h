@@ -50,13 +50,15 @@
  * add's refusal of a HOME that reaches the filesystem root through a link
  * (cmds/add.c).
  *
- * A row's target is normalized and validated where it is written (the binders,
- * mount_validate_target); the build asks only what an entry is — an absolute
- * path, `/` included, which it spells "" for the join's sake — and a row that
- * came through no binder keys its claims at whatever it spells, which no argument
- * can spell back. The repair is a re-bind: at a different directory, or a disable
- * and an enable, since the binders keep a row's spelling for its own directory
- * (mount_table_build).
+ * Every root's spelling is absolute and folded (sys/filesystem.h fs_is_folded),
+ * each established where it is made: the sentinel's is the literal "", HOME's
+ * is the identity's (sys/identity, normalized at identity_init), and a row's
+ * target is normalized and validated where it is written (the binders,
+ * mount_validate_target) over a column that holds no other shape (core/state.c:
+ * a target no binder would write is refused where a hand makes the edit). So
+ * the build meets only spellings that are keys — `/` spelled "" — and refuses
+ * any other as a caller's bug (mount_table_build). A row bound nowhere holds
+ * NULL, which contributes no mount; the repair is a re-bind.
  *
  * The root directory is spelled "" in the table — the one spelling that joins a
  * tail with one slash and encloses every absolute path at depth zero: the
@@ -280,12 +282,10 @@ typedef struct mount_table mount_table_t;
  *   and `/`"), which is the machine-wide name this module does not produce.
  *   mount_table_build refuses one.
  * - target: where the profile's custom/ tree stands, as its binder wrote it —
- *   absolute, folded, no trailing slash (mount_validate_target), "/" included,
- *   which the table spells "" — and the key of every custom/ path beneath it.
- *   NULL or empty contributes no mount, and neither does a relative spelling:
- *   the entry is dropped at build time, and the profile is bound nowhere in that
- *   table. Those two are the whole of the build's question (the table's paragraph
- *   above).
+ *   absolute and folded (sys/filesystem.h fs_is_folded), "/" included, which
+ *   the table spells "" — and the key of every custom/ path beneath it. NULL or
+ *   empty contributes no mount: the profile is bound nowhere in that table. Any
+ *   other string is refused at the build (mount_table_build).
  */
 typedef struct {
     const char *profile;
@@ -304,17 +304,20 @@ typedef struct {
  *   - A ROOT mount whose target is the empty string (universal fallback for
  *     absolute paths that match no other mount).
  *
- * A mount with no profile is refused (ERR_INVALID_ARG): a binding is a profile's,
- * and the invariant is established here so the readers need no per-read check
- * (mount_t above). A mount whose target is NULL or empty contributes nothing
- * and is dropped — it names no target — and so does a relative one, a spelling
- * the table cannot hold as a root, which no binder writes and a hand-edited row
- * can. A target of "/" is a root like any other, spelled "" for the join's sake
- * (the table's paragraph above), and takes the tie from the sentinel: every path
- * of that profile outside a deeper root is custom/. Dropped and not refused because
- * the profile is then merely bound nowhere, which the view records (core/manifest.h
- * manifest_unbound) and a re-bind repairs, where a refusal would fail the command
- * that repairs it.
+ * A mount with no profile, or with a target that is not absolute and folded, is
+ * refused (ERR_INVALID_ARG): a binding is a profile's, and a root is a spelling
+ * that is a key. Both invariants are established here so the readers need no
+ * per-read check (mount_t above), and both hold of every input by construction
+ * — the store's column for a row (core/state.c), mount_validate_target for a
+ * command's own binding. A target of "/" is a root like any other, spelled ""
+ * for the join's sake (the table's paragraph above), and takes the tie from the
+ * sentinel: every path of that profile outside a deeper root is custom/. A NULL
+ * or empty target contributes nothing: the profile is bound nowhere, which the
+ * view records (core/manifest.h manifest_unbound) and a re-bind repairs. A store
+ * a hand still got a malformed row into — its constraints switched off, or its
+ * marker bumped without the table — fails every command that builds the view
+ * but one: `profile disable`, whose receipt's view is built tolerantly on purpose
+ * (cmds/profile.c), which is the way out, then a re-bind.
  *
  * Lifetime:
  *   - Output is allocated entirely from `arena`, every string included: the table
@@ -324,7 +327,8 @@ typedef struct {
  *     mutations.
  *
  * Errors:
- *   - ERR_INVALID_ARG when a mount names no profile.
+ *   - ERR_INVALID_ARG when a mount names no profile, or names a target that is
+ *     not absolute and folded.
  *   - ERR_MEMORY on arena allocation failure.
  *
  * One production reader: core/manifest.h's manifest_mount_table, which shapes

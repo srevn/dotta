@@ -680,8 +680,12 @@ error_t *fs_normalize_path(const char *path, char **out);
  * answer flows in (fs_working_directory).
  *
  * Pure: no allocation, no filesystem. Readers: the working directory's pwd -L
- * rule (fs_working_directory), and a deployment target's shape at the binders
- * (infra/mount.h mount_validate_target).
+ * rule (fs_working_directory); a deployment target's shape at the binders and
+ * the mount table's own precondition (infra/mount.h mount_validate_target,
+ * mount_table_build); and the invoker's HOME, which sys/identity produces by
+ * normalizing rather than asking. The store spells the same rule in its own
+ * language on the column that holds a target (core/state.c), and one list of
+ * shapes is driven through both (tests/test-mount.c, tests/test-state.c).
  *
  * @param path Path, or NULL
  * @return true iff path is absolute and the fold would return it unchanged

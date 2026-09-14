@@ -30,7 +30,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "18"
+#define STATE_SCHEMA_VERSION "19"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -182,12 +182,31 @@ static error_t *initialize_schema(sqlite3 *db) {
         "INSERT INTO schema_meta (key, value) "
         "VALUES ('version', '" STATE_SCHEMA_VERSION "');"
 
-        /* Enabled profiles table (authority: profile commands) */
+        /* Enabled profiles table (authority: profile commands).
+         *
+         * Held by the schema:
+         *   - a target is NULL — bound nowhere — or absolute and folded, "/"
+         *     included (sys/filesystem.h fs_is_folded: the rule the binders
+         *     validate before they write, infra/mount.h mount_validate_target,
+         *     and the mount table takes as its precondition, mount_table_build),
+         *     spelled once more in the store's own language so a hand edit is
+         *     refused where it is made: no reader meets a spelling no binder
+         *     wrote, and the row cache is the table with no rule of its own.
+         *     The seven clauses are exactly that predicate over the strings C
+         *     reads — both walks stop at a NUL — and tests/test-state.c drives
+         *     one list of shapes through both. Named, so the refusal a hand meets
+         *     reads "CHECK constraint failed: target_spelling"; the record's
+         *     `type IN (…)` below is unnamed because its expression is its own
+         *     sentence. */
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
         "    enabled_at INTEGER NOT NULL,"
-        "    target TEXT"
+        "    target TEXT CONSTRAINT target_spelling CHECK ("
+        "        target IS NULL OR target = '/' OR ("
+        "        target GLOB '/?*' AND target NOT GLOB '*//*' AND target NOT GLOB '*/'"
+        "        AND target NOT GLOB '*/.' AND target NOT GLOB '*/./*'"
+        "        AND target NOT GLOB '*/..' AND target NOT GLOB '*/../*'))"
         ") STRICT;"
 
         /* Index for existence checks */
@@ -941,8 +960,9 @@ error_t *state_disable_profile(
  * state_disable_profile). Both refusals leave the table untouched.
  *
  * Per-row state (the target) is read from the row cache and preserved across
- * the DELETE + re-INSERT rewrite. Only the position column changes meaning per
- * call; everything else is byte-for-byte preserved.
+ * the DELETE + re-INSERT rewrite. Only the position changes: the name and the
+ * target are re-inserted as the cache holds them, and enabled_at is the current
+ * time (state.h).
  *
  * Hot path - must be fast even with 10,000 deployed files. Only modifies
  * enabled_profiles (the record untouched).

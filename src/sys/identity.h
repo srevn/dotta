@@ -39,9 +39,11 @@
  * $HOME — the test isolation pattern, and every explicit intent — unless it is
  * unset, empty, or, under root obtained for a user, root's own home (`-H`, `-i`
  * and always_set_home rewrite it to root's; that is sudo's doing, not the user's),
- * in which case the invoker's passwd entry answers. Absolute, and lexically
- * normalised: a key under HOME is HOME's spelling and a tail (infra/mount.h),
- * and a doubled slash inside HOME would be a spelling no folded argument matches.
+ * in which case the invoker's passwd entry answers. Absolute and folded
+ * (sys/filesystem.h fs_is_folded, by normalizing here rather than refusing): a
+ * key under HOME is HOME's spelling and a tail (infra/mount.h), and a doubled
+ * slash inside HOME would be a spelling no folded argument matches. It is one
+ * of the mount table's three root spellings, each established where it is made.
  * Whether the directory exists is not asked here.
  *
  * HOME may have a second spelling: the one the kernel writes — realpath's, and
@@ -128,7 +130,7 @@ typedef struct identity {
     const gid_t *groups;       /* The kernel's supplementary list for this process */
     int ngroups;               /* Its length; 0 when there is none to read */
     const char *name;          /* The passwd entry's name; NULL when it has no entry */
-    const char *home;          /* The HOME rule above; absolute, normalised, never NULL */
+    const char *home;          /* The HOME rule above; absolute, folded, never NULL */
     const char *home_physical; /* HOME as realpath spells it; NULL when it does not stand */
     bool privileged;           /* Root is held: the effective user started as uid 0 */
 } identity_t;

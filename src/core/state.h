@@ -25,10 +25,14 @@
  * tree — its custom/ paths — stands here. The target is part of the enablement,
  * not of the branch: bound by `enable --target` and `add --target`, moved in
  * place by `enable --target`, kept by an enable that names none, and gone with
- * the row when the profile is disabled. A profile with custom/ paths is enabled
- * only with a target; the one row without one that can exist is the profile a
- * sync brought custom/ paths into after it was enabled here, and the build holds
- * that tree's claims until it is bound (manifest_unbound).
+ * the row when the profile is disabled. The column holds an absolute, folded
+ * target or NULL and nothing else — the schema refuses the rest, the binders'
+ * own rule (infra/mount.h mount_validate_target) in the store's language — so a
+ * hand edit is refused at the hand edit, and every reader of the row cache reads
+ * a key or none. A profile with custom/ paths is enabled only with a target;
+ * the one row without one that can exist is the profile a sync brought custom/
+ * paths into after it was enabled here, and the build holds that tree's claims
+ * until it is bound (manifest_unbound).
  *
  * Database location: the store's dotta.db, beside its refs (utils/repo.h)
  *
@@ -429,7 +433,8 @@ void state_free(state_t *state);
  * position (UPSERT). `target` binds the profile's custom/ tree here; NULL (or
  * empty) names no target and keeps the one the row has — the only way a row loses
  * its target is state_disable_profile. The callers validate a target before it
- * reaches this write (mount_validate_target, at the binders).
+ * reaches this write (mount_validate_target, at the binders), and the schema
+ * refuses what they would not have written (the target_spelling constraint).
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
@@ -582,7 +587,13 @@ state_profiles_t state_peek_profiles(const state_t *state);
  * Peek a single profile's deployment target
  *
  * Returns a borrowed pointer into the row cache. Same lifetime rules as
- * state_peek_profiles.
+ * state_peek_profiles. The answer is a key or NULL, the column holding nothing
+ * else (the table's paragraph above).
+ *
+ * Readers: the three binders and add's pre-flight (cmds/add.c, cmds/profile.c,
+ * cmds/interactive.c), the two screens that print a binding beside its profile
+ * (cmds/status.c, cmds/profile.c) and the disable receipt that names the one it
+ * forgets, and the interactive editor's seed.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to look up (must not be NULL)

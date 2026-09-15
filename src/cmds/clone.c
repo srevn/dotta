@@ -619,8 +619,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         if (needs_target) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Profile '%s' holds custom/ paths and needs a target here; "
-                "not enabled", profile
+                "Profile '%s' needs a target for custom/ here; not enabled", profile
             );
             output_hint(
                 out, OUTPUT_NORMAL,

@@ -38,9 +38,10 @@
  *           last-deployed timestamp and the verbose per-profile counts are folded
  *           from its rows (NULL when no workspace was loaded — the slices are
  *           empty then, and the header is names alone)
- * @param unbound The view's health slice: the claims the build could not place,
- *                annotated onto their profile's line (a count, the paths under
- *                -v), the repair a legend line under the block
+ * @param unbound The view's health slice: the claims the build could not place
+ *                and the root a profile scans that it could not, annotated onto
+ *                their profile's line (a count and the root's clause, the entries
+ *                under -v), the repair a legend line under the block
  * @param unkept Its sibling: the names a profile holds for a location it also
  *               names otherwise, annotated and listed the same way. Both say a
  *               profile carries more than it projects, for two different reasons
@@ -107,12 +108,18 @@ static void display_enabled_profiles(
         }
 
         /* Unbound claims are not rows — the counts above never see them; the
-         * annotation is what says the profile carries more than it projects. */
+         * annotation is what says the profile carries more than it projects. A
+         * root the profile scans with no target here is on the same slice and
+         * is noted apart: it is no path, and the sentence below has a clause of
+         * its own for it. */
         size_t unplaced = 0;
+        bool root_unplaced = false;
         for (size_t j = 0; j < unbound.count; j++) {
-            if (strcmp(unbound.entries[j].profile, profile) == 0) unplaced++;
+            if (strcmp(unbound.entries[j].profile, profile) != 0) continue;
+            if (unbound.entries[j].kind == MANIFEST_UNBOUND_ROOT) root_unplaced = true;
+            else unplaced++;
         }
-        if (unplaced > 0) unbound_shown = true;
+        if (unplaced > 0 || root_unplaced) unbound_shown = true;
 
         /* Nor are the paths the view does not use. One count and not two: the
          * repair is per path, and the file each of them reaches is on its own
@@ -137,11 +144,27 @@ static void display_enabled_profiles(
             );
         }
 
-        if (unplaced > 0) {
+        /* One sentence for one repair, whatever the profile carries: the claims
+         * counted, the root named, the two joined where both are held. Only custom
+         * can go unplaced — the shared roots always answer — so the label is
+         * the sentence's own, as it always was. */
+        if (unplaced > 0 && root_unplaced) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}(%zu custom/ path%s and the contents of custom/ need a "
+                "deployment target){reset}",
+                unplaced, unplaced == 1 ? "" : "s"
+            );
+        } else if (unplaced > 0) {
             output_styled(
                 out, OUTPUT_NORMAL,
                 "  {yellow}(%zu custom/ path%s need%s a deployment target){reset}",
                 unplaced, unplaced == 1 ? "" : "s", unplaced == 1 ? "s" : ""
+            );
+        } else if (root_unplaced) {
+            output_styled(
+                out, OUTPUT_NORMAL,
+                "  {yellow}(the contents of custom/ need a deployment target){reset}"
             );
         }
 
@@ -158,12 +181,14 @@ static void display_enabled_profiles(
             output_format_counts(file_count, dir_count, counts, sizeof(counts));
             output_print(out, OUTPUT_NORMAL, "\n    %s", counts);
 
+            /* Each entry by what a screen calls it (manifest_unbound_describe):
+             * a claim by its name, the root by its contents. */
+            char shown[PATH_MAX];
             for (size_t j = 0; j < unbound.count; j++) {
                 if (strcmp(unbound.entries[j].profile, profile) != 0) continue;
                 output_print(
-                    out, OUTPUT_NORMAL, "\n    no target: %s%s",
-                    unbound.entries[j].storage_path,
-                    path_kind_suffix(unbound.entries[j].kind)
+                    out, OUTPUT_NORMAL, "\n    no target: %s",
+                    manifest_unbound_describe(&unbound.entries[j], shown, sizeof(shown))
                 );
             }
 
@@ -177,7 +202,6 @@ static void display_enabled_profiles(
              * window's absolute one: `~/jail/etc/x` beside two storage paths
              * reads, where the absolute form is the longest thing on the line
              * and is mostly the storage path with its label spelled out. */
-            char shown[PATH_MAX];
             for (size_t j = 0; j < unkept.count; j++) {
                 if (strcmp(unkept.entries[j].profile, profile) != 0) continue;
                 output_format_path(

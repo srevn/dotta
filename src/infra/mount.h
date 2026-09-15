@@ -64,7 +64,9 @@
  * The root directory is spelled "" in the table — the one spelling that joins a
  * tail with one slash and encloses every absolute path at depth zero: the
  * sentinel's, HOME's when HOME is "/" (a container's bare uid), and a binding's
- * when its target is "/" (a container's own root; mount_table_build).
+ * when its target is "/" (a container's own root; mount_table_build). One reader
+ * turns it back into the path it spells, for a caller that walks a root rather
+ * than joins beneath it (mount_root_location).
  *
  * One table, one reading
  * ----------------------
@@ -133,7 +135,8 @@ typedef enum {
  *
  * Stable storage: SPECS rows live in static data, so the pointers returned by
  * `mount_spec_for_kind` and `mount_spec_for_path` are valid for the process
- * lifetime. Callers borrow.
+ * lifetime. Callers borrow. A spec's kind is its row's position, read back from
+ * the pointer (mount_spec_kind) and stored nowhere a second time.
  */
 typedef struct mount_spec {
     const char *label;            /* Storage-label string ("home", "root", "custom") */
@@ -152,6 +155,19 @@ typedef struct mount_spec {
  * table; valid for the process lifetime.
  */
 const mount_spec_t *mount_spec_for_kind(mount_kind_t kind);
+
+/**
+ * The kind a spec is: its row's index, the inverse of mount_spec_for_kind.
+ *
+ * Every spec pointer in the tree is a row of the static table — the three accessors
+ * above and below hand out nothing else — so the answer is the pointer's own
+ * position and nothing is spelled twice; a spec that is not the table's is a
+ * caller's bug, not an answer. For a caller that found the spec by its label
+ * and wants the slot the kind names in a per-kind array.
+ *
+ * Readers: the sheet's parser (core/metadata.c metadata_from_json).
+ */
+mount_kind_t mount_spec_kind(const mount_spec_t *spec);
 
 /**
  * Resolve a storage path to its kind's spec by reading the leading label. Returns
@@ -477,6 +493,35 @@ const mount_spec_t *mount_root(
     const mount_table_t *table,
     const char *profile,
     const char *location
+);
+
+/**
+ * Where `profile`'s root of `kind` stands, as a location.
+ *
+ * The inverse of mount_root: that one asks which root stands at a location, this
+ * one where a root stands. The entry's spelling as a path — "/" where the table
+ * spells the root "" (the sentinel, a HOME of "/", a binding at "/") — or NULL
+ * for a per_profile kind the profile is not bound at here, and for a NULL asker
+ * naming one. A location and never the table's own spelling, because the reader
+ * walks it, stats it and joins beneath it by the walkers' rule (a separator unless
+ * the directory is "/"), and the one spelling that is not a path — "" — is exactly
+ * the one lstat answers ENOENT to. HOME and the sentinel are every asker's and
+ * always answer.
+ *
+ * The entry, not the tie: a HOME that is also a binding is one directory under
+ * two kinds, and each kind answers its own spelling here, where mount_root and
+ * mount_name give the binding the tie. Never fails, allocates nothing; the answer
+ * is the table's for the arena's lifetime, or the literal "/".
+ *
+ * Reader: the view's contribution, which asks where each root the sheet scans
+ * stands and records the one that stands nowhere (core/manifest.c
+ * manifest_contribute). No walker asks the table: the contribution having asked
+ * once, the scan reads the view.
+ */
+const char *mount_root_location(
+    const mount_table_t *table,
+    const char *profile,
+    mount_kind_t kind
 );
 
 /* The longest sentence mount_root_describe renders: "the deployment target" (20),

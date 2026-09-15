@@ -41,6 +41,7 @@
 
 #include "core/manifest.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -110,11 +111,12 @@ struct manifest {
 
     const mount_table_t *mounts;   /* The table the rows were placed by: the build's own, or a tree view's caller's */
 
-    /* The two health slices: claims the build could not place (no target binding)
-     * and names a profile did not keep (it names the location otherwise), both
-     * grouped by profile in build order. Flat arena arrays, abandon-and-realloc
-     * growth; empty on the common build (no allocation until the first note). */
-    manifest_unbound_claim_t *unbound;
+    /* The two health slices: what the build could not place (a claim with no
+     * target binding, a root such a profile scans) and names a profile did not
+     * keep (it names the location otherwise), both grouped by profile in build
+     * order. Flat arena arrays, abandon-and-realloc growth; empty on the common
+     * build (no allocation until the first note). */
+    manifest_unbound_entry_t *unbound;
     size_t unbound_count;
     size_t unbound_capacity;
     manifest_unkept_claim_t *unkept;
@@ -286,37 +288,41 @@ static error_t *manifest_place(
 }
 
 /**
- * Record one claim the build could not place
+ * Record one thing the build could not place
  *
- * The health primitive both claim sites share: appends (profile, storage_path,
- * kind) to the view's health slice. No dedup, and none possible — the two passes
- * note disjoint names. The blob pass notes names the tree holds a blob at; the
- * directory pass notes sheet keys it does not, the content-authority rule having
- * contradicted the rest before either pass resolved anything. And within a pass
- * a name is its own: a tree holds one blob per path, a sheet one item per key.
+ * The health primitive the three sites share: appends (profile, name, kind) to
+ * the view's health slice. No dedup, and none possible — the three passes note
+ * disjoint names. The root pass notes a label alone, which carries no separator
+ * and no claim can spell; the blob pass notes names the tree holds a blob at;
+ * the directory pass notes sheet keys it does not, the content-authority rule
+ * having contradicted the rest before either claim pass resolved anything. And
+ * within a pass a name is its own: a sheet scans a root once, a tree holds one
+ * blob per path, a sheet one item per key.
  *
- * Growth is the spine's abandon-and-realloc idiom. Both strings must be
- * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ * Growth is the spine's abandon-and-realloc idiom. The strings must outlive the
+ * view — arena-backed by the caller for a claim, the spec table's own static
+ * for a root's label — and the entry borrows them for the view's lifetime.
  *
  * @param manifest Target view (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
- * @param storage_path Arena-backed storage path (must not be NULL)
- * @param kind The claim's kind (FILE for tree blobs, DIRECTORY for metadata items)
+ * @param name The claim's storage path, arena-backed, or a root's label, the
+ *             spec table's (must not be NULL)
+ * @param kind What the entry is (manifest_unbound_kind_t)
  * @param arena Arena for the array growth (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *manifest_note_unbound(
     manifest_t *manifest,
     const char *profile,
-    const char *storage_path,
-    path_kind_t kind,
+    const char *name,
+    manifest_unbound_kind_t kind,
     arena_t *arena
 ) {
     if (manifest->unbound_count >= manifest->unbound_capacity) {
         size_t new_capacity =
             manifest->unbound_capacity > 0 ? manifest->unbound_capacity * 2 : 8;
 
-        manifest_unbound_claim_t *grown = arena_calloc(
+        manifest_unbound_entry_t *grown = arena_calloc(
             arena, new_capacity, sizeof(*grown)
         );
         if (!grown) {
@@ -330,9 +336,9 @@ static error_t *manifest_note_unbound(
         manifest->unbound_capacity = new_capacity;
     }
 
-    manifest->unbound[manifest->unbound_count++] = (manifest_unbound_claim_t){
+    manifest->unbound[manifest->unbound_count++] = (manifest_unbound_entry_t){
         .profile = profile,
-        .storage_path = storage_path,
+        .name = name,
         .kind = kind,
     };
     return NULL;
@@ -921,7 +927,8 @@ static int manifest_claim_blob(
     }
     if (!filesystem_path) {
         ctx->error = manifest_note_unbound(
-            ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
+            ctx->manifest, ctx->profile, storage_path, MANIFEST_UNBOUND_FILE,
+            ctx->arena
         );
         return ctx->error ? -1 : 0;
     }
@@ -1086,6 +1093,21 @@ static error_t *manifest_contribute(
         goto cleanup;
     }
 
+    /* The roots the profile scans, asked of the table as its claims are: a custom
+     * root with no target here stands nowhere, and the slice records it as its
+     * third kind — the one entry that is no claim. HOME and the sentinel always
+     * answer, so only a per_profile root can be noted, and the label is the spec's
+     * own static string. Noted before the claims, in the sheet's own order. */
+    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
+        if (!metadata_scans_root(metadata, kind)) continue;
+        if (mount_root_location(manifest->mounts, c->profile, kind)) continue;
+        err = manifest_note_unbound(
+            manifest, c->profile, mount_spec_for_kind(kind)->label,
+            MANIFEST_UNBOUND_ROOT, arena
+        );
+        if (err) goto cleanup;
+    }
+
     /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
      * and bindings are keyed by profile — which the callback feeds verbatim into
      * mount_resolve, so a custom/ claim of this profile places under this profile's
@@ -1163,7 +1185,7 @@ static error_t *manifest_contribute(
                 break;
             }
             err = manifest_note_unbound(
-                manifest, c->profile, key, PATH_KIND_DIRECTORY, arena
+                manifest, c->profile, key, MANIFEST_UNBOUND_DIRECTORY, arena
             );
             if (err) break;
             continue;
@@ -1628,7 +1650,7 @@ const mount_table_t *manifest_mounts(const manifest_t *manifest) {
 }
 
 /**
- * The claims the build could not place, grouped by profile
+ * What the build could not place, grouped by profile
  */
 manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
     if (!manifest) return (manifest_unbound_t){ 0 };
@@ -1636,6 +1658,27 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
         .entries = manifest->unbound,
         .count = manifest->unbound_count,
     };
+}
+
+/**
+ * What a screen calls one entry of the slice
+ */
+const char *manifest_unbound_describe(
+    const manifest_unbound_entry_t *entry, char *buf, size_t size
+) {
+    switch (entry->kind) {
+        case MANIFEST_UNBOUND_FILE:
+            snprintf(buf, size, "%s", entry->name);
+            break;
+        case MANIFEST_UNBOUND_DIRECTORY:
+            snprintf(buf, size, "%s/", entry->name);
+            break;
+        case MANIFEST_UNBOUND_ROOT:
+            snprintf(buf, size, "the contents of %s/", entry->name);
+            break;
+    }
+
+    return buf;
 }
 
 /**

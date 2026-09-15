@@ -40,12 +40,17 @@
  * The schema version is the document's, not the collection's: metadata_to_json
  * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
  * is nothing here for a version field to say.
+ *
+ * The roots stand beside the items, one slot per kind: the sheet's second statement
+ * (metadata.h), zeroed with the collection — a sheet that says nothing of them
+ * scans none — and read and written through the two verbs alone.
  */
 struct metadata {
     metadata_item_t **items;         /* Spine of stable items, in insertion order */
     size_t count;                    /* Items held */
     size_t capacity;                 /* Spine slots allocated */
     hashmap_t *index;                /* key -> item*, borrowing the item's own key */
+    bool roots[MOUNT_KIND_COUNT];    /* The roots whose contents the profile scans */
 };
 
 /**
@@ -469,6 +474,14 @@ bool metadata_remove_item(
      * the index named an item no slot holds — nothing above changed anything,
      * so the honest answer is that nothing was removed. */
     return false;
+}
+
+bool metadata_scans_root(const metadata_t *metadata, mount_kind_t kind) {
+    return metadata->roots[kind];
+}
+
+void metadata_add_root(metadata_t *metadata, mount_kind_t kind) {
+    metadata->roots[kind] = true;
 }
 
 /**
@@ -1050,6 +1063,32 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         goto cleanup;
     }
 
+    /* The roots the profile scans, before the items and in kind order: printed
+     * iff it scans one — the sheet's own sparse rule — so a sheet that scans
+     * nothing is byte-identical to what it was, and the determinism below holds
+     * for every branch written before the key existed. Attached as it is created:
+     * the root object owns the array from its first entry, so the tail has nothing
+     * to free. */
+    cJSON *roots = NULL;
+    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
+        if (!metadata->roots[kind]) continue;
+        if (!roots) {
+            roots = cJSON_AddArrayToObject(root, "roots");
+            if (!roots) {
+                err = ERROR(ERR_MEMORY, "Failed to create roots array");
+                goto cleanup;
+            }
+        }
+        /* A CreateString that failed arrives as a NULL item, the one thing the
+         * add refuses — so one check answers for both allocations. */
+        if (!cJSON_AddItemToArray(
+            roots, cJSON_CreateString(mount_spec_for_kind(kind)->label)
+            )) {
+            err = ERROR(ERR_MEMORY, "Failed to add root to metadata");
+            goto cleanup;
+        }
+    }
+
     /* Create items array */
     items_array = cJSON_CreateArray();
     if (!items_array) {
@@ -1298,6 +1337,41 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     err = metadata_create_empty(&metadata);
     if (err) {
         goto cleanup;
+    }
+
+    /* The roots the profile scans, optional: a sheet without the key scans none,
+     * which is what every sheet written before the key said. Each entry is a
+     * label alone — the one address a root has (infra/mount.h mount_spec_for_label)
+     * — and a non-string, an unknown label or a repeat is the same loud refusal
+     * every other malformation gets. Read before the items, in the order the
+     * writer prints them; the loop over a sheet without the key runs no
+     * iteration. */
+    cJSON *roots = cJSON_GetObjectItem(root, "roots");
+    if (roots && !cJSON_IsArray(roots)) {
+        err = ERROR(ERR_INVALID_ARG, "Invalid roots array in metadata");
+        goto cleanup;
+    }
+    cJSON *label = NULL;
+    cJSON_ArrayForEach(label, roots) {
+        if (!cJSON_IsString(label) || !label->valuestring) {
+            err = ERROR(ERR_INVALID_ARG, "Invalid root in metadata (not a string)");
+            goto cleanup;
+        }
+        const mount_spec_t *spec = mount_spec_for_label(label->valuestring);
+        if (!spec) {
+            err = ERROR(
+                ERR_INVALID_ARG, "Invalid root in metadata: %s "
+                "(expected 'home', 'root' or 'custom')", label->valuestring
+            );
+            goto cleanup;
+        }
+        if (metadata_scans_root(metadata, mount_spec_kind(spec))) {
+            err = ERROR(
+                ERR_INVALID_ARG, "Duplicate root in metadata: %s", label->valuestring
+            );
+            goto cleanup;
+        }
+        metadata_add_root(metadata, mount_spec_kind(spec));
     }
 
     /* Parse each item in the unified array */

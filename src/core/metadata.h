@@ -25,6 +25,12 @@
  * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
  *   hold, since Git trees have no empty directories
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
+ * - the roots whose contents the profile scans: the sheet's ("roots") — the one
+ *   statement that is no claim about a path (below). It travels load→save
+ *   untouched: every writer loads one sheet and saves the same one (add, update,
+ *   remove; revert loads a historical sheet beside the standing one and saves
+ *   the standing one), and no verb copies a sheet into another collection, so
+ *   nothing has to carry it and nothing can drop it
  *
  * Two kinds of directory claim, one field between them. "tracked" says the profile
  * manages the directory itself: a walk went into it, so the directory exists
@@ -32,7 +38,13 @@
  * its contents the profile's to scan. Without the field the item is only the
  * attributes to give the path if dotta has to create it — an ancestor claim,
  * derived from the chain above a managed path, binding dotta's own creation of
- * that path and nothing else.
+ * that path and nothing else. A root the walk entered — HOME, a target — is
+ * neither: a root has no key (the mount root itself is never a key,
+ * metadata_capture_ancestors), exists by the machine's word and is named beneath
+ * by its label, so the one fact a walk into it can leave is the third — its
+ * contents are scanned — and the sheet says that as a statement of its own beside
+ * the items ("roots"), never as an item. The filesystem root's own directory is
+ * never scanned, on any machine, by any label that reaches it.
  *
  * Nothing infers a tracked claim away. It leaves the sheet where a verb takes
  * it — `remove` of the directory, or `update` committing the deletion of a
@@ -68,9 +80,11 @@
  * FIFOs; symlink mode; umask-relative mode classes. Each would need its own
  * capture/deploy/divergence story; none is blocked by this schema.
  *
- * JSON Schema (Version 6) — items sorted by key, fields present iff claimed:
+ * JSON Schema (Version 6) — roots in kind order, present iff one is scanned;
+ * items sorted by key, fields present iff claimed:
  * {
  *   "version": 6,
+ *   "roots": ["custom"],
  *   "items": [
  *     {
  *       "kind": "directory",
@@ -112,7 +126,8 @@
  *
  * home/.config is an ancestor claim: dotta creates it 0700 if it has to create
  * it at all, and leaves it exactly as it finds it otherwise. home/.config/nvim
- * was walked into, so the profile manages it.
+ * was walked into, so the profile manages it. custom is a root the profile scans:
+ * a label alone, no item, and nothing is scanned there until a target places it.
  */
 
 #ifndef DOTTA_METADATA_H
@@ -382,6 +397,40 @@ bool metadata_remove_item(
     metadata_t *metadata,
     const char *key
 );
+
+/**
+ * Does the profile scan the contents of its root of `kind` for new files?
+ *
+ * The third of the three facts a tracked directory bundles, and the only one a
+ * root can carry: the root exists by the machine's word, its attributes are
+ * nobody's to converge, and its label names beneath it already. So it is no claim
+ * and no item — never a row, a record, a prune order, a hook path or an export
+ * entry — and it carries no mode, owner or group because there is nothing here
+ * to carry one. A per_profile root the machine cannot place is the view's to
+ * record (core/manifest.h manifest_unbound): the sheet's statement stands, and
+ * the scan begins when a target does.
+ *
+ * Readers: the view's contribution (core/manifest.c manifest_contribute), which
+ * asks where each scanned root stands and records the one it cannot place. A
+ * reader not on this list is a bug.
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param kind The root's kind
+ * @return true iff the sheet says the root's contents are scanned
+ */
+bool metadata_scans_root(const metadata_t *metadata, mount_kind_t kind);
+
+/**
+ * The sheet gains the root
+ *
+ * Idempotent: a repeated selection writes the same bytes, and a commit over them
+ * moves nothing (metadata_to_json's determinism). Writers: the parser, for a
+ * sheet that says it (metadata_from_json).
+ *
+ * @param metadata Metadata collection (must not be NULL)
+ * @param kind The root's kind
+ */
+void metadata_add_root(metadata_t *metadata, mount_kind_t kind);
 
 /**
  * Prune the derivations nothing stands beneath

@@ -23,9 +23,11 @@
  * Indexed by `mount_kind_t` and sized by the arity the header publishes, so the
  * enum declares the label set once and the array's extent is that declaration
  * rather than a second one that happens to agree. Designated initializers keep
- * the row order in lockstep with the ordinals. Adding a fourth kind is one row
- * here plus a matching enum entry; every consumer that asks "does this kind track
- * ownership?" etc. reads spec attributes — no switches to update.
+ * the row order in lockstep with the ordinals, which is what lets a row's kind
+ * be its position (mount_spec_kind) rather than a field that would have to agree
+ * with it. Adding a fourth kind is one row here plus a matching enum entry; every
+ * consumer that asks "does this kind track ownership?" etc. reads spec attributes
+ * — no switches to update.
  */
 static const mount_spec_t SPECS[MOUNT_KIND_COUNT] = {
     [MOUNT_HOME] =   { "home",   "your home directory",   false, false },
@@ -36,6 +38,10 @@ static const mount_spec_t SPECS[MOUNT_KIND_COUNT] = {
 const mount_spec_t *mount_spec_for_kind(mount_kind_t kind) {
     if ((unsigned int) kind >= MOUNT_KIND_COUNT) return NULL;
     return &SPECS[kind];
+}
+
+mount_kind_t mount_spec_kind(const mount_spec_t *spec) {
+    return (mount_kind_t) (spec - SPECS);
 }
 
 /**
@@ -532,7 +538,8 @@ const char *mount_root_describe(
  * entry is its own profile's alone, so a NULL asker finds no binding and places
  * no custom/ claim (namespace_holds).
  *
- * Sole consumer today is mount_resolve.
+ * Two readers: mount_resolve, which joins beneath the spelling, and
+ * mount_root_location, which hands it out as a path.
  */
 static const mount_entry_t *find_entry(
     const mount_table_t *table, mount_kind_t kind, const char *profile
@@ -543,6 +550,18 @@ static const mount_entry_t *find_entry(
     }
 
     return NULL;
+}
+
+const char *mount_root_location(
+    const mount_table_t *table, const char *profile, mount_kind_t kind
+) {
+    const mount_entry_t *entry = find_entry(table, kind, profile);
+    if (!entry) return NULL;
+
+    /* The one reader that turns the table's "" back into the path it spells:
+     * every other verb joins beneath the spelling (mount_resolve) or matches it
+     * as a prefix (deepest_root), and neither wants the slash. */
+    return entry->spelling[0] ? entry->spelling : "/";
 }
 
 error_t *mount_resolve(

@@ -34,6 +34,12 @@
  * derived from the chain above a managed path, binding dotta's own creation of
  * that path and nothing else.
  *
+ * Nothing infers a tracked claim away. It leaves the sheet where a verb takes
+ * it — `remove` of the directory, or `update` committing the deletion of a
+ * directory dotta saw — and no attribute of it reads back as intent: a walked
+ * directory at the umask default, or claiming no mode at all, is kept for the
+ * word alone.
+ *
  * The polarity is the fail-safe one and the sparse one at once: an item that
  * loses the field — a hand edit, a tool that drops what it does not know — degrades
  * to the class dotta does less with, and the derived claims, one per rung of
@@ -43,8 +49,8 @@
  * all it has left to say. One that claims no mode says nothing the view could
  * not say alone — an unclaimed directory mode projects as DIR_MODE_DEFAULT, which
  * is what an unclaimed path would have got anyway. The prune weighs no attribute
- * of a derived claim either way: it survives by what stands beneath it and by
- * nothing else (metadata_prune_directories).
+ * at all: a derivation survives by what stands beneath it, a tracked claim by
+ * the word itself (metadata_prune_ancestors).
  *
  * The sheet is sparse and the view completes it: manifest_build resolves an
  * unclaimed mode into an answer at build (the filemode floor for blob rows,
@@ -124,17 +130,17 @@
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
 
 /**
- * Default mode for tracked directories without an explicit override.
+ * Default mode for a directory claim that names none
  *
  * Mirrors the umask default any newly-mkdir'd directory gets on Linux/ macOS/BSD
  * (0755 = rwxr-xr-x) — the mode a chain of parents gets when nothing claims them.
  *
- * Used by metadata_prune_directories as half the residue discriminator: a tracked
- * claim at this mode and with no ownership carries no preservation intent over
- * what the filesystem already does by default, so with nothing anchoring it either,
- * the entry is walker residue from a path the user no longer tracks and can be
- * dropped without information loss. An ancestor claim needs no such reading of
- * its attributes — it is a derivation, so the anchor question is the whole of it.
+ * A value, never evidence: what a directory claim means is said by its kind and
+ * its "tracked" word, never by the bits it carries, so nothing compares a mode
+ * against this to read intent back out of it. Readers, each supplying the answer
+ * where a claim named none: the view's projection (core/manifest.c
+ * manifest_contribute), deploy's creation of a rung no claim covers
+ * (core/deploy.c), and export's materialisation (cmds/export.c).
  */
 #define DIR_MODE_DEFAULT 0755
 
@@ -378,40 +384,32 @@ bool metadata_remove_item(
 );
 
 /**
- * Prune redundant directory entries
+ * Prune the derivations nothing stands beneath
  *
- * Removes kind=directory items whose reason to exist is gone. Every such item
- * is asked two questions, and one that answers no to both is removed:
+ * The ancestor rule's other half. metadata_capture_ancestors authors a derived
+ * claim at every rung above a captured leaf, because something beneath it does;
+ * this removes one the moment nothing does. A tracked claim is not this pass's
+ * subject at all — the walk's own word stands with nothing beneath it and at
+ * any attributes, and it is retracted where it was made (the module header) —
+ * so the pass reads one field and asks one question of what is left:
  *
- *   - Does it claim anything of its own? A tracked claim at a mode the umask
- *     would not have produced, or carrying any ownership overlay, is the walk's
- *     word about a directory the profile manages, and it is kept with nothing
- *     beneath it: that is exactly the legitimate "track this empty directory
- *     with these attributes" intent. A tracked claim at DIR_MODE_DEFAULT — or
- *     at no mode at all, a hand-sparse entry claiming even less — says nothing
- *     a plain mkdir would not. An ancestor claim claims nothing of its own by
- *     construction: it is derived from the chain above a managed path, so no
- *     attribute it carries can make it mean anything else.
- *
- *   - Is anything managed beneath it? The profile's managed set is the index's
- *     paths and the sheet's own directory claims together. The index names every
- *     path a tree can hold and is the sole authority for those — deliberately
- *     not the metadata items, which are sparse by design (a symlink carries an
- *     item only when captured with ownership, i.e. elevated), so a directory
- *     whose only tracked content is an item-less symlink is anchored by the index
- *     and survives. What no index can name is an empty directory, and only a
- *     claim names one — a claim that answered yes to the first question, since
- *     one that did not survives solely by being anchored itself and would otherwise
- *     hold a doomed chain alive one command per rung.
+ *   Is anything managed beneath it? The profile's managed set is the index's
+ *   paths and the sheet's own tracked claims together. The index names every
+ *   path a tree can hold and is the sole authority for those — deliberately not
+ *   the metadata items, which are sparse by design (a symlink carries an item
+ *   only when captured with ownership, i.e. elevated), so a directory whose only
+ *   tracked content is an item-less symlink is anchored by the index and survives.
+ *   What no index can name is an empty directory, and only a tracked claim names
+ *   one — a derivation cannot anchor, since it survives solely by being anchored
+ *   itself and would otherwise hold a doomed chain alive one command per rung.
  *
  * Anchoring is judged against the post-edit index (the tree the impending commit
- * will record). An entry that answers no twice has no role in any downstream
- * pipeline: the view would only claim it as a default-mode scan anchor for an
- * emptied subtree, and divergence detection has nothing to compare against.
- * Typically it's walker residue from a path the user no longer tracks (e.g.,
- * `dotta add ~/dir/` followed by `dotta remove` of every file underneath), or
- * the tail of an ancestry whose leaf has just gone. Without this prune, the view
- * would keep claiming the entry indefinitely.
+ * will record). A derivation nothing stands beneath has no role in any downstream
+ * pipeline: the view would claim it as an [ancestor] row over an emptied subtree,
+ * and divergence detection has nothing to compare against. Typically it is the
+ * tail of an ancestry whose leaf has just gone (e.g., `dotta add ~/dir/f.conf`
+ * followed by `dotta remove` of that file). Without this prune, the view would
+ * keep claiming the entry indefinitely.
  *
  * Caller pattern: invoke after every edit of the stage for the impending commit
  * (additions put, deletions removed) and before the sheet is saved onto it, so
@@ -427,7 +425,7 @@ bool metadata_remove_item(
  * @param pruned Receives the keys pruned, appended (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *metadata_prune_directories(
+error_t *metadata_prune_ancestors(
     metadata_t *metadata,
     git_index *index,
     string_array_t *pruned

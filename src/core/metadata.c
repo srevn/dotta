@@ -472,46 +472,47 @@ bool metadata_remove_item(
 }
 
 /**
- * Does this directory claim anything of its own?
+ * Does a tracked claim stand beneath this key?
  *
- * The one predicate two questions read: whether an item is residue-eligible at
- * all, and whether it can anchor a claim above it. They are the same question —
- * an item that claims nothing of its own survives solely by being anchored, so
- * it is never the reason another item survives, and letting the two drift would
- * hold a doomed chain alive one command per rung.
+ * The sheet's half of the managed set. An empty directory is named by its own
+ * claim and by nothing else, so a tracked claim is the one thing beneath a
+ * derivation that no index can name. A derivation anchors nothing — it survives
+ * by being anchored itself, and letting one anchor another would hold a doomed
+ * chain alive a rung per command. The word that decides the prune's subject decides
+ * this too, so the two readings cannot drift: they are one field.
  *
- * A tracked claim is the walk's word about a directory the profile manages: a
- * mode the umask would not have produced, or any ownership overlay, is intent
- * the sheet keeps with nothing beneath it. An ancestor claim is derived from
- * the chain above a managed path — it exists because something beneath it does,
- * and no attribute it carries can make it say anything else.
+ * Strictly beneath, at a component boundary: a claim AT the key is the key, and
+ * one above it is the ancestry every path has.
  *
- * @param dir Directory item (must not be NULL; asked of no other kind)
- * @return true if the claim stands without anything beneath it
+ * @param items The sheet's items, borrowed — the caller's own snapshot (must
+ *              not be NULL)
+ * @param count How many it holds (zero answers false)
+ * @param key The derivation's key (must not be NULL)
+ * @return true iff a tracked directory claim stands strictly beneath it
  */
-static bool claims_intent(const metadata_item_t *dir) {
-    if (!dir->tracked) {
-        return false;
-    }
-    if (dir->mode != DIR_MODE_DEFAULT && dir->mode != MODE_UNCLAIMED) {
-        return true;
+static bool tracked_beneath(
+    const metadata_item_t *const *items, size_t count, const char *key
+) {
+    const size_t len = strlen(key);
+
+    for (size_t i = 0; i < count; i++) {
+        if (items[i]->kind != PATH_KIND_DIRECTORY || !items[i]->tracked) continue;
+        if (str_path_beneath(items[i]->key, key, len)) return true;
     }
 
-    return dir->owner != NULL || dir->group != NULL;
+    return false;
 }
 
 /**
- * Prune redundant directory entries
+ * Prune the derivations nothing stands beneath
  *
  * Two-pass collect-then-prune: metadata_remove_item frees the item it removes
  * and shifts the spine behind it, so the pass that decides cannot also be the
  * pass that acts. string_array_push duplicates each key, so the prune pass operates
  * on independent strings.
  */
-error_t *metadata_prune_directories(
-    metadata_t *metadata,
-    git_index *index,
-    string_array_t *pruned
+error_t *metadata_prune_ancestors(
+    metadata_t *metadata, git_index *index, string_array_t *pruned
 ) {
     CHECK_NULL(metadata);
     CHECK_NULL(index);
@@ -526,14 +527,17 @@ error_t *metadata_prune_directories(
 
     for (size_t d = 0; d < item_count; d++) {
         const metadata_item_t *dir = items[d];
-        if (dir->kind != PATH_KIND_DIRECTORY) continue;
 
-        /* The first question: an entry that claims something of its own is kept
-         * whatever stands beneath it. */
-        if (claims_intent(dir)) continue;
+        /* The subject: a derivation, which exists because something beneath it
+         * does. A tracked claim is the walk's own word that the profile manages
+         * the directory — it stands with nothing beneath it and at any attributes,
+         * and it leaves the sheet where a verb takes it, never by inference
+         * (metadata.h). The two fields capture_ancestor reads to leave a standing
+         * claim alone, asked here for the same reason. */
+        if (dir->kind != PATH_KIND_DIRECTORY || dir->tracked) continue;
 
-        /* The second, half of it: any path under the directory that a tree can
-         * hold. Metadata items are not the universe there — a symlink tracked
+        /* Half of what stands beneath: any path under the directory that a tree
+         * can hold. Metadata items are not the universe there — a symlink tracked
          * without elevation carries no item, yet still anchors its parent — so
          * the index is the authority. It is sorted, so one prefix probe answers;
          * a failed look must not prune. */
@@ -547,18 +551,8 @@ error_t *metadata_prune_directories(
         if (rc == 0) continue;
         if (rc != GIT_ENOTFOUND) return error_from_git(rc);
 
-        /* And the other half: the paths a tree cannot hold. An empty directory
-         * is named by its own claim and by nothing else, so a claim that stands
-         * on its own anchors everything above it — and one that does not is passed
-         * over, since it survives only by being anchored itself. */
-        const size_t key_len = strlen(dir->key);
-        bool anchored = false;
-        for (size_t a = 0; !anchored && a < item_count; a++) {
-            anchored = items[a]->kind == PATH_KIND_DIRECTORY &&
-                claims_intent(items[a]) &&
-                str_path_beneath(items[a]->key, dir->key, key_len);
-        }
-        if (anchored) continue;
+        /* And the other half: the one path a tree cannot hold. */
+        if (tracked_beneath(items, item_count, dir->key)) continue;
 
         error_t *err = string_array_push(pruned, dir->key);
         if (err) {
@@ -853,8 +847,10 @@ static error_t *capture_ancestor(
      * the walk's own word about a directory the profile manages, and nothing
      * derived refreshes or retires it. A FILE item is the tree's business: a
      * path is a blob or a tree, so an item of that kind at a directory's key is
-     * stale metadata, and the tree and metadata_prune_directories are its
-     * authorities. */
+     * stale metadata, and the tree is its authority — the view drops it where
+     * its own walk met the blob (core/manifest.c manifest_contribute), and a
+     * capture at that key replaces it. The prune is no authority over it: it
+     * takes derivations, and this item is not one. */
     const metadata_item_t *held = metadata_lookup(metadata, storage_path);
     if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
         return NULL;
@@ -890,7 +886,8 @@ static error_t *capture_ancestor(
      *
      * The guard authors nothing and retires nothing: a claim already standing
      * at a root from an older table is the sheet's business
-     * (metadata_prune_directories), not a migration's. */
+     * (metadata_prune_ancestors, which is what a claim reaching here is), not a
+     * migration's. */
     if (mount_root(mounts, profile, filesystem_path)) {
         return NULL;
     }

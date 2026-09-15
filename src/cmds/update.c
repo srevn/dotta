@@ -768,13 +768,11 @@ static error_t *update_profile(
      * entry with nothing managed beneath it. That set is judged against the stage's
      * index (deletions removed, captures put by the walk) for every path a tree
      * can hold — never against metadata items, which omit unelevated symlinks —
-     * and against the sheet's own standing claims for the one path it cannot,
-     * an empty directory. Only entries that claim nothing of their own are pruned;
-     * a tracked claim carrying real attributes survives as the empty-dir intent
-     * it is. Without this, the view would keep claiming the orphaned entry
-     * indefinitely. The keys go on the commit's bookkeeping: the entry leaves
-     * the view by this commit, so its record is this verb's to retire. */
-    err = metadata_prune_directories(metadata, stage_index(stage), &commit->pruned);
+     * and against the sheet's own tracked claims for the one path it cannot, an
+     * empty directory. Without this, the view would keep claiming the orphaned
+     * entry indefinitely. The keys go on the commit's bookkeeping: the entry
+     * leaves the view by this commit, so its record is this verb's to retire. */
+    err = metadata_prune_ancestors(metadata, stage_index(stage), &commit->pruned);
     if (err) {
         err = error_wrap(err, "Failed to prune redundant directories");
         goto cleanup;

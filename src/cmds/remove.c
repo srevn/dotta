@@ -974,11 +974,9 @@ static error_t *remove_files_from_profile(
      * record (the judge's own contract, metadata.h). Removing a file may leave
      * its parent directory metadata entry with nothing managed beneath it. The
      * index answers that for every path a tree can hold — never the metadata
-     * items, which omit unelevated symlinks — and the sheet's own standing claims
-     * answer it for the one path it cannot, an empty directory. Only entries
-     * that claim nothing of their own are dropped; a tracked claim carrying real
-     * attributes is preserved as the empty-dir intent it is. */
-    err = metadata_prune_directories(metadata, stage_index(stage), &pruned_dirs);
+     * items, which omit unelevated symlinks — and the sheet's own tracked claims
+     * answer it for the one path it cannot, an empty directory. */
+    err = metadata_prune_ancestors(metadata, stage_index(stage), &pruned_dirs);
     if (err) {
         err = error_wrap(err, "Failed to prune redundant directories");
         goto cleanup;

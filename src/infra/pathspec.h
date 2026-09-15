@@ -34,7 +34,6 @@
 #include <stddef.h>
 #include <types.h>
 
-typedef struct mount_table mount_table_t;
 typedef struct pathspec pathspec_t;
 
 /**
@@ -82,26 +81,17 @@ typedef struct {
  * NULL / empty inputs short-circuit: `*out` is NULL (matches all). A NULL pathspec
  * passed to pathspec_matches matches all paths.
  *
- * `table` must be non-NULL even when no custom mounts are configured — the
- * resolver's own precondition (infra/path.h); a location is the normalizer's
- * answer, and the table is otherwise unread.
- *
  * The pathspec and everything in it are the arena's; nothing is freed.
  *
  * @param inputs User-provided strings, each NUL-terminated (may be NULL when
  *               count is 0)
  * @param count  Number of inputs
- * @param table  Mount table, handed to the resolver (must not be NULL)
  * @param arena  Arena backing the pathspec (must not be NULL, must outlive it)
  * @param out    Pathspec or NULL when inputs were empty (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *pathspec_create(
-    char *const *inputs,
-    size_t count,
-    const mount_table_t *table,
-    arena_t *arena,
-    pathspec_t **out
+    char *const *inputs, size_t count, arena_t *arena, pathspec_t **out
 );
 
 /**

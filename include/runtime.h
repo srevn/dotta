@@ -218,16 +218,27 @@ typedef enum dotta_crypto_mode {
  * This machine's topology over the enabled set — `manifest_mount_table` over
  * the state's rows and `$HOME` — for placing a storage path the command reads
  * (`mount_resolve`) and naming beneath its roots (`mount_root`). Requires `state`.
- * A command that reads a CLI path declares it — unless it brings a binding of
- * its own that no row need hold (`add --target`), which builds the same table
- * with that binding standing for its profile's row (`core/manifest.h`
- * `manifest_mount_table`) and reads that: the dispatcher's would be a second
- * build of the same rows. A command that declares the view as well borrows the
- * view's table — `manifest_mounts`, the one the builder derived from the rows
- * it read — so the names it places and the rows it selects read one value; a
- * command that declares `mounts` alone gets its own build from the same rows.
- * Every location the run spells — a row's, a record's, an argument's — is a root's
- * spelling and a tail, the binder's or the user's own (`infra/mount.h`).
+ * A command declares it when it asks one of the table's verbs: where a claim
+ * stands (`mount_resolve`: diff, ignore, remove, revert, update), which root a
+ * location is under (`mount_root`: ignore, revert), a view of one branch placed
+ * by it (`manifest_build_tree`: diff, export, revert; `manifest_build_branch`:
+ * ignore), a claim's ancestors climbed (`metadata_capture_ancestors`: update),
+ * or a claim found by its key (`profile_claim_name`: list, show;
+ * `profile_discover_claims`: revert; `profile_build_location_index`: remove).
+ * Reading a CLI path is not one of those verbs: an argument's key is the
+ * normalizer's own string and no root's spelling is read to make it
+ * (`infra/path.h`), so apply, whose path filter is those strings, and status
+ * and sync, which filter by profile alone and compile none, declare no table.
+ * add asks the verbs and declares none: it brings a binding no row need hold
+ * (`add --target`) and builds the same table with that binding standing for its
+ * profile's row (`core/manifest.h` `manifest_mount_table`), where the dispatcher's
+ * would be a second build of the same rows. A command that declares the view as
+ * well borrows the view's table — `manifest_mounts`, the one the builder derived
+ * from the rows it read — so the names it places and the rows it selects read
+ * one value; a command that declares `mounts` alone gets its own build from the
+ * same rows. Every location the run spells — a row's, a record's, an argument's
+ * — is a root's spelling and a tail, the binder's or the user's own
+ * (`infra/mount.h`).
  *
  * crypto
  * ------
@@ -340,12 +351,11 @@ typedef struct dotta_needs {
  *   - `state` is the handle in the declared shape; dispatch closes it on return
  *     (`state_free` rolls back any uncommitted transaction).
  *   - `mounts` is a value: built into the command arena from the state's rows
- *     and `$HOME`, it borrows nothing from the row cache, so after a command
- *     mutates the binding set (profile enable/disable, clone, interactive,
- *     add-with-implicit-enable) it still reads as the topology at dispatch —
- *     the one before. It classifies the command's input. Where the view is declared
- *     too it is the view's own table, lent (`manifest_mounts`): one topology
- *     per run, and still the arena's.
+ *     and `$HOME`, it borrows nothing from the row cache, so it neither dangles
+ *     nor shifts when the rows are re-read — it is the topology at dispatch for
+ *     as long as the run lasts, and a command that moves the binding set reads
+ *     the one before. Where the view is declared too it is the view's own table,
+ *     lent (`manifest_mounts`): one topology per run, and still the arena's.
  *   - `keymgr != NULL` implies `config->encryption_enabled`. `content_cache`
  *     carries a borrowed pointer to it (NULL when encryption is disabled) and
  *     is torn down before it.

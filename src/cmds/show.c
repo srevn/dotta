@@ -680,7 +680,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         if (err) goto cleanup;
 
         path_input_t arg;
-        err = path_input_resolve(mounts, opts->file_path, ctx->arena, &arg);
+        err = path_input_resolve(opts->file_path, ctx->arena, &arg);
         if (err) goto cleanup;
 
         err = show_source(ctx, profile, opts->commit, &tree);
@@ -707,20 +707,19 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* The owning profile is the view's: the enabled set at HEAD with precedence
-     * resolved, asked in the key the argument names — through the table the view's
-     * rows were placed by, so the two read one topology. A location is one row,
-     * the winner standing there whatever its name. A name keys within one profile,
-     * so the view may hold it once (home/, root/, or one binding), or once per
-     * binding under custom/ — and then no profile is the answer, and each holder
-     * is named with the location that tells them apart. */
-    err = manifest_build(repo, state, ctx->arena, &manifest);
+    /* The argument first: reading one asks no topology (infra/path.h), so a bad
+     * argument is refused in its own words before a view is built under it. Then
+     * the owning profile, which is the view's: the enabled set at HEAD with
+     * precedence resolved, asked in the key the argument names. A location is
+     * one row, the winner standing there whatever its name. A name keys within
+     * one profile, so the view may hold it once (home/, root/, or one binding),
+     * or once per binding under custom/ — and then no profile is the answer,
+     * and each holder is named with the location that tells them apart. */
+    path_input_t arg;
+    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
-    path_input_t arg;
-    err = path_input_resolve(
-        manifest_mounts(manifest), opts->file_path, ctx->arena, &arg
-    );
+    err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     const manifest_row_t *row = NULL;

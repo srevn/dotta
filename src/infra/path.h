@@ -9,16 +9,19 @@
  * one profile's own). There is no exception left: nothing here manufactures one
  * key from the other, and no surface below offers to.
  *
- * The single chokepoint for input-shape dispatch; the topology primitives
- * (mount_resolve, mount_table_build) live one layer down in infra/mount.
+ * The single chokepoint for input-shape dispatch. Of infra/mount it reads the
+ * storage-label vocabulary alone — mount_spec_for_path, mount_validate_storage,
+ * a label being a label on every machine — and never the table of roots: no root's
+ * spelling is read to make a key, so the answer is the argument, HOME and the
+ * working directory and nothing else. That is what lets the normalizer stand
+ * beside mount_resolve's join as a producer of one key (infra/mount.h, the four
+ * producers), and why no caller hands a topology down to read an argument.
  */
 
 #ifndef DOTTA_PATH_H
 #define DOTTA_PATH_H
 
 #include <types.h>
-
-#include "infra/mount.h"
 
 /**
  * The key an argument names.
@@ -54,11 +57,11 @@ typedef struct {
  * `.`/`..`/`//` folded), and that spelling is the key: a location is a string
  * of its own, a link in it a component, so the answer keys against the view's
  * rows by strcmp when it was spelled the way the rows were (infra/mount.h). No
- * profile, no name, no stat: the argument need not exist, and a root is a location
- * like any other — the verb that cannot take one refuses it in its own words. A
- * bare name is refused: add's grammar reads one as the jail's or the working
- * directory's (cmds/add.c spell_argument); the resolver does not, because its
- * callers' first positional may be a profile.
+ * profile, no name, no stat, no table: the argument need not exist, and a root
+ * is a location like any other — the verb that cannot take one refuses it in
+ * its own words. A bare name is refused: add's grammar reads one as the jail's
+ * or the working directory's (cmds/add.c spell_argument); the resolver does not,
+ * because its callers' first positional may be a profile.
  *
  *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (HOME as the identity spells it)
  *   ./config    (in /etc)     -> LOCATION  /etc/config
@@ -86,18 +89,12 @@ typedef struct {
  * one does (cmds/add.c) — its filesystem head is add's own grammar, spelled around
  * path_input_normalize.
  *
- * @param table Mount table (must not be NULL)
  * @param input User-provided path string (must not be NULL)
  * @param arena Arena that owns the answer's string
  * @param out   The key and its name (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_resolve(
-    const mount_table_t *table,
-    const char *input,
-    arena_t *arena,
-    path_input_t *out
-);
+error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path

@@ -1452,7 +1452,6 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     );
 
     git_repository *repo = ctx->run.repo;
-    const mount_table_t *mounts = ctx->run.mounts;
     keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
     arena_t *arena = ctx->arena;
@@ -1518,7 +1517,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * normalized. So the only shapes needing a word here are the ones the
          * resolver refused. */
         path_input_t arg;
-        err = path_input_resolve(mounts, opts->file_path, arena, &arg);
+        err = path_input_resolve(opts->file_path, arena, &arg);
         if (err) {
             /* The one refused shape a branch subtree answers is a label alone
              * (`export global home`, `home/`): the whole tree under it, which

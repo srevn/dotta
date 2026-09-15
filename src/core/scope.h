@@ -70,7 +70,6 @@
 #include <stdbool.h>
 #include <types.h>
 
-#include "infra/mount.h"
 #include "infra/pathspec.h"
 
 /* Forward decl: state_t's full API lives in core/state.h. scope only passes the
@@ -114,17 +113,15 @@ typedef struct scope_inputs {
  *      set: one not in it is refused, whether it is a disabled profile (the hint
  *      names `profile enable`) or no profile here at all (the hint names the
  *      listing and the fetch). A filter never narrows in silence.
- *   3. If in->file_count > 0, build the pathspec consuming the caller-supplied
- *      mount table.
+ *   3. If in->file_count > 0, compile the positional arguments into the path
+ *      filter (infra/pathspec): one matcher over the two keys a managed path
+ *      has, each input read in the key its own shape names.
  *   4. Compile the -e layer into `arena` (ignore_excludes_compile): a pattern
  *      the grammar refuses refuses the build, under the flag's name.
  *
  * @param repo   Repository (must not be NULL)
  * @param state  State handle (must not be NULL, borrowed for the call)
  * @param in     Inputs (must not be NULL)
- * @param mounts Per-machine mount table covering enabled profiles (must not be
- *               NULL; arena-borrowed; consumed by pathspec_create only, which
- *               hands it to the resolver — scope_t does not store it)
  * @param arena  Borrowed allocator backing the compiled exclude ruleset
  *               and the path filter; must outlive the returned scope (must not
  *               be NULL)
@@ -135,7 +132,6 @@ error_t *scope_build(
     git_repository *repo,
     const state_t *state,
     const scope_inputs_t *in,
-    const mount_table_t *mounts,
     arena_t *arena,
     scope_t **out
 );

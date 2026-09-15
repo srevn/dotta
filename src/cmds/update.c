@@ -1535,7 +1535,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
-    const mount_table_t *mounts = ctx->run.mounts;
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *manifest = ctx->run.manifest;
     const config_t *config = ctx->config;
@@ -1569,9 +1568,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(
-        repo, state, &scope_inputs, mounts, ctx->arena, &scope
-    );
+    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {

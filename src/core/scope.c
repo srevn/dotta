@@ -28,10 +28,6 @@
  * released by arena_destroy, not scope_free. The excludes are the -e layer
  * core/ignore compiles (ignore_excludes_compile) — the rules add's builder takes
  * as its top layer, asked alone here (scope_is_excluded).
- *
- * The mount table is supplied by the caller (typically `ctx->run.mounts`) and
- * consumed by pathspec_create only. scope_t does not store it — per-machine
- * topology has process scope, not per-scope_build scope.
  */
 struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */
@@ -73,12 +69,11 @@ static error_t *resolve_enabled_lenient(
 
 error_t *scope_build(
     git_repository *repo, const state_t *state, const scope_inputs_t *in,
-    const mount_table_t *mounts, arena_t *arena, scope_t **out
+    arena_t *arena, scope_t **out
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(state);
     CHECK_NULL(in);
-    CHECK_NULL(mounts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -130,12 +125,10 @@ error_t *scope_build(
      *    as scope is alive. */
     s->active = s->filter ? s->filter : s->enabled;
 
-    /* 4. Build path filter consuming the caller-supplied mount table — handed
-     *    to the resolver for its filesystem shapes, no intermediate round-trip.
-     *    The mount table is borrowed for this call only; scope_t does not store
-     *    it. */
+    /* 4. The path filter: one matcher over both keys a managed path has, each
+     *    input read in the key its own shape names (infra/pathspec). */
     if (in->file_count > 0) {
-        err = pathspec_create(in->files, in->file_count, mounts, arena, &s->paths);
+        err = pathspec_create(in->files, in->file_count, arena, &s->paths);
         if (err) {
             err = error_wrap(err, "Failed to build path filter");
             goto fail;

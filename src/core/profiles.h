@@ -51,6 +51,7 @@
 
 #include "base/hashmap.h"
 #include "core/state.h"
+#include "infra/mount.h"
 #include "infra/path.h"
 
 /**

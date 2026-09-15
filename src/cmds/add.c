@@ -1782,7 +1782,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * p home/dir/` is the spelling every other consumer already accepts
              * (infra/path.h). */
             path_input_t arg;
-            err = path_input_resolve(mounts, file, ctx->arena, &arg);
+            err = path_input_resolve(file, ctx->arena, &arg);
             if (err) goto cleanup;
             typed = arg.storage_path;
 

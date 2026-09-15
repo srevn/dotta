@@ -351,7 +351,7 @@ static error_t *resolve_removal_claims(
     /* Match each argument, marking the claims it takes */
     for (size_t i = 0; i < path_count; i++) {
         path_input_t arg;
-        err = path_input_resolve(mounts, input_paths[i], ctx->arena, &arg);
+        err = path_input_resolve(input_paths[i], ctx->arena, &arg);
         if (err) {
             if (!opts->force) {
                 goto cleanup;

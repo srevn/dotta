@@ -1538,7 +1538,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;                /* Borrowed from dispatcher (WRITE) */
-    const mount_table_t *mounts = ctx->run.mounts;
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
@@ -1577,8 +1576,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * no gate of its own.
      *
      * Scope_build resolves enabled (lenient on empty), resolves and validates
-     * the CLI filter, harvests custom targets from the active set, builds the
-     * path filter, and deep-copies excludes. */
+     * the CLI filter, compiles the path filter, and deep-copies excludes. */
     output_print(out, OUTPUT_VERBOSE, "Loading profiles...\n");
 
     scope_inputs_t scope_inputs = {
@@ -1589,9 +1587,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         .exclude_patterns = opts->exclude_patterns,
         .exclude_count    = opts->exclude_count,
     };
-    err = scope_build(
-        repo, state, &scope_inputs, mounts, ctx->arena, &scope
-    );
+    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
     if (err) goto cleanup;
 
     output_print(
@@ -3037,7 +3033,6 @@ const args_command_t spec_apply = {
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_WRITE,
-        .mounts   = true,
         .crypto   = DOTTA_CRYPTO_OBTAIN,
         .manifest = true,
     },

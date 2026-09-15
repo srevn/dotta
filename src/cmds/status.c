@@ -1478,10 +1478,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
     CHECK_NULL(opts);
 
     git_repository *repo = ctx->run.repo;
-    state_t *state = ctx->run.state;  /* Borrowed from dispatcher; do not free */
-    const mount_table_t *mounts = ctx->run.mounts;
+    state_t *state = ctx->run.state;                /* Borrowed from dispatcher; do not free */
     content_cache_t *content_cache = ctx->run.content_cache;
-    const manifest_t *manifest = ctx->run.manifest;  /* The view at dispatch */
+    const manifest_t *manifest = ctx->run.manifest; /* The view at dispatch */
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -1508,9 +1507,7 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(
-        repo, state, &scope_inputs, mounts, ctx->arena, &scope
-    );
+    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
     if (err) goto cleanup;
 
     /* Load workspace for divergence analysis (only needed for local status)
@@ -1714,7 +1711,6 @@ const args_command_t spec_status = {
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_READ,
-        .mounts   = true,
         .crypto   = DOTTA_CRYPTO_CACHED,
         .manifest = true,
     },

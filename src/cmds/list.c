@@ -633,9 +633,7 @@ static error_t *list_file_history(
         RETURN_IF_ERROR(profile_require(repo, profile));
 
         path_input_t arg;
-        RETURN_IF_ERROR(
-            path_input_resolve(mounts, opts->file_path, ctx->arena, &arg)
-        );
+        RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
 
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
@@ -650,26 +648,21 @@ static error_t *list_file_history(
             return err;
         }
     } else {
-        /* The owner is the view's: the enabled set at HEAD, precedence resolved,
-         * asked in the key the argument names — through the table the view's
-         * rows were placed by, so the two read one topology. A location is one
-         * row, the winner standing there whatever its name. A name keys within
-         * one profile, so the view may hold it once (home/, root/, or one binding),
-         * or once per binding under custom/ — and then no profile is the answer,
-         * and each holder is named with the location that tells them apart. The
-         * rows are the arena's; only the index is released here. */
+        /* The argument first: reading one asks no topology (infra/path.h), so a
+         * bad argument is refused in its own words before a view is built under
+         * it. Then the owner, which is the view's: the enabled set at HEAD,
+         * precedence resolved, asked in the key the argument names. A location
+         * is one row, the winner standing there whatever its name. A name keys
+         * within one profile, so the view may hold it once (home/, root/, or
+         * one binding), or once per binding under custom/ — and then no profile
+         * is the answer, and each holder is named with the location that tells
+         * them apart. The rows are the arena's; only the index is released here. */
+        path_input_t arg;
+        RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
+
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
-
-        path_input_t arg;
-        err = path_input_resolve(
-            manifest_mounts(manifest), opts->file_path, ctx->arena, &arg
-        );
-        if (err) {
-            manifest_free(manifest);
-            return err;
-        }
 
         const manifest_row_t *row = NULL;
         if (arg.key == PATH_KEY_LOCATION) {

@@ -70,9 +70,7 @@ static void prefix_location(entry_t *e, const char *location) {
  * anything else — a bare `conf<star>/x` could mean either vocabulary — is refused
  * toward the self-announcing spellings. The shape is read past a leading '!',
  * so a negated rule is a rule in either vocabulary. */
-static error_t *compile_rule(
-    const mount_table_t *table, const char *input, arena_t *arena, entry_t *out
-) {
+static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
     bool negated = input[0] == '!';
     const char *body = input + (negated ? 1 : 0);
     const char *line = input; /* what gitignore parses: the input, or the anchored tail */
@@ -113,7 +111,7 @@ static error_t *compile_rule(
         }
 
         path_input_t anchor;
-        error_t *err = path_input_resolve(table, head, arena, &anchor);
+        error_t *err = path_input_resolve(head, arena, &anchor);
         if (err) {
             return error_wrap(err, "Invalid glob pattern '%s'", input);
         }
@@ -159,10 +157,8 @@ static bool listed(const pathspec_t *spec, const entry_t *entry) {
 }
 
 error_t *pathspec_create(
-    char *const *inputs, size_t count, const mount_table_t *table, arena_t *arena,
-    pathspec_t **out
+    char *const *inputs, size_t count, arena_t *arena, pathspec_t **out
 ) {
-    CHECK_NULL(table);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -187,13 +183,13 @@ error_t *pathspec_create(
         entry_t entry = { 0 };
 
         if (strpbrk(input, "*?[")) {
-            RETURN_IF_ERROR(compile_rule(table, input, arena, &entry));
+            RETURN_IF_ERROR(compile_rule(input, arena, &entry));
             spec->rule_count++;
         } else {
             /* An exact entry in the key the input names, one per key however
              * many inputs spell it. */
             path_input_t arg;
-            error_t *err = path_input_resolve(table, input, arena, &arg);
+            error_t *err = path_input_resolve(input, arena, &arg);
             if (err) {
                 return error_wrap(err, "Invalid path '%s'", input);
             }

@@ -794,7 +794,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * path, neither manufactured from the other (infra/path.h) — and the profile
      * the revert acts on. */
     path_input_t arg;
-    err = path_input_resolve(mounts, opts->file_path, ctx->arena, &arg);
+    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
     err = select_profile(ctx, opts, &arg, &profile);

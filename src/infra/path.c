@@ -16,10 +16,11 @@
  *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the normalizer, whose answer
- * is the key. The topology (mount_spec_for_path, mount_validate_storage), the
- * filesystem primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
- * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
- * the layers below.
+ * is the key. The storage-label vocabulary (mount_spec_for_path,
+ * mount_validate_storage), the filesystem primitives (fs_expand_tilde,
+ * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
+ * (sys/identity) are delegated to the layers below. The table of roots is not
+ * among them: no root's spelling is read here (infra/path.h).
  */
 
 #include "infra/path.h"
@@ -52,9 +53,8 @@ static bool input_is_filesystem_shape(const char *input) {
 }
 
 error_t *path_input_resolve(
-    const mount_table_t *table, const char *input, arena_t *arena, path_input_t *out
+    const char *input, arena_t *arena, path_input_t *out
 ) {
-    CHECK_NULL(table);
     CHECK_NULL(input);
     CHECK_NULL(arena);
     CHECK_NULL(out);

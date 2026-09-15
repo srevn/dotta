@@ -1555,7 +1555,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
-    const mount_table_t *mounts = ctx->run.mounts;
     content_cache_t *content_cache = ctx->run.content_cache;
     const manifest_t *before = ctx->run.manifest;  /* The view ahead of the Git phase: the dispatcher's */
     const config_t *config = ctx->config;
@@ -1600,9 +1599,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .profiles      = opts->profiles,
         .profile_count = opts->profile_count,
     };
-    err = scope_build(
-        repo, state, &scope_inputs, mounts, ctx->arena, &scope
-    );
+    err = scope_build(repo, state, &scope_inputs, ctx->arena, &scope);
     if (err) goto cleanup;
 
     if (scope_enabled(scope)->count == 0) {
@@ -2433,7 +2430,6 @@ const args_command_t spec_sync = {
     .payload      = &(const dotta_needs_t){
         .repo     = DOTTA_REPO_OPEN,
         .state    = DOTTA_STATE_READ,
-        .mounts   = true,
         .crypto   = DOTTA_CRYPTO_CACHED,
         .manifest = true,
     },

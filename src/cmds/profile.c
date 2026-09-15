@@ -7,11 +7,13 @@
 
 #include "cmds/profile.h"
 
+#include <errno.h>
 #include <git2.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "base/arena.h"
 #include "base/args.h"
@@ -25,6 +27,7 @@
 #include "core/state.h"
 #include "infra/mount.h"
 #include "infra/path.h"
+#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/transfer.h"
@@ -793,10 +796,19 @@ static error_t *profile_enable(
      * held to the target's rules. Validating inside the per-profile loop used
      * to categorize a bad target as not_found, which mislabels a CLI input problem
      * as a missing profile. With the --target-requires-single-profile rule above,
-     * a single validation here covers every path that can reach Phase 2. */
+     * a single validation here covers every path that can reach Phase 2. The
+     * validator's last rule needs dotta's own store — the one directory no binding
+     * may reach — as the walkers take it (utils/repo.h): the directory the state
+     * opened its database beside, stat'd once per binding. Fatal, as their stat
+     * is: a store that will not stat has already failed the open. */
     if (opts->target) {
+        struct stat store;
+        if (fs_stat(git_repository_path(repo), &store) != 0) {
+            err = error_from_errno(errno, "Failed to stat the store");
+            goto cleanup;
+        }
         err = path_input_normalize(opts->target, &target);
-        if (!err) err = mount_validate_target(target);
+        if (!err) err = mount_validate_target(target, store.st_dev, store.st_ino);
         if (err) {
             err = error_wrap(err, "Invalid --target value");
             goto cleanup;

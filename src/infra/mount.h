@@ -101,6 +101,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/types.h>
 #include <types.h>
 
 /**
@@ -204,6 +205,11 @@ error_t *mount_validate_storage(const char *storage_path);
  *  - a path that does not stand (a link to nothing named as such), or that is
  *    not a directory — one stat, through a link standing at the spelling: a binding
  *    means the directory the link reaches, as mount_same_target reads it
+ *  - the directory dotta's own store stands in, by identity off that same stat
+ *    — named outright or reached through a link, a binding there would put a
+ *    profile's custom/ tree over the store's own config and refs at the next
+ *    apply. The pair is the caller's to hand in: where the store is, is the run's
+ *    fact (utils/repo.h, git_repository_path), which this table cannot ask
  *
  * The shape before the disk, so a traversal is refused by what it is and never
  * by its absence. The filesystem root is a target like any other: a binding there
@@ -214,9 +220,12 @@ error_t *mount_validate_storage(const char *storage_path);
  * Filesystem access is required for the existence + directory checks.
  *
  * @param target Deployment target to validate (must not be NULL)
+ * @param store_dev The store's directory, as its caller stat'd it: the one
+ *                  directory no binding may reach
+ * @param store_ino
  * @return Error or NULL when valid
  */
-error_t *mount_validate_target(const char *target);
+error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino);
 
 /**
  * Do two target spellings name one directory?

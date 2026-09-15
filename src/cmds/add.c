@@ -1592,6 +1592,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
 
+    /* Where dotta's own store stands, taken once for the whole command: the call
+     * that answers where the store's own files sit (utils/repo.h), which
+     * core/workspace.c's scan reads too. Not `repo_path`, which is in scope one
+     * line from `repo` and is the wrong answer for a store a hand made
+     * (add_walk_t). Read by the target's validator first — no binding reaches
+     * the store — and by the walk after. Fatal: a store that will not stat has
+     * already failed the open, and a walk that ran carrying no identity for it
+     * would be this rule silently disarmed. */
+    const char *store_path = git_repository_path(repo);
+    struct stat store;
+    if (fs_stat(store_path, &store) != 0) {
+        err = error_from_errno(errno, "Failed to stat the store at '%s'", store_path);
+        goto cleanup;
+    }
+    walk.store_dev = store.st_dev;
+    walk.store_ino = store.st_ino;
+
     /* The target, when the run brought one: a filesystem-shaped argument —
      * absolute, tilde, or relative to the working directory — resolved to the
      * absolute path the row stores, then held to the target's rules. */
@@ -1605,7 +1622,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = ERROR(ERR_MEMORY, "Failed to allocate the target");
             goto cleanup;
         }
-        err = mount_validate_target(target);
+        err = mount_validate_target(target, walk.store_dev, walk.store_ino);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch
@@ -1793,22 +1810,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         err = ERROR(ERR_MEMORY, "Failed to allocate the walk's listing");
         goto cleanup;
     }
-
-    /* Where dotta's own store stands, taken once for the whole command: the call
-     * that answers where the store's own files sit (utils/repo.h), which
-     * core/workspace.c's scan reads too. Not `repo_path`, which is in scope one
-     * line from `repo` and is the wrong answer for a store a hand made
-     * (add_walk_t). Fatal: a store that will not stat has already failed the
-     * open, and a walk that ran carrying no identity for it would be this rule
-     * silently disarmed. */
-    const char *store_path = git_repository_path(repo);
-    struct stat store;
-    if (fs_stat(store_path, &store) != 0) {
-        err = error_from_errno(errno, "Failed to stat the store at '%s'", store_path);
-        goto cleanup;
-    }
-    walk.store_dev = store.st_dev;
-    walk.store_ino = store.st_ino;
 
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's

@@ -2379,34 +2379,45 @@ static error_t *blob_over(
 }
 
 /**
- * One scan root: a directory a tracked row stands at, and the row that owns it
+ * One scan root: a directory to enumerate, whose walk it is, and its spelling
  *
- * Keyed by the directory's identity — the (dev, ino) of the row's own key, from
- * the driver's look — because a traversal must not enumerate one directory twice,
- * and which directory a frame stands in is a fact about the filesystem, not about
- * naming: two tracked rows spelled through different links stand at one directory
- * (a link a binding is declared through, one no binding names, a firmlink, a
- * bind mount), and a walk reaches a directory by whatever spelling its frame
- * joined. Two keys at one directory are two paths to the view and one walk to
- * the scan. One entry per directory, so the array is both the boundaries — a
- * walk stops at any of them it meets, by whichever string (find_scan_root) —
- * and the walks: the driver enumerates each once, from a depth 0 of its own.
+ * Three facts and nothing else of whatever produced one: the identity, the disk's
+ * word on which directory this is; the owner, whose names, rules and attribution
+ * the walk runs under (scan_t); and the spelling the walk starts from, which
+ * every child joins onto. A tracked row carries much besides and a walk reads
+ * none of it, which is what makes a registration no row; the two strings are
+ * the view's, borrowed, the rows and this array being one arena's
+ * (include/runtime.h).
+ *
+ * Keyed by the directory's identity — the (dev, ino) the driver's look found at
+ * the spelling it registers — because a traversal must not enumerate one directory
+ * twice, and which directory a frame stands in is a fact about the filesystem,
+ * not about naming: two tracked rows spelled through different links stand at
+ * one directory (a link a binding is declared through, one no binding names, a
+ * firmlink, a bind mount), and a walk reaches a directory by whatever spelling
+ * its frame joined. Two keys at one directory are two paths to the view and one
+ * walk to the scan. One entry per directory, so the array is both the boundaries
+ * — a walk stops at any of them it meets, by whichever string (find_scan_root)
+ * — and the walks: the driver enumerates each once, from a depth 0 of its own.
  * Where several rows stand at one directory the later-enabled profile's is the
- * one kept, the index's rule for a contested location (core/manifest.c
- * manifest_layer) applied where the keys differ; among one profile's, the later
- * in path order. The consequence: where two tracked rows stand at one directory
- * under two spellings, the later-enabled profile's walk is the one that runs,
- * and the other's namespace never sees an offer beneath it.
+ * one kept, owner and spelling together, the index's rule for a contested location
+ * (core/manifest.c manifest_layer) applied where the keys differ; among one
+ * profile's, the later in path order. The consequence: where two tracked rows
+ * stand at one directory under two spellings, the later-enabled profile's walk
+ * is the one that runs, and the other's namespace never sees an offer beneath it.
  *
  * The entries index (entry_t) reads the same fact off the same rows, for the
  * two verbs that act on an entry through a string, and the two are not one
  * structure: a root is a selection with a winner and a mutable registration, an
- * entry an observation with a run of equals.
+ * entry an observation with a run of equals — and the shapes differ with them,
+ * an entry carrying the row its readers ask what stands on, a root the two strings
+ * its walk reads.
  */
 typedef struct {
-    dev_t dev;                     /* The directory's identity */
+    dev_t dev;              /* The directory's identity */
     ino_t ino;
-    const manifest_row_t *row;     /* The tracked row that owns it */
+    const char *profile;    /* The owner: its names, its rules, its attribution */
+    const char *directory;  /* The spelling the walk starts from, and every child's prefix */
 } scan_root_t;
 
 /**
@@ -2820,14 +2831,13 @@ static error_t *analyze_untracked_files(
             if (fs_lstat_occupant(row->filesystem_path, &st) != FS_OCCUPANT_DIRECTORY) continue;
             if (st.st_dev == store.st_dev && st.st_ino == store.st_ino) continue;
 
-            scan_root_t *held = find_scan_root(roots, root_count, st.st_dev, st.st_ino);
-            if (held) {
-                held->row = row;
-            } else {
-                roots[root_count++] = (scan_root_t){
-                    .dev = st.st_dev, .ino = st.st_ino, .row = row,
-                };
-            }
+            scan_root_t *root = find_scan_root(roots, root_count, st.st_dev, st.st_ino);
+            if (!root) root = &roots[root_count++];
+
+            *root = (scan_root_t){
+                .dev = st.st_dev, .ino = st.st_ino,
+                .profile = row->profile, .directory = row->filesystem_path,
+            };
         }
     }
     if (root_count == 0) return NULL;
@@ -2860,7 +2870,7 @@ static error_t *analyze_untracked_files(
     }
 
     for (size_t r = 0; r < root_count; r++) {
-        const manifest_row_t *row = roots[r].row;
+        const scan_root_t *root = &roots[r];
 
         /* The same question at a root the driver reached directly: an independent
          * scan root beneath a file claim is as much beneath it as a child the
@@ -2869,7 +2879,7 @@ static error_t *analyze_untracked_files(
          * a lower row standing at it under a cleaner spelling could have offered
          * — the view's word about the directory is its owner's. */
         const manifest_row_t *blob = NULL;
-        err = blob_over(ws->manifest, row->filesystem_path, ws->arena, &blob);
+        err = blob_over(ws->manifest, root->directory, ws->arena, &blob);
         if (err) goto cleanup;
         if (blob) continue;
 
@@ -2878,10 +2888,10 @@ static error_t *analyze_untracked_files(
          * files as untracked, which the user could then `dotta add` by accident.
          * A corrupt .dottaignore must surface so the user can fix it. */
         const gitignore_ruleset_t *rules = NULL;
-        err = ignore_rules_for_profile(ignore_rules, row->profile, &rules);
+        err = ignore_rules_for_profile(ignore_rules, root->profile, &rules);
         if (err) {
             err = error_wrap(
-                err, "Failed to load ignore patterns for profile '%s'", row->profile
+                err, "Failed to load ignore patterns for profile '%s'", root->profile
             );
             goto cleanup;
         }
@@ -2893,13 +2903,13 @@ static error_t *analyze_untracked_files(
             .ws            = ws,
             .roots         = roots,
             .root_count    = root_count,
-            .profile       = row->profile,
+            .profile       = root->profile,
             .rules         = rules,
             .source_filter = source_filter,
             .store_dev     = store.st_dev,
             .store_ino     = store.st_ino,
         };
-        err = scan_directory_for_untracked(&scan, row->filesystem_path, 0);
+        err = scan_directory_for_untracked(&scan, root->directory, 0);
         if (err) goto cleanup;
     }
 

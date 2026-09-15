@@ -40,7 +40,7 @@ root/etc/hosts                → deploys to /etc/hosts
 custom/etc/nginx.conf         → deploys to <this profile's target>/etc/nginx.conf
 ```
 
-These names travel with the profile. Each machine supplies its home directory and each profile's [target](profiles.md#targets); `root/` paths stay absolute. A profile needs a target to deploy its `custom/` files.
+These names travel with the profile. Each machine supplies its home directory and each profile's [target](profiles.md#targets); `root/` paths stay absolute. A profile needs a target to deploy its `custom/` paths.
 
 ### Where a File Goes
 

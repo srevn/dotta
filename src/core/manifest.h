@@ -451,9 +451,11 @@ error_t *manifest_build_tree(
  * — reads manifest_build_tree. No policy enters here: no raw argument, no fallback,
  * no enabled-set question, and the branch need not be enabled.
  *
- * Readers: `ignore --test`'s named arm (cmds/ignore.c), and the two cross-branch
+ * Readers: `ignore --test`'s named arm (cmds/ignore.c); the two cross-branch
  * searches (core/profiles.c profile_discover_claims, profile_build_location_index),
- * which build one per local branch.
+ * which build one per local branch; and the target producer (core/profiles.c
+ * profile_needs_target), which builds one under a table that binds nothing and
+ * reads the health slice alone.
  *
  * @param repo Git repository (must not be NULL)
  * @param branch Branch name (must not be NULL); a branch that will not load is
@@ -582,9 +584,12 @@ error_t *manifest_mount_table(
 /**
  * One claim the build could not place: its profile has no deployment target on
  * this machine. Recorded, never dropped in silence — the health consumers (status,
- * apply, sync) surface these, and export reads the count alone, for a hint; the
- * repair is one command (`profile enable <p> --target /path`), the untracking
- * another (`remove`). The screen says **no target**, never "unbound": the header's
+ * apply, sync) surface these; export reads the count alone, for a hint, and so
+ * does add's enable hint over its own opened tree (cmds/add.c); and the count
+ * under a table that binds nothing is the answer to whether a branch needs a
+ * target at all (core/profiles.h profile_needs_target). The repair is one command
+ * (`profile enable <p> --target /path`), the untracking another (`remove`). The
+ * screen says **no target** or **needs a target**, never "unbound": the header's
  * word is what the build could not do, the screen's is what the user must give.
  * Strings are the build arena's, same lifetime as the rows.
  */

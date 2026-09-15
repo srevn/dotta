@@ -92,7 +92,7 @@ Keep using the target spelling shown by `profile list`. If you supply another sp
 
 **To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 
-Profiles with `custom/` files need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` files into an enabled profile, `status` asks you to choose a target.
+Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.
 
 Targets are not exclusive. Another profile can manage paths there through its own `home/` or `root/` names; normal layering applies wherever the destination pathnames match.
 
@@ -162,6 +162,7 @@ dotta --interactive
 Keybindings:
 - Arrow keys / `j`/`k` -- navigate
 - `Space` -- toggle enable/disable
+- `t` -- set or edit the deployment target
 - `J`/`K` -- reorder (move up/down)
 - `w` -- save changes
 - `q` / `Esc` -- quit

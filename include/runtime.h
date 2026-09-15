@@ -442,15 +442,20 @@ typedef struct dotta_run {
  *     mount table, the view's rows) lives in it. Handlers and every layer beneath
  *     borrow the pointer — never call `arena_destroy(ctx->arena)`.
  *
- *   - Frame-scope. `core/workspace.c`'s untracked walk creates one arena per
- *     directory frame and resets it before each entry, because an entry that is
- *     named and then excluded is neither an offer nor a row, and its joined path
- *     and the namer's two strings all outlive the decision that discarded it:
- *     20,000 ignored files beneath one tracked directory measured 4.1 MB of peak
- *     RSS at the shape that composed names by hand, 20.3 MB against `ctx->arena`,
- *     and 4.1 MB with the frame's own. The pointer never leaves the frame that
- *     made it, and every string that outlives a frame is copied at the one door
- *     it leaves through (workspace_add_untracked).
+ *   - Frame-scope. An arena a function makes and destroys itself, whose pointer
+ *     never leaves it. Two instances. `core/workspace.c`'s untracked walk creates
+ *     one per directory frame and resets it before each entry, because an entry
+ *     that is named and then excluded is neither an offer nor a row, and its
+ *     joined path and the namer's two strings all outlive the decision that
+ *     discarded it: 20,000 ignored files beneath one tracked directory measured
+ *     4.1 MB of peak RSS at the shape that composed names by hand, 20.3 MB against
+ *     `ctx->arena`, and 4.1 MB with the frame's own; every string that outlives
+ *     a frame is copied at the one door it leaves through
+ *     (workspace_add_untracked). `core/profiles.c`'s profile_needs_target builds
+ *     one branch's view to read one bool off it: against `ctx->arena` the editor
+ *     would keep a view per local branch for the length of its session and the
+ *     listing one per available row — 1.8 MB of heap at six branches of 1,000
+ *     paths, for six bools.
  *
  * Adding a fourth requires the evidence that one has: a genuinely sub-command
  * lifetime in code, and a number. Hypothesised need is not enough; a primitive

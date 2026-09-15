@@ -173,7 +173,6 @@ typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */
     size_t directory_count;  /* Tracked directories the branch metadata claims */
     size_t total_size;       /* Bytes of those blobs */
-    bool has_custom;         /* A custom/ tree at the top — paths a target places here */
 } profile_stats_t;
 
 /**
@@ -182,8 +181,7 @@ typedef struct {
  * One walk of the branch tree — each content blob counted and its size taken
  * from the object header, nothing inflated — then the branch metadata's DIRECTORY
  * items. A branch with no metadata.json claims no directories; that absence is
- * not a failure. The custom/ probe (profile_has_custom_files) is answered from
- * the same tree, so a listing that marks such a profile reads the branch once.
+ * not a failure.
  *
  * The walk is complete or an error, as the listing's is: an entry whose path no
  * mount can place fails the count rather than being skipped past.
@@ -243,23 +241,62 @@ error_t *profile_list_files(
 );
 
 /**
- * Check if profile contains any custom/ files
+ * Does this profile's branch need a deployment target?
  *
- * The branch probe: does this profile hold a tree that needs a target here? A
- * profile with custom/ paths is enabled only with one, and the three enable sites
- * read this before the row is written — `profile enable` (the skip), clone (the
- * skip), the interactive rows (the gate on space, and the mark). The probe reads
- * the branch, so it answers for a set the build refuses too.
+ * Definitional, not a rule of its own: the branch's contribution is built under
+ * the one table no state row can produce — HOME and the root sentinel, no binding
+ * — and the answer is whether it left anything unplaced (core/manifest.h
+ * manifest_unbound). Every home/ and root/ claim places there; a per_profile
+ * claim — a blob under custom/, a custom/ item of the sheet, tracked or derived
+ * — cannot, so a non-zero count is the answer, and a claim the contribution learns
+ * to place or to record moves the answer with it, no clause here having to follow.
+ * An empty custom tree needs none, by the same reading: a binding would place
+ * nothing for it.
+ *
+ * The branch's fact and not this machine's: asked under a table with no binding
+ * so that what the branch needs and what this machine binds are two facts, the
+ * first answerable where the second is not in scope (clone holds no state at
+ * its skip), and unchanged by a row this machine writes.
+ *
+ * Complete or an error: a branch that will not load, a sheet this build cannot
+ * read, and a tree entry no mount can place all fail here — the three the next
+ * view build over the same branch would fail on, one phase earlier than `profile
+ * enable` failed until now, before the row was written. A caller that must not
+ * fail whole on one branch absorbs the error and renders the row as unreadable
+ * (cmds/interactive.c read_targets), as cmds/profile.c's listing already does
+ * for a statistics error.
+ *
+ * Readers: the three enablers' skip — `profile enable` (cmds/profile.c), clone
+ * (cmds/clone.c), the editor's OFF→ON gate (cmds/interactive.c) — the two marks,
+ * the listing's available rows (cmds/profile.c) and the editor's, and the editor's
+ * `t`, live only on a row that can be bound. The rule these keep is "a profile
+ * that needs a target is not enabled without one", and its scope is theirs alone,
+ * not an invariant of the rows: the editor prompts and lets a row be saved unbound
+ * (plan_validate says why), add's implicit enable authors no such row (a created
+ * profile's custom/ claim requires --target, which the row takes), sync and a
+ * re-bind can leave an enabled row needing one, and `profile validate` does not
+ * ask — an enabled row with no binding is a lifecycle stage the health channel
+ * names, not an inconsistency. add asks no producer: it holds a view over its
+ * own opened tree under its own table and reads the slice on that (cmds/add.c
+ * report_enable_hint).
+ *
+ * Cost: one tree walk and one sheet load, in an arena of the call's own — the
+ * product is a bool and nothing outlives the call (include/runtime.h, the
+ * frame-scope lifetime). Measured at 0.144.2 on a 1,000-path branch: 2.5 ms,
+ * against 31 ms for the statistics beside it, whose object-header read per blob
+ * is the larger half.
  *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
- * @param out_has_custom Output flag (must not be NULL)
+ * @param needs_target Output flag: the branch holds a claim no binding-less table
+ *                     places — the view's own unbound count, non-zero (must not
+ *                     be NULL)
  * @return Error or NULL on success
  */
-error_t *profile_has_custom_files(
+error_t *profile_needs_target(
     git_repository *repo,
     const char *profile,
-    bool *out_has_custom
+    bool *needs_target
 );
 
 /**

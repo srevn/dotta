@@ -220,9 +220,9 @@ error_t *mount_validate_storage(const char *storage_path);
  * Filesystem access is required for the existence + directory checks.
  *
  * @param target Deployment target to validate (must not be NULL)
- * @param store_dev The store's directory, as its caller stat'd it: the one
- *                  directory no binding may reach
- * @param store_ino
+ * @param store_dev Device of the store's directory, as its caller stat'd it
+ * @param store_ino Inode of the same: together, the one directory no binding
+ *                  may reach, compared against the stat this function already takes
  * @return Error or NULL when valid
  */
 error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino);
@@ -343,12 +343,14 @@ typedef struct {
  *     not absolute and folded.
  *   - ERR_MEMORY on arena allocation failure.
  *
- * One production reader: core/manifest.h's manifest_mount_table, which shapes
- * the state's rows — and a command's own binding, where the run brought one —
- * into the array. Every verb reads the asker's own entries, so a table holding
- * one binding would answer its profile as the whole table does; the one derivation
- * is kept because the rows a command's table is built from are the rows the view
- * it later joins by is built from (cmds/add.c).
+ * Two production readers. core/manifest.h's manifest_mount_table shapes the state's
+ * rows — and a command's own binding, where the run brought one — into the array:
+ * every verb reads the asker's own entries, so a table holding one binding would
+ * answer its profile as the whole table does, and the one derivation is kept
+ * because the rows a command's table is built from are the rows the view it later
+ * joins by is built from (cmds/add.c). core/profiles.c's profile_needs_target
+ * builds the table no state can produce — no mounts at all, HOME and the sentinel
+ * alone — to ask a branch what it needs apart from what this machine binds.
  *
  * @param arena       Arena for the table and its internal storage
  * @param mounts      Caller-declared mounts (may be NULL when count is 0)

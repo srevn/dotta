@@ -663,11 +663,6 @@ error_t *profile_get_stats(
     out->file_count = data.file_count;
     out->total_size = data.total_size;
 
-    /* The custom/ tree, by its top-level entry — the probe profile_has_custom_files
-     * makes, answered here from the tree already in hand. */
-    const git_tree_entry *custom = git_tree_entry_byname(tree, "custom");
-    out->has_custom = custom && git_tree_entry_type(custom) == GIT_OBJECT_TREE;
-
     /* The directories: the branch's own metadata, the same source the view's
      * claim routine reads. A tree without a sheet loads as an empty one — no
      * claim, so nothing counted below — and every load error is real and
@@ -724,40 +719,37 @@ error_t *profile_get_stats(
 }
 
 /**
- * Check if profile contains any custom/ files
+ * Does this profile's branch need a deployment target?
  *
- * Uses direct tree lookup instead of full tree walk for O(log k) performance
- * where k is the number of top-level entries (typically <20).
+ * The table binds nothing on purpose — HOME and the sentinel alone — so a custom/
+ * claim has nowhere to go and is recorded, which is the answer. The view is built
+ * to read one count off it and freed before the arena that holds it.
  */
-error_t *profile_has_custom_files(
+error_t *profile_needs_target(
     git_repository *repo,
     const char *profile,
-    bool *out_has_custom
+    bool *needs_target
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profile);
-    CHECK_NULL(out_has_custom);
+    CHECK_NULL(needs_target);
 
-    *out_has_custom = false;
+    *needs_target = false;
 
-    git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'", profile
-        );
+    arena_t *scratch = arena_create(0);
+    if (!scratch) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the branch's view");
     }
 
-    /* Check for custom/ directory using O(log k) lookup. git_tree_entry_byname
-     * returns a pointer owned by the tree — must read before git_tree_free. */
-    const git_tree_entry *entry = git_tree_entry_byname(tree, "custom");
-    if (entry) {
-        *out_has_custom = (git_tree_entry_type(entry) == GIT_OBJECT_TREE);
-    }
+    mount_table_t *mounts = NULL;
+    manifest_t *view = NULL;
+    error_t *err = mount_table_build(scratch, NULL, 0, &mounts);
+    if (!err) err = manifest_build_branch(repo, profile, mounts, scratch, &view);
+    if (!err) *needs_target = manifest_unbound(view).count > 0;
 
-    git_tree_free(tree);
-
-    return NULL;
+    manifest_free(view);                 /* reads the arena: before the destroy */
+    arena_destroy(scratch);
+    return err;
 }
 
 /**

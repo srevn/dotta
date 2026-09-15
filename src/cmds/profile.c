@@ -241,20 +241,19 @@ static error_t *profile_list(
         for (size_t i = 0; i < enabled_profiles->count; i++) {
             const char *profile = enabled_profiles->items[i];
             profile_stats_t stats = { 0 };
-            error_t *stats_err = profile_get_stats(repo, profile, &stats);
+            error_t *row_err = profile_get_stats(repo, profile, &stats);
 
             /* Name what the branch holds if we could read it, otherwise say so */
-            if (stats_err) {
+            if (row_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (counts unavailable)",
                     i + 1, profile
                 );
-                error_free(stats_err);
+                error_free(row_err);
             } else {
                 char counts[64];
                 output_format_counts(
-                    stats.file_count, stats.directory_count,
-                    counts, sizeof(counts)
+                    stats.file_count, stats.directory_count, counts, sizeof(counts)
                 );
                 output_styled(
                     out, OUTPUT_NORMAL, "  %zu. {cyan}%s{reset} (%s)",
@@ -275,35 +274,38 @@ static error_t *profile_list(
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>'");
     }
 
-    /* Print available (disabled) profiles, marking the ones a target enables: a
-     * profile with custom/ paths is enabled only with one, so this is the mark
-     * on exactly the profile clone and --all left here. */
+    /* Print available (disabled) profiles, marking the ones that need a target:
+     * such a profile is enabled only with one, so this is the mark on exactly
+     * the profile clone and --all left here, and the answer is the view's over
+     * the branch alone (core/profiles.h profile_needs_target). Two reads of one
+     * branch, one failure arm: both open the same tree first, and a row that
+     * would not count says so rather than marking nothing in silence. */
     if (available->count > 0 && opts->show_available) {
         output_section(out, OUTPUT_NORMAL, "Available (disabled)");
         for (size_t i = 0; i < available->count; i++) {
             const char *profile = available->items[i];
             profile_stats_t stats = { 0 };
-            error_t *stats_err = profile_get_stats(repo, profile, &stats);
+            bool needs_target = false;
+            error_t *row_err = profile_get_stats(repo, profile, &stats);
+            if (!row_err) row_err = profile_needs_target(repo, profile, &needs_target);
 
             /* Name what the branch holds if we could read it, otherwise say so */
-            if (stats_err) {
+            if (row_err) {
                 output_styled(
                     out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (counts unavailable)",
                     profile
                 );
-                error_free(stats_err);
+                error_free(row_err);
             } else {
                 char counts[64];
                 output_format_counts(
-                    stats.file_count, stats.directory_count,
-                    counts, sizeof(counts)
+                    stats.file_count, stats.directory_count, counts, sizeof(counts)
                 );
                 output_styled(
-                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)",
-                    profile, counts
+                    out, OUTPUT_NORMAL, "  • {cyan}%s{reset} (%s)", profile, counts
                 );
-                if (stats.has_custom) {
-                    output_styled(out, OUTPUT_NORMAL, " {dim}(custom){reset}");
+                if (needs_target) {
+                    output_styled(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
                 }
             }
             output_newline(out, OUTPUT_NORMAL);
@@ -365,8 +367,7 @@ static error_t *profile_list(
                         output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
                         for (size_t i = 0; i < remote_only->count; i++) {
                             output_print(
-                                out, OUTPUT_NORMAL, "  • %s\n",
-                                remote_only->items[i]
+                                out, OUTPUT_NORMAL, "  • %s\n", remote_only->items[i]
                             );
                         }
                         output_newline(out, OUTPUT_NORMAL);
@@ -644,10 +645,10 @@ cleanup:
  * set as it stands at dispatch (the spec declares it; a set that will not build
  * ends dispatch with the builder's message, and the enable never runs):
  *   1. Gather & validate — resolve --all/args to a request set, then filter out
- *      the already-enabled, the missing, and the custom-bearing named without a
- *      target: a profile with custom/ paths is enabled only with one, so such a
- *      profile is skipped and told the flag, whatever the request shape, and a
- *      run that enabled nothing is an error. Emits per-profile warnings; produces
+ *      the already-enabled, the missing, and the ones that need a target and
+ *      were named without one: such a profile is enabled only with one, so it
+ *      is skipped and told the flag, whatever the request shape, and a run that
+ *      enabled nothing is an error. Emits per-profile warnings; produces
  *      to_enable_validated. An already-enabled profile named with a --target
  *      that differs from its row's is not a skip: it re-enters the validated
  *      set as a retarget, and `retarget` remembers which one (at most one — the
@@ -696,7 +697,7 @@ static error_t *profile_enable(
     const char *retarget = NULL;
     size_t already_enabled = 0;
     size_t not_found = 0;
-    size_t needs_target = 0;
+    size_t no_target = 0;
 
     /* Phase 1: Gather & validate */
     err = state_get_profiles(state, &enabled);
@@ -815,10 +816,10 @@ static error_t *profile_enable(
         }
     }
 
-    /* Filter: already-enabled, missing-branch and custom-without-target are
-     * per-profile skips, each with its own tally — unless the already-enabled
-     * profile came with a differing --target, which is a retarget and stays in
-     * the run's work. The surviving set lands in to_enable_validated. */
+    /* Filter: already-enabled, missing-branch and needs-a-target are per-profile
+     * skips, each with its own tally — unless the already-enabled profile came
+     * with a differing --target, which is a retarget and stays in the run's work.
+     * The surviving set lands in to_enable_validated. */
     to_enable_validated = string_array_new(0);
     if (!to_enable_validated) {
         err = ERROR(ERR_MEMORY, "Failed to create validated list");
@@ -894,16 +895,19 @@ static error_t *profile_enable(
             continue;
         }
 
-        /* A profile with custom/ paths is enabled only with a target: the binding
+        /* A profile that needs a target is enabled only with one: the binding
          * is part of the enablement, and a row without one would hold every custom/
-         * claim while the screens said "enabled". Skipped and named with the
-         * flag, whatever the request shape; a run that enabled nothing ends in
-         * the error below. A tree Git cannot read is that error now, not a profile
-         * assumed to hold no custom/ paths. */
-        bool has_custom = false;
-        err = profile_has_custom_files(repo, profile, &has_custom);
+         * claim while the screens said "enabled". Whether it needs one is the
+         * view's answer over the branch alone (core/profiles.h
+         * profile_needs_target), asked whatever the flag says, so the branch is
+         * the earlier question: a tree Git cannot read, or a sheet this build
+         * cannot, is the error here and not one phase later, after the row was
+         * written. Skipped and named with the flag, whatever the request shape;
+         * a run that enabled nothing ends in the error below. */
+        bool needs_target = false;
+        err = profile_needs_target(repo, profile, &needs_target);
         if (err) goto cleanup;
-        if (has_custom && !target) {
+        if (needs_target && !target) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here", profile
@@ -911,7 +915,7 @@ static error_t *profile_enable(
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", profile
             );
-            needs_target++;
+            no_target++;
             continue;
         }
 
@@ -966,18 +970,18 @@ static error_t *profile_enable(
                 not_found, not_found == 1 ? "" : "s"
             );
         }
-        if (needs_target > 0) {
+        if (no_target > 0) {
             output_warning(
                 out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
-                needs_target, needs_target == 1 ? "" : "s",
-                needs_target == 1 ? "s" : ""
+                no_target, no_target == 1 ? "" : "s",
+                no_target == 1 ? "s" : ""
             );
         }
         /* Mirror the live-path terminal: if nothing would be enabled because
          * every requested profile was missing or needs a target, surface the
          * same error a live run would produce. Idempotent cases (all already
          * enabled) fall through to cleanup with err == NULL. */
-        if (to_enable_validated->count == 0 && (not_found > 0 || needs_target > 0)) {
+        if (to_enable_validated->count == 0 && (not_found > 0 || no_target > 0)) {
             err = ERROR(
                 not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
                 "No profiles were enabled"
@@ -1096,11 +1100,11 @@ static error_t *profile_enable(
             not_found, not_found == 1 ? "" : "s"
         );
     }
-    if (needs_target > 0) {
+    if (no_target > 0) {
         output_warning(
             out, OUTPUT_NORMAL, "%zu profile%s need%s a target",
-            needs_target, needs_target == 1 ? "" : "s",
-            needs_target == 1 ? "s" : ""
+            no_target, no_target == 1 ? "" : "s",
+            no_target == 1 ? "s" : ""
         );
     }
 
@@ -1109,7 +1113,7 @@ static error_t *profile_enable(
      * which, for the reader; every error exits the same. Pure idempotent cases
      * (all already-enabled, or --all on an empty repo) fall through to cleanup
      * with err == NULL. */
-    if (to_enable_validated->count == 0 && (not_found > 0 || needs_target > 0)) {
+    if (to_enable_validated->count == 0 && (not_found > 0 || no_target > 0)) {
         err = ERROR(
             not_found > 0 ? ERR_NOT_FOUND : ERR_INVALID_ARG,
             "No profiles were enabled"

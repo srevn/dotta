@@ -918,21 +918,35 @@ static void report_capture(
  *
  * The one remedy an add into such a profile leaves, whichever screen says it:
  * the receipt's, where the record phase found no row, and the preview's, where
- * the rows it read say the same. Enable is the verb, taking the target as the
- * user typed it when the run brought one — and "here" is where they typed it.
+ * the rows it read say the same. Enable is the verb, and what it must bring is
+ * one of three things. The target as the user typed it, when the run brought
+ * one — "here" is where they typed it. Else a target, when the branch as this
+ * command opened it holds a claim no binding places (core/manifest.h
+ * manifest_unbound): the reading `profile enable` refuses on, so the hint never
+ * names a command that refuses — the branch's custom/ paths were there before
+ * this add and are there after it, whatever this add captured beside them. Else
+ * enable alone.
  *
  * @param out     Output context (must not be NULL)
  * @param profile The profile (must not be NULL)
  * @param target  The --target the run brought, as typed; NULL without one
+ * @param view    The branch as this command opened it, under its table (must
+ *                not be NULL)
  */
 static void report_enable_hint(
-    output_t *out, const char *profile, const char *target
+    output_t *out, const char *profile, const char *target, const manifest_t *view
 ) {
     if (target) {
         output_hint(
             out, OUTPUT_NORMAL,
             "Run 'dotta profile enable %s --target %s' to deploy it here",
             profile, target
+        );
+    } else if (manifest_unbound(view).count > 0) {
+        output_hint(
+            out, OUTPUT_NORMAL,
+            "Run 'dotta profile enable %s --target /path' to activate and deploy",
+            profile
         );
     } else {
         output_hint(
@@ -2479,7 +2493,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 out, OUTPUT_NORMAL,
                 "Profile not enabled - nothing would be marked as deployed"
             );
-            report_enable_hint(out, opts->profile, opts->target);
+            report_enable_hint(out, opts->profile, opts->target, view);
             output_newline(out, OUTPUT_NORMAL);
         }
 
@@ -2833,7 +2847,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the event for the files it adopts and never for a directory, and an unowned
      * directory is released at scope exit where an owned one is pruned. */
     if (!record.enabled) {
-        report_enable_hint(out, opts->profile, opts->target);
+        report_enable_hint(out, opts->profile, opts->target, view);
     } else if (record_err) {
         output_hint(
             out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"

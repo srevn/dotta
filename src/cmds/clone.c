@@ -200,8 +200,8 @@ static error_t *initialize_state(
      *
      * state_enable_profile is the membership primitive — clone calls it once
      * per profile, always with target=NULL: the caller hands it only profiles
-     * without custom/ paths, so there is nothing to bind, and a per-machine target
-     * is enable's to give later.
+     * that need no target here, so there is nothing to bind, and a per-machine
+     * target is enable's to give later.
      *
      * The view is computed, never stored: the build writes nothing and its result
      * is discarded. It is the tripwire that keeps clone from landing an enabled
@@ -603,16 +603,20 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
     /* The profiles to enable: every fetched one whose claims this machine can
-     * place. A profile with custom/ paths is enabled only with a target, and
-     * clone cannot take one (enable's --target names a single profile): it is
-     * left fetched and disabled, named here with the command that enables it. A
-     * tree Git cannot read fails the clone, as the build over it would. */
+     * place. A profile that needs a target is enabled only with one, and clone
+     * cannot take one (enable's --target names a single profile): it is left
+     * fetched and disabled, named here with the command that enables it. The
+     * answer is the view's over the branch alone (core/profiles.h
+     * profile_needs_target), and its failures are the clone's: a tree Git cannot
+     * read, or a sheet this build cannot, fails the clone whole and rolls the
+     * store back — as the build in initialize_state already did for a portable
+     * branch, and now for every fetched one. */
     for (size_t i = 0; i < fetched_profiles->count; i++) {
         const char *profile = fetched_profiles->items[i];
-        bool has_custom = false;
-        err = profile_has_custom_files(repo, profile, &has_custom);
+        bool needs_target = false;
+        err = profile_needs_target(repo, profile, &needs_target);
         if (err) goto cleanup;
-        if (has_custom) {
+        if (needs_target) {
             output_warning(
                 out, OUTPUT_NORMAL,
                 "Profile '%s' holds custom/ paths and needs a target here; "

@@ -46,8 +46,8 @@
 
 /* Row prefix: "  " + cursor + " " + checkbox + " " = 6 visible columns. */
 #define ROW_PREFIX_COLS       6
-/* Worst static annotation: " (custom)" = 9 visible columns. */
-#define ROW_ANNOTATION_COLS   9
+/* Worst static annotation: " (needs a target)" = 17 visible columns. */
+#define ROW_ANNOTATION_COLS   17
 
 /* Pre-allocated prompt buffer size; geometric realloc covers overflow. */
 #define PROMPT_INITIAL_CAP    256
@@ -56,10 +56,10 @@
 
 typedef struct {
     char *name;            /* Owned profile name */
-    char *target;          /* Owned deployment target for custom/ files; NULL when unset */
+    char *target;          /* Owned deployment target: the row's, or this session's; NULL when unset */
     bool enabled;          /* Selected for save; toggled by space, persisted by save_order */
-    bool exists_locally;   /* Profile branch is present in this clone */
-    bool has_custom;       /* Profile contains custom/ files (eager probe at create) */
+    bool needs_target;     /* A claim of the branch needs a binding (core/profiles.h) */
+    bool unreadable;       /* The branch would not read: the seed absorbed it, the row says so */
 } item_t;
 
 typedef struct {
@@ -68,7 +68,7 @@ typedef struct {
     size_t cap;            /* Allocated capacity */
     size_t item_index;     /* Row anchor (view->items index) the prompt is over */
     bool active;           /* True while the prompt overlay is open */
-    bool enable;           /* True iff opened via space-on-disabled-custom (commit flips enabled) */
+    bool enable;           /* True iff opened by space on a row that needs a target (commit flips enabled) */
 } prompt_t;
 
 typedef struct {
@@ -190,9 +190,9 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
 
 /* --- View lifecycle --- */
 
-/* Allocate view->items and populate name/enabled/exists_locally. On failure,
- * item_count is set to the populated prefix and view_free (via view_create's
- * fail path) releases what was allocated. */
+/* Allocate view->items and populate name/enabled. On failure, item_count is set
+ * to the populated prefix and view_free (via view_create's fail path) releases
+ * what was allocated. */
 static error_t *build_items(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
@@ -260,7 +260,6 @@ static error_t *build_items(
                 goto cleanup;
             }
             view->items[item_idx].enabled = true;
-            view->items[item_idx].exists_locally = true;
             item_idx++;
         }
     }
@@ -274,7 +273,6 @@ static error_t *build_items(
             goto cleanup;
         }
         view->items[item_idx].enabled = false;
-        view->items[item_idx].exists_locally = true;
         item_idx++;
     }
 
@@ -287,42 +285,47 @@ cleanup:
     return err;
 }
 
-/* Pass two: eagerly seed has_custom and target.
+/* Pass two, the target column of every row: the binding an enabled row holds
+ * (its arrow), and whether its branch needs one (its mark, and the OFF→ON gate)
+ * — both read up front so a keystroke never reads Git: the gate is a field test,
+ * where a lazy probe would be a tree read inside a raw-mode handler, visible
+ * latency on the first space.
  *
- * has_custom is computed up front so toggling becomes a constant-time field check.
- * Lazy probing would force a Git tree read inside a raw-mode keystroke handler
- * — visible latency on the first space.
+ * The binding first, and it cannot fail: the row's target is the store's fact
+ * whatever the branch says, so a branch that will not read keeps its arrow. It
+ * borrows from state_peek_profile_target's row cache, whose lifetime ends at
+ * the next state_enable/disable/reorder; save runs those much later, so the copy
+ * crosses the boundary now.
  *
- * Target borrows from state_peek_profile_target's row cache, whose lifetime ends
- * at the next state_enable/disable/reorder. Save runs those calls much later;
- * copy across the boundary now. */
-static error_t *seed_metadata(
+ * The need is absorbed, not propagated: the editor is the way out of an enabled
+ * set the next load cannot build. A sheet this build refuses on one enabled branch
+ * kills status; here SPACE disables the branch and `w` saves, plan_check building
+ * over the post-mutation set — the door tests/test-claims.sh pins for `profile
+ * disable`, and a strict seed would close it. The row says what the seed could
+ * not, and is not gated: we do not know, so we do not prompt. */
+static error_t *read_targets(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
     for (size_t i = 0; i < view->item_count; i++) {
-        error_t *err = profile_has_custom_files(
-            repo, view->items[i].name, &view->items[i].has_custom
-        );
-        if (err) {
-            return error_wrap(
-                err, "Failed to inspect profile '%s' for custom files",
-                view->items[i].name
-            );
+        item_t *it = &view->items[i];
+
+        /* The binding the store holds for this row — only an enabled row has
+         * one, the word cmd_add spells the same peek with. */
+        const char *bound = it->enabled
+            ? state_peek_profile_target(deploy_state, it->name) : NULL;
+        if (bound) {
+            it->target = strdup(bound);
+            if (!it->target) {
+                return error_create(
+                    ERR_MEMORY, "failed to duplicate target for profile '%s'", it->name
+                );
+            }
         }
-        if (!view->items[i].enabled) continue;
 
-        const char *t = state_peek_profile_target(
-            deploy_state, view->items[i].name
-        );
-        if (!t) continue;
-
-        view->items[i].target = strdup(t);
-        if (!view->items[i].target) {
-            return error_create(
-                ERR_MEMORY,
-                "failed to duplicate target for profile '%s'",
-                view->items[i].name
-            );
+        error_t *err = profile_needs_target(repo, it->name, &it->needs_target);
+        if (err) {
+            it->unreadable = true;
+            error_free(err);
         }
     }
     return NULL;
@@ -356,7 +359,7 @@ static error_t *view_create(
     error_t *err = build_items(repo, deploy_state, view);
     if (err) goto fail;
 
-    err = seed_metadata(repo, deploy_state, view);
+    err = read_targets(repo, deploy_state, view);
     if (err) goto fail;
 
     /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
@@ -535,11 +538,12 @@ static error_t *plan_classify(
 }
 
 /* Phase: validate user-supplied targets at the boundary, mirroring the check
- * `cmd profile enable` runs. A NULL target is legitimate on every row: a non-custom
- * one has nothing to place, and a custom one saved unbound is a normal lifecycle
- * stage the health channel names (core/manifest.h manifest_unbound) — the OFF→ON
- * prompt asks for a target, a row already enabled without one keeps that, and
- * nothing downstream refuses either. No second guard here.
+ * `cmd profile enable` runs. A NULL target is legitimate on every row: one that
+ * needs no target has nothing to place, and one that needs a target and is saved
+ * without it is a normal lifecycle stage the health channel names (core/manifest.h
+ * manifest_unbound) — the OFF→ON prompt asks for a target, a row already enabled
+ * without one keeps that, and nothing downstream refuses either. No second guard
+ * here.
  *
  * The validator's last rule needs dotta's own store — the one directory no binding
  * may reach — as the walkers take it (utils/repo.h): the directory the state
@@ -653,6 +657,20 @@ static error_t *save_order(
     err = state_commit(deploy_state);
     if (err) goto rollback;
 
+    /* A row the save did not enable carries no binding past it. A target held
+     * on a disabled row — typed with `t`, or captured at the prompt and toggled
+     * off again — renders as an arrow, and once (modified) clears every arrow
+     * on the screen is the store's; this one the store never took. Released here
+     * and not refused at `t`: setting the target and then toggling on is a way
+     * to enable, and the survival across a toggle-off is the capture's own promise
+     * (handle_key_normal) for the window before a save. The precedent is
+     * plan_classify's write-back: the item takes what the save decided, never
+     * what it happened to hold. */
+    for (size_t i = 0; i < view->item_count; i++) {
+        if (view->items[i].enabled) continue;
+        free(view->items[i].target);
+        view->items[i].target = NULL;
+    }
     view->modified = false;
     return NULL;
 
@@ -663,10 +681,11 @@ rollback:
 
 /* --- Render --- */
 
-/* Three row shapes, all the same line count:
+/* Four row shapes, all the same line count:
  *   1. Prompt-active   "  ▶   Target: <buffer>_"
- *   2. Enabled custom  "  ▶ ✓ name → <target>"
- *   3. Disabled custom "    name (custom)"
+ *   2. Bound           "  ▶ ✓ name → <target>"
+ *   3. Needs a target  "    name (needs a target)"
+ *   4. Unreadable      "    name (unreadable)"
  *
  * Trailing '_' is the visible caret; hardware cursor stays hidden for the whole
  * session. Annotations print from their own fprintf so the unbounded target string
@@ -701,12 +720,21 @@ static void row_render(const view_t *view, size_t i) {
         cursor_glyph, checkbox, name_open, it->name, name_close
     );
 
-    if (it->enabled && it->has_custom && it->target) {
+    /* Three questions, in order. Does the row hold a binding — the store's, or
+     * this session's? Shown wherever one is held: on a home-only row bound on
+     * purpose, as profile list and status show it; and on a disabled row, where
+     * it is what the next toggle-on writes (save_order releases it if no save
+     * takes it). Could the seed not say? Does the branch need a binding it has
+     * not got — the same answer status prints for an enabled row, and here `t`
+     * is the remedy. */
+    if (it->target) {
         char shown[PATH_MAX];
         output_format_path(it->target, identity()->home, shown, sizeof(shown));
         fprintf(stdout, " " UI_DIM "→ %s" UI_RESET, shown);
-    } else if (!it->enabled && it->has_custom) {
-        fprintf(stdout, " " UI_DIM "(custom)" UI_RESET);
+    } else if (it->unreadable) {
+        fprintf(stdout, " " UI_DIM "(unreadable)" UI_RESET);
+    } else if (it->needs_target) {
+        fprintf(stdout, " " UI_DIM "(needs a target)" UI_RESET);
     }
     fprintf(stdout, "\r\n");
 }
@@ -735,8 +763,10 @@ static void render_footer(const view_t *view) {
         return;
     }
 
+    /* `t` is named where it is live: on a row whose branch needs a target
+     * (handle_key_normal). */
     const char *target_hint =
-        (view->item_count > 0 && view->items[view->cursor].has_custom)
+        (view->item_count > 0 && view->items[view->cursor].needs_target)
             ? UI_DIM "t" UI_RESET " target  "
             : "";
 
@@ -887,12 +917,14 @@ static interactive_result_t handle_key_normal(
             item_t *it = &view->items[view->cursor];
             bool toggling_on = !it->enabled;
 
-            /* Three-gate trigger: prompt opens iff (1) row has custom files,
+            /* Three-gate trigger: prompt opens iff (1) the branch needs a target,
              * (2) toggle is OFF→ON, (3) no target captured or seeded yet. The
              * captured target survives transient toggle-off / toggle-on cycles
              * within a session, so a re-enable skips the prompt naturally via
-             * gate 3. */
-            if (toggling_on && it->has_custom && it->target == NULL) {
+             * gate 3 (until a save releases it: save_order). A row the seed could
+             * not read needs nothing it can say, so it toggles without a prompt
+             * and plan_check refuses the save that would enable it. */
+            if (toggling_on && it->needs_target && it->target == NULL) {
                 prompt_open_capture(&view->prompt, view->cursor);
                 return INTERACTIVE_CONTINUE;
             }
@@ -904,14 +936,16 @@ static interactive_result_t handle_key_normal(
 
         case 't':
         case 'T': {
-            /* Edit existing target on a custom-bearing row. Same prompt as space
-             * but with enable cleared so committing only updates the target string.
-             * No-op on non-custom rows. */
+            /* Set or edit the target on a row whose branch needs one: the same
+             * prompt as space, with enable cleared so committing only sets the
+             * string. No-op on a row that needs none — a binding places custom/
+             * claims, and a branch with none has nothing for one to place. On a
+             * disabled row the target is what the next toggle-on writes. */
             if (view->cursor >= view->item_count) {
                 return INTERACTIVE_CONTINUE;
             }
             item_t *it = &view->items[view->cursor];
-            if (!it->has_custom) {
+            if (!it->needs_target) {
                 return INTERACTIVE_CONTINUE;
             }
             prompt_open_edit(&view->prompt, view->cursor, it->target);
@@ -980,10 +1014,10 @@ static interactive_result_t view_handle_key(
 /* Reject the session if the terminal can't host the static row layout.
  *
  * Row geometry: "  " + cursor + " " + checkbox + " " + name + annotation.
- * The static prefix is ROW_PREFIX_COLS; the worst static annotation is " (custom)"
- * at ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run longer than that,
- * but it is user data and its visual overflow is allowed to wrap rather than
- * block startup. Same logic applies to the mid-session "Target: <buffer>"
+ * The static prefix is ROW_PREFIX_COLS; the worst static annotation is " (needs
+ * a target)" at ROW_ANNOTATION_COLS. The dynamic "→ <target>" can run longer
+ * than that, but it is user data and its visual overflow is allowed to wrap rather
+ * than block startup. Same logic applies to the mid-session "Target: <buffer>"
  * overlay. */
 static error_t *check_screen(const view_t *view) {
     terminal_size_t size;
@@ -1112,7 +1146,7 @@ const args_command_t spec_interactive = {
         "Notes:\n"
         "  - Enabled profiles are saved to state in the displayed order\n"
         "  - Profile order determines layering (later overrides earlier)\n"
-        "  - Toggling on a custom/-bearing profile opens an inline target prompt\n"
+        "  - Toggling on a profile that needs a target opens an inline target prompt\n"
         "  - A relative target is resolved from this directory, like a shell's\n"
         "  - Use regular commands (apply, update, sync) after enabling profiles\n",
     .payload      = &(const dotta_needs_t){

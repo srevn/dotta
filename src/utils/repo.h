@@ -34,15 +34,16 @@
  * `git_repository_path` on the open handle and not `resolve_repo_path`: the two
  * name one directory for the bare repository dotta makes and two for a non-bare
  * one a hand declared, where the store's own files sit in the `.git/` and the
- * path resolves to the worktree beside it. Four readers, each taking the pair
- * (dev, ino) once and comparing it inline, because the store is the same directory
- * under every name and its location is the run's, which no ignore pattern could
- * say: core/state.c (the database beside its refs), cmds/add.c (no argument names
- * it, no frame of the walk enters it), core/workspace.c (no row registers it as
- * a scan root, no frame of the scan enters it), and the target's validator
+ * path resolves to the worktree beside it. core/state.c reads that path as a
+ * path, joining its database onto it; the readers that must stay *out* of the
+ * directory each take the pair (dev, ino) once and compare it inline, because
+ * the store is the same directory under every name and its location is the run's,
+ * which no ignore pattern could say. Three of those: cmds/add.c (no argument
+ * names it, no frame of the walk enters it), core/workspace.c (no row registers
+ * it as a scan root, no frame of the scan enters it), and the target's validator
  * (infra/mount.h mount_validate_target: no binding reaches it), handed the pair
  * by each of the three binders — `profile enable`, the interactive save, `add
- * --target` — since the table cannot ask where the store is. A fifth reader belongs
+ * --target` — since the table cannot ask where the store is. A fourth belongs
  * on this list.
  */
 

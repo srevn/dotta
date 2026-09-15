@@ -300,13 +300,14 @@ static error_t *manifest_place(
  * blob per path, a sheet one item per key.
  *
  * Growth is the spine's abandon-and-realloc idiom. The strings must outlive the
- * view — arena-backed by the caller for a claim, the spec table's own static
- * for a root's label — and the entry borrows them for the view's lifetime.
+ * view — arena-backed by the caller for a claim, the vocabulary's own static
+ * for a root's label (infra/mount.h mount_kinds) — and the entry borrows them
+ * for the view's lifetime.
  *
  * @param manifest Target view (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
  * @param name The claim's storage path, arena-backed, or a root's label, the
- *             spec table's (must not be NULL)
+ *             vocabulary's (must not be NULL)
  * @param kind What the entry is (manifest_unbound_kind_t)
  * @param arena Arena for the array growth (must not be NULL)
  * @return Error or NULL on success
@@ -624,7 +625,7 @@ static error_t *manifest_ascend(
     size_t len = strlen(rung);
 
     for (;;) {
-        if (mount_root(n->mounts, n->profile, rung)) break;
+        if (mount_root(n->mounts, n->profile, rung, NULL)) break;
 
         size_t up = str_path_parent_len(rung);
         if (up >= len) break;   /* "/" is its own parent; the sentinel ends it anyway */
@@ -838,7 +839,7 @@ static int manifest_claim_blob(
      * them: a README, a LICENSE, a docs/ tree. Asked on the root, before the
      * join, so machinery costs no allocation and no unlabelled path reaches the
      * shape check below to be read as corruption. */
-    if (!mount_spec_for_path(root)) {
+    if (!mount_under_label(root)) {
         return 0;
     }
 
@@ -1096,13 +1097,14 @@ static error_t *manifest_contribute(
     /* The roots the profile scans, asked of the table as its claims are: a custom
      * root with no target here stands nowhere, and the slice records it as its
      * third kind — the one entry that is no claim. HOME and the sentinel always
-     * answer, so only a per_profile root can be noted, and the label is the spec's
-     * own static string. Noted before the claims, in the sheet's own order. */
+     * answer, so only a per_profile root can be noted, and the label is the
+     * vocabulary's own static string. Noted before the claims, in the sheet's
+     * own order. */
     for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
         if (!metadata_scans_root(metadata, kind)) continue;
         if (mount_root_location(manifest->mounts, c->profile, kind)) continue;
         err = manifest_note_unbound(
-            manifest, c->profile, mount_spec_for_kind(kind)->label,
+            manifest, c->profile, mount_kinds[kind].label,
             MANIFEST_UNBOUND_ROOT, arena
         );
         if (err) goto cleanup;

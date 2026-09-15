@@ -384,8 +384,8 @@ static error_t *entry_to_restore(
         }
 
         if (arg->key == PATH_KEY_LOCATION) {
-            const mount_spec_t *root = mount_root(ctx->run.mounts, profile, arg->location);
-            if (root) {
+            mount_kind_t root;
+            if (mount_root(ctx->run.mounts, profile, arg->location, &root)) {
                 char buf[MOUNT_NOUN_MAX];
                 const char *noun = mount_root_describe(root, profile, buf, sizeof(buf));
                 return ERROR(
@@ -807,7 +807,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * profile_discover_claims from being asked to search for one. The asker is
      * the flag's profile where the user gave one and nobody otherwise. */
     if (arg.key == PATH_KEY_LABEL) {
-        err = path_input_refuse_label(arg.label, opts->profile);
+        err = path_input_refuse_label(arg.root, opts->profile);
         goto cleanup;
     }
 

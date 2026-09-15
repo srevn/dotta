@@ -1193,7 +1193,7 @@ static int select_delta(
     delta_select_t *sel = payload;
     const char *path = delta->new_file.path;
 
-    if (!mount_spec_for_path(path)) {
+    if (!mount_under_label(path)) {
         return 1;
     }
 

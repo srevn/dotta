@@ -17,8 +17,8 @@
  * still answers to `custom/`.
  *
  * The single chokepoint for input-shape dispatch. Of infra/mount it reads the
- * storage-label vocabulary alone — mount_spec_for_path, mount_spec_for_label,
- * mount_validate_storage, mount_root_describe over a spec these answered, a label
+ * storage-label vocabulary alone — mount_under_label, mount_kind,
+ * mount_validate_storage, mount_root_describe over a kind these answered, a label
  * being a label on every machine — and never the table of roots: no root's spelling
  * is read to make a key, so the answer is the argument, HOME and the working
  * directory and nothing else. That is what lets the normalizer stand beside
@@ -30,6 +30,8 @@
 #define DOTTA_PATH_H
 
 #include <types.h>
+
+#include "infra/mount.h"
 
 /**
  * The key an argument names.
@@ -51,20 +53,21 @@ typedef enum {
  * The third key is a label, which is the one address a root has: a location and
  * a name are this machine's and the profile's, while a label is the same word
  * everywhere. The tag names what was read, as the other two do, and the member
- * is the label the vocabulary publishes — the spec that describes the root it
- * names is one total lookup away (infra/mount.h mount_spec_for_label). The
+ * is the root the label names, as the vocabulary numbers it — its kind, the one
+ * currency the vocabulary has (infra/mount.h): the verb that matches or prints
+ * with the label reads its spelling from the table, `mount_kinds[root].label`,
+ * and the verb that refuses or indexes with it holds the kind as it is. The
  * separator is no part of it: a verb that matches with the key wants the bare
  * prefix, and a verb that prints it adds the '/' its message needs.
  *
- * `location` and `storage_path` are the arena's; `label` is the spec table's
- * own static string and outlives every arena.
+ * `location` and `storage_path` are the arena's; `root` is a value.
  */
 typedef struct {
     path_key_t key;
     union {
         const char *location;       /* PATH_KEY_LOCATION: absolute, normalized */
         const char *storage_path;   /* PATH_KEY_STORAGE: validated, the directory spelling shed */
-        const char *label;          /* PATH_KEY_LABEL: the label alone, the spec's own string */
+        mount_kind_t root;          /* PATH_KEY_LABEL: the root the label names, by its kind */
     };
 } path_input_t;
 
@@ -97,7 +100,7 @@ typedef struct {
  *   ~/link/../x               -> LOCATION  $HOME/x          ('..' pops the link's spelling)
  *   ~                         -> LOCATION  $HOME            (a root is a location; the verb decides)
  *   home/.config/nvim/        -> STORAGE   home/.config/nvim
- *   custom/                   -> LABEL     custom           (the namespace, not a path in it)
+ *   custom/                   -> LABEL     MOUNT_CUSTOM     (the namespace, not a path in it)
  *   home/../x                 -> refused   (mount_validate_storage)
  *   config                    -> refused   (neither shape)
  *
@@ -147,29 +150,27 @@ error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out
  * was handed a namespace where it wanted a path in one. What each verb then does
  * with the error is its own — returned, or carried to a cleanup label.
  *
- * `label` is a resolve's own answer (path_input_t.label), which is one of the
- * three strings the vocabulary publishes, so the lookup beneath it cannot miss;
- * that is the whole precondition, and it is mount_root_describe's own read one
- * rung earlier. `profile` is the asker, or NULL where the verb has none to name
- * — `show custom/` chose no profile and cannot — and the noun then stands without
- * an owner (infra/mount.h mount_root_describe).
+ * `root` is a resolve's own answer (path_input_t.root), the kind the label named,
+ * and nothing is looked up beneath it: the label the message prints and the noun
+ * that describes it are the kind's row (infra/mount.h). `profile` is the asker,
+ * or NULL where the verb has none to name — `show custom/` chose no profile and
+ * cannot — and the noun then stands without an owner (mount_root_describe).
  *
- * The separator is the message's and never the key's: a label is carried bare
- * because the verbs that take one match with it, and printed slash-marked because
- * that is the one spelling that reaches this key. The same refusal for the
- * *location* spelling of a root is its two callers' own sentence (core/profiles.c,
- * cmds/revert.c): they hold a location and no label, and a location needs no
- * separator added to it.
+ * The separator is the message's and never the key's: a label is carried as the
+ * kind it names because the verbs that take one match or index with it, and printed
+ * slash-marked because that is the one spelling that reaches this key. The same
+ * refusal for the *location* spelling of a root is its two callers' own sentence
+ * (core/profiles.c, cmds/revert.c): they hold a location and no label, and a
+ * location needs no separator added to it.
  *
  * Reads the label vocabulary and no table, as the resolver does (this file's
- * banner): mount_spec_for_label is the label set, and mount_root_describe takes
- * the spec it answers.
+ * banner).
  *
- * @param label   The label a resolve answered (must not be NULL)
+ * @param root    The root a resolve answered, by its kind
  * @param profile The asker, or NULL where the verb named none
  * @return The refusal; never NULL
  */
-error_t *path_input_refuse_label(const char *label, const char *profile);
+error_t *path_input_refuse_label(mount_kind_t root, const char *profile);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path

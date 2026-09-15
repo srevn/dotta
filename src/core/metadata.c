@@ -755,11 +755,10 @@ error_t *metadata_capture_from_file(
         return err;
     }
 
-    /* Ownership, for a label that tracks it and an owner that is not the invoker's
+    /* Ownership, for a kind that tracks it and an owner that is not the invoker's
      * own (claims_ownership). The lstat needs no privilege, so the claim is
      * authored by whoever can read the path. */
-    const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && claims_ownership(st)) {
+    if (mount_kinds[mount_kind(storage_path)].tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -817,8 +816,7 @@ error_t *metadata_capture_from_directory(
     }
 
     /* Ownership, by the file capture's rule (claims_ownership). */
-    const mount_spec_t *spec = mount_spec_for_path(storage_path);
-    if (spec && spec->tracks_ownership && claims_ownership(st)) {
+    if (mount_kinds[mount_kind(storage_path)].tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -901,7 +899,7 @@ static error_t *capture_ancestor(
      * at a root from an older table is the sheet's business
      * (metadata_prune_ancestors, which is what a claim reaching here is), not a
      * migration's. */
-    if (mount_root(mounts, profile, filesystem_path)) {
+    if (mount_root(mounts, profile, filesystem_path, NULL)) {
         return NULL;
     }
 
@@ -1082,7 +1080,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         /* A CreateString that failed arrives as a NULL item, the one thing the
          * add refuses — so one check answers for both allocations. */
         if (!cJSON_AddItemToArray(
-            roots, cJSON_CreateString(mount_spec_for_kind(kind)->label)
+            roots, cJSON_CreateString(mount_kinds[kind].label)
             )) {
             err = ERROR(ERR_MEMORY, "Failed to add root to metadata");
             goto cleanup;
@@ -1341,7 +1339,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
     /* The roots the profile scans, optional: a sheet without the key scans none,
      * which is what every sheet written before the key said. Each entry is a
-     * label alone — the one address a root has (infra/mount.h mount_spec_for_label)
+     * label alone — the one address a root has (infra/mount.h mount_parse_label)
      * — and a non-string, an unknown label or a repeat is the same loud refusal
      * every other malformation gets. Read before the items, in the order the
      * writer prints them; the loop over a sheet without the key runs no
@@ -1357,21 +1355,21 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             err = ERROR(ERR_INVALID_ARG, "Invalid root in metadata (not a string)");
             goto cleanup;
         }
-        const mount_spec_t *spec = mount_spec_for_label(label->valuestring);
-        if (!spec) {
+        mount_kind_t kind;
+        if (!mount_parse_label(label->valuestring, &kind)) {
             err = ERROR(
                 ERR_INVALID_ARG, "Invalid root in metadata: %s "
                 "(expected 'home', 'root' or 'custom')", label->valuestring
             );
             goto cleanup;
         }
-        if (metadata_scans_root(metadata, mount_spec_kind(spec))) {
+        if (metadata_scans_root(metadata, kind)) {
             err = ERROR(
                 ERR_INVALID_ARG, "Duplicate root in metadata: %s", label->valuestring
             );
             goto cleanup;
         }
-        metadata_add_root(metadata, mount_spec_kind(spec));
+        metadata_add_root(metadata, kind);
     }
 
     /* Parse each item in the unified array */

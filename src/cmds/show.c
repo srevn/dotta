@@ -725,7 +725,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
      * the view nothing to choose one by. With -p the branch namer says the same
      * thing (core/profiles.h profile_claim_name). */
     if (arg.key == PATH_KEY_LABEL) {
-        err = path_input_refuse_label(arg.label, NULL);
+        err = path_input_refuse_label(arg.root, NULL);
         goto cleanup;
     }
 

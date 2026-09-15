@@ -380,10 +380,10 @@ static int collect_tree_callback(
     /* Whole-profile walks start at branch root, where content lives only under
      * storage-label subtrees; everything else is machinery. Positive return prunes
      * the entry (and its subtree, pre-order). What survives is a label exactly
-     * — the whole-name question, which is what mount_spec_for_label answers —
-     * so the shape check below has nothing left to ask of it. */
+     * — the whole-name question, which is what mount_parse_label answers — so
+     * the shape check below has nothing left to ask of it. */
     if (at_branch_root && (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
-        !mount_spec_for_label(name))) {
+        !mount_parse_label(name, NULL))) {
         return 1;
     }
 
@@ -1515,13 +1515,12 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             if (strchr(opts->file_path, '/') != NULL) goto cleanup;
 
             /* Here the word is a label or it is machinery, and export says which
-             * in its own words. The refusal is released only once the answer is
-             * known, so the resolver's own words survive until they are
-             * replaced. */
-            const mount_spec_t *spec = mount_spec_for_label(opts->file_path);
+             * in its own words: the resolver's are released first, replaced either
+             * way. */
             error_free(err);
             err = NULL;
-            if (!spec) {
+            mount_kind_t root;
+            if (!mount_parse_label(opts->file_path, &root)) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'%s' is not exportable content\n"
@@ -1532,7 +1531,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 );
                 goto cleanup;
             }
-            arg = (path_input_t){ .key = PATH_KEY_LABEL, .label = spec->label };
+            arg = (path_input_t){ .key = PATH_KEY_LABEL, .root = root };
         }
 
         switch (arg.key) {
@@ -1554,7 +1553,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                  * tree entry at the branch root, and the walk beneath it is the
                  * one a directory name earns. */
                 err = collect_name(
-                    ctx, tree, opts->profile, arg.label, commit_suffix, &list
+                    ctx, tree, opts->profile, mount_kinds[arg.root].label,
+                    commit_suffix, &list
                 );
                 break;
         }
@@ -1700,7 +1700,7 @@ static error_t *export_post_parse(
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 &&
-        (mount_spec_for_path(first) || mount_spec_for_label(first)))) {
+        (mount_under_label(first) || mount_parse_label(first, NULL)))) {
         return ERROR(
             ERR_INVALID_ARG,
             "'%s' looks like a path — export requires an explicit "

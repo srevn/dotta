@@ -1,11 +1,13 @@
 /**
  * mount.c - Storage labels and per-machine deployment mount table
  *
- * SECURITY: All path conversions validate against path traversal.
+ * Traversal is refused at the boundary (mount_validate_storage,
+ * mount_validate_target) and trusted below it (infra/mount.h).
  */
 
 #include "infra/mount.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,37 +20,28 @@
 #include "sys/identity.h"
 
 /**
- * Per-kind behavioral attributes — the single source of truth.
+ * What each kind implies — the single source of truth.
  *
  * Indexed by `mount_kind_t` and sized by the arity the header publishes, so the
  * enum declares the label set once and the array's extent is that declaration
  * rather than a second one that happens to agree. Designated initializers keep
- * the row order in lockstep with the ordinals, which is what lets a row's kind
- * be its position (mount_spec_kind) rather than a field that would have to agree
- * with it. Adding a fourth kind is one row here plus a matching enum entry; every
- * consumer that asks "does this kind track ownership?" etc. reads spec attributes
- * — no switches to update.
+ * the row order in lockstep with the ordinals, which is what lets a reader
+ * subscript by the kind it holds. Adding a fourth kind is one row here plus a
+ * matching enum entry; every consumer that asks "does this kind track ownership?"
+ * etc. reads the row — no switches to update.
  */
-static const mount_spec_t SPECS[MOUNT_KIND_COUNT] = {
+const mount_spec_t mount_kinds[MOUNT_KIND_COUNT] = {
     [MOUNT_HOME] =   { "home",   "your home directory",   false, false },
     [MOUNT_ROOT] =   { "root",   "the filesystem root",   false, true  },
     [MOUNT_CUSTOM] = { "custom", "the deployment target", true,  true  },
 };
 
-const mount_spec_t *mount_spec_for_kind(mount_kind_t kind) {
-    if ((unsigned int) kind >= MOUNT_KIND_COUNT) return NULL;
-    return &SPECS[kind];
-}
-
-mount_kind_t mount_spec_kind(const mount_spec_t *spec) {
-    return (mount_kind_t) (spec - SPECS);
-}
-
 /**
  * Decode a storage path's leading label.
  *
  * Single source of truth for the `home/` | `root/` | `custom/` -> kind
- * mapping. Both outputs are optional — pass NULL for either to discard.
+ * mapping, and the one walk beneath the three string questions the header publishes
+ * over it. Both outputs are optional — pass NULL for either to discard.
  *
  *   storage_path = "home/.bashrc"   -> *kind=MOUNT_HOME,   *tail=".bashrc"
  *   storage_path = "custom/etc/foo" -> *kind=MOUNT_CUSTOM, *tail="etc/foo"
@@ -56,8 +49,8 @@ mount_kind_t mount_spec_kind(const mount_spec_t *spec) {
  *   storage_path = NULL             -> false, outputs unchanged
  *
  * The returned tail aliases `storage_path`; it shares the input's lifetime. Walks
- * SPECS so the label set has one canonical home — adding a fourth kind needs no
- * edit here.
+ * the table so the label set has one canonical home — adding a fourth kind needs
+ * no edit here.
  */
 static bool mount_decode_label(
     const char *storage_path, mount_kind_t *out_kind, const char **out_tail
@@ -65,7 +58,7 @@ static bool mount_decode_label(
     if (!storage_path) return false;
 
     for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
-        const char *label = SPECS[i].label;
+        const char *label = mount_kinds[i].label;
         size_t label_len = strlen(label);
 
         if (strncmp(storage_path, label, label_len) != 0) continue;
@@ -79,30 +72,43 @@ static bool mount_decode_label(
     return false;
 }
 
-const mount_spec_t *mount_spec_for_path(const char *storage_path) {
-    mount_kind_t kind;
-    if (!mount_decode_label(storage_path, &kind, NULL)) return NULL;
-    /* mount_decode_label only emits in-range kinds, so the bounds check inside
-     * mount_spec_for_kind is redundant — but borrowing the accessor keeps a single
-     * chokepoint for kind→spec resolution. */
-    return mount_spec_for_kind(kind);
+bool mount_under_label(const char *s) {
+    return mount_decode_label(s, NULL, NULL);
 }
 
-const mount_spec_t *mount_spec_for_label(const char *label) {
-    if (!label) return NULL;
+mount_kind_t mount_kind(const char *storage_path) {
+    mount_kind_t kind;
+    bool under_label = mount_decode_label(storage_path, &kind, NULL);
 
-    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
-        if (strcmp(label, SPECS[i].label) == 0) return &SPECS[i];
-    }
+    /* The precondition (infra/mount.h): a path under no label is a caller's bug,
+     * and no kind may stand in for it. */
+    assert(under_label);
+    (void) under_label;
 
-    return NULL;
+    return kind;
 }
 
 const char *mount_strip_label(const char *storage_path) {
-    if (!storage_path) return NULL;
-    const char *tail = NULL;
+    const char *tail;
+    bool under_label = mount_decode_label(storage_path, NULL, &tail);
 
-    return mount_decode_label(storage_path, NULL, &tail) ? tail : storage_path;
+    /* mount_kind's precondition, the same way. */
+    assert(under_label);
+    (void) under_label;
+
+    return tail;
+}
+
+bool mount_parse_label(const char *word, mount_kind_t *out) {
+    if (!word) return false;
+
+    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
+        if (strcmp(word, mount_kinds[i].label) != 0) continue;
+        if (out) *out = (mount_kind_t) i;
+        return true;
+    }
+
+    return false;
 }
 
 error_t *mount_validate_storage(const char *storage_path) {
@@ -344,9 +350,10 @@ static const char *tail_under_root(const char *location, const char *root) {
  *
  * `*out_tail` is empty when the location is the root itself, and is written only
  * when an entry matched — NULL when none did, which with the sentinel present
- * means only a malformed table or a location that is not absolute.
+ * means only a malformed table or a location that is not absolute. The winner
+ * is the entry itself: mount_name reads its kind's label, mount_root its kind.
  */
-static const mount_spec_t *deepest_root(
+static const mount_entry_t *deepest_root(
     const mount_table_t *table, const char *profile, const char *location,
     const char **out_tail
 ) {
@@ -382,7 +389,7 @@ static const mount_spec_t *deepest_root(
 
     *out_tail = deepest;
 
-    return mount_spec_for_kind(winner->kind);
+    return winner;
 }
 
 error_t *mount_table_build(
@@ -490,7 +497,7 @@ error_t *mount_name(
     *out_storage = NULL;
 
     const char *tail = NULL;
-    const mount_spec_t *root = deepest_root(table, profile, location, &tail);
+    const mount_entry_t *root = deepest_root(table, profile, location, &tail);
     if (!root) {
         return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
     }
@@ -498,7 +505,9 @@ error_t *mount_name(
     /* A root has no name: the answer is the absence, already written. */
     if (*tail == '\0') return NULL;
 
-    *out_storage = arena_str_format(arena, "%s/%s", root->label, tail);
+    *out_storage = arena_str_format(
+        arena, "%s/%s", mount_kinds[root->kind].label, tail
+    );
     if (!*out_storage) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
@@ -506,26 +515,29 @@ error_t *mount_name(
     return NULL;
 }
 
-const mount_spec_t *mount_root(
-    const mount_table_t *table, const char *profile, const char *location
+bool mount_root(
+    const mount_table_t *table, const char *profile, const char *location,
+    mount_kind_t *out_kind
 ) {
     const char *tail = NULL;
-    const mount_spec_t *root = deepest_root(table, profile, location, &tail);
+    const mount_entry_t *root = deepest_root(table, profile, location, &tail);
 
-    return root && *tail == '\0' ? root : NULL;
+    if (!root || *tail != '\0') return false;
+    if (out_kind) *out_kind = root->kind;
+    return true;
 }
 
 const char *mount_root_describe(
-    const mount_spec_t *root, const char *profile, char *buf, size_t size
+    mount_kind_t root, const char *profile, char *buf, size_t size
 ) {
     /* The owner is named where there is one to name. A root found in a table
-     * was found by its own profile, so a per_profile spec arrives with its asker;
+     * was found by its own profile, so a per_profile kind arrives with its asker;
      * a root named by its label alone was found by nobody, and the noun is then
      * the label's own (infra/mount.h). */
-    if (root->per_profile && profile) {
-        snprintf(buf, size, "%s of profile '%s'", root->noun, profile);
+    if (mount_kinds[root].per_profile && profile) {
+        snprintf(buf, size, "%s of profile '%s'", mount_kinds[root].noun, profile);
     } else {
-        snprintf(buf, size, "%s", root->noun);
+        snprintf(buf, size, "%s", mount_kinds[root].noun);
     }
 
     return buf;

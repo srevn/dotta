@@ -983,31 +983,31 @@ static void report_labels(const add_walk_t *walk, const char *target) {
     output_t *out = walk->ctx->out;
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
 
-    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
-        const mount_spec_t *spec = mount_spec_for_kind(kind);
-
-        /* The spec pointers are the static table's (infra/mount.h), so a name's
-         * label is its spec's identity. */
-        size_t count = 0;
-        for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
-            for (size_t i = 0; i < listed[b]->count; i++) {
-                const add_path_t *path = listed[b]->items[i];
-                if (mount_spec_for_path(path->claim.storage_path) == spec) count++;
-            }
+    /* One pass over both lists, a slot per kind: a name's label is its kind
+     * (infra/mount.h mount_kind). */
+    size_t count[MOUNT_KIND_COUNT] = { 0 };
+    for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
+        for (size_t i = 0; i < listed[b]->count; i++) {
+            const add_path_t *path = listed[b]->items[i];
+            count[mount_kind(path->claim.storage_path)]++;
         }
-        if (count == 0) continue;
+    }
 
-        if (spec->per_profile) {
+    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
+        if (count[kind] == 0) continue;
+
+        if (mount_kinds[kind].per_profile) {
             char shown[PATH_MAX];
             output_format_path(target, identity()->home, shown, sizeof(shown));
             output_info(
                 out, OUTPUT_NORMAL, "  %zu path%s as %s/ under %s",
-                count, count == 1 ? "" : "s", spec->label, shown
+                count[kind], count[kind] == 1 ? "" : "s",
+                mount_kinds[kind].label, shown
             );
         } else {
             output_info(
                 out, OUTPUT_NORMAL, "  %zu path%s as %s/",
-                count, count == 1 ? "" : "s", spec->label
+                count[kind], count[kind] == 1 ? "" : "s", mount_kinds[kind].label
             );
         }
     }
@@ -1838,7 +1838,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *location = NULL;
         const char *typed = NULL;   /* The name the user wrote, or NULL for a spelling */
 
-        if (mount_spec_for_path(file)) {
+        if (mount_under_label(file)) {
             /* A storage shape, read by the one resolver that reads input shapes
              * — a name or a label alone and never a location, since the same
              * predicate dispatched here. It validates the shape and sheds a
@@ -1853,7 +1853,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * is named by its own spelling — `add p ~`, `add p <target>` — which
              * is the argument arm below. */
             if (arg.key == PATH_KEY_LABEL) {
-                err = path_input_refuse_label(arg.label, opts->profile);
+                err = path_input_refuse_label(arg.root, opts->profile);
                 goto cleanup;
             }
 
@@ -1997,10 +1997,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * made. The walk beneath it has already composed its children
                  * under the root's label, and a claim admitted now would move
                  * their prefix. */
+                mount_kind_t root;
+                mount_root(mounts, opts->profile, location, &root);
                 char buf[MOUNT_NOUN_MAX];
                 const char *noun = mount_root_describe(
-                    mount_root(mounts, opts->profile, location), opts->profile,
-                    buf, sizeof(buf)
+                    root, opts->profile, buf, sizeof(buf)
                 );
                 err = ERROR(
                     ERR_INVALID_ARG,
@@ -2069,14 +2070,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * standing at the store was refused by its own lstat above. A typed
              * name never arrives here, the user's own name being the answer.
              *
-             * `root` is non-NULL: manifest_name answered NULL, which it does
-             * only where mount_root answers (infra/mount.h mount_root_describe). */
-            const mount_spec_t *root = mount_root(mounts, opts->profile, location);
+             * `root` is written: manifest_name answered NULL, which it does only
+             * where mount_root answers (infra/mount.h mount_root_describe). */
+            mount_kind_t root;
+            mount_root(mounts, opts->profile, location, &root);
             struct stat reached;
             if (occupant == FS_OCCUPANT_SYMLINK && fs_stat(location, &reached) == 0 &&
                 S_ISDIR(reached.st_mode)) {
                 struct stat slash;
-                if (!root->per_profile && fs_stat("/", &slash) == 0 &&
+                if (!mount_kinds[root].per_profile && fs_stat("/", &slash) == 0 &&
                     reached.st_dev == slash.st_dev && reached.st_ino == slash.st_ino) {
                     err = ERROR(
                         ERR_INVALID_ARG,

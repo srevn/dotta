@@ -290,8 +290,8 @@ static bool ownership_diverges(
     const struct stat *st
 ) {
     if (!owner && !group) {
-        const mount_spec_t *spec = mount_spec_for_path(storage_path);
-        return spec && spec->tracks_ownership && st->st_uid != identity()->uid;
+        return mount_kinds[mount_kind(storage_path)].tracks_ownership &&
+               st->st_uid != identity()->uid;
     }
 
     if (owner) {

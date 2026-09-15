@@ -22,12 +22,12 @@
  *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the normalizer, whose answer
- * is the key. The storage-label vocabulary (mount_spec_for_path,
- * mount_spec_for_label, mount_validate_storage, mount_root_describe over a spec
- * those answered), the filesystem primitives (fs_expand_tilde,
- * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
- * (sys/identity) are delegated to the layers below. The table of roots is not
- * among them: no root's spelling is read here (infra/path.h).
+ * is the key. The storage-label vocabulary (mount_under_label, mount_kind,
+ * mount_validate_storage, mount_root_describe over a kind those answered), the
+ * filesystem primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
+ * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
+ * the layers below. The table of roots is not among them: no root's spelling is
+ * read here (infra/path.h).
  */
 
 #include "infra/path.h"
@@ -77,8 +77,7 @@ error_t *path_input_resolve(
      * listings print directory claims slash-marked — and the filesystem arm below
      * sheds its own inside fs_normalize_path; shedding here keeps the two surface
      * forms resolving alike. */
-    const mount_spec_t *spec = mount_spec_for_path(input);
-    if (spec) {
+    if (mount_under_label(input)) {
         size_t len = strlen(input);
         while (len > 0 && input[len - 1] == '/') len--;
 
@@ -87,11 +86,11 @@ error_t *path_input_resolve(
          * either, since a label is the same word on every machine while a location
          * is this one's. The prefix already matched and no label ends in a
          * separator, so what survives the shed is the whole test; and the answer
-         * is the spec's own static string, which outlives every arena and needs
-         * no copy. */
-        if (len == strlen(spec->label)) {
+         * is the kind itself, a value nothing has to hold or copy. */
+        mount_kind_t root = mount_kind(input);
+        if (len == strlen(mount_kinds[root].label)) {
             out->key = PATH_KEY_LABEL;
-            out->label = spec->label;
+            out->root = root;
             return NULL;
         }
 
@@ -145,14 +144,12 @@ error_t *path_input_resolve(
     return NULL;
 }
 
-error_t *path_input_refuse_label(const char *label, const char *profile) {
-    CHECK_NULL(label);
-
+error_t *path_input_refuse_label(mount_kind_t root, const char *profile) {
     char buf[MOUNT_NOUN_MAX];
 
     return ERROR(
-        ERR_INVALID_ARG, "'%s/' is %s: name what is inside it", label,
-        mount_root_describe(mount_spec_for_label(label), profile, buf, sizeof(buf))
+        ERR_INVALID_ARG, "'%s/' is %s: name what is inside it",
+        mount_kinds[root].label, mount_root_describe(root, profile, buf, sizeof(buf))
     );
 }
 

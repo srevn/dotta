@@ -426,7 +426,7 @@ static bool tree_entry_content_path(
      * at the branch root, or beneath a tree no label names, is not content —
      * dotta's own files sit there, and so does whatever else a hand or a tool
      * left beside them. */
-    if (!mount_spec_for_path(root)) {
+    if (!mount_under_label(root)) {
         return false;
     }
 
@@ -891,7 +891,7 @@ error_t *profile_claim_name(
              * back. The refusal the location spelling of that same root earns
              * at the end of this function, said one key earlier because a label
              * needs no view to be recognised. */
-            return path_input_refuse_label(arg->label, profile);
+            return path_input_refuse_label(arg->root, profile);
 
         case PATH_KEY_LOCATION:
             break;
@@ -921,14 +921,13 @@ error_t *profile_claim_name(
         /* A root of the profile with no claim on it. The namer's last rung is
          * mount_name over this very table, asker and location (core/manifest.c
          * manifest_ascend), so its NULL is the one mount_root_describe's contract
-         * asks for and the spec is there to describe. */
+         * asks for, and mount_root writes the kind there is to describe. */
+        mount_kind_t root;
+        mount_root(mounts, profile, arg->location, &root);
         char buf[MOUNT_NOUN_MAX];
-        const char *noun = mount_root_describe(
-            mount_root(mounts, profile, arg->location), profile, buf, sizeof(buf)
-        );
         return ERROR(
             ERR_INVALID_ARG, "'%s' is %s: name what is inside it", arg->location,
-            noun
+            mount_root_describe(root, profile, buf, sizeof(buf))
         );
     }
 
@@ -1070,7 +1069,8 @@ error_t *profile_discover_claims(
                  * (cmds/revert.c). */
                 err = ERROR(
                     ERR_INTERNAL,
-                    "profile_discover_claims received the label '%s'", arg->label
+                    "profile_discover_claims received the label '%s'",
+                    mount_kinds[arg->root].label
                 );
                 break;
         }

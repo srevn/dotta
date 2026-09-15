@@ -666,7 +666,7 @@ static error_t *list_file_history(
          * a label gives the view nothing to choose one by. With -p the branch
          * namer says the same thing (core/profiles.h profile_claim_name). */
         if (arg.key == PATH_KEY_LABEL) {
-            return path_input_refuse_label(arg.label, NULL);
+            return path_input_refuse_label(arg.root, NULL);
         }
 
         manifest_t *manifest = NULL;

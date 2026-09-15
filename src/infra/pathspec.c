@@ -95,7 +95,7 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
     *out = (entry_t){ .key = PATH_KEY_STORAGE };
 
     if (strchr(body, '/') != NULL &&
-        mount_spec_for_path(body) == NULL &&
+        !mount_under_label(body) &&
         !str_starts_with(body, "**/") &&
         !str_starts_with(body, "*/")) {
         /* The tail starts at the component holding the first metacharacter; the
@@ -218,7 +218,9 @@ error_t *pathspec_create(
             switch (arg.key) {
                 case PATH_KEY_LOCATION: prefix_location(&entry, arg.location); break;
                 case PATH_KEY_STORAGE:  prefix_name(&entry, arg.storage_path); break;
-                case PATH_KEY_LABEL:     prefix_name(&entry, arg.label); break;
+                case PATH_KEY_LABEL:
+                    prefix_name(&entry, mount_kinds[arg.root].label);
+                    break;
             }
             if (listed(spec, &entry)) {
                 continue;

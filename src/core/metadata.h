@@ -638,7 +638,10 @@ error_t *metadata_capture_from_directory(
  * @param mounts The table these names were made under, so that a rung resolves
  *               back to where the leaf was read (must not be NULL)
  * @param profile Profile whose chain this is, for a custom/ rung (must not be NULL)
- * @param storage_path Leaf's storage path, label-first (must not be NULL)
+ * @param storage_path Leaf's storage path, under a label — the vocabulary's
+ *                     precondition (infra/mount.h mount_strip_label), which every
+ *                     caller meets with a name it composed or validated (must
+ *                     not be NULL)
  * @param arena Arena the rungs' locations are spelled into (must not be NULL)
  * @param captured Count of rungs whose claim this call authored or changed, added
  *                 to (must not be NULL)

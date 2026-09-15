@@ -826,7 +826,7 @@ static bool stands_as_directory(
  *     and none casts a verdict — the same outcome the location spelling of a
  *     root reaches below, said without building a view for it.
  *
- * The *shape* is read by mount_spec_for_path and not by the resolver, because a
+ * The *shape* is read by mount_under_label and not by the resolver, because a
  * bare name is a filesystem argument here — `dotta ignore --test foo.log` reads
  * it against the working directory, as add's grammar does — and path_input_resolve
  * refuses one, its callers' first positional being a profile. What the shape
@@ -899,51 +899,47 @@ static error_t *test_path_ignore(
     ignore_rules_t *ignore_rules = NULL;
     string_array_t *enabled = NULL;
 
-    /* The key the user named, fixed for every asker: exactly one of the three
-     * is non-NULL, and which one is the whole condition the loop's arms read.
-     * Each is established whole here, its own second reading beside it — the
-     * name and the tail the rules see, the location and the kind observed there,
-     * the root and nothing else, a root having no second reading to make — so
-     * the loop reads what the argument gave and asks nothing of it again. The
-     * table is the run's until a view is built, and then the view's own — the
-     * one its rows were placed by. */
+    /* The key the user named, fixed for every asker: the resolver's sum, its
+     * tag the whole condition the loop's arms read and its member the argument's
+     * own reading. A second reading stands beside it where the key has one — a
+     * name's tail, what the rules see; a location's kind, observed there once;
+     * a root has none to make — so the loop reads what the argument gave and
+     * asks nothing of it again. The table is the run's until a view is built,
+     * and then the view's own — the one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    const char *argument_name = NULL;         /* a storage argument: its own name */
-    const char *argument_subject = NULL;      /* … and its tail, what the rules see */
-    const char *argument_location = NULL;     /* a filesystem argument: where it stands */
-    const mount_spec_t *argument_root = NULL; /* a label alone: the root it names */
-    bool argument_is_directory = false;       /* … and the kind observed there, once */
+    path_input_t arg;                         /* the key: a name, a location or a root */
+    const char *argument_subject = NULL;      /* a name's tail, what the rules see */
+    bool argument_is_directory = false;       /* a location's kind, observed there once */
 
-    if (mount_spec_for_path(test_path)) {
+    if (mount_under_label(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
          * name or a label alone and never a location, since the same predicate
          * dispatched here (cmds/add.c's storage head is the other). A bare name
          * never arrives: that is this command's own filesystem grammar, and the
          * predicate above let it past. */
-        path_input_t arg;
         err = path_input_resolve(test_path, ctx->arena, &arg);
         if (err) return err;
 
-        if (arg.key == PATH_KEY_LABEL) {
-            argument_root = mount_spec_for_label(arg.label);
-        } else {
-            argument_name = arg.storage_path;
-            argument_subject = mount_strip_label(argument_name);
+        if (arg.key == PATH_KEY_STORAGE) {
+            argument_subject = mount_strip_label(arg.storage_path);
         }
     } else {
         /* The key as the normalizer spells it: absolute, folded, nothing read
-         * through. The copy is the command's because the answer outlives the
-         * call and the normalizer's is malloc's by contract (infra/path.h). */
+         * through — the resolver's own location arm, spelled here because the
+         * resolver refuses the bare name this grammar reads. The copy is the
+         * command's because the answer outlives the call and the normalizer's
+         * is malloc's by contract (infra/path.h). */
         char *normalized = NULL;
         err = path_input_normalize(test_path, &normalized);
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", test_path);
         }
-        argument_location = arena_strdup(ctx->arena, normalized);
+        const char *location = arena_strdup(ctx->arena, normalized);
         free(normalized);
-        if (!argument_location) {
+        if (!location) {
             return ERROR(ERR_MEMORY, "Failed to allocate path");
         }
+        arg = (path_input_t){ .key = PATH_KEY_LOCATION, .location = location };
 
         /* Both builders free their own partial view and leave *out NULL, so this
          * returns; from the build on, the view is owned and every failure leaves
@@ -1021,9 +1017,9 @@ static error_t *test_path_ignore(
      * than where the key was read, so the note it may print stands under the
      * same header the per-asker notes of a storage name stand under — one command
      * saying one thing in one order. */
-    if (argument_location) {
+    if (arg.key == PATH_KEY_LOCATION) {
         argument_is_directory = stands_as_directory(
-            "", test_path, argument_location, trailing_slash, out
+            "", test_path, arg.location, trailing_slash, out
         );
     }
 
@@ -1049,12 +1045,12 @@ static error_t *test_path_ignore(
          * per asker because the noun is the asker's; the verdict is not, so no
          * asker casts one and the summary reads what it reads for any unnameable
          * path. */
-        if (argument_root) {
+        if (arg.key == PATH_KEY_LABEL) {
             char buf[MOUNT_NOUN_MAX];
             output_info(
                 out, OUTPUT_NORMAL,
                 "%s'%s' is %s: it has no name for a pattern to match", who,
-                test_path, mount_root_describe(argument_root, asker, buf, sizeof(buf))
+                test_path, mount_root_describe(arg.root, asker, buf, sizeof(buf))
             );
             continue;
         }
@@ -1064,13 +1060,13 @@ static error_t *test_path_ignore(
          * one reading and the kind observed there once. The arm fills the half
          * the argument did not name. */
         const char *subject = argument_subject;
-        const char *location = argument_location;
+        const char *location = arg.key == PATH_KEY_LOCATION ? arg.location : NULL;
         bool is_directory = argument_is_directory;
 
-        if (argument_name) {
+        if (arg.key == PATH_KEY_STORAGE) {
             /* Where this asker's target puts the name, and what stands there: a
              * custom/ name places only under a profile with a target. */
-            err = mount_resolve(mounts, asker, argument_name, ctx->arena, &location);
+            err = mount_resolve(mounts, asker, arg.storage_path, ctx->arena, &location);
             if (err) goto cleanup;
             is_directory = stands_as_directory(
                 who, test_path, location, trailing_slash, out
@@ -1078,20 +1074,19 @@ static error_t *test_path_ignore(
         } else {
             /* What this asker calls the location: the claims it holds above it,
              * else its own roots. NULL is a root of this asker with no claim
-             * standing on it — mount_name answered it, so mount_root finds the
-             * spec that describes it, and no pattern can match a root. */
+             * standing on it — mount_name answered it, so mount_root writes the
+             * kind that describes it, and no pattern can match a root. */
             const char *name = NULL;
             err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             if (!name) {
+                mount_kind_t root;
+                mount_root(mounts, asker, location, &root);
                 char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(
-                    mount_root(mounts, asker, location), asker, buf, sizeof(buf)
-                );
                 output_info(
                     out, OUTPUT_NORMAL,
                     "%s'%s' is %s: it has no name for a pattern to match",
-                    who, test_path, noun
+                    who, test_path, mount_root_describe(root, asker, buf, sizeof(buf))
                 );
                 continue;
             }

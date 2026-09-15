@@ -387,7 +387,7 @@ static error_t *resolve_removal_claims(
                 break;
 
             case PATH_KEY_LABEL:
-                subject = arg.label;
+                subject = mount_kinds[arg.root].label;
                 by_name = true;
                 break;
         }

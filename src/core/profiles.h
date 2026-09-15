@@ -166,8 +166,8 @@ error_t *profile_require(git_repository *repo, const char *name);
  * The two sources are the ones the view's per-profile step reads when the profile
  * *is* enabled (manifest_contribute) — the tree's content blobs and the branch
  * metadata's tracked directories — and both sides read one content gate
- * (mount_spec_for_path, infra/mount.h), so a profile that wins every path it
- * claims counts the same here as its rows do there.
+ * (mount_under_label, infra/mount.h), so a profile that wins every path it claims
+ * counts the same here as its rows do there.
  */
 typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */

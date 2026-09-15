@@ -808,7 +808,7 @@ static bool stands_as_directory(
  *
  * The argument is one of the two keys a managed path has, and every profile the
  * verdict covers answers the other (infra/path.h — neither is manufactured from
- * the other):
+ * the other); or it is the third key, which is no path and so gets no verdict:
  *
  *   - a storage path is the contract itself: its own tail is the subject, for
  *     every asker alike, and it stands wherever that asker's target puts it —
@@ -821,14 +821,19 @@ static bool stands_as_directory(
  *     a directory the profile already tracks names what lies beneath it, and
  *     only where nothing of the profile's stands above the location do its roots
  *     answer. That is the whole reason a view is built here.
+ *   - a label alone (`home/`) is a root, and a root has no name for a pattern
+ *     to match. Every asker is told so in the noun its own table gives that root,
+ *     and none casts a verdict — the same outcome the location spelling of a
+ *     root reaches below, said without building a view for it.
  *
- * The shape is read by mount_spec_for_path and not by the resolver: a bare name
- * is a filesystem argument here — `dotta ignore --test foo.log` reads it against
- * the working directory, as add's grammar does — and path_input_resolve refuses
- * one, its callers' first positional being a profile. The key is then the
- * normalizer's own answer, which is what the view's rows are keyed by too
- * (infra/mount.h), so it is read before the view is built and a refusal is a
- * plain return.
+ * The *shape* is read by mount_spec_for_path and not by the resolver, because a
+ * bare name is a filesystem argument here — `dotta ignore --test foo.log` reads
+ * it against the working directory, as add's grammar does — and path_input_resolve
+ * refuses one, its callers' first positional being a profile. What the shape
+ * dispatches to *is* the resolver for a storage spelling, which sheds the directory
+ * slash and tells a name from a label; the filesystem arm is the normalizer alone,
+ * whose answer is what the view's rows are keyed by too (infra/mount.h). Both
+ * are read before the view is built, so a refusal is a plain return.
  *
  * The path need not exist: a trailing slash on one that does not is the directory
  * hint, so directory-only patterns (`cache/`) can be tested. The rules are
@@ -844,9 +849,10 @@ static bool stands_as_directory(
  * A NULL name is a root of that asker with no claim standing on it — a root has
  * no canonical name and no pattern can match it — and is answered inside the
  * asker's own turn, the one place that can name the root a binding's own target
- * is. An asker that never got a subject cast no verdict, which is why the summary
- * reads two accumulators and not one: a path no asker can name is neither ignored
- * nor tracked.
+ * is. A label argument is that same answer known one question earlier, and takes
+ * the same turn for the same reason. An asker that never got a subject cast no
+ * verdict, which is why the summary reads two accumulators and not one: a path
+ * no asker can name is neither ignored nor tracked.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -869,17 +875,14 @@ static error_t *test_path_ignore(
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    /* The directory hint is read before resolution: the storage grammar refuses
-     * a trailing slash, and normalization drops it. */
+    /* The directory hint is read from the argument as typed, and it is the only
+     * thing read from it: both readings below shed a trailing slash of their
+     * own — the resolver's storage arm sheds it, and fs_normalize_path folds it
+     * away — so nothing here has to hand them a shortened copy. Shortening it
+     * *before* the dispatch is what used to read `home/` as the working directory's
+     * `home`. */
     size_t len = strlen(test_path);
     bool trailing_slash = len > 1 && test_path[len - 1] == '/';
-    const char *input = test_path;
-    if (trailing_slash) {
-        input = arena_strndup(ctx->arena, test_path, len - 1);
-        if (!input) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
-    }
 
     /* The profile named must be here before anything is read under it: the view
      * below is its branch, and the refusal names both ways out. */
@@ -896,34 +899,45 @@ static error_t *test_path_ignore(
     ignore_rules_t *ignore_rules = NULL;
     string_array_t *enabled = NULL;
 
-    /* The key the user named, fixed for every asker: exactly one of the two is
-     * non-NULL, and which one is the whole condition the loop's arms read. Each
-     * is established whole here, its own second reading beside it — the name
-     * and the tail the rules see, the location and the kind observed there — so
+    /* The key the user named, fixed for every asker: exactly one of the three
+     * is non-NULL, and which one is the whole condition the loop's arms read.
+     * Each is established whole here, its own second reading beside it — the
+     * name and the tail the rules see, the location and the kind observed there,
+     * the root and nothing else, a root having no second reading to make — so
      * the loop reads what the argument gave and asks nothing of it again. The
      * table is the run's until a view is built, and then the view's own — the
      * one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    const char *argument_name = NULL;        /* a storage argument: its own name */
-    const char *argument_subject = NULL;     /* … and its tail, what the rules see */
-    const char *argument_location = NULL;    /* a filesystem argument: where it stands */
-    bool argument_is_directory = false;      /* … and the kind observed there, once */
+    const char *argument_name = NULL;         /* a storage argument: its own name */
+    const char *argument_subject = NULL;      /* … and its tail, what the rules see */
+    const char *argument_location = NULL;     /* a filesystem argument: where it stands */
+    const mount_spec_t *argument_root = NULL; /* a label alone: the root it names */
+    bool argument_is_directory = false;       /* … and the kind observed there, once */
 
-    if (mount_spec_for_path(input)) {
-        err = mount_validate_storage(input);
-        if (err) {
-            return error_wrap(err, "Invalid storage path '%s'", input);
+    if (mount_spec_for_path(test_path)) {
+        /* A storage shape, read by the one resolver that reads input shapes — a
+         * name or a label alone and never a location, since the same predicate
+         * dispatched here (cmds/add.c's storage head is the other). A bare name
+         * never arrives: that is this command's own filesystem grammar, and the
+         * predicate above let it past. */
+        path_input_t arg;
+        err = path_input_resolve(test_path, ctx->arena, &arg);
+        if (err) return err;
+
+        if (arg.key == PATH_KEY_LABEL) {
+            argument_root = mount_spec_for_label(arg.label);
+        } else {
+            argument_name = arg.storage_path;
+            argument_subject = mount_strip_label(argument_name);
         }
-        argument_name = input;
-        argument_subject = mount_strip_label(input);
     } else {
         /* The key as the normalizer spells it: absolute, folded, nothing read
          * through. The copy is the command's because the answer outlives the
          * call and the normalizer's is malloc's by contract (infra/path.h). */
         char *normalized = NULL;
-        err = path_input_normalize(input, &normalized);
+        err = path_input_normalize(test_path, &normalized);
         if (err) {
-            return error_wrap(err, "Failed to resolve path '%s'", input);
+            return error_wrap(err, "Failed to resolve path '%s'", test_path);
         }
         argument_location = arena_strdup(ctx->arena, normalized);
         free(normalized);
@@ -1026,6 +1040,23 @@ static error_t *test_path_ignore(
         char who[IGNORE_ASKER_MAX] = "";
         if (asker) {
             snprintf(who, sizeof(who), "Profile '%s': ", asker);
+        }
+
+        /* A label alone names this asker's root of that namespace, and a root
+         * has no name for a pattern to match — the same answer, in the same words,
+         * the location spelling of that place earns from the namer below, reached
+         * one question earlier because a label needs no namer to say it. Said
+         * per asker because the noun is the asker's; the verdict is not, so no
+         * asker casts one and the summary reads what it reads for any unnameable
+         * path. */
+        if (argument_root) {
+            char buf[MOUNT_NOUN_MAX];
+            output_info(
+                out, OUTPUT_NORMAL,
+                "%s'%s' is %s: it has no name for a pattern to match", who,
+                test_path, mount_root_describe(argument_root, asker, buf, sizeof(buf))
+            );
+            continue;
         }
 
         /* The asker's reading, seeded with the key the user named: a storage

@@ -660,6 +660,15 @@ static error_t *list_file_history(
         path_input_t arg;
         RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
 
+        /* A label names the namespace above every path of its kind, and this
+         * lists one file's history — refused here, before the build, as any bad
+         * argument is, and with no profile to name because none was chosen and
+         * a label gives the view nothing to choose one by. With -p the branch
+         * namer says the same thing (core/profiles.h profile_claim_name). */
+        if (arg.key == PATH_KEY_LABEL) {
+            return path_input_refuse_label(arg.label, NULL);
+        }
+
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;

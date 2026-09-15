@@ -82,6 +82,16 @@ const mount_spec_t *mount_spec_for_path(const char *storage_path) {
     return mount_spec_for_kind(kind);
 }
 
+const mount_spec_t *mount_spec_for_label(const char *label) {
+    if (!label) return NULL;
+
+    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
+        if (strcmp(label, SPECS[i].label) == 0) return &SPECS[i];
+    }
+
+    return NULL;
+}
+
 const char *mount_strip_label(const char *storage_path) {
     if (!storage_path) return NULL;
     const char *tail = NULL;
@@ -502,7 +512,11 @@ const mount_spec_t *mount_root(
 const char *mount_root_describe(
     const mount_spec_t *root, const char *profile, char *buf, size_t size
 ) {
-    if (root->per_profile) {
+    /* The owner is named where there is one to name. A root found in a table
+     * was found by its own profile, so a per_profile spec arrives with its asker;
+     * a root named by its label alone was found by nobody, and the noun is then
+     * the label's own (infra/mount.h). */
+    if (root->per_profile && profile) {
         snprintf(buf, size, "%s of profile '%s'", root->noun, profile);
     } else {
         snprintf(buf, size, "%s", root->noun);

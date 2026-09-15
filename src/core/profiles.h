@@ -335,6 +335,12 @@ error_t *profile_needs_target(
  * own row string, or the namer's — and outlives the view this call builds and
  * frees.
  *
+ * A LABEL argument is refused here, not by the caller: the profile holds every
+ * claim beneath the label and none at it, so this has no name to give back, and
+ * the refusal is the one a location standing at that root already earns
+ * (infra/path.h path_input_refuse_label). So `show -p` and `list -p` hand a label
+ * straight through and say nothing about it themselves.
+ *
  * Cost: one tree walk and one sheet load per location argument. Its other face:
  * a profile whose sheet will not load refuses a location argument where a name
  * argument proceeds — the view is strict, a verb's own read is not
@@ -415,9 +421,15 @@ typedef struct {
  * not the enabled set. A caller that wants the owning profile among the enabled
  * set asks the view instead (manifest_lookup, manifest_holders — list, show).
  *
+ * The argument is a location or a name. A LABEL is the caller's to refuse before
+ * asking — revert does, at its door — and arrives here as ERR_INTERNAL: no branch
+ * *stands at* a label while every branch holds a tree under one, so a search
+ * would answer "held by all" to a question the verb never meant.
+ *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)
- * @param arg The argument, in the key it named (must not be NULL)
+ * @param arg The argument, in the key it named — a location or a storage path
+ *            (must not be NULL)
  * @param arena Arena that owns the claims (must not be NULL)
  * @param out The claims, at least one (must not be NULL; zeroed after an error)
  * @return Error (ERR_NOT_FOUND when no branch holds it) or NULL on success

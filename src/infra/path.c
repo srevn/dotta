@@ -1,23 +1,30 @@
 /**
  * path.c - The key a CLI path argument names
  *
- * Two readings of a flexible CLI path argument:
+ * Two readings of a flexible CLI path argument, and the one refusal a reading
+ * earns:
  *
- *   path_input_resolve    - the key the input names: a location (a filesystem
- *                           shape, normalized) or a storage path (validated, as
- *                           typed) — the pathspec, and every verb that takes a
- *                           path from the command line
+ *   path_input_resolve      - the key the input names: a location (a filesystem
+ *                             shape, normalized), a storage path (validated, as
+ *                             typed) or a label alone (the one address a root
+ *                             has) — the pathspec, and every verb that takes a
+ *                             path from the command line
  *
- *   path_input_normalize  - filesystem path -> absolute filesystem path, a
- *                           relative one's working directory spelled under HOME
- *                            (the commands that walk, bind or test a spelling:
- *                            add, the binders' --target, ignore --test, the
- *                            completion)
+ *   path_input_normalize    - filesystem path -> absolute filesystem path, a
+ *                             relative one's working directory spelled under
+ *                             HOME (the commands that walk, bind or test a
+ *                             spelling: add, the binders' --target, ignore --test,
+ *                             the completion)
+ *
+ *   path_input_refuse_label - the sentence the verbs that act on one path give
+ *                             a label, in the noun the vocabulary gives the root
+ *                             it names
  *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the normalizer, whose answer
  * is the key. The storage-label vocabulary (mount_spec_for_path,
- * mount_validate_storage), the filesystem primitives (fs_expand_tilde,
+ * mount_spec_for_label, mount_validate_storage, mount_root_describe over a spec
+ * those answered), the filesystem primitives (fs_expand_tilde,
  * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
  * (sys/identity) are delegated to the layers below. The table of roots is not
  * among them: no root's spelling is read here (infra/path.h).
@@ -65,14 +72,33 @@ error_t *path_input_resolve(
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* A storage shape — shed the directory spelling, validate, arena-copy. A
-     * trailing '/' is the same path spelled as a directory — the UI's own listings
-     * print directory claims slash-marked — and the filesystem arm below sheds
-     * its own inside fs_normalize_path; shedding here keeps the two surface forms
-     * resolving alike. */
-    if (mount_spec_for_path(input)) {
+    /* A storage shape — shed the directory spelling, then read what is left of
+     * it. A trailing '/' is the same path spelled as a directory — the UI's own
+     * listings print directory claims slash-marked — and the filesystem arm below
+     * sheds its own inside fs_normalize_path; shedding here keeps the two surface
+     * forms resolving alike. */
+    const mount_spec_t *spec = mount_spec_for_path(input);
+    if (spec) {
         size_t len = strlen(input);
         while (len > 0 && input[len - 1] == '/') len--;
+
+        /* The label and nothing after it: the root of a namespace, which is no
+         * storage path — mount_validate_storage refuses one — and no location
+         * either, since a label is the same word on every machine while a location
+         * is this one's. The prefix already matched and no label ends in a
+         * separator, so what survives the shed is the whole test; and the answer
+         * is the spec's own static string, which outlives every arena and needs
+         * no copy. */
+        if (len == strlen(spec->label)) {
+            out->key = PATH_KEY_LABEL;
+            out->label = spec->label;
+            return NULL;
+        }
+
+        /* A name beneath it. The two refusals a label alone would have earned
+         * here are unreachable from this arm now: the prefix matched, so the
+         * byte at the label's own length is the '/' the decode wants, and the
+         * shed above took every trailing one. */
         const char *storage = arena_strndup(arena, input, len);
         if (!storage) {
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
@@ -92,8 +118,9 @@ error_t *path_input_resolve(
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
-            "Hint: Use absolute (/path), tilde (~/.file), relative (./path), or\n"
-            "      storage format (home/..., root/..., custom/...)", input
+            "Hint: Use absolute (/path), tilde (~/.file), relative (./path),\n"
+            "      storage format (home/..., root/..., custom/...), or a label\n"
+            "      alone (home/, root/, custom/)", input
         );
     }
 
@@ -116,6 +143,17 @@ error_t *path_input_resolve(
     out->location = location;
 
     return NULL;
+}
+
+error_t *path_input_refuse_label(const char *label, const char *profile) {
+    CHECK_NULL(label);
+
+    char buf[MOUNT_NOUN_MAX];
+
+    return ERROR(
+        ERR_INVALID_ARG, "'%s/' is %s: name what is inside it", label,
+        mount_root_describe(mount_spec_for_label(label), profile, buf, sizeof(buf))
+    );
 }
 
 /**

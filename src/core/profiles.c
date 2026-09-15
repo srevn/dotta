@@ -878,11 +878,23 @@ error_t *profile_claim_name(
 
     *out_storage = NULL;
 
-    /* A name is Git's key and needs no view: the caller's own read of the tree
-     * is what decides whether the profile holds it. */
-    if (arg->key == PATH_KEY_STORAGE) {
-        *out_storage = arg->storage_path;
-        return NULL;
+    switch (arg->key) {
+        case PATH_KEY_STORAGE:
+            /* A name is Git's key and needs no view: the caller's own read of
+             * the tree is what decides whether the profile holds it. */
+            *out_storage = arg->storage_path;
+            return NULL;
+
+        case PATH_KEY_LABEL:
+            /* A label is the namespace and not a name in it: the profile holds
+             * every claim beneath it and none at it, so there is no name to give
+             * back. The refusal the location spelling of that same root earns
+             * at the end of this function, said one key earlier because a label
+             * needs no view to be recognised. */
+            return path_input_refuse_label(arg->label, profile);
+
+        case PATH_KEY_LOCATION:
+            break;
     }
 
     manifest_t *view = NULL;
@@ -1047,6 +1059,20 @@ error_t *profile_discover_claims(
                     repo, branch, arg->storage_path, &storage_path
                 );
                 break;
+
+            case PATH_KEY_LABEL:
+                /* Never handed one, and stated here as mount_resolve states its
+                 * own (infra/mount.c): this searches for a claim standing at a
+                 * key, and a label is the namespace itself — no branch stands
+                 * at one, and every branch holds a tree under it, so a search
+                 * would answer "held by all" to a question nobody asked. revert,
+                 * the sole caller, refuses a label at its own door
+                 * (cmds/revert.c). */
+                err = ERROR(
+                    ERR_INTERNAL,
+                    "profile_discover_claims received the label '%s'", arg->label
+                );
+                break;
         }
         if (err) break;
         if (!storage_path) continue;
@@ -1064,6 +1090,8 @@ error_t *profile_discover_claims(
     string_array_free(branches);
     if (err) return err;
 
+    /* Two keys, not three: the label arm above leaves by `err` and never reaches
+     * here. */
     if (count == 0) {
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile",

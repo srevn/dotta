@@ -23,13 +23,16 @@
 /* One compiled input. `text` is what the coverage line prints — the input as
  * typed, since a location rule is an anchor and a tail and has no one compiled
  * string. `key` is the vocabulary its subject is read in, decided by the input's
- * shape and never by an asker. An exact entry keeps the spelling it names in
- * `prefix`, its length hoisted, for the beneath test the matcher and the
- * attribution share; a location rule keeps its anchor there, the rung past which
- * it reads; a storage rule keeps none. Every byte is the arena's. */
+ * shape and never by an asker; its domain here is two, not the three a CLI argument
+ * has, because a label is read in the storage vocabulary like any other name
+ * (prefix_name). An exact entry keeps the spelling it names in `prefix`, its
+ * length hoisted, for the beneath test the matcher and the attribution share; a
+ * location rule keeps its anchor there, the rung past which it reads; a storage
+ * rule keeps none. Every byte is the arena's, or — for a label — the vocabulary's
+ * own static string. */
 typedef struct {
     const char *text;                /* the input as typed: what a coverage line prints */
-    path_key_t key;                  /* the vocabulary its subject is read in */
+    path_key_t key;                  /* the vocabulary its subject is read in: LOCATION or STORAGE */
     gitignore_rule_t *rule;          /* the rule; NULL for an exact entry */
     const char *prefix;              /* an exact entry's spelling, or a location rule's anchor; NULL for a storage rule */
     size_t prefix_len;               /* strlen(prefix), hoisted for the beneath test */
@@ -48,8 +51,22 @@ struct pathspec {
  * reads the leading slash alone), and the one a rule anchored there reads past
  * with the same arithmetic as any other anchor. */
 static void prefix_location(entry_t *e, const char *location) {
+    e->key = PATH_KEY_LOCATION;
     e->prefix = strcmp(location, "/") == 0 ? "" : location;
     e->prefix_len = strlen(e->prefix);
+}
+
+/* A name as an entry's prefix: a storage path, or the label alone, which every
+ * name of that namespace is beneath. Both are read in the storage vocabulary,
+ * so an entry's key stays two-valued whatever the argument's was — the matcher
+ * and the attribution ask only which of the two subjects to read (own_subject),
+ * and a label is answered by the same one a name is. The key is set here rather
+ * than copied from the argument, which is what keeps the third tag out of the
+ * matcher without any site having to remember not to pass it on. */
+static void prefix_name(entry_t *e, const char *name) {
+    e->key = PATH_KEY_STORAGE;
+    e->prefix = name;
+    e->prefix_len = strlen(name);
 }
 
 /* A rule, parsed alone in the vocabulary its shape names.
@@ -110,6 +127,10 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
             }
         }
 
+        /* The anchor is a location or this arm has no business being in it: the
+         * gate above entered only for a body no label prefixes, and the guard
+         * refused every first byte but '/' and '.', so neither of the storage
+         * keys can come back. The test is total over all three and says so. */
         path_input_t anchor;
         error_t *err = path_input_resolve(head, arena, &anchor);
         if (err) {
@@ -126,7 +147,6 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
         if (!line) {
             return ERROR(ERR_MEMORY, "Failed to allocate pattern");
         }
-        out->key = PATH_KEY_LOCATION;
         prefix_location(out, anchor.location);
     }
 
@@ -187,18 +207,18 @@ error_t *pathspec_create(
             spec->rule_count++;
         } else {
             /* An exact entry in the key the input names, one per key however
-             * many inputs spell it. */
+             * many inputs spell it. A label is taken: it is the prefix every
+             * name of that namespace is beneath, which is the only reading that
+             * reaches a claim standing nowhere on this machine. */
             path_input_t arg;
             error_t *err = path_input_resolve(input, arena, &arg);
             if (err) {
                 return error_wrap(err, "Invalid path '%s'", input);
             }
-            entry.key = arg.key;
-            if (arg.key == PATH_KEY_LOCATION) {
-                prefix_location(&entry, arg.location);
-            } else {
-                entry.prefix = arg.storage_path;
-                entry.prefix_len = strlen(arg.storage_path);
+            switch (arg.key) {
+                case PATH_KEY_LOCATION: prefix_location(&entry, arg.location); break;
+                case PATH_KEY_STORAGE:  prefix_name(&entry, arg.storage_path); break;
+                case PATH_KEY_LABEL:     prefix_name(&entry, arg.label); break;
             }
             if (listed(spec, &entry)) {
                 continue;

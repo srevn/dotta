@@ -250,28 +250,6 @@ static const char *path_basename(const char *path) {
 }
 
 /**
- * Does the first path component decode as a storage label?
- *
- * The mount vocabulary is the authority for the content namespace: everything a
- * profile deploys lives under home/, root/, or custom/. Anything else at branch
- * root (.dotta/, .bootstrap, README, ...) is profile machinery and never part
- * of an export. Bare labels ("home") name the whole subtree. Walks the label
- * set by its published bound (MOUNT_KIND_COUNT) so a future fourth label is covered
- * without an edit here.
- */
-static bool storage_namespace_contains(const char *path) {
-    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
-        const char *label = mount_spec_for_kind(kind)->label;
-
-        size_t len = strlen(label);
-        if (strncmp(path, label, len) != 0) continue;
-        if (path[len] == '\0' || path[len] == '/') return true;
-    }
-
-    return false;
-}
-
-/**
  * Resolve an entry's final mode.
  *
  * A claimed mode wins; the fallback is the git filemode for files (the same floor
@@ -402,11 +380,10 @@ static int collect_tree_callback(
     /* Whole-profile walks start at branch root, where content lives only under
      * storage-label subtrees; everything else is machinery. Positive return prunes
      * the entry (and its subtree, pre-order). What survives is a label exactly
-     * — storage_namespace_contains matches to the terminator and a tree entry
-     * name holds no '/' — so the shape check below has nothing left to ask of
-     * it. */
+     * — the whole-name question, which is what mount_spec_for_label answers —
+     * so the shape check below has nothing left to ask of it. */
     if (at_branch_root && (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
-        !storage_namespace_contains(name))) {
+        !mount_spec_for_label(name))) {
         return 1;
     }
 
@@ -1519,29 +1496,25 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         path_input_t arg;
         err = path_input_resolve(opts->file_path, arena, &arg);
         if (err) {
-            /* The one refused shape a branch subtree answers is a label alone
-             * (`export global home`, `home/`): the whole tree under it, which
-             * is not a storage path and has no location. Every other refusal
-             * stands — an absolute path outside the roots, a `..` in the tail —
-             * because a name the tree lookup happened to find would become the
+            /* The one refused shape a branch subtree answers is a *bare* label
+             * (`export global home`): the whole tree under it, which the resolver
+             * reads as neither shape because its callers' first positional may
+             * be a profile. Slash-marked (`home/`) it is a key already, so nothing
+             * carrying a separator belongs here: every other refusal stands —
+             * an absolute path outside the roots, a `..` in the tail — because
+             * a name the tree lookup happened to find would become the
              * destination's basename, and `home/..` copies beside the destination
              * the user named rather than into it. */
-            size_t len = strlen(opts->file_path);
-            while (len > 1 && opts->file_path[len - 1] == '/') len--;
-            const char *label = arena_strndup(arena, opts->file_path, len);
-            if (!label) {
-                error_free(err);
-                err = ERROR(ERR_MEMORY, "Failed to allocate storage path");
-                goto cleanup;
-            }
-            if (strchr(label, '/') != NULL) goto cleanup;
+            if (strchr(opts->file_path, '/') != NULL) goto cleanup;
 
-            /* A bare word, which the resolver reads as neither shape because
-             * its callers' first positional may be a profile. Here it is a label
-             * or it is machinery, and export says which in its own words. */
+            /* Here the word is a label or it is machinery, and export says which
+             * in its own words. The refusal is released only once the answer is
+             * known, so the resolver's own words survive until they are
+             * replaced. */
+            const mount_spec_t *spec = mount_spec_for_label(opts->file_path);
             error_free(err);
             err = NULL;
-            if (!storage_namespace_contains(label)) {
+            if (!spec) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'%s' is not exportable content\n"
@@ -1552,7 +1525,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 );
                 goto cleanup;
             }
-            arg = (path_input_t){ .key = PATH_KEY_STORAGE, .storage_path = label };
+            arg = (path_input_t){ .key = PATH_KEY_LABEL, .label = spec->label };
         }
 
         switch (arg.key) {
@@ -1566,6 +1539,15 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 err = collect_name(
                     ctx, tree, opts->profile, arg.storage_path, commit_suffix,
                     &list
+                );
+                break;
+
+            case PATH_KEY_LABEL:
+                /* The label's whole subtree, looked up as any name is: it is a
+                 * tree entry at the branch root, and the walk beneath it is the
+                 * one a directory name earns. */
+                err = collect_name(
+                    ctx, tree, opts->profile, arg.label, commit_suffix, &list
                 );
                 break;
         }
@@ -1703,10 +1685,15 @@ static error_t *export_post_parse(
     char **args = o->positional_args;
 
     /* A path in the profile slot is the one predictable misuse — catch it with
-     * a usage hint instead of a branch-lookup error. */
+     * a usage hint instead of a branch-lookup error. Alone, a word under a label
+     * or a label itself is content and never a branch; with a second positional
+     * the first word is the profile, whatever it looks like. The two label
+     * questions are asked as two, the vocabulary publishing each on its own
+     * (infra/mount.h). */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
-        (o->positional_count == 1 && storage_namespace_contains(first))) {
+        (o->positional_count == 1 &&
+        (mount_spec_for_path(first) || mount_spec_for_label(first)))) {
         return ERROR(
             ERR_INVALID_ARG,
             "'%s' looks like a path — export requires an explicit "
@@ -1908,7 +1895,8 @@ const args_command_t spec_export = {
         "\n"
         "Naming what is copied:\n"
         "  Without a path the whole profile is exported, storage layout\n"
-        "  mirrored (home/, root/, custom/). A storage path copies that\n"
+        "  mirrored (home/, root/, custom/). A label alone copies one of\n"
+        "  those namespaces whole; a storage path beneath it copies that\n"
         "  branch subtree. A filesystem path copies what the profile\n"
         "  PLACES there on this machine — every path it puts at or\n"
         "  beneath that directory, however each one is stored, laid\n"

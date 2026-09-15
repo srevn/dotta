@@ -167,11 +167,34 @@ const mount_spec_t *mount_spec_for_kind(mount_kind_t kind);
  * may hold what it likes next to the labels, and no walk of content sees it or
  * refuses it. Readers: the view's claim routine (core/manifest.c), the file listing
  * and the branch statistics (core/profiles.c), the refspec completion
- * (cmds/completion.c). cmds/export.c asks the neighbouring question of a top-level
- * entry's bare name and spells it there — a label as a name rather than as a
- * prefix, which this cannot answer (it requires the '/').
+ * (cmds/completion.c), and the two input heads that dispatch on shape before
+ * reading it (cmds/add.c, cmds/ignore.c). The neighbouring question — a label
+ * as a whole name rather than as a prefix — is mount_spec_for_label; this one
+ * requires the '/' and answers the prefix form alone.
  */
 const mount_spec_t *mount_spec_for_path(const char *storage_path);
+
+/**
+ * Resolve a bare storage label to its kind's spec: "home", "root", "custom".
+ *
+ * The whole name and not a prefix, which is what tells this apart from
+ * mount_spec_for_path: `mount_spec_for_label("home/x")` is NULL and
+ * `mount_spec_for_path("home")` is too. The two are the vocabulary's atoms, and
+ * a caller wanting either spells the union at its own site (cmds/export.c's
+ * grammar, where a lone positional that is content rather than a profile is one
+ * or the other).
+ *
+ * Returns NULL when `label` is NULL or names no kind; otherwise a borrowed pointer
+ * into the static SPECS table, valid for the process lifetime. Walks SPECS, so
+ * a fourth kind needs no edit here.
+ *
+ * Readers: the refusal a label argument earns (infra/path.c
+ * path_input_refuse_label), which turns the label a resolve answered back into
+ * the spec that describes it; export's catch arm, which makes that same key out
+ * of the bare word its grammar allows, and export's branch-root walk, where a
+ * top-level tree entry is content iff its name is a label (cmds/export.c).
+ */
+const mount_spec_t *mount_spec_for_label(const char *label);
 
 /**
  * Validate a storage path's syntactic shape.
@@ -476,13 +499,22 @@ const mount_spec_t *mount_root(
  * invariant rather than a hope. A caller whose own search already answered nothing
  * at the location asks mount_root directly and reads its answer (cmds/revert.c),
  * which establishes the same thing. `profile` is read only for a per_profile
- * root, and a per_profile root can only have been found by the profile that owns
- * it, so it is non-NULL exactly when it is read.
+ * root, and a per_profile root found in a table can only have been found by the
+ * profile that owns it, so it is non-NULL exactly when it is read.
+ *
+ * One caller reaches a spec without asking a table at all: a label alone names
+ * a root on every machine, and nobody asked (infra/path.h path_input_refuse_label).
+ * There the per_profile noun stands on its own — "the deployment target", no
+ * owner — which is why a NULL `profile` is answered rather than read. No
+ * table-sourced root lands in that arm: mount_root answers a NULL asker with
+ * the shared roots alone, which are never per_profile.
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
- * than through a statement of its own: five sites print this sentence and would
- * otherwise spell it five ways — the message that a location has no name is the
- * same message whether a pattern, an argument, a search or a revert asked.
+ * than through a statement of its own: every site that says a place has no name
+ * would otherwise spell the noun its own way — and the message is the same one
+ * whether a pattern, an argument, a search or a revert asked. The sentence around
+ * it stays the site's, save for the one that more than one verb shares
+ * (infra/path.h path_input_refuse_label).
  *
  * Truncates rather than fails: a screen noun, not a key.
  */

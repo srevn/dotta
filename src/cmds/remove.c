@@ -366,18 +366,38 @@ static error_t *resolve_removal_claims(
             continue;
         }
 
-        /* The sum type, read at the use site: a storage argument keys against
-         * the claims' names, a location against where they stand. The filesystem
+        /* The sum type, read at the use site and read once: a storage argument
+         * keys against the claims' names, a location against where they stand,
+         * and a label alone is the one name every claim of that namespace is
+         * beneath — the form that reaches a profile with no binding here, whose
+         * custom/ claims stand nowhere for a location to match. The filesystem
          * root is spelled "" — the one prefix every absolute path is beneath,
          * as the table spells it and the pathspec reads it. */
-        const char *subject = arg.key == PATH_KEY_STORAGE ? arg.storage_path
-                              : strcmp(arg.location, "/") == 0 ? "" : arg.location;
+        const char *subject = NULL;
+        bool by_name = false;
+
+        switch (arg.key) {
+            case PATH_KEY_LOCATION:
+                subject = strcmp(arg.location, "/") == 0 ? "" : arg.location;
+                break;
+
+            case PATH_KEY_STORAGE:
+                subject = arg.storage_path;
+                by_name = true;
+                break;
+
+            case PATH_KEY_LABEL:
+                subject = arg.label;
+                by_name = true;
+                break;
+        }
+
         size_t subject_len = strlen(subject);
         size_t matches_found = 0;
 
         for (size_t j = 0; j < claim_count; j++) {
-            const char *key = arg.key == PATH_KEY_STORAGE
-                              ? claims[j].storage_path : claims[j].filesystem_path;
+            const char *key = by_name ? claims[j].storage_path
+                                      : claims[j].filesystem_path;
             if (!key) continue;                       /* it stands nowhere */
 
             /* The exact claim, or one beneath it at a directory boundary */

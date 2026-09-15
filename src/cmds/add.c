@@ -1840,13 +1840,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         if (mount_spec_for_path(file)) {
             /* A storage shape, read by the one resolver that reads input shapes
-             * — STORAGE by construction, since the same predicate dispatched
-             * here. It validates the shape and sheds a trailing slash, so `add
-             * p home/dir/` is the spelling every other consumer already accepts
-             * (infra/path.h). */
+             * — a name or a label alone and never a location, since the same
+             * predicate dispatched here. It validates the shape and sheds a
+             * trailing slash, so `add p home/dir/` is the spelling every other
+             * consumer already accepts (infra/path.h). */
             path_input_t arg;
             err = path_input_resolve(file, ctx->arena, &arg);
             if (err) goto cleanup;
+
+            /* A label names no path to capture: it is what every name this profile
+             * holds of that kind begins with, and the directory it stands for
+             * is named by its own spelling — `add p ~`, `add p <target>` — which
+             * is the argument arm below. */
+            if (arg.key == PATH_KEY_LABEL) {
+                err = path_input_refuse_label(arg.label, opts->profile);
+                goto cleanup;
+            }
+
             typed = arg.storage_path;
 
             /* Where the claim stands, through the table: home/ and root/ resolve

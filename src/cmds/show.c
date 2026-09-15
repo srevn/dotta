@@ -719,6 +719,16 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
 
+    /* A label names the namespace above every path of its kind, and show prints
+     * one file's bytes — refused here, before the build, as any bad argument
+     * is, and with no profile to name because none was chosen and a label gives
+     * the view nothing to choose one by. With -p the branch namer says the same
+     * thing (core/profiles.h profile_claim_name). */
+    if (arg.key == PATH_KEY_LABEL) {
+        err = path_input_refuse_label(arg.label, NULL);
+        goto cleanup;
+    }
+
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 

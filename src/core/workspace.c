@@ -2443,6 +2443,14 @@ static scan_root_t *find_scan_root(
  * depth 0 of its own. Nothing here is written by a frame; the struct is one value
  * the recursion passes down, the roots are read through it and never written,
  * and the strings a frame makes live in an allocator of its own.
+ *
+ * `store_dev` and `store_ino` are dotta's own store, taken once by the driver
+ * (analyze_untracked_files) from the same call cmds/add.c's walk reads. It is
+ * the one directory no walk enters and no row registers: enumerating it would
+ * offer every loose object the last command wrote, and a `y` at update's prompt
+ * would commit the object database and the live state beside it. By identity,
+ * because the store is the same directory under every name and its location is
+ * the run's, which no ignore pattern could say.
  */
 typedef struct {
     workspace_t *ws;                   /* The view, the record, the arena offers live in */
@@ -2451,6 +2459,8 @@ typedef struct {
     const char *profile;               /* The owner of the root this walk began at */
     const gitignore_ruleset_t *rules;  /* That profile's layered ruleset */
     source_filter_t *source_filter;    /* The source tree's .gitignore, or NULL */
+    dev_t store_dev;                   /* dotta's own store: the one directory no walk enters */
+    ino_t store_ino;
 } scan_t;
 
 /**
@@ -2482,12 +2492,13 @@ typedef struct {
  *
  * The order is the order. The lstat first, because the kind and the identity
  * decide every arm; the occupant skip before any lookup, because nothing can
- * hold what it names; identity before the climb and the namer, because another
- * root's directory needs no string; the guards before the name, because an ascent
- * is paid only where a name is used and in a tracked directory most leaves are
- * managed; the name before the ignore layers, the name being the first layer's
- * subject; the layers before the descent, because an excluded directory is not
- * entered.
+ * hold what it names; the store before every other question a directory is asked,
+ * because nothing about it is any profile's; identity before the climb and the
+ * namer, because another root's directory needs no string; the guards before
+ * the name, because an ascent is paid only where a name is used and in a tracked
+ * directory most leaves are managed; the name before the ignore layers, the name
+ * being the first layer's subject; the layers before the descent, because an
+ * excluded directory is not entered.
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
  * can hold at an offered name is update's question at its capture (cmds/update.c).
@@ -2621,6 +2632,15 @@ static error_t *scan_directory_for_untracked(
         bool is_dir = occupant == FS_OCCUPANT_DIRECTORY;
 
         if (is_dir) {
+            /* Never dotta's own store, whatever this frame joined its way to.
+             * First of the identity questions and before every string one: no
+             * profile names it, no rule of any profile bounds it, and what lies
+             * beneath it is the run's own state rather than anything a commit
+             * may hold. cmds/add.c's walk asks the same question of the same
+             * lstat and says a line; nothing is said here, as nothing is said
+             * for any child the scan declines to offer. */
+            if (st.st_dev == scan->store_dev && st.st_ino == scan->store_ino) continue;
+
             /* Another scan root's directory — by identity, whatever this frame
              * joined — is that root's to enumerate, from a depth 0 of its own
              * and under its owner's names and rules. Asked before the name and
@@ -2726,13 +2746,17 @@ cleanup:
  * later-enabled where two stand at one — under the name that profile's own claims
  * give it (core/manifest.h manifest_name), minus what that profile's ignore layers
  * and the source tree exclude — and nothing at all beneath a path the view holds
- * a blob at, a tracked root of its own included (blob_over). A best-effort look,
- * said once per directory it could not list and once per path it could not look
- * at: not a snapshot, and not an admission — what the commit can hold at that
- * name is update's question at its capture (cmds/update.c).
+ * a blob at, a tracked root of its own included (blob_over), nor anything beneath
+ * dotta's own store, whatever row stands there. A best-effort look, said once
+ * per directory it could not list and once per path it could not look at: not a
+ * snapshot, and not an admission — what the commit can hold at that name is
+ * update's question at its capture (cmds/update.c).
  *
  * The driver enumerates the view's tracked directories, one scan each, and the
  * walk descends only into directories the view does not track (scan_root_t).
+ * The store is refused at both ends — never registered here, never entered from
+ * above by the walk — because a registration is reached directly, from a depth
+ * 0 of its own, where the walk's child check never sees it.
  */
 static error_t *analyze_untracked_files(
     workspace_t *ws,
@@ -2741,6 +2765,19 @@ static error_t *analyze_untracked_files(
     CHECK_NULL(ws);
 
     manifest_rows_t dirs = workspace_directories(ws);
+
+    /* Where dotta's own store stands, taken once before the loop that reads it:
+     * the directory the state opened its database beside (core/state.c get_db_path,
+     * git_repository_path), which cmds/add.c's walk reads by the same call. One
+     * stat per load that scans, paid whether or not a row stands there. Fatal,
+     * as the two builders below are: a store that will not stat has already failed
+     * the open, and a scan that ran carrying no identity for it would be this
+     * rule silently disarmed. */
+    const char *store_path = git_repository_path(ws->repo);
+    struct stat store;
+    if (fs_stat(store_path, &store) != 0) {
+        return error_from_errno(errno, "Failed to stat the store at '%s'", store_path);
+    }
 
     /* The scan roots: every tracked directory that is a directory on disk, one
      * per directory. An ancestor claim is not one — the profile passes through
@@ -2758,7 +2795,12 @@ static error_t *analyze_untracked_files(
      * order, lowest profile first, so a later profile's row standing at a directory
      * an earlier one already stands at takes it — the index's own rule for a
      * contested location (core/manifest.c manifest_layer), applied where the
-     * keys differ — and within one profile the later row in path order. */
+     * keys differ — and within one profile the later row in path order. Nor is
+     * dotta's own store, whatever row stands there: a sheet captured before the
+     * capture refused one, or one synced from a machine that had no such rule,
+     * would otherwise make the object database a scan root and offer every loose
+     * object at every status. Asked of the look, as the kind is — the row's key
+     * is a string and the store is a directory. */
     scan_root_t *roots = arena_calloc(ws->arena, dirs.count, sizeof(*roots));
     if (!roots) {
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's roots");
@@ -2776,6 +2818,7 @@ static error_t *analyze_untracked_files(
             if (!row->tracked || strcmp(row->profile, profiles[p]) != 0) continue;
             if (workspace_displaced_ancestor(ws, row->filesystem_path)) continue;
             if (fs_lstat_occupant(row->filesystem_path, &st) != FS_OCCUPANT_DIRECTORY) continue;
+            if (st.st_dev == store.st_dev && st.st_ino == store.st_ino) continue;
 
             scan_root_t *held = find_scan_root(roots, root_count, st.st_dev, st.st_ino);
             if (held) {
@@ -2853,6 +2896,8 @@ static error_t *analyze_untracked_files(
             .profile       = row->profile,
             .rules         = rules,
             .source_filter = source_filter,
+            .store_dev     = store.st_dev,
+            .store_ino     = store.st_ino,
         };
         err = scan_directory_for_untracked(&scan, row->filesystem_path, 0);
         if (err) goto cleanup;

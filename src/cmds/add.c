@@ -104,6 +104,20 @@ typedef struct {
  * admission grows with every blob listed; the sheet is the branch's and holds
  * no directory this command lists, so those are read once more with the selection
  * complete (cmd_add).
+ *
+ * `store_dev` and `store_ino` are dotta's own store — the directory the state
+ * opened its database beside (core/state.c get_db_path, git_repository_path):
+ * the store itself for the bare repository dotta makes, the `.git/` of one a
+ * hand made, and never `ctx->run.repo_path`, which names that same directory
+ * for the first and the worktree beside it for the second. No frame enters it
+ * and no argument names it: its objects, its refs and the live database are no
+ * profile's content, and a commit of them is one the next apply writes back over
+ * the run's own state. Asked by identity, because a directory is the same directory
+ * under every name — a parent reached through a link, a case the volume folds —
+ * where the store's location is the run's (DOTTA_REPO_DIR's) and no pattern could
+ * say it. A symlink standing at the store is a leaf like any other and is listed
+ * as one; a path inside the store, named by hand, is the user's own act.
+ * core/workspace.c's scan holds the same pair, from the same call.
  */
 typedef struct {
     const dotta_ctx_t *ctx;              /* The arena the paths live in, and the output */
@@ -113,6 +127,8 @@ typedef struct {
     source_filter_t *source_filter;      /* The source tree's .gitignore, when consulted */
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
+    dev_t store_dev;                     /* dotta's own store: the one directory no walk enters */
+    ino_t store_ino;
     hashmap_t *listing;                  /* location -> &item->claim (borrowed both) */
     ptr_array_t files;                   /* add_path_t *: every non-directory listed */
     ptr_array_t directories;             /* add_path_t *: every directory walked into */
@@ -552,7 +568,8 @@ static error_t *admit_name(
  * Every directory walked into is listed — the walk is the sole source of directory
  * tracking — and so is every regular file and symlink child a branch can hold.
  * Symlinks are never followed: a symlink to a directory is an entry like any
- * other, and a special file is no entry at all.
+ * other, and a special file is no entry at all. dotta's own store is neither
+ * listed nor entered, whatever stands above it (add_walk_t).
  *
  * Each child is named here, once, by the claim standing at it — this command's
  * own where it has listed one there, else the profile's own (core/manifest.h
@@ -655,6 +672,18 @@ static error_t *collect_tree(
             case FS_OCCUPANT_REGULAR:
             case FS_OCCUPANT_SYMLINK:
                 break;
+        }
+
+        /* Never dotta's own store: its objects, its refs and the live database
+         * are no profile's content, and a commit of them is one the next apply
+         * writes back over the run's own state. By identity, whatever spelling
+         * this frame joined its way to — a parent reached through a link, a case
+         * the volume folds — and a symlink standing at the store is a leaf like
+         * any other, listed as one. core/workspace.c's walk asks the same question
+         * of the same lstat. */
+        if (st.st_dev == walk->store_dev && st.st_ino == walk->store_ino) {
+            output_info(out, OUTPUT_VERBOSE, "Skipped store: %s", child_fs);
+            continue;
         }
 
         /* Walked whole, or listed already: asked before a name, so nothing this
@@ -1762,6 +1791,22 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         goto cleanup;
     }
 
+    /* Where dotta's own store stands, taken once for the whole command: the call
+     * that answers where the store's own files sit (utils/repo.h), which
+     * core/workspace.c's scan reads too. Not `repo_path`, which is in scope one
+     * line from `repo` and is the wrong answer for a store a hand made
+     * (add_walk_t). Fatal: a store that will not stat has already failed the
+     * open, and a walk that ran carrying no identity for it would be this rule
+     * silently disarmed. */
+    const char *store_path = git_repository_path(repo);
+    struct stat store;
+    if (fs_stat(store_path, &store) != 0) {
+        err = error_from_errno(errno, "Failed to stat the store at '%s'", store_path);
+        goto cleanup;
+    }
+    walk.store_dev = store.st_dev;
+    walk.store_ino = store.st_ino;
+
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's
      * own listing, the name, the rules, the claim the profile holds at the
@@ -1892,6 +1937,23 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 break;
         }
 
+        /* Never dotta's own store, however the argument spells it: a storage
+         * path under the label that reaches it, a filesystem path, the target
+         * itself. The walk refuses it as a child (collect_tree) and this is that
+         * refusal for the path the user named, where a named path is an error
+         * and never a skip. No gate on the kind: an inode is unique to its device,
+         * so nothing but the store's own directory can carry the store's pair,
+         * and the lstat is the argument's own — a symlink that reaches the store
+         * is a leaf here, and the root arm below asks the other stat. */
+        if (st.st_dev == walk.store_dev && st.st_ino == walk.store_ino) {
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "'%s' is dotta's own store, and a profile holds no part of it",
+                file
+            );
+            goto cleanup;
+        }
+
         /* This command's own listing. A location already settled here says nothing
          * new — a second spelling of one argument, or an argument beneath a
          * directory already walked — and a spelling simply moves on. A typed
@@ -1969,11 +2031,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * that lands under the next machine's HOME. A target's link may reach
              * it — the machine is then named custom/, which the next machine
              * binds where it likes, a target at "/" being a binding like any
-             * other (infra/mount.h). A link is the only shape asked, that being
-             * what the command line brought; a root standing at the filesystem
-             * root as a directory in its own right — a bind mount at HOME — is
-             * entered like any other. A typed name never arrives here, the user's
-             * own name being the answer.
+             * other (infra/mount.h). A link that reaches dotta's own store is
+             * refused under every label: the exemption the filesystem root gives
+             * a target has no counterpart here, a custom/ binding at the store
+             * being the worst of the three rather than the tolerable one. A link
+             * is the only shape asked, that being what the command line brought;
+             * a root standing at the filesystem root as a directory in its own
+             * right — a bind mount at HOME — is entered like any other, and one
+             * standing at the store was refused by its own lstat above. A typed
+             * name never arrives here, the user's own name being the answer.
              *
              * `root` is non-NULL: manifest_name answered NULL, which it does
              * only where mount_root answers (infra/mount.h mount_root_describe). */
@@ -1991,6 +2057,24 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     );
                     goto cleanup;
                 }
+
+                /* The other directory no root may reach. This is the one stat
+                 * that sees through the link, and the promotion below is what
+                 * makes the walk follow it — so a root whose spelling reaches
+                 * the store would enumerate the object database under the root's
+                 * own label, and the next apply would write the profile's bytes
+                 * back over it. No remedy is named: the store has no inside a
+                 * profile may hold. */
+                if (reached.st_dev == walk.store_dev &&
+                    reached.st_ino == walk.store_ino) {
+                    err = ERROR(
+                        ERR_INVALID_ARG,
+                        "'%s' reaches dotta's own store, and a profile holds no "
+                        "part of it", file
+                    );
+                    goto cleanup;
+                }
+
                 kind = PATH_KIND_DIRECTORY;
             }
             if (kind != PATH_KIND_DIRECTORY) {

@@ -81,7 +81,7 @@ char *build_commit_message(const config_t *config, const commit_message_context_
  * Get action name in present tense
  *
  * @param action Action type
- * @return Static string ("Add", "Update", "Sync")
+ * @return Static string ("Add", "Update", "Remove", "Sync", "Revert")
  */
 const char *commit_action_name(commit_action_t action);
 
@@ -89,7 +89,7 @@ const char *commit_action_name(commit_action_t action);
  * Get action name in past tense
  *
  * @param action Action type
- * @return Static string ("Added", "Updated", "Synced")
+ * @return Static string ("Added", "Updated", "Removed", "Synced", "Reverted")
  */
 const char *commit_action_name_past(commit_action_t action);
 

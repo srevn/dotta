@@ -15,12 +15,31 @@
 #include "base/error.h"
 #include "sys/identity.h"
 
-/* Maximum length for hostname and username */
+/* Maximum length for hostname */
 #define MAX_HOSTNAME 256
-#define MAX_USERNAME 256
 
 /* Maximum paths to show in detail before truncating */
 #define MAX_PATHS_DETAIL 5
+
+/**
+ * One template variable, and what it renders to
+ *
+ * The values a message is made of are resolved once and read by both substitutions,
+ * so a title and a body cannot disagree about one of them, and the header's list
+ * of variables is one row each (utils/commit.h) — a row being where the name
+ * and the value are written beside each other, which is what makes a transposition
+ * among ten same-typed strings a thing that cannot be written rather than a thing
+ * that compiles.
+ *
+ * A value is never NULL: NULL is the reader's word for "no such variable", and
+ * what it does with one is leave the template's own bytes standing. A variable
+ * that is legitimately absent — a target commit outside a revert — renders empty,
+ * which is the row's business and not the reader's.
+ */
+typedef struct {
+    const char *name;    /* As a template spells it, without the braces */
+    const char *value;   /* Never NULL */
+} template_t;
 
 /**
  * Get current hostname Returns allocated string or NULL on error
@@ -90,6 +109,11 @@ static char *get_date_local(void) {
 
 /**
  * Get action name in present tense
+ *
+ * Every action, and no default arm: -Wswitch names this function and its past
+ * tense the day a sixth action lands, where a default would have rendered the
+ * new one "Unknown" into a commit nobody re-reads. The return past the switch
+ * is for a value no enumerator names, which only a cast can produce.
  */
 const char *commit_action_name(commit_action_t action) {
     switch (action) {
@@ -98,8 +122,8 @@ const char *commit_action_name(commit_action_t action) {
         case COMMIT_ACTION_REMOVE: return "Remove";
         case COMMIT_ACTION_SYNC:   return "Sync";
         case COMMIT_ACTION_REVERT: return "Revert";
-        default:                   return "Unknown";
     }
+    return "Unknown";
 }
 
 /**
@@ -112,8 +136,8 @@ const char *commit_action_name_past(commit_action_t action) {
         case COMMIT_ACTION_REMOVE: return "Removed";
         case COMMIT_ACTION_SYNC:   return "Synced";
         case COMMIT_ACTION_REVERT: return "Reverted";
-        default:                   return "Unknown";
     }
+    return "Unknown";
 }
 
 /**
@@ -157,10 +181,7 @@ static char *format_path_list(const char *const *paths, size_t count) {
     }
 
     /* Transfer ownership from buffer to avoid copy */
-    char *result = NULL;
-    result = buffer_detach(&buf);
-
-    return result;
+    return buffer_detach(&buf);
 
 cleanup:
     error_free(err);
@@ -171,120 +192,80 @@ cleanup:
 /**
  * Substitute template variables in a string
  *
- * Replaces {variable} placeholders with actual values. Variables: host, user,
- * profile, action, action_past, count, date, datetime, paths, target_commit
+ * Replaces {variable} placeholders with the table's values. A name the table
+ * has no row for is left as the template spelled it, braces and all, so a typo
+ * empties no line and prose survives a stray brace.
  *
  * @param template Template string with {variable} placeholders
- * @param hostname Hostname value
- * @param username Username value
- * @param profile Profile name
- * @param action Action name (present tense)
- * @param action_past Action name (past tense)
- * @param path_count Number of paths, both kinds
- * @param date Date string (YYYY-MM-DD)
- * @param datetime Datetime string
- * @param path_list Formatted path list
- * @param target_commit Target commit SHA (can be NULL)
+ * @param vars The variables and their values, resolved once by the caller
+ * @param var_count How many
  * @return Allocated string with substitutions, or NULL on error
  */
 static char *substitute_template(
-    const char *template,
-    const char *hostname,
-    const char *username,
-    const char *profile,
-    const char *action,
-    const char *action_past,
-    size_t path_count,
-    const char *date,
-    const char *datetime,
-    const char *path_list,
-    const char *target_commit
+    const char *template, const template_t *vars, size_t var_count
 ) {
     if (!template) {
         return NULL;
     }
 
     buffer_t buf = BUFFER_INIT;
-
-    /* Path count as string */
-    char count_str[32];
-    snprintf(count_str, sizeof(count_str), "%zu", path_count);
-
     error_t *err = NULL;
 
-    /* Process template character by character */
+    /* Process template character by character. Three cases, each leaving the
+     * loop at its own line: what is not a variable, what is shaped like one and
+     * cannot be read, and the name the table answers for. */
     const char *p = template;
     while (*p) {
-        if (*p == '{') {
-            /* Found potential variable start */
-            const char *end = strchr(p, '}');
-            if (end) {
-                /* Extract variable name */
-                size_t var_len = (size_t) (end - p - 1);
-                char var_name[64];
+        /* Where this variable would end. A brace nothing closes opens nothing:
+         * it is a character of the template like any other, as is every character
+         * that is not a brace at all. */
+        const char *end = *p == '{' ? strchr(p, '}') : NULL;
+        if (!end) {
+            err = buffer_append(&buf, p, 1);
+            if (err) goto cleanup;
+            p++;
+            continue;
+        }
 
-                if (var_len < sizeof(var_name)) {
-                    memcpy(var_name, p + 1, var_len);
-                    var_name[var_len] = '\0';
+        /* A name too long for the scratch is no name: the braced run stands as
+         * the template spelled it, and the reader resumes past it. */
+        size_t var_len = (size_t) (end - p - 1);
+        char var_name[64];
 
-                    /* Substitute variable */
-                    const char *value = NULL;
-                    if (strcmp(var_name, "host") == 0) {
-                        value = hostname;
-                    } else if (strcmp(var_name, "user") == 0) {
-                        value = username;
-                    } else if (strcmp(var_name, "profile") == 0) {
-                        value = profile;
-                    } else if (strcmp(var_name, "action") == 0) {
-                        value = action;
-                    } else if (strcmp(var_name, "action_past") == 0) {
-                        value = action_past;
-                    } else if (strcmp(var_name, "count") == 0) {
-                        value = count_str;
-                    } else if (strcmp(var_name, "date") == 0) {
-                        value = date;
-                    } else if (strcmp(var_name, "datetime") == 0) {
-                        value = datetime;
-                    } else if (strcmp(var_name, "paths") == 0) {
-                        value = path_list;
-                    } else if (strcmp(var_name, "target_commit") == 0) {
-                        value = target_commit ? target_commit : "";
-                    }
+        if (var_len >= sizeof(var_name)) {
+            err = buffer_append(&buf, p, (size_t) (end - p) + 1);
+            if (err) goto cleanup;
+            p = end + 1;
+            continue;
+        }
 
-                    if (value) {
-                        err = buffer_append_string(&buf, value);
-                    } else {
-                        /* Unknown variable - keep as-is */
-                        err = buffer_append(&buf, "{", 1);
-                        if (!err) err = buffer_append_string(&buf, var_name);
-                        if (!err) err = buffer_append(&buf, "}", 1);
-                    }
+        memcpy(var_name, p + 1, var_len);
+        var_name[var_len] = '\0';
 
-                    if (err) goto cleanup;
-                    p = end + 1;
-                    continue;
-                }
-
-                /* Variable name too long - preserve as literal text */
-                size_t literal_len = (size_t) (end - p) + 1;
-                err = buffer_append(&buf, p, literal_len);
-                if (err) goto cleanup;
-                p = end + 1;
-                continue;
+        /* Substitute variable: the table's row, or no row at all */
+        const char *value = NULL;
+        for (size_t i = 0; i < var_count; i++) {
+            if (strcmp(var_name, vars[i].name) == 0) {
+                value = vars[i].value;
+                break;
             }
         }
 
-        /* Regular character */
-        err = buffer_append(&buf, p, 1);
+        if (value) {
+            err = buffer_append_string(&buf, value);
+        } else {
+            /* Unknown variable - keep as-is */
+            err = buffer_append(&buf, "{", 1);
+            if (!err) err = buffer_append_string(&buf, var_name);
+            if (!err) err = buffer_append(&buf, "}", 1);
+        }
         if (err) goto cleanup;
-        p++;
+
+        p = end + 1;
     }
 
     /* Transfer ownership from buffer to avoid copy */
-    char *result = NULL;
-    result = buffer_detach(&buf);
-
-    return result;
+    return buffer_detach(&buf);
 
 cleanup:
     error_free(err);
@@ -319,8 +300,7 @@ static char *build_full_message(const char *title, const char *body) {
  * Build commit message from context
  */
 char *build_commit_message(
-    const config_t *config,
-    const commit_message_context_t *ctx
+    const config_t *config, const commit_message_context_t *ctx
 ) {
     /* Validate input */
     if (!ctx || !ctx->profile) {
@@ -332,81 +312,57 @@ char *build_commit_message(
         return strdup(ctx->custom_msg);
     }
 
-    /* Get components */
+    /* Get components. Everything allocated here is freed at the one exit below,
+     * message and all: each step's failure is the same failure — there is no
+     * allocation this function can fail and carry on — so it is spelled once. */
     char *hostname = get_hostname();
     char *username = get_username();
     char *date = get_date_local();
     char *datetime = get_datetime_local();
-    const char *action = commit_action_name(ctx->action);
-    const char *action_past = commit_action_name_past(ctx->action);
     char *path_list = format_path_list(ctx->paths, ctx->path_count);
+    char *title = NULL, *body = NULL, *message = NULL;
 
     /* Check allocations */
     if (!hostname || !username || !date || !datetime || !path_list) {
-        free(hostname);
-        free(username);
-        free(date);
-        free(datetime);
-        free(path_list);
-
-        return NULL;
+        goto cleanup;
     }
 
-    /* Build title from template */
-    char *title = substitute_template(
-        config->commit_title,
-        hostname,
-        username,
-        ctx->profile,
-        action,
-        action_past,
-        ctx->path_count,
-        date,
-        datetime,
-        path_list,
-        ctx->target_commit
-    );
+    /* The values this message is made of, resolved once for both templates. The
+     * count is rendered here and not in the reader, which is what keeps it the
+     * length of the list beside it under any template that names either. */
+    char count[32];
+    snprintf(count, sizeof(count), "%zu", ctx->path_count);
 
-    if (!title) {
-        free(hostname);
-        free(username);
-        free(date);
-        free(datetime);
-        free(path_list);
+    const template_t vars[] = {
+        { "host",          hostname                                     },
+        { "user",          username                                     },
+        { "profile",       ctx->profile                                 },
+        { "action",        commit_action_name(ctx->action)              },
+        { "action_past",   commit_action_name_past(ctx->action)         },
+        { "count",         count                                        },
+        { "date",          date                                         },
+        { "datetime",      datetime                                     },
+        { "paths",         path_list                                    },
+        { "target_commit", ctx->target_commit ? ctx->target_commit : "" },
+    };
+    const size_t var_count = sizeof(vars) / sizeof(vars[0]);
 
-        return NULL;
-    }
+    /* Build title and body from their templates */
+    title = substitute_template(config->commit_title, vars, var_count);
+    if (!title) goto cleanup;
 
-    /* Build body from template */
-    char *body = substitute_template(
-        config->commit_body,
-        hostname,
-        username,
-        ctx->profile,
-        action,
-        action_past,
-        ctx->path_count,
-        date,
-        datetime,
-        path_list,
-        ctx->target_commit
-    );
+    body = substitute_template(config->commit_body, vars, var_count);
+    if (!body) goto cleanup;
 
-    /* Free intermediate allocations */
+    /* Build full message */
+    message = build_full_message(title, body);
+
+cleanup:
     free(hostname);
     free(username);
     free(date);
     free(datetime);
     free(path_list);
-
-    if (!body) {
-        free(title);
-        return NULL;
-    }
-
-    /* Build full message */
-    char *message = build_full_message(title, body);
-
     free(title);
     free(body);
 

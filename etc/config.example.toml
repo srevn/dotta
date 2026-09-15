@@ -246,15 +246,19 @@ diverged_strategy = "warn"
 # Available Template Variables:
 # -----------------------------
 #   {host}          - System hostname (from gethostname())
-#   {user}          - Current username (from $USER or getlogin())
+#   {user}          - The invoker's username (the human behind sudo)
 #   {profile}       - Profile name
 #   {action}        - Action (Add, Update, Remove, Sync, Revert)
 #   {action_past}   - Past tense (Added, Updated, Removed, Synced, Reverted)
-#   {count}         - Number of files
+#   {count}         - Number of paths, both kinds
 #   {date}          - Local date (YYYY-MM-DD)
 #   {datetime}      - Local timestamp with timezone (ISO 8601 format)
-#   {files}         - Formatted file list (bullet points, max 5 shown)
+#   {paths}         - Formatted path list (bullet points, max 5 shown)
 #   {target_commit} - Target commit SHA (for revert operations, empty otherwise)
+#
+# A commit names paths and not files: one commit carries both the files it
+# captured and the directories it tracks, so {count} counts both and {paths}
+# lists both, as storage paths (home/.bashrc, root/etc/hosts, custom/…).
 #
 # Default Templates (you can customize these):
 # --------------------------------------------
@@ -273,21 +277,21 @@ title = "{host}: {action} {profile}"
 #   User: john
 #   Host: macbook-pro
 #   Profile: darwin
-#   Files: 3
+#   Paths: 3
 #
 #   Added:
-#     - .bashrc
-#     - .vimrc
-#     - .tmux.conf
+#     - home/.bashrc
+#     - home/.vimrc
+#     - home/.tmux.conf
 body = """
 Date: {datetime}
 User: {user}
 Host: {host}
 Profile: {profile}
-Files: {count}
+Paths: {count}
 
 {action_past}:
-{files}
+{paths}
 """
 
 # ============================================================================
@@ -298,14 +302,14 @@ Files: {count}
 # ---------------
 # [commit]
 # title = "{action} {profile}"
-# body = "{files}"
+# body = "{paths}"
 #
 # Output:
 #   Add darwin
 #
-#     - .bashrc
-#     - .vimrc
-#     - .tmux.conf
+#     - home/.bashrc
+#     - home/.vimrc
+#     - home/.tmux.conf
 #
 #
 # Detailed Format:
@@ -318,10 +322,10 @@ Files: {count}
 # Date: {datetime}
 # User: {user}
 # Host: {host}
-# Count: {count} file(s)
+# Count: {count} path(s)
 #
-# Files:
-# {files}
+# Paths:
+# {paths}
 # """
 #
 # Output:
@@ -332,63 +336,63 @@ Files: {count}
 #   Date: 2025-01-09 14:23:45 +0200
 #   User: john
 #   Host: macbook-pro
-#   Count: 3 file(s)
+#   Count: 3 path(s)
 #
-#   Files:
-#     - .bashrc
-#     - .vimrc
-#     - .tmux.conf
+#   Paths:
+#     - home/.bashrc
+#     - home/.vimrc
+#     - home/.tmux.conf
 #
 #
 # Git Conventional Commits:
 # --------------------------
 # [commit]
-# title = "feat({profile}): {action} {count} config file(s)"
-# body = "{files}"
+# title = "feat({profile}): {action} {count} config path(s)"
+# body = "{paths}"
 #
 # Output:
-#   feat(darwin): Add 3 config file(s)
+#   feat(darwin): Add 3 config path(s)
 #
-#     - .bashrc
-#     - .vimrc
-#     - .tmux.conf
+#     - home/.bashrc
+#     - home/.vimrc
+#     - home/.tmux.conf
 #
 #
 # Revert-Aware Format:
 # --------------------
 # [commit]
-# title = "{action_past} {count} file(s) in {profile}"
+# title = "{action_past} {count} path(s) in {profile}"
 # body = """
 # Profile: {profile}
 # Action: {action}
 # Target: {target_commit}
-# Files:
-# {files}
+# Paths:
+# {paths}
 #
 # Timestamp: {datetime}
 # """
 #
 # Output (for revert operations):
-#   Reverted 1 file(s) in global
+#   Reverted 1 path(s) in global
 #
 #   Profile: global
 #   Action: Revert
 #   Target: 94d98791ced8cd927813ccf085714e7e1a3c5085
-#   Files:
+#   Paths:
 #     - home/.bashrc
 #
 #   Timestamp: 2025-10-10 22:40:05 +0300
 #
 # Output (for add operations):
-#   Added 3 file(s) in darwin
+#   Added 3 path(s) in darwin
 #
 #   Profile: darwin
 #   Action: Add
 #   Target:
-#   Files:
-#     - .bashrc
-#     - .vimrc
-#     - .tmux.conf
+#   Paths:
+#     - home/.bashrc
+#     - home/.vimrc
+#     - home/.tmux.conf
 #
 #   Timestamp: 2025-01-09 14:23:45 +0200
 #

@@ -781,7 +781,6 @@ static error_t *remove_files_from_profile(
     size_t claim_count = 0;
     metadata_t *metadata = NULL;           /* the branch's, from the resolver (owned) */
     removal_overlaps_t overlaps = { 0 };   /* arena — the analysis's */
-    string_array_t *removed_paths = NULL;
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
     manifest_t *after = NULL;
@@ -937,9 +936,17 @@ static error_t *remove_files_from_profile(
      * FILE claim is in the stage's tree (the resolver's universe is that tree's
      * own listing), so the stage's missing-entry error cannot fire. */
     size_t removed_files = 0, removed_dirs = 0, meta_edits = 0;
-    removed_paths = string_array_new(0);
+
+    /* The names this commit lets go, borrowed from the claims (arena): one per
+     * claim, both kinds, since the message's unit is the path and a directory
+     * claim is a path the commit gives up as surely as a blob is (utils/commit.h).
+     * The message reads them once and the arena outlives the call, so nothing
+     * is copied. */
+    const char **removed_paths = arena_calloc(
+        ctx->arena, claim_count, sizeof(*removed_paths)
+    );
     if (!removed_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate removal plan");
+        err = ERROR(ERR_MEMORY, "Failed to allocate the removal's paths");
         goto cleanup;
     }
 
@@ -958,11 +965,7 @@ static error_t *remove_files_from_profile(
             meta_edits++;
         }
 
-        err = string_array_push(removed_paths, claim->storage_path);
-        if (err) {
-            err = error_wrap(err, "Failed to track removed path");
-            goto cleanup;
-        }
+        removed_paths[i] = claim->storage_path;
         output_info(out, OUTPUT_VERBOSE, "Removed: %s", claim->storage_path);
     }
 
@@ -1004,8 +1007,8 @@ static error_t *remove_files_from_profile(
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REMOVE,
         .profile       = opts->profile,
-        .files         = removed_paths->items,
-        .file_count    = removed_paths->count,
+        .paths         = removed_paths,
+        .path_count    = claim_count,
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
@@ -1220,7 +1223,6 @@ cleanup:
     manifest_free(after);
     free(message);
     string_array_deinit(&pruned_dirs);
-    if (removed_paths) string_array_free(removed_paths);
     if (metadata) metadata_free(metadata);
     stage_free(stage);
 

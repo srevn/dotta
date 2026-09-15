@@ -600,18 +600,19 @@ static char *build_revert_commit_message(
     char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
     git_oid_tostr(oid_str, sizeof(oid_str), target_commit_oid);
 
-    /* Build context for commit message */
-    char *files[] = { (char *) file_path };
-    commit_message_context_t ctx = {
+    /* Build context for commit message. One path, the name the restore wrote,
+     * borrowed for the call as every caller's list is (utils/commit.h). */
+    const char *paths[] = { file_path };
+    commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_REVERT,
         .profile       = profile,
-        .files         = files,
-        .file_count    = 1,
+        .paths         = paths,
+        .path_count    = 1,
         .custom_msg    = NULL,
         .target_commit = oid_str
     };
 
-    return build_commit_message(config, &ctx);
+    return build_commit_message(config, &msg_ctx);
 }
 
 /**

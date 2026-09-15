@@ -19,8 +19,8 @@
 #define MAX_HOSTNAME 256
 #define MAX_USERNAME 256
 
-/* Maximum files to show in detail before truncating */
-#define MAX_FILES_DETAIL 5
+/* Maximum paths to show in detail before truncating */
+#define MAX_PATHS_DETAIL 5
 
 /**
  * Get current hostname Returns allocated string or NULL on error
@@ -117,36 +117,40 @@ const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
- * Format file list as bullet points with truncation Returns allocated string or
+ * Format path list as bullet points with truncation Returns allocated string or
  * NULL on error
+ *
+ * Both kinds, as the caller handed them over (utils/commit.h): the list says
+ * "paths" of what it truncates and of what it has none of, because a commit that
+ * claimed a directory and no file has a path to name and no file.
  */
-static char *format_file_list(char **files, size_t count) {
-    if (count == 0 || !files) {
-        return strdup("  (no files)");
+static char *format_path_list(const char *const *paths, size_t count) {
+    if (count == 0 || !paths) {
+        return strdup("  (no paths)");
     }
 
     buffer_t buf = BUFFER_INIT;
 
-    /* Show up to MAX_FILES_DETAIL files */
-    size_t show_count = count < MAX_FILES_DETAIL ? count : MAX_FILES_DETAIL;
+    /* Show up to MAX_PATHS_DETAIL paths */
+    size_t show_count = count < MAX_PATHS_DETAIL ? count : MAX_PATHS_DETAIL;
     error_t *err = NULL;
 
     for (size_t i = 0; i < show_count; i++) {
         err = buffer_append_string(&buf, "  - ");
-        if (!err) err = buffer_append_string(&buf, files[i]);
-        if (!err && (i < show_count - 1 || count > MAX_FILES_DETAIL)) {
+        if (!err) err = buffer_append_string(&buf, paths[i]);
+        if (!err && (i < show_count - 1 || count > MAX_PATHS_DETAIL)) {
             err = buffer_append_string(&buf, "\n");
         }
         if (err) goto cleanup;
     }
 
     /* Add truncation notice if needed */
-    if (count > MAX_FILES_DETAIL) {
+    if (count > MAX_PATHS_DETAIL) {
         char truncate_msg[64];
         snprintf(
             truncate_msg, sizeof(truncate_msg),
-            "  ... and %zu more file%s",
-            count - MAX_FILES_DETAIL, (count - MAX_FILES_DETAIL) == 1 ? "" : "s"
+            "  ... and %zu more path%s",
+            count - MAX_PATHS_DETAIL, (count - MAX_PATHS_DETAIL) == 1 ? "" : "s"
         );
         err = buffer_append_string(&buf, truncate_msg);
         if (err) goto cleanup;
@@ -168,7 +172,7 @@ cleanup:
  * Substitute template variables in a string
  *
  * Replaces {variable} placeholders with actual values. Variables: host, user,
- * profile, action, action_past, count, date, datetime, files, target_commit
+ * profile, action, action_past, count, date, datetime, paths, target_commit
  *
  * @param template Template string with {variable} placeholders
  * @param hostname Hostname value
@@ -176,10 +180,10 @@ cleanup:
  * @param profile Profile name
  * @param action Action name (present tense)
  * @param action_past Action name (past tense)
- * @param file_count Number of files
+ * @param path_count Number of paths, both kinds
  * @param date Date string (YYYY-MM-DD)
  * @param datetime Datetime string
- * @param file_list Formatted file list
+ * @param path_list Formatted path list
  * @param target_commit Target commit SHA (can be NULL)
  * @return Allocated string with substitutions, or NULL on error
  */
@@ -190,10 +194,10 @@ static char *substitute_template(
     const char *profile,
     const char *action,
     const char *action_past,
-    size_t file_count,
+    size_t path_count,
     const char *date,
     const char *datetime,
-    const char *file_list,
+    const char *path_list,
     const char *target_commit
 ) {
     if (!template) {
@@ -202,9 +206,9 @@ static char *substitute_template(
 
     buffer_t buf = BUFFER_INIT;
 
-    /* File count as string */
+    /* Path count as string */
     char count_str[32];
-    snprintf(count_str, sizeof(count_str), "%zu", file_count);
+    snprintf(count_str, sizeof(count_str), "%zu", path_count);
 
     error_t *err = NULL;
 
@@ -241,8 +245,8 @@ static char *substitute_template(
                         value = date;
                     } else if (strcmp(var_name, "datetime") == 0) {
                         value = datetime;
-                    } else if (strcmp(var_name, "files") == 0) {
-                        value = file_list;
+                    } else if (strcmp(var_name, "paths") == 0) {
+                        value = path_list;
                     } else if (strcmp(var_name, "target_commit") == 0) {
                         value = target_commit ? target_commit : "";
                     }
@@ -335,15 +339,15 @@ char *build_commit_message(
     char *datetime = get_datetime_local();
     const char *action = commit_action_name(ctx->action);
     const char *action_past = commit_action_name_past(ctx->action);
-    char *file_list = format_file_list(ctx->files, ctx->file_count);
+    char *path_list = format_path_list(ctx->paths, ctx->path_count);
 
     /* Check allocations */
-    if (!hostname || !username || !date || !datetime || !file_list) {
+    if (!hostname || !username || !date || !datetime || !path_list) {
         free(hostname);
         free(username);
         free(date);
         free(datetime);
-        free(file_list);
+        free(path_list);
 
         return NULL;
     }
@@ -356,10 +360,10 @@ char *build_commit_message(
         ctx->profile,
         action,
         action_past,
-        ctx->file_count,
+        ctx->path_count,
         date,
         datetime,
-        file_list,
+        path_list,
         ctx->target_commit
     );
 
@@ -368,7 +372,7 @@ char *build_commit_message(
         free(username);
         free(date);
         free(datetime);
-        free(file_list);
+        free(path_list);
 
         return NULL;
     }
@@ -381,10 +385,10 @@ char *build_commit_message(
         ctx->profile,
         action,
         action_past,
-        ctx->file_count,
+        ctx->path_count,
         date,
         datetime,
-        file_list,
+        path_list,
         ctx->target_commit
     );
 
@@ -393,7 +397,7 @@ char *build_commit_message(
     free(username);
     free(date);
     free(datetime);
-    free(file_list);
+    free(path_list);
 
     if (!body) {
         free(title);

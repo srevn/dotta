@@ -254,10 +254,10 @@ config_t *config_create_default(void) {
         "User: {user}\n"
         "Host: {host}\n"
         "Profile: {profile}\n"
-        "Files: {count}\n"
+        "Paths: {count}\n"
         "\n"
         "{action_past}:\n"
-        "{files}";
+        "{paths}";
 
     /* [sync] defaults */
     config->auto_pull = true;                   /* Default: auto-pull when remote ahead */

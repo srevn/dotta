@@ -1099,43 +1099,48 @@ static error_t *add_file_to_stage(
 /**
  * Commit the stage
  *
- * @param ctx Dispatch context (must not be NULL)
+ * The message names both kinds this commit carries — the message's unit is the
+ * path (utils/commit.h), and a commit that claimed a directory and no file has
+ * a path to name and no file — so the walk goes in, not one of its lists.
+ *
+ * @param walk The selection, both lists, and the arena the names live in (must
+ *             not be NULL)
  * @param stage The profile's stage, every capture on it (must not be NULL)
  * @param opts Command options
- * @param added_files The files the walk listed, as captured (must not be NULL)
  * @param out_committed Whether a commit was made: false when the stage holds
  *                      the branch's own tree, so a re-add of what the profile
  *                      already holds moves nothing (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *create_commit(
-    const dotta_ctx_t *ctx,
+    const add_walk_t *walk,
     stage_t *stage,
     const cmd_add_options_t *opts,
-    const ptr_array_t *added_files,
     bool *out_committed
 ) {
-    CHECK_NULL(ctx);
+    CHECK_NULL(walk);
     CHECK_NULL(stage);
     CHECK_NULL(opts);
-    CHECK_NULL(added_files);
     CHECK_NULL(out_committed);
 
-    const config_t *config = ctx->config;
+    /* The names this commit takes, borrowed from the claims the walk listed them
+     * under: every listed path has one (list_path), where a location entered
+     * without claiming is the listing's NULL value and no list's member. Both
+     * kinds, in the order every other reader of the two takes them. The message
+     * reads them once and the arena outlives the call, so nothing is copied. */
+    const ptr_array_t *listed[] = { &walk->files, &walk->directories };
+    size_t count = walk->files.count + walk->directories.count;
 
-    /* Build commit message using storage paths — the walk's, classified once. */
-    string_array_t *storage_paths = string_array_new(0);
-    if (!storage_paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
+    const char **paths = arena_calloc(walk->ctx->arena, count, sizeof(*paths));
+    if (!paths) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the commit's paths");
     }
 
-    error_t *err = NULL;
-    for (size_t i = 0; i < added_files->count; i++) {
-        const add_path_t *path = added_files->items[i];
-        err = string_array_push(storage_paths, path->claim.storage_path);
-        if (err) {
-            string_array_free(storage_paths);
-            return err;
+    size_t named = 0;
+    for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
+        for (size_t i = 0; i < listed[b]->count; i++) {
+            const add_path_t *path = listed[b]->items[i];
+            paths[named++] = path->claim.storage_path;
         }
     }
 
@@ -1143,21 +1148,19 @@ static error_t *create_commit(
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_ADD,
         .profile       = opts->profile,
-        .files         = storage_paths->items,
-        .file_count    = storage_paths->count,
+        .paths         = paths,
+        .path_count    = count,
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
 
-    char *message = build_commit_message(config, &msg_ctx);
-    string_array_free(storage_paths);
-
+    char *message = build_commit_message(walk->ctx->config, &msg_ctx);
     if (!message) {
         return ERROR(ERR_MEMORY, "Failed to build commit message");
     }
 
     /* Create commit */
-    err = stage_commit(stage, message, out_committed);
+    error_t *err = stage_commit(stage, message, out_committed);
     free(message);
 
     if (err) {
@@ -2639,7 +2642,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Create commit. A stage that holds the branch's own tree — every capture
      * as the profile already had it, a --force re-add of identical bytes — commits
      * nothing, and the summary says so. */
-    err = create_commit(ctx, stage, opts, &walk.files, &committed);
+    err = create_commit(&walk, stage, opts, &committed);
     if (err) goto cleanup;
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones

@@ -441,7 +441,7 @@ static error_t *update_profile(
 
     /* Initialize all resources to NULL for goto cleanup */
     metadata_t *metadata = NULL;
-    char **storage_paths = NULL;
+    const char **storage_paths = NULL;
     char *message = NULL;
     error_t *err = NULL;
 
@@ -804,14 +804,15 @@ static error_t *update_profile(
 
     /* Build array of storage paths for commit message: what the commit captured
      * and what it let go — the bookkeeping, so an item the walk skipped is not
-     * named. A retired claim is named with them (it leaves the view by this
-     * commit); an authored one only rides, the pruned-keys precedent, so a
-     * derivation that only refreshed names nothing and the message's file list
-     * says so. */
+     * named. Both kinds, a captured directory claim being a path the commit took
+     * as surely as a blob is (utils/commit.h). A retired claim is named with
+     * them (it leaves the view by this commit); an authored one only rides, the
+     * pruned-keys precedent, so a derivation that only refreshed names nothing
+     * and the message's path list says so. */
     size_t named_count = commit->captured_count + commit->deleted.count +
         commit->retired.count;
     if (named_count > 0) {
-        storage_paths = malloc(named_count * sizeof(char *));
+        storage_paths = malloc(named_count * sizeof(*storage_paths));
         if (!storage_paths) {
             err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
             goto cleanup;
@@ -834,8 +835,8 @@ static error_t *update_profile(
     commit_message_context_t msg_ctx = {
         .action        = COMMIT_ACTION_UPDATE,
         .profile       = profile,
-        .files         = storage_paths,
-        .file_count    = named_count,
+        .paths         = storage_paths,
+        .path_count    = named_count,
         .custom_msg    = opts->message,
         .target_commit = NULL
     };

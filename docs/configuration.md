@@ -87,14 +87,18 @@ title = "{host}: {action} {profile}"
 body = """
 Date: {datetime}
 User: {user}
-Files: {count}
+Paths: {count}
 
 {action_past}:
-{files}
+{paths}
 """
 ```
 
-**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{files}`, `{date}`, `{datetime}`, `{target_commit}`
+**Available variables:** `{host}`, `{user}`, `{profile}`, `{action}`, `{action_past}`, `{count}`, `{paths}`, `{date}`, `{datetime}`, `{target_commit}`
+
+A commit names paths, not files: one commit carries the files it captured and
+the directories it tracks, so `{count}` counts both and `{paths}` lists both,
+as storage paths (`home/.bashrc`, `root/etc/hosts`).
 
 ### [hooks]
 

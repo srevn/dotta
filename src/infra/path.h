@@ -202,9 +202,17 @@ bool path_input_is_bare(const char *input);
  * PATH_KEY_LOCATION, whose member is then NULL.
  *
  * Readers, and what each does with a label — a reader not on this list is a bug.
- * The tag is read by a switch where every key does work of its own and by an
- * `if` where the site narrows (it refuses one key, or a predicate upstream already
- * ruled one out), so this list, and not -Wswitch, is what says the sweep is whole:
+ *
+ * A verb that admits only some of the keys says so in a switch at its door, above
+ * everything it would open, build or announce under one, and every read below
+ * narrows with an `if` that rests on the door. Which keys a verb takes is the
+ * verb's fact and not this module's, and a switch is how C states one: that is
+ * where -Wswitch owns the completeness claim, so a fourth key becomes a compile
+ * error at each verb that has to decide rather than a fallthrough read of a member
+ * the tag does not name. Two readers have not been swept yet and this list is
+ * what says so — add's storage head narrows with an `if`, and `ignore --test`'s
+ * label line sits inside the asker loop and has to be hoisted before it can be
+ * a door:
  *
  *   - the pathspec's exact entries (infra/pathspec) take one: a label is the
  *     prefix every name of that namespace is beneath, and the entry it makes is
@@ -216,9 +224,10 @@ bool path_input_is_bare(const char *input);
  *     the same key out of a bare label before it asks here, its own grammar having
  *     a reading for a word standing alone where this one has none
  *     (path_input_is_bare).
- *   - show and list without a profile (cmds/) refuse one, and with a profile
- *     hand the key to the branch namer, which refuses it there (core/profiles.h
- *     profile_claim_name); revert refuses one at its door, so
+ *   - show, list and revert (cmds/) each refuse one at their own door, above
+ *     the profile question and above anything opened under it, with the flag's
+ *     profile named where the user gave one: the branch namer takes a location
+ *     and has no label to refuse (core/profiles.h profile_claim_name), and
  *     profile_discover_claims is never handed one.
  *   - add's storage head (cmds/add.c) refuses one: a label names no path to
  *     capture, and `add <p> ~` and `add <p> <target>` name the place it labels.
@@ -279,7 +288,7 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
  *   'custom/' is the deployment target of profile 'web': name what is inside it
  *   'home/' is your home directory: name what is inside it
  *
- * One sentence for the five sites that own it, because it is one fact: the verb
+ * One sentence for the four doors that own it, because it is one fact: the verb
  * was handed a namespace where it wanted a path in one. What each verb then does
  * with the error is its own — returned, or carried to a cleanup label.
  *

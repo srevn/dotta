@@ -625,49 +625,61 @@ static error_t *list_file_history(
     git_tree *tree = NULL;
     error_t *err = NULL;
 
+    /* The argument first, above the profile question and above anything read
+     * under either: reading one asks no topology (infra/path.h), so a key this
+     * cannot act on is refused in its own words before a branch is opened or a
+     * view built. Read once for both arms, which differ in where each key's answer
+     * comes from and not in which keys they take. */
+    path_input_t arg;
+    RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
+
+    switch (arg.key) {
+        case PATH_KEY_LOCATION:
+        case PATH_KEY_STORAGE:
+            break;
+
+        case PATH_KEY_LABEL:
+            /* A label names the namespace above every path of its kind, and this
+             * lists one file's history. The asker is the flag's profile where
+             * the user named one and nobody otherwise — a label gives the view
+             * nothing to choose a profile by, so the arm without one has none
+             * to name. */
+            return path_input_refuse_label(arg.root, profile);
+    }
+
     if (profile) {
         /* The profile named must be here before anything is read under it; then
          * its tip, which is both where the claim is looked for and what the
          * pre-check below reads (core/profiles.h profile_claim_name). */
         RETURN_IF_ERROR(profile_require(repo, profile));
 
-        path_input_t arg;
-        RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
-
         err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }
 
-        err = profile_claim_name(
-            repo, tree, mounts, profile, &arg, ctx->arena, &storage_path
-        );
-        if (err) {
-            git_tree_free(tree);
-            return err;
+        /* The two keys the door left. A name the user typed is Git's key already,
+         * so the pre-check below is what decides whether the profile holds it;
+         * a location is the branch's to name. */
+        if (arg.key == PATH_KEY_STORAGE) {
+            storage_path = arg.storage_path;
+        } else {
+            err = profile_claim_name(
+                repo, tree, mounts, profile, arg.location, ctx->arena, &storage_path
+            );
+            if (err) {
+                git_tree_free(tree);
+                return err;
+            }
         }
     } else {
-        /* The argument first: reading one asks no topology (infra/path.h), so a
-         * bad argument is refused in its own words before a view is built under
-         * it. Then the owner, which is the view's: the enabled set at HEAD,
-         * precedence resolved, asked in the key the argument names. A location
-         * is one row, the winner standing there whatever its name. A name keys
-         * within one profile, so the view may hold it once (home/, root/, or
-         * one binding), or once per binding under custom/ — and then no profile
-         * is the answer, and each holder is named with the location that tells
-         * them apart. The rows are the arena's; only the index is released here. */
-        path_input_t arg;
-        RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
-
-        /* A label names the namespace above every path of its kind, and this
-         * lists one file's history — refused here, before the build, as any bad
-         * argument is, and with no profile to name because none was chosen and
-         * a label gives the view nothing to choose one by. With -p the branch
-         * namer says the same thing (core/profiles.h profile_claim_name). */
-        if (arg.key == PATH_KEY_LABEL) {
-            return path_input_refuse_label(arg.root, NULL);
-        }
-
+        /* The owner is the view's: the enabled set at HEAD, precedence resolved,
+         * asked in the key the argument names. A location is one row, the winner
+         * standing there whatever its name. A name keys within one profile, so
+         * the view may hold it once (home/, root/, or one binding), or once per
+         * binding under custom/ — and then no profile is the answer, and each
+         * holder is named with the location that tells them apart. The rows are
+         * the arena's; only the index is released here. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;

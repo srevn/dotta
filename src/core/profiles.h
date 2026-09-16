@@ -300,25 +300,28 @@ error_t *profile_needs_target(
 );
 
 /**
- * The name `profile` has for the argument in `tree`: the claim standing there,
- * or the name a claim there would take
+ * The name `profile` has for `location` in `tree`: the claim standing there, or
+ * the name a claim there would take
  *
- * Two keys, two authorities, neither manufactured from the other (infra/path.h):
+ * A location key, and the only one. The resolver answers three and the other
+ * two are already settled where the argument was read (infra/path.h): a name
+ * the user typed is Git's key, so the caller's own read of `tree` decides whether
+ * the profile holds it and there is nothing here to ask — a name no claim sheet
+ * mentions, a bare subtree, a name the view did not keep, is found in the tree
+ * and nowhere else; and a label names the namespace and not a path in it, the
+ * profile holding every claim beneath one and none at it, refused at the verb's
+ * own door in the one sentence every verb that acts on one path gives it
+ * (infra/path.h path_input_refuse_label). What arrives here is the key that needs
+ * the branch to answer it.
  *
- *   - a STORAGE argument is the name as typed, handed back. A name is Git's key,
- *     so the caller's own read of `tree` decides whether the profile holds it,
- *     and a name no claim sheet mentions — a bare subtree, a name the view did
- *     not keep — is found there and nowhere else. Nothing is built and `tree`
- *     is not read.
- *   - a LOCATION argument is asked of the profile's own view of `tree`
- *     (manifest_build_tree, the sheet loaded strictly), in this order: the row
- *     standing there answers with its own name whatever its kind, so
- *     home/jail/etc/x under a binding at ~/jail is found by ~/jail/etc/x and
- *     the chain above a file captured before the binding answers as the claim
- *     it is; else the name the profile would give the location (manifest_name)
- *     — the word a history search and a not-found line need; else a root of the
- *     profile with no claim on it, refused by the root's own noun
- *     (mount_root_describe), one thing not being a root.
+ * Asked of the profile's own view of `tree` (manifest_build_tree, the sheet loaded
+ * strictly), in this order: the row standing there answers with its own name
+ * whatever its kind, so home/jail/etc/x under a binding at ~/jail is found by
+ * ~/jail/etc/x and the chain above a file captured before the binding answers
+ * as the claim it is; else the name the profile would give the location
+ * (manifest_name) — the word a history search and a not-found line need; else a
+ * root of the profile with no claim on it, refused by the root's own noun
+ * (mount_root_describe), one thing not being a root.
  *
  * The row before the namer is the contract, not a shortcut: a derived claim is
  * something the profile holds and nothing it names (manifest_is_derived), so
@@ -330,34 +333,27 @@ error_t *profile_needs_target(
  * a verb that means everything at a place selects rows by location (cmds/export.c)
  * and never walks this answer's subtree.
  *
- * `mounts` is the table the rows are placed by, and a location argument keys
- * against them by strcmp (infra/mount.h). The answer is the arena's — the view's
- * own row string, or the namer's — and outlives the view this call builds and
- * frees.
+ * `mounts` is the table the rows are placed by, and the location keys against
+ * them by strcmp (infra/mount.h). The answer is the arena's — the view's own
+ * row string, or the namer's — and outlives the view this call builds and frees.
  *
- * A LABEL argument is refused here, not by the caller: the profile holds every
- * claim beneath the label and none at it, so this has no name to give back, and
- * the refusal is the one a location standing at that root already earns
- * (infra/path.h path_input_refuse_label). So `show -p` and `list -p` hand a label
- * straight through and say nothing about it themselves.
- *
- * Cost: one tree walk and one sheet load per location argument. Its other face:
- * a profile whose sheet will not load refuses a location argument where a name
- * argument proceeds — the view is strict, a verb's own read is not
+ * Cost: one tree walk and one sheet load, every call. Its other face: a profile
+ * whose sheet will not load refuses a location where the name its caller answers
+ * unaided proceeds — the view is strict, a verb's own read is not
  * (core/manifest.h). A ref or a tree that will not load refuses both.
  *
  * Readers: `show -p` and `list -p` over the tree the verb selected (the branch's
  * tip, or the commit the user named, so a name that changed since is found as
- * of then); `revert` over the stage's tree, the tree the revert edits. `export`
- * selects rows instead, `remove` matches its own claims, and `ignore --test`
- * asks manifest_name itself.
+ * of then). `export` selects rows instead, `remove` matches its own claims,
+ * `revert` reads the claim standing in the tree it edits (cmds/revert.c
+ * claim_standing), and `ignore --test` asks manifest_name itself.
  *
  * @param repo Repository the tree's blobs (the sheet among them) are read from
  *             (must not be NULL)
  * @param tree The tree the claim is looked for in (must not be NULL)
  * @param mounts The table the rows are placed by (must not be NULL)
  * @param profile Whose claims these are (must not be NULL)
- * @param arg The argument, in the key it named (must not be NULL)
+ * @param location Where to ask, spelled as the rows are keyed (must not be NULL)
  * @param arena Arena that owns the answer (must not be NULL)
  * @param out_storage Arena-borrowed storage path; NULL after an error (must not
  *                    be NULL)
@@ -368,7 +364,7 @@ error_t *profile_claim_name(
     const git_tree *tree,
     const mount_table_t *mounts,
     const char *profile,
-    const path_input_t *arg,
+    const char *location,
     arena_t *arena,
     const char **out_storage
 );
@@ -421,10 +417,19 @@ typedef struct {
  * not the enabled set. A caller that wants the owning profile among the enabled
  * set asks the view instead (manifest_lookup, manifest_holders — list, show).
  *
- * The argument is a location or a name. A LABEL is the caller's to refuse before
- * asking — revert does, at its door — and arrives here as ERR_INTERNAL: no branch
- * *stands at* a label while every branch holds a tree under one, so a search
- * would answer "held by all" to a question the verb never meant.
+ * The key is the input here, where its sibling takes a location outright
+ * (profile_claim_name): both keys run this one search — the same enumeration,
+ * the same collection, the same refusal when nothing holds it — and the tag chooses
+ * which probe each branch is asked. Over there the other two keys are answers
+ * the caller already holds, so nothing is left for the call to do with them. A
+ * sum that chooses among a function's own behaviours is its input; one whose
+ * arm means "there was nothing to ask" is the caller's question smuggled in.
+ *
+ * So two keys arrive and the third is a caller's bug. A LABEL is refused before
+ * asking — revert does, at its door — and is said here as ERR_INTERNAL, above
+ * the enumeration and before anything is read: no branch *stands at* a label
+ * while every branch holds a tree under one, so a search would answer "held by
+ * all" to a question the verb never meant.
  *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)

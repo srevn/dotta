@@ -857,14 +857,14 @@ error_t *profile_build_location_index(
 }
 
 /**
- * The name `profile` has for the argument in `tree`
+ * The name `profile` has for `location` in `tree`
  */
 error_t *profile_claim_name(
     git_repository *repo,
     const git_tree *tree,
     const mount_table_t *mounts,
     const char *profile,
-    const path_input_t *arg,
+    const char *location,
     arena_t *arena,
     const char **out_storage
 ) {
@@ -872,30 +872,11 @@ error_t *profile_claim_name(
     CHECK_NULL(tree);
     CHECK_NULL(mounts);
     CHECK_NULL(profile);
-    CHECK_NULL(arg);
+    CHECK_NULL(location);
     CHECK_NULL(arena);
     CHECK_NULL(out_storage);
 
     *out_storage = NULL;
-
-    switch (arg->key) {
-        case PATH_KEY_STORAGE:
-            /* A name is Git's key and needs no view: the caller's own read of
-             * the tree is what decides whether the profile holds it. */
-            *out_storage = arg->storage_path;
-            return NULL;
-
-        case PATH_KEY_LABEL:
-            /* A label is the namespace and not a name in it: the profile holds
-             * every claim beneath it and none at it, so there is no name to give
-             * back. The refusal the location spelling of that same root earns
-             * at the end of this function, said one key earlier because a label
-             * needs no view to be recognised. */
-            return path_input_refuse_label(arg->root, profile);
-
-        case PATH_KEY_LOCATION:
-            break;
-    }
 
     manifest_t *view = NULL;
     error_t *err = manifest_build_tree(repo, tree, profile, mounts, arena, &view);
@@ -904,7 +885,7 @@ error_t *profile_claim_name(
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
      * a name the branch never held. */
-    const manifest_row_t *row = manifest_lookup_claim(view, profile, arg->location);
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, location);
     if (row) {
         *out_storage = row->storage_path;   /* the arena's: outlives the view */
         manifest_free(view);
@@ -913,7 +894,7 @@ error_t *profile_claim_name(
 
     /* Nothing stands there, so the name the profile would give the place — NULL
      * at a root of its own namespace, and the refusal below is that. */
-    err = manifest_name(view, profile, arg->location, NULL, arena, out_storage);
+    err = manifest_name(view, profile, location, NULL, arena, out_storage);
     manifest_free(view);
     if (err) return err;
 
@@ -923,10 +904,10 @@ error_t *profile_claim_name(
          * manifest_ascend), so its NULL is the one mount_root_describe's contract
          * asks for, and mount_root writes the kind there is to describe. */
         mount_kind_t root;
-        mount_root(mounts, profile, arg->location, &root);
+        mount_root(mounts, profile, location, &root);
         char buf[MOUNT_NOUN_MAX];
         return ERROR(
-            ERR_INVALID_ARG, "'%s' is %s: name what is inside it", arg->location,
+            ERR_INVALID_ARG, "'%s' is %s: name what is inside it", location,
             mount_root_describe(root, profile, buf, sizeof(buf))
         );
     }
@@ -1027,6 +1008,28 @@ error_t *profile_discover_claims(
 
     *out = (profile_claims_t){ 0 };
 
+    /* Two keys search, and the third is a caller's bug — said here, above the
+     * enumeration, as mount_resolve states its own (infra/mount.c). This looks
+     * for a claim standing at a key, and a label is the namespace itself: no
+     * branch stands at one, and every branch holds a tree under it, so a search
+     * would answer "held by all" to a question nobody asked. revert, the sole
+     * caller, refuses a label at its own door (cmds/revert.c).
+     *
+     * Above the enumeration and not inside it, because a store with no branches
+     * runs no loop: a door per branch would let a label reach the not-found
+     * sentence below, which reads a key's member on the word of the tag. */
+    switch (arg->key) {
+        case PATH_KEY_LOCATION:
+        case PATH_KEY_STORAGE:
+            break;
+
+        case PATH_KEY_LABEL:
+            return ERROR(
+                ERR_INTERNAL, "profile_discover_claims received the label '%s'",
+                mount_kinds[arg->root].label
+            );
+    }
+
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) return err;
@@ -1046,33 +1049,14 @@ error_t *profile_discover_claims(
         const char *branch = branches->items[i];
         const char *storage_path = NULL;
 
-        switch (arg->key) {
-            case PATH_KEY_LOCATION:
-                err = claim_in_view(
-                    repo, branch, mounts, arg->location, arena, &storage_path
-                );
-                break;
-
-            case PATH_KEY_STORAGE:
-                err = claim_in_tree(
-                    repo, branch, arg->storage_path, &storage_path
-                );
-                break;
-
-            case PATH_KEY_LABEL:
-                /* Never handed one, and stated here as mount_resolve states its
-                 * own (infra/mount.c): this searches for a claim standing at a
-                 * key, and a label is the namespace itself — no branch stands
-                 * at one, and every branch holds a tree under it, so a search
-                 * would answer "held by all" to a question nobody asked. revert,
-                 * the sole caller, refuses a label at its own door
-                 * (cmds/revert.c). */
-                err = ERROR(
-                    ERR_INTERNAL,
-                    "profile_discover_claims received the label '%s'",
-                    mount_kinds[arg->root].label
-                );
-                break;
+        /* The door left two keys, and each names its own search: the branch's
+         * view of its tip, or one lookup in its tree. */
+        if (arg->key == PATH_KEY_LOCATION) {
+            err = claim_in_view(
+                repo, branch, mounts, arg->location, arena, &storage_path
+            );
+        } else {
+            err = claim_in_tree(repo, branch, arg->storage_path, &storage_path);
         }
         if (err) break;
         if (!storage_path) continue;
@@ -1090,8 +1074,8 @@ error_t *profile_discover_claims(
     string_array_free(branches);
     if (err) return err;
 
-    /* Two keys, not three: the label arm above leaves by `err` and never reaches
-     * here. */
+    /* The argument in its own key, which the door said is one of two — whatever
+     * the enumeration held, this loop having run or not. */
     if (count == 0) {
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile",

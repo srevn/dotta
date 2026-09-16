@@ -667,28 +667,54 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     /* Handle SHOW_FILE mode */
     CHECK_NULL(opts->file_path);
 
+    /* The argument first, above the profile question and above anything opened
+     * or announced under either: reading one asks no topology (infra/path.h),
+     * so a key show cannot act on is refused in its own words with nothing of
+     * the repository standing on screen above it. Read once for both arms, which
+     * differ in where each key's answer comes from and not in which keys they
+     * take. */
+    path_input_t arg;
+    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
+    if (err) goto cleanup;
+
+    switch (arg.key) {
+        case PATH_KEY_LOCATION:
+        case PATH_KEY_STORAGE:
+            break;
+
+        case PATH_KEY_LABEL:
+            /* A label names the namespace above every path of its kind, and show
+             * prints one file's bytes. The asker is the flag's profile where
+             * the user named one and nobody otherwise — a label gives the view
+             * nothing to choose a profile by, so the arm without one has none
+             * to name. */
+            err = path_input_refuse_label(arg.root, profile);
+            goto cleanup;
+    }
+
     if (profile) {
-        /* The profile named must be here, and the argument must be a key, before
-         * anything is opened or announced under either — a refused argument is
-         * refused before a commit's header lines stand on screen. Then the tree
-         * the profile selected — its tip, or the commit's — which is both where
-         * the claim is looked for and what its bytes come from, so a name that
-         * changed since the commit is found as of then (core/profiles.h
+        /* The profile named must be here before its tree is opened. Then the
+         * tree the profile selected — its tip, or the commit's — which is both
+         * where the claim is looked for and what its bytes come from, so a name
+         * that changed since the commit is found as of then (core/profiles.h
          * profile_claim_name). */
         err = profile_require(repo, profile);
-        if (err) goto cleanup;
-
-        path_input_t arg;
-        err = path_input_resolve(opts->file_path, ctx->arena, &arg);
         if (err) goto cleanup;
 
         err = show_source(ctx, profile, opts->commit, &tree);
         if (err) goto cleanup;
 
-        err = profile_claim_name(
-            repo, tree, mounts, profile, &arg, ctx->arena, &storage_path
-        );
-        if (err) goto cleanup;
+        /* The two keys the door left. A name the user typed is Git's key already,
+         * so show_file's own read of the tree is what decides whether the profile
+         * holds it; a location is the branch's to name. */
+        if (arg.key == PATH_KEY_STORAGE) {
+            storage_path = arg.storage_path;
+        } else {
+            err = profile_claim_name(
+                repo, tree, mounts, profile, arg.location, ctx->arena, &storage_path
+            );
+            if (err) goto cleanup;
+        }
 
         err = show_file(ctx, profile, storage_path, tree);
         goto cleanup;
@@ -706,28 +732,12 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         goto cleanup;
     }
 
-    /* The argument first: reading one asks no topology (infra/path.h), so a bad
-     * argument is refused in its own words before a view is built under it. Then
-     * the owning profile, which is the view's: the enabled set at HEAD with
-     * precedence resolved, asked in the key the argument names. A location is
-     * one row, the winner standing there whatever its name. A name keys within
-     * one profile, so the view may hold it once (home/, root/, or one binding),
-     * or once per binding under custom/ — and then no profile is the answer,
-     * and each holder is named with the location that tells them apart. */
-    path_input_t arg;
-    err = path_input_resolve(opts->file_path, ctx->arena, &arg);
-    if (err) goto cleanup;
-
-    /* A label names the namespace above every path of its kind, and show prints
-     * one file's bytes — refused here, before the build, as any bad argument
-     * is, and with no profile to name because none was chosen and a label gives
-     * the view nothing to choose one by. With -p the branch namer says the same
-     * thing (core/profiles.h profile_claim_name). */
-    if (arg.key == PATH_KEY_LABEL) {
-        err = path_input_refuse_label(arg.root, NULL);
-        goto cleanup;
-    }
-
+    /* The owning profile is the view's: the enabled set at HEAD with precedence
+     * resolved, asked in the key the argument names. A location is one row, the
+     * winner standing there whatever its name. A name keys within one profile,
+     * so the view may hold it once (home/, root/, or one binding), or once per
+     * binding under custom/ — and then no profile is the answer, and each holder
+     * is named with the location that tells them apart. */
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 

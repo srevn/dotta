@@ -449,8 +449,9 @@ error_t *manifest_build_tree(
  * manifest_build_tree over the branch's HEAD: the tree is loaded here, walked,
  * and freed before this returns — the view's rows borrow nothing from it. The
  * one shape for a caller that has a branch name and no tree; a caller that holds
- * a tree — a historical commit's (cmds/diff.c, cmds/export.c), or the one a verb
- * selected, a tip, a commit's or a stage's (core/profiles.c profile_claim_name)
+ * a tree — a historical commit's (cmds/diff.c, cmds/export.c), the one a verb
+ * selected, a tip or a commit's (core/profiles.c profile_claim_name), or a stage's,
+ * the tree the verb is about to edit (cmds/revert.c claim_standing, cmds/add.c)
  * — reads manifest_build_tree. No policy enters here: no raw argument, no fallback,
  * no enabled-set question, and the branch need not be enabled.
  *

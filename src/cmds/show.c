@@ -204,29 +204,33 @@ static error_t *print_blob_content(
 }
 
 /**
- * The tree `show` reads, and the provenance it announces
+ * The tree `show` reads, and the commit it came from
  *
  * The branch's tip, or the tree of the commit the user named — resolved in the
- * branch, so a ref that means something elsewhere means nothing here — with the
- * commit's own header lines printed from the same handle, which is released before
- * this returns. A resolved commit is always in hand (sys/gitops.h): the handle
- * is the tree's source and the header's, and neither reads it conditionally.
- * The tree is the caller's.
+ * branch, so a ref that means something elsewhere means nothing here. A resolved
+ * commit is always in hand (sys/gitops.h), and the handle is the tree's source
+ * and the header's alike: it comes back beside the tree rather than being spent
+ * here, because what it captions is printed once the argument has an answer
+ * (show_provenance). `*out_commit` is NULL where the tip was read — a tip is
+ * what the profile holds now and has no provenance to announce. Both are the
+ * caller's to free.
  */
 static error_t *show_source(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *commit_ref,
-    git_tree **out_tree
+    git_tree **out_tree,
+    git_commit **out_commit
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(profile);
     CHECK_NULL(out_tree);
+    CHECK_NULL(out_commit);
 
     git_repository *repo = ctx->run.repo;
-    output_t *out = ctx->out;
 
     *out_tree = NULL;
+    *out_commit = NULL;
 
     if (!commit_ref) {
         error_t *err = gitops_load_branch_tree(repo, profile, out_tree, NULL);
@@ -253,8 +257,25 @@ static error_t *show_source(
         );
     }
 
+    *out_commit = commit;
+
+    return NULL;
+}
+
+/**
+ * The provenance of what is about to be shown
+ *
+ * The commit's own header lines, from the handle show_source kept. A caption
+ * stands over what it captions, so this is said only once the verb has an answer:
+ * an argument the branch refuses by its own noun — a label, a root with no claim
+ * on it — leaves nothing of the commit on screen, and the hint under a refusal
+ * that asks for a profile cannot be followed into a second refusal under a header.
+ * Past that point the header is what says which tree the bytes, or the absence
+ * of them, were read from.
+ */
+static void show_provenance(output_t *out, const git_commit *commit) {
     char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
     const git_signature *author = git_commit_author(commit);
     time_t commit_time = (time_t) author->when.time;
@@ -289,10 +310,6 @@ static error_t *show_source(
             );
         }
     }
-
-    git_commit_free(commit);
-
-    return NULL;
 }
 
 /**
@@ -602,6 +619,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     string_array_t *profiles = NULL;
     manifest_t *manifest = NULL;
     git_tree *tree = NULL;
+    git_commit *source = NULL;
     const char *profile = opts->profile;
     const char *storage_path = NULL;
 
@@ -701,7 +719,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         err = profile_require(repo, profile);
         if (err) goto cleanup;
 
-        err = show_source(ctx, profile, opts->commit, &tree);
+        err = show_source(ctx, profile, opts->commit, &tree, &source);
         if (err) goto cleanup;
 
         /* The two keys the door left. A name the user typed is Git's key already,
@@ -714,6 +732,12 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
                 repo, tree, mounts, profile, arg.location, ctx->arena, &storage_path
             );
             if (err) goto cleanup;
+        }
+
+        /* The argument is answered, so the commit it was read from can caption
+         * the answer. A tip named none and captions nothing. */
+        if (source) {
+            show_provenance(out, source);
         }
 
         err = show_file(ctx, profile, storage_path, tree);
@@ -791,12 +815,15 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         storage_path
     );
 
-    err = show_source(ctx, profile, NULL, &tree);
+    /* The tip, which this arm is always about: the view is HEAD's, so the row
+     * that answered names no commit and there is no provenance to announce. */
+    err = show_source(ctx, profile, NULL, &tree, &source);
     if (err) goto cleanup;
 
     err = show_file(ctx, profile, storage_path, tree);
 
 cleanup:
+    git_commit_free(source);
     git_tree_free(tree);
     manifest_free(manifest);
     string_array_free(profiles);

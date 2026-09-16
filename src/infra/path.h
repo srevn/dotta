@@ -10,20 +10,20 @@
  * key from the other, and no surface below offers to.
  *
  * A label alone is the third, and it is neither of those two: it keys no path
- * at all but the namespace above every path of its kind — a root, which is where
- * names begin and so can never be a leaf. It is a key because it can be matched
- * with (every name of that kind is beneath it) and because it is the one address
- * a root has that no machine has to supply: a custom/ tree bound nowhere here
- * still answers to `custom/`.
+ * at all but the namespace every name of its kind begins with. It is a key because
+ * it can be matched with (every name of that kind is beneath it) and because it
+ * is the same word on every machine, which a location and a name are not: a custom/
+ * tree bound nowhere here still answers to `custom/`. Where a namespace lands
+ * is a root, and a root is a place the table finds for an asker (infra/mount.h)
+ * — never a thing a label names, and nothing this module reads.
  *
  * The single chokepoint for input-shape dispatch. It reads the grammar of a name
- * (infra/label.h: label_split, label_validate_storage, label_words) and, of
- * infra/mount, the noun a screen calls a root by over a label the grammar answered
- * — a label being a label on every machine — and never the table of roots: no
- * root's spelling is read to make a key, so the answer is the argument, HOME
- * and the working directory and nothing else. That is what lets the location
- * door stand beside mount_resolve's join as a producer of one key (infra/mount.h,
- * the four producers), and why no caller hands a topology down to read an argument.
+ * (infra/label.h: label_split, label_validate_storage, label_words) and nothing
+ * of the table of roots: no root's spelling is read to make a key and no root's
+ * noun to refuse one, so the answer is the argument, HOME and the working directory
+ * and nothing else. That is what lets the location door stand beside
+ * mount_resolve's join as a producer of one key (infra/mount.h, the four
+ * producers), and why no caller hands a topology down to read an argument.
  *
  * Two questions stand before any reading, both over the spelling alone and both
  * the caller's to ask first: whether a positional announces a path at all, where
@@ -57,14 +57,14 @@ typedef enum {
  * on the key reads `location` in one arm and `storage_path` in the next, and no
  * second pointer promises to be NULL.
  *
- * The third key is a label, which is the one address a root has: a location and
- * a name are this machine's and the profile's, while a label is the same word
- * everywhere. The tag names what was read, as the other two do, and the member
- * is the label itself, the one currency the grammar has (infra/label.h): the
- * verb that matches or prints with it reads its word, `label_words[label]`, and
- * the verb that refuses or indexes with it holds the label as it is. The separator
- * is no part of it: a verb that matches with the key wants the bare prefix, and
- * a verb that prints it adds the '/' its message needs.
+ * The third key is a label, which names a namespace and no path in it: a location
+ * and a name are this machine's and the profile's, while a label is the same
+ * word everywhere. The tag names what was read, as the other two do, and the
+ * member is the label itself, the one currency the grammar has (infra/label.h):
+ * the verb that matches or prints with it reads its word, `label_words[label]`,
+ * and the verb that refuses or indexes with it holds the label as it is. The
+ * separator is no part of it: a verb that matches with the key wants the bare
+ * prefix, and a verb that prints it adds the '/' its message needs.
  *
  * `location` and `storage_path` are the arena's; `label` is a value.
  */
@@ -164,19 +164,19 @@ bool path_input_is_bare(const char *input);
 /**
  * Read a CLI path argument: the shape dispatch, and nothing else.
  *
- * A storage shape is read in two: the label alone is a root — the namespace itself,
- * which is no storage path (label_validate_storage refuses one) and no location
- * either, a label being the same word on every machine — and anything beneath
- * it is a name, validated and kept as typed. Either way the trailing slash is
- * shed (the UI's listings print directory claims slash-marked, and the filesystem
- * arm sheds its own inside the normalizer; the two surface forms resolve alike).
- * A filesystem shape is located (path_input_locate: tilde, the working directory,
- * `.`/`..`/`//` folded), and that spelling is the key: a location is a string
- * of its own, a link in it a component, so the answer keys against the view's
- * rows by strcmp when it was spelled the way the rows were (infra/mount.h). No
- * profile, no name, no stat, no table: the argument need not exist, and a root
- * named by its own spelling (`~`, a target's path) is a location like any other
- * — a place, where the label that names the same root is a namespace, and the
+ * A storage shape is read in two: the label alone is the namespace itself, which
+ * is no storage path (label_validate_storage refuses one) and no location either,
+ * a label being the same word on every machine — and anything beneath it is a
+ * name, validated and kept as typed. Either way the trailing slash is shed (the
+ * UI's listings print directory claims slash-marked, and the filesystem arm sheds
+ * its own inside the normalizer; the two surface forms resolve alike). A filesystem
+ * shape is located (path_input_locate: tilde, the working directory, `.`/`..`/`//`
+ * folded), and that spelling is the key: a location is a string of its own, a
+ * link in it a component, so the answer keys against the view's rows by strcmp
+ * when it was spelled the way the rows were (infra/mount.h). No profile, no name,
+ * no stat, no table: the argument need not exist, and a root named by its own
+ * spelling (`~`, a target's path) is a location like any other — a place, where
+ * the label of the namespace that lands there names no place at all, and the
  * two are different keys for that reason. The verb that cannot take either refuses
  * it in its own words. A word standing alone is refused (path_input_is_bare),
  * because a caller's path slot may hold a profile and the resolver cannot see
@@ -208,10 +208,10 @@ bool path_input_is_bare(const char *input);
  * verb's fact and not this module's, and a switch is how C states one: that is
  * where -Wswitch owns the completeness claim, so a fourth key becomes a compile
  * error at each verb that has to decide rather than a fallthrough read of a member
- * the tag does not name. Two readers have not been swept yet and this list is
- * what says so — add's storage head narrows with an `if`, and `ignore --test`'s
- * label line sits inside the asker loop and has to be hoisted before it can be
- * a door:
+ * the tag does not name. Every reader below states its domain that way, the two
+ * heads that read the input's shape before the key included: theirs is stated
+ * over the keys their own predicate can hand them, and the key it cannot says
+ * so in its arm (cmds/add.c, cmds/ignore.c):
  *
  *   - the pathspec's exact entries (infra/pathspec) take one: a label is the
  *     prefix every name of that namespace is beneath, and the entry it makes is
@@ -224,15 +224,19 @@ bool path_input_is_bare(const char *input);
  *     a reading for a word standing alone where this one has none
  *     (path_input_is_bare).
  *   - show, list and revert (cmds/) each refuse one at their own door, above
- *     the profile question and above anything opened under it, with the flag's
- *     profile named where the user gave one: the branch namer takes a location
- *     and has no label to refuse (core/profiles.h profile_claim_name), and
- *     profile_discover_claims is never handed one.
+ *     the profile question and above anything opened under it: what a label names
+ *     is the same on every machine and for every asker, so no profile is read
+ *     to say it. The branch namer takes a location and has no label to refuse
+ *     (core/profiles.h profile_claim_name), and profile_discover_claims is never
+ *     handed one.
  *   - add's storage head (cmds/add.c) refuses one: a label names no path to
- *     capture, and `add <p> ~` and `add <p> <target>` name the place it labels.
- *     add's filesystem head is add's own grammar, spelled around path_input_locate.
- *   - `ignore --test` (cmds/ignore.c) reports one: a root has no name for a pattern
- *     to match, which is the answer its location spelling earns too.
+ *     capture, and the directory a namespace lands in is named by its own spelling
+ *     — `add <p> ~`, `add <p> <target>` — which is add's filesystem head, add's
+ *     own grammar spelled around path_input_locate.
+ *   - `ignore --test` (cmds/ignore.c) answers one, above the rules and the askers
+ *     and once for all of them: a namespace is no subject for a pattern, and no
+ *     asker reads that differently. Its location spelling earns a different answer
+ *     for a different reason — a place the asker has no name for.
  *
  * @param input User-provided path string (must not be NULL)
  * @param arena Arena that owns the answer's string, where one is copied — a label
@@ -284,35 +288,35 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
 /**
  * The refusal a label argument earns from a verb that acts on one path
  *
- *   'custom/' is the deployment target of profile 'web': name what is inside it
- *   'home/' is your home directory: name what is inside it
+ *   'custom/' names a namespace, not a path in it: name what is inside it
  *
  * One sentence for the four doors that own it, because it is one fact: the verb
  * was handed a namespace where it wanted a path in one. What each verb then does
  * with the error is its own — returned, or carried to a cleanup label.
  *
- * `root` is a resolve's own answer (path_input_t.label), the root the label named,
- * and nothing is looked up beneath it: the message's word is the grammar's
- * (infra/label.h label_words) and the noun that describes it is the label's row
- * (infra/mount.h). `profile` is the asker, or NULL where the verb has none to
- * name — `show custom/` chose no profile and cannot — and the noun then stands
- * without an owner (mount_root_describe).
+ * True on every machine and for every asker, which is what lets it be said with
+ * nothing looked up: `label` is a resolve's own answer (path_input_t.label) and
+ * the message's word is the grammar's (infra/label.h label_words). Where a
+ * namespace lands is a root, a place the table finds for an asker, and a namespace
+ * that lands nowhere here is a namespace still — so no table is asked and no
+ * profile is named. The refusal a *location* standing at such a place earns is
+ * its callers' own sentence, in the noun the table gives the root it found
+ * (core/profiles.c, cmds/revert.c, cmds/add.c, infra/mount.h mount_root_describe):
+ * that one names a place and this one a namespace, and they say different things
+ * for that reason. The remedy is the same because the mistake is.
  *
  * The separator is the message's and never the key's: a label is carried as the
  * label it is because the verbs that take one match or index with it, and printed
- * slash-marked because that is the one spelling that reaches this key. The same
- * refusal for the *location* spelling of a root is its two callers' own sentence
- * (core/profiles.c, cmds/revert.c): they hold a location and no label, and a
- * location needs no separator added to it.
+ * slash-marked because that is the one spelling that reaches this key — the
+ * vocabulary's word and not the argument's, so `custom///` is refused as `custom/`.
  *
- * Reads the grammar and no table of roots, as the resolver does (this file's
- * banner).
+ * One site says this clause with a tail of its own: `ignore --test` answers a
+ * label rather than refusing one, --test being a query (cmds/ignore.c).
  *
- * @param root    The root a resolve answered, by its label
- * @param profile The asker, or NULL where the verb named none
+ * @param label The namespace the argument named
  * @return The refusal; never NULL
  */
-error_t *path_input_refuse_label(label_t root, const char *profile);
+error_t *path_input_refuse_label(label_t label);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path

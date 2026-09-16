@@ -821,10 +821,11 @@ static bool stands_as_directory(
  *     a directory the profile already tracks names what lies beneath it, and
  *     only where nothing of the profile's stands above the location do its roots
  *     answer. That is the whole reason a view is built here.
- *   - a label alone (`home/`) is a root, and a root has no name for a pattern
- *     to match. Every asker is told so in the noun its own table gives that root,
- *     and none casts a verdict — the same outcome the location spelling of a
- *     root reaches below, said without building a view for it.
+ *   - a label alone (`home/`) names a namespace and no path in it, so nothing
+ *     stands at it for a pattern to be matched against. One answer for every
+ *     asker, a namespace being the same word on every machine and for every profile
+ *     — so it is said once at the door, by nobody, and nothing below it runs:
+ *     no view, no rules, no askers, no preamble, no summary, no lstat.
  *
  * The *shape* is read by label_prefixes and not by the resolver, because a bare
  * name is a filesystem argument here — `dotta ignore --test foo.log` reads it
@@ -849,10 +850,13 @@ static bool stands_as_directory(
  * A NULL name is a root of that asker with no claim standing on it — a root has
  * no canonical name and no pattern can match it — and is answered inside the
  * asker's own turn, the one place that can name the root a binding's own target
- * is. A label argument is that same answer known one question earlier, and takes
- * the same turn for the same reason. An asker that never got a subject cast no
- * verdict, which is why the summary reads two accumulators and not one: a path
- * no asker can name is neither ignored nor tracked.
+ * is. A label argument is not that answer known earlier: a place this asker has
+ * no name for and a namespace that names no place are two facts, and only the
+ * first is an asker's. An asker that never got a subject cast no verdict, which
+ * is why the summary reads two accumulators and not one: a path no asker can
+ * name is neither ignored nor tracked. Neither accumulator is written for a label,
+ * and that is the other half of why the door answers above them: they report
+ * turns taken, and a namespace takes none.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -903,11 +907,12 @@ static error_t *test_path_ignore(
      * tag the whole condition the loop's arms read and its member the argument's
      * own reading. A second reading stands beside it where the key has one — a
      * name's tail, what the rules see; a location's kind, observed there once;
-     * a root has none to make — so the loop reads what the argument gave and
-     * asks nothing of it again. The table is the run's until a view is built,
-     * and then the view's own — the one its rows were placed by. */
+     * a namespace has neither, and the door below answers it rather than passing
+     * it on — so the loop reads what the argument gave and asks nothing of it
+     * again. The table is the run's until a view is built, and then the view's
+     * own — the one its rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    path_input_t arg;                         /* the key: a name, a location or a root */
+    path_input_t arg;                         /* the key: a name, a location or a namespace */
     const char *argument_subject = NULL;      /* a name's tail, what the rules see */
     bool argument_is_directory = false;       /* a location's kind, observed there once */
 
@@ -919,10 +924,6 @@ static error_t *test_path_ignore(
          * predicate above let it past. */
         err = path_input_resolve(test_path, ctx->arena, &arg);
         if (err) return err;
-
-        if (arg.key == PATH_KEY_STORAGE) {
-            argument_subject = label_tail(arg.storage_path);
-        }
     } else {
         /* The key as the location door spells it: absolute, folded, nothing read
          * through — the resolver's own location arm, read here because the resolver
@@ -933,22 +934,55 @@ static error_t *test_path_ignore(
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", test_path);
         }
+    }
 
-        /* Both builders free their own partial view and leave *out NULL, so this
-         * returns; from the build on, the view is owned and every failure leaves
-         * by cleanup. */
-        if (specific_profile) {
-            err = manifest_build_branch(
-                repo, specific_profile, mounts, ctx->arena, &view
+    /* What each key owes before there is an asker to ask — the door, and the
+     * three keys this command answers (infra/path.h). */
+    switch (arg.key) {
+        case PATH_KEY_LABEL:
+            /* A label names the namespace every name of its kind begins with
+             * and no path in it, so nothing stands at it for a pattern to be
+             * matched against — and no asker reads that differently, a namespace
+             * being the same word on every machine and for every profile. Said
+             * once, by nobody, above the rules and the askers because none of
+             * them is read to say it. The four verbs that act on one path refuse
+             * this key in the same words (infra/path.h path_input_refuse_label);
+             * --test is a query, so it answers instead and the tail is its own.
+             * The location spelling of a place a namespace lands at earns a
+             * different answer below, for a different reason: there a path stands,
+             * and this asker has no name for it. Nothing is owned yet, so this
+             * leaves the way the two reads above it do. */
+            output_info(
+                out, OUTPUT_NORMAL,
+                "'%s/' names a namespace, not a path in it: no pattern can match it",
+                label_words[arg.label]
             );
-        } else {
-            err = manifest_build(repo, state, ctx->arena, &view);
-        }
-        if (err) return err;
+            return NULL;
 
-        /* The table the rows were placed by — the named profile's arm hands in
-         * the very table this lends back (core/manifest.h manifest_mounts). */
-        mounts = manifest_mounts(view);
+        case PATH_KEY_STORAGE:
+            /* The name's own tail is the subject, for every asker alike. */
+            argument_subject = label_tail(arg.storage_path);
+            break;
+
+        case PATH_KEY_LOCATION:
+            /* Each asker names the location from its own claims and its own roots,
+             * so a view is built and the table the rows were placed by is the
+             * view's from here on — the named profile's arm hands in the very
+             * table this lends back (core/manifest.h manifest_mounts). Both
+             * builders free their own partial view and leave *out NULL, so this
+             * returns; from the build on, the view is owned and every failure
+             * leaves by cleanup. */
+            if (specific_profile) {
+                err = manifest_build_branch(
+                    repo, specific_profile, mounts, ctx->arena, &view
+                );
+            } else {
+                err = manifest_build(repo, state, ctx->arena, &view);
+            }
+            if (err) return err;
+
+            mounts = manifest_mounts(view);
+            break;
     }
 
     /* Source .gitignore filter (opt-in via config). Built once for the whole
@@ -1024,28 +1058,12 @@ static error_t *test_path_ignore(
 
         /* Whose answer this is, on every line of the turn. One value, so each
          * message below is spelled once and no site can forget the form the asker
-         * that is no profile needs — the shape mount_root_describe already uses
-         * for a root's noun. */
+         * that is no profile needs. Every line of this loop is one asker's, which
+         * is why the door above answers a label rather than taking a turn here:
+         * that answer is nobody's. */
         char who[IGNORE_ASKER_MAX] = "";
         if (asker) {
             snprintf(who, sizeof(who), "Profile '%s': ", asker);
-        }
-
-        /* A label alone names this asker's root of that namespace, and a root
-         * has no name for a pattern to match — the same answer, in the same words,
-         * the location spelling of that place earns from the namer below, reached
-         * one question earlier because a label needs no namer to say it. Said
-         * per asker because the noun is the asker's; the verdict is not, so no
-         * asker casts one and the summary reads what it reads for any unnameable
-         * path. */
-        if (arg.key == PATH_KEY_LABEL) {
-            char buf[MOUNT_NOUN_MAX];
-            output_info(
-                out, OUTPUT_NORMAL,
-                "%s'%s' is %s: it has no name for a pattern to match", who,
-                test_path, mount_root_describe(arg.label, asker, buf, sizeof(buf))
-            );
-            continue;
         }
 
         /* The asker's reading, seeded with the key the user named: a storage

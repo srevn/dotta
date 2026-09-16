@@ -21,8 +21,7 @@
  *                             and frees what it holds (the interactive save)
  *
  *   path_input_refuse_label - the sentence the verbs that act on one path give
- *                             a label, in the noun the vocabulary gives the root
- *                             it names
+ *                             a label: it names a namespace, and no path in one
  *
  *   path_input_is_bare      - the one shape the resolver has no reading for, for
  *                             the caller whose own grammar has one
@@ -35,12 +34,11 @@
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the location door, whose
  * answer is the key. The grammar of a name (infra/label.h: label_split,
- * label_words, label_validate_storage), the noun a screen calls a root by over
- * a label the grammar answered (infra/mount.h mount_root_describe), the filesystem
- * primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
- * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
- * the layers below. The table of roots is not among them: no root's spelling is
- * read here (infra/path.h).
+ * label_words, label_validate_storage), the filesystem primitives (fs_expand_tilde,
+ * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
+ * (sys/identity) are delegated to the layers below. The table of roots is not
+ * among them: no root's spelling is read here and no root's noun, so this file
+ * names no place (infra/path.h).
  */
 
 #include "infra/path.h"
@@ -52,7 +50,6 @@
 #include "base/error.h"
 #include "base/string.h"
 #include "infra/label.h"
-#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
@@ -178,12 +175,11 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out) 
     return *out ? NULL : ERROR(ERR_MEMORY, "Failed to allocate the location");
 }
 
-error_t *path_input_refuse_label(label_t root, const char *profile) {
-    char buf[MOUNT_NOUN_MAX];
-
+error_t *path_input_refuse_label(label_t label) {
     return ERROR(
-        ERR_INVALID_ARG, "'%s/' is %s: name what is inside it",
-        label_words[root], mount_root_describe(root, profile, buf, sizeof(buf))
+        ERR_INVALID_ARG,
+        "'%s/' names a namespace, not a path in it: name what is inside it",
+        label_words[label]
     );
 }
 

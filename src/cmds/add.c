@@ -1835,16 +1835,36 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             err = path_input_resolve(file, ctx->arena, &arg);
             if (err) goto cleanup;
 
-            /* A label names no path to capture: it is what every name this profile
-             * holds of that kind begins with, and the directory it stands for
-             * is named by its own spelling — `add p ~`, `add p <target>` — which
-             * is the argument arm below. */
-            if (arg.key == PATH_KEY_LABEL) {
-                err = path_input_refuse_label(arg.label, opts->profile);
-                goto cleanup;
-            }
+            /* The keys the predicate above can hand this head, and what each is
+             * to a capture (infra/path.h). */
+            switch (arg.key) {
+                case PATH_KEY_STORAGE:
+                    typed = arg.storage_path;
+                    break;
 
-            typed = arg.storage_path;
+                case PATH_KEY_LABEL:
+                    /* A label names no path to capture: it is what every name
+                     * this profile holds of that kind begins with, and the
+                     * directory the namespace lands in is named by its own spelling
+                     * — `add p ~`, `add p <target>` — which is the argument arm
+                     * below. */
+                    err = path_input_refuse_label(arg.label);
+                    goto cleanup;
+
+                case PATH_KEY_LOCATION:
+                    /* The shape predicate above dispatched here, so the resolver
+                     * answered one of the two storage keys and never this one:
+                     * a filesystem spelling is add's own grammar and reaches
+                     * spell_argument instead. Said, as mount_resolve and
+                     * profile_discover_claims say theirs, so a fourth key is a
+                     * decision at this head rather than a read of the member
+                     * the tag does not name. */
+                    err = ERROR(
+                        ERR_INTERNAL, "add's storage head read '%s' as a location",
+                        file
+                    );
+                    goto cleanup;
+            }
 
             /* Where the claim stands, through the table: home/ and root/ resolve
              * for every profile, custom/ through this one's binding — the row's,

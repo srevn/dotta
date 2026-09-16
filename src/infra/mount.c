@@ -381,9 +381,9 @@ const char *mount_root_describe(
     label_t root, const char *profile, char *buf, size_t size
 ) {
     /* The owner is named where there is one to name. A root found in a table
-     * was found by its own profile, so a per_profile root arrives with its asker;
-     * a root named by its label alone was found by nobody, and the noun is then
-     * the label's own (infra/mount.h). */
+     * was found by its own profile, so a per_profile root arrives with its asker
+     * — and the conjunct guards a caller the tree no longer has, which is why
+     * it is stated in the header rather than trusted here (infra/mount.h). */
     if (mount_kinds[root].per_profile && profile) {
         snprintf(buf, size, "%s of profile '%s'", mount_kinds[root].noun, profile);
     } else {

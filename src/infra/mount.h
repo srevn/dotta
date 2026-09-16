@@ -432,31 +432,30 @@ const char *mount_root_location(
  * A root's noun for a screen, rendered into `buf` and returned: "your home
  * directory", "the filesystem root", "the deployment target of profile 'web'".
  *
- * `root` is the root being described, as the label mount_root wrote, and the
- * callers reach it two ways. Most have just had mount_name answer NULL for the
- * same table, asker and location — asked directly, or as the last rung of the
- * namer's ascent (core/manifest.c manifest_ascend), which is the only way that
- * one answers NULL — the same find over the same data, an invariant rather than
- * a hope; they ask mount_root for the label and never read whether. A caller
+ * `root` is the root being described, as the label mount_root wrote, and every
+ * caller holds one a table found. Most have just had mount_name answer NULL for
+ * the same table, asker and location — asked directly, or as the last rung of
+ * the namer's ascent (core/manifest.c manifest_ascend), which is the only way
+ * that one answers NULL — the same find over the same data, an invariant rather
+ * than a hope; they ask mount_root for the label and never read whether. A caller
  * whose own search already answered nothing at the location asks mount_root
  * directly and reads both (cmds/revert.c), which establishes the same thing.
  * `profile` is read only for a per_profile root, and a per_profile root found
  * in a table can only have been found by the profile that owns it, so it is
  * non-NULL exactly when it is read.
  *
- * One caller reaches a label without asking a table at all: a label alone names
- * a root on every machine, and nobody asked (infra/path.h path_input_refuse_label).
- * There the per_profile noun stands on its own — "the deployment target", no
- * owner — which is why a NULL `profile` is answered rather than read. No
- * table-sourced root lands in that arm: mount_root answers a NULL asker with
- * the shared roots alone, which are never per_profile.
+ * The body's `&& profile` therefore guards nothing: it stood for the one caller
+ * that reached a label with no table behind it, and there is none now — what a
+ * label names is no place and is said in the grammar's own word (infra/path.h
+ * path_input_refuse_label). The arm and the parameter leave together when a root
+ * becomes a value the table hands out; until then the guard is kept, an unreachable
+ * branch being the better of it and an unreachable "(null)".
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
  * than through a statement of its own: every site that says a place has no name
  * would otherwise spell the noun its own way — and the message is the same one
  * whether a pattern, an argument, a search or a revert asked. The sentence around
- * it stays the site's, save for the one that more than one verb shares
- * (infra/path.h path_input_refuse_label).
+ * it stays the site's, every one of them.
  *
  * Truncates rather than fails: a screen noun, not a key.
  */

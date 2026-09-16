@@ -804,15 +804,16 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * here to choose a profile for — every branch holds a tree under the label
      * and none stands at it. Refused at the door, which is what keeps the reads
      * below this line meeting two keys and not three, and what keeps
-     * profile_discover_claims from being asked to search for one. The asker is
-     * the flag's profile where the user gave one and nobody otherwise. */
+     * profile_discover_claims from being asked to search for one. Said without
+     * the flag's profile, bound or not: what a label names is the same on every
+     * machine and for every asker. */
     switch (arg.key) {
         case PATH_KEY_LOCATION:
         case PATH_KEY_STORAGE:
             break;
 
         case PATH_KEY_LABEL:
-            err = path_input_refuse_label(arg.label, opts->profile);
+            err = path_input_refuse_label(arg.label);
             goto cleanup;
     }
 

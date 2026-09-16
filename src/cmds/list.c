@@ -640,11 +640,10 @@ static error_t *list_file_history(
 
         case PATH_KEY_LABEL:
             /* A label names the namespace above every path of its kind, and this
-             * lists one file's history. The asker is the flag's profile where
-             * the user named one and nobody otherwise — a label gives the view
-             * nothing to choose a profile by, so the arm without one has none
-             * to name. */
-            return path_input_refuse_label(arg.label, profile);
+             * lists one file's history. Said without the flag's profile, bound
+             * or not: what a label names is the same on every machine and for
+             * every asker, so there is nothing here for a profile to change. */
+            return path_input_refuse_label(arg.label);
     }
 
     if (profile) {

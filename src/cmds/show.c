@@ -702,11 +702,10 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
         case PATH_KEY_LABEL:
             /* A label names the namespace above every path of its kind, and show
-             * prints one file's bytes. The asker is the flag's profile where
-             * the user named one and nobody otherwise — a label gives the view
-             * nothing to choose a profile by, so the arm without one has none
-             * to name. */
-            err = path_input_refuse_label(arg.label, profile);
+             * prints one file's bytes. Said without the flag's profile, bound
+             * or not: what a label names is the same on every machine and for
+             * every asker, so there is nothing here for a profile to change. */
+            err = path_input_refuse_label(arg.label);
             goto cleanup;
     }
 

@@ -122,8 +122,8 @@ struct mount_table {
  * "unknown". A NULL asker meets the shared roots alone: it names nothing beneath
  * another profile's binding and places no custom/ claim.
  *
- * One rule, read by the forward name (deepest_root) and the backward resolve
- * (mount_root_of).
+ * One rule, read by the search over the roots (mount_root_above) and the lookup
+ * by label (mount_root_of).
  */
 static bool namespace_holds(const char *profile, const mount_root_t *m) {
     return !m->profile || (profile && strcmp(m->profile, profile) == 0);
@@ -141,7 +141,8 @@ static bool namespace_holds(const char *profile, const mount_root_t *m) {
  * one string per root and no consumer of a root can hold the form that is not a
  * path.
  *
- * Two readers: the enclosing search (deepest_root) and the join (mount_resolve).
+ * Two readers: the search over the roots (mount_root_above) and the join
+ * (mount_resolve).
  */
 static const char *join_prefix(const mount_root_t *root) {
     return root->location[1] ? root->location : "";
@@ -173,35 +174,12 @@ static const char *tail_under_root(const char *location, const char *prefix) {
     return tail;  /* "" when the two name one directory, non-empty otherwise */
 }
 
-/**
- * The deepest root of `profile` the location stands under, and the tail past it.
- *
- * A namespace is one profile's: the shared roots (HOME, the sentinel, both
- * profile-less) and its own binding; another profile's target is skipped before
- * it can win (namespace_holds). Tightest container wins. At an equal depth two
- * of the asker's own roots stand at one directory, and the more specific statement
- * takes it — a binding over the shared roots, and the sentinel over a HOME that
- * is "/": `~/.rc` under a binding at $HOME is `custom/.rc`, and a capture at
- * `/etc/x` on a machine whose HOME is "/" (a container's bare uid) is `root/etc/x`,
- * the reading that means the same directory on every other machine. Three roots
- * can stand at "/": the sentinel always, HOME when it is "/", and a binding whose
- * target is "/". The binding takes both ties by the rule above — every path of
- * that profile outside a deeper root is `custom/`, which is what binding a profile
- * at the root means: a container's own root here, and the same profile bound at
- * a jail on the host — and between HOME and the sentinel the portable name wins.
- * One profile has one binding.
- *
- * A root encloses the location iff its prefix is a prefix of it on a component
- * boundary (tail_under_root), the root itself included with the empty tail: every
- * key is a string of the rows' own (infra/mount.h), so no second spelling of a
- * root is owed a match.
- *
- * `*out_tail` is empty when the location is the root itself, and is written only
- * when a root matched — NULL when none did, which with the sentinel present means
- * only a malformed table or a location that is not absolute. The answer is the
- * table's own row: mount_name reads its label, mount_root_at its whole.
- */
-static const mount_root_t *deepest_root(
+/* The search, whose contract — the tie, the boundary, the absence — is the header's
+ * (infra/mount.h). A root encloses the location iff its prefix is a prefix of
+ * it on a component boundary (tail_under_root), the root itself included with
+ * the empty tail: every key is a string of the rows' own, so no second spelling
+ * of a root is owed a match. */
+const mount_root_t *mount_root_above(
     const mount_table_t *table, const char *profile, const char *location,
     const char **out_tail
 ) {
@@ -259,7 +237,7 @@ error_t *mount_table_build(
     }
 
     /* Customs first (input order), then HOME, then the sentinel; no reader depends
-     * on the order — deepest_root breaks its ties on the binder and one label,
+     * on the order — mount_root_above breaks its ties on the binder and one label,
      * and mount_root_of answers a label whose row is unique to it (infra/mount.h).
      *
      * The profile is the type's contract (mount_t) and is refused whatever the
@@ -299,7 +277,8 @@ error_t *mount_table_build(
          * the rows it was built from. A target of "/" is kept as it stands, as
          * HOME and the sentinel are below — a root is a path here, and the one
          * that is its own separator is read a byte shorter where it is matched
-         * and joined (join_prefix); the tie between the three is deepest_root's. */
+         * and joined (join_prefix); the tie between the three is
+         * mount_root_above's. */
         const char *location = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
         if (!location || !profile) {
@@ -335,39 +314,12 @@ error_t *mount_table_build(
     return NULL;
 }
 
-error_t *mount_name(
-    const mount_table_t *table, const char *profile, const char *location,
-    arena_t *arena, const char **out_storage
-) {
-    CHECK_NULL(table);
-    CHECK_NULL(location);
-    CHECK_NULL(arena);
-    CHECK_NULL(out_storage);
-
-    *out_storage = NULL;
-
-    const char *tail = NULL;
-    const mount_root_t *root = deepest_root(table, profile, location, &tail);
-    if (!root) {
-        return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
-    }
-
-    /* A root has no name: the answer is the absence, already written. */
-    if (*tail == '\0') return NULL;
-
-    *out_storage = label_compose(arena, root->label, tail);
-    if (!*out_storage) {
-        return ERROR(ERR_MEMORY, "Failed to format storage path");
-    }
-
-    return NULL;
-}
-
 const mount_root_t *mount_root_at(
     const mount_table_t *table, const char *profile, const char *location
 ) {
     const char *tail = NULL;
-    const mount_root_t *root = deepest_root(table, profile, location, &tail);
+    const mount_root_t *root =
+        mount_root_above(table, profile, location, &tail);
 
     return root && *tail == '\0' ? root : NULL;
 }

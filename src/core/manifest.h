@@ -1000,12 +1000,15 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  *
  * The claim standing at the location is its name; else the location is composed
  * beneath the nearest rung above it that names what lies beneath — a DIRECTORY
- * claim of either layer (manifest_claim_beneath), asked before the root at every
- * rung; else what the profile's own roots make of it (infra/mount.h mount_name),
+ * claim of either layer (manifest_claim_beneath), asked at every rung down to
+ * the profile's own root and *before* that root decides, so a claim standing at
+ * the root itself outranks it; else the label of the root it lies under and the
+ * tail past it (infra/mount.h mount_root_above, infra/label.h label_compose),
  * which is NULL when the location is one of them. An ancestor claim names nothing,
  * and nothing is named beneath a blob. The profile's own contribution is read,
  * never the index: a location it lost to a higher profile is still named by what
- * it holds. `profile` may be NULL — the shared roots alone, as mount_name reads it.
+ * it holds. `profile` may be NULL — the shared roots alone, as the table reads
+ * one (infra/mount.h).
  *
  * This is the rule the view itself runs when a profile names one location twice
  * — minus the leaf clause, which is the one thing a settle cannot ask, a name

@@ -407,7 +407,7 @@ static error_t *manifest_note_unkept(
  * functions below thread it and read nothing else.
  *
  * `c` is NULL for an asker the view has no contribution for — the shared roots
- * and nothing else, as mount_name reads it.
+ * and nothing else, as the table reads a NULL asker (infra/mount.h).
  */
 typedef struct {
     const contribution_t *c;       /* The asker's own claims, or NULL */
@@ -461,7 +461,7 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * settle will keep (209 C3 §1.10). Spelling the rule once is what keeps the name
  * the view keeps and the name a namer gives from drifting apart.
  *
- * `fresh` is NULL where the location is a root of the profile — mount_name's
+ * `fresh` is NULL where the location is a root of the profile — the ascent's
  * own answer, a root having no name — and the bytewise-least then stands, no
  * name being the fresh one there.
  *
@@ -579,35 +579,46 @@ static error_t *manifest_standing(
 /**
  * The name `profile` composes for `location` from what stands above it
  *
- * The rungs above the location, nearest first: the claim standing at each one
- * (manifest_standing — this command's own listing where it has one there, else
- * what the profile's committed claims settle on), and the location is composed
- * beneath the first that names what lies beneath it, a DIRECTORY claim of either
- * layer (manifest_claim_beneath). A root of the profile ends the ascent at every
- * rung, the location itself included: nothing of the profile's stands above its
- * own binding, and mount_name composes the answer beneath the deepest root it
- * has (NULL when the location is that root). An ancestor claim names nothing,
- * and a blob names its own location and nothing under it — a name beneath a file
- * is a tree entry the stage refuses — so both are climbed past.
+ * The table is asked once, up front: the deepest root of the profile enclosing
+ * the location, and the tail past it (infra/mount.h mount_root_above). That one
+ * answer is the whole of what the roots have to say here — where the ascent floors,
+ * whether the location is itself a root, and the label and tail a name is spelled
+ * from — where asking per rung answered the same question N+2 times.
  *
- * The claim is asked before the root at every rung, and the loop's shape is what
- * makes that true: the root test at the top reads the rung whose claim the previous
- * turn read, so the order over the rungs is root(L), claim(P1), root(P1),
- * claim(P2), … Written with the root test after the up-step instead, a typed
- * `home/jail` standing at web's own target would be climbed past, and web's name
- * for what lies beneath it would be the binding's rather than its own claim's.
+ * Then the rungs above the location, nearest first: the claim standing at each
+ * one (manifest_standing — this command's own listing where it has one there,
+ * else what the profile's committed claims settle on), and the location is composed
+ * beneath the first that names what lies beneath it, a DIRECTORY claim of either
+ * layer (manifest_claim_beneath). An ancestor claim names nothing, and a blob
+ * names its own location and nothing under it — a name beneath a file is a tree
+ * entry the stage refuses — so both are climbed past. Where no claim above gave
+ * a name, the root's label and the tail spell one (infra/label.h label_compose);
+ * a location that *is* a root has none at all, which is the absence this answers
+ * with.
+ *
+ * The root is the floor and not a per-rung test, because no root of the profile
+ * can stand strictly between it and the location — one that did would enclose
+ * the location more tightly and have won the find. So `strlen(root->location)`
+ * is the one rung a root stands at, the root directory's being "/" like any other,
+ * and the loop's condition says the ascent reaches it and stops. The claim standing
+ * at every rung is still read before the root decides, the root's own rung
+ * included: written the other way, a typed `home/jail` standing at web's own
+ * target would be climbed past, and web's name for what lies beneath it would
+ * be the binding's rather than its own claim's.
  *
  * The root "/" is a rung the ascent passes through and never reads: no storage
- * path spells it, so nothing can be listed or tracked there, and the sentinel —
- * a root of every namespace — ends the ascent at the top of the next turn. The
- * skip is load-bearing, not an optimisation: the tail arithmetic below assumes
- * a separator where the rung ends, which the root and the empty prefix do not have.
+ * path spells it, so nothing can be listed or tracked there. The skip is
+ * load-bearing, not an optimisation: the tail arithmetic below assumes a separator
+ * where the rung ends, which the root directory does not have — and it is also
+ * the floor whenever it is reached, so the condition ends the walk on the next
+ * turn rather than one rung later.
  *
- * The scratch copy is the arena's and abandoned, the module's idiom. How often
- * that is paid is not "once per newly listed path": the ascent runs for every
- * location nothing stands at — including one a caller goes on to exclude or refuse
- * — and again at every contested location a namer reads, and again at every
- * contested rung one of those ascents passes through.
+ * The scratch copy is the arena's and abandoned, the module's idiom, and is taken
+ * only where there is a rung to read: not at a root, and not for a location no
+ * root encloses. How often the rest is paid is not "once per newly listed path":
+ * the ascent runs for every location nothing stands at — including one a caller
+ * goes on to exclude or refuse — and again at every contested location a namer
+ * reads, and again at every contested rung one of those ascents passes through.
  *
  * @param n What the question is asked under (must not be NULL)
  * @param location Absolute location (must not be NULL)
@@ -619,20 +630,30 @@ static error_t *manifest_ascend(
 ) {
     *out_storage = NULL;
 
+    /* The roots' whole answer, asked once. The sentinel encloses every absolute
+     * path, so a location nothing encloses is not a location, and no claim is
+     * read for a caller's bug. */
+    const char *tail = NULL;
+    const mount_root_t *root = mount_root_above(n->mounts, n->profile, location, &tail);
+    if (!root) {
+        return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
+    }
+
+    /* A root of the profile: nothing of the profile's stands above its own root,
+     * and a root has no name. The absence is the answer, already written. */
+    if (*tail == '\0') return NULL;
+
     char *rung = arena_strdup(n->arena, location);
     if (!rung) {
         return ERROR(ERR_MEMORY, "Failed to copy the location");
     }
     size_t len = strlen(rung);
+    const size_t floor = strlen(root->location);   /* the rung the root stands at */
 
-    for (;;) {
-        if (mount_root_at(n->mounts, n->profile, rung)) break;
-
-        size_t up = str_path_parent_len(rung);
-        if (up >= len) break;   /* "/" is its own parent; the sentinel ends it anyway */
-        len = up;
+    while (len > floor) {
+        len = str_path_parent_len(rung);
         rung[len] = '\0';
-        if (len < 2) continue;  /* "/" and the empty prefix name nothing — see above */
+        if (len < 2) continue;  /* "/" names nothing, and is the floor — see above */
 
         /* What stands at this rung, and only a directory naming what lies beneath
          * it. */
@@ -650,7 +671,13 @@ static error_t *manifest_ascend(
         return NULL;
     }
 
-    return mount_name(n->mounts, n->profile, location, n->arena, out_storage);
+    /* Nothing of the profile's above it: the root's own label, and the tail. */
+    *out_storage = label_compose(n->arena, root->label, tail);
+    if (!*out_storage) {
+        return ERROR(ERR_MEMORY, "Failed to compose the name");
+    }
+
+    return NULL;
 }
 
 /**

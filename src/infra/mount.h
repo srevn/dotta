@@ -86,22 +86,23 @@
  * and within one profile the view keeps one. Nothing is exclusive: a binding
  * says where a profile's names resolve, not who owns the files there.
  *
- * Four questions over the same data. Three answer a root of the asker's — the
- * table's own, lent (mount_root_t) — and the fourth a string it composed:
+ * Four questions over two searches. Three answer a root of the asker's — the
+ * table's own, lent (mount_root_t) — and the fourth a string the table composed:
+ *   - Which root encloses a location, and what lies past it: mount_root_above,
+ *     the search itself, asked once per name by the view's ascent. A name is
+ *     what that root's label and that tail spell, and the ascent spells it there
+ *     (core/manifest.c manifest_ascend): the table hands out what it found and
+ *     composes nothing, one reader being no reason to own the sentence.
  *   - Which root stands exactly at a location, and whose: mount_root_at, the
- *     climb's question and every refusal that names a place.
- *   - Where the asker's root of a label stands: mount_root_of, the view's
- *     contribution and add's receipt.
+ *     same search with nothing past the root — the climb's question and every
+ *     refusal that names a place.
+ *   - Where the asker's root of a label stands: mount_root_of, by label rather
+ *     than by place — the view's contribution and add's receipt.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
- *     mount_resolve — that find, then the join. A name is composed beneath a
- *     root, so resolving one places it back at the very location it was composed
- *     from. This verb answers a string rather than a root because its join has
- *     many readers, where the compose below has one.
- *   - What a profile would call a location it holds no claim at (location ->
- *     storage): mount_name, beneath the deepest of that profile's own roots;
- *     nothing at a root itself. The fuller question — a claim of the profile
- *     standing at or above the location, and only then this — is core/manifest.h's
- *     manifest_name, whose last rung this is.
+ *     mount_resolve — that second find, then the join. A name is composed beneath
+ *     a root, so resolving one places it back at the very location it was composed
+ *     from. This verb composes where the ascent's does not, because its join
+ *     has many readers and the name's has one.
  *
  * Traversal is refused at the boundary and trusted below it: a storage path where
  * a branch, a sheet or an argument is read (infra/label.h label_validate_storage),
@@ -307,69 +308,6 @@ error_t *mount_table_build(
 );
 
 /**
- * What `profile` would call a location it holds no claim at.
- *
- * "<label>/<tail>" beneath the deepest of the profile's own roots — its target,
- * HOME, `/` — or NULL when the location *is* that root: a root has no canonical
- * name, and the tree standing there is its label's. Another profile's target is
- * invisible here (the "One table, one reading" paragraph above). At a tie — two
- * of the profile's own roots at one directory — a binding wins, because it is
- * the more specific statement (`~/.rc` under a binding at $HOME is `custom/.rc`;
- * `/etc/x` under a binding at "/" is `custom/etc/x`, and nothing under HOME is,
- * HOME being the deeper root); between HOME and `/` at one directory the portable
- * name wins (a HOME of "/" yields to the sentinel, so `/etc/x` is `root/etc/x`
- * — `home/` there would name the whole filesystem on every other machine). A
- * NULL `profile` names through HOME and `/` alone: a profile with no binding on
- * this machine, or no profile at all.
- *
- * `location` is a key — a row's, a record's, an argument's as the normalizer
- * spelled it, a walk's join — and the test is a string's: a root encloses the
- * location iff its spelling is a prefix of it on a component boundary, the root
- * itself included. Nothing is respelled here and nothing is read through.
- *
- * A name is composed beneath a root's spelling, so mount_resolve places an answer
- * of this one back at the very location it was composed from.
- *
- * This is the *last* rung of the question a command actually asks. A claim of
- * the profile standing at or above the location outranks every root, and
- * core/manifest.h's manifest_name is the whole ascent with this at its end.
- *
- * The answer is the arena's. NULL is a root, and mount_root_at names which.
- *
- * Errors:
- *   - ERR_INTERNAL when no root encloses the location — a malformed table, or a
- *     `location` that is not absolute. The sentinel encloses every absolute path
- *     at depth zero and belongs to every namespace, so a well-formed table always
- *     answers.
- *   - ERR_MEMORY on arena allocation failure.
- *
- * Readers: the last rung of the namer's ascent (core/manifest.c manifest_ascend),
- * and nothing else. No command reads it: a command asks what a profile calls a
- * location, which is its claim there first and this only at the end of the climb.
- * `ignore --test` was one until its subject became the whole ascent's
- * (core/manifest.h manifest_name); the five `-p` verbs shared an interim resolver
- * over it (infra/path.h) until each found its claim where it stands
- * (core/profiles.h profile_claim_name) or matched by location outright
- * (cmds/remove.c); and add's argument arm and its walk were the last two, until
- * they asked the namer instead.
- *
- * @param table       Mount table (must not be NULL)
- * @param profile     The asker, or NULL for the shared roots alone
- * @param location    Absolute location (must not be NULL)
- * @param arena       Arena that owns `*out_storage`
- * @param out_storage Arena-borrowed storage path, NULL at a root (must not be
- *                    NULL; NULL after an error)
- * @return Error or NULL on success
- */
-error_t *mount_name(
-    const mount_table_t *table,
-    const char *profile,
-    const char *location,
-    arena_t *arena,
-    const char **out_storage
-);
-
-/**
  * One of the asker's roots, as the table holds it.
  *
  * `location` is where the root stands, as a path: every reader prints it, compares
@@ -402,14 +340,56 @@ typedef struct {
 } mount_root_t;
 
 /**
+ * The deepest root of `profile` at or above `location`, and the tail past it.
+ *
+ * At or above, the reflexive case being the one mount_root_at asks for alone:
+ * the tail says which, "" where the location *is* the root.
+ *
+ * The one search, handed out whole. A namespace is one profile's: the shared
+ * roots (HOME, the sentinel, both unbound) and its own binding; another profile's
+ * target is skipped before it can win (the "One table, one reading" paragraph
+ * above). Tightest container wins, and a root encloses the location iff it is a
+ * prefix of it on a component boundary, the root itself included — `location`
+ * is a key, so the test is a string's and nothing is respelled or read through.
+ *
+ * At an equal depth two of the asker's own roots stand at one directory, and
+ * the more specific statement takes it — a binding over the shared roots, and
+ * the sentinel over a HOME that is "/": `~/.rc` under a binding at $HOME is under
+ * the binding, and `/etc/x` on a machine whose HOME is "/" (a container's bare
+ * uid) is under the sentinel, the reading that means the same directory on every
+ * other machine. Three roots can stand at "/": the sentinel always, HOME when
+ * it is "/", and a binding whose target is "/". The binding takes both ties —
+ * every path of that profile outside a deeper root is custom/, which is what
+ * binding a profile at the root means — and between HOME and the sentinel the
+ * portable name wins. One profile has one binding (mount_table_build).
+ *
+ * `*out_tail` aliases `location`: "" when the location *is* the root, the tail
+ * past it otherwise. NULL when no root encloses the location — a malformed table,
+ * or a location that is not absolute; the sentinel encloses every absolute path
+ * at depth zero, so a well-formed table always answers, and `*out_tail` is then
+ * untouched. Never fails, allocates nothing.
+ *
+ * Reader: the view's ascent, once per name (core/manifest.c manifest_ascend),
+ * which reads all three of the answer — the root ends the climb, its `location`
+ * is the rung it ends at, and its label and the tail compose the name where no
+ * claim above gave one (infra/label.h label_compose). Nothing else needs the
+ * tail: the two questions a command asks are below.
+ */
+const mount_root_t *mount_root_above(
+    const mount_table_t *table,
+    const char *profile,
+    const char *location,
+    const char **out_tail
+);
+
+/**
  * Does a root of `profile` stand exactly at `location`, and which?
  *
- * By the root's one spelling: exact equality is the whole test, a key being a
- * string of the rows' own (the table's paragraph above). The root when one stands
- * there, NULL when none does. The tie is the table's, so the answer's binder is
- * the winner's — a binding over a shared root at one directory, the portable
- * name over a HOME at depth zero — and a NULL asker meets the shared roots alone,
- * so its answer is never a binding's.
+ * The search above with nothing past the root: by its one spelling, exact equality
+ * being the whole test, a key being a string of the rows' own (the table's
+ * paragraph above). The root when one stands there, NULL when none does — so
+ * the tie is that search's, and a NULL asker, meeting the shared roots alone,
+ * is never answered a binding.
  *
  * A root met from above is entered unlisted and its children are named from its
  * label; a symlink standing at one is skipped by a walk and followed by the
@@ -439,8 +419,8 @@ const mount_root_t *mount_root_at(
  * and always answer.
  *
  * The row, not the tie: a HOME that is also a binding is one directory under
- * two labels, and each label answers its own row here, where mount_root_at and
- * mount_name give the binding the tie. Never fails, allocates nothing.
+ * two labels, and each label answers its own row here, where the enclosing search
+ * and mount_root_at give the binding the tie. Never fails, allocates nothing.
  *
  * Readers: the view's contribution, which asks where each root the sheet scans
  * stands and records the one that stands nowhere (core/manifest.c

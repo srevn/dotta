@@ -833,6 +833,11 @@ static error_t *refuse_moved_name(const add_walk_t *walk) {
         if (err) {
             return error_wrap(err, "Failed to name '%s'", location);
         }
+        /* `next` is never NULL: every location in this slice is one the profile
+         * names more than once, a contested group holds only explicit rows — a
+         * derived claim is skipped where one is held and replaced where it holds
+         * (core/manifest.c manifest_contribute) — so the namer's leaf clause
+         * answers a name there and the ascent is not reached. */
         if (strcmp(kept, next) == 0) continue;   /* nothing moved here */
 
         /* The one selection that may move a name: the command captured the location

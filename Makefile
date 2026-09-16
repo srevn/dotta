@@ -194,10 +194,10 @@ BUILD_SUBDIRS := $(BUILD_LAYER_DIRS) $(BUILD_DIR)/lib $(BUILD_DIR)/completions
 $(BUILD_DIR) $(BIN_DIR) $(BUILD_SUBDIRS):
 	@mkdir -p $@
 
-# Build configuration sentinel: how this tree's objects were produced. A tree
-# is one build type's for life, so the stamp is the flags alone.
+# Build configuration sentinel: how this tree's objects were produced — the
+# flags, and the compiler by version, since $(CC) is a word PATH resolves.
 BUILD_CONFIG := $(BUILD_DIR)/.build-config
-BUILD_STAMP := $(CC) $(CFLAGS) $(INCLUDES) \
+BUILD_STAMP := $(CC_VERSION) $(CFLAGS) $(INCLUDES) \
                $(LIBGIT2_CFLAGS) $(SQLITE3_CFLAGS) $(LIBGIT2_LIBS) $(SQLITE3_LIBS)
 
 .PHONY: FORCE

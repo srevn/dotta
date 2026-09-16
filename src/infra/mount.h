@@ -172,17 +172,23 @@ extern const mount_spec_t mount_kinds[MOUNT_KIND_COUNT];
  * own machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever
  * else a hand or a tool left beside them. Nothing else distinguishes them, and
  * nothing needs to: a branch may hold what it likes next to the labels, and no
- * walk of content sees it or refuses it. And it is the shape dispatch on an
- * argument, which reads a storage shape before the filesystem shapes. A label
- * alone, with no separator, stands under none: that is the whole-word question,
- * mount_parse_label, and a caller wanting either asks both (cmds/export.c's
- * grammar).
+ * walk of content sees it. A caller *handed* such a name rather than finding it
+ * refuses in its own words — export's name arm, which takes a label as a key
+ * and meets whatever stands there (cmds/export.c). And it is the shape dispatch
+ * on an argument, which reads a storage shape before the filesystem shapes. A
+ * label alone, with no separator, stands under none: that is the whole-word
+ * question, mount_parse_label, and a caller wanting either asks both
+ * (cmds/export.c's grammar). A label spelled as a directory does stand under
+ * one — "custom/" is the label and an empty tail — so a gate meant to catch a
+ * label asks it of the word.
  *
  * Readers: the view's claim routine (core/manifest.c), the file listing and the
  * branch statistics (core/profiles.c), the refspec completion (cmds/completion.c),
  * diff's delta selection (cmds/diff.c), the rule compiler (infra/pathspec.c),
- * the resolver's first arm (infra/path.c) and the two input heads that dispatch
- * on shape before reading it (cmds/add.c, cmds/ignore.c).
+ * the resolver's first arm (infra/path.c), the two input heads that dispatch on
+ * shape before reading it (cmds/add.c, cmds/ignore.c) and export's two — its
+ * profile slot's own grammar, and the gate its name arm asks of the key it is
+ * handed (cmds/export.c).
  */
 bool mount_under_label(const char *s);
 
@@ -241,9 +247,9 @@ const char *mount_strip_label(const char *storage_path);
  * so a fourth kind needs no edit here.
  *
  * Readers: the sheet's parser, one entry of `roots` at a time (core/metadata.c
- * metadata_from_json); export's catch arm, which makes the resolver's key out
- * of the bare word its grammar allows, and export's branch-root walk, where a
- * top-level tree entry is content iff its name is a label (cmds/export.c).
+ * metadata_from_json); export's bare-word arm, which makes the resolver's key
+ * out of the word its own grammar allows, and export's branch-root walk, where
+ * a top-level tree entry is content iff its name is a label (cmds/export.c).
  */
 bool mount_parse_label(const char *word, mount_kind_t *out);
 

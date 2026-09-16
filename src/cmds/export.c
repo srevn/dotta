@@ -56,10 +56,16 @@
  * is read: mount_validate_storage in the walk callback, the same check the view
  * makes for the same reason (core/manifest.c manifest_claim_blob) and therefore
  * already made for every row the location arm reads, and, for the claim sheet,
- * its own loader (core/metadata.c). The remaining escape vector — a pre-existing
- * symlink at a content-dictated path below the root — is refused in phase 1,
- * which can see every such path because the entry list is completed first: every
- * directory the copy needs is an entry of it.
+ * its own loader (core/metadata.c). The branch root is the one rung no storage
+ * grammar covers, because nothing standing there is a storage path: a name is
+ * content there iff it is a label naming a tree, which the whole-profile walk
+ * prunes by and the name arm refuses by (the content gate, infra/mount.h
+ * mount_under_label). So every FILE and SYMLINK entry carries a validated storage
+ * path — the metadata key and the associated data both — where a DIRECTORY entry
+ * may carry a label, which keys nothing and seals nothing. The remaining escape
+ * vector — a pre-existing symlink at a content-dictated path below the root —
+ * is refused in phase 1, which can see every such path because the entry list
+ * is completed first: every directory the copy needs is an entry of it.
  */
 
 #include "cmds/export.h"
@@ -617,7 +623,15 @@ cleanup:
 }
 
 /**
- * The name arm: the branch subtree the storage path names, laid out beneath it.
+ * The name arm: the branch subtree the name holds, laid out beneath it.
+ *
+ * `name` is a key in the branch's own tree, and the two a caller can give are
+ * not the same kind of word: a storage path, validated where the argument was
+ * read (infra/path.h), and a label, which names a namespace and not a path in
+ * it — no sheet keys one (core/metadata.c validates every key), nothing was ever
+ * sealed under one (infra/content.h), and the branch holds it as the tree the
+ * namespace's names stand in. The content gate (infra/mount.h mount_under_label)
+ * is what tells the two apart, and the blob arm below is the one place it matters.
  *
  * A blob is the single-entry copy, its destination the user's own path (cp
  * semantics); a tree is the copy's root with its subtree walked beneath it. A
@@ -629,7 +643,7 @@ static error_t *collect_name(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
-    const char *storage,
+    const char *name,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
@@ -641,21 +655,23 @@ static error_t *collect_name(
     error_t *err = load_sheet(ctx, tree, profile, &metadata);
     if (err) return err;
 
-    list->basename = path_basename(storage);
+    list->basename = path_basename(name);
 
-    err = gitops_find_file_in_tree(tree, storage, &target);
+    err = gitops_find_file_in_tree(tree, name, &target);
     if (err) {
         if (err->code != ERR_NOT_FOUND) goto cleanup;
 
         /* Not in the tree. An empty tracked directory has no tree entry — its
          * claim lives only in the metadata, and the export is then the claim
-         * itself: the directory, at its stored mode. */
-        const metadata_item_t *claim_item = metadata_lookup(metadata, storage);
+         * itself: the directory, at its stored mode. A label is never one of
+         * these: the sheet's loader refuses a key that is not a storage path,
+         * so no sheet holds a claim at a namespace's own name. */
+        const metadata_item_t *claim_item = metadata_lookup(metadata, name);
         if (!claim_item || claim_item->kind != PATH_KIND_DIRECTORY) {
             error_free(err);
             err = ERROR(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
-                storage, profile, commit_suffix
+                name, profile, commit_suffix
             );
             goto cleanup;
         }
@@ -669,12 +685,12 @@ static error_t *collect_name(
          * subtree is walked — or, for a metadata-only claim, there is no subtree
          * to walk and any children are claims themselves, collected by the append
          * below. */
-        const metadata_item_t *root_item = metadata_lookup(metadata, storage);
+        const metadata_item_t *root_item = metadata_lookup(metadata, name);
         mode_t root_mode = export_entry_mode(
-            metadata, storage, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
+            metadata, name, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
         );
         err = append_root(
-            list, arena, storage, root_mode,
+            list, arena, name, root_mode,
             root_item && root_item->kind == PATH_KIND_DIRECTORY
         );
         if (err) goto cleanup;
@@ -691,7 +707,7 @@ static error_t *collect_name(
             struct collect_ctx cctx = {
                 .metadata     = metadata,
                 .profile      = profile,
-                .storage_base = storage,
+                .storage_base = name,
                 .list         = list,
                 .arena        = arena,
                 .error        = NULL
@@ -704,14 +720,35 @@ static error_t *collect_name(
             if (err) goto cleanup;
         }
 
-        err = append_claim_dirs(list, arena, metadata, tree, storage);
+        err = append_claim_dirs(list, arena, metadata, tree, name);
     } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
+        /* The content gate, asked of the key this arm was handed rather than of
+         * the names a walk finds beneath it. The only key that can fail it is a
+         * label, and a label names a namespace: the branch holds it as the tree
+         * the namespace's names stand in, so a blob standing at one is the branch
+         * root's own machinery — the entry the whole-profile walk prunes at that
+         * rung — and it has no storage name for the sheet to key or the cipher
+         * to seal under. The word and never the directory spelling: "custom/"
+         * stands under a label and would pass, which is why the two spellings
+         * of one label are pinned together. Refused aloud where the user named
+         * it, pruned in silence where the user named the profile. */
+        if (!mount_under_label(name)) {
+            err = ERROR(
+                ERR_NOT_FOUND,
+                "Profile '%s'%s has no '%s/' content: the branch holds a file "
+                "at that name\n"
+                "Hint: Use 'dotta git' for raw repository access",
+                profile, commit_suffix, name
+            );
+            goto cleanup;
+        }
+
         /* Single-entry export: degenerate case of the walk. */
         git_filemode_t filemode = git_tree_entry_filemode(target);
 
         export_entry_t e;
         memset(&e, 0, sizeof(e));
-        e.storage_path = storage;
+        e.storage_path = name;
         e.rel_path = list->basename;
         git_oid_cpy(&e.blob_oid, git_tree_entry_id(target));
         if (filemode == GIT_FILEMODE_LINK) {
@@ -719,14 +756,14 @@ static error_t *collect_name(
         } else {
             e.kind = EXPORT_ENTRY_FILE;
             e.mode = export_entry_mode(
-                metadata, storage, PATH_KIND_FILE, filemode
+                metadata, name, PATH_KIND_FILE, filemode
             );
         }
 
         err = entry_list_append(list, arena, &e);
     } else {
         err = ERROR(
-            ERR_INVALID_ARG, "Unsupported entry type for '%s'", storage
+            ERR_INVALID_ARG, "Unsupported entry type for '%s'", name
         );
     }
 
@@ -1548,7 +1585,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
             case PATH_KEY_LABEL:
                 /* The label's whole subtree, looked up as any name is: it is a
                  * tree entry at the branch root, and the walk beneath it is the
-                 * one a directory name earns. */
+                 * one a directory name earns. The word alone, which is the spelling
+                 * the name arm's content gate reads — a namespace is a directory
+                 * there, and anything else at that name is machinery. */
                 err = collect_name(
                     ctx, tree, opts->profile, mount_kinds[arg.root].label,
                     commit_suffix, &list

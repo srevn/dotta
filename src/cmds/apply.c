@@ -25,6 +25,7 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
+#include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 #include "utils/hooks.h"
@@ -2907,12 +2908,12 @@ cleanup:
 enum apply_class { APPLY_CLASS_FILE = 1, APPLY_CLASS_PROFILE, };
 
 /**
- * Positional classifier: file-like tokens go to files[]; everything else is treated
- * as a profile name.
+ * Positional classifier: a token that announces a path goes to files[], and what
+ * announces nothing is a profile name (infra/path.h path_input_announces_path).
  */
 static args_class_t apply_classify(const char *tok) {
-    return str_looks_like_file_path(tok) ? APPLY_CLASS_FILE
-                                         : APPLY_CLASS_PROFILE;
+    return path_input_announces_path(tok) ? APPLY_CLASS_FILE
+                                          : APPLY_CLASS_PROFILE;
 }
 
 /**

@@ -20,7 +20,6 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -30,6 +29,7 @@
 #include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
@@ -2043,9 +2043,9 @@ cleanup:
  * Route the raw positional bucket into `files[]` and `profiles[]`.
  *
  * Positional rule (differs from add — position-dependent):
- *   - First positional: classified as a file path or a profile name via
- *     `str_looks_like_file_path`. A file path lands in `files`; a bare name lands
- *     in `profiles`.
+ *   - First positional: a file path or a profile name, by whether it announces a
+ *     path (infra/path.h path_input_announces_path). A file path lands in `files`;
+ *     a name lands in `profiles`.
  *   - Remaining positionals: always file paths.
  *
  * Profiles from `-p` are already populated in `profiles` by the APPEND row; a
@@ -2073,10 +2073,9 @@ static error_t *update_post_parse(
         char *arg = o->positional_args[i];
 
         /* Only the first positional is ambiguous (profile or file). It becomes
-         * a profile only if -p was not given AND it doesn't look like a file
-         * path. */
+         * a profile only if -p was not given AND it announces no path. */
         if (i == 0 && o->profile_count == 0 &&
-            !str_looks_like_file_path(arg)) {
+            !path_input_announces_path(arg)) {
             /* Arena-backed 1-slot profile array for the positional. */
             char **profiles = arena_calloc(arena, 1, sizeof(char *));
             if (profiles == NULL) {
@@ -2124,7 +2123,7 @@ static args_want_t update_complete(
     if (o->profile_count == 0) {
         if (o->positional_count == 0) {
             completion_profiles(ctx, out, COMPLETION_ENABLED);
-        } else if (!str_looks_like_file_path(o->positional_args[0])) {
+        } else if (!path_input_announces_path(o->positional_args[0])) {
             winners = o->positional_args;   /* the profile slot was taken */
             winner_count = 1;
         }

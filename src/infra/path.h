@@ -24,6 +24,13 @@
  * directory and nothing else. That is what lets the location door stand beside
  * mount_resolve's join as a producer of one key (infra/mount.h, the four
  * producers), and why no caller hands a topology down to read an argument.
+ *
+ * Two questions stand before any reading, both over the spelling alone and both
+ * the caller's to ask first: whether a positional announces a path at all, where
+ * a verb's slot could hold a profile instead (path_input_announces_path), and
+ * whether the input is the one shape the resolver has no reading for
+ * (path_input_is_bare). Neither resolves anything, and neither is the other's
+ * negation.
  */
 
 #ifndef DOTTA_PATH_H
@@ -70,6 +77,53 @@ typedef struct {
         mount_kind_t root;          /* PATH_KEY_LABEL: the root the label names, by its kind */
     };
 } path_input_t;
+
+/**
+ * Does the positional announce a path, or is it a name?
+ *
+ * The grammars' question, asked of a token whose slot is still undecided: the
+ * leading positional of list, diff, apply and update may be a profile or a path,
+ * and this tells the two apart with no repository in hand. A path announces itself
+ * — absolute (`/x`), tilde (`~/x`), dot-relative (`./x`, `../x`, `.rc`), under
+ * a storage label (infra/mount.h mount_under_label), or a pattern that selects
+ * one. A name announces nothing, and neither does a name with a separator in
+ * it: the layering convention spells profiles `<os>/<variant>` and
+ * `hosts/<host>/<variant>`, so `darwin/work` and `src/config` are one shape and
+ * only the profile reading has no other spelling — `./src/config` is the path's.
+ * A profile whose own name announces a path is named with -p, which is what each
+ * of the four calls that flag at its own slot.
+ *
+ * The pattern alphabet is the pathspec's rule gate (infra/pathspec.c
+ * pathspec_create), not wildmatch's whole grammar: a token answered here as a
+ * pattern is one the filter compiles as a rule, and the two sets move together
+ * or a pattern lands in the bucket that cannot read it.
+ *
+ * This and path_input_is_bare are two questions, and not each other's negation.
+ * This one is asked before a slot is decided; that one by a caller already holding
+ * a path slot, about the one shape the resolver has no reading for. The resolver's
+ * own filesystem shape is wider than either — it reads `a/b` as a path, its caller
+ * having decided so:
+ *
+ *   input        announces a path   stands alone   the resolver reads
+ *   config       no                 yes            refused
+ *   src/config   no                 no             $CWD/src/config
+ *   *.conf       yes                yes            refused
+ *   ./config     yes                no             $CWD/config
+ *   home/x       yes                no             home/x
+ *
+ * Reads the label vocabulary and no table, as the resolver does (this file's
+ * banner). The other classifier a positional meets — a token shaped like a commit
+ * — needs no vocabulary and is read where strings are read alone (base/string.h
+ * str_looks_like_git_ref); diff asks this one first, so a token that announces
+ * a path is never read as a commit.
+ *
+ * Readers: list's inference form and its completion, diff's and apply's positional
+ * classifiers, update's first-positional rule and its completion.
+ *
+ * @param input The positional (may be NULL, which announces nothing)
+ * @return true iff the input announces a path, or a pattern that selects one
+ */
+bool path_input_announces_path(const char *input);
 
 /**
  * Does the input stand alone — a single component with no shape at all?

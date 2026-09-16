@@ -19,7 +19,6 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -879,7 +878,8 @@ error_t *cmd_list(const dotta_ctx_t *ctx, const cmd_list_options_t *opts) {
  *     2 positionals -> error: only one file may accompany -p
  *
  *   Inference form (no -p): the leading positional is a profile or a file,
- *   disambiguated by str_looks_like_file_path.
+ *   disambiguated by whether it announces a path (infra/path.h
+ *   path_input_announces_path).
  *     0 positionals -> LIST_PROFILES
  *     1 positional  -> path? LIST_FILE_HISTORY (profile inferred)
  *                      name? LIST_FILES
@@ -914,7 +914,7 @@ static error_t *list_post_parse(
 
     if (o->positional_count == 1) {
         const char *arg = o->positional_args[0];
-        if (str_looks_like_file_path(arg)) {
+        if (path_input_announces_path(arg)) {
             o->mode = LIST_FILE_HISTORY;
             o->file_path = arg;
         } else {
@@ -963,7 +963,7 @@ static args_want_t list_complete(
         completion_profiles(ctx, out, COMPLETION_LOCAL);
         completion_files(ctx, out, NULL, 0, false);
     } else if (o->positional_count == 1 &&
-        !str_looks_like_file_path(o->positional_args[0])) {
+        !path_input_announces_path(o->positional_args[0])) {
         completion_refspecs(ctx, out, o->positional_args[0]);
     }
     return ARGS_WANT_NONE;

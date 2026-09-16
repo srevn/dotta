@@ -27,6 +27,11 @@
  *   path_input_is_bare      - the one shape the resolver has no reading for, for
  *                             the caller whose own grammar has one
  *
+ *   path_input_announces_path
+ *                           - the grammars' question, asked of a positional whose
+ *                             slot is still undecided: a path, or a name (list,
+ *                             diff, apply, update)
+ *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the location door, whose
  * answer is the key. The storage-label vocabulary (mount_under_label, mount_kind,
@@ -48,6 +53,17 @@
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
+
+bool path_input_announces_path(const char *input) {
+    if (!input || input[0] == '\0') return false;
+
+    /* A place, in the first byte; a name, under a label; or a pattern that selects
+     * either. A separator alone announces nothing — that is a profile's own shape,
+     * and the reason this is not the resolver's reading of the same string
+     * (infra/path.h). */
+    return input[0] == '/' || input[0] == '~' || input[0] == '.' ||
+           mount_under_label(input) || strpbrk(input, "*?[") != NULL;
+}
 
 bool path_input_is_bare(const char *input) {
     if (!input || input[0] == '\0') return false;

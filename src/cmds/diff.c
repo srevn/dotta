@@ -27,6 +27,7 @@
 #include "infra/content.h"
 #include "infra/pathspec.h"
 #include "infra/mount.h"
+#include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 
@@ -1609,17 +1610,21 @@ enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
 /**
  * Positional classifier for diff.
  *
- * Three-way split:
- *   - File paths → files[] bucket (workspace file filter).
- *   - Git refs   → git_refs[] bucket (diff mode selector).
- *   - Else       → profiles[] bucket (profile filter).
+ * Three-way split, each bucket claimed by a token that announces itself and the
+ * last taking what announces nothing:
+ *   - Announces a path → files[] bucket (workspace file filter).
+ *   - Looks like a ref → git_refs[] bucket (diff mode selector).
+ *   - Else             → profiles[] bucket (profile filter).
+ *
+ * The path question is asked first, so a token that announces a path is never
+ * read as a commit (infra/path.h path_input_announces_path).
  *
  * Mode (workspace vs commit-to-workspace vs commit-to-commit) is inferred from
  * the number of git refs in diff_post_parse.
  */
 static args_class_t diff_classify(const char *tok) {
-    if (str_looks_like_file_path(tok)) return DIFF_CLASS_FILE;
-    if (str_looks_like_git_ref(tok))   return DIFF_CLASS_GIT_REF;
+    if (path_input_announces_path(tok)) return DIFF_CLASS_FILE;
+    if (str_looks_like_git_ref(tok))    return DIFF_CLASS_GIT_REF;
     return DIFF_CLASS_PROFILE;
 }
 

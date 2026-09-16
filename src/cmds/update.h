@@ -16,8 +16,9 @@
  * Update command options
  *
  * `files` and `profiles` are populated from the raw positional bucket by
- * `update_post_parse`. The first positional is classified as a file path or profile
- * name via `str_looks_like_file_path`; remaining positionals are always file paths.
+ * `update_post_parse`. The first positional is a file path or a profile name by
+ * whether it announces a path (infra/path.h path_input_announces_path); remaining
+ * positionals are always file paths.
  */
 typedef struct {
     /* User-facing (read by cmd_update). */

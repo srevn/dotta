@@ -137,8 +137,9 @@ error_t *encryption_policy_should_encrypt(
  * Returns true iff the row is content-bearing, its blob is stored plaintext,
  * AND the path matches an active auto-encrypt rule.
  *
- * Used by workspace analysis to flag DIVERGENCE_ENCRYPTION when a managed file
- * matches an auto-encrypt pattern but is stored plaintext in Git.
+ * Used by workspace analysis to flag DIVERGENCE_ENCRYPTION (core/workspace.h)
+ * when a managed file matches an auto-encrypt pattern but is stored plaintext
+ * in Git.
  *
  * Only content-bearing kinds (FILE, EXECUTABLE) can violate. A symlink's blob
  * is its target path, not content: deploy materializes it via symlink(2) and

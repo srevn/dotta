@@ -1,7 +1,26 @@
 /**
- * types.h - Common type definitions for dotta
+ * types.h - The vocabulary every layer may assume
  *
- * This file defines common types used throughout the dotta codebase.
+ * A prelude, not a module: four opaque handles, base's error codes and transparent
+ * containers, and the two words for a managed path. include/config.h is the second
+ * prelude — the config layout, read by core without including utils/. base/args.h
+ * and base/hashmap.h re-declare the handles they need instead of including this,
+ * staying standalone engines with no domain dependency; every other base header
+ * includes it.
+ *
+ * Admission is by meaning, not by owner. A value a reader can interpret holding
+ * nothing else stands here; a verdict one module computes stands with that module:
+ * workspace_state_t and divergence_type_t in core/workspace.h, beside
+ * workspace_displaced_t and workspace_fault_t. Reach bounds what meaning admits:
+ * every type here is named by three headers or more, and the best candidate below
+ * — hashmap_t, fs_occupant_t, output_color_t — by two.
+ *
+ * path_kind_t and path_type_t cross layers besides: infra/pathspec matches on
+ * the kind core/manifest produces, and manifest.h, state.h, deploy.h and policy.h
+ * read the type where none can hold it for the other three.
+ *
+ * <stdint.h> and <stdbool.h> have no user here: base/gitignore.h reaches uint8_t
+ * and a dozen headers reach bool through this file. Not unused.
  */
 
 #ifndef DOTTA_TYPES_H
@@ -65,56 +84,6 @@ typedef struct {
     size_t size;
     size_t capacity;
 } buffer_t;
-
-/**
- * Workspace state - where an item exists
- *
- * Represents the location/deployment status of a file or directory across the
- * view (Git), the record (the store's dotta.db) and the filesystem.
- *
- * This enum captures WHERE an item exists, separate from WHAT is wrong with it
- * (see divergence_type_t). States are mutually exclusive.
- */
-typedef enum {
-    WORKSPACE_STATE_DEPLOYED,      /* In profile + deployed + on filesystem */
-    WORKSPACE_STATE_UNDEPLOYED,    /* In profile, not deployed yet */
-    WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
-    WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
-    WORKSPACE_STATE_UNTRACKED,     /* On filesystem in tracked directory, not in manifest */
-    WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires (core/workspace.h) */
-} workspace_state_t;
-
-/**
- * Divergence type - what is wrong with an item
- *
- * Bit flags; multiple can be set simultaneously (e.g., content changed AND mode
- * changed). This enum captures WHAT is wrong, separate from WHERE the item exists
- * (see workspace_state_t).
- *
- * Two families, by what the operands are:
- *
- * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, UNVERIFIED — measures
- * the managed path against the view: what stands on disk versus the row's claim
- * (STALE through the record: the blob dotta last deployed versus the row's),
- * UNVERIFIED when the measurement itself could not run. No path bit survives
- * absence — properties of what is not there cannot be compared.
- *
- * The blob family — ENCRYPTION alone — measures the blob Git holds against the
- * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
- * so it is the one bit a row in any state can carry, absence included; and because
- * no write to the path can change how a blob is stored, it is never deploy's
- * work — update re-stores the blob, status reports it.
- */
-typedef enum {
-    DIVERGENCE_NONE       = 0,       /* No divergence detected */
-    DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
-    DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
-    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
-    DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
-    DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
-    DIVERGENCE_UNVERIFIED = 1 << 5,  /* The look failed; the item's fault says whose remedy that is (core/workspace.h) */
-    DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */
-} divergence_type_t;
 
 /**
  * Path kind — what a managed storage path refers to

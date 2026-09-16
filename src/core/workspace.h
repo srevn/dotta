@@ -76,6 +76,56 @@
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
 
 /**
+ * Workspace state - where an item exists
+ *
+ * Represents the location/deployment status of a file or directory across the
+ * view (Git), the record (the store's dotta.db) and the filesystem.
+ *
+ * This enum captures WHERE an item exists, separate from WHAT is wrong with it
+ * (see divergence_type_t). States are mutually exclusive.
+ */
+typedef enum {
+    WORKSPACE_STATE_DEPLOYED,      /* The view claims the path and something stands there */
+    WORKSPACE_STATE_UNDEPLOYED,    /* The view claims the path and nothing does: apply's to create */
+    WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
+    WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
+    WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
+    WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires */
+} workspace_state_t;
+
+/**
+ * Divergence type - what is wrong with an item
+ *
+ * Bit flags; multiple can be set simultaneously (e.g., content changed AND mode
+ * changed). This enum captures WHAT is wrong, separate from WHERE the item exists
+ * (see workspace_state_t).
+ *
+ * Two families, by what the operands are:
+ *
+ * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, UNVERIFIED — measures
+ * the managed path against the view: what stands on disk versus the row's claim
+ * (STALE through the record: the blob dotta last deployed versus the row's),
+ * UNVERIFIED when the measurement itself could not run. No path bit survives
+ * absence — properties of what is not there cannot be compared.
+ *
+ * The blob family — ENCRYPTION alone — measures the blob Git holds against the
+ * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
+ * so it is the one bit a row in any state can carry, absence included; and because
+ * no write to the path can change how a blob is stored, it is never deploy's
+ * work — update re-stores the blob, status reports it.
+ */
+typedef enum {
+    DIVERGENCE_NONE       = 0,       /* No divergence detected */
+    DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
+    DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
+    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
+    DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
+    DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
+    DIVERGENCE_UNVERIFIED = 1 << 5,  /* The look failed; (workspace_fault_t) */
+    DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */
+} divergence_type_t;
+
+/**
  * Whose claim holds the squatted directory an observation resolved through —
  * the displaced fact, with its reach
  *

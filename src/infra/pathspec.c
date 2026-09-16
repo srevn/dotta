@@ -127,27 +127,22 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
             }
         }
 
-        /* The anchor is a location or this arm has no business being in it: the
-         * gate above entered only for a body no label prefixes, and the guard
-         * refused every first byte but '/' and '.', so neither of the storage
-         * keys can come back. The test is total over all three and says so. */
-        path_input_t anchor;
-        error_t *err = path_input_resolve(head, arena, &anchor);
+        /* The head is a filesystem spelling and nothing else can reach here:
+         * the gate above entered only for a body no label prefixes, and the guard
+         * refused every first byte but '/', '~' and '.'. So it is read as the
+         * location it names, through the door that reads one and answers no key
+         * to disagree with (infra/path.h path_input_locate). */
+        const char *location = NULL;
+        error_t *err = path_input_locate(head, arena, &location);
         if (err) {
             return error_wrap(err, "Invalid glob pattern '%s'", input);
-        }
-        if (anchor.key != PATH_KEY_LOCATION) {
-            return ERROR(
-                ERR_INTERNAL, "Glob pattern '%s': the anchor '%s' is not a location",
-                input, head
-            );
         }
 
         line = arena_str_format(arena, "%s/%s", negated ? "!" : "", tail);
         if (!line) {
             return ERROR(ERR_MEMORY, "Failed to allocate pattern");
         }
-        prefix_location(out, anchor.location);
+        prefix_location(out, location);
     }
 
     /* The grammar quotes a pattern only where its words are the refusal, which

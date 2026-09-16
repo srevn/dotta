@@ -11,7 +11,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/array.h"
 #include "base/buffer.h"
@@ -924,22 +923,15 @@ static error_t *test_path_ignore(
             argument_subject = mount_strip_label(arg.storage_path);
         }
     } else {
-        /* The key as the normalizer spells it: absolute, folded, nothing read
-         * through — the resolver's own location arm, spelled here because the
-         * resolver refuses the bare name this grammar reads. The copy is the
-         * command's because the answer outlives the call and the normalizer's
-         * is malloc's by contract (infra/path.h). */
-        char *normalized = NULL;
-        err = path_input_normalize(test_path, &normalized);
+        /* The key as the location door spells it: absolute, folded, nothing read
+         * through — the resolver's own location arm, read here because the resolver
+         * refuses the bare name this grammar reads (infra/path.h
+         * path_input_locate). */
+        arg.key = PATH_KEY_LOCATION;
+        err = path_input_locate(test_path, ctx->arena, &arg.location);
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", test_path);
         }
-        const char *location = arena_strdup(ctx->arena, normalized);
-        free(normalized);
-        if (!location) {
-            return ERROR(ERR_MEMORY, "Failed to allocate path");
-        }
-        arg = (path_input_t){ .key = PATH_KEY_LOCATION, .location = location };
 
         /* Both builders free their own partial view and leave *out NULL, so this
          * returns; from the build on, the view is owned and every failure leaves

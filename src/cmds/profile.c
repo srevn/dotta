@@ -688,7 +688,7 @@ static error_t *profile_enable(
     hashmap_t *seen_set = NULL;
     manifest_t *after = NULL;
     manifest_diff_stats_t *stats = NULL;
-    char *target = NULL;      /* --target, absolute: what the row stores */
+    const char *target = NULL; /* --target, absolute: what the row stores */
     error_t *err = NULL;
 
     /* Phase 1 observations — tallied during the validation loop. retarget names
@@ -808,7 +808,7 @@ static error_t *profile_enable(
             err = error_from_errno(errno, "Failed to stat the store");
             goto cleanup;
         }
-        err = path_input_normalize(opts->target, &target);
+        err = path_input_locate(opts->target, ctx->arena, &target);
         if (!err) err = mount_validate_target(target, store.st_dev, store.st_ino);
         if (err) {
             err = error_wrap(err, "Invalid --target value");
@@ -1132,7 +1132,6 @@ cleanup:
     string_array_free(to_enable);
     string_array_free(all_branches);
     string_array_free(enabled);
-    free(target);
 
     return err;
 }

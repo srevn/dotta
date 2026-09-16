@@ -90,9 +90,9 @@ void source_filter_free(source_filter_t *f);
  * Preconditions: `abs_path` must start with `/` and must name an entry — one
  * with nothing after its last `/` has no name for a rule to match and answers
  * `false`. Callers with possibly-relative input must resolve it first (in-tree
- * callers either ride path_input_normalize, path_input_resolve, realpath, or
- * feed a pre-resolved state filesystem path), and every one of those sheds a
- * trailing `/` on the way.
+ * callers either ride path_input_locate, path_input_resolve, realpath, or feed
+ * a pre-resolved state filesystem path), and every one of those sheds a trailing
+ * `/` on the way.
  *
  * @param f        Filter (must not be NULL)
  * @param abs_path Absolute path (must start with `/`)

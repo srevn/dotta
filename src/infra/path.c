@@ -1,7 +1,7 @@
 /**
  * path.c - The key a CLI path argument names
  *
- * Two readings of a flexible CLI path argument, and the one refusal a reading
+ * The readings of a flexible CLI path argument, and the one refusal a reading
  * earns:
  *
  *   path_input_resolve      - the key the input names: a location (a filesystem
@@ -10,19 +10,23 @@
  *                             has) — the pathspec, and every verb that takes a
  *                             path from the command line
  *
+ *   path_input_locate       - the location alone, in the arena: the same reading,
+ *                             for a caller whose grammar has no storage arm to
+ *                             dispatch to (add, the binders' --target, ignore
+ *                             --test, the completion, a glob's anchor)
+ *
  *   path_input_normalize    - filesystem path -> absolute filesystem path, a
  *                             relative one's working directory spelled under
- *                             HOME (the commands that walk, bind or test a
- *                             spelling: add, the binders' --target, ignore --test,
- *                             the completion)
+ *                             HOME; malloc's, for the one reader that replaces
+ *                             and frees what it holds (the interactive save)
  *
  *   path_input_refuse_label - the sentence the verbs that act on one path give
  *                             a label, in the noun the vocabulary gives the root
  *                             it names
  *
  * One dispatch: the resolver reads the storage label itself and hands every
- * filesystem spelling (absolute, tilde, relative) to the normalizer, whose answer
- * is the key. The storage-label vocabulary (mount_under_label, mount_kind,
+ * filesystem spelling (absolute, tilde, relative) to the location door, whose
+ * answer is the key. The storage-label vocabulary (mount_under_label, mount_kind,
  * mount_validate_storage, mount_root_describe over a kind those answered), the
  * filesystem primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
  * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
@@ -68,6 +72,8 @@ error_t *path_input_resolve(
 
     *out = (path_input_t){ 0 };
 
+    /* The same sentence the normalizer gives, said here because the storage arm
+     * below never reaches the normalizer at all. */
     if (input[0] == '\0') {
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
@@ -124,24 +130,31 @@ error_t *path_input_resolve(
     }
 
     /* A filesystem shape — absolute, tilde, or relative to the working directory
-     * — through the normalizer (one arm for the three spellings, with `.`, `..`
-     * and the directory spelling folded there), and its answer is the key. The
-     * copy is the resolver's because the answer outlives the call and the
-     * normalizer's is malloc's by contract (path.h). */
-    char *normalized = NULL;
-    error_t *err = path_input_normalize(input, &normalized);
-    if (err) return err;
-
-    const char *location = arena_strdup(arena, normalized);
-    free(normalized);
-    if (!location) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the location");
-    }
-
+     * — read as the location it names: one arm for the three spellings, with
+     * `.`, `..` and the directory spelling folded inside it. The key is written
+     * before the answer because the zeroed key is already this one: a read that
+     * fails leaves a NULL beneath it, which is what this function promises after
+     * an error. */
     out->key = PATH_KEY_LOCATION;
-    out->location = location;
 
-    return NULL;
+    return path_input_locate(input, arena, &out->location);
+}
+
+error_t *path_input_locate(const char *input, arena_t *arena, const char **out) {
+    CHECK_NULL(arena);
+    CHECK_NULL(out);
+
+    *out = NULL;
+
+    /* `input` is the normalizer's to refuse: a NULL one and an empty one earn
+     * the same sentence a frame deeper, so a guard here would spell it twice. */
+    char *normalized = NULL;
+    RETURN_IF_ERROR(path_input_normalize(input, &normalized));
+
+    *out = arena_strdup(arena, normalized);
+    free(normalized);
+
+    return *out ? NULL : ERROR(ERR_MEMORY, "Failed to allocate the location");
 }
 
 error_t *path_input_refuse_label(mount_kind_t root, const char *profile) {

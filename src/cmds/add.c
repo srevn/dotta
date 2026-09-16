@@ -343,7 +343,7 @@ static error_t *spell_argument(
     /* The grammar, by the argument's first byte: what the argument is spelled
      * from. Three spellings are the shell's own and are never re-rooted — a tilde
      * path, a path spelled from here, and an empty argument, which is no path
-     * in any grammar and which the normalizer is the one place to say so of,
+     * in any grammar and which the location door is the one place to say so of,
      * rather than the joiner refusing it by accident of validating its own
      * component. A host-absolute path is the jail's unless a prefix of it is
      * the target — something only an absolute spelling can be, since folding a
@@ -364,24 +364,18 @@ static error_t *spell_argument(
         }
     }
 
-    char *normalized = NULL;
-    error_t *err = path_input_normalize(composed ? composed : input, &normalized);
-    free(composed);
-    if (err) return err;
-
     /* The answer is the arena's: the caller keys, names and walks from it, and
      * nothing here outlives the call — which is what lets the refusal below simply
      * return, where a malloc'd answer had to be freed and nulled first. */
-    const char *spelled = arena_strdup(arena, normalized);
-    free(normalized);
-    if (!spelled) {
-        return ERROR(ERR_MEMORY, "Failed to copy the argument");
-    }
+    const char *spelled = NULL;
+    error_t *err = path_input_locate(composed ? composed : input, arena, &spelled);
+    free(composed);
+    if (err) return err;
 
     /* One check for every escape, whatever the shape: `..` walked out of a path
      * that started inside, or a path spelled from here while the user stands
-     * outside. The subject is folded (path_input_normalize), so the whole test
-     * is a string's, where the boundary above had to be asked per prefix on the
+     * outside. The subject is folded (path_input_locate), so the whole test is
+     * a string's, where the boundary above had to be asked per prefix on the
      * bytes as typed. A tilde path is HOME's and is read against no target, even
      * one beneath HOME. The root's own slash is its separator, so as a prefix
      * it is "" — the table's spelling of it (infra/mount.h) — and every absolute
@@ -1627,15 +1621,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * absolute, tilde, or relative to the working directory — resolved to the
      * absolute path the row stores, then held to the target's rules. */
     if (opts->target) {
-        char *absolute = NULL;
-        err = path_input_normalize(opts->target, &absolute);
+        err = path_input_locate(opts->target, ctx->arena, &target);
         if (err) goto cleanup;
-        target = arena_strdup(ctx->arena, absolute);
-        free(absolute);
-        if (!target) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate the target");
-            goto cleanup;
-        }
         err = mount_validate_target(target, walk.store_dev, walk.store_ino);
         if (err) goto cleanup;
 

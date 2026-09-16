@@ -28,13 +28,13 @@
  * the record and every screen share — is a root's spelling joined with a tail.
  * A key is the spelling its writer typed, and the four producers of one agree
  * because they read the same strings: mount_resolve (a root's spelling and a
- * claim's tail), the normalizer (an argument, folded; infra/path.h), a walk's
- * join (a parent and a name) and a climb's cut — a key truncated at a separator,
- * which is a root's spelling and a shorter tail whichever label named it, so an
- * ancestor's key is never manufactured a second way (core/manifest.c
- * manifest_ascend, core/workspace.c blob_over, core/cleanup.c, infra/pathspec.c).
- * So two locations are one path iff they are one string, and a symlink anywhere
- * in a path is a component like any other:
+ * claim's tail), the location door (an argument, folded; infra/path.h
+ * path_input_locate), a walk's join (a parent and a name) and a climb's cut — a
+ * key truncated at a separator, which is a root's spelling and a shorter tail
+ * whichever label named it, so an ancestor's key is never manufactured a second
+ * way (core/manifest.c manifest_ascend, core/workspace.c blob_over, core/cleanup.c,
+ * infra/pathspec.c). So two locations are one path iff they are one string, and
+ * a symlink anywhere in a path is a component like any other:
  * nothing here reads through one, `~/.config -> ~/dotfiles/config` stays the
  * entry it is, and two claims through and around it are two claims. A filesystem
  * that folds case or normalization can stand one entry at two strings; the two
@@ -166,14 +166,14 @@ extern const mount_spec_t mount_kinds[MOUNT_KIND_COUNT];
  *
  * The prefix and its separator, nothing of the tail: the question any string
  * may be asked, NULL included, where the two projections beneath it ask for a
- * path that passed this one. It is the content gate
- * every walk over a profile tree asks of its own walk root — a managed path stands
- * under a label, so a blob at the branch root, or beneath a tree no label names,
- * is the branch's own machinery: dotta's files (.dottaignore, .bootstrap, .dotta/)
- * and whatever else a hand or a tool left beside them. Nothing else distinguishes
- * them, and nothing needs to: a branch may hold what it likes next to the labels,
- * and no walk of content sees it or refuses it. And it is the shape dispatch on
- * an argument, which reads a storage shape before the filesystem shapes. A label
+ * path that passed this one. It is the content gate every walk over a profile
+ * tree asks of its own walk root — a managed path stands under a label, so a
+ * blob at the branch root, or beneath a tree no label names, is the branch's
+ * own machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever
+ * else a hand or a tool left beside them. Nothing else distinguishes them, and
+ * nothing needs to: a branch may hold what it likes next to the labels, and no
+ * walk of content sees it or refuses it. And it is the shape dispatch on an
+ * argument, which reads a storage shape before the filesystem shapes. A label
  * alone, with no separator, stands under none: that is the whole-word question,
  * mount_parse_label, and a caller wanting either asks both (cmds/export.c's
  * grammar).
@@ -268,9 +268,9 @@ error_t *mount_validate_storage(const char *storage_path);
 /**
  * Validate a deployment target (the `--target` argument) as the row will hold it.
  *
- * The binders normalize first (infra/path.h path_input_normalize: tilde, the
- * working directory, `.`, `..`, `//`), so what reaches here is the absolute path
- * the row stores; the shape rule holds for a caller that did not (the interactive
+ * The binders locate first (infra/path.h path_input_locate: tilde, the working
+ * directory, `.`, `..`, `//`), so what reaches here is the absolute path the
+ * row stores; the shape rule holds for a caller that did not (the interactive
  * save's validate, on text a resolve refused).
  *
  * Refuses, in order, one message each:

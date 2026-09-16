@@ -21,7 +21,7 @@
  * mount_validate_storage, mount_root_describe over a kind these answered, a label
  * being a label on every machine — and never the table of roots: no root's spelling
  * is read to make a key, so the answer is the argument, HOME and the working
- * directory and nothing else. That is what lets the normalizer stand beside
+ * directory and nothing else. That is what lets the location door stand beside
  * mount_resolve's join as a producer of one key (infra/mount.h, the four
  * producers), and why no caller hands a topology down to read an argument.
  */
@@ -80,17 +80,17 @@ typedef struct {
  * it is a name, validated and kept as typed. Either way the trailing slash is
  * shed (the UI's listings print directory claims slash-marked, and the filesystem
  * arm sheds its own inside the normalizer; the two surface forms resolve alike).
- * A filesystem shape is normalized (path_input_normalize: tilde, the working
- * directory, `.`/`..`/`//` folded), and that spelling is the key: a location is
- * a string of its own, a link in it a component, so the answer keys against the
- * view's rows by strcmp when it was spelled the way the rows were (infra/mount.h).
- * No profile, no name, no stat, no table: the argument need not exist, and a
- * root named by its own spelling (`~`, a target's path) is a location like any
- * other — a place, where the label that names the same root is a namespace, and
- * the two are different keys for that reason. The verb that cannot take either
- * refuses it in its own words. A bare name is refused: add's grammar reads one
- * as the jail's or the working directory's (cmds/add.c spell_argument); the
- * resolver does not, because its callers' first positional may be a profile.
+ * A filesystem shape is located (path_input_locate: tilde, the working directory,
+ * `.`/`..`/`//` folded), and that spelling is the key: a location is a string
+ * of its own, a link in it a component, so the answer keys against the view's
+ * rows by strcmp when it was spelled the way the rows were (infra/mount.h). No
+ * profile, no name, no stat, no table: the argument need not exist, and a root
+ * named by its own spelling (`~`, a target's path) is a location like any other
+ * — a place, where the label that names the same root is a namespace, and the
+ * two are different keys for that reason. The verb that cannot take either refuses
+ * it in its own words. A bare name is refused: add's grammar reads one as the
+ * jail's or the working directory's (cmds/add.c spell_argument); the resolver
+ * does not, because its callers' first positional may be a profile.
  *
  *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (HOME as the identity spells it)
  *   ./config    (in /etc)     -> LOCATION  /etc/config
@@ -127,8 +127,7 @@ typedef struct {
  *     profile_discover_claims is never handed one.
  *   - add's storage head (cmds/add.c) refuses one: a label names no path to
  *     capture, and `add <p> ~` and `add <p> <target>` name the place it labels.
- *     add's filesystem head is add's own grammar, spelled around
- *     path_input_normalize.
+ *     add's filesystem head is add's own grammar, spelled around path_input_locate.
  *   - `ignore --test` (cmds/ignore.c) reports one: a root has no name for a pattern
  *     to match, which is the answer its location spelling earns too.
  *
@@ -139,6 +138,45 @@ typedef struct {
  * @return Error or NULL on success
  */
 error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
+
+/**
+ * The location a filesystem-shaped argument names, in the arena
+ *
+ * path_input_normalize's reading, copied once into the arena the caller keys
+ * from: the one door a location key is read through, standing beside
+ * mount_resolve's join (infra/mount.h, the four producers of one location). `*out`
+ * is the location on success and NULL after an error, so a reader that ignores
+ * the error meets a NULL rather than a stale string.
+ *
+ * One grammar, not three: every input is read as a filesystem spelling, so `home/x`
+ * is the working directory's `home/x` and never a name, and a bare `config` is
+ * the working directory's too where path_input_resolve refuses it. Which door a
+ * verb reads through is its own positional grammar's answer — one whose first
+ * positional may be a profile reads the key, and one that has ruled the storage
+ * vocabulary out already, or never had one, reads the location here — so a name
+ * handed to this door comes back as a filesystem reading of itself, which is
+ * the whole reason the two are named apart.
+ *
+ * Readers, and what makes each one this door's — a reader not on this list is a
+ * bug:
+ *
+ *   - path_input_resolve's own filesystem arm: this is that arm.
+ *   - add's argument grammar (cmds/add.c spell_argument) and `ignore --test`'s
+ *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
+ *     themselves, and both read a bare name as a path where the resolver will not.
+ *   - the two binders' --target (cmds/add.c, cmds/profile.c) and the root the
+ *     completion offers beneath (cmds/completion.c): a target names a directory
+ *     on this machine and has no storage vocabulary to dispatch on.
+ *   - a glob's anchor (infra/pathspec.c compile_rule): the components before
+ *     the first metacharacter, which that rule's own gate has already made a
+ *     filesystem spelling.
+ *
+ * @param input User-provided path (filesystem or tilde; must not be NULL)
+ * @param arena Arena that owns the answer (must not be NULL)
+ * @param out   The location: absolute, folded, the arena's (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
 
 /**
  * The refusal a label argument earns from a verb that acts on one path
@@ -203,18 +241,20 @@ error_t *path_input_refuse_label(mount_kind_t root, const char *profile);
  *   home/../c   (in HOME's parent, spelled physically)
  *                             -> <parent>/c    (the tail is the user's)
  *
- * The filesystem arm of path_input_resolve is this function and a copy; the
- * commands that read a filesystem spelling and walk it (add), bind it (the binders'
- * --target), test it (ignore --test) or complete beneath it (the completion's
- * root) call it directly. A target given as an absolute or tilde path is the
- * user's own; one given relatively is spelled by the rule above like any other
- * relative argument. Storage-path inputs ("home/", "root/", "custom/") are not
- * this function's — they are validated and placed at the call site
- * (mount_validate_storage, mount_resolve). add's re-rooting under --target is
- * add's own grammar, spelled around this call (cmds/add.c, spell_argument). The
- * answer is malloc's: three of the callers own it — the interactive save's per-edit
- * target, the completion, the binder that frees at its label — and the rest hand
- * it on and free it.
+ * The reading every location key is made by: path_input_locate is this function
+ * and a copy, and everything that keys from an argument — the resolver's own
+ * filesystem arm, add's grammar, the two binders, `ignore --test`, the completion,
+ * a glob's anchor — goes through that door. A target given as an absolute or
+ * tilde path is the user's own; one given relatively is spelled by the rule above
+ * like any other relative argument. Storage-path inputs ("home/", "root/",
+ * "custom/") are not this function's — they are validated and placed at the call
+ * site (mount_validate_storage, mount_resolve). add's re-rooting under --target
+ * is add's own grammar, spelled around the door (cmds/add.c, spell_argument).
+ *
+ * The answer is malloc's, and one reader wants it that way: the interactive save's
+ * per-edit target (cmds/interactive.c), replaced on every commit of the prompt
+ * and freed with the item it is on — which an arena cannot do. A reader that
+ * keys from the answer is path_input_locate's, not this function's.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL)
  * @param out   Normalized absolute path (caller must free, must not be NULL)

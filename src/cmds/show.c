@@ -17,7 +17,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/refspec.h"
-#include "base/string.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -826,7 +825,7 @@ static error_t *show_post_parse(
         const char *arg = args[0];
 
         /* Pure commit ref: git ref without path separators. */
-        if (str_looks_like_git_ref(arg) && !strchr(arg, '/') &&
+        if (refspec_looks_like_commit(arg) && !strchr(arg, '/') &&
             !strchr(arg, '.')) {
             o->mode = SHOW_COMMIT;
             o->commit = arg;
@@ -850,7 +849,7 @@ static error_t *show_post_parse(
     if (o->positional_count == 2) {
         o->mode = SHOW_FILE;
 
-        if (str_looks_like_git_ref(args[1])) {
+        if (refspec_looks_like_commit(args[1])) {
             /* <file> <commit> */
             o->file_path = args[0];
             o->commit = args[1];

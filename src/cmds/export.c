@@ -1806,7 +1806,7 @@ static error_t *export_post_parse(
 
         /* A bare ref selects a whole-profile historical export; anything
          * path-shaped goes through refspec parsing. */
-        if (str_looks_like_git_ref(args[1]) && !strchr(args[1], '/') &&
+        if (refspec_looks_like_commit(args[1]) && !strchr(args[1], '/') &&
             !strchr(args[1], '.')) {
             o->commit = args[1];
         } else {

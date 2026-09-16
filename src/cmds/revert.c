@@ -17,7 +17,6 @@
 #include "base/error.h"
 #include "base/output.h"
 #include "base/refspec.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -76,8 +75,8 @@ static error_t *select_profile(
      * rests on. The hints spell the command with what the user typed, so they
      * paste back, and they spell it in the three-positional form: that is the
      * one arm of revert_post_parse that assigns without asking
-     * str_looks_like_git_ref whether the second word is a commit, so a tag or a
-     * branch name pastes back as readily as an oid does. */
+     * refspec_looks_like_commit whether the second word is a commit, so a tag
+     * or a branch name pastes back as readily as an oid does. */
     const char *subject = arg->key == PATH_KEY_LOCATION ? arg->location
                                                         : arg->storage_path;
 
@@ -240,7 +239,7 @@ static error_t *refuse_second_name(
 
         /* Both remedies are spelled to run: the revert in the three-positional
          * form, which assigns its words by position and never asks
-         * str_looks_like_git_ref whether the second one is a commit — the
+         * refspec_looks_like_commit whether the second one is a commit — the
          * two-positional form reads a tag or a branch name as a profile and refuses
          * the command it was offered as. */
         err = ERROR(
@@ -1359,7 +1358,7 @@ static error_t *revert_post_parse(
         o->file_path = rs.file;
         if (rs.commit != NULL) o->commit = rs.commit;
     } else if (o->positional_count == 2) {
-        if (str_looks_like_git_ref(args[1])) {
+        if (refspec_looks_like_commit(args[1])) {
             /* <file> <commit> */
             o->file_path = args[0];
             o->commit = args[1];

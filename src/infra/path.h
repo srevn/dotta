@@ -113,8 +113,8 @@ typedef struct {
  *
  * Reads the label vocabulary and no table, as the resolver does (this file's
  * banner). The other classifier a positional meets — a token shaped like a commit
- * — needs no vocabulary and is read where strings are read alone (base/string.h
- * str_looks_like_git_ref); diff asks this one first, so a token that announces
+ * — reads Git's vocabulary and is spelled where that syntax lives (base/refspec.h
+ * refspec_looks_like_commit); diff asks this one first, so a token that announces
  * a path is never read as a commit.
  *
  * Readers: list's inference form and its completion, diff's and apply's positional

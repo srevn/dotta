@@ -16,7 +16,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/output.h"
-#include "base/string.h"
+#include "base/refspec.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -1624,7 +1624,7 @@ enum diff_class { DIFF_CLASS_FILE = 1, DIFF_CLASS_GIT_REF, DIFF_CLASS_PROFILE, }
  */
 static args_class_t diff_classify(const char *tok) {
     if (path_input_announces_path(tok)) return DIFF_CLASS_FILE;
-    if (str_looks_like_git_ref(tok))    return DIFF_CLASS_GIT_REF;
+    if (refspec_looks_like_commit(tok)) return DIFF_CLASS_GIT_REF;
     return DIFF_CLASS_PROFILE;
 }
 

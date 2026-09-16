@@ -2,7 +2,8 @@
  * refspec.c - Refspec parsing utilities
  *
  * Splits "[profile:]<path>[@commit]" into three arena-backed slices in a single
- * pass. See refspec.h for lifetime rules.
+ * pass, over the one rule that says what a commit looks like. See refspec.h for
+ * lifetime rules and for what that rule does and does not recognize.
  *
  * A partial parse that fails mid-way leaves a few unused bytes in the arena;
  * these are reclaimed when the arena is destroyed. No rollback is needed, so
@@ -11,11 +12,60 @@
 
 #include "base/refspec.h"
 
+#include <ctype.h>
 #include <string.h>
 
 #include "base/arena.h"
 #include "base/error.h"
-#include "base/string.h"
+
+bool refspec_looks_like_commit(const char *token) {
+    if (!token || !*token) {
+        return false;
+    }
+
+    /* Check for @ (current commit shorthand) */
+    if (strcmp(token, "@") == 0) {
+        return true;
+    }
+
+    /* Check for HEAD and its variations */
+    if (strncmp(token, "HEAD", 4) == 0) {
+        /* Could be HEAD, HEAD~1, HEAD^, HEAD~3^2, etc. */
+        return true;
+    }
+
+    /* Check for pure commit SHA (7-40 hex chars) */
+    size_t len = strlen(token);
+    if (len >= 7 && len <= 40) {
+        bool all_hex = true;
+        for (size_t i = 0; i < len; i++) {
+            if (!isxdigit((unsigned char) token[i])) {
+                all_hex = false;
+                break;
+            }
+        }
+        if (all_hex) {
+            return true;
+        }
+    }
+
+    /* Check for SHA with modifiers (abc123^, def456~2, etc.) */
+    const char *p = token;
+    size_t hex_count = 0;
+
+    /* Count leading hex chars */
+    while (*p && isxdigit((unsigned char) *p)) {
+        hex_count++;
+        p++;
+    }
+
+    /* If we have 7+ hex chars followed by ~ or ^, it's a ref */
+    if (hex_count >= 7 && (*p == '~' || *p == '^')) {
+        return true;
+    }
+
+    return false;
+}
 
 error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
     CHECK_NULL(arena);
@@ -41,7 +91,7 @@ error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
 
     /* Step 2: last '@' separates commit, but only when the suffix is a git ref. */
     const char *at = strrchr(remainder, '@');
-    if (at && at[1] != '\0' && str_looks_like_git_ref(at + 1)) {
+    if (at && at[1] != '\0' && refspec_looks_like_commit(at + 1)) {
         size_t file_len = (size_t) (at - remainder);
         if (file_len == 0) {
             return ERROR(ERR_INVALID_ARG, "Empty file path in refspec");

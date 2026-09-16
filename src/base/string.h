@@ -1,7 +1,11 @@
 /**
  * string.h - String utility functions
  *
- * Helper functions for common string operations.
+ * Helper functions for common string operations. Strings are read here as strings:
+ * no product's grammar lives in this file, so a question whose answer turns on
+ * what a word *means* to dotta or to Git belongs with the module that owns the
+ * words — a storage name's shape with the labels (infra/path.h, infra/mount.h),
+ * a commit's with the syntax that spells one (base/refspec.h).
  */
 
 #ifndef DOTTA_STRING_H
@@ -135,22 +139,6 @@ error_t *str_dup(const char *str, char **out);
  * @return Error or NULL on success
  */
 error_t *str_replace_owned(char **target, const char *new_value);
-
-/**
- * Check if string looks like a Git reference
- *
- * Recognizes:
- * - Commit SHAs (7-40 hex chars)
- * - HEAD and variations (HEAD~1, HEAD^, HEAD~3^2)
- * - SHA with modifiers (abc123^, def456~2)
- * - @ symbol (current commit shorthand)
- *
- * Note: Does not verify ref exists in repository.
- *
- * @param str String to check (can be NULL)
- * @return true if str looks like a git reference
- */
-bool str_looks_like_git_ref(const char *str);
 
 /**
  * RAII cleanup for strings

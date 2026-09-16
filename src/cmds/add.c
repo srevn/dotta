@@ -963,18 +963,21 @@ static void report_enable_hint(
  *
  * One line per label that took a path, in the labels' own order, counting paths:
  * a file and a directory are one name each, so the lines sum to the kinds the
- * counts above them name, in every arm. The per-profile label names where it
- * stands, spelled as every screen that prints a bound target spells it
- * (base/output.h). No tense: a noun phrase, true of a capture and of one about
- * to happen.
+ * counts above them name, in every arm. A label whose root the user chose names
+ * where it stands, spelled as every screen that prints a bound target spells it
+ * (base/output.h); the machine's own roots are where the word says. No tense: a
+ * noun phrase, true of a capture and of one about to happen.
  *
- * @param walk The selection, and the output (must not be NULL)
- * @param target Where this profile's custom/ tree stands for this command — the
- *               binding its table holds. Non-NULL whenever a listed name is
- *               custom/, which only a binding composes or resolves
+ * The place is the table's, asked of the view the walk named through — the same
+ * table, which lends it back (core/manifest.h manifest_mounts) — so the line
+ * and the names it counts cannot disagree about where a binding stands.
+ *
+ * @param walk The selection, the table it named through, and the output (must
+ *             not be NULL)
  */
-static void report_labels(const add_walk_t *walk, const char *target) {
+static void report_labels(const add_walk_t *walk) {
     output_t *out = walk->ctx->out;
+    const mount_table_t *mounts = manifest_mounts(walk->view);
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
 
     /* One pass over both lists, a slot per label: a name says its own
@@ -990,9 +993,13 @@ static void report_labels(const add_walk_t *walk, const char *target) {
     for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
         if (count[label] == 0) continue;
 
-        if (mount_kinds[label].per_profile) {
+        /* A name was listed under a label only where the asker has that root,
+         * so the table holds one — and whether the user chose the place is the
+         * root's own answer, not the label's. */
+        const mount_root_t *root = mount_root_of(mounts, walk->profile, label);
+        if (root && root->profile) {
             char shown[PATH_MAX];
-            output_format_path(target, identity()->home, shown, sizeof(shown));
+            output_format_path(root->location, identity()->home, shown, sizeof(shown));
             output_info(
                 out, OUTPUT_NORMAL, "  %zu path%s as %s/ under %s",
                 count[label], count[label] == 1 ? "" : "s",
@@ -2000,16 +2007,25 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             const manifest_claim_t *listed = hashmap_get(walk.listing, location);
             if (!listed) {
                 /* Entered without claiming, which happens at a root of the profile
-                 * alone — so mount_root answers, as it did when the entry was
+                 * alone — so the table answers, as it did when the entry was
                  * made. The walk beneath it has already composed its children
                  * under the root's label, and a claim admitted now would move
-                 * their prefix. */
-                label_t root;
-                mount_root(mounts, opts->profile, location, &root);
+                 * their prefix.
+                 *
+                 * Two structures could disagree here — this command's listing
+                 * and the table it was built from — so the miss is said rather
+                 * than dereferenced, which every other noun site can do because
+                 * a find two lines above established its root. */
+                const mount_root_t *root = mount_root_at(mounts, opts->profile, location);
+                if (!root) {
+                    err = ERROR(
+                        ERR_INTERNAL,
+                        "'%s' was entered as a root the table does not hold", file
+                    );
+                    goto cleanup;
+                }
                 char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(
-                    root, opts->profile, buf, sizeof(buf)
-                );
+                const char *noun = mount_root_describe(root, buf, sizeof(buf));
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'%s' names %s, which this command has already walked through\n\n"
@@ -2062,30 +2078,33 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * one rule with two halves, of which collect_tree's "Skipped root"
              * arm is the other (a link met in a walk is not followed). A link
              * to nothing, and anything that is not a directory, still cannot be
-             * added itself. A HOME whose link reaches the filesystem root is
-             * refused: it would name the whole machine home/, a portable label
-             * that lands under the next machine's HOME. A target's link may reach
-             * it — the machine is then named custom/, which the next machine
-             * binds where it likes, a target at "/" being a binding like any
-             * other (infra/mount.h). A link that reaches dotta's own store is
-             * refused under every label: the exemption the filesystem root gives
-             * a target has no counterpart here, a custom/ binding at the store
-             * being the worst of the three rather than the tolerable one. A link
-             * is the only shape asked, that being what the command line brought;
-             * a root standing at the filesystem root as a directory in its own
-             * right — a bind mount at HOME — is entered like any other, and one
-             * standing at the store was refused by its own lstat above. A typed
-             * name never arrives here, the user's own name being the answer.
+             * added itself. A root the machine's own word placed, whose link
+             * reaches the filesystem root, is refused: it would name the whole
+             * machine home/, a portable label that lands under the next machine's
+             * HOME. A root the user bound may reach it — the machine is then
+             * named custom/, which the next machine binds where it likes, a target
+             * at "/" being a binding like any other (infra/mount.h) — so the
+             * exemption reads which profile bound the root, and no label, and a
+             * binding at HOME's own spelling is that profile's binding by the
+             * table's tie. A link that reaches dotta's own store is refused under
+             * every label: the exemption the filesystem root gives a target has
+             * no counterpart here, a custom/ binding at the store being the worst
+             * of the three rather than the tolerable one. A link is the only
+             * shape asked, that being what the command line brought; a root
+             * standing at the filesystem root as a directory in its own right —
+             * a bind mount at HOME — is entered like any other, and one standing
+             * at the store was refused by its own lstat above. A typed name never
+             * arrives here, the user's own name being the answer.
              *
-             * `root` is written: manifest_name answered NULL, which it does only
-             * where mount_root answers (infra/mount.h mount_root_describe). */
-            label_t root;
-            mount_root(mounts, opts->profile, location, &root);
+             * `root` is non-NULL: manifest_name answered NULL, which it does
+             * only where a root of the profile stands at the location —
+             * mount_root_at's own definition (infra/mount.h). */
+            const mount_root_t *root = mount_root_at(mounts, opts->profile, location);
             struct stat reached;
             if (occupant == FS_OCCUPANT_SYMLINK && fs_stat(location, &reached) == 0 &&
                 S_ISDIR(reached.st_mode)) {
                 struct stat slash;
-                if (!mount_kinds[root].per_profile && fs_stat("/", &slash) == 0 &&
+                if (!root->profile && fs_stat("/", &slash) == 0 &&
                     reached.st_dev == slash.st_dev && reached.st_ino == slash.st_ino) {
                     err = ERROR(
                         ERR_INVALID_ARG,
@@ -2116,9 +2135,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
             if (kind != PATH_KIND_DIRECTORY) {
                 char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(
-                    root, opts->profile, buf, sizeof(buf)
-                );
+                const char *noun = mount_root_describe(root, buf, sizeof(buf));
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'%s' is %s and cannot be added itself; name what is inside it",
@@ -2493,7 +2510,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 opts->profile
             );
         }
-        report_labels(&walk, target ? target : bound);
+        report_labels(&walk);
         if (!profile_exists) {
             output_info(
                 out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
@@ -2758,7 +2775,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * keeps being its claim's and not the command line's. Under the binding this
      * command's table holds: the flag's when the run brought one, else the row's
      * the pre-flight copied. */
-    report_labels(&walk, target ? target : bound);
+    report_labels(&walk);
 
     /* The branch is Git's fact and stands whatever the record did; the enabling
      * is a row, which a failed phase can leave standing (a branch recreated over

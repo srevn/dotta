@@ -671,9 +671,13 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest);
  * the kind (manifest_unbound_kind_t), so the screens that print an entry read
  * one spelling and a fourth kind is named here.
  *
- * Returns `buf`, so the noun reaches the line it belongs to as a value, the way
- * mount_root_describe's does. Truncates rather than fails: a screen noun, not a
- * key.
+ * Returns `buf`, so the noun reaches the line it belongs to as a value rather
+ * than through a statement of its own, and every screen that prints an entry
+ * says it one way. Truncates rather than fails: a screen noun, not a key.
+ *
+ * Two vocabularies name a root in this tree, by decision: this one a namespace
+ * with no place, where nothing was found; infra/mount.h's mount_root_describe a
+ * place the table found. Neither is the other's fallback.
  *
  * @param entry The entry (must not be NULL)
  * @param buf Caller's buffer (PATH_MAX at every caller)

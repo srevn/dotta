@@ -23,7 +23,6 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
-#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -384,10 +383,11 @@ static error_t *entry_to_restore(
         }
 
         if (arg->key == PATH_KEY_LOCATION) {
-            label_t root;
-            if (mount_root(ctx->run.mounts, profile, arg->location, &root)) {
+            const mount_root_t *root =
+                mount_root_at(ctx->run.mounts, profile, arg->location);
+            if (root) {
                 char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(root, profile, buf, sizeof(buf));
+                const char *noun = mount_root_describe(root, buf, sizeof(buf));
                 return ERROR(
                     ERR_INVALID_ARG, "'%s' is %s: name what is inside it",
                     arg->location, noun

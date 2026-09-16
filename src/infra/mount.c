@@ -26,11 +26,15 @@
  * than a second one that happens to agree. Designated initializers keep the row
  * order in lockstep with the ordinals, which is what lets a reader subscript by
  * the label it holds.
+ *
+ * Defined here and read nowhere in this file: the noun that was its third column
+ * is rendered from a root now (mount_root_describe), and what the two survivors
+ * say belongs to core/cleanup and core/metadata (infra/mount.h).
  */
 const mount_spec_t mount_kinds[LABEL_COUNT] = {
-    [LABEL_HOME] =   { "your home directory",   false, false },
-    [LABEL_ROOT] =   { "the filesystem root",   false, true  },
-    [LABEL_CUSTOM] = { "the deployment target", true,  true  },
+    [LABEL_HOME] =   { false, false },
+    [LABEL_ROOT] =   { false, true  },
+    [LABEL_CUSTOM] = { true,  true  },
 };
 
 error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino) {
@@ -40,7 +44,8 @@ error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_
      * (infra/path.h), so of the binders' input only the interactive save's raw
      * text — kept as typed where a resolve refused it — can fail here; the sentence
      * names the whole rule for it. "/" is included: a target at the root is a
-     * binding like any other, spelled "" in the table (mount_table_build). */
+     * binding like any other, and the table keeps it as it stands
+     * (mount_table_build). */
     if (!fs_is_folded(target)) {
         return ERROR(
             ERR_INVALID_ARG,
@@ -103,76 +108,66 @@ bool mount_same_target(const char *a, const char *b) {
            st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino;
 }
 
-/**
- * One mount: the spelling it is known by, and whose it is. Both views (forward
- * name, backward resolve) walk this same array.
- *
- * - spelling: as its binder typed it — HOME as the identity spells it, "" for a
- *           root at "/" (the sentinel's, HOME's when HOME is "/", and a binding's
- *           when its target is "/"). The key of every location beneath it: a
- *           location is this joined with a tail, and nothing is read through
- *           (infra/mount.h).
- * - label:  the storage label paths under this entry take.
- * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
- *           namespace. For CUSTOM mounts, the owning profile name — always set,
- *           mount_table_build refusing a binding that names none; it is the whole
- *           of whose an entry is, and both views read it through one predicate
- *           (namespace_holds).
- *
- * Every string is the arena's — copied at build — so the table borrows nothing
- * and stands for the arena's lifetime; the sentinel's is the literal "", which
- * outlives every arena.
- */
-typedef struct {
-    const char *spelling;    /* As its binder typed it */
-    label_t label;           /* The storage label paths under it take */
-    const char *profile;     /* The binding's owner; NULL for HOME and ROOT */
-} mount_entry_t;
-
 struct mount_table {
-    mount_entry_t *entries;    /* Customs in position order, then HOME, then ROOT */
-    size_t entry_count;        /* The customs that named a target, plus those two */
+    mount_root_t *roots;    /* Customs in position order, then HOME, then ROOT */
+    size_t root_count;      /* The customs that named a target, plus those two */
 };
 
 /**
- * Does the asker's namespace hold this entry?
+ * Does the asker's namespace hold this root?
  *
- * A binding is a profile's (mount_t); an entry with none — HOME, the sentinel —
- * is every namespace's, and the build refuses a binding that names no profile
- * (mount_table_build), so a missing profile reads as "shared" and never as
+ * A binding is a profile's (mount_t); a root no profile bound — HOME, the sentinel
+ * — is every namespace's, and the build refuses a binding that names no profile
+ * (mount_table_build), so a missing binder reads as "shared" and never as
  * "unknown". A NULL asker meets the shared roots alone: it names nothing beneath
  * another profile's binding and places no custom/ claim.
  *
  * One rule, read by the forward name (deepest_root) and the backward resolve
- * (find_entry).
+ * (mount_root_of).
  */
-static bool namespace_holds(const char *profile, const mount_entry_t *m) {
+static bool namespace_holds(const char *profile, const mount_root_t *m) {
     return !m->profile || (profile && strcmp(m->profile, profile) == 0);
 }
 
 /**
- * The tail of `location` past `root`, on a component boundary.
+ * The prefix a location is matched against and joined beneath.
+ *
+ * A root is a path wherever it is read (infra/mount.h), and the root directory
+ * is the one root that *is* its separator: the two string verbs read it one byte
+ * shorter, as "", which is the prefix that joins a tail with one slash and encloses
+ * every absolute path at depth zero. Every other root is its own prefix, the
+ * same pointer. The reading is made here and nowhere else — the sentinel, a HOME
+ * of "/" and a binding whose target is "/" all reach it — so the build stores
+ * one string per root and no consumer of a root can hold the form that is not a
+ * path.
+ *
+ * Two readers: the enclosing search (deepest_root) and the join (mount_resolve).
+ */
+static const char *join_prefix(const mount_root_t *root) {
+    return root->location[1] ? root->location : "";
+}
+
+/**
+ * The tail of `location` past `prefix`, on a component boundary.
  *
  *   /home/user encloses /home/user/.bashrc; it does NOT enclose
  *   /home/username/.bashrc
  *
- * `root` is any of the table's — a mount's spelling, HOME's, or the sentinel's
- * "" — never a `--target` as such, so the parameter is named for what the table
- * calls it. Returns NULL when `root` does not enclose `location` or the boundary
- * fails; otherwise a pointer into `location` — the empty string when the two
- * name one directory, the tail past it otherwise. The root's "" encloses every
- * absolute path at depth zero, and only those: a relative path's first byte is
- * no boundary.
+ * `prefix` is a root's, as join_prefix reads it — never a `--target` as such.
+ * Returns NULL when it does not enclose `location` or the boundary fails; otherwise
+ * a pointer into `location` — the empty string when the two name one directory,
+ * the tail past it otherwise. The root directory's "" encloses every absolute
+ * path at depth zero, and only those: a relative path's first byte is no boundary.
  */
-static const char *tail_under_root(const char *location, const char *root) {
-    size_t root_len = strlen(root);
-    if (strncmp(location, root, root_len) != 0) return NULL;
+static const char *tail_under_root(const char *location, const char *prefix) {
+    size_t prefix_len = strlen(prefix);
+    if (strncmp(location, prefix, prefix_len) != 0) return NULL;
 
     /* Boundary: next character must be '/' or '\0'. */
-    char boundary = location[root_len];
+    char boundary = location[prefix_len];
     if (boundary != '/' && boundary != '\0') return NULL;
 
-    const char *tail = location + root_len;
+    const char *tail = location + prefix_len;
     if (*tail == '/') tail++;
 
     return tail;  /* "" when the two name one directory, non-empty otherwise */
@@ -189,48 +184,50 @@ static const char *tail_under_root(const char *location, const char *root) {
  * is "/": `~/.rc` under a binding at $HOME is `custom/.rc`, and a capture at
  * `/etc/x` on a machine whose HOME is "/" (a container's bare uid) is `root/etc/x`,
  * the reading that means the same directory on every other machine. Three roots
- * can stand at "": the sentinel always, HOME when it is "/", and a binding whose
+ * can stand at "/": the sentinel always, HOME when it is "/", and a binding whose
  * target is "/". The binding takes both ties by the rule above — every path of
  * that profile outside a deeper root is `custom/`, which is what binding a profile
  * at the root means: a container's own root here, and the same profile bound at
  * a jail on the host — and between HOME and the sentinel the portable name wins.
  * One profile has one binding.
  *
- * A root encloses the location iff its spelling is a prefix of it on a component
+ * A root encloses the location iff its prefix is a prefix of it on a component
  * boundary (tail_under_root), the root itself included with the empty tail: every
  * key is a string of the rows' own (infra/mount.h), so no second spelling of a
  * root is owed a match.
  *
  * `*out_tail` is empty when the location is the root itself, and is written only
- * when an entry matched — NULL when none did, which with the sentinel present
- * means only a malformed table or a location that is not absolute. The winner
- * is the entry itself: mount_name reads its label's word, mount_root its label.
+ * when a root matched — NULL when none did, which with the sentinel present means
+ * only a malformed table or a location that is not absolute. The answer is the
+ * table's own row: mount_name reads its label, mount_root_at its whole.
  */
-static const mount_entry_t *deepest_root(
+static const mount_root_t *deepest_root(
     const mount_table_t *table, const char *profile, const char *location,
     const char **out_tail
 ) {
-    const mount_entry_t *winner = NULL;
+    const mount_root_t *winner = NULL;
     const char *deepest = NULL;
 
-    for (size_t i = 0; i < table->entry_count; i++) {
-        const mount_entry_t *m = &table->entries[i];
+    for (size_t i = 0; i < table->root_count; i++) {
+        const mount_root_t *m = &table->roots[i];
 
-        /* The asker's own entries first: another profile's binding is an ordinary
+        /* The asker's own roots first: another profile's binding is an ordinary
          * directory in this namespace, and never competes on depth. */
         if (!namespace_holds(profile, m)) continue;
 
-        const char *tail = tail_under_root(location, m->spelling);
+        const char *tail = tail_under_root(location, join_prefix(m));
         if (!tail) continue;
 
         /* Every tail points into `location` at its root's length, so pointer
          * order is depth order. The tie reads as the incumbent's veto and holds
-         * under any entry order: it keeps an equal depth when it is the binding
-         * — the more specific statement — or when the challenger is HOME, which
-         * the portable name outranks. */
+         * under any row order: it keeps an equal depth when it is a binding —
+         * the more specific statement, the row's own fact — or when the challenger
+         * is HOME, which the portable name outranks. The one comparison a label
+         * is load-bearing for, a HOME of "/" and the sentinel standing at one
+         * directory with neither owned. */
         if (winner && tail < deepest) continue;
         if (winner && tail == deepest &&
-            (winner->label == LABEL_CUSTOM || m->label == LABEL_HOME)) {
+            (winner->profile || m->label == LABEL_HOME)) {
             continue;
         }
 
@@ -256,27 +253,29 @@ error_t *mount_table_build(
     /* Slot reserve: every mount, whether or not it contributes, plus HOME and
      * the sentinel — a reservation, not a count, so the rows are read once. */
     mount_table_t *table = arena_calloc(arena, 1, sizeof(*table));
-    mount_entry_t *entries = arena_calloc(arena, mount_count + 2U, sizeof(*entries));
-    if (!table || !entries) {
+    mount_root_t *roots = arena_calloc(arena, mount_count + 2U, sizeof(*roots));
+    if (!table || !roots) {
         return ERROR(ERR_MEMORY, "Failed to allocate mount table");
     }
 
     /* Customs first (input order), then HOME, then the sentinel; no reader depends
-     * on the order — deepest_root breaks its ties on the labels.
+     * on the order — deepest_root breaks its ties on the binder and one label,
+     * and mount_root_of answers a label whose row is unique to it (infra/mount.h).
      *
      * The profile is the type's contract (mount_t) and is refused whatever the
      * target: a nameless binding is a caller's bug, and it would be a root of
      * every namespace — the machine-wide name this module does not produce.
      * Establishing it here is what lets namespace_holds read `m->profile` as
-     * the whole of whose an entry is, for both views at once. The target is the
-     * type's contract too, and is refused when it is not absolute and folded
-     * (sys/filesystem.h fs_is_folded): a relative row is no path on this machine,
-     * and a `//`, a `.` or a trailing slash would key claims no argument can
-     * spell. Neither reaches here — a row's target is the store's, whose column
-     * holds no other shape (core/state.c), and a command's own binding passed
-     * mount_validate_target — so one arriving is a caller's bug, refused as a
-     * nameless binding is, naming the profile. Establishing both here is what
-     * lets mount_resolve join every spelling with one separator, unconditionally.
+     * the whole of whose a root is, for both views at once, and lets the noun
+     * name a binder without asking whether there is one (mount_root_describe).
+     * The target is the type's contract too, and is refused when it is not absolute
+     * and folded (sys/filesystem.h fs_is_folded): a relative row is no path on
+     * this machine, and a `//`, a `.` or a trailing slash would key claims no
+     * argument can spell. Neither reaches here — a row's target is the store's,
+     * whose column holds no other shape (core/state.c), and a command's own binding
+     * passed mount_validate_target — so one arriving is a caller's bug, refused
+     * as a nameless binding is, naming the profile. Establishing both here is
+     * what lets mount_resolve join every root with one separator, unconditionally.
      * NULL contributes no mount: the profile is bound nowhere in this table,
      * which the view records (core/manifest.h manifest_unbound). */
     size_t n = 0;
@@ -297,41 +296,40 @@ error_t *mount_table_build(
 
         /* Copied like the name: the table keeps nothing of the caller's past
          * the call, so it stands for the arena's lifetime whatever happens to
-         * the rows it was built from. "/" is spelled "" as a HOME of "/" is below
-         * — the one spelling that joins a tail with one slash and encloses every
-         * absolute path at depth zero, which is the sentinel's own; the tie between
-         * the three is deepest_root's. */
-        const char *spelling = arena_strdup(arena, raw[1] ? raw : "");
+         * the rows it was built from. A target of "/" is kept as it stands, as
+         * HOME and the sentinel are below — a root is a path here, and the one
+         * that is its own separator is read a byte shorter where it is matched
+         * and joined (join_prefix); the tie between the three is deepest_root's. */
+        const char *location = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
-        if (!spelling || !profile) {
+        if (!location || !profile) {
             return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
         }
-        entries[n++] = (mount_entry_t){
-            .spelling = spelling, .label = LABEL_CUSTOM, .profile = profile,
+        roots[n++] = (mount_root_t){
+            .label = LABEL_CUSTOM, .location = location, .profile = profile,
         };
     }
 
-    /* The invoker's HOME as the identity spells it (sys/identity) — "" when it
-     * is "/", a container's bare uid: the one spelling that joins a tail with
-     * one slash and encloses every absolute path at depth zero, which is the
-     * sentinel's own; the tie between the two is deepest_root's. */
+    /* The invoker's HOME as the identity spells it (sys/identity), "/" included
+     * — a container's bare uid, which then stands at the sentinel's own directory
+     * and loses the naming tie to it. */
     const identity_t *id = identity();
-    const char *home = arena_strdup(arena, id->home[1] ? id->home : "");
+    const char *home = arena_strdup(arena, id->home);
     if (!home) {
         return ERROR(ERR_MEMORY, "Failed to copy the home directory into the arena");
     }
-    entries[n++] = (mount_entry_t){
-        .spelling = home, .label = LABEL_HOME, .profile = NULL,
+    roots[n++] = (mount_root_t){
+        .label = LABEL_HOME, .location = home, .profile = NULL,
     };
-    /* The sentinel: "" encloses every absolute path at depth zero and joins a
-     * tail with one slash, so the fallback needs no case of its own anywhere. A
-     * literal, not the arena's. */
-    entries[n++] = (mount_entry_t){
-        .spelling = "", .label = LABEL_ROOT, .profile = NULL,
+    /* The sentinel: every absolute path stands under the root directory at depth
+     * zero, so the fallback needs no case of its own anywhere. A literal, not
+     * the arena's. */
+    roots[n++] = (mount_root_t){
+        .label = LABEL_ROOT, .location = "/", .profile = NULL,
     };
 
-    table->entries = entries;
-    table->entry_count = n;
+    table->roots = roots;
+    table->root_count = n;
     *out = table;
 
     return NULL;
@@ -349,7 +347,7 @@ error_t *mount_name(
     *out_storage = NULL;
 
     const char *tail = NULL;
-    const mount_entry_t *root = deepest_root(table, profile, location, &tail);
+    const mount_root_t *root = deepest_root(table, profile, location, &tail);
     if (!root) {
         return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
     }
@@ -365,65 +363,45 @@ error_t *mount_name(
     return NULL;
 }
 
-bool mount_root(
-    const mount_table_t *table, const char *profile, const char *location,
-    label_t *out_label
+const mount_root_t *mount_root_at(
+    const mount_table_t *table, const char *profile, const char *location
 ) {
     const char *tail = NULL;
-    const mount_entry_t *root = deepest_root(table, profile, location, &tail);
+    const mount_root_t *root = deepest_root(table, profile, location, &tail);
 
-    if (!root || *tail != '\0') return false;
-    if (out_label) *out_label = root->label;
-    return true;
+    return root && *tail == '\0' ? root : NULL;
 }
 
-const char *mount_root_describe(
-    label_t root, const char *profile, char *buf, size_t size
+const mount_root_t *mount_root_of(
+    const mount_table_t *table, const char *profile, label_t label
 ) {
-    /* The owner is named where there is one to name. A root found in a table
-     * was found by its own profile, so a per_profile root arrives with its asker
-     * — and the conjunct guards a caller the tree no longer has, which is why
-     * it is stated in the header rather than trusted here (infra/mount.h). */
-    if (mount_kinds[root].per_profile && profile) {
-        snprintf(buf, size, "%s of profile '%s'", mount_kinds[root].noun, profile);
-    } else {
-        snprintf(buf, size, "%s", mount_kinds[root].noun);
-    }
-
-    return buf;
-}
-
-/**
- * The entry of `label` in the asker's namespace, or NULL when none is.
- *
- * HOME and the sentinel are every asker's, so they answer whoever asks; a CUSTOM
- * entry is its own profile's alone, so a NULL asker finds no binding and places
- * no custom/ claim (namespace_holds).
- *
- * Two readers: mount_resolve, which joins beneath the spelling, and
- * mount_root_location, which hands it out as a path.
- */
-static const mount_entry_t *find_entry(
-    const mount_table_t *table, label_t label, const char *profile
-) {
-    for (size_t i = 0; i < table->entry_count; i++) {
-        const mount_entry_t *m = &table->entries[i];
+    for (size_t i = 0; i < table->root_count; i++) {
+        const mount_root_t *m = &table->roots[i];
         if (m->label == label && namespace_holds(profile, m)) return m;
     }
 
     return NULL;
 }
 
-const char *mount_root_location(
-    const mount_table_t *table, const char *profile, label_t label
+const char *mount_root_describe(
+    const mount_root_t *root, char *buf, size_t size
 ) {
-    const mount_entry_t *entry = find_entry(table, label, profile);
-    if (!entry) return NULL;
+    /* The one switch over a label's meaning on a screen. A bound root names its
+     * binder: the profile is the build's, refused when a binding names none
+     * (mount_table_build), so there is no arm where it could be absent. */
+    switch (root->label) {
+        case LABEL_HOME:
+            snprintf(buf, size, "your home directory");
+            break;
+        case LABEL_ROOT:
+            snprintf(buf, size, "the filesystem root");
+            break;
+        case LABEL_CUSTOM:
+            snprintf(buf, size, "the deployment target of profile '%s'", root->profile);
+            break;
+    }
 
-    /* The one reader that turns the table's "" back into the path it spells:
-     * every other verb joins beneath the spelling (mount_resolve) or matches it
-     * as a prefix (deepest_root), and neither wants the slash. */
-    return entry->spelling[0] ? entry->spelling : "/";
+    return buf;
 }
 
 error_t *mount_resolve(
@@ -451,27 +429,26 @@ error_t *mount_resolve(
         );
     }
 
-    /* Only CUSTOM lookups can miss here: HOME and ROOT entries are unconditional
-     * (mount_table_build adds them every time). A CUSTOM miss means the profile
-     * has no --target on this machine — e.g., a clone before the user has
-     * configured a target — and the answer is the absence itself; malformed-input
-     * failures surface as ERR_INTERNAL above. */
-    const mount_entry_t *entry = find_entry(table, split.label, profile);
-    if (!entry) return NULL;
+    /* The find, whose absence is this verb's: only CUSTOM can miss — HOME and
+     * the sentinel are unconditional (mount_table_build adds them every time) —
+     * and a CUSTOM miss means the profile has no --target on this machine, e.g.
+     * a clone before the user has configured one. The answer is that absence
+     * itself; malformed-input failures surfaced as ERR_INTERNAL above. */
+    const mount_root_t *root = mount_root_of(table, profile, split.label);
+    if (!root) return NULL;
 
-    /* The join: the root's spelling, "/", the tail — the key of the claim, which
+    /* The join: the root's prefix, "/", the tail — the key of the claim, which
      * every producer of a key agrees on because every one is this join over the
-     * same strings (infra/mount.h). Uniform across the three labels — the
-     * sentinel's "" and a HOME of "/" join with one slash:
+     * same strings (infra/mount.h). Uniform across the three labels, the root
+     * directory reading as "" (join_prefix):
      *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
      * The tail is non-empty (label_validate_storage rejects trailing slashes)
-     * and no spelling ends in a slash: the sentinel's, a HOME of "/" and a binding
-     * at "/" are "", HOME is folded by the identity (sys/identity), and a target
-     * is absolute and folded, the build's own refusal (mount_table_build) — so
-     * the join is unconditional. */
-    *out_location = arena_str_format(arena, "%s/%s", entry->spelling, split.tail);
+     * and no prefix ends in a slash: the root directory's is "", HOME is folded
+     * by the identity (sys/identity), and a target is absolute and folded, the
+     * build's own refusal (mount_table_build) — so the join is unconditional. */
+    *out_location = arena_str_format(arena, "%s/%s", join_prefix(root), split.tail);
     if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }

@@ -626,7 +626,7 @@ static error_t *manifest_ascend(
     size_t len = strlen(rung);
 
     for (;;) {
-        if (mount_root(n->mounts, n->profile, rung, NULL)) break;
+        if (mount_root_at(n->mounts, n->profile, rung)) break;
 
         size_t up = str_path_parent_len(rung);
         if (up >= len) break;   /* "/" is its own parent; the sentinel ends it anyway */
@@ -1099,11 +1099,12 @@ static error_t *manifest_contribute(
      * root with no target here stands nowhere, and the slice records it as its
      * third kind — the one entry that is no claim. HOME and the sentinel always
      * answer, so only a per_profile root can be noted, and the label is the
-     * vocabulary's own static string. Noted before the claims, in the sheet's
-     * own order. */
+     * vocabulary's own static string. Where the root stands is not read — the
+     * question is whether the asker has one — so the find is asked for its absence.
+     * Noted before the claims, in the sheet's own order. */
     for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
         if (!metadata_scans_root(metadata, label)) continue;
-        if (mount_root_location(manifest->mounts, c->profile, label)) continue;
+        if (mount_root_of(manifest->mounts, c->profile, label)) continue;
         err = manifest_note_unbound(
             manifest, c->profile, label_words[label],
             MANIFEST_UNBOUND_ROOT, arena

@@ -900,7 +900,7 @@ static error_t *capture_ancestor(
      * at a root from an older table is the sheet's business
      * (metadata_prune_ancestors, which is what a claim reaching here is), not a
      * migration's. */
-    if (mount_root(mounts, profile, filesystem_path, NULL)) {
+    if (mount_root_at(mounts, profile, filesystem_path)) {
         return NULL;
     }
 

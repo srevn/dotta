@@ -54,21 +54,22 @@
  * a HOME that reaches the filesystem root through a link (cmds/add.c).
  *
  * Every root's spelling is absolute and folded (sys/filesystem.h fs_is_folded),
- * each established where it is made: the sentinel's is the literal "", HOME's
+ * each established where it is made: the sentinel's is the literal "/", HOME's
  * is the identity's (sys/identity, normalized at identity_init), and a row's
  * target is normalized and validated where it is written (the binders,
  * mount_validate_target) over a column that holds no other shape (core/state.c:
  * a target no binder would write is refused where a hand makes the edit). So
- * the build meets only spellings that are keys — `/` spelled "" — and refuses
- * any other as a caller's bug (mount_table_build). A row bound nowhere holds
- * NULL, which contributes no mount; the repair is a re-bind.
+ * the build meets only spellings that are keys, keeps each as it stands, and
+ * refuses any other as a caller's bug (mount_table_build). A row bound nowhere
+ * holds NULL, which contributes no mount; the repair is a re-bind.
  *
- * The root directory is spelled "" in the table — the one spelling that joins a
- * tail with one slash and encloses every absolute path at depth zero: the
- * sentinel's, HOME's when HOME is "/" (a container's bare uid), and a binding's
- * when its target is "/" (a container's own root; mount_table_build). One reader
- * turns it back into the path it spells, for a caller that walks a root rather
- * than joins beneath it (mount_root_location).
+ * So a root is a path wherever it is read — printed, compared to an argument,
+ * measured against a rung. The root directory is the one root that *is* its own
+ * separator, and the table's two string verbs read it one byte shorter: "" is
+ * the prefix that joins a tail with one slash and encloses every absolute path
+ * at depth zero, and it is where the sentinel, a HOME of "/" (a container's bare
+ * uid) and a binding whose target is "/" (a container's own root) all stand.
+ * That reading is made in one place and nowhere published (mount.c join_prefix).
  *
  * One table, one reading
  * ----------------------
@@ -85,17 +86,22 @@
  * and within one profile the view keeps one. Nothing is exclusive: a binding
  * says where a profile's names resolve, not who owns the files there.
  *
- * Three questions over the same data:
+ * Four questions over the same data. Three answer a root of the asker's — the
+ * table's own, lent (mount_root_t) — and the fourth a string it composed:
+ *   - Which root stands exactly at a location, and whose: mount_root_at, the
+ *     climb's question and every refusal that names a place.
+ *   - Where the asker's root of a label stands: mount_root_of, the view's
+ *     contribution and add's receipt.
+ *   - Where a profile's claim stands (profile + storage -> filesystem):
+ *     mount_resolve — that find, then the join. A name is composed beneath a
+ *     root, so resolving one places it back at the very location it was composed
+ *     from. This verb answers a string rather than a root because its join has
+ *     many readers, where the compose below has one.
  *   - What a profile would call a location it holds no claim at (location ->
  *     storage): mount_name, beneath the deepest of that profile's own roots;
  *     nothing at a root itself. The fuller question — a claim of the profile
  *     standing at or above the location, and only then this — is core/manifest.h's
  *     manifest_name, whose last rung this is.
- *   - Whether a location is one of a profile's roots: mount_root, the walkers'
- *     and the climb's question.
- *   - Where a profile's claim stands (profile + storage -> filesystem):
- *     mount_resolve. A name is composed beneath a root's spelling, so resolving
- *     one places it back at the very location it was composed from.
  *
  * Traversal is refused at the boundary and trusted below it: a storage path where
  * a branch, a sheet or an argument is read (infra/label.h label_validate_storage),
@@ -117,24 +123,22 @@
  * What a label implies.
  *
  * The label names *which namespace a storage path is in* (infra/label.h); the
- * row carries *what the label implies*: the noun a screen calls the root by,
- * and the two per-label facts every consumer ultimately asks — "is resolution
- * profile-keyed?" and "do files under this label carry ownership metadata?".
+ * row carries *what the label implies*: the two per-label facts every consumer
+ * ultimately asks — "is resolution profile-keyed?" and "do files under this label
+ * carry ownership metadata?".
  *
  * One row per label, indexed by it — the shape utils/config.h's strategies and
  * crypto/kdf.h's presets take — so a fact of a label is a subscript and never a
  * lookup.
  *
- * Every field here is leaving, and the row with them: the noun becomes what the
- * table renders from the root it found, `per_profile` becomes the owner the build
- * stamps on an entry, and `tracks_ownership` becomes the sheet's own statement
- * about what an absent claim means. Until each moves, this is where its reader
- * subscripts.
+ * Both fields are leaving, and the row with them: `per_profile` becomes the profile
+ * the build stamps on a root (mount_root_t), and `tracks_ownership` becomes the
+ * sheet's own statement about what an absent claim means. The noun has already
+ * left — the table renders one from the root it found (mount_root_describe) —
+ * so no verb in this module reads the row, and its readers are core/cleanup and
+ * core/metadata alone. Until each field moves, this is where each subscripts.
  */
 typedef struct mount_spec {
-    const char *noun;             /* The root's word for a screen — a complete noun
-                                   * phrase; a per_profile root takes " of profile
-                                   * '<name>'" after it (mount_root_describe) */
     bool per_profile;             /* True iff resolution is profile-keyed (CUSTOM) */
     bool tracks_ownership;        /* True iff files under this label carry ownership
                                    * metadata */
@@ -220,15 +224,15 @@ typedef struct mount_table mount_table_t;
  * for the call only — the table copies what it keeps.
  *
  * - profile: the owning profile's name; required, whatever the target. A binding
- *   is a profile's: an entry with no profile would be a root of every namespace
- *   (mount_name and mount_root read a NULL profile as "the shared roots — HOME
- *   and `/`"), which is the machine-wide name this module does not produce.
- *   mount_table_build refuses one.
+ *   is a profile's: a root no profile bound is a root of every namespace (every
+ *   verb reads a NULL profile as "the shared roots — HOME and `/`"), which is
+ *   the machine-wide name this module does not produce. mount_table_build refuses
+ *   one.
  * - target: where the profile's custom/ tree stands, as its binder wrote it —
  *   absolute and folded (sys/filesystem.h fs_is_folded), "/" included, which
- *   the table spells "" — and the key of every custom/ path beneath it. NULL or
- *   empty contributes no mount: the profile is bound nowhere in that table. Any
- *   other string is refused at the build (mount_table_build).
+ *   the table keeps as it stands — and the key of every custom/ path beneath
+ *   it. NULL or empty contributes no mount: the profile is bound nowhere in that
+ *   table. Any other string is refused at the build (mount_table_build).
  */
 typedef struct {
     const char *profile;
@@ -244,23 +248,29 @@ typedef struct {
  *
  * The table is augmented internally with:
  *   - A HOME mount at the invoker's home as the identity spells it (sys/identity).
- *   - A ROOT mount whose target is the empty string (universal fallback for
- *     absolute paths that match no other mount).
+ *   - A ROOT mount at "/" (the universal fallback: every absolute path stands
+ *     under it, at depth zero, so no other root is owed a fallback case).
  *
  * A mount with no profile, or with a target that is not absolute and folded, is
  * refused (ERR_INVALID_ARG): a binding is a profile's, and a root is a spelling
  * that is a key. Both invariants are established here so the readers need no
  * per-read check (mount_t above), and both hold of every input by construction
  * — the store's column for a row (core/state.c), mount_validate_target for a
- * command's own binding. A target of "/" is a root like any other, spelled ""
- * for the join's sake (the table's paragraph above), and takes the tie from the
- * sentinel: every path of that profile outside a deeper root is custom/. A NULL
- * or empty target contributes nothing: the profile is bound nowhere, which the
- * view records (core/manifest.h manifest_unbound) and a re-bind repairs. A store
- * a hand still got a malformed row into — its constraints switched off, or its
- * marker bumped without the table — fails every command that builds the view
- * but one: `profile disable`, whose receipt's view is built tolerantly on purpose
- * (cmds/profile.c), which is the way out, then a re-bind.
+ * command's own binding. A target of "/" is a root like any other and takes the
+ * tie from the sentinel: every path of that profile outside a deeper root is
+ * custom/. A NULL or empty target contributes nothing: the profile is bound
+ * nowhere, which the view records (core/manifest.h manifest_unbound) and a re-bind
+ * repairs. A store a hand still got a malformed row into — its constraints switched
+ * off, or its marker bumped without the table — fails every command that builds
+ * the view but one: `profile disable`, whose receipt's view is built tolerantly
+ * on purpose (cmds/profile.c), which is the way out, then a re-bind.
+ *
+ * One binding per profile is the input's shape and not a rule refused here: both
+ * production readers hand in one — the state's rows are keyed by name
+ * (core/state.c) and manifest_mount_table skips the row a command's own binding
+ * stands for — and a profile handed two would have two custom/ roots, of which
+ * every verb below finds whichever the array holds first. A caller building its
+ * own array owes the same.
  *
  * Lifetime:
  *   - Output is allocated entirely from `arena`, every string included: the table
@@ -324,7 +334,7 @@ error_t *mount_table_build(
  * the profile standing at or above the location outranks every root, and
  * core/manifest.h's manifest_name is the whole ascent with this at its end.
  *
- * The answer is the arena's. NULL is a root, and mount_root names which.
+ * The answer is the arena's. NULL is a root, and mount_root_at names which.
  *
  * Errors:
  *   - ERR_INTERNAL when no root encloses the location — a malformed table, or a
@@ -360,67 +370,91 @@ error_t *mount_name(
 );
 
 /**
+ * One of the asker's roots, as the table holds it.
+ *
+ * `location` is where the root stands, as a path: every reader prints it, compares
+ * it to an argument the normalizer spelled, or measures a rung against it — and
+ * the one root that is its own separator, "/", is spelled so here like any other
+ * (the table's paragraph above). `profile` is the whole of whose a root is —
+ * the one that bound it: the build refuses a binding that names none (mount_t),
+ * so NULL reads as "the machine's own word" — HOME, `/` — and never as "unknown".
+ * A name composed beneath a root a profile bound is this machine's arrangement,
+ * which the next machine re-binds where it likes; one composed beneath a root
+ * the machine placed is portable and re-mounts by the word. Every policy asking
+ * "may the user have chosen this place?" reads this field and no label. Not the
+ * *file* ownership every claim carries beside its group (core/manifest.h
+ * manifest_row_t, core/metadata.h) — that one is a system identity, and this
+ * one a profile name.
+ *
+ * The table's own row, lent: every find answers a pointer into the table, NULL
+ * for absence as every lookup in the tree answers it (core/manifest.h
+ * manifest_lookup, mount_resolve below, hashmap_get), and every string is the
+ * arena the table was built in or a literal. A reader that outlives the table
+ * copies what it keeps, as a reader of a view's row does. Two roots can stand
+ * at one directory — a profile bound at HOME's own spelling — and they are two
+ * rows with two labels and two binders, which is why no reader compares the
+ * pointers.
+ */
+typedef struct {
+    label_t label;          /* The namespace mounted here */
+    const char *location;   /* Where it stands, as a path */
+    const char *profile;    /* The profile that bound it; NULL for HOME and / */
+} mount_root_t;
+
+/**
  * Does a root of `profile` stand exactly at `location`, and which?
  *
  * By the root's one spelling: exact equality is the whole test, a key being a
- * string of the rows' own (the table's paragraph above). True, `*out_label`
- * written, when one does; false, `*out_label` untouched, when none does.
- * `out_label` may be NULL for a caller that asks only whether.
+ * string of the rows' own (the table's paragraph above). The root when one stands
+ * there, NULL when none does. The tie is the table's, so the answer's binder is
+ * the winner's — a binding over a shared root at one directory, the portable
+ * name over a HOME at depth zero — and a NULL asker meets the shared roots alone,
+ * so its answer is never a binding's.
  *
  * A root met from above is entered unlisted and its children are named from its
  * label; a symlink standing at one is skipped by a walk and followed by the
  * argument that names it (cmds/add.c, find -H's rule); a claim the climb would
- * author at one is not authored (core/metadata.c). Asked once per directory entry
- * and once per chain rung. Never fails, allocates nothing; `table` and `location`
- * must not be NULL, `profile` may be — a NULL asker meets the shared roots (HOME,
- * `/`) alone, so the answer is never a per_profile root.
+ * author at one is not authored (core/metadata.c). Asked once per chain rung
+ * and once per argument that names a place. Never fails, allocates nothing; `table`
+ * and `location` must not be NULL, `profile` may be.
  *
- * Readers, by what they read. Whether alone: the namer's ascent, at every rung
- * rather than once per argument (core/manifest.c manifest_ascend), and the climb's
- * root guard (core/metadata.c capture_ancestor). The root's label alone, holding
- * the invariant that a root stands there (mount_root_describe): add's two root
- * refusals — the argument arm and the already-walked arm (cmds/add.c), `ignore
- * --test`'s root line (cmds/ignore.c), the claim search's root refusal
- * (core/profiles.c profile_claim_name). Both: revert's, asked directly where
- * its own search answered nothing at the location (cmds/revert.c).
+ * Readers: the climb's root guard (core/metadata.c capture_ancestor), the claim
+ * search's refusal (core/profiles.c profile_claim_name), `ignore --test`'s root
+ * line (cmds/ignore.c), add's two root arms — the argument's, whose root-link
+ * rule reads its binder, and the already-walked arm (cmds/add.c) — and revert's,
+ * asked where its own search answered nothing at the location (cmds/revert.c).
  */
-bool mount_root(
+const mount_root_t *mount_root_at(
     const mount_table_t *table,
     const char *profile,
-    const char *location,
-    label_t *out_label
+    const char *location
 );
 
 /**
- * Where `profile`'s root of `label` stands, as a location.
+ * Where the asker's root of `label` stands, and whose it is.
  *
- * The inverse of mount_root: that one asks which root stands at a location, this
- * one where a root stands. The entry's spelling as a path — "/" where the table
- * spells the root "" (the sentinel, a HOME of "/", a binding at "/") — or NULL
- * for a per_profile root the profile is not bound at here, and for a NULL asker
- * naming one. A location and never the table's own spelling, because the reader
- * walks it, stats it and joins beneath it by the walkers' rule (a separator unless
- * the directory is "/"), and the one spelling that is not a path — "" — is exactly
- * the one lstat answers ENOENT to. HOME and the sentinel are every asker's and
- * always answer.
+ * The inverse of mount_root_at: that one asks which root stands at a location,
+ * this one where a root stands. NULL when the asker has none here — a custom/
+ * nobody bound, a NULL asker naming one; HOME and the sentinel are every asker's
+ * and always answer.
  *
- * The entry, not the tie: a HOME that is also a binding is one directory under
- * two labels, and each label answers its own spelling here, where mount_root
- * and mount_name give the binding the tie. Never fails, allocates nothing; the
- * answer is the table's for the arena's lifetime, or the literal "/".
+ * The row, not the tie: a HOME that is also a binding is one directory under
+ * two labels, and each label answers its own row here, where mount_root_at and
+ * mount_name give the binding the tie. Never fails, allocates nothing.
  *
- * Reader: the view's contribution, which asks where each root the sheet scans
+ * Readers: the view's contribution, which asks where each root the sheet scans
  * stands and records the one that stands nowhere (core/manifest.c
- * manifest_contribute). No walker asks the table: the contribution having asked
- * once, the scan reads the view.
+ * manifest_contribute); add's receipt, which names the place the custom/ names
+ * it captured went under (cmds/add.c report_labels). No walker asks the table:
+ * the contribution having asked once, the scan reads the view.
  */
-const char *mount_root_location(
+const mount_root_t *mount_root_of(
     const mount_table_t *table,
     const char *profile,
     label_t label
 );
 
-/* The longest sentence mount_root_describe renders: "the deployment target" (20),
+/* The longest sentence mount_root_describe renders: "the deployment target" (21),
  * " of profile '" (13), a profile name, the closing quote and the terminator.
  * The name is bounded by the ref it becomes, not by git's 255 — that one is per
  * component and a profile name has several: gitops_build_refname refuses a name
@@ -432,24 +466,19 @@ const char *mount_root_location(
  * A root's noun for a screen, rendered into `buf` and returned: "your home
  * directory", "the filesystem root", "the deployment target of profile 'web'".
  *
- * `root` is the root being described, as the label mount_root wrote, and every
- * caller holds one a table found. Most have just had mount_name answer NULL for
- * the same table, asker and location — asked directly, or as the last rung of
- * the namer's ascent (core/manifest.c manifest_ascend), which is the only way
- * that one answers NULL — the same find over the same data, an invariant rather
- * than a hope; they ask mount_root for the label and never read whether. A caller
- * whose own search already answered nothing at the location asks mount_root
- * directly and reads both (cmds/revert.c), which establishes the same thing.
- * `profile` is read only for a per_profile root, and a per_profile root found
- * in a table can only have been found by the profile that owns it, so it is
- * non-NULL exactly when it is read.
+ * Rendered from the root itself, so the profile named is the one the build stamped
+ * and no caller can hand the wrong one; a bound root has one to name by that
+ * same refusal of a nameless binding (mount_t). One switch under -Wswitch, the
+ * one place a label's meaning on a screen is decided — and what a *label* names,
+ * no root having been found for it, is no place at all and is said in the grammar's
+ * own word (infra/path.h path_input_refuse_label).
  *
- * The body's `&& profile` therefore guards nothing: it stood for the one caller
- * that reached a label with no table behind it, and there is none now — what a
- * label names is no place and is said in the grammar's own word (infra/path.h
- * path_input_refuse_label). The arm and the parameter leave together when a root
- * becomes a value the table hands out; until then the guard is kept, an unreachable
- * branch being the better of it and an unreachable "(null)".
+ * `root` is non-NULL, and every caller holds one a find answered: directly, or
+ * through the namer, whose NULL is exactly mount_root_at's answer over the same
+ * table, asker and location — the same find over the same data, an invariant
+ * rather than a hope (core/manifest.h manifest_name). One caller holds two
+ * structures that could disagree instead of one find, and says so rather than
+ * dereferencing (cmds/add.c's already-walked arm).
  *
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
  * than through a statement of its own: every site that says a place has no name
@@ -457,11 +486,11 @@ const char *mount_root_location(
  * whether a pattern, an argument, a search or a revert asked. The sentence around
  * it stays the site's, every one of them.
  *
- * Truncates rather than fails: a screen noun, not a key.
+ * Truncates rather than fails: a screen noun, not a key, so it stands inside an
+ * ERROR() argument.
  */
 const char *mount_root_describe(
-    label_t root,
-    const char *profile,
+    const mount_root_t *root,
     char *buf,
     size_t size
 );
@@ -474,16 +503,19 @@ const char *mount_root_describe(
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
  *
- * The location is the root's spelling, "/", and the tail: the key of the claim,
+ * The location is the root, one separator and the tail: the key of the claim,
  * and the one every producer of a key agrees on (the table's paragraph above).
  * A link anywhere in it is a component — a claim captured through one stands
  * where its spelling says, and so does a claim of the link itself.
  *
- * Absence is NULL, as every lookup in the tree answers it (manifest_lookup,
- * state_peek_profile_target, hashmap_get): `*out_location` is NULL when the claim
- * is `custom/` and the profile has no target on this machine — a clone before
- * the target is chosen, a sync that pulled another machine's claims — and the
- * callers read it as the fact it is: the manifest's claim routine skips
+ * Absence is the find's own, handed on unchanged: mount_root_of answers no root
+ * of the name's label for this asker, so the two have one producer and one reading
+ * between them. `*out_location` is then NULL — the claim is `custom/` and the
+ * profile has no target on this machine, a clone before the target is chosen, a
+ * sync that pulled another machine's claims — which is how every lookup in the
+ * tree answers an absence (manifest_lookup, state_peek_profile_target,
+ * hashmap_get), and the callers read it as the fact it is: the manifest's claim
+ * routine skips
  * the claim and records it on the view (manifest_unbound, the health channel);
  * user-facing contexts fall back to a display spelling (remove.c) or let a hint
  * stand in (ignore.c). HOME and ROOT lookups always answer — those entries are

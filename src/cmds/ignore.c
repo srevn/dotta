@@ -1085,19 +1085,19 @@ static error_t *test_path_ignore(
         } else {
             /* What this asker calls the location: the claims it holds above it,
              * else its own roots. NULL is a root of this asker with no claim
-             * standing on it — mount_name answered it, so mount_root writes the
-             * label that describes it, and no pattern can match a root. */
+             * standing on it — the namer answers NULL there and nowhere else,
+             * so the table says which root it is, and no pattern can match a
+             * root. */
             const char *name = NULL;
             err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             if (!name) {
-                label_t root;
-                mount_root(mounts, asker, location, &root);
+                const mount_root_t *root = mount_root_at(mounts, asker, location);
                 char buf[MOUNT_NOUN_MAX];
                 output_info(
                     out, OUTPUT_NORMAL,
                     "%s'%s' is %s: it has no name for a pattern to match",
-                    who, test_path, mount_root_describe(root, asker, buf, sizeof(buf))
+                    who, test_path, mount_root_describe(root, buf, sizeof(buf))
                 );
                 continue;
             }

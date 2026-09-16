@@ -217,12 +217,14 @@ typedef enum dotta_crypto_mode {
  * ------
  * This machine's topology over the enabled set — `manifest_mount_table` over
  * the state's rows and `$HOME` — for placing a storage path the command reads
- * (`mount_resolve`) and naming beneath its roots (`mount_root`). Requires `state`.
- * A command declares it when it asks one of the table's verbs: where a claim
- * stands (`mount_resolve`: diff, ignore, remove, revert, update), which root a
- * location is under (`mount_root`: ignore, revert), a view of one branch placed
- * by it (`manifest_build_tree`: diff, export, revert; `manifest_build_branch`:
- * ignore), a claim's ancestors climbed (`metadata_capture_ancestors`: update),
+ * (`mount_resolve`) and for naming a location beneath its roots, which is the
+ * view's ascent and not a verb here (`core/manifest.h` `manifest_name`). Requires
+ * `state`. A command declares it when it asks one of the table's verbs: where a
+ * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), which
+ * root stands at a location (`mount_root_at`: ignore, revert), a view of one
+ * branch placed by it (`manifest_build_tree`: diff, export, revert;
+ * `manifest_build_branch`: ignore), a claim's ancestors climbed
+ * (`metadata_capture_ancestors`: update),
  * or a claim found by its key (`profile_claim_name`: list, show;
  * `profile_discover_claims`: revert; `profile_build_location_index`: remove).
  * Reading a CLI path is not one of those verbs: an argument's key is the

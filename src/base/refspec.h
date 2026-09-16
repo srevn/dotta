@@ -20,15 +20,16 @@
  * The lexical half of the syntax below: what may stand after the last '@', and
  * — for the verbs whose positional slot could hold one — what a whole token may
  * be. It recognizes the spellings that name a commit with nothing looked up:
- * `HEAD` and its modifiers (`HEAD~1`, `HEAD^`, `HEAD~3^2`), `@` for the current
- * commit, a bare SHA of 7 to 40 hex digits, and a SHA carrying a modifier
- * (`a4f2c8e^`, `def4567~2`).
+ * `HEAD` where the word ends there or a modifier follows it (`HEAD~1`, `HEAD^`,
+ * `HEAD~3^2`, `HEAD@{1}`), `@` for the current commit, a bare SHA of 7 to 40
+ * hex digits, and a SHA carrying a modifier (`a4f2c8e^`, `def4567~2`).
  *
  * A shape and never an existence: nothing is resolved and no store is read, so
- * a tag and a branch name are refused here whatever the repository holds. A verb
- * that means to accept either takes its commit by position instead of asking
- * (cmds/revert.c's three-positional form), and that is the whole reason the two
- * forms differ.
+ * a tag and a branch name are refused here whatever the repository holds — and
+ * so is a word that merely begins with a commit's letters, `HEADER` being a profile
+ * name like any other. A verb that means to accept a tag takes its commit by
+ * position instead of asking (cmds/revert.c's three-positional form), and that
+ * is the whole reason the two forms differ.
  *
  * Readers: the parse below, for its '@' gate; show's one- and two-positional
  * forms, export's second positional and revert's, each deciding whether a token

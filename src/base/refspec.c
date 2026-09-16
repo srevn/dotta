@@ -28,9 +28,13 @@ bool refspec_looks_like_commit(const char *token) {
         return true;
     }
 
-    /* Check for HEAD and its variations */
-    if (strncmp(token, "HEAD", 4) == 0) {
-        /* Could be HEAD, HEAD~1, HEAD^, HEAD~3^2, etc. */
+    /* HEAD and its variations: the word alone, or a modifier standing right after
+     * it (HEAD~1, HEAD^, HEAD~3^2, HEAD@{1}). The byte past the four is the whole
+     * of the rule — a prefix test alone reads every word that begins with those
+     * letters as a commit, and a profile named HEADER is not one. */
+    if (strncmp(token, "HEAD", 4) == 0 &&
+        (token[4] == '\0' || token[4] == '~' || token[4] == '^' ||
+        token[4] == '@')) {
         return true;
     }
 

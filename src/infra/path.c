@@ -24,6 +24,9 @@
  *                             a label, in the noun the vocabulary gives the root
  *                             it names
  *
+ *   path_input_is_bare      - the one shape the resolver has no reading for, for
+ *                             the caller whose own grammar has one
+ *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the location door, whose
  * answer is the key. The storage-label vocabulary (mount_under_label, mount_kind,
@@ -46,21 +49,15 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-/**
- * Does the input spell a filesystem path?
- *
- * Absolute (`/x`), tilde (`~/x`), or relative to the working directory — `./x`,
- * `../x`, a dotfile's `.x`, `a/b`. A bare single component is neither shape and
- * is refused by the one caller: `./X` says which was meant, and the resolver's
- * callers may read a bare word as a profile.
- *
- * Asked once the storage label is ruled out (path_input_resolve's first arm has
- * returned for every `home/`, `root/` and `custom/` spelling), so no label test
- * is needed here.
- */
-static bool input_is_filesystem_shape(const char *input) {
-    if (input[0] == '/' || input[0] == '~' || input[0] == '.') return true;
-    return strchr(input, '/') != NULL;
+bool path_input_is_bare(const char *input) {
+    if (!input || input[0] == '\0') return false;
+
+    /* A filesystem place announces itself in its first byte — absolute (`/x`),
+     * tilde (`~/x`), relative to the working directory (`./x`, `../x`, a dotfile's
+     * `.x`) — or in a separator anywhere (`a/b`, and every name under a label).
+     * What announces neither stands alone. */
+    if (input[0] == '/' || input[0] == '~' || input[0] == '.') return false;
+    return strchr(input, '/') == NULL;
 }
 
 error_t *path_input_resolve(
@@ -117,9 +114,11 @@ error_t *path_input_resolve(
         return NULL;
     }
 
-    /* A bare name — a single component with no slash and no leading '.' — is
-     * neither shape: the resolver's callers may read it as a profile. */
-    if (!input_is_filesystem_shape(input)) {
+    /* A word standing alone is neither shape: a caller's path slot may hold a
+     * profile and this function cannot see whose does, so `./X` is what says a
+     * path was meant. The caller whose slot cannot asks the same question first
+     * and puts its own reading here (infra/path.h path_input_is_bare). */
+    if (path_input_is_bare(input)) {
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"

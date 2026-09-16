@@ -72,6 +72,43 @@ typedef struct {
 } path_input_t;
 
 /**
+ * Does the input stand alone — a single component with no shape at all?
+ *
+ * The one input path_input_resolve has no reading for: a word with no separator
+ * in it and no leading '/', '~' or '.' announcing a filesystem place. A path
+ * shape means a place on this machine at every verb and a label-prefixed one a
+ * name in a branch, but a word alone means nothing by itself — a verb's own
+ * positional grammar is the only thing that can say what it is, and the resolver
+ * stands downstream of every one of them with no sight of which handed it a string.
+ * So it refuses a word alone for all of them: a worst case earned by the one
+ * slot that can hold a profile — revert's `<file> <commit>`, whose first positional
+ * is a file or a profile with nothing to tell them apart — and paid by the slots
+ * that cannot, which are most of them.
+ *
+ * Said here, in the positive, for the caller whose grammar has taken the profile
+ * already and has a reading to put in the refusal's place: export's second
+ * positional is a name at its branch root — a label and its whole subtree, or
+ * machinery it names in its own words (cmds/export.c). A caller with no reading
+ * of its own asks nothing here; the refusal is the right answer for it, whatever
+ * its slot could hold.
+ *
+ * A name under a label carries the separator its label ends with, so nothing
+ * under one is bare; a label *alone* is, and the caller that has a reading for
+ * one says so before it asks here. The empty string is no name and is not bare:
+ * the resolver refuses it in its own words, and a caller that hands it on gets
+ * that sentence rather than one of its own.
+ *
+ * Readers: the resolver's own refusal, and export's grammar. A verb that reads
+ * a bare word as a path asks nothing here — it goes to path_input_locate, whose
+ * grammar has no bare-word refusal to pre-empt (add, the binders, `ignore --test`,
+ * the completion).
+ *
+ * @param input The argument (may be NULL, which stands for nothing)
+ * @return true iff the input is a word standing alone
+ */
+bool path_input_is_bare(const char *input);
+
+/**
  * Read a CLI path argument: the shape dispatch, and nothing else.
  *
  * A storage shape is read in two: the label alone is a root — the namespace itself,
@@ -88,9 +125,11 @@ typedef struct {
  * named by its own spelling (`~`, a target's path) is a location like any other
  * — a place, where the label that names the same root is a namespace, and the
  * two are different keys for that reason. The verb that cannot take either refuses
- * it in its own words. A bare name is refused: add's grammar reads one as the
- * jail's or the working directory's (cmds/add.c spell_argument); the resolver
- * does not, because its callers' first positional may be a profile.
+ * it in its own words. A word standing alone is refused (path_input_is_bare),
+ * because a caller's path slot may hold a profile and the resolver cannot see
+ * whose does: add's grammar reads one as the jail's or the working directory's
+ * and reads it through the location door (cmds/add.c spell_argument), and the
+ * caller whose slot has taken the profile says so at the predicate.
  *
  *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (HOME as the identity spells it)
  *   ./config    (in /etc)     -> LOCATION  /etc/config
@@ -102,7 +141,7 @@ typedef struct {
  *   home/.config/nvim/        -> STORAGE   home/.config/nvim
  *   custom/                   -> LABEL     MOUNT_CUSTOM     (the namespace, not a path in it)
  *   home/../x                 -> refused   (mount_validate_storage)
- *   config                    -> refused   (neither shape)
+ *   config                    -> refused   (path_input_is_bare)
  *
  * `*out` is zeroed on entry: after an error it is no answer, and a reader that
  * ignores the error meets a NULL rather than a stale string — the zeroed key is
@@ -119,8 +158,10 @@ typedef struct {
  *     never meet one — the arm that compiles them has already ruled a label out.
  *   - remove (cmds/remove.c) takes one: every claim beneath the label, matched
  *     by name, which is the one form that reaches a profile with no binding here.
- *   - export (cmds/export.c) takes one: the whole tree under the label. Its own
- *     catch arm makes the same key out of the bare word its grammar allows.
+ *   - export (cmds/export.c) takes one: the whole tree under the label. It makes
+ *     the same key out of a bare label before it asks here, its own grammar having
+ *     a reading for a word standing alone where this one has none
+ *     (path_input_is_bare).
  *   - show and list without a profile (cmds/) refuse one, and with a profile
  *     hand the key to the branch namer, which refuses it there (core/profiles.h
  *     profile_claim_name); revert refuses one at its door, so

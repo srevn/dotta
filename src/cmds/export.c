@@ -1498,27 +1498,21 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * path, neither manufactured from the other (infra/path.h) — and hand
          * it to the arm that answers in that key. A storage shape was validated
          * as typed and carries no trailing slash; a filesystem shape was
-         * normalized. So the only shapes needing a word here are the ones the
-         * resolver refused. */
+         * normalized.
+         *
+         * Export's own grammar is asked first, over the one input the resolver
+         * has no reading for: a word standing alone means nothing by itself,
+         * and the resolver refuses one because a caller's path slot may hold a
+         * profile (infra/path.h path_input_is_bare). This one cannot —
+         * export_post_parse took the profile — so a word alone here is a name
+         * at the branch root, where a label is the namespace and its whole subtree
+         * (`export p home`, the copy `export p home/` makes) and anything else
+         * is machinery. Every other input is the resolver's to read, and every
+         * refusal it gives is the resolver's to word: a `..` in a tail, a tilde
+         * it cannot expand, an empty path — each named by its own cause rather
+         * than by this arm. */
         path_input_t arg;
-        err = path_input_resolve(opts->file_path, arena, &arg);
-        if (err) {
-            /* The one refused shape a branch subtree answers is a *bare* label
-             * (`export global home`): the whole tree under it, which the resolver
-             * reads as neither shape because its callers' first positional may
-             * be a profile. Slash-marked (`home/`) it is a key already, so nothing
-             * carrying a separator belongs here: every other refusal stands —
-             * an absolute path outside the roots, a `..` in the tail — because
-             * a name the tree lookup happened to find would become the
-             * destination's basename, and `home/..` copies beside the destination
-             * the user named rather than into it. */
-            if (strchr(opts->file_path, '/') != NULL) goto cleanup;
-
-            /* Here the word is a label or it is machinery, and export says which
-             * in its own words: the resolver's are released first, replaced either
-             * way. */
-            error_free(err);
-            err = NULL;
+        if (path_input_is_bare(opts->file_path)) {
             mount_kind_t root;
             if (!mount_parse_label(opts->file_path, &root)) {
                 err = ERROR(
@@ -1532,6 +1526,9 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 goto cleanup;
             }
             arg = (path_input_t){ .key = PATH_KEY_LABEL, .root = root };
+        } else {
+            err = path_input_resolve(opts->file_path, arena, &arg);
+            if (err) goto cleanup;
         }
 
         switch (arg.key) {

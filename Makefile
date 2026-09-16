@@ -499,13 +499,13 @@ tidy-file:
 	@if [ -z "$(FILE)" ]; then echo "Usage: make tidy-file FILE=src/path/to/file.c"; exit 1; fi
 	@$(TIDY) -p . --quiet $(FILE)
 
-# Regenerate compile_commands.json via bear
+# Regenerate compile_commands.json via bear; a suite with no entry is guessed
 .PHONY: compile-commands
 compile-commands:
 	@command -v bear >/dev/null 2>&1 || \
 		{ echo "Error: 'bear' not installed. Install via: brew install bear"; exit 1; }
 	@$(MAKE) clean
-	@bear -- $(MAKE) -j$$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+	@bear -- $(MAKE) -j$$(sysctl -n hw.ncpu 2>/dev/null || nproc) all $(TESTS_BIN)
 
 # Check dependencies
 .PHONY: check-deps

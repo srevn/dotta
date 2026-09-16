@@ -27,6 +27,7 @@
 #include "base/string.h"
 #include "core/scope.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 
@@ -173,7 +174,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
      * the user's to re-target — the copy here is the claim's old home. The same
      * test as cleanup_verdict's hold arm, its inputs in hand; guarded by the
      * kind so a re-targeted custom/ copy never trips it. */
-    if (item->row && !mount_kinds[mount_kind(item->storage_path)].per_profile) {
+    if (item->row && !mount_kinds[label_of(item->storage_path)].per_profile) {
         return CLEANUP_SKIP_RELOCATED;
     }
 
@@ -255,7 +256,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
      * so the copy is real dotfiles under the claim's real home. --force lifts
      * it — the escape for a deliberate home migration. */
     if (item->row && !force &&
-        !mount_kinds[mount_kind(item->storage_path)].per_profile) {
+        !mount_kinds[label_of(item->storage_path)].per_profile) {
         return CLEANUP_SKIPPED;
     }
 

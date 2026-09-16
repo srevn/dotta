@@ -30,6 +30,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
@@ -213,7 +214,7 @@ typedef struct {
  * Tree-walk callback: emit one token per managed file blob.
  *
  * `root` is "" at the top level or "dir/.../" with a trailing slash, so
- * mount_under_label(root) gates emission to files under a storage label, skipping
+ * label_prefixes(root) gates emission to files under a storage label, skipping
  * top-level blobs, .dotta/, and any non-label root.
  */
 static int refspec_emit_cb(
@@ -222,7 +223,7 @@ static int refspec_emit_cb(
     refspec_walk_ctx_t *walk = payload;
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;  /* descend trees */
-    if (!mount_under_label(root)) return 0;                       /* storage-label gate */
+    if (!label_prefixes(root)) return 0;                          /* storage-label gate */
 
     const char *name = git_tree_entry_name(entry);
     if (walk->prefix) {

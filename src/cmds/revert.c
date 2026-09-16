@@ -23,6 +23,7 @@
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -383,7 +384,7 @@ static error_t *entry_to_restore(
         }
 
         if (arg->key == PATH_KEY_LOCATION) {
-            mount_kind_t root;
+            label_t root;
             if (mount_root(ctx->run.mounts, profile, arg->location, &root)) {
                 char buf[MOUNT_NOUN_MAX];
                 const char *noun = mount_root_describe(root, profile, buf, sizeof(buf));
@@ -811,7 +812,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
             break;
 
         case PATH_KEY_LABEL:
-            err = path_input_refuse_label(arg.root, opts->profile);
+            err = path_input_refuse_label(arg.label, opts->profile);
             goto cleanup;
     }
 

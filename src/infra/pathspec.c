@@ -12,7 +12,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/string.h"
-#include "infra/mount.h"
+#include "infra/label.h"
 #include "infra/path.h"
 
 /* The ascent's copy of a subject: the stack covers the common case, the heap
@@ -95,7 +95,7 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
     *out = (entry_t){ .key = PATH_KEY_STORAGE };
 
     if (strchr(body, '/') != NULL &&
-        !mount_under_label(body) &&
+        !label_prefixes(body) &&
         !str_starts_with(body, "**/") &&
         !str_starts_with(body, "*/")) {
         /* The tail starts at the component holding the first metacharacter; the
@@ -214,7 +214,7 @@ error_t *pathspec_create(
                 case PATH_KEY_LOCATION: prefix_location(&entry, arg.location); break;
                 case PATH_KEY_STORAGE:  prefix_name(&entry, arg.storage_path); break;
                 case PATH_KEY_LABEL:
-                    prefix_name(&entry, mount_kinds[arg.root].label);
+                    prefix_name(&entry, label_words[arg.label]);
                     break;
             }
             if (listed(spec, &entry)) {

@@ -25,9 +25,10 @@
 #include "core/workspace.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "infra/pathspec.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
+#include "infra/pathspec.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 
@@ -1194,7 +1195,7 @@ static int select_delta(
     delta_select_t *sel = payload;
     const char *path = delta->new_file.path;
 
-    if (!mount_under_label(path)) {
+    if (!label_prefixes(path)) {
         return 1;
     }
 

@@ -13,7 +13,7 @@
 #include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/mount.h"
+#include "infra/label.h"
 #include "infra/pathspec.h"
 
 /**
@@ -214,7 +214,7 @@ bool scope_is_excluded(
     const scope_t *s, const char *storage_path, path_kind_t kind
 ) {
     return gitignore_is_ignored(
-        s->excludes_ruleset, mount_strip_label(storage_path),
+        s->excludes_ruleset, label_tail(storage_path),
         kind == PATH_KIND_DIRECTORY
     );
 }

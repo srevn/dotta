@@ -52,6 +52,7 @@
 #include "base/string.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/gitops.h"
 
@@ -301,7 +302,7 @@ static error_t *manifest_place(
  *
  * Growth is the spine's abandon-and-realloc idiom. The strings must outlive the
  * view — arena-backed by the caller for a claim, the vocabulary's own static
- * for a root's label (infra/mount.h mount_kinds) — and the entry borrows them
+ * for a root's label (infra/label.h label_words) — and the entry borrows them
  * for the view's lifetime.
  *
  * @param manifest Target view (must not be NULL)
@@ -839,7 +840,7 @@ static int manifest_claim_blob(
      * them: a README, a LICENSE, a docs/ tree. Asked on the root, before the
      * join, so machinery costs no allocation and no unlabelled path reaches the
      * shape check below to be read as corruption. */
-    if (!mount_under_label(root)) {
+    if (!label_prefixes(root)) {
         return 0;
     }
 
@@ -866,7 +867,7 @@ static int manifest_claim_blob(
      * checked where the tree is read, the same reason metadata's key loop checks
      * its own (core/metadata.c). Malformed here is corruption, not a lifecycle
      * stage: it takes the err branch below rather than the unbound note. */
-    error_t *err = mount_validate_storage(storage_path);
+    error_t *err = label_validate_storage(storage_path);
     if (err) {
         ctx->error = error_wrap(
             err, "Invalid path in profile '%s'", ctx->profile
@@ -1100,11 +1101,11 @@ static error_t *manifest_contribute(
      * answer, so only a per_profile root can be noted, and the label is the
      * vocabulary's own static string. Noted before the claims, in the sheet's
      * own order. */
-    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
-        if (!metadata_scans_root(metadata, kind)) continue;
-        if (mount_root_location(manifest->mounts, c->profile, kind)) continue;
+    for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
+        if (!metadata_scans_root(metadata, label)) continue;
+        if (mount_root_location(manifest->mounts, c->profile, label)) continue;
         err = manifest_note_unbound(
-            manifest, c->profile, mount_kinds[kind].label,
+            manifest, c->profile, label_words[label],
             MANIFEST_UNBOUND_ROOT, arena
         );
         if (err) goto cleanup;

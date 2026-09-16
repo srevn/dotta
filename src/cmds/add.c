@@ -28,6 +28,7 @@
 #include "core/policy.h"
 #include "core/state.h"
 #include "infra/content.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
@@ -401,9 +402,8 @@ static error_t *spell_argument(
  * Consults two independent mechanisms in order, each on the name it is written
  * against:
  *   1. The `.dottaignore` layers (baseline, profile, config, CLI) compiled into
- *      a single gitignore ruleset, evaluated on the mount-relative path
- *      (mount_strip_label of `storage_path`): what a `.gitignore` at the mount
- *      root would see.
+ *      a single gitignore ruleset, evaluated on the mount-relative path (label_tail
+ *      of `storage_path`): what a `.gitignore` at the mount root would see.
  *   2. The source tree's own `.gitignore`, if the command built a filter (gated
  *      on `config.respect_gitignore`), evaluated on `location`: that repository's
  *      root is the root its rules are relative to. The lowest layer: asked only
@@ -438,7 +438,7 @@ static bool is_excluded(
     bool is_directory = kind == PATH_KIND_DIRECTORY;
 
     gitignore_eval(
-        walk->rules, mount_strip_label(storage_path), is_directory, out_match
+        walk->rules, label_tail(storage_path), is_directory, out_match
     );
     if (out_match->decided) {
         return out_match->ignored;
@@ -977,31 +977,31 @@ static void report_labels(const add_walk_t *walk, const char *target) {
     output_t *out = walk->ctx->out;
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
 
-    /* One pass over both lists, a slot per kind: a name's label is its kind
-     * (infra/mount.h mount_kind). */
-    size_t count[MOUNT_KIND_COUNT] = { 0 };
+    /* One pass over both lists, a slot per label: a name says its own
+     * (infra/label.h label_of). */
+    size_t count[LABEL_COUNT] = { 0 };
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
             const add_path_t *path = listed[b]->items[i];
-            count[mount_kind(path->claim.storage_path)]++;
+            count[label_of(path->claim.storage_path)]++;
         }
     }
 
-    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
-        if (count[kind] == 0) continue;
+    for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
+        if (count[label] == 0) continue;
 
-        if (mount_kinds[kind].per_profile) {
+        if (mount_kinds[label].per_profile) {
             char shown[PATH_MAX];
             output_format_path(target, identity()->home, shown, sizeof(shown));
             output_info(
                 out, OUTPUT_NORMAL, "  %zu path%s as %s/ under %s",
-                count[kind], count[kind] == 1 ? "" : "s",
-                mount_kinds[kind].label, shown
+                count[label], count[label] == 1 ? "" : "s",
+                label_words[label], shown
             );
         } else {
             output_info(
                 out, OUTPUT_NORMAL, "  %zu path%s as %s/",
-                count[kind], count[kind] == 1 ? "" : "s", mount_kinds[kind].label
+                count[label], count[label] == 1 ? "" : "s", label_words[label]
             );
         }
     }
@@ -1825,7 +1825,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         const char *location = NULL;
         const char *typed = NULL;   /* The name the user wrote, or NULL for a spelling */
 
-        if (mount_under_label(file)) {
+        if (label_prefixes(file)) {
             /* A storage shape, read by the one resolver that reads input shapes
              * — a name or a label alone and never a location, since the same
              * predicate dispatched here. It validates the shape and sheds a
@@ -1840,7 +1840,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * is named by its own spelling — `add p ~`, `add p <target>` — which
              * is the argument arm below. */
             if (arg.key == PATH_KEY_LABEL) {
-                err = path_input_refuse_label(arg.root, opts->profile);
+                err = path_input_refuse_label(arg.label, opts->profile);
                 goto cleanup;
             }
 
@@ -1984,7 +1984,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * made. The walk beneath it has already composed its children
                  * under the root's label, and a claim admitted now would move
                  * their prefix. */
-                mount_kind_t root;
+                label_t root;
                 mount_root(mounts, opts->profile, location, &root);
                 char buf[MOUNT_NOUN_MAX];
                 const char *noun = mount_root_describe(
@@ -2059,7 +2059,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              *
              * `root` is written: manifest_name answered NULL, which it does only
              * where mount_root answers (infra/mount.h mount_root_describe). */
-            mount_kind_t root;
+            label_t root;
             mount_root(mounts, opts->profile, location, &root);
             struct stat reached;
             if (occupant == FS_OCCUPANT_SYMLINK && fs_stat(location, &reached) == 0 &&

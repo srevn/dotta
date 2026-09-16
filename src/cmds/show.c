@@ -706,7 +706,7 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
              * the user named one and nobody otherwise — a label gives the view
              * nothing to choose a profile by, so the arm without one has none
              * to name. */
-            err = path_input_refuse_label(arg.root, profile);
+            err = path_input_refuse_label(arg.label, profile);
             goto cleanup;
     }
 

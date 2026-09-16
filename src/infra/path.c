@@ -34,9 +34,10 @@
  *
  * One dispatch: the resolver reads the storage label itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the location door, whose
- * answer is the key. The storage-label vocabulary (mount_under_label, mount_kind,
- * mount_validate_storage, mount_root_describe over a kind those answered), the
- * filesystem primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
+ * answer is the key. The grammar of a name (infra/label.h: label_split,
+ * label_words, label_validate_storage), the noun a screen calls a root by over
+ * a label the grammar answered (infra/mount.h mount_root_describe), the filesystem
+ * primitives (fs_expand_tilde, fs_working_directory, fs_path_join,
  * fs_normalize_path) and HOME's two spellings (sys/identity) are delegated to
  * the layers below. The table of roots is not among them: no root's spelling is
  * read here (infra/path.h).
@@ -50,6 +51,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/string.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -62,7 +64,7 @@ bool path_input_announces_path(const char *input) {
      * and the reason this is not the resolver's reading of the same string
      * (infra/path.h). */
     return input[0] == '/' || input[0] == '~' || input[0] == '.' ||
-           mount_under_label(input) || strpbrk(input, "*?[") != NULL;
+           label_prefixes(input) || strpbrk(input, "*?[") != NULL;
 }
 
 bool path_input_is_bare(const char *input) {
@@ -91,37 +93,41 @@ error_t *path_input_resolve(
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* A storage shape — shed the directory spelling, then read what is left of
-     * it. A trailing '/' is the same path spelled as a directory — the UI's own
-     * listings print directory claims slash-marked — and the filesystem arm below
-     * sheds its own inside fs_normalize_path; shedding here keeps the two surface
-     * forms resolving alike. */
-    if (mount_under_label(input)) {
-        size_t len = strlen(input);
-        while (len > 0 && input[len - 1] == '/') len--;
+    /* A storage shape — read at its label, then the directory spelling shed from
+     * what is left. A trailing '/' is the same path spelled as a directory —
+     * the UI's own listings print directory claims slash-marked — and the
+     * filesystem arm below sheds its own inside fs_normalize_path; shedding here
+     * keeps the two surface forms resolving alike. The grammar folds nothing,
+     * so the shed is this function's, and it walks the tail alone: every trailing
+     * separator is in it, the label's own bytes are not. */
+    label_split_t split = label_split(input);
+    if (split.tail) {
+        size_t tail_len = strlen(split.tail);
+        while (tail_len > 0 && split.tail[tail_len - 1] == '/') tail_len--;
 
-        /* The label and nothing after it: the root of a namespace, which is no
-         * storage path — mount_validate_storage refuses one — and no location
-         * either, since a label is the same word on every machine while a location
-         * is this one's. The prefix already matched and no label ends in a
-         * separator, so what survives the shed is the whole test; and the answer
-         * is the kind itself, a value nothing has to hold or copy. */
-        mount_kind_t root = mount_kind(input);
-        if (len == strlen(mount_kinds[root].label)) {
+        /* Nothing stands past the label once the shed is done: the root of a
+         * namespace, which is no storage path — label_validate_storage refuses
+         * one — and no location either, since a label is the same word on every
+         * machine while a location is this one's. The answer is the label itself,
+         * a value nothing has to hold or copy. */
+        if (tail_len == 0) {
             out->key = PATH_KEY_LABEL;
-            out->root = root;
+            out->label = split.label;
             return NULL;
         }
 
-        /* A name beneath it. The two refusals a label alone would have earned
-         * here are unreachable from this arm now: the prefix matched, so the
-         * byte at the label's own length is the '/' the decode wants, and the
-         * shed above took every trailing one. */
-        const char *storage = arena_strndup(arena, input, len);
+        /* A name beneath it, the shed one the split already measured out. The
+         * two refusals a label alone would have earned here are unreachable from
+         * this arm now: the prefix matched, so the byte at the label's own length
+         * is the '/' the split wants, and the shed above took every trailing
+         * one. */
+        const char *storage = arena_strndup(
+            arena, input, (size_t) (split.tail - input) + tail_len
+        );
         if (!storage) {
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
-        error_t *err = mount_validate_storage(storage);
+        error_t *err = label_validate_storage(storage);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);
         }
@@ -172,12 +178,12 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out) 
     return *out ? NULL : ERROR(ERR_MEMORY, "Failed to allocate the location");
 }
 
-error_t *path_input_refuse_label(mount_kind_t root, const char *profile) {
+error_t *path_input_refuse_label(label_t root, const char *profile) {
     char buf[MOUNT_NOUN_MAX];
 
     return ERROR(
         ERR_INVALID_ARG, "'%s/' is %s: name what is inside it",
-        mount_kinds[root].label, mount_root_describe(root, profile, buf, sizeof(buf))
+        label_words[root], mount_root_describe(root, profile, buf, sizeof(buf))
     );
 }
 

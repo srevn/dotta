@@ -22,6 +22,7 @@
 #include "core/ignore.h"
 #include "core/manifest.h"
 #include "core/profiles.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/editor.h"
@@ -825,9 +826,9 @@ static bool stands_as_directory(
  *     and none casts a verdict — the same outcome the location spelling of a
  *     root reaches below, said without building a view for it.
  *
- * The *shape* is read by mount_under_label and not by the resolver, because a
- * bare name is a filesystem argument here — `dotta ignore --test foo.log` reads
- * it against the working directory, as add's grammar does — and path_input_resolve
+ * The *shape* is read by label_prefixes and not by the resolver, because a bare
+ * name is a filesystem argument here — `dotta ignore --test foo.log` reads it
+ * against the working directory, as add's grammar does — and path_input_resolve
  * refuses one, its callers' first positional being a profile. What the shape
  * dispatches to *is* the resolver for a storage spelling, which sheds the directory
  * slash and tells a name from a label; the filesystem arm is the normalizer alone,
@@ -910,7 +911,7 @@ static error_t *test_path_ignore(
     const char *argument_subject = NULL;      /* a name's tail, what the rules see */
     bool argument_is_directory = false;       /* a location's kind, observed there once */
 
-    if (mount_under_label(test_path)) {
+    if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
          * name or a label alone and never a location, since the same predicate
          * dispatched here (cmds/add.c's storage head is the other). A bare name
@@ -920,7 +921,7 @@ static error_t *test_path_ignore(
         if (err) return err;
 
         if (arg.key == PATH_KEY_STORAGE) {
-            argument_subject = mount_strip_label(arg.storage_path);
+            argument_subject = label_tail(arg.storage_path);
         }
     } else {
         /* The key as the location door spells it: absolute, folded, nothing read
@@ -1042,7 +1043,7 @@ static error_t *test_path_ignore(
             output_info(
                 out, OUTPUT_NORMAL,
                 "%s'%s' is %s: it has no name for a pattern to match", who,
-                test_path, mount_root_describe(arg.root, asker, buf, sizeof(buf))
+                test_path, mount_root_describe(arg.label, asker, buf, sizeof(buf))
             );
             continue;
         }
@@ -1067,12 +1068,12 @@ static error_t *test_path_ignore(
             /* What this asker calls the location: the claims it holds above it,
              * else its own roots. NULL is a root of this asker with no claim
              * standing on it — mount_name answered it, so mount_root writes the
-             * kind that describes it, and no pattern can match a root. */
+             * label that describes it, and no pattern can match a root. */
             const char *name = NULL;
             err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             if (!name) {
-                mount_kind_t root;
+                label_t root;
                 mount_root(mounts, asker, location, &root);
                 char buf[MOUNT_NOUN_MAX];
                 output_info(
@@ -1082,7 +1083,7 @@ static error_t *test_path_ignore(
                 );
                 continue;
             }
-            subject = mount_strip_label(name);
+            subject = label_tail(name);
         }
         any_named = true;
 

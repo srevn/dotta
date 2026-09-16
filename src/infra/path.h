@@ -2,7 +2,7 @@
  * path.h - The key a CLI path argument names
  *
  * A location keys across profiles — the view's rows, the record, every screen —
- * and a storage path keys within one (infra/mount.h). The resolver answers in
+ * and a storage path keys within one (infra/label.h). The resolver answers in
  * the one the user named and manufactures neither from the other: what a profile
  * calls a location is a claim standing in a branch, and a command asks the branch
  * (core/manifest.h, the view by location; core/profiles.h profile_claim_name,
@@ -16,14 +16,14 @@
  * a root has that no machine has to supply: a custom/ tree bound nowhere here
  * still answers to `custom/`.
  *
- * The single chokepoint for input-shape dispatch. Of infra/mount it reads the
- * storage-label vocabulary alone — mount_under_label, mount_kind,
- * mount_validate_storage, mount_root_describe over a kind these answered, a label
- * being a label on every machine — and never the table of roots: no root's spelling
- * is read to make a key, so the answer is the argument, HOME and the working
- * directory and nothing else. That is what lets the location door stand beside
- * mount_resolve's join as a producer of one key (infra/mount.h, the four
- * producers), and why no caller hands a topology down to read an argument.
+ * The single chokepoint for input-shape dispatch. It reads the grammar of a name
+ * (infra/label.h: label_split, label_validate_storage, label_words) and, of
+ * infra/mount, the noun a screen calls a root by over a label the grammar answered
+ * — a label being a label on every machine — and never the table of roots: no
+ * root's spelling is read to make a key, so the answer is the argument, HOME
+ * and the working directory and nothing else. That is what lets the location
+ * door stand beside mount_resolve's join as a producer of one key (infra/mount.h,
+ * the four producers), and why no caller hands a topology down to read an argument.
  *
  * Two questions stand before any reading, both over the spelling alone and both
  * the caller's to ask first: whether a positional announces a path at all, where
@@ -38,7 +38,7 @@
 
 #include <types.h>
 
-#include "infra/mount.h"
+#include "infra/label.h"
 
 /**
  * The key an argument names.
@@ -60,21 +60,20 @@ typedef enum {
  * The third key is a label, which is the one address a root has: a location and
  * a name are this machine's and the profile's, while a label is the same word
  * everywhere. The tag names what was read, as the other two do, and the member
- * is the root the label names, as the vocabulary numbers it — its kind, the one
- * currency the vocabulary has (infra/mount.h): the verb that matches or prints
- * with the label reads its spelling from the table, `mount_kinds[root].label`,
- * and the verb that refuses or indexes with it holds the kind as it is. The
- * separator is no part of it: a verb that matches with the key wants the bare
- * prefix, and a verb that prints it adds the '/' its message needs.
+ * is the label itself, the one currency the grammar has (infra/label.h): the
+ * verb that matches or prints with it reads its word, `label_words[label]`, and
+ * the verb that refuses or indexes with it holds the label as it is. The separator
+ * is no part of it: a verb that matches with the key wants the bare prefix, and
+ * a verb that prints it adds the '/' its message needs.
  *
- * `location` and `storage_path` are the arena's; `root` is a value.
+ * `location` and `storage_path` are the arena's; `label` is a value.
  */
 typedef struct {
     path_key_t key;
     union {
         const char *location;       /* PATH_KEY_LOCATION: absolute, normalized */
         const char *storage_path;   /* PATH_KEY_STORAGE: validated, the directory spelling shed */
-        mount_kind_t root;          /* PATH_KEY_LABEL: the root the label names, by its kind */
+        label_t label;              /* PATH_KEY_LABEL: the namespace the label names */
     };
 } path_input_t;
 
@@ -85,9 +84,9 @@ typedef struct {
  * leading positional of list, diff, apply and update may be a profile or a path,
  * and this tells the two apart with no repository in hand. A path announces itself
  * — absolute (`/x`), tilde (`~/x`), dot-relative (`./x`, `../x`, `.rc`), under
- * a storage label (infra/mount.h mount_under_label), or a pattern that selects
- * one. A name announces nothing, and neither does a name with a separator in
- * it: the layering convention spells profiles `<os>/<variant>` and
+ * a storage label (infra/label.h label_prefixes), or a pattern that selects one.
+ * A name announces nothing, and neither does a name with a separator in it: the
+ * layering convention spells profiles `<os>/<variant>` and
  * `hosts/<host>/<variant>`, so `darwin/work` and `src/config` are one shape and
  * only the profile reading has no other spelling — `./src/config` is the path's.
  * A profile whose own name announces a path is named with -p, which is what each
@@ -111,7 +110,7 @@ typedef struct {
  *   ./config     yes                no             $CWD/config
  *   home/x       yes                no             home/x
  *
- * Reads the label vocabulary and no table, as the resolver does (this file's
+ * Reads the grammar and no table of roots, as the resolver does (this file's
  * banner). The other classifier a positional meets — a token shaped like a commit
  * — reads Git's vocabulary and is spelled where that syntax lives (base/refspec.h
  * refspec_looks_like_commit); diff asks this one first, so a token that announces
@@ -166,7 +165,7 @@ bool path_input_is_bare(const char *input);
  * Read a CLI path argument: the shape dispatch, and nothing else.
  *
  * A storage shape is read in two: the label alone is a root — the namespace itself,
- * which is no storage path (mount_validate_storage refuses one) and no location
+ * which is no storage path (label_validate_storage refuses one) and no location
  * either, a label being the same word on every machine — and anything beneath
  * it is a name, validated and kept as typed. Either way the trailing slash is
  * shed (the UI's listings print directory claims slash-marked, and the filesystem
@@ -193,8 +192,8 @@ bool path_input_is_bare(const char *input);
  *   ~/link/../x               -> LOCATION  $HOME/x          ('..' pops the link's spelling)
  *   ~                         -> LOCATION  $HOME            (a root is a location; the verb decides)
  *   home/.config/nvim/        -> STORAGE   home/.config/nvim
- *   custom/                   -> LABEL     MOUNT_CUSTOM     (the namespace, not a path in it)
- *   home/../x                 -> refused   (mount_validate_storage)
+ *   custom/                   -> LABEL     LABEL_CUSTOM     (the namespace, not a path in it)
+ *   home/../x                 -> refused   (label_validate_storage)
  *   config                    -> refused   (path_input_is_bare)
  *
  * `*out` is zeroed on entry: after an error it is no answer, and a reader that
@@ -292,27 +291,28 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
  * was handed a namespace where it wanted a path in one. What each verb then does
  * with the error is its own — returned, or carried to a cleanup label.
  *
- * `root` is a resolve's own answer (path_input_t.root), the kind the label named,
- * and nothing is looked up beneath it: the label the message prints and the noun
- * that describes it are the kind's row (infra/mount.h). `profile` is the asker,
- * or NULL where the verb has none to name — `show custom/` chose no profile and
- * cannot — and the noun then stands without an owner (mount_root_describe).
+ * `root` is a resolve's own answer (path_input_t.label), the root the label named,
+ * and nothing is looked up beneath it: the message's word is the grammar's
+ * (infra/label.h label_words) and the noun that describes it is the label's row
+ * (infra/mount.h). `profile` is the asker, or NULL where the verb has none to
+ * name — `show custom/` chose no profile and cannot — and the noun then stands
+ * without an owner (mount_root_describe).
  *
  * The separator is the message's and never the key's: a label is carried as the
- * kind it names because the verbs that take one match or index with it, and printed
+ * label it is because the verbs that take one match or index with it, and printed
  * slash-marked because that is the one spelling that reaches this key. The same
  * refusal for the *location* spelling of a root is its two callers' own sentence
  * (core/profiles.c, cmds/revert.c): they hold a location and no label, and a
  * location needs no separator added to it.
  *
- * Reads the label vocabulary and no table, as the resolver does (this file's
+ * Reads the grammar and no table of roots, as the resolver does (this file's
  * banner).
  *
- * @param root    The root a resolve answered, by its kind
+ * @param root    The root a resolve answered, by its label
  * @param profile The asker, or NULL where the verb named none
  * @return The refusal; never NULL
  */
-error_t *path_input_refuse_label(mount_kind_t root, const char *profile);
+error_t *path_input_refuse_label(label_t root, const char *profile);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path
@@ -352,8 +352,9 @@ error_t *path_input_refuse_label(mount_kind_t root, const char *profile);
  * tilde path is the user's own; one given relatively is spelled by the rule above
  * like any other relative argument. Storage-path inputs ("home/", "root/",
  * "custom/") are not this function's — they are validated and placed at the call
- * site (mount_validate_storage, mount_resolve). add's re-rooting under --target
- * is add's own grammar, spelled around the door (cmds/add.c, spell_argument).
+ * site (infra/label.h label_validate_storage, infra/mount.h mount_resolve). add's
+ * re-rooting under --target is add's own grammar, spelled around the door
+ * (cmds/add.c, spell_argument).
  *
  * The answer is malloc's, and one reader wants it that way: the interactive save's
  * per-edit target (cmds/interactive.c), replaced on every commit of the prompt

@@ -19,6 +19,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -426,7 +427,7 @@ static bool tree_entry_content_path(
      * at the branch root, or beneath a tree no label names, is not content —
      * dotta's own files sit there, and so does whatever else a hand or a tool
      * left beside them. */
-    if (!mount_under_label(root)) {
+    if (!label_prefixes(root)) {
         return false;
     }
 
@@ -453,7 +454,7 @@ static bool tree_entry_content_path(
      * (core/manifest.c manifest_claim_blob). Malformed here is corruption, not
      * an entry to skip: a walk that dropped it silently would leave the caller
      * a listing it cannot place and call it complete. */
-    error_t *shape = mount_validate_storage(buf);
+    error_t *shape = label_validate_storage(buf);
     if (shape) {
         *out_err = shape;
         return false;
@@ -902,8 +903,8 @@ error_t *profile_claim_name(
         /* A root of the profile with no claim on it. The namer's last rung is
          * mount_name over this very table, asker and location (core/manifest.c
          * manifest_ascend), so its NULL is the one mount_root_describe's contract
-         * asks for, and mount_root writes the kind there is to describe. */
-        mount_kind_t root;
+         * asks for, and mount_root writes the label there is to describe. */
+        label_t root;
         mount_root(mounts, profile, location, &root);
         char buf[MOUNT_NOUN_MAX];
         return ERROR(
@@ -1026,7 +1027,7 @@ error_t *profile_discover_claims(
         case PATH_KEY_LABEL:
             return ERROR(
                 ERR_INTERNAL, "profile_discover_claims received the label '%s'",
-                mount_kinds[arg->root].label
+                label_words[arg->label]
             );
     }
 

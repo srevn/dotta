@@ -622,8 +622,8 @@ typedef enum {
  * nothing is scanned there until a target places it.
  *
  * `name` is the claim's name — a storage path — for the two claim kinds, and
- * the label alone ("custom", the vocabulary's own string, infra/mount.h
- * mount_kinds) for a ROOT: the one name a root has, and not a storage path (a
+ * the label alone ("custom", the grammar's own static word, infra/label.h
+ * label_words) for a ROOT: the one name a root has, and not a storage path (a
  * reader that resolves it has not read the kind). Strings are the build arena's
  * or the vocabulary's, both outliving the view.
  */

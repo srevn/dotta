@@ -4,7 +4,7 @@
  * Helper functions for common string operations. Strings are read here as strings:
  * no product's grammar lives in this file, so a question whose answer turns on
  * what a word *means* to dotta or to Git belongs with the module that owns the
- * words — a storage name's shape with the labels (infra/path.h, infra/mount.h),
+ * words — a storage name's shape with the labels (infra/label.h, infra/path.h),
  * a commit's with the syntax that spells one (base/refspec.h).
  */
 

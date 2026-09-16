@@ -53,14 +53,14 @@
  * Traversal safety is established, not assumed. A tree entry's name is whoever
  * wrote the branch's, and git accepts one called ".." without a murmur, so every
  * path a source dictates is read against the storage grammar where the source
- * is read: mount_validate_storage in the walk callback, the same check the view
+ * is read: label_validate_storage in the walk callback, the same check the view
  * makes for the same reason (core/manifest.c manifest_claim_blob) and therefore
  * already made for every row the location arm reads, and, for the claim sheet,
  * its own loader (core/metadata.c). The branch root is the one rung no storage
  * grammar covers, because nothing standing there is a storage path: a name is
  * content there iff it is a label naming a tree, which the whole-profile walk
- * prunes by and the name arm refuses by (the content gate, infra/mount.h
- * mount_under_label). So every FILE and SYMLINK entry carries a validated storage
+ * prunes by and the name arm refuses by (the content gate, infra/label.h
+ * label_prefixes). So every FILE and SYMLINK entry carries a validated storage
  * path — the metadata key and the associated data both — where a DIRECTORY entry
  * may carry a label, which keys nothing and seals nothing. The remaining escape
  * vector — a pre-existing symlink at a content-dictated path below the root —
@@ -92,7 +92,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "infra/content.h"
-#include "infra/mount.h"
+#include "infra/label.h"
 #include "infra/path.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -386,10 +386,10 @@ static int collect_tree_callback(
     /* Whole-profile walks start at branch root, where content lives only under
      * storage-label subtrees; everything else is machinery. Positive return prunes
      * the entry (and its subtree, pre-order). What survives is a label exactly
-     * — the whole-name question, which is what mount_parse_label answers — so
-     * the shape check below has nothing left to ask of it. */
+     * — the whole-name question, which is what label_parse answers — so the shape
+     * check below has nothing left to ask of it. */
     if (at_branch_root && (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
-        !mount_parse_label(name, NULL))) {
+        !label_parse(name, NULL))) {
         return 1;
     }
 
@@ -422,7 +422,7 @@ static int collect_tree_callback(
      * A link's target is the link's own business, copied verbatim, and is not a
      * path of this copy. */
     if (!at_branch_root) {
-        error_t *shape = mount_validate_storage(e.storage_path);
+        error_t *shape = label_validate_storage(e.storage_path);
         if (shape) {
             ctx->error = error_wrap(
                 shape, "Invalid path in profile '%s'", ctx->profile
@@ -630,7 +630,7 @@ cleanup:
  * read (infra/path.h), and a label, which names a namespace and not a path in
  * it — no sheet keys one (core/metadata.c validates every key), nothing was ever
  * sealed under one (infra/content.h), and the branch holds it as the tree the
- * namespace's names stand in. The content gate (infra/mount.h mount_under_label)
+ * namespace's names stand in. The content gate (infra/label.h label_prefixes)
  * is what tells the two apart, and the blob arm below is the one place it matters.
  *
  * A blob is the single-entry copy, its destination the user's own path (cp
@@ -732,7 +732,7 @@ static error_t *collect_name(
          * stands under a label and would pass, which is why the two spellings
          * of one label are pinned together. Refused aloud where the user named
          * it, pruned in silence where the user named the profile. */
-        if (!mount_under_label(name)) {
+        if (!label_prefixes(name)) {
             err = ERROR(
                 ERR_NOT_FOUND,
                 "Profile '%s'%s has no '%s/' content: the branch holds a file "
@@ -1550,8 +1550,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * than by this arm. */
         path_input_t arg;
         if (path_input_is_bare(opts->file_path)) {
-            mount_kind_t root;
-            if (!mount_parse_label(opts->file_path, &root)) {
+            label_t label;
+            if (!label_parse(opts->file_path, &label)) {
                 err = ERROR(
                     ERR_INVALID_ARG,
                     "'%s' is not exportable content\n"
@@ -1562,7 +1562,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 );
                 goto cleanup;
             }
-            arg = (path_input_t){ .key = PATH_KEY_LABEL, .root = root };
+            arg = (path_input_t){ .key = PATH_KEY_LABEL, .label = label };
         } else {
             err = path_input_resolve(opts->file_path, arena, &arg);
             if (err) goto cleanup;
@@ -1589,7 +1589,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                  * the name arm's content gate reads — a namespace is a directory
                  * there, and anything else at that name is machinery. */
                 err = collect_name(
-                    ctx, tree, opts->profile, mount_kinds[arg.root].label,
+                    ctx, tree, opts->profile, label_words[arg.label],
                     commit_suffix, &list
                 );
                 break;
@@ -1731,12 +1731,12 @@ static error_t *export_post_parse(
      * a usage hint instead of a branch-lookup error. Alone, a word under a label
      * or a label itself is content and never a branch; with a second positional
      * the first word is the profile, whatever it looks like. The two label
-     * questions are asked as two, the vocabulary publishing each on its own
-     * (infra/mount.h). */
+     * questions are asked as two, the grammar publishing each on its own
+     * (infra/label.h). */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
         (o->positional_count == 1 &&
-        (mount_under_label(first) || mount_parse_label(first, NULL)))) {
+        (label_prefixes(first) || label_parse(first, NULL)))) {
         return ERROR(
             ERR_INVALID_ARG,
             "'%s' looks like a path — export requires an explicit "

@@ -1,184 +1,37 @@
 /**
- * mount.c - Storage labels and per-machine deployment mount table
+ * mount.c - Where a label lands: the per-machine table of roots
  *
- * Traversal is refused at the boundary (mount_validate_storage,
+ * Traversal is refused at the boundary (infra/label.h label_validate_storage,
  * mount_validate_target) and trusted below it (infra/mount.h).
  */
 
 #include "infra/mount.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
 /**
- * What each kind implies — the single source of truth.
+ * What each label implies — the single source of truth.
  *
- * Indexed by `mount_kind_t` and sized by the arity the header publishes, so the
- * enum declares the label set once and the array's extent is that declaration
- * rather than a second one that happens to agree. Designated initializers keep
- * the row order in lockstep with the ordinals, which is what lets a reader
- * subscript by the kind it holds. Adding a fourth kind is one row here plus a
- * matching enum entry; every consumer that asks "does this kind track ownership?"
- * etc. reads the row — no switches to update.
+ * Indexed by `label_t` and sized by the arity the grammar publishes, so the enum
+ * declares the label set once and the array's extent is that declaration rather
+ * than a second one that happens to agree. Designated initializers keep the row
+ * order in lockstep with the ordinals, which is what lets a reader subscript by
+ * the label it holds.
  */
-const mount_spec_t mount_kinds[MOUNT_KIND_COUNT] = {
-    [MOUNT_HOME] =   { "home",   "your home directory",   false, false },
-    [MOUNT_ROOT] =   { "root",   "the filesystem root",   false, true  },
-    [MOUNT_CUSTOM] = { "custom", "the deployment target", true,  true  },
+const mount_spec_t mount_kinds[LABEL_COUNT] = {
+    [LABEL_HOME] =   { "your home directory",   false, false },
+    [LABEL_ROOT] =   { "the filesystem root",   false, true  },
+    [LABEL_CUSTOM] = { "the deployment target", true,  true  },
 };
-
-/**
- * Decode a storage path's leading label.
- *
- * Single source of truth for the `home/` | `root/` | `custom/` -> kind
- * mapping, and the one walk beneath the three string questions the header publishes
- * over it. Both outputs are optional — pass NULL for either to discard.
- *
- *   storage_path = "home/.bashrc"   -> *kind=MOUNT_HOME,   *tail=".bashrc"
- *   storage_path = "custom/etc/foo" -> *kind=MOUNT_CUSTOM, *tail="etc/foo"
- *   storage_path = "/abs/path"      -> false, outputs unchanged
- *   storage_path = NULL             -> false, outputs unchanged
- *
- * The returned tail aliases `storage_path`; it shares the input's lifetime. Walks
- * the table so the label set has one canonical home — adding a fourth kind needs
- * no edit here.
- */
-static bool mount_decode_label(
-    const char *storage_path, mount_kind_t *out_kind, const char **out_tail
-) {
-    if (!storage_path) return false;
-
-    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
-        const char *label = mount_kinds[i].label;
-        size_t label_len = strlen(label);
-
-        if (strncmp(storage_path, label, label_len) != 0) continue;
-        if (storage_path[label_len] != '/') continue;
-
-        if (out_kind) *out_kind = (mount_kind_t) i;
-        if (out_tail) *out_tail = storage_path + label_len + 1;
-        return true;
-    }
-
-    return false;
-}
-
-bool mount_under_label(const char *s) {
-    return mount_decode_label(s, NULL, NULL);
-}
-
-mount_kind_t mount_kind(const char *storage_path) {
-    mount_kind_t kind;
-    bool under_label = mount_decode_label(storage_path, &kind, NULL);
-
-    /* The precondition (infra/mount.h): a path under no label is a caller's bug,
-     * and no kind may stand in for it. */
-    assert(under_label);
-    (void) under_label;
-
-    return kind;
-}
-
-const char *mount_strip_label(const char *storage_path) {
-    const char *tail;
-    bool under_label = mount_decode_label(storage_path, NULL, &tail);
-
-    /* mount_kind's precondition, the same way. */
-    assert(under_label);
-    (void) under_label;
-
-    return tail;
-}
-
-bool mount_parse_label(const char *word, mount_kind_t *out) {
-    if (!word) return false;
-
-    for (size_t i = 0; i < MOUNT_KIND_COUNT; i++) {
-        if (strcmp(word, mount_kinds[i].label) != 0) continue;
-        if (out) *out = (mount_kind_t) i;
-        return true;
-    }
-
-    return false;
-}
-
-error_t *mount_validate_storage(const char *storage_path) {
-    CHECK_NULL(storage_path);
-
-    if (storage_path[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Storage path cannot be empty");
-    }
-
-    /* SECURITY: Reject absolute paths */
-    if (storage_path[0] == '/') {
-        return ERROR(
-            ERR_INVALID_ARG, "Storage path must be relative (got '%s')",
-            storage_path
-        );
-    }
-
-    /* SECURITY: Must start with home/, root/, or custom/ */
-    const char *tail = NULL;
-    if (!mount_decode_label(storage_path, NULL, &tail)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Storage path must start with "
-            "'home/', 'root/', or 'custom/' (got '%s')", storage_path
-        );
-    }
-
-    /* Must reference a file, not just a label directory */
-    if (storage_path[strlen(storage_path) - 1] == '/') {
-        return ERROR(
-            ERR_INVALID_ARG, "Storage path must not end with '/': '%s'",
-            storage_path
-        );
-    }
-
-    /* Reject consecutive slashes */
-    if (strstr(storage_path, "//") != NULL) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid path format ('//'): '%s'",
-            storage_path
-        );
-    }
-
-    /* SECURITY: Tail components must not be `.` or `..`. A component is one by
-     * its first bytes and whatever ends it, so the walk reads neither a length
-     * nor a token; the label itself ("home"/"root"/"custom") is constant and
-     * never a traversal token, so only the tail is walked. An empty component —
-     * the one a `//` or a trailing `/` leaves — was refused above in its own
-     * words and does not reach here. The message names the path the user typed,
-     * not the tail it is walking. */
-    for (const char *comp = tail; comp != NULL;) {
-        if (comp[0] == '.' &&
-            comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
-            return ERROR(
-                ERR_INVALID_ARG, "Path traversal not allowed "
-                "(component '..' in '%s')", storage_path
-            );
-        }
-        if (comp[0] == '.' && (comp[1] == '/' || comp[1] == '\0')) {
-            return ERROR(
-                ERR_INVALID_ARG, "Invalid path component '.' in '%s'",
-                storage_path
-            );
-        }
-
-        const char *slash = strchr(comp, '/');
-        comp = slash ? slash + 1 : NULL;
-    }
-
-    return NULL;
-}
 
 error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino) {
     CHECK_NULL(target);
@@ -259,7 +112,7 @@ bool mount_same_target(const char *a, const char *b) {
  *           when its target is "/"). The key of every location beneath it: a
  *           location is this joined with a tail, and nothing is read through
  *           (infra/mount.h).
- * - kind:   mount kind for this entry's storage label.
+ * - label:  the storage label paths under this entry take.
  * - profile: NULL for the shared roots (HOME, ROOT), which belong to every
  *           namespace. For CUSTOM mounts, the owning profile name — always set,
  *           mount_table_build refusing a binding that names none; it is the whole
@@ -272,7 +125,7 @@ bool mount_same_target(const char *a, const char *b) {
  */
 typedef struct {
     const char *spelling;    /* As its binder typed it */
-    mount_kind_t kind;       /* The storage label paths under it take */
+    label_t label;           /* The storage label paths under it take */
     const char *profile;     /* The binding's owner; NULL for HOME and ROOT */
 } mount_entry_t;
 
@@ -351,7 +204,7 @@ static const char *tail_under_root(const char *location, const char *root) {
  * `*out_tail` is empty when the location is the root itself, and is written only
  * when an entry matched — NULL when none did, which with the sentinel present
  * means only a malformed table or a location that is not absolute. The winner
- * is the entry itself: mount_name reads its kind's label, mount_root its kind.
+ * is the entry itself: mount_name reads its label's word, mount_root its label.
  */
 static const mount_entry_t *deepest_root(
     const mount_table_t *table, const char *profile, const char *location,
@@ -377,7 +230,7 @@ static const mount_entry_t *deepest_root(
          * the portable name outranks. */
         if (winner && tail < deepest) continue;
         if (winner && tail == deepest &&
-            (winner->kind == MOUNT_CUSTOM || m->kind == MOUNT_HOME)) {
+            (winner->label == LABEL_CUSTOM || m->label == LABEL_HOME)) {
             continue;
         }
 
@@ -388,7 +241,6 @@ static const mount_entry_t *deepest_root(
     if (!winner) return NULL;
 
     *out_tail = deepest;
-
     return winner;
 }
 
@@ -410,7 +262,7 @@ error_t *mount_table_build(
     }
 
     /* Customs first (input order), then HOME, then the sentinel; no reader depends
-     * on the order — deepest_root breaks its ties on the kinds.
+     * on the order — deepest_root breaks its ties on the labels.
      *
      * The profile is the type's contract (mount_t) and is refused whatever the
      * target: a nameless binding is a caller's bug, and it would be a root of
@@ -455,7 +307,7 @@ error_t *mount_table_build(
             return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
         }
         entries[n++] = (mount_entry_t){
-            .spelling = spelling, .kind = MOUNT_CUSTOM, .profile = profile,
+            .spelling = spelling, .label = LABEL_CUSTOM, .profile = profile,
         };
     }
 
@@ -469,13 +321,13 @@ error_t *mount_table_build(
         return ERROR(ERR_MEMORY, "Failed to copy the home directory into the arena");
     }
     entries[n++] = (mount_entry_t){
-        .spelling = home, .kind = MOUNT_HOME, .profile = NULL,
+        .spelling = home, .label = LABEL_HOME, .profile = NULL,
     };
     /* The sentinel: "" encloses every absolute path at depth zero and joins a
      * tail with one slash, so the fallback needs no case of its own anywhere. A
      * literal, not the arena's. */
     entries[n++] = (mount_entry_t){
-        .spelling = "", .kind = MOUNT_ROOT, .profile = NULL,
+        .spelling = "", .label = LABEL_ROOT, .profile = NULL,
     };
 
     table->entries = entries;
@@ -505,9 +357,7 @@ error_t *mount_name(
     /* A root has no name: the answer is the absence, already written. */
     if (*tail == '\0') return NULL;
 
-    *out_storage = arena_str_format(
-        arena, "%s/%s", mount_kinds[root->kind].label, tail
-    );
+    *out_storage = label_compose(arena, root->label, tail);
     if (!*out_storage) {
         return ERROR(ERR_MEMORY, "Failed to format storage path");
     }
@@ -517,21 +367,21 @@ error_t *mount_name(
 
 bool mount_root(
     const mount_table_t *table, const char *profile, const char *location,
-    mount_kind_t *out_kind
+    label_t *out_label
 ) {
     const char *tail = NULL;
     const mount_entry_t *root = deepest_root(table, profile, location, &tail);
 
     if (!root || *tail != '\0') return false;
-    if (out_kind) *out_kind = root->kind;
+    if (out_label) *out_label = root->label;
     return true;
 }
 
 const char *mount_root_describe(
-    mount_kind_t root, const char *profile, char *buf, size_t size
+    label_t root, const char *profile, char *buf, size_t size
 ) {
     /* The owner is named where there is one to name. A root found in a table
-     * was found by its own profile, so a per_profile kind arrives with its asker;
+     * was found by its own profile, so a per_profile root arrives with its asker;
      * a root named by its label alone was found by nobody, and the noun is then
      * the label's own (infra/mount.h). */
     if (mount_kinds[root].per_profile && profile) {
@@ -544,7 +394,7 @@ const char *mount_root_describe(
 }
 
 /**
- * The entry of `kind` in the asker's namespace, or NULL when none is.
+ * The entry of `label` in the asker's namespace, or NULL when none is.
  *
  * HOME and the sentinel are every asker's, so they answer whoever asks; a CUSTOM
  * entry is its own profile's alone, so a NULL asker finds no binding and places
@@ -554,20 +404,20 @@ const char *mount_root_describe(
  * mount_root_location, which hands it out as a path.
  */
 static const mount_entry_t *find_entry(
-    const mount_table_t *table, mount_kind_t kind, const char *profile
+    const mount_table_t *table, label_t label, const char *profile
 ) {
     for (size_t i = 0; i < table->entry_count; i++) {
         const mount_entry_t *m = &table->entries[i];
-        if (m->kind == kind && namespace_holds(profile, m)) return m;
+        if (m->label == label && namespace_holds(profile, m)) return m;
     }
 
     return NULL;
 }
 
 const char *mount_root_location(
-    const mount_table_t *table, const char *profile, mount_kind_t kind
+    const mount_table_t *table, const char *profile, label_t label
 ) {
-    const mount_entry_t *entry = find_entry(table, kind, profile);
+    const mount_entry_t *entry = find_entry(table, label, profile);
     if (!entry) return NULL;
 
     /* The one reader that turns the table's "" back into the path it spells:
@@ -590,12 +440,11 @@ error_t *mount_resolve(
     /* Storage paths arriving here are validated at their write boundary —
      * metadata.json parse (metadata.c), Git tree commit (add.c, update.c validate
      * before commit), state DB INSERT (validated upstream), or an explicit
-     * CLI-input check at the calling site (add.c). The decode-label path below
-     * tolerates any non-validated leading-label input by surfacing ERR_INTERNAL
-     * — but the invariant is upstream, not here. */
-    mount_kind_t kind;
-    const char *tail = NULL;
-    if (!mount_decode_label(storage_path, &kind, &tail)) {
+     * CLI-input check at the calling site (add.c). The split below tolerates
+     * any non-validated leading-label input by surfacing ERR_INTERNAL — but the
+     * invariant is upstream, not here. */
+    label_split_t split = label_split(storage_path);
+    if (!split.tail) {
         return ERROR(
             ERR_INTERNAL, "mount_resolve received non-storage path '%s'",
             storage_path
@@ -607,22 +456,22 @@ error_t *mount_resolve(
      * has no --target on this machine — e.g., a clone before the user has
      * configured a target — and the answer is the absence itself; malformed-input
      * failures surface as ERR_INTERNAL above. */
-    const mount_entry_t *entry = find_entry(table, kind, profile);
+    const mount_entry_t *entry = find_entry(table, split.label, profile);
     if (!entry) return NULL;
 
     /* The join: the root's spelling, "/", the tail — the key of the claim, which
      * every producer of a key agrees on because every one is this join over the
-     * same strings (infra/mount.h). Uniform across the three kinds — the sentinel's
-     * "" and a HOME of "/" join with one slash:
+     * same strings (infra/mount.h). Uniform across the three labels — the
+     * sentinel's "" and a HOME of "/" join with one slash:
      *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
-     * `tail` is non-empty (mount_validate_storage rejects trailing slashes) and
-     * no spelling ends in a slash: the sentinel's, a HOME of "/" and a binding
+     * The tail is non-empty (label_validate_storage rejects trailing slashes)
+     * and no spelling ends in a slash: the sentinel's, a HOME of "/" and a binding
      * at "/" are "", HOME is folded by the identity (sys/identity), and a target
      * is absolute and folded, the build's own refusal (mount_table_build) — so
      * the join is unconditional. */
-    *out_location = arena_str_format(arena, "%s/%s", entry->spelling, tail);
+    *out_location = arena_str_format(arena, "%s/%s", entry->spelling, split.tail);
     if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }

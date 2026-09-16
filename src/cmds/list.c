@@ -644,7 +644,7 @@ static error_t *list_file_history(
              * the user named one and nobody otherwise — a label gives the view
              * nothing to choose a profile by, so the arm without one has none
              * to name. */
-            return path_input_refuse_label(arg.root, profile);
+            return path_input_refuse_label(arg.label, profile);
     }
 
     if (profile) {

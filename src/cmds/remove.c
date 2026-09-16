@@ -24,6 +24,7 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -387,7 +388,7 @@ static error_t *resolve_removal_claims(
                 break;
 
             case PATH_KEY_LABEL:
-                subject = mount_kinds[arg.root].label;
+                subject = label_words[arg.label];
                 by_name = true;
                 break;
         }

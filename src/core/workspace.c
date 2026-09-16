@@ -43,6 +43,7 @@
 #include "core/policy.h"
 #include "infra/compare.h"
 #include "infra/content.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -290,7 +291,7 @@ static bool ownership_diverges(
     const struct stat *st
 ) {
     if (!owner && !group) {
-        return mount_kinds[mount_kind(storage_path)].tracks_ownership &&
+        return mount_kinds[label_of(storage_path)].tracks_ownership &&
                st->st_uid != identity()->uid;
     }
 
@@ -2719,7 +2720,7 @@ static error_t *scan_directory_for_untracked(
              * wins. The layer's own failure leaves no verdict, as today; its
              * allocation failure is the run's. */
             gitignore_match_t match;
-            gitignore_eval(scan->rules, mount_strip_label(name), is_dir, &match);
+            gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
             bool ignored = match.decided && match.ignored;
             if (!match.decided && scan->source_filter) {
                 error_t *layer = source_filter_is_excluded(

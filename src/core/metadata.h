@@ -137,6 +137,7 @@
 #include <sys/stat.h>
 #include <types.h>
 
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/stage.h"
 
@@ -399,7 +400,7 @@ bool metadata_remove_item(
 );
 
 /**
- * Does the profile scan the contents of its root of `kind` for new files?
+ * Does the profile scan the contents of its root of `label` for new files?
  *
  * The third of the three facts a tracked directory bundles, and the only one a
  * root can carry: the root exists by the machine's word, its attributes are
@@ -415,10 +416,10 @@ bool metadata_remove_item(
  * reader not on this list is a bug.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param kind The root's kind
+ * @param label The root's label
  * @return true iff the sheet says the root's contents are scanned
  */
-bool metadata_scans_root(const metadata_t *metadata, mount_kind_t kind);
+bool metadata_scans_root(const metadata_t *metadata, label_t label);
 
 /**
  * The sheet gains the root
@@ -428,9 +429,9 @@ bool metadata_scans_root(const metadata_t *metadata, mount_kind_t kind);
  * sheet that says it (metadata_from_json).
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param kind The root's kind
+ * @param label The root's label
  */
-void metadata_add_root(metadata_t *metadata, mount_kind_t kind);
+void metadata_add_root(metadata_t *metadata, label_t label);
 
 /**
  * Prune the derivations nothing stands beneath
@@ -639,9 +640,8 @@ error_t *metadata_capture_from_directory(
  *               back to where the leaf was read (must not be NULL)
  * @param profile Profile whose chain this is, for a custom/ rung (must not be NULL)
  * @param storage_path Leaf's storage path, under a label — the vocabulary's
- *                     precondition (infra/mount.h mount_strip_label), which every
- *                     caller meets with a name it composed or validated (must
- *                     not be NULL)
+ *                     precondition (infra/label.h label_tail), which every caller
+ *                     meets with a name it composed or validated (must not be NULL)
  * @param arena Arena the rungs' locations are spelled into (must not be NULL)
  * @param captured Count of rungs whose claim this call authored or changed, added
  *                 to (must not be NULL)

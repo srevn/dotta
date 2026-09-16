@@ -19,6 +19,7 @@
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
@@ -41,16 +42,16 @@
  * writes METADATA_VERSION and metadata_from_json refuses anything else, so there
  * is nothing here for a version field to say.
  *
- * The roots stand beside the items, one slot per kind: the sheet's second statement
- * (metadata.h), zeroed with the collection — a sheet that says nothing of them
- * scans none — and read and written through the two verbs alone.
+ * The roots stand beside the items, one slot per label: the sheet's second
+ * statement (metadata.h), zeroed with the collection — a sheet that says nothing
+ * of them scans none — and read and written through the two verbs alone.
  */
 struct metadata {
-    metadata_item_t **items;         /* Spine of stable items, in insertion order */
-    size_t count;                    /* Items held */
-    size_t capacity;                 /* Spine slots allocated */
-    hashmap_t *index;                /* key -> item*, borrowing the item's own key */
-    bool roots[MOUNT_KIND_COUNT];    /* The roots whose contents the profile scans */
+    metadata_item_t **items;    /* Spine of stable items, in insertion order */
+    size_t count;               /* Items held */
+    size_t capacity;            /* Spine slots allocated */
+    hashmap_t *index;           /* key -> item*, borrowing the item's own key */
+    bool roots[LABEL_COUNT];    /* The roots whose contents the profile scans */
 };
 
 /**
@@ -476,12 +477,12 @@ bool metadata_remove_item(
     return false;
 }
 
-bool metadata_scans_root(const metadata_t *metadata, mount_kind_t kind) {
-    return metadata->roots[kind];
+bool metadata_scans_root(const metadata_t *metadata, label_t label) {
+    return metadata->roots[label];
 }
 
-void metadata_add_root(metadata_t *metadata, mount_kind_t kind) {
-    metadata->roots[kind] = true;
+void metadata_add_root(metadata_t *metadata, label_t label) {
+    metadata->roots[label] = true;
 }
 
 /**
@@ -758,7 +759,7 @@ error_t *metadata_capture_from_file(
     /* Ownership, for a kind that tracks it and an owner that is not the invoker's
      * own (claims_ownership). The lstat needs no privilege, so the claim is
      * authored by whoever can read the path. */
-    if (mount_kinds[mount_kind(storage_path)].tracks_ownership && claims_ownership(st)) {
+    if (mount_kinds[label_of(storage_path)].tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -816,7 +817,7 @@ error_t *metadata_capture_from_directory(
     }
 
     /* Ownership, by the file capture's rule (claims_ownership). */
-    if (mount_kinds[mount_kind(storage_path)].tracks_ownership && claims_ownership(st)) {
+    if (mount_kinds[label_of(storage_path)].tracks_ownership && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -985,7 +986,7 @@ error_t *metadata_capture_ancestors(
     /* One rung per separator in the mount-relative tail. The mount root is excluded
      * by where the scan starts and the leaf by where it ends — arithmetic, not
      * a special case — so a path directly beneath a mount root climbs nowhere. */
-    const char *first = strchr(mount_strip_label(storage_path), '/');
+    const char *first = strchr(label_tail(storage_path), '/');
     if (!first) {
         return NULL;
     }
@@ -1061,15 +1062,15 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         goto cleanup;
     }
 
-    /* The roots the profile scans, before the items and in kind order: printed
+    /* The roots the profile scans, before the items and in label order: printed
      * iff it scans one — the sheet's own sparse rule — so a sheet that scans
      * nothing is byte-identical to what it was, and the determinism below holds
      * for every branch written before the key existed. Attached as it is created:
      * the root object owns the array from its first entry, so the tail has nothing
      * to free. */
     cJSON *roots = NULL;
-    for (mount_kind_t kind = MOUNT_HOME; kind < MOUNT_KIND_COUNT; kind++) {
-        if (!metadata->roots[kind]) continue;
+    for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
+        if (!metadata->roots[label]) continue;
         if (!roots) {
             roots = cJSON_AddArrayToObject(root, "roots");
             if (!roots) {
@@ -1080,7 +1081,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
         /* A CreateString that failed arrives as a NULL item, the one thing the
          * add refuses — so one check answers for both allocations. */
         if (!cJSON_AddItemToArray(
-            roots, cJSON_CreateString(mount_kinds[kind].label)
+            roots, cJSON_CreateString(label_words[label])
             )) {
             err = ERROR(ERR_MEMORY, "Failed to add root to metadata");
             goto cleanup;
@@ -1339,8 +1340,8 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
     /* The roots the profile scans, optional: a sheet without the key scans none,
      * which is what every sheet written before the key said. Each entry is a
-     * label alone — the one address a root has (infra/mount.h mount_parse_label)
-     * — and a non-string, an unknown label or a repeat is the same loud refusal
+     * label alone — the one address a root has (infra/label.h label_parse) —
+     * and a non-string, an unknown label or a repeat is the same loud refusal
      * every other malformation gets. Read before the items, in the order the
      * writer prints them; the loop over a sheet without the key runs no
      * iteration. */
@@ -1349,27 +1350,27 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         err = ERROR(ERR_INVALID_ARG, "Invalid roots array in metadata");
         goto cleanup;
     }
-    cJSON *label = NULL;
-    cJSON_ArrayForEach(label, roots) {
-        if (!cJSON_IsString(label) || !label->valuestring) {
+    cJSON *word = NULL;
+    cJSON_ArrayForEach(word, roots) {
+        if (!cJSON_IsString(word) || !word->valuestring) {
             err = ERROR(ERR_INVALID_ARG, "Invalid root in metadata (not a string)");
             goto cleanup;
         }
-        mount_kind_t kind;
-        if (!mount_parse_label(label->valuestring, &kind)) {
+        label_t label;
+        if (!label_parse(word->valuestring, &label)) {
             err = ERROR(
                 ERR_INVALID_ARG, "Invalid root in metadata: %s "
-                "(expected 'home', 'root' or 'custom')", label->valuestring
+                "(expected 'home', 'root' or 'custom')", word->valuestring
             );
             goto cleanup;
         }
-        if (metadata_scans_root(metadata, kind)) {
+        if (metadata_scans_root(metadata, label)) {
             err = ERROR(
-                ERR_INVALID_ARG, "Duplicate root in metadata: %s", label->valuestring
+                ERR_INVALID_ARG, "Duplicate root in metadata: %s", word->valuestring
             );
             goto cleanup;
         }
-        metadata_add_root(metadata, kind);
+        metadata_add_root(metadata, label);
     }
 
     /* Parse each item in the unified array */
@@ -1414,7 +1415,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         }
 
         /* Validate key format (prevent path traversal) */
-        err = mount_validate_storage(key_obj->valuestring);
+        err = label_validate_storage(key_obj->valuestring);
         if (err) {
             err = error_wrap(
                 err, "Invalid key in metadata: %s",

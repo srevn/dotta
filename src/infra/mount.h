@@ -1,18 +1,20 @@
 /**
- * mount.h - Storage labels and per-machine deployment mount table
+ * mount.h - Where a label lands: the per-machine table of roots
  *
- * Storage-path namespace
- * ----------------------
- * Dotta encodes deployment locations into a portable namespace:
+ * Where a label lands
+ * -------------------
+ * A profile names what it holds portably, `<label>/<tail>` (infra/label.h), and
+ * this module is where each label stands on one machine:
  *
  *   home/X   - X under $HOME (per-machine $HOME resolution)
  *   root/X   - /X (filesystem root; same on every machine)
  *   custom/X - X under a per-profile, per-machine deployment target (configured
  *              via `--target` at profile-enable time)
  *
- * The label (`home`, `root`, `custom`) names which mount kind a storage path
- * belongs to. Storage paths are stable across machines; the per-machine filesystem
- * location of a label is decided by the mount table below.
+ * Storage paths are stable across machines; the per-machine filesystem location
+ * of a label is decided by the mount table below. The grammar of a name — the
+ * three words, the shape rule and the split beneath both — is the layer under
+ * this one: this module reads it, and it reads nothing of the table.
  *
  * The table
  * ---------
@@ -96,9 +98,9 @@
  *     one places it back at the very location it was composed from.
  *
  * Traversal is refused at the boundary and trusted below it: a storage path where
- * a branch, a sheet or an argument is read (mount_validate_storage), a target
- * where a binding is written (mount_validate_target). The verbs over the table
- * join a tail on that strength and validate nothing themselves.
+ * a branch, a sheet or an argument is read (infra/label.h label_validate_storage),
+ * a target where a binding is written (mount_validate_target). The verbs over
+ * the table join a tail on that strength and validate nothing themselves.
  */
 
 #ifndef DOTTA_MOUNT_H
@@ -109,167 +111,36 @@
 #include <sys/types.h>
 #include <types.h>
 
-/**
- * Mount kinds — one per storage label.
- *
- * The vocabulary's one currency: what a reader holds, passes, stores and loops
- * over. A kind indexes (the sheet's roots, a receipt's counts), is switched on
- * under -Wswitch, and costs nothing to keep. Its spelling is read from the table
- * below where a string is printed or written, and parsed back into a kind where
- * a document, a tree or an argument is read (mount_parse_label, mount_kind). No
- * reader holds a row of the table or a label string in a kind's place: the row
- * is what `mount_kinds[kind]` denotes at the point of use, and the string is
- * `.label` there.
- */
-typedef enum {
-    MOUNT_HOME,    /* home/...   -> $HOME/... */
-    MOUNT_ROOT,    /* root/...   -> /... */
-    MOUNT_CUSTOM,  /* custom/... -> per-profile deployment target */
-} mount_kind_t;
+#include "infra/label.h"
 
 /**
- * The kinds' arity, for a walk over the labels (cmds/add.c's receipt, the sheet's
- * writer, the view's contribution) and for an array with one slot per kind (the
- * sheet's roots, the receipt's counts). A macro, not an enumerator, for the reason
- * WORKSPACE_ROUTE_COUNT is one (core/workspace.h): a switch over the kinds must
- * not have to name a sentinel.
- */
-#define MOUNT_KIND_COUNT (MOUNT_CUSTOM + 1)
-
-/**
- * What a kind implies.
+ * What a label implies.
  *
- * The kind names *what the storage label is*; the row carries *what the label
- * implies*: the label string, the noun a screen calls the root by, and the two
- * per-kind facts every consumer ultimately asks — "is resolution profile-keyed?"
- * and "do files of this kind carry ownership metadata?".
+ * The label names *which namespace a storage path is in* (infra/label.h); the
+ * row carries *what the label implies*: the noun a screen calls the root by,
+ * and the two per-label facts every consumer ultimately asks — "is resolution
+ * profile-keyed?" and "do files under this label carry ownership metadata?".
  *
- * One row per kind, indexed by it — the shape utils/config.h's strategies and
- * crypto/kdf.h's presets take — so a fact of a kind is a subscript and never a
- * lookup, and a fourth kind is an enumerator and a row. The rows are static and
- * outlive every arena, which is what lets a label string read from one be kept
- * without a copy (the view's health slice, core/manifest.h).
+ * One row per label, indexed by it — the shape utils/config.h's strategies and
+ * crypto/kdf.h's presets take — so a fact of a label is a subscript and never a
+ * lookup.
+ *
+ * Every field here is leaving, and the row with them: the noun becomes what the
+ * table renders from the root it found, `per_profile` becomes the owner the build
+ * stamps on an entry, and `tracks_ownership` becomes the sheet's own statement
+ * about what an absent claim means. Until each moves, this is where its reader
+ * subscripts.
  */
 typedef struct mount_spec {
-    const char *label;            /* Storage-label string ("home", "root", "custom") */
     const char *noun;             /* The root's word for a screen — a complete noun
                                    * phrase; a per_profile root takes " of profile
                                    * '<name>'" after it (mount_root_describe) */
     bool per_profile;             /* True iff resolution is profile-keyed (CUSTOM) */
-    bool tracks_ownership;        /* True iff files of this kind carry ownership metadata */
+    bool tracks_ownership;        /* True iff files under this label carry ownership
+                                   * metadata */
 } mount_spec_t;
 
-extern const mount_spec_t mount_kinds[MOUNT_KIND_COUNT];
-
-/**
- * Does `s` stand under a label — "home/…", "root/…", "custom/…"?
- *
- * The prefix and its separator, nothing of the tail: the question any string
- * may be asked, NULL included, where the two projections beneath it ask for a
- * path that passed this one. It is the content gate every walk over a profile
- * tree asks of its own walk root — a managed path stands under a label, so a
- * blob at the branch root, or beneath a tree no label names, is the branch's
- * own machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever
- * else a hand or a tool left beside them. Nothing else distinguishes them, and
- * nothing needs to: a branch may hold what it likes next to the labels, and no
- * walk of content sees it. A caller *handed* such a name rather than finding it
- * refuses in its own words — export's name arm, which takes a label as a key
- * and meets whatever stands there (cmds/export.c). And it is the shape dispatch
- * on an argument, which reads a storage shape before the filesystem shapes. A
- * label alone, with no separator, stands under none: that is the whole-word
- * question, mount_parse_label, and a caller wanting either asks both
- * (cmds/export.c's grammar). A label spelled as a directory does stand under
- * one — "custom/" is the label and an empty tail — so a gate meant to catch a
- * label asks it of the word.
- *
- * Readers: the view's claim routine (core/manifest.c), the file listing and the
- * branch statistics (core/profiles.c), the refspec completion (cmds/completion.c),
- * diff's delta selection (cmds/diff.c), the rule compiler (infra/pathspec.c),
- * the resolver's first arm (infra/path.c), the two input heads that dispatch on
- * shape before reading it (cmds/add.c, cmds/ignore.c) and export's two — its
- * profile slot's own grammar, and the gate its name arm asks of the key it is
- * handed (cmds/export.c).
- */
-bool mount_under_label(const char *s);
-
-/**
- * The kind of a storage path: which label it stands under.
- *
- * `storage_path` stands under a label (mount_under_label) — the whole precondition,
- * and every reader holds a path that does: a name the namer composed beneath a
- * root's label (core/manifest.h manifest_name), a row's or a record's, validated
- * where the branch or the sheet was read (mount_validate_storage), or an argument
- * the resolver's first arm dispatched on that very test (infra/path.c). Asserted,
- * never answered: a path under no label is a caller's bug, and no kind may stand
- * in for it — least of all MOUNT_ROOT in silence.
- *
- * Readers: the ownership captures and the divergence check, for tracks_ownership
- * (core/metadata.c, core/workspace.c); cleanup's relocation hold, for per_profile
- * (core/cleanup.c); add's receipt, counting names by their kind (cmds/add.c);
- * the resolver's label arm (infra/path.c).
- */
-mount_kind_t mount_kind(const char *storage_path);
-
-/**
- * Return the mount-relative path: a pointer past the storage label.
- *
- * The subject every user-authored pattern is evaluated against. A pattern — in
- * `.dottaignore`, `[ignore] patterns`, `--exclude`, `auto_encrypt` — is matched
- * against the path relative to its mount root, what a `.gitignore` at `~`, at
- * `/` or at the deployment target would see: `home/.ssh/id_rsa` is matched as
- * `.ssh/id_rsa`, `root/etc/hosts` as `etc/hosts`. Labels are dotta's, never the
- * pattern's, and nothing above the mount root takes part. Paths are resolved
- * through the table; patterns are not.
- *
- * Zero allocation; the returned pointer aliases `storage_path` and shares its
- * lifetime. mount_kind's precondition, asserted the same way: every reader holds
- * a composed or a validated path, and a tail of something that stands under no
- * label is not an answer.
- *
- * @param storage_path Storage path, under a label
- * @return Pointer past the label; "" for a label spelled as a directory
- */
-const char *mount_strip_label(const char *storage_path);
-
-/**
- * The kind a bare label names: "home", "root", "custom" — the whole word.
- *
- * The whole name and not a prefix, which is what tells this apart from
- * mount_under_label: "home/x" names no kind here, and "home" stands under no
- * label there. The two are the vocabulary's atoms, and a caller wanting either
- * spells the union at its own site (cmds/export.c's grammar, where a lone
- * positional that is content rather than a profile is one or the other).
- *
- * Writes `*out` and answers true when `word` is a label; false, `*out` untouched,
- * when it is not — an unknown word is the caller's to refuse in its own sentence,
- * the sheet's and export's differing. `out` may be NULL for a caller that asks
- * only whether, and `word` may be NULL, which names nothing. Walks the table,
- * so a fourth kind needs no edit here.
- *
- * Readers: the sheet's parser, one entry of `roots` at a time (core/metadata.c
- * metadata_from_json); export's bare-word arm, which makes the resolver's key
- * out of the word its own grammar allows, and export's branch-root walk, where
- * a top-level tree entry is content iff its name is a label (cmds/export.c).
- */
-bool mount_parse_label(const char *word, mount_kind_t *out);
-
-/**
- * Validate a storage path's syntactic shape.
- *
- * Checks:
- *  - Non-empty
- *  - Starts with "home/", "root/", or "custom/"
- *  - Not absolute (no leading '/')
- *  - No "..", ".", or empty component (path traversal)
- *  - No "//" (consecutive slashes)
- *  - No trailing slash (must reference a file, not a directory prefix)
- *
- * Pure rule check — no filesystem access, no arena, no state.
- *
- * @param storage_path Path to validate (must not be NULL)
- * @return Error or NULL when valid
- */
-error_t *mount_validate_storage(const char *storage_path);
+extern const mount_spec_t mount_kinds[LABEL_COUNT];
 
 /**
  * Validate a deployment target (the `--target` argument) as the row will hold it.
@@ -492,9 +363,9 @@ error_t *mount_name(
  * Does a root of `profile` stand exactly at `location`, and which?
  *
  * By the root's one spelling: exact equality is the whole test, a key being a
- * string of the rows' own (the table's paragraph above). True, `*out_kind` written,
- * when one does; false, `*out_kind` untouched, when none does. `out_kind` may
- * be NULL for a caller that asks only whether.
+ * string of the rows' own (the table's paragraph above). True, `*out_label`
+ * written, when one does; false, `*out_label` untouched, when none does.
+ * `out_label` may be NULL for a caller that asks only whether.
  *
  * A root met from above is entered unlisted and its children are named from its
  * label; a symlink standing at one is skipped by a walk and followed by the
@@ -502,31 +373,31 @@ error_t *mount_name(
  * author at one is not authored (core/metadata.c). Asked once per directory entry
  * and once per chain rung. Never fails, allocates nothing; `table` and `location`
  * must not be NULL, `profile` may be — a NULL asker meets the shared roots (HOME,
- * `/`) alone, so the answer is never a per_profile kind.
+ * `/`) alone, so the answer is never a per_profile root.
  *
  * Readers, by what they read. Whether alone: the namer's ascent, at every rung
  * rather than once per argument (core/manifest.c manifest_ascend), and the climb's
- * root guard (core/metadata.c capture_ancestor). The kind alone, holding the
- * invariant that a root stands there (mount_root_describe): add's two root refusals
- * — the argument arm and the already-walked arm (cmds/add.c), `ignore --test`'s
- * root line (cmds/ignore.c), the claim search's root refusal (core/profiles.c
- * profile_claim_name). Both: revert's, asked directly where its own search answered
- * nothing at the location (cmds/revert.c).
+ * root guard (core/metadata.c capture_ancestor). The root's label alone, holding
+ * the invariant that a root stands there (mount_root_describe): add's two root
+ * refusals — the argument arm and the already-walked arm (cmds/add.c), `ignore
+ * --test`'s root line (cmds/ignore.c), the claim search's root refusal
+ * (core/profiles.c profile_claim_name). Both: revert's, asked directly where
+ * its own search answered nothing at the location (cmds/revert.c).
  */
 bool mount_root(
     const mount_table_t *table,
     const char *profile,
     const char *location,
-    mount_kind_t *out_kind
+    label_t *out_label
 );
 
 /**
- * Where `profile`'s root of `kind` stands, as a location.
+ * Where `profile`'s root of `label` stands, as a location.
  *
  * The inverse of mount_root: that one asks which root stands at a location, this
  * one where a root stands. The entry's spelling as a path — "/" where the table
  * spells the root "" (the sentinel, a HOME of "/", a binding at "/") — or NULL
- * for a per_profile kind the profile is not bound at here, and for a NULL asker
+ * for a per_profile root the profile is not bound at here, and for a NULL asker
  * naming one. A location and never the table's own spelling, because the reader
  * walks it, stats it and joins beneath it by the walkers' rule (a separator unless
  * the directory is "/"), and the one spelling that is not a path — "" — is exactly
@@ -534,9 +405,9 @@ bool mount_root(
  * always answer.
  *
  * The entry, not the tie: a HOME that is also a binding is one directory under
- * two kinds, and each kind answers its own spelling here, where mount_root and
- * mount_name give the binding the tie. Never fails, allocates nothing; the answer
- * is the table's for the arena's lifetime, or the literal "/".
+ * two labels, and each label answers its own spelling here, where mount_root
+ * and mount_name give the binding the tie. Never fails, allocates nothing; the
+ * answer is the table's for the arena's lifetime, or the literal "/".
  *
  * Reader: the view's contribution, which asks where each root the sheet scans
  * stands and records the one that stands nowhere (core/manifest.c
@@ -546,7 +417,7 @@ bool mount_root(
 const char *mount_root_location(
     const mount_table_t *table,
     const char *profile,
-    mount_kind_t kind
+    label_t label
 );
 
 /* The longest sentence mount_root_describe renders: "the deployment target" (20),
@@ -561,18 +432,19 @@ const char *mount_root_location(
  * A root's noun for a screen, rendered into `buf` and returned: "your home
  * directory", "the filesystem root", "the deployment target of profile 'web'".
  *
- * `root` is a kind mount_root wrote, and the callers reach it two ways. Most
- * have just had mount_name answer NULL for the same table, asker and location —
- * asked directly, or as the last rung of the namer's ascent (core/manifest.c
- * manifest_ascend), which is the only way that one answers NULL — the same find
- * over the same data, an invariant rather than a hope; they ask mount_root for
- * the kind and never read whether. A caller whose own search already answered
- * nothing at the location asks mount_root directly and reads both (cmds/revert.c),
- * which establishes the same thing. `profile` is read only for a per_profile
- * root, and a per_profile root found in a table can only have been found by the
- * profile that owns it, so it is non-NULL exactly when it is read.
+ * `root` is the root being described, as the label mount_root wrote, and the
+ * callers reach it two ways. Most have just had mount_name answer NULL for the
+ * same table, asker and location — asked directly, or as the last rung of the
+ * namer's ascent (core/manifest.c manifest_ascend), which is the only way that
+ * one answers NULL — the same find over the same data, an invariant rather than
+ * a hope; they ask mount_root for the label and never read whether. A caller
+ * whose own search already answered nothing at the location asks mount_root
+ * directly and reads both (cmds/revert.c), which establishes the same thing.
+ * `profile` is read only for a per_profile root, and a per_profile root found
+ * in a table can only have been found by the profile that owns it, so it is
+ * non-NULL exactly when it is read.
  *
- * One caller reaches a kind without asking a table at all: a label alone names
+ * One caller reaches a label without asking a table at all: a label alone names
  * a root on every machine, and nobody asked (infra/path.h path_input_refuse_label).
  * There the per_profile noun stands on its own — "the deployment target", no
  * owner — which is why a NULL `profile` is answered rather than read. No
@@ -589,7 +461,7 @@ const char *mount_root_location(
  * Truncates rather than fails: a screen noun, not a key.
  */
 const char *mount_root_describe(
-    mount_kind_t root,
+    label_t root,
     const char *profile,
     char *buf,
     size_t size

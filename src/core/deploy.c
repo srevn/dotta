@@ -789,13 +789,15 @@ cleanup:
 /**
  * The ownership a row's write applies
  *
- * No claim: the invoker's own — on a label that tracks ownership by the capture's
- * rule, on one that does not by the label's silence (metadata.h). The pair is
- * applied by a privileged run alone: the invoker's own creation needs no
- * correction, and root's — a refused syscall's second try (sys/filesystem) — is
- * handed to the invoker here. A claim: the sheet's word wherever it stands,
- * resolved on this host (metadata_resolve_ownership); whether this run may set
- * the pair is the ownership rung's question, not this one's.
+ * No claim, under every label: the invoker's own. The pair is applied by a
+ * privileged run alone — the invoker's own creation needs no correction, and
+ * root's, a refused syscall's second try (sys/filesystem.h), is handed to the
+ * invoker here. What the sheet reads into that absence does not enter
+ * (core/metadata.h metadata_ownership): the correction is owed to the raise and
+ * not to the namespace, so a silent sheet and an implied invoker land alike and
+ * always will. A claim: the sheet's word wherever it stands, resolved on this
+ * host (metadata_resolve_ownership); whether this run may set the pair is the
+ * ownership rung's question, not this one's.
  *
  * Strict ownership mode (strict_ownership=true): an unknown user/group is a fatal
  * error, aborting deployment. Otherwise it is a warning, and no change.

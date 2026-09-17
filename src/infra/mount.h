@@ -121,33 +121,6 @@
 #include "infra/label.h"
 
 /**
- * What a label implies.
- *
- * The label names *which namespace a storage path is in* (infra/label.h); the
- * row carries *what the label implies* — by now one fact, the last one any consumer
- * still asks here: "do files under this label carry ownership metadata?".
- *
- * One row per label, indexed by it — the shape utils/config.h's strategies and
- * crypto/kdf.h's presets take — so a fact of a label is a subscript and never a
- * lookup.
- *
- * The field is leaving, and the row with it: `tracks_ownership` becomes the sheet's
- * own statement about what an absent claim means. Its two siblings have gone
- * that way already — the noun is rendered from the root the table found
- * (mount_root_describe), and whether a namespace is anyone's to re-target is
- * read where its one consequence is derived (core/workspace.h
- * workspace_relocation_t). So no verb in this module reads the row, and
- * core/metadata is its only reader. Until the field moves, this is where it
- * subscripts.
- */
-typedef struct mount_spec {
-    bool tracks_ownership;        /* True iff files under this label carry ownership
-                                   * metadata */
-} mount_spec_t;
-
-extern const mount_spec_t mount_kinds[LABEL_COUNT];
-
-/**
  * Validate a deployment target (the `--target` argument) as the row will hold it.
  *
  * The binders locate first (infra/path.h path_input_locate: tilde, the working

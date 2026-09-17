@@ -44,7 +44,6 @@
 #include "infra/compare.h"
 #include "infra/content.h"
 #include "infra/label.h"
-#include "infra/mount.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
@@ -269,15 +268,15 @@ static error_t *workspace_create_empty(
  * Does disk ownership diverge from the claim?
  *
  * The ownership half of every divergence check — one rule for the file, orphan
- * and directory analyzers. A present claim is the sheet's word wherever it stands,
- * whatever the label: only the names actually claimed are compared (NULL skips
- * that half), and a UID/GID the system cannot resolve to a name reads as divergence
- * — unknown ≠ expected (security-first). An absent claim's meaning is the label's
- * (metadata.h): on a label that tracks ownership it is the invoker's own, so
- * the owner is compared to the invoker; on one that does not, the path carries
- * no ownership and nothing is compared. Whether this run could chown does not
- * enter — the lstat needs no privilege, and a claim the disk contradicts is a
- * fact about the path whoever reads it.
+ * and directory analyzers. What the sheet says here is the sheet's to say
+ * (core/metadata.h metadata_ownership) and this function is the comparison alone,
+ * one per reading: the names it claimed, and only those, are compared by name
+ * (NULL skips that half), and a UID/GID the system cannot resolve to one reads
+ * as divergence — unknown ≠ expected (security-first); silence the sheet reads
+ * as the invoker's own compares the owner to the invoker; and silence it says
+ * nothing about compares nothing. Whether this run could chown does not enter —
+ * the lstat needs no privilege, and a claim the disk contradicts is a fact about
+ * the path whoever reads it.
  *
  * @param storage_path The claim's key, for its label (must not be NULL)
  * @param owner The claimed owner, or NULL
@@ -290,9 +289,15 @@ static bool ownership_diverges(
     const char *group,
     const struct stat *st
 ) {
-    if (!owner && !group) {
-        return mount_kinds[label_of(storage_path)].tracks_ownership &&
-               st->st_uid != identity()->uid;
+    /* The sheet's word first: an absent claim is answered by the namespace it
+     * stands in, a present one by the names below. */
+    switch (metadata_ownership(storage_path, owner, group)) {
+        case OWNERSHIP_SILENT:
+            return false;
+        case OWNERSHIP_INVOKER:
+            return st->st_uid != identity()->uid;
+        case OWNERSHIP_NAMED:
+            break;
     }
 
     if (owner) {

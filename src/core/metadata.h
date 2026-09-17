@@ -12,16 +12,20 @@
  *   here, and the tree's word wins over a stale item's kind
  * - permission bits: the sheet's ("mode") — Git's filemode holds one bit of them
  *   (owner-execute), the sheet holds them all
- * - ownership: the sheet's ("owner"/"group"). A claim names a system identity,
- *   never the invoker's own: the invoker's own is what every machine supplies
- *   by default, so it is the absence of a claim, which every machine reads as
- *   itself — the compare asks whether the owner is the invoker (core/workspace),
- *   and a privileged deploy applies the invoker's pair (core/deploy). Captured
- *   only for paths whose label tracks it (root/, custom/): a home/ path carries
- *   none, and a claim standing on one by hand is honoured as written. A capture
- *   names both halves or neither: the read side reads a lone half as a narrow
- *   claim deliberately made, so a name the host cannot spell fails the capture
- *   rather than authoring one
+ * - ownership: the sheet's ("owner"/"group"), one statement read three ways
+ *   (metadata_ownership). A claim is authored exactly where silence would not
+ *   travel: the invoker's own identity is what every machine supplies by default,
+ *   so absence is the portable way to say it and a claim names a system identity
+ *   instead — and where the invoker is itself a system identity (a root login),
+ *   absence would travel wrong, so everything is claimed (claims_ownership).
+ *   Under home/ the sheet says nothing at all: that namespace *is* the invoker's
+ *   own directory, so the place has answered already and a claim would contradict
+ *   it on the next machine. A claim a hand wrote where a capture would author
+ *   none is honoured on the read side and replaced by the next capture over that
+ *   path, which authors the item whole (metadata_add_item). A capture names both
+ *   halves or neither: the read side reads a lone half as a narrow claim
+ *   deliberately made, so a name the host cannot spell fails the capture rather
+ *   than authoring one
  * - a directory's existence: the sheet's ("tracked") — the one claim a tree cannot
  *   hold, since Git trees have no empty directories
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
@@ -532,15 +536,16 @@ const metadata_item_t *const *metadata_items(
  * a links-only answer, and the producers read it as "the capture claims nothing":
  * retire whatever stale item stands at the key.
  *
- * Ownership capture (user/group), for a label that tracks it (root/, custom/):
- * the ownership half is authored iff the owner is not the capturing invoker, or
- * the invoker is root — a claim names a system identity, and the invoker's own
- * is the absence of one (the module header). No privilege enters: an lstat needs
- * none, so a user captures root's file as root's, and root captures its own.
- * Both names or neither: where ownership is captured at all, a UID or GID this
- * host cannot name fails the capture (ERR_NOT_FOUND). Half a claim would read
- * downstream as a claim deliberately made narrow, and the path would land owned
- * by whoever deploy created it as.
+ * Ownership capture (user/group), where the sheet reads silence as the invoker's
+ * own (metadata_ownership: root/ and custom/, never home/): the ownership half
+ * is authored iff the owner is not the capturing invoker, or the invoker is root
+ * — a claim says what silence would misstate, and the invoker's own is the absence
+ * of one (the module header). No privilege enters: an lstat needs none, so a
+ * user captures root's file as root's, and root captures its own. Both names or
+ * neither: where ownership is captured at all, a UID or GID this host cannot
+ * name fails the capture (ERR_NOT_FOUND). Half a claim would read downstream as
+ * a claim deliberately made narrow, and the path would land owned by whoever
+ * deploy created it as.
  *
  * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
  *
@@ -767,7 +772,61 @@ error_t *metadata_save_to_stage(
 );
 
 /**
+ * What the sheet says about a path's owner
+ *
+ * Three readings and no fourth, because there is no fourth thing a sheet can
+ * say about who a path belongs to: these names, the identity whoever reads it
+ * runs as, or nothing.
+ *
+ * "Ownership" here is the file's — its uid and gid, the axis status prints as
+ * [ownership]. The record's ownership (core/state.h: an ownership event, dotta
+ * putting a path where it stands) is a different word wearing the same spelling.
+ */
+typedef enum {
+    OWNERSHIP_SILENT,     /* No claim, and the sheet says nothing: home/ */
+    OWNERSHIP_INVOKER,    /* No claim, read as the invoker's own: root/, custom/ */
+    OWNERSHIP_NAMED,      /* The claim's names, on every machine */
+} ownership_t;
+
+/**
+ * Read the sheet's ownership statement for one path
+ *
+ * The one place the rule about an absent ownership claim is spelled. A claim
+ * outranks the namespace — the names are the sheet's word wherever they stand,
+ * under every label — and silence is read by the namespace the path is named in
+ * (the module header).
+ *
+ * Readers: the divergence check, which switches on all three (core/workspace.c
+ * ownership_diverges), and the two captures, which ask by name what silence would
+ * be read as here and author a claim exactly where it would misstate. So a fourth
+ * reading of silence is a compile error at the one switch and a change of meaning
+ * at the two comparisons, which is the whole reason this is a word and not a
+ * bool. The landing reads none of it: what a claimless write sets is the raise's
+ * answer and not the sheet's (core/deploy.c resolve_deployment_ownership,
+ * sys/filesystem.h), so a silent sheet and an implied invoker land alike.
+ *
+ * A record is read under the name it was written with (core/state.h anchor_t),
+ * which for the one reader that asks — the orphan compare — is the only name
+ * there is: the path left the view, so there is no row to ask.
+ *
+ * @param storage_path The claim's key, for its label (must not be NULL, under a
+ *                     label)
+ * @param owner The claimed owner, or NULL
+ * @param group The claimed group, or NULL
+ * @return What the sheet says: the names, the invoker's own, or nothing
+ */
+ownership_t metadata_ownership(
+    const char *storage_path,
+    const char *owner,
+    const char *group
+);
+
+/**
  * Resolve ownership from owner/group strings to UID/GID
+ *
+ * The second of the two ownership questions, and the one a name reaches: the
+ * reading above takes a path and its claim and answers what the sheet says; this
+ * one takes two names and no path and answers what they are on this host.
  *
  * Converts owner and group names to UID/GID values. This is pure data
  * transformation - no filesystem operations, no privilege questions: whether

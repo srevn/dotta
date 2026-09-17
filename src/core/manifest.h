@@ -178,7 +178,7 @@ typedef struct manifest_row {
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
     mode_t mode;                /* Total for every kind that carries one (claim or floor); 0 on a link row, a don't-care */
-    char *owner;                /* The claimed owner, or NULL (metadata.h: absence is the invoker's own) */
+    char *owner;                /* The claimed owner, or NULL; what absence says is the sheet's (metadata.h) */
     char *group;                /* The claimed group, or NULL */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */
     bool tracked;               /* DIRECTORY rows: the profile manages the directory itself */

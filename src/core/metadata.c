@@ -640,16 +640,56 @@ const metadata_item_t *const *metadata_items(
 }
 
 /**
+ * What the sheet says about a path's owner
+ *
+ * The read side of the rule claims_ownership writes by, and the pair is the whole
+ * of it: a claim is authored where silence would not travel, and read as what
+ * silence means where it was not (metadata.h).
+ */
+ownership_t metadata_ownership(
+    const char *storage_path,
+    const char *owner,
+    const char *group
+) {
+    if (owner || group) {
+        return OWNERSHIP_NAMED;
+    }
+
+    /* Silence, read by the namespace: the one place the sheet's rule about an
+     * absent claim is spelled. */
+    switch (label_of(storage_path)) {
+        case LABEL_HOME:
+            return OWNERSHIP_SILENT;
+        case LABEL_ROOT:
+        case LABEL_CUSTOM:
+            return OWNERSHIP_INVOKER;
+    }
+
+    /* A label no enumerator names, which only a cast can produce: label_of asserts
+     * before it could reach here (infra/label.h), and a sanitizer does not — an
+     * exhaustive switch proves this tail unreachable and the check is elided,
+     * so the tail is a defined answer or a garbage register. The silent one,
+     * because it acts on nothing: the only posture an impossible state has
+     * earned. */
+    return OWNERSHIP_SILENT;
+}
+
+/**
  * Is this owner a system identity, or the invoker's own?
  *
  * A claim names a system identity, never the invoker's own: the invoker's own
  * is what every machine supplies by default, so it is the absence of a claim
  * (metadata.h). Root's own is a system fact wherever it is observed — a real
- * root run, whose invoker is root, records everything. The group rides with the
- * owner: a file the invoker owns under a system group (a web root's www-data)
- * is the invoker's to the capture, since a group is as often the directory's
- * inheritance (macOS's /tmp is wheel's) as an intent; a lone group claim written
- * by hand is honoured by the read side (metadata_resolve_ownership).
+ * root run, whose invoker is root, records everything, since absence would then
+ * mean root's here and the reader's own there. That clause is the whole of what
+ * separates this from the reading it writes for (metadata_ownership's
+ * OWNERSHIP_INVOKER, the same comparison without it): one rule asked from either
+ * end, and where this one claims, the sheet holds a name and the reading is
+ * OWNERSHIP_NAMED. The group rides with the owner: a file the invoker owns under
+ * a system group (a web root's www-data) is the invoker's to the capture, since
+ * a group is as often the directory's inheritance (macOS's /tmp is wheel's) as
+ * an intent; a lone group claim written by hand is honoured by the read side
+ * (metadata_resolve_ownership).
  *
  * @param st The stat whose owner is asked (must not be NULL)
  * @return true iff a capture authors the ownership half for it
@@ -756,10 +796,13 @@ error_t *metadata_capture_from_file(
         return err;
     }
 
-    /* Ownership, for a kind that tracks it and an owner that is not the invoker's
-     * own (claims_ownership). The lstat needs no privilege, so the claim is
-     * authored by whoever can read the path. */
-    if (mount_kinds[label_of(storage_path)].tracks_ownership && claims_ownership(st)) {
+    /* Ownership, where the sheet would read silence as the invoker's own and
+     * the owner is not (claims_ownership): a claim says what silence would
+     * misstate. Under home/ the sheet is silent and nothing is authored. The
+     * lstat needs no privilege, so the claim is authored by whoever can read
+     * the path. */
+    if (metadata_ownership(storage_path, NULL, NULL) == OWNERSHIP_INVOKER
+        && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -771,8 +814,9 @@ error_t *metadata_capture_from_file(
      * a regular file always claims its mode — and only one kind of link: asked
      * after ownership resolution, which by now has either named both halves or
      * failed, what falls out here is a link the capture had no ownership to take
-     * (a label that does not track it, or the invoker's own link), never one
-     * whose owner this host could not spell. No empty entry is ever authored. */
+     * (a namespace whose silence says nothing, or the invoker's own link), never
+     * one whose owner this host could not spell. No empty entry is ever
+     * authored. */
     if (item->mode == MODE_UNCLAIMED && !item->owner && !item->group) {
         metadata_item_free(item);
         *out = NULL;
@@ -816,8 +860,9 @@ error_t *metadata_capture_from_directory(
         return err;
     }
 
-    /* Ownership, by the file capture's rule (claims_ownership). */
-    if (mount_kinds[label_of(storage_path)].tracks_ownership && claims_ownership(st)) {
+    /* Ownership, by the file capture's rule (metadata_ownership, claims_ownership). */
+    if (metadata_ownership(storage_path, NULL, NULL) == OWNERSHIP_INVOKER
+        && claims_ownership(st)) {
         err = capture_ownership(item, st);
         if (err) {
             metadata_item_free(item);
@@ -1146,7 +1191,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             }
         }
 
-        /* Add optional owner (only present for ownership-tracking labels) */
+        /* Add optional owner (present iff the item claims one) */
         if (item->owner) {
             if (!cJSON_AddStringToObject(item_obj, "owner", item->owner)) {
                 cJSON_Delete(item_obj);
@@ -1155,7 +1200,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
             }
         }
 
-        /* Add optional group (only present for ownership-tracking labels) */
+        /* Add optional group (present iff the item claims one) */
         if (item->group) {
             if (!cJSON_AddStringToObject(item_obj, "group", item->group)) {
                 cJSON_Delete(item_obj);
@@ -1494,7 +1539,10 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         }
 
         /* Ownership is the overlay every producer stamps beside the factory,
-         * present only for the labels that track it. */
+         * present iff the item claims it. What an absent one means is the label's
+         * and is decided where the claim is read (metadata_ownership), never
+         * enforced here: a claim standing under any label is parsed as it stands,
+         * which is what makes a hand-written one honoured on the read side. */
         cJSON *owner_obj = cJSON_GetObjectItem(item_obj, "owner");
         if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
             item->owner = strdup(owner_obj->valuestring);
@@ -1504,7 +1552,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
         }
 
-        /* Parse optional group (only the labels that track ownership: root/, custom/) */
+        /* Parse optional group, the other half of the same overlay */
         cJSON *group_obj = cJSON_GetObjectItem(item_obj, "group");
         if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
             item->group = strdup(group_obj->valuestring);

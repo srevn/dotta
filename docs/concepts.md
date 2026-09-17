@@ -66,7 +66,7 @@ Use `add --force` to update an existing entry. To give the same pathname another
 
 Each profile chooses its own names. For example, `web` can store `~/jail/etc/x` as `custom/etc/x` while `global` stores it as `home/jail/etc/x`. Because both deploy to the same pathname, [profile precedence](profiles.md#layering-and-precedence) decides which one wins.
 
-Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of `root/` and `custom/` paths that belong to someone else. A path the invoker owns needs no owner recorded — every machine reads that absence as "whoever is running dotta". Metadata is captured during `add`/`update` and restored during `apply`.
+Each profile also maintains a `.dotta/metadata.json` file recording the permissions of every path it manages, and the owner of `root/` and `custom/` paths owned by someone other than you. A path with no owner recorded deploys as whoever runs `dotta`, so your own files need none — except when you run as root, where every one of those paths records its owner instead. Paths under `home/` never record an owner and never report one in `dotta status`: that is your own home directory on every machine. Metadata is captured during `add`/`update` and restored during `apply`.
 
 ### Spellings and Symlinks
 

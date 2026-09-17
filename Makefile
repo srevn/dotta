@@ -108,7 +108,7 @@ endif
 export INSTALL_HINT
 
 # Goals that need no compiler and no libraries
-BUILDLESS_GOALS := clean help check-deps format format-check reflow reflow-check uninstall uninstall-completions
+BUILDLESS_GOALS := clean help check-deps format format-all format-check reflow reflow-check uninstall uninstall-completions
 
 # Fail at the point of misconfiguration
 ifneq ($(filter-out $(BUILDLESS_GOALS),$(or $(MAKECMDGOALS),all)),)
@@ -255,11 +255,7 @@ $(TARGET): $(LIB_OBJ) $(MAIN_OBJ) | $(BIN_DIR)
 .PHONY: debug
 debug: all
 
-# The library — every object but main's — archived for the unit binaries,
-# which link it and take the members they reference: a base suite pulls a
-# handful of objects, a core suite the layers beneath it, and neither pays
-# the whole program's link. Rebuilt from scratch: `ar r` replaces and adds,
-# it never drops the member of a source that is gone.
+# The library — every object but main's — archived for the unit binaries
 LIBDOTTA := $(BUILD_DIR)/libdotta.a
 
 $(LIBDOTTA): $(LIB_OBJ)
@@ -304,12 +300,6 @@ test-all: $(TESTS_BIN) $(TARGET)
 	@$(RUN_SUITES) $(SUITE)
 
 # Coverage — which lines of src/ the suites run.
-#
-# `%m` expands to the binary's own signature, so thousands of dotta processes
-# merge online into one file per binary instead of one file each.
-#
-# The tools are the compiler's: a profile is read by the clang whose runtime
-# wrote it, and a Homebrew clang beside an Xcode llvm-cov is how this breaks.
 COVERAGE_DIR := $(BUILD_DIR)/profile
 COVERAGE_RAW := $(COVERAGE_DIR)/raw
 COVERAGE_DATA := $(COVERAGE_DIR)/dotta.profdata
@@ -423,47 +413,62 @@ uninstall-completions:
 install-all: install
 	@$(MAKE) --no-print-directory install-completions
 
-# Shared find expression for C sources and headers
-FORMAT_FIND := src include \( -name "*.c" -o -name "*.h" \)
+# Where the C sources live — a find expression and an unglobbed git pathspec
+SRC_ROOTS := src include
+FORMAT_FIND := $(SRC_ROOTS) \( -name "*.c" -o -name "*.h" \)
+SRC_PATHSPEC := $(foreach r,$(SRC_ROOTS),'$(r)/*.c' '$(r)/*.h')
 
-# Format code (requires uncrustify)
+# What this tree changed, tracked or not. Override with CHANGED_SRC="src/a.c".
+CHANGED_SRC ?= $(shell git diff --name-only --diff-filter=d HEAD -- $(SRC_PATHSPEC); \
+                       git ls-files --others --exclude-standard -- $(SRC_PATHSPEC))
+
+# Format what changed (requires uncrustify)
 .PHONY: format
 format:
-	@echo "Formatting code..."
+	@files='$(CHANGED_SRC)'; \
+	if [ -z "$$files" ]; then \
+	  echo "No modified .c/.h files to format."; \
+	else \
+	  echo "Formatting $$(echo $$files | wc -w | tr -d ' ') file(s)..."; \
+	  uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup -q $$files; \
+	fi
+
+# Format the whole tree — the sweep after a config edit or a version bump
+.PHONY: format-all
+format-all:
+	@echo "Formatting the tree..."
 	@find $(FORMAT_FIND) -print0 | xargs -0 uncrustify -c $(UNCRUSTIFY_CFG) -l C --no-backup -q
 
-# Check formatting without modifying files
+# Check formatting without modifying files — tree-wide, where drift shows
 .PHONY: format-check
 format-check:
 	@find $(FORMAT_FIND) -print0 | xargs -0 uncrustify -c $(UNCRUSTIFY_CFG) -l C --check -q \
-	  || { echo "Formatting issues found. Run 'make format' to fix."; exit 1; }
+	  || { echo "Formatting issues found. Run 'make format-all' to fix."; exit 1; }
 	@echo "All files formatted correctly."
 
-# Reflow block comments (requires python3). Runs after uncrustify, never before:
-# the fill column is measured from the comment's own indent, so the reindent has
-# to land first or the column it just produced is gone.
+# Reflow block comments (requires python3). Runs after uncrustify
 REFLOW := scripts/reflow_comments.py
 REFLOW_WIDTH ?= 80
 REFLOW_SLACK ?= 4
-# Scope is what git says changed. Override with REFLOW_FILES="src/a.c include/b.h".
-REFLOW_FILES ?= $(shell git diff --name-only --diff-filter=d HEAD -- 'src/*.c' 'src/*.h' 'include/*.h')
 
 .PHONY: reflow
 reflow:
 	@command -v python3 >/dev/null 2>&1 || \
 	  { echo "Error: python3 not installed."; exit 1; }
-	@if [ -z "$(REFLOW_FILES)" ]; then \
+	@files='$(CHANGED_SRC)'; \
+	if [ -z "$$files" ]; then \
 	  echo "No modified .c/.h files to reflow."; \
 	else \
 	  echo "Reflowing comments..."; \
-	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) --apply $(REFLOW_FILES); \
+	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) --apply $$files; \
 	fi
 
 # Show what reflow would change without writing; non-zero if anything would
 .PHONY: reflow-check
 reflow-check:
-	@if [ -n "$(REFLOW_FILES)" ]; then \
-	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) $(REFLOW_FILES) \
+	@files='$(CHANGED_SRC)'; \
+	if [ -n "$$files" ]; then \
+	  python3 $(REFLOW) --width $(REFLOW_WIDTH) --slack $(REFLOW_SLACK) $$files \
 	    || { echo "Comment reflow pending. Run 'make reflow' to fix."; exit 1; }; \
 	fi
 	@echo "All comments reflowed correctly."
@@ -568,8 +573,9 @@ help:
 	@echo "  install-all           - Install binary, configs, hooks, and completions"
 	@echo "  uninstall             - Remove installed files from $(PREFIX)"
 	@echo "  uninstall-completions - Remove shell completions only"
-	@echo "  format                - Format code with uncrustify"
-	@echo "  format-check          - Check formatting without modifying files"
+	@echo "  format                - Format the git-modified .c/.h files with uncrustify"
+	@echo "  format-all            - Format every .c/.h file in the tree"
+	@echo "  format-check          - Check formatting of the whole tree without modifying files"
 	@echo "  reflow                - Reflow comments in git-modified .c/.h files"
 	@echo "  reflow-check          - Show pending comment reflow without writing"
 	@echo "  tidy                  - Run clang-tidy static analysis (parallel)"

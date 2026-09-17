@@ -685,7 +685,8 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest);
  *
  * @param entry The entry (must not be NULL)
  * @param buf Caller's buffer (PATH_MAX at every caller)
- * @param size Its size
+ * @param size Its size, one byte at least: the switch's tail is written before
+ *             its arms, so an empty buffer is the one thing this cannot take
  * @return `buf`
  */
 const char *manifest_unbound_describe(

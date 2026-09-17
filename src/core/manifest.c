@@ -1697,6 +1697,12 @@ manifest_unbound_t manifest_unbound(const manifest_t *manifest) {
 const char *manifest_unbound_describe(
     const manifest_unbound_entry_t *entry, char *buf, size_t size
 ) {
+    /* The switch's tail, a defined answer and not the caller's stack, as the
+     * sibling noun's is (infra/mount.c mount_root_describe): -Wswitch proves no
+     * kind reaches it, so the check is elided and a `%s` would print whatever
+     * the buffer held. */
+    buf[0] = '\0';
+
     switch (entry->kind) {
         case MANIFEST_UNBOUND_FILE:
             snprintf(buf, size, "%s", entry->name);

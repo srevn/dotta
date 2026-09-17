@@ -319,6 +319,13 @@ const mount_root_t *mount_root_of(
 const char *mount_root_describe(
     const mount_root_t *root, char *buf, size_t size
 ) {
+    /* The switch's tail, a defined answer and not the caller's stack: -Wswitch
+     * proves no label reaches it, so the check is elided and a `%s` would print
+     * whatever the buffer held. A default: would buy the same and lose the
+     * exhaustiveness proof — core/metadata.c metadata_ownership's ruling, and
+     * the reading core/workspace.c's relocation switch gets from its memset. */
+    buf[0] = '\0';
+
     /* The one switch over a label's meaning on a screen. A bound root names its
      * binder: the profile is the build's, refused when a binding names none
      * (mount_table_build), so there is no arm where it could be absent. */

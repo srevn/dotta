@@ -457,7 +457,9 @@ const mount_root_t *mount_root_of(
  * noun into it.
  *
  * Truncates rather than fails: a screen noun, not a key, so it stands inside an
- * ERROR() argument.
+ * ERROR() argument. `size` is one byte at least — the switch's tail is written
+ * before its arms, so an empty buffer is the one thing this cannot take; every
+ * caller holds a MOUNT_NOUN_MAX or a PATH_MAX.
  */
 const char *mount_root_describe(
     const mount_root_t *root,

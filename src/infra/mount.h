@@ -463,8 +463,13 @@ const mount_root_t *mount_root_of(
  * Returns `buf`, so the noun reaches the message it belongs to as a value rather
  * than through a statement of its own: every site that says a place has no name
  * would otherwise spell the noun its own way — and the message is the same one
- * whether a pattern, an argument, a search or a revert asked. The sentence around
- * it stays the site's, every one of them.
+ * whether a pattern, an argument, a search or a revert asked. Three sites say a
+ * sentence of their own around it: `ignore --test` answers rather than refuses,
+ * --test being a query, and add's two indict the argument ("cannot be added
+ * itself", "which this command has already walked through"). The fourth sentence
+ * — what a verb that acts on one path says of a location standing at a root —
+ * is one fact with one producer, mount_root_refuse below, which renders this
+ * noun into it.
  *
  * Truncates rather than fails: a screen noun, not a key, so it stands inside an
  * ERROR() argument.
@@ -474,6 +479,37 @@ const char *mount_root_describe(
     char *buf,
     size_t size
 );
+
+/**
+ * The refusal a location standing at a root earns from a verb that acts on one path
+ *
+ *   '/home/me' is your home directory: name what is inside it
+ *
+ * One sentence for the four verbs that own it, because it is one fact: a root
+ * is a place and never a name, so a verb that acts on one path has nothing to
+ * act on at one. Why each asked differs — a claim search found nothing standing
+ * there (core/profiles.c profile_claim_name), a commit held nothing
+ * (cmds/revert.c), the enabled view has no row (cmds/show.c, cmds/list.c) — and
+ * what is said is a fact of the root, said in the root's own words. A verb that
+ * means a place and everything beneath it takes a root as the prefix it is and
+ * refuses nothing (cmds/remove.c, cmds/export.c); add's two arms indict the
+ * argument instead, a root that is a directory being a thing add can walk.
+ *
+ * Every byte comes from `root`: where it stands, and the noun of its rule
+ * (mount_root_describe). No spelling is handed in because there is none to hand
+ * — a location key is absolute and folded wherever one is made (infra/path.h
+ * path_input_locate, mount_resolve's join), and a find answers by exact equality,
+ * so the root's own `location` is the argument's spelling. `root` is non-NULL,
+ * as mount_root_describe's is.
+ *
+ * The sibling for a *label* is infra/path.h path_input_refuse_label: that one
+ * says a namespace is not a path in it, this one that a place is not a thing in
+ * it. The remedy is the same because the mistake is.
+ *
+ * @param root The root the location stands at (must not be NULL)
+ * @return The refusal; never NULL
+ */
+error_t *mount_root_refuse(const mount_root_t *root);
 
 /**
  * Where a claim stands on this machine: a storage path through a profile's mount.

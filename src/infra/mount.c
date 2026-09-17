@@ -356,6 +356,18 @@ const char *mount_root_describe(
     return buf;
 }
 
+/* The one sentence four verbs share, said of the root and nothing else: the place
+ * is the root's own spelling, which is the argument's too — a key is folded where
+ * it is made and a find answers by exact equality (infra/mount.h). */
+error_t *mount_root_refuse(const mount_root_t *root) {
+    char buf[MOUNT_NOUN_MAX];
+
+    return ERROR(
+        ERR_INVALID_ARG, "'%s' is %s: name what is inside it", root->location,
+        mount_root_describe(root, buf, sizeof(buf))
+    );
+}
+
 error_t *mount_resolve(
     const mount_table_t *table, const char *profile, const char *storage_path,
     arena_t *arena, const char **out_location

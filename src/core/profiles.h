@@ -320,8 +320,8 @@ error_t *profile_needs_target(
  * ~/jail/etc/x and the chain above a file captured before the binding answers
  * as the claim it is; else the name the profile would give the location
  * (manifest_name) — the word a history search and a not-found line need; else a
- * root of the profile with no claim on it, refused by the root's own noun
- * (mount_root_describe), one thing not being a root.
+ * root of the profile with no claim on it, refused in the root's own words
+ * (infra/mount.h mount_root_refuse), one thing not being a root.
  *
  * The row before the namer is the contract, not a shortcut: a derived claim is
  * something the profile holds and nothing it names (manifest_is_derived), so

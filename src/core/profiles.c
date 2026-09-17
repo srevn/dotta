@@ -903,13 +903,10 @@ error_t *profile_claim_name(
         /* A root of the profile with no claim on it, and the table says which:
          * the namer's last rung is the deepest root of this very table, asker
          * and location (core/manifest.c manifest_ascend), and it answers NULL
-         * there and nowhere else — which is mount_root_at's own definition. */
-        const mount_root_t *root = mount_root_at(mounts, profile, location);
-        char buf[MOUNT_NOUN_MAX];
-        return ERROR(
-            ERR_INVALID_ARG, "'%s' is %s: name what is inside it", location,
-            mount_root_describe(root, buf, sizeof(buf))
-        );
+         * there and nowhere else — which is mount_root_at's own definition. The
+         * sentence is the root's, shared with every verb that acts on one path
+         * (infra/mount.h mount_root_refuse). */
+        return mount_root_refuse(mount_root_at(mounts, profile, location));
     }
 
     return NULL;

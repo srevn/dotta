@@ -386,12 +386,9 @@ static error_t *entry_to_restore(
             const mount_root_t *root =
                 mount_root_at(ctx->run.mounts, profile, arg->location);
             if (root) {
-                char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(root, buf, sizeof(buf));
-                return ERROR(
-                    ERR_INVALID_ARG, "'%s' is %s: name what is inside it",
-                    arg->location, noun
-                );
+                /* A place, not an absence: the sentence is the root's, shared
+                 * with every verb that acts on one path (infra/mount.h). */
+                return mount_root_refuse(root);
             }
             return ERROR(
                 ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",

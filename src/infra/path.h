@@ -300,10 +300,10 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
  * namespace lands is a root, a place the table finds for an asker, and a namespace
  * that lands nowhere here is a namespace still — so no table is asked and no
  * profile is named. The refusal a *location* standing at such a place earns is
- * its callers' own sentence, in the noun the table gives the root it found
- * (core/profiles.c, cmds/revert.c, cmds/add.c, infra/mount.h mount_root_describe):
- * that one names a place and this one a namespace, and they say different things
- * for that reason. The remedy is the same because the mistake is.
+ * this one's sibling, said of the root the table found and in the root's own
+ * noun (infra/mount.h mount_root_refuse): that one names a place and this one a
+ * namespace, and they say different things for that reason. The remedy is the
+ * same because the mistake is.
  *
  * The separator is the message's and never the key's: a label is carried as the
  * label it is because the verbs that take one match or index with it, and printed

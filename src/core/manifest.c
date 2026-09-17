@@ -1844,6 +1844,29 @@ error_t *manifest_name(
 }
 
 /**
+ * The root standing at a location, read through the view's precedence
+ */
+const mount_root_t *manifest_root_at(
+    const manifest_t *manifest, const char *location
+) {
+    if (!manifest || !location) return NULL;
+
+    /* A binding is the more specific statement and the table gives it the tie,
+     * so every profile is asked before the machine's own roots answer: an answer
+     * carrying a binder is this profile's own — the table admits no other's —
+     * and a shared root is every profile's and belongs to the fallback, which
+     * is why only an owned answer ends the loop. Highest precedence first, as
+     * the index reads its own rows. */
+    for (size_t i = manifest->profile_count; i-- > 0;) {
+        const mount_root_t *root =
+            mount_root_at(manifest->mounts, manifest->profiles[i], location);
+        if (root && root->profile) return root;
+    }
+
+    return mount_root_at(manifest->mounts, NULL, location);
+}
+
+/**
  * Look up a row by filesystem path
  */
 const manifest_row_t *manifest_lookup(

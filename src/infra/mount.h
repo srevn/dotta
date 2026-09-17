@@ -403,6 +403,11 @@ const mount_root_t *mount_root_above(
  * line (cmds/ignore.c), add's two root arms — the argument's, whose root-link
  * rule reads its binder, and the already-walked arm (cmds/add.c) — and revert's,
  * asked where its own search answered nothing at the location (cmds/revert.c).
+ * Every one of them has an asker to name. A reader holding a view and nobody to
+ * name asks core/manifest.h manifest_root_at, which asks this once per profile
+ * the view holds: a NULL asker here meets the shared roots alone, so it would
+ * answer HOME for a location a profile bound and is no stand-in for the view's
+ * own question.
  */
 const mount_root_t *mount_root_at(
     const mount_table_t *table,

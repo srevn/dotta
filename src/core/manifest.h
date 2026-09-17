@@ -83,8 +83,10 @@
  *     path under one profile, linear), manifest_holders (how many rows hold a
  *     name, and the one when one does), manifest_lookup_claim, manifest_name
  *     and manifest_holds_name (one profile's own contribution, whoever won the
- *     location); and manifest_diff, the per-profile delta between two views that
- *     the scope-changing verbs and sync print their receipts from.
+ *     location), manifest_root_at (which root stands at a location, with nobody
+ *     named — the view's precedence over the table it lends); and manifest_diff,
+ *     the per-profile delta between two views that the scope-changing verbs and
+ *     sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -522,9 +524,11 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * topology it was placed by reads it here rather than building a second table
  * from the same rows, so the names it places and the rows it selects read one
  * value. Readers: the dispatcher (`run.mounts` for a command that declares the
- * view, include/runtime.h); show and list without a profile, and a filesystem
- * argument to `ignore --test`, which build the view themselves and read the table
- * back from it.
+ * view, include/runtime.h); a filesystem argument to `ignore --test` and add's
+ * label receipt, each of which builds a view of its own and reads the table back
+ * from it rather than beside it. Show and list build one too and ask it nothing:
+ * their arm reads the view by key alone, and the root question it asks over the
+ * table is the view's own (manifest_root_at).
  *
  * Pure value return — no allocation, no error path.
  *
@@ -1066,6 +1070,48 @@ error_t *manifest_name(
     const hashmap_t *pending,
     arena_t *arena,
     const char **out_storage
+);
+
+/**
+ * The root standing at `location`, read through the view's precedence
+ *
+ * A root is a place, so "is this location one" needs no profile named — but two
+ * roots can stand at one directory (a binding over HOME, two profiles bound at
+ * one target), and the table holds its roots unordered: it breaks a tie between
+ * two roots of one asker and has no order to break one between two askers
+ * (infra/mount.h mount_root_above). The view has one, so the view is where the
+ * question is asked with nobody named: each profile in turn, highest precedence
+ * first, and its own binding answers where it has one — this loop *is* the
+ * tie-break, run the way the view breaks every other. The machine's own roots,
+ * HOME and the sentinel, are every profile's and nobody's, so they answer last
+ * and answer whatever the view holds, an empty view included.
+ *
+ * The profiles are the view's: the enabled set less the branches that are gone
+ * (manifest_profiles). A binding whose branch left the tree stands in the table
+ * and is no root this answers — that is `dotta profile validate`'s business and
+ * not this one.
+ *
+ * `location` is a location key — absolute and folded, as every producer of one
+ * makes it (infra/path.h path_input_locate, mount_resolve) — and never a storage
+ * path: a name stands under no root, so a caller holding a path_input_t asks
+ * this in the location arm alone.
+ *
+ * The answer is the table's row, lent, and the table is not the index: it outlives
+ * manifest_free (manifest_mounts — the arena's for a built view, the caller's
+ * for a tree view), which is what lets a caller free the view and then return
+ * the refusal the root earns (infra/mount.h mount_root_refuse). A reader that
+ * outlives the arena copies what it keeps, as a reader of a row does.
+ *
+ * Readers: show and list without a profile, where the view has no row at the
+ * location — an absence there is a place, and is said as one.
+ *
+ * @param manifest Manifest (NULL returns NULL)
+ * @param location Absolute location (NULL returns NULL)
+ * @return Borrowed root, or NULL when no root of the view's stands there
+ */
+const mount_root_t *manifest_root_at(
+    const manifest_t *manifest,
+    const char *location
 );
 
 /**

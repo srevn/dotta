@@ -217,11 +217,12 @@ typedef enum dotta_crypto_mode {
  * ------
  * This machine's topology over the enabled set — `manifest_mount_table` over
  * the state's rows and `$HOME` — for placing a storage path the command reads
- * (`mount_resolve`) and for naming a location beneath its roots, which is the
- * view's ascent and not a verb here (`core/manifest.h` `manifest_name`). Requires
- * `state`. A command declares it when it asks one of the table's verbs: where a
- * claim stands (`mount_resolve`: diff, ignore, remove, revert, update), which
- * root stands at a location (`mount_root_at`: ignore, revert), a view of one
+ * (`mount_resolve`). Naming a location beneath its roots, and asking which root
+ * stands at one with nobody named, are the view's own over the table it lends
+ * and neither a verb here (`core/manifest.h` `manifest_name`, `manifest_root_at`).
+ * Requires `state`. A command declares it when it asks one of the table's verbs:
+ * where a claim stands (`mount_resolve`: diff, ignore, remove, revert, update),
+ * which root stands at a location (`mount_root_at`: ignore, revert), a view of one
  * branch placed by it (`manifest_build_tree`: diff, export, revert;
  * `manifest_build_branch`: ignore), a claim's ancestors climbed
  * (`metadata_capture_ancestors`: update),

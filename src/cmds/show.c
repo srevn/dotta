@@ -767,6 +767,17 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     const manifest_row_t *row = NULL;
     if (arg.key == PATH_KEY_LOCATION) {
         row = manifest_lookup(manifest, arg.location);
+        if (!row) {
+            /* No row is not the same as no thing: a location standing at a root
+             * of the view is a place, and is refused in the root's own words as
+             * it is under -p (core/manifest.h manifest_root_at). A name is never
+             * a root, so only this arm asks. */
+            const mount_root_t *root = manifest_root_at(manifest, arg.location);
+            if (root) {
+                err = mount_root_refuse(root);
+                goto cleanup;
+            }
+        }
     } else {
         size_t holders = manifest_holders(manifest, arg.storage_path, &row);
         if (holders > 1) {

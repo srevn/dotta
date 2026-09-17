@@ -114,6 +114,13 @@ typedef struct {
  * Walks label_words, so the label set has one home — adding a fourth needs no
  * edit here.
  *
+ * Readers: the two that want both halves. The table's join takes the label to
+ * find the asker's root and joins the tail onto its spelling (infra/mount.c
+ * mount_resolve); the resolver's storage arm sheds the tail's trailing separators
+ * and answers the label alone where nothing is left of it (infra/path.c
+ * path_input_resolve). A caller wanting the verdict and no half of the answer
+ * asks label_prefixes, which is this call and one comparison.
+ *
  * @param s Any string, or NULL
  * @return The split; `tail` NULL when no label prefixes `s`
  */
@@ -133,22 +140,24 @@ label_split_t label_split(const char *s);
  * walk of content sees it. A caller *handed* such a name rather than finding it
  * refuses in its own words — export's name arm, which takes a label as a key
  * and meets whatever stands there (cmds/export.c). And it is the shape dispatch
- * on an argument, which reads a storage shape before the filesystem shapes. A
- * label alone, with no separator, stands under none: that is the whole-word
- * question, label_parse, and a caller wanting either asks both (cmds/export.c's
- * grammar). A label spelled as a directory does stand under one — "custom/" is
- * the label and an empty tail — so a gate meant to catch a label asks it of the
- * word.
+ * on an argument, which reads a storage shape before the filesystem shapes —
+ * asked there through label_split, that arm wanting the tail as well as the
+ * verdict. A label alone, with no separator, stands under none: that is the
+ * whole-word question, label_parse, and a caller wanting either asks both
+ * (cmds/export.c's grammar). A label spelled as a directory does stand under
+ * one — "custom/" is the label and an empty tail — so a gate meant to catch a
+ * label asks it of the word.
  *
- * Readers: the view's claim routine (core/manifest.c), the file listing and the
- * branch statistics (core/profiles.c), the refspec completion (cmds/completion.c),
- * diff's delta selection (cmds/diff.c), the rule compiler (infra/pathspec.c),
- * the resolver's storage arm and the question its neighbour asks of a positional
- * whose slot is undecided (infra/path.c path_input_resolve,
- * path_input_announces_path), the two input heads that dispatch on shape before
- * reading it (cmds/add.c, cmds/ignore.c) and export's two — its profile slot's
- * own grammar, and the gate its name arm asks of the key it is handed
- * (cmds/export.c).
+ * Readers: the view's claim routine (core/manifest.c manifest_claim_blob), the
+ * file listing and the branch statistics (core/profiles.c tree_entry_content_path),
+ * the refspec completion (cmds/completion.c refspec_emit_cb), diff's delta
+ * selection (cmds/diff.c select_delta), the rule compiler (infra/pathspec.c
+ * compile_rule), the question the resolver's neighbour asks of a positional whose
+ * slot is undecided (infra/path.c path_input_announces_path), the two input heads
+ * that dispatch on shape before reading it (cmds/add.c cmd_add, cmds/ignore.c
+ * test_path_ignore) and export's two — its profile slot's own grammar, and the
+ * gate its name arm asks of the key it is handed (cmds/export.c export_post_parse,
+ * collect_name).
  */
 bool label_prefixes(const char *s);
 
@@ -163,9 +172,11 @@ bool label_prefixes(const char *s);
  * never answered: a path under no label is a caller's bug, and no label may stand
  * in for it — least of all LABEL_ROOT in silence.
  *
- * Readers: the ownership captures and the divergence check (core/metadata.c,
- * core/workspace.c); cleanup's relocation hold (core/cleanup.c); add's receipt,
- * counting names by their label (cmds/add.c).
+ * Readers: the two that derive a consequence from the namespace, each an exhaustive
+ * switch — what the sheet reads into an absent ownership claim (core/metadata.c
+ * metadata_ownership) and which rule placed the root a relocated claim lands
+ * under (core/workspace.c workspace_add_diverged) — and one that only indexes
+ * by it, add's receipt counting names by their label (cmds/add.c report_labels).
  */
 label_t label_of(const char *storage_path);
 
@@ -184,6 +195,16 @@ label_t label_of(const char *storage_path);
  * lifetime. label_of's precondition, asserted the same way: every reader holds
  * a composed or a validated path, and a tail of something that stands under no
  * label is not an answer.
+ *
+ * Readers: every surface a pattern is evaluated on — the enumeration
+ * core/ignore.h's "The subject" describes without naming. The two walks ask of
+ * what they found (cmds/add.c is_excluded, core/workspace.c
+ * scan_directory_for_untracked), the scope of a row for --exclude (core/scope.c
+ * scope_is_excluded), the policy of a name for auto_encrypt (core/policy.c
+ * encryption_policy_matches_auto_patterns), and `ignore --test` twice, of its
+ * argument and of the name the view gave it (cmds/ignore.c test_path_ignore).
+ * One reader counts rather than matches: the climb, whose rungs are the separators
+ * in the tail (core/metadata.c metadata_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for a label spelled as a directory
@@ -207,10 +228,10 @@ const char *label_tail(const char *storage_path);
  *
  * Readers: the sheet's parser, one entry of `roots` at a time (core/metadata.c
  * metadata_from_json); and export's three — its bare-word arm, which makes the
- * resolver's key out of the word its own grammar allows, its branch-root walk,
- * where a top-level tree entry is content iff its name is a label, and the catch
- * that reads a lone positional in the profile slot as the user's misuse
- * (cmds/export.c).
+ * resolver's key out of the word its own grammar allows (cmds/export.c cmd_export),
+ * its branch-root walk, where a top-level tree entry is content iff its name is
+ * a label (collect_tree_callback), and the catch that reads a lone positional
+ * in the profile slot as the user's misuse (export_post_parse).
  */
 bool label_parse(const char *word, label_t *out);
 
@@ -232,9 +253,11 @@ bool label_parse(const char *word, label_t *out);
  * Pure rule check — no filesystem access, no arena, no state.
  *
  * Readers: the four boundaries a name arrives across — a branch's tree at the
- * view's claim routine (core/manifest.c) and at the file listing (core/profiles.c),
- * the sheet's keys (core/metadata.c), export's walk (cmds/export.c) — and the
- * resolver's storage arm, where the name is one the user typed (infra/path.c).
+ * view's claim routine (core/manifest.c manifest_claim_blob) and at the file
+ * listing (core/profiles.c tree_entry_content_path), the sheet's keys
+ * (core/metadata.c metadata_from_json), export's walk (cmds/export.c
+ * collect_tree_callback) — and the resolver's storage arm, where the name is
+ * one the user typed (infra/path.c path_input_resolve).
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid

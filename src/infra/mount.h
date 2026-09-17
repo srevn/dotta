@@ -124,23 +124,23 @@
  * What a label implies.
  *
  * The label names *which namespace a storage path is in* (infra/label.h); the
- * row carries *what the label implies*: the two per-label facts every consumer
- * ultimately asks — "is resolution profile-keyed?" and "do files under this label
- * carry ownership metadata?".
+ * row carries *what the label implies* — by now one fact, the last one any consumer
+ * still asks here: "do files under this label carry ownership metadata?".
  *
  * One row per label, indexed by it — the shape utils/config.h's strategies and
  * crypto/kdf.h's presets take — so a fact of a label is a subscript and never a
  * lookup.
  *
- * Both fields are leaving, and the row with them: `per_profile` becomes the profile
- * the build stamps on a root (mount_root_t), and `tracks_ownership` becomes the
- * sheet's own statement about what an absent claim means. The noun has already
- * left — the table renders one from the root it found (mount_root_describe) —
- * so no verb in this module reads the row, and its readers are core/cleanup and
- * core/metadata alone. Until each field moves, this is where each subscripts.
+ * The field is leaving, and the row with it: `tracks_ownership` becomes the sheet's
+ * own statement about what an absent claim means. Its two siblings have gone
+ * that way already — the noun is rendered from the root the table found
+ * (mount_root_describe), and whether a namespace is anyone's to re-target is
+ * read where its one consequence is derived (core/workspace.h
+ * workspace_relocation_t). So no verb in this module reads the row, and
+ * core/metadata is its only reader. Until the field moves, this is where it
+ * subscripts.
  */
 typedef struct mount_spec {
-    bool per_profile;             /* True iff resolution is profile-keyed (CUSTOM) */
     bool tracks_ownership;        /* True iff files under this label carry ownership
                                    * metadata */
 } mount_spec_t;
@@ -323,6 +323,13 @@ error_t *mount_table_build(
  * *file* ownership every claim carries beside its group (core/manifest.h
  * manifest_row_t, core/metadata.h) — that one is a system identity, and this
  * one a profile name.
+ *
+ * And not the label's own rule, of which this field is the consequence and never
+ * the cause: the build binds custom/ entries and nothing else (mount_table_build),
+ * so a reader asking whether a *namespace* is anyone's to re-target asks the
+ * label and would learn nothing here that it did not already hand in. A reader
+ * asking whether *this place* is the user's holds a root because it needs the
+ * place, and asks here — which is every reader below.
  *
  * The table's own row, lent: every find answers a pointer into the table, NULL
  * for absence as every lookup in the tree answers it (core/manifest.h

@@ -6,11 +6,12 @@
  * becomes of each, and carries that out.
  *
  * The verdict re-verifies nothing and touches neither disk, Git nor state — every
- * input is a field of the workspace item, observed once at load. Preflight takes
- * two looks past it, neither a property any earlier phase could have recorded:
- * the readdir, because what is left in a directory after this run's removals is
- * decided by this run; and the parent's reach, because whether this run may make
- * a removal is a fact about the run, not the item.
+ * input is a field of the workspace item, observed once at load, and no vocabulary
+ * of a lower layer is read to interpret one. Preflight takes two looks past it,
+ * neither a property any earlier phase could have recorded: the readdir, because
+ * what is left in a directory after this run's removals is decided by this run;
+ * and the parent's reach, because whether this run may make a removal is a fact
+ * about the run, not the item.
  */
 
 #include "core/cleanup.h"
@@ -27,8 +28,6 @@
 #include "base/string.h"
 #include "core/scope.h"
 #include "core/state.h"
-#include "infra/label.h"
-#include "infra/mount.h"
 #include "sys/filesystem.h"
 
 /* ══════════════════════════════════════════════════════════════════
@@ -170,11 +169,11 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_UNVERIFIED;
     }
 
-    /* A held relocation: the claim's row rides the item and the label is not
-     * the user's to re-target — the copy here is the claim's old home. The same
-     * test as cleanup_verdict's hold arm, its inputs in hand; guarded by the
-     * kind so a re-targeted custom/ copy never trips it. */
-    if (item->row && !mount_kinds[label_of(item->storage_path)].per_profile) {
+    /* A held relocation: the claim now lands in a namespace nobody re-targets,
+     * so the copy here is the claim's old home. The same test as cleanup_verdict's
+     * hold arm, its one input in hand; a re-targeted custom/ copy is the other
+     * class and never trips it. */
+    if (item->relocation == WORKSPACE_RELOCATION_SHARED) {
         return CLEANUP_SKIP_RELOCATED;
     }
 
@@ -250,13 +249,12 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
         return CLEANUP_RELEASED;
     }
 
-    /* The relocation hold, both kinds (the table in cleanup.h): the claim's row
-     * rides the item, and a label the user cannot re-target (!per_profile — home/;
-     * root/'s projection is fixed and never gets here) means $HOME itself differs,
-     * so the copy is real dotfiles under the claim's real home. --force lifts
-     * it — the escape for a deliberate home migration. */
-    if (item->row && !force &&
-        !mount_kinds[label_of(item->storage_path)].per_profile) {
+    /* The relocation hold, both kinds (the table in cleanup.h): the claim moved
+     * under a namespace nobody re-targets (SHARED — home/; root/'s projection
+     * is fixed and never gets here), which means $HOME itself differs, so the
+     * copy is real dotfiles under the claim's real home. --force lifts it — the
+     * escape for a deliberate home migration. */
+    if (!force && item->relocation == WORKSPACE_RELOCATION_SHARED) {
         return CLEANUP_SKIPPED;
     }
 

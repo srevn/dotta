@@ -1081,16 +1081,22 @@ static void display_workspace_status(
                                 if (is_dir) {
                                     /* The two ways a directory reaches SKIPPED
                                      * here (force=false): the workspace could
-                                     * not verify it — which outranks the hold,
-                                     * as it does in the file table, and is worded
-                                     * by whose remedy it is — or the relocation
-                                     * hold. A directory seals no content, so
+                                     * not verify it, or the relocation hold —
+                                     * so the tail is the hold, no third way
+                                     * existing. Unverified is read first, which
+                                     * is the file table's order and the inverse
+                                     * of cleanup_verdict's arms, deliberately:
+                                     * --force lifts the hold and never the
+                                     * unverified bit, so on a directory carrying
+                                     * both the failed look's wording is the one
+                                     * that stays true. Worded by whose remedy
+                                     * it is; a directory seals no content, so
                                      * its failed look is never the key's. */
-                                    hint = !(orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
-                                        ? relocated_hint
-                                        : orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
-                                        ? "cannot be read; apply skips it"
-                                        : "could not be verified; apply skips it";
+                                    hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
+                                        ? (orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
+                                           ? "cannot be read; apply skips it"
+                                           : "could not be verified; apply skips it")
+                                        : relocated_hint;
                                     break;
                                 }
                                 switch (cleanup_skip_reason(orphaned[i])) {
@@ -1134,7 +1140,8 @@ static void display_workspace_status(
                                 break;
 
                             case CLEANUP_PRUNABLE:
-                                if (orphaned[i]->row) {
+                                if (orphaned[i]->relocation !=
+                                    WORKSPACE_RELOCATION_NONE) {
                                     hint = relocated_hint;
                                 } else if (is_dir) {
                                     hint = "apply prunes it; a directory still holding "

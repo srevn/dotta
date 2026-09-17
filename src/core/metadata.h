@@ -407,9 +407,9 @@ bool metadata_remove_item(
  * nobody's to converge, and its label names beneath it already. So it is no claim
  * and no item — never a row, a record, a prune order, a hook path or an export
  * entry — and it carries no mode, owner or group because there is nothing here
- * to carry one. A per_profile root the machine cannot place is the view's to
- * record (core/manifest.h manifest_unbound): the sheet's statement stands, and
- * the scan begins when a target does.
+ * to carry one. A custom/ root the machine cannot place is the view's to record
+ * (core/manifest.h manifest_unbound): the sheet's statement stands, and the scan
+ * begins when a target does.
  *
  * Readers: the view's contribution (core/manifest.c manifest_contribute), which
  * asks where each scanned root stands and records the one it cannot place. A

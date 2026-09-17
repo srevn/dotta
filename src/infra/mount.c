@@ -27,14 +27,17 @@
  * order in lockstep with the ordinals, which is what lets a reader subscript by
  * the label it holds.
  *
- * Defined here and read nowhere in this file: the noun that was its third column
- * is rendered from a root now (mount_root_describe), and what the two survivors
- * say belongs to core/cleanup and core/metadata (infra/mount.h).
+ * Defined here and read nowhere in this file. Of the columns this row once held,
+ * the word is the grammar's (infra/label.h label_words), the noun is rendered
+ * from the root the table found (mount_root_describe), and whether a namespace
+ * is anyone's to re-target is read where its one consequence is derived
+ * (core/workspace.h workspace_relocation_t). What the survivor says belongs to
+ * core/metadata (infra/mount.h).
  */
 const mount_spec_t mount_kinds[LABEL_COUNT] = {
-    [LABEL_HOME] =   { false, false },
-    [LABEL_ROOT] =   { false, true  },
-    [LABEL_CUSTOM] = { true,  true  },
+    [LABEL_HOME] =   { false },
+    [LABEL_ROOT] =   { true  },
+    [LABEL_CUSTOM] = { true  },
 };
 
 error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino) {

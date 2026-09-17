@@ -246,12 +246,12 @@ error_t *profile_list_files(
  * Definitional, not a rule of its own: the branch's contribution is built under
  * the one table no state row can produce — HOME and the root sentinel, no binding
  * — and the answer is whether it left anything unplaced (core/manifest.h
- * manifest_unbound). Every home/ and root/ claim places there; a per_profile
- * claim — a blob under custom/, a custom/ item of the sheet, tracked or derived,
- * the custom root the sheet scans — cannot, so a non-zero count is the answer,
- * and a claim the contribution learns to place or to record moves the answer
- * with it, no clause here having to follow. An empty custom tree needs none, by
- * the same reading: a binding would place nothing for it.
+ * manifest_unbound). Every home/ and root/ claim places there; a custom/ claim
+ * — a blob under custom/, a custom/ item of the sheet, tracked or derived, the
+ * custom root the sheet scans — cannot, so a non-zero count is the answer, and
+ * a claim the contribution learns to place or to record moves the answer with
+ * it, no clause here having to follow. An empty custom tree needs none, by the
+ * same reading: a binding would place nothing for it.
  *
  * The branch's fact and not this machine's: asked under a table with no binding
  * so that what the branch needs and what this machine binds are two facts, the

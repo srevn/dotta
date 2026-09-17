@@ -1125,7 +1125,7 @@ static error_t *manifest_contribute(
     /* The roots the profile scans, asked of the table as its claims are: a custom
      * root with no target here stands nowhere, and the slice records it as its
      * third kind — the one entry that is no claim. HOME and the sentinel always
-     * answer, so only a per_profile root can be noted, and the label is the
+     * answer, so only a custom/ root can be noted, and the label is the
      * vocabulary's own static string. Where the root stands is not read — the
      * question is whether the asker has one — so the find is asked for its absence.
      * Noted before the claims, in the sheet's own order. */

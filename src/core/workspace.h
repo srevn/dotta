@@ -175,6 +175,45 @@ typedef enum {
 } workspace_displaced_t;
 
 /**
+ * The rule of the namespace a relocated claim lands in — the class of a relocation
+ *
+ * A relocation is an orphan whose own claim is still in the view, standing at
+ * another path: the record's (profile, storage path) pair found a row that projects
+ * elsewhere (analyze_orphans). What becomes of the copy left behind turns on
+ * one question — did the user move the claim, or did the ground move under it —
+ * and the answer is the mounting rule of the namespace the claim is named in
+ * (infra/label.h), not the place either side stands at:
+ *
+ *   SHARED    home/ and root/ mount where the machine says — the invoker's HOME
+ *             and `/`. Neither is anyone's to re-target, so a claim that moved
+ *             under one moved because the machine's own HOME did. root/'s
+ *             projection is a constant and never relocates at all; it is named
+ *             here because the rule is the namespace's and the switch is
+ *             exhaustive.
+ *   BOUND     custom/ mounts at the target this machine binds for the profile —
+ *             the user's word, and re-bound by the user's word alone.
+ *
+ * A fact of the placement, not an assertion about who moved the file: the program
+ * read the record and the view, never the actor. NONE on every item that is not
+ * a relocation — any item with no row, and every state but ORPHANED (a RELEASED
+ * record carries no row, and on a DEPLOYED item the row is the ordinary claim).
+ *
+ * Assigned once by the one producer of every item (workspace_add_diverged) and
+ * trusted downstream, as the displaced class is. Readers: cleanup's two verdicts,
+ * which hold a SHARED relocation behind --force and prune a BOUND one — the reason
+ * is cleanup's and lives there (core/cleanup.h) — and the three screens that
+ * ask only whether there is a relocation at all: the [relocated] tag
+ * (workspace_item_extract_display_info), apply's prune split, status's prunable
+ * hint. The presence question is this field against NONE at every one of them;
+ * item->row's second meaning is the producer's own.
+ */
+typedef enum {
+    WORKSPACE_RELOCATION_NONE = 0,  /* Not a relocation */
+    WORKSPACE_RELOCATION_SHARED,    /* home/, root/ — the machine places the root */
+    WORKSPACE_RELOCATION_BOUND      /* custom/ — the profile's binding places it */
+} workspace_relocation_t;
+
+/**
  * Why a look failed — the class of DIVERGENCE_UNVERIFIED, by whose remedy it is
  *
  * The bit answers the verb question: no verb resolves this item — apply skips
@@ -276,9 +315,11 @@ typedef struct {
      *           and for UNTRACKED — except a relocated orphan, where it is the
      *           record's own claim's row at another file (the orphan analysis
      *           carried it after its guard found no row standing on the record's
-     *           own entry, so two spellings of one path never read as a move:
-     *           non-NULL on an ORPHANED item IS the relocation, and the new
-     *           location is printable from it).
+     *           own entry, so two spellings of one path never read as a move).
+     *           Whether an ORPHANED item is a relocation is asked of `relocation`
+     *           and never of this field: the producer derives the class from
+     *           the row and nothing downstream reads the row again. What it still
+     *           carries is the new location, which no screen names yet.
      *   anchor  the record — always the live snapshot record, the same pointer
      *           workspace_get_anchor returns: the writers patch it in place
      *           (workspace_anchor) or create it and backfill this field
@@ -300,9 +341,10 @@ typedef struct {
     char *profile;              /* Winning profile name */
 
     /* The analysis's verdicts */
-    workspace_state_t state;      /* Where the item exists (deployed/undeployed/etc.) */
-    divergence_type_t divergence; /* What's wrong with it (bit flags, can combine) */
-    path_kind_t item_kind;        /* The identity source's kind (scan: FILE) */
+    workspace_state_t state;           /* Where the item exists (deployed/undeployed/etc.) */
+    workspace_relocation_t relocation; /* The rule of a relocated claim's namespace, or NONE */
+    divergence_type_t divergence;      /* What's wrong with it (bit flags, can combine) */
+    path_kind_t item_kind;             /* The identity source's kind (scan: FILE) */
 
     /* The observation */
     fs_occupant_t occupant;           /* What the analysis's lstat found at the path (see above) */

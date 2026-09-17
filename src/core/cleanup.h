@@ -190,15 +190,16 @@ typedef enum {
  *                                  it, and status ranks its tag — [locked],
  *                                  [unreadable] or [unverified] — the same way,
  *                                  so one item has one name in both places.
- *   a held relocation              RELOCATED    — the item carries the claim's
- *                                  row (item->row, the relocation) under a label
- *                                  whose projection is not the user's to move
- *                                  (home/ — !per_profile): the copy here is the
- *                                  claim's old home, held even when byte-clean,
- *                                  so the hold outranks the user-change reasons
- *                                  below it. Guarded by the label, so a re-targeted
- *                                  custom/ copy never trips it and keeps the
- *                                  prune (or its own divergence reason)
+ *   a held relocation              RELOCATED    — the item's claim stands at
+ *                                  another path now, in a namespace whose
+ *                                  projection is not the user's to move
+ *                                  (WORKSPACE_RELOCATION_SHARED — home/): the
+ *                                  copy here is the claim's old home, held even
+ *                                  when byte-clean, so the hold outranks the
+ *                                  user-change reasons below it. The class is
+ *                                  the whole test, so a re-targeted custom/ copy
+ *                                  — the BOUND class — never trips it and keeps
+ *                                  the prune (or its own divergence reason)
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
@@ -251,14 +252,15 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    own released record has
  *                                                    retired and no witness of
  *                                                    the squat remains
- *   a relocated home/ claim, unforced     SKIPPED    both kinds. The claim's row
- *                                                    (item->row — the relocation)
+ *   a SHARED relocation, unforced         SKIPPED    both kinds. The claim
  *                                                    projects at a different
- *                                                    filesystem path under a
- *                                                    label the user cannot
- *                                                    re-target (!per_profile:
+ *                                                    filesystem path now, in a
+ *                                                    namespace the user cannot
+ *                                                    re-target (core/workspace.h
+ *                                                    workspace_relocation_t:
  *                                                    home/, since root/'s
- *                                                    projection is fixed), which
+ *                                                    projection is fixed and
+ *                                                    never relocates), which
  *                                                    means $HOME itself differs
  *                                                    — and the identity's HOME
  *                                                    is the invoker's under sudo
@@ -270,10 +272,14 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    home. --force lifts the
  *                                                    hold — the designed escape
  *                                                    for a deliberate home
- *                                                    migration. A re-targeted
- *                                                    custom/ claim is the user's
- *                                                    own move and prunes as before,
- *                                                    its preview naming the move
+ *                                                    migration, which is why
+ *                                                    the preview can call this
+ *                                                    skip "home changed" outright.
+ *                                                    A BOUND relocation — a
+ *                                                    re-targeted custom/ claim
+ *                                                    — is the user's own move
+ *                                                    and prunes as before, its
+ *                                                    preview naming the move
  *   a file with a cleanup_skip_reason     SKIPPED    unless --force
  *   a directory with DIVERGENCE_UNVERIFIED
  *                                         SKIPPED    --force included: no flag

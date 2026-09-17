@@ -352,6 +352,10 @@ static workspace_fault_t fault_of(error_t *err) {
  * producer's own: the file analyzer's rows are blob types, the directory analyzer's
  * DIRECTORY, the orphan loop's the record's.
  *
+ * The one verdict decided here rather than handed in: a relocation's class
+ * (workspace_relocation_t), which is a reading of the two sources this function
+ * already holds and of nothing else.
+ *
  * @param ws Workspace context (must not be NULL)
  * @param row The view's claim (NULL for orphans — except a relocated one, whose
  *            row is the same claim's at its new filesystem path)
@@ -398,6 +402,27 @@ static error_t *workspace_add_diverged(
         item->storage_path = row->storage_path;
         item->profile = row->profile;
         item->item_kind = path_type_kind(row->type);
+    }
+
+    /* A row on an ORPHANED item is the relocation: the record's own claim, still
+     * in the view, standing at another path (analyze_orphans). Which of the two
+     * kinds of relocation it is, is the mounting rule of the namespace the claim
+     * is named in — the label alone, and no place: a root's binder answers which
+     * profile bound that one root, where the question here is whether the namespace
+     * is anyone's to re-target (infra/mount.h mount_root_t). The record's name
+     * and the row's are one string (manifest_lookup_storage matches it exactly),
+     * and a name the view holds was validated where the branch was read, so the
+     * projection below asserts nothing not already established. */
+    if (row && state == WORKSPACE_STATE_ORPHANED) {
+        switch (label_of(item->storage_path)) {
+            case LABEL_HOME:
+            case LABEL_ROOT:
+                item->relocation = WORKSPACE_RELOCATION_SHARED;
+                break;
+            case LABEL_CUSTOM:
+                item->relocation = WORKSPACE_RELOCATION_BOUND;
+                break;
+        }
     }
 
     item->state = state;
@@ -1992,7 +2017,8 @@ static error_t *index_entries(workspace_t *ws) {
  *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
  *     to prune, divergence permitting — and carries the relocation read: a BACKED
  *     orphan whose claim still has a row elsewhere in the view rides that row
- *     on the item, and the storage label picks the fate (cleanup_verdict).
+ *     on the item, which carries the class of the namespace the claim lands in
+ *     (workspace_relocation_t), and that class picks the fate (cleanup_verdict).
  *     Elsewhere is another entry, never merely another string, and the guard is
  *     asked first: a row standing on the record's very entry under another spelling
  *     of its path — whoever's — makes the record a stale key, RELEASED, so the
@@ -2193,10 +2219,12 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * above, to another entry: a root re-spelled under another name
                  * of one directory is the guard's, not a relocation. So the claim
                  * deploys at a new location now: a moved custom/ target, a
-                 * different $HOME. The item carries it (item->row non-NULL on
-                 * an ORPHANED item IS the relocation; the label picks the fate
-                 * at cleanup_verdict, and root/ never gets here — its projection
-                 * is fixed). Strictly the record's own profile: a claim shadowed
+                 * different $HOME. The item carries the row, and the producer
+                 * reads the class of the namespace off it (workspace_add_diverged);
+                 * the class picks the fate at cleanup_verdict, and root/ never
+                 * gets here — its projection is fixed, so a root/ claim's old
+                 * and new locations are one string and the record was never
+                 * orphaned. Strictly the record's own profile: a claim shadowed
                  * by another profile at its new home is not "relocated" — the
                  * copy here is simply no longer active — and the same-profile
                  * rule is what keeps workspace_reassigned false by construction
@@ -3990,11 +4018,12 @@ bool workspace_item_extract_display_info(
 
             /* The relocation, ridden as a secondary tag beside the divergence
              * tags (the way [reassigned] rides on DEPLOYED): the record's claim
-             * still has a row, projected elsewhere — item->row IS the fact
-             * (workspace.h). The fate stays cleanup's (a re-targeted custom/
-             * copy prunes, a moved home holds behind --force); this only names
-             * what the copy is. */
-            if (item->row) {
+             * still has a row, projected elsewhere. Whether there is one at all
+             * is the class against NONE, here as at every screen (workspace.h).
+             * The fate stays cleanup's, and turns on which class it is (a
+             * re-targeted custom/ copy prunes, a moved home holds behind --force);
+             * this only names what the copy is. */
+            if (item->relocation != WORKSPACE_RELOCATION_NONE) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "relocated";
                 }

@@ -1213,16 +1213,18 @@ static void print_cleanup_preview(
     if (present_files + verdicts->absent_files.count > 0) {
         output_section(out, OUTPUT_NORMAL, "Orphaned files");
 
-        /* The prunable summary splits by the relocation the item carries
-         * (item->row) — a naming, not a verdict: both halves are cleanup's one
-         * prunable bucket, named together in the list below, and the split only
-         * keeps each parenthetical true. A relocated prunable copy is not inactive
-         * — its claim deploys at a new filesystem path — so "(no longer active)"
-         * would lie about it. */
+        /* The prunable summary splits by whether the item carries a relocation
+         * at all (core/workspace.h workspace_relocation_t against NONE, the one
+         * presence question every screen asks) — a naming, not a verdict: both
+         * halves are cleanup's one prunable bucket, named together in the list
+         * below, and the split only keeps each parenthetical true. A relocated
+         * prunable copy is not inactive — its claim deploys at a new filesystem
+         * path — so "(no longer active)" would lie about it. Both classes reach
+         * here: a BOUND one by its own verdict, a SHARED one under --force. */
         workspace_items_t prunable = workspace_items_view(&verdicts->prunable_files);
         size_t moved = 0;
         for (size_t i = 0; i < prunable.count; i++) {
-            if (prunable.entries[i]->row) moved++;
+            if (prunable.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) moved++;
         }
 
         if (prunable.count - moved > 0) {
@@ -1422,6 +1424,9 @@ static void print_cleanup_skips(
                 color = OUTPUT_COLOR_RED;
                 break;
             case CLEANUP_SKIP_RELOCATED:
+                /* The skip is the SHARED class alone (core/cleanup.h), and of
+                 * the two namespaces in it only home/ ever relocates — so the
+                 * word is true by construction and not by a label test here. */
                 glyph = "⚠";
                 label = "home changed";
                 break;

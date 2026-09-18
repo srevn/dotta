@@ -389,18 +389,20 @@ error_t *mount_resolve(
     const mount_root_t *root = mount_root_of(table, profile, split.label);
     if (!root) return NULL;
 
-    /* The join: the root's prefix, "/", the tail — the key of the claim, which
-     * every producer of a key agrees on because every one is this join over the
-     * same strings (infra/mount.h). Uniform across the three labels, the root
-     * directory reading as "" (join_prefix):
+    /* The root's own directory for the word alone — a key already, and the spelling
+     * every producer of a key agrees on — and beneath it the join: the root's
+     * prefix, "/", the tail. Uniform across the three labels, the root directory
+     * reading as "" (join_prefix):
      *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
-     * The tail is non-empty (label_validate_storage rejects trailing slashes)
-     * and no prefix ends in a slash: the root directory's is "", HOME is folded
-     * by the identity (sys/identity), and a target is absolute and folded, the
-     * build's own refusal (mount_table_build) — so the join is unconditional. */
-    *out_location = arena_str_format(arena, "%s/%s", join_prefix(root), split.tail);
+     *   the word alone                         -> the root's location, "/" included
+     * No prefix ends in a slash — the root directory's is "", HOME is folded by
+     * the identity (sys/identity), and a target is absolute and folded, the build's
+     * own refusal (mount_table_build) — so the join is unconditional. */
+    *out_location = *split.tail
+        ? arena_str_format(arena, "%s/%s", join_prefix(root), split.tail)
+        : arena_strdup(arena, root->location);
     if (!*out_location) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }

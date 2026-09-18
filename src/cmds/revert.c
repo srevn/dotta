@@ -72,13 +72,11 @@ static error_t *select_profile(
         return NULL;
     }
 
-    /* The argument in the key it named — one of two, the third having been refused
-     * at the command's door (cmd_revert), which is what every read below there
-     * rests on. The hints spell the command with what the user typed, so they
-     * paste back, and they spell it in the three-positional form: that is the
-     * one arm of revert_post_parse that assigns without asking
-     * refspec_looks_like_commit whether the second word is a commit, so a tag
-     * or a branch name pastes back as readily as an oid does. */
+    /* The argument in the key it named — one of two. The hints spell the command
+     * with what the user typed, so they paste back, and they spell it in the
+     * three-positional form: that is the one arm of revert_post_parse that assigns
+     * without asking refspec_looks_like_commit whether the second word is a commit,
+     * so a tag or a branch name pastes back as readily as an oid does. */
     const char *subject = arg->key == PATH_KEY_LOCATION ? arg->location
                                                         : arg->storage_path;
 
@@ -790,24 +788,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     path_input_t arg;
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
-
-    /* A label before a profile is chosen: a revert restores one file's bytes
-     * and a label is the namespace above every one of them, so there is nothing
-     * here to choose a profile for — every branch holds a tree under the label
-     * and none stands at it. Refused at the door, which is what keeps the reads
-     * below this line meeting two keys and not three, and what keeps
-     * profile_discover_claims from being asked to search for one. Said without
-     * the flag's profile, bound or not: what a label names is the same on every
-     * machine and for every asker. */
-    switch (arg.key) {
-        case PATH_KEY_LOCATION:
-        case PATH_KEY_STORAGE:
-            break;
-
-        case PATH_KEY_LABEL:
-            err = path_input_refuse_label(arg.label);
-            goto cleanup;
-    }
 
     err = select_profile(ctx, opts, &arg, &profile);
     if (err) goto cleanup;

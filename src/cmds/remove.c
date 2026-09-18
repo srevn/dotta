@@ -24,7 +24,6 @@
 #include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
-#include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
 #include "sys/gitops.h"
@@ -368,12 +367,12 @@ static error_t *resolve_removal_claims(
         }
 
         /* The sum type, read at the use site and read once: a storage argument
-         * keys against the claims' names, a location against where they stand,
-         * and a label alone is the one name every claim of that namespace is
-         * beneath — the form that reaches a profile with no binding here, whose
-         * custom/ claims stand nowhere for a location to match. The filesystem
-         * root is spelled "" — the one prefix every absolute path is beneath,
-         * as the table spells it and the pathspec reads it. */
+         * keys against the claims' names and a location against where they stand,
+         * the word alone among the names — every claim of its namespace being
+         * beneath it — and the form that reaches a profile with no binding here,
+         * whose custom/ claims stand nowhere for a location to match. The
+         * filesystem root is spelled "" — the one prefix every absolute path is
+         * beneath, as the table spells it and the pathspec reads it. */
         const char *subject = NULL;
         bool by_name = false;
 
@@ -384,11 +383,6 @@ static error_t *resolve_removal_claims(
 
             case PATH_KEY_STORAGE:
                 subject = arg.storage_path;
-                by_name = true;
-                break;
-
-            case PATH_KEY_LABEL:
-                subject = label_words[arg.label];
                 by_name = true;
                 break;
         }

@@ -684,27 +684,12 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
     /* The argument first, above the profile question and above anything opened
      * or announced under either: reading one asks no topology (infra/path.h),
-     * so a key show cannot act on is refused in its own words with nothing of
-     * the repository standing on screen above it. Read once for both arms, which
-     * differ in where each key's answer comes from and not in which keys they
-     * take. */
+     * so every refusal it earns is said with nothing of the repository standing
+     * on screen above it. Read once for both arms, which differ in where each
+     * key's answer comes from and not in which keys they take. */
     path_input_t arg;
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
-
-    switch (arg.key) {
-        case PATH_KEY_LOCATION:
-        case PATH_KEY_STORAGE:
-            break;
-
-        case PATH_KEY_LABEL:
-            /* A label names the namespace above every path of its kind, and show
-             * prints one file's bytes. Said without the flag's profile, bound
-             * or not: what a label names is the same on every machine and for
-             * every asker, so there is nothing here for a profile to change. */
-            err = path_input_refuse_label(arg.label);
-            goto cleanup;
-    }
 
     if (profile) {
         /* The profile named must be here before its tree is opened. Then the
@@ -718,9 +703,10 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         err = show_source(ctx, profile, opts->commit, &tree, &source);
         if (err) goto cleanup;
 
-        /* The two keys the door left. A name the user typed is Git's key already,
-         * so show_file's own read of the branch's two documents is what decides
-         * whether the profile holds it; a location is the branch's to name. */
+        /* The two keys, and each names its own read. A name the user typed is
+         * Git's key already, so show_file's own read of the branch's two documents
+         * is what decides whether the profile holds it; a location is the branch's
+         * to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {

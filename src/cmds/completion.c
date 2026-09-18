@@ -213,9 +213,13 @@ typedef struct {
 /**
  * Tree-walk callback: emit one token per managed file blob.
  *
- * `root` is "" at the top level or "dir/.../" with a trailing slash, so
- * label_prefixes(root) gates emission to files under a storage label, skipping
- * top-level blobs, .dotta/, and any non-label root.
+ * The content gate every walk over a branch asks (infra/label.h label_prefixes):
+ * a name in the grammar is content, and a blob under no label — a top-level one,
+ * .dotta/, whatever a hand left beside them — is the branch's machinery and no
+ * token. `root` is "" at the top level or "dir/.../" with a trailing slash, so
+ * the gate reads the walk root where there is one and the entry's own name where
+ * there is not, which is the joined name's answer and costs this walk no join:
+ * it prints the two pieces and holds no name of its own.
  */
 static int refspec_emit_cb(
     const char *root, const git_tree_entry *entry, void *payload
@@ -223,9 +227,10 @@ static int refspec_emit_cb(
     refspec_walk_ctx_t *walk = payload;
 
     if (git_tree_entry_type(entry) != GIT_OBJECT_BLOB) return 0;  /* descend trees */
-    if (!label_prefixes(root)) return 0;                          /* storage-label gate */
 
     const char *name = git_tree_entry_name(entry);
+    if (!label_prefixes(root[0] ? root : name)) return 0;         /* the content gate */
+
     if (walk->prefix) {
         fprintf(
             walk->out, "%s:%s%s\n", walk->branch, root, name

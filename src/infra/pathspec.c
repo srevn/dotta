@@ -23,13 +23,11 @@
 /* One compiled input. `text` is what the coverage line prints — the input as
  * typed, since a location rule is an anchor and a tail and has no one compiled
  * string. `key` is the vocabulary its subject is read in, decided by the input's
- * shape and never by an asker; its domain here is two, not the three a CLI argument
- * has, because a label is read in the storage vocabulary like any other name
- * (prefix_name). An exact entry keeps the spelling it names in `prefix`, its
- * length hoisted, for the beneath test the matcher and the attribution share; a
- * location rule keeps its anchor there, the rung past which it reads; a storage
- * rule keeps none. Every byte is the arena's, or — for a label — the vocabulary's
- * own static string. */
+ * shape and never by an asker; its domain is two, as the argument's is. An exact
+ * entry keeps the spelling it names in `prefix`, its length hoisted, for the
+ * beneath test the matcher and the attribution share; a location rule keeps its
+ * anchor there, the rung past which it reads; a storage rule keeps none. Every
+ * byte is the arena's. */
 typedef struct {
     const char *text;                /* the input as typed: what a coverage line prints */
     path_key_t key;                  /* the vocabulary its subject is read in: LOCATION or STORAGE */
@@ -56,13 +54,11 @@ static void prefix_location(entry_t *e, const char *location) {
     e->prefix_len = strlen(e->prefix);
 }
 
-/* A name as an entry's prefix: a storage path, or the label alone, which every
- * name of that namespace is beneath. Both are read in the storage vocabulary,
- * so an entry's key stays two-valued whatever the argument's was — the matcher
- * and the attribution ask only which of the two subjects to read (own_subject),
- * and a label is answered by the same one a name is. The key is set here rather
- * than copied from the argument, which is what keeps the third tag out of the
- * matcher without any site having to remember not to pass it on. */
+/* A name as an entry's prefix — the word alone included, which every name of
+ * its namespace is beneath. The key is set here rather than copied from the
+ * argument, so this sits beside prefix_location as its twin: one writer per
+ * vocabulary, and the matcher and the attribution ask only which of the two
+ * subjects to read (own_subject). */
 static void prefix_name(entry_t *e, const char *name) {
     e->key = PATH_KEY_STORAGE;
     e->prefix = name;
@@ -202,9 +198,9 @@ error_t *pathspec_create(
             spec->rule_count++;
         } else {
             /* An exact entry in the key the input names, one per key however
-             * many inputs spell it. A label is taken: it is the prefix every
-             * name of that namespace is beneath, which is the only reading that
-             * reaches a claim standing nowhere on this machine. */
+             * many inputs spell it. A namespace's own directory is a name like
+             * any other, and naming it selects every name beneath it — the only
+             * reading that reaches a claim standing nowhere on this machine. */
             path_input_t arg;
             error_t *err = path_input_resolve(input, arena, &arg);
             if (err) {
@@ -213,9 +209,6 @@ error_t *pathspec_create(
             switch (arg.key) {
                 case PATH_KEY_LOCATION: prefix_location(&entry, arg.location); break;
                 case PATH_KEY_STORAGE:  prefix_name(&entry, arg.storage_path); break;
-                case PATH_KEY_LABEL:
-                    prefix_name(&entry, label_words[arg.label]);
-                    break;
             }
             if (listed(spec, &entry)) {
                 continue;

@@ -52,13 +52,14 @@ typedef struct {
  *
  * An input holding a glob metacharacter ('*', '?', '[') is a rule; any other is
  * an exact entry in the key it names (path_input_resolve: a filesystem shape
- * normalized, a storage path validated and kept as typed, a label alone kept as
- * the root it names). A label selects everything of its kind — `custom/` is every
- * custom/ claim, including those of a profile bound nowhere here, which no location
- * can reach — and is matched in the storage vocabulary like any name. Two inputs
- * naming one key — two spellings of one location, one storage path typed twice
- * — are one exact entry; a name beside a location is two, since they are two
- * keys. Rules are never collapsed: their order is their meaning.
+ * normalized, a storage path validated and kept as typed). A label selects
+ * everything of its kind — `custom/` is the namespace's own directory and every
+ * custom/ claim beneath it, including those of a profile bound nowhere here,
+ * which no location can reach — and is matched in the storage vocabulary like
+ * any name, which after the shed it is. Two inputs naming one key — two spellings
+ * of one location, one storage path typed twice — are one exact entry; a name
+ * beside a location is two, since they are two keys. Rules are never collapsed:
+ * their order is their meaning.
  *
  * Glob rules:
  *   - Basename-only globs ("*.vim") match at any depth

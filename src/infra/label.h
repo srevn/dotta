@@ -2,11 +2,12 @@
  * label.h - The grammar of a storage name
  *
  * A profile names what it holds portably: `<label>/<tail>`, the label one of
- * three words and the tail a relative path with no traversal in it. The label
- * says which namespace the name is in — home/ under the invoker's HOME, root/
- * under `/`, custom/ under the target this machine binds for the profile — and
- * the tail is the name within it, the subject every user-authored pattern is
- * matched against
+ * three words and the tail a relative path with no traversal in it — or the label
+ * alone, which names the namespace's own directory and is a name like any other.
+ * The label says which namespace the name is in — home/ under the invoker's HOME,
+ * root/ under `/`, custom/ under the target this machine binds for the profile
+ * — and the tail is the name within it, the subject every user-authored pattern
+ * is matched against
  * (core/ignore.h). Where a namespace lands on a machine is infra/mount's table;
  * what a claim under a label says about its path is the sheet's (core/metadata.h).
  * This module is the words and the shape alone: no table, no arena beyond the
@@ -18,21 +19,18 @@
  * below (infra/mount.h), and its four tree-and-sheet readers are the whole reason
  * every verb beneath may join a tail onto a root's spelling without looking.
  * The bytes of a name are the cipher's associated data (crypto/cipher.h), so
- * the shape rule refuses a malformed name and folds nothing, and the two
- * recognitions read a prefix or a whole word and validate nothing, their domain
- * being any string with NULL in it. No wrapper for a name is stored anywhere:
- * the bytes are the wire form and the authenticated one both, so a split is a
- * value on the stack for one call, refspec_t's shape, never a member.
+ * the shape rule refuses a malformed name and folds nothing, and the one
+ * recognition reads a prefix and validates nothing, its domain being any string
+ * with NULL in it. No wrapper for a name is stored anywhere: the bytes are the
+ * wire form and the authenticated one both, so a split is a value on the stack
+ * for one call, refspec_t's shape, never a member.
  *
  * Three verbs pay for that decision. A name is a string of a particular shape
  * and C cannot say so, so label_of, label_tail and label_compose assert what
  * they cannot declare — the two projections where they take a name, the compose
- * where it makes one. The assert is not theatre against an invented bug: this
- * tree holds a bare word in a field typed as a name by design (a pathspec entry's
- * prefix, the label every name of that namespace is beneath — infra/pathspec.c
- * pathspec_create), so "looks like a name, is not one" is a real inhabitant here,
- * and one abort per verb is what stands against it where a header sentence is
- * all that otherwise would.
+ * where it makes one. A path under no label is a caller's bug, and one abort
+ * per verb is what stands against it where a header sentence is all that otherwise
+ * would.
  */
 
 #ifndef DOTTA_LABEL_H
@@ -46,10 +44,10 @@
  * The vocabulary's one currency: what a reader holds, passes, stores and loops
  * over. A label indexes — label_words at every word reader, a receipt's counts
  * at cmds/add.c report_labels — and costs nothing to keep. Its word is read from
- * label_words where a string is printed, written or matched, and parsed back
- * into a label where a tree or an argument is read (label_parse, label_of). No
- * reader holds a label's word in a label's place: the word is `label_words[label]`
- * at the point of use.
+ * label_words where a string is printed, written or matched, and read back into
+ * a label where a tree or an argument is read (label_split, label_of). No reader
+ * holds a label's word in a label's place: the word is `label_words[label]` at
+ * the point of use.
  *
  * A fourth label is an enumerator here, an entry in label_words, one more slot
  * in every array sized by LABEL_COUNT, a decision at every reader that derives
@@ -88,11 +86,12 @@ extern const char *const label_words[LABEL_COUNT];
  * `tail` is NULL when no label prefixes the string — the whole verdict, for a
  * caller asking a string what it is — and `label` is then unread, holding the
  * zero the answer was built from (gitignore_match_t's shape: one field gates
- * its siblings). "" is a tail: a label spelled as a directory ("home/") stands
- * under its label with nothing past it, and "home//" is a tail of separators.
- * Nothing here folds — a caller that reads a directory spelling as the label
- * alone sheds its own separators first (infra/path.c path_input_resolve) — and
- * the tail aliases the input, so the two share a lifetime.
+ * its siblings). "" is a tail, and two spellings answer with it: the word alone
+ * ("home"), which is the key of the namespace's own directory, and the word spelled
+ * as a directory ("home/"), which is an input and never a key. Nothing here folds
+ * — a caller that reads a directory spelling as the key sheds its own separators
+ * first (infra/path.c path_input_resolve), and "home//" is a tail of separators
+ * — and the tail aliases the input, so the two share a lifetime.
  */
 typedef struct {
     label_t label;       /* Which namespace the string is in */
@@ -109,19 +108,19 @@ typedef struct {
  *   "home/.bashrc"   -> { LABEL_HOME,   ".bashrc" }
  *   "custom/etc/foo" -> { LABEL_CUSTOM, "etc/foo" }
  *   "home/"          -> { LABEL_HOME,   ""        }
+ *   "home"           -> { LABEL_HOME,   ""        }
  *   "/abs/path"      -> { .tail = NULL }
- *   "home"           -> { .tail = NULL }
+ *   "homework"       -> { .tail = NULL }
  *   NULL             -> { .tail = NULL }
  *
  * Walks label_words, so the label set has one home — adding a fourth needs no
  * edit here.
  *
- * Readers: the two that want both halves. The table's join takes the label to
- * find the asker's root and joins the tail onto its spelling (infra/mount.c
- * mount_resolve); the resolver's storage arm sheds the tail's trailing separators
- * and answers the label alone where nothing is left of it (infra/path.c
- * path_input_resolve). A caller wanting the verdict and no half of the answer
- * asks label_prefixes, which is this call and one comparison.
+ * Reader: the one caller that wants both halves. The table's join takes the label
+ * to find the asker's root and joins the tail onto its spelling, answering the
+ * root's own directory where the tail is empty (infra/mount.c mount_resolve). A
+ * caller wanting the verdict and no half of the answer asks label_prefixes, which
+ * is this call and one comparison.
  *
  * @param s Any string, or NULL
  * @return The split; `tail` NULL when no label prefixes `s`
@@ -129,37 +128,49 @@ typedef struct {
 label_split_t label_split(const char *s);
 
 /**
- * Does `s` stand under a label — "home/…", "root/…", "custom/…"?
+ * Is `s` a name in the grammar — "home/…", "root/…", "custom/…", or one of those
+ * words alone?
  *
- * The prefix and its separator, nothing of the tail: the question any string
- * may be asked, NULL included, where the two projections beneath it ask for a
- * path that passed this one. It is the content gate every walk over a profile
- * tree asks of its own walk root — a managed path stands under a label, so a
- * blob at the branch root, or beneath a tree no label names, is the branch's
- * own machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever
- * else a hand or a tool left beside them. Nothing else distinguishes them, and
- * nothing needs to: a branch may hold what it likes next to the labels, and no
- * walk of content sees it. A caller *handed* such a name rather than finding it
- * refuses in its own words — export's name arm, which takes a label as a key
- * and meets whatever stands there (cmds/export.c collect_name). And it is the
- * shape dispatch on an argument, which reads a storage shape before the filesystem
- * shapes — asked there through label_split, that arm wanting the tail as well
- * as the verdict. A label alone, with no separator, stands under none: that is
- * the whole-word question, label_parse, and a caller wanting either asks both
- * (cmds/export.c export_post_parse). A label spelled as a directory does stand
- * under one — "custom/" is the label and an empty tail — so a gate meant to catch
- * a label asks it of the word.
+ * The word and its boundary, nothing of the tail: the question any string may
+ * be asked, NULL included, where the two projections beneath it ask for a path
+ * that passed this one. The word alone is the namespace's own directory and holds
+ * what a directory holds, so it is a name like any other and answers true; a
+ * word with something else past it ("homework") stands under none. A label spelled
+ * as a directory answers true as well — "custom/" is the word and an empty tail
+ * — the marker being an input's spelling and never a key's.
+ *
+ * It is the content gate every walk over a profile tree asks of the name an entry
+ * stands at. A managed path is a name in the grammar, so a blob beneath a tree
+ * no label names, or one at the branch root under no word, is the branch's own
+ * machinery: dotta's files (.dottaignore, .bootstrap, .dotta/) and whatever else
+ * a hand or a tool left beside them. Nothing else distinguishes them, and nothing
+ * needs to: a branch may hold what it likes next to the labels, and no walk of
+ * content sees it.
+ *
+ * The question reads no further than the name's first component, which is what
+ * lets a walk holding no joined name ask it of the walk's root where there is
+ * one and of the entry's own name where there is not, and get the joined name's
+ * answer: a libgit2 walk root is "" or ends in '/', so a non-empty one carries
+ * the whole answer. Where the joined name is the site's own product the gate is
+ * asked of the name (core/manifest.c manifest_claim_blob, cmds/export.c
+ * collect_tree_callback); where building one is the only thing the gate would
+ * pay for, it is asked of the two (core/profiles.c tree_entry_content_path,
+ * cmds/completion.c refspec_emit_cb). One reader was always handed the whole
+ * name and is the shape the others now take (cmds/diff.c select_delta).
+ *
+ * And it is the shape dispatch on an argument, which reads a storage shape before
+ * the filesystem shapes.
  *
  * Readers: the view's claim routine (core/manifest.c manifest_claim_blob), the
  * file listing and the branch statistics (core/profiles.c tree_entry_content_path),
- * the refspec completion (cmds/completion.c refspec_emit_cb), diff's delta
- * selection (cmds/diff.c select_delta), the rule compiler (infra/pathspec.c
- * compile_rule), the question the resolver's neighbour asks of a positional whose
- * slot is undecided (infra/path.c path_input_announces_path), the two input heads
- * that dispatch on shape before reading it (cmds/add.c cmd_add, cmds/ignore.c
- * test_path_ignore) and export's two — its profile slot's own grammar, and the
- * gate its name arm asks of the key it is handed (cmds/export.c export_post_parse,
- * collect_name).
+ * the refspec completion (cmds/completion.c refspec_emit_cb), export's walk
+ * (cmds/export.c collect_tree_callback), diff's delta selection (cmds/diff.c
+ * select_delta), the rule compiler (infra/pathspec.c compile_rule), the resolver's
+ * storage arm and the question its neighbour asks of a positional whose slot is
+ * undecided (infra/path.c path_input_resolve, path_input_announces_path), the
+ * two input heads that dispatch on shape before reading it (cmds/add.c cmd_add,
+ * cmds/ignore.c test_path_ignore) and export's profile slot's own grammar
+ * (cmds/export.c export_post_parse).
  */
 bool label_prefixes(const char *s);
 
@@ -210,42 +221,22 @@ label_t label_of(const char *storage_path);
  * in the tail (core/metadata.c metadata_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
- * @return Pointer past the label; "" for a label spelled as a directory
+ * @return Pointer past the label; "" for the word alone, and for a label spelled
+ *         as a directory
  */
 const char *label_tail(const char *storage_path);
-
-/**
- * The label a bare word names: "home", "root", "custom" — the whole word.
- *
- * The whole name and not a prefix, which is what tells this apart from
- * label_prefixes: "home/x" names no label here, and "home" stands under no label
- * there. The two are the vocabulary's atoms, and a caller wanting either spells
- * the union at its own site (cmds/export.c export_post_parse, where a lone
- * positional that is content rather than a profile is one or the other).
- *
- * Writes `*out` and answers true when `word` is a label; false, `*out` untouched,
- * when it is not — an unknown word is the caller's to refuse in its own sentence.
- * `out` may be NULL for a caller that asks only whether, and `word` may be NULL,
- * which names nothing. Walks label_words, so a fourth label needs no edit here.
- *
- * Readers: export's three — its bare-word arm, which makes the resolver's key
- * out of the word its own grammar allows (cmds/export.c cmd_export), its
- * branch-root walk, where a top-level tree entry is content iff its name is a
- * label (collect_tree_callback), and the catch that reads a lone positional in
- * the profile slot as the user's misuse (export_post_parse).
- */
-bool label_parse(const char *word, label_t *out);
 
 /**
  * Validate a storage path's syntactic shape.
  *
  * Checks:
  *  - Non-empty
- *  - Starts with "home/", "root/", or "custom/"
+ *  - Starts with "home/", "root/", or "custom/", or is one of those words alone
  *  - Not absolute (no leading '/')
  *  - No "..", ".", or empty component (path traversal)
  *  - No "//" (consecutive slashes)
- *  - No trailing slash (must reference a file, not a directory prefix)
+ *  - No trailing slash: a key never carries the directory marker, the label's
+ *    own directory being spelled by the word alone
  *
  * The order is the sentence's, not the rule's: an empty path and an absolute
  * one are refused in their own words above the label test, which would otherwise
@@ -266,15 +257,13 @@ bool label_parse(const char *word, label_t *out);
 error_t *label_validate_storage(const char *storage_path);
 
 /**
- * The name a label and a tail spell: "<word>/<tail>".
+ * The name a label and a tail spell: "<word>/<tail>", or "<word>" alone.
  *
- * The write side of label_split's separator, so the grammar owns both directions
- * of it and no consumer spells the join. `tail` is non-empty — a label alone is
- * no storage name, which the shape rule refuses and which would key a tree entry
- * and seal a blob under a namespace's own word — and a caller holding an empty
- * tail holds a root, whose having no name is its own answer (core/manifest.h
- * manifest_name). Asserted, as the two projections assert the same rule read
- * from the other side.
+ * The write side of label_split's boundary, so the grammar owns both directions
+ * of it and no consumer spells the join: the separator stands iff something stands
+ * past the word, and an empty tail spells the word alone — the namespace's own
+ * directory, a key like any name. `tail` must not be NULL, asserted as the two
+ * projections assert the same rule read from the other side.
  *
  * Reader: the last rung of the namer's ascent, which is the one place in the
  * tree a location becomes a name (core/manifest.c manifest_ascend), over the
@@ -282,7 +271,7 @@ error_t *label_validate_storage(const char *storage_path);
  *
  * @param arena Arena that owns the answer (must not be NULL)
  * @param label The namespace the name is in
- * @param tail  The name within it (must not be NULL or empty)
+ * @param tail  The name within it (must not be NULL; "" spells the word alone)
  * @return The name, the arena's; NULL on allocation failure
  */
 const char *label_compose(arena_t *arena, label_t label, const char *tail);

@@ -431,9 +431,7 @@ const mount_root_t *mount_root_of(
  * Rendered from the root itself, so the profile named is the one the build stamped
  * and no caller can hand the wrong one; a bound root has one to name by that
  * same refusal of a nameless binding (mount_t). One switch under -Wswitch, the
- * one place a label's meaning on a screen is decided — and what a *label* names,
- * no root having been found for it, is no place at all and is said in the grammar's
- * own word (infra/path.h path_input_refuse_label).
+ * one place a label's meaning on a screen is decided.
  *
  * `root` is non-NULL, and every caller holds one a find answered: directly, or
  * through the namer, whose NULL is exactly mount_root_at's answer over the same
@@ -486,10 +484,6 @@ const char *mount_root_describe(
  * so the root's own `location` is the argument's spelling. `root` is non-NULL,
  * as mount_root_describe's is.
  *
- * The sibling for a *label* is infra/path.h path_input_refuse_label: that one
- * says a namespace is not a path in it, this one that a place is not a thing in
- * it. The remedy is the same because the mistake is.
- *
  * @param root The root the location stands at (must not be NULL)
  * @return The refusal; never NULL
  */
@@ -502,11 +496,15 @@ error_t *mount_root_refuse(const mount_root_t *root);
  *   home/X   -> $HOME/X                  (profile may be NULL)
  *   root/X   -> /X                       (profile may be NULL)
  *   custom/X -> <profile's target>/X     (profile must match a CUSTOM mount)
+ *   home     -> $HOME                    (the namespace's own directory)
+ *   root     -> /
+ *   custom   -> <profile's target>
  *
- * The location is the root, one separator and the tail: the key of the claim,
- * and the one every producer of a key agrees on (the table's paragraph above).
- * A link anywhere in it is a component — a claim captured through one stands
- * where its spelling says, and so does a claim of the link itself.
+ * The location is the root, one separator and the tail — or the root itself where
+ * the name is the word alone: the key of the claim either way, and the one every
+ * producer of a key agrees on (the table's paragraph above). A link anywhere in
+ * it is a component — a claim captured through one stands where its spelling
+ * says, and so does a claim of the link itself.
  *
  * Absence is the find's own, handed on unchanged: mount_root_of answers no root
  * of the name's label for this asker, so the two have one producer and one reading

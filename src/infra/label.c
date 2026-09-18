@@ -19,10 +19,10 @@
  * Indexed by `label_t` and sized by the arity the header publishes, so the enum
  * declares the label set once and the array's extent is that declaration rather
  * than a second one that happens to agree. Designated initializers keep the words
- * in lockstep with the ordinals, which is what lets a reader subscript by the label
- * it holds; an entry left out is a NULL the walks below read, and the parse of
- * every word back to its own label is the only check an array's completeness can
- * have (tests/test-label.c).
+ * in lockstep with the ordinals, which is what lets a reader subscript by the
+ * label it holds; an entry left out is a NULL the walk below reads, and the split
+ * of every word back to its own label is the only check an array's completeness
+ * can have (tests/test-label.c).
  */
 const char *const label_words[LABEL_COUNT] = {
     [LABEL_HOME] = "home", [LABEL_ROOT] = "root", [LABEL_CUSTOM] = "custom",
@@ -34,11 +34,20 @@ label_split_t label_split(const char *s) {
     for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
         const char *word = label_words[label];
         size_t word_len = strlen(word);
-
         if (strncmp(s, word, word_len) != 0) continue;
-        if (s[word_len] != '/') continue;
 
-        return (label_split_t){ .label = label, .tail = s + word_len + 1 };
+        /* The word, then its separator or its end: a name beneath the label
+         * ("home/x"), or the word alone ("home"), which is the namespace's own
+         * directory and a name like any other. A directory spelling ("home/")
+         * is the word with an empty tail too, and the shed is the reader's
+         * (infra/path.c path_input_resolve). "homework" stands under none. The
+         * boundary infra/mount.c tail_under_root reads at a root, read here at
+         * a label. */
+        const char *tail = s + word_len;
+        if (*tail == '/') tail++;
+        else if (*tail != '\0') continue;
+
+        return (label_split_t){ .label = label, .tail = tail };
     }
 
     return (label_split_t){ 0 };
@@ -67,18 +76,6 @@ const char *label_tail(const char *storage_path) {
     return split.tail;
 }
 
-bool label_parse(const char *word, label_t *out) {
-    if (!word) return false;
-
-    for (label_t label = LABEL_HOME; label < LABEL_COUNT; label++) {
-        if (strcmp(word, label_words[label]) != 0) continue;
-        if (out) *out = label;
-        return true;
-    }
-
-    return false;
-}
-
 error_t *label_validate_storage(const char *storage_path) {
     CHECK_NULL(storage_path);
 
@@ -101,11 +98,14 @@ error_t *label_validate_storage(const char *storage_path) {
     if (!split.tail) {
         return ERROR(
             ERR_INVALID_ARG, "Storage path must start with "
-            "'home/', 'root/', or 'custom/' (got '%s')", storage_path
+            "'home/', 'root/', or 'custom/', or be one of those words alone "
+            "(got '%s')", storage_path
         );
     }
 
-    /* Must reference a file, not just a label directory */
+    /* A key never carries the directory marker: the label's own directory is
+     * spelled by the word alone, as every directory is by its name, and a reader
+     * of a directory spelling sheds it first (infra/path.c path_input_resolve). */
     if (storage_path[strlen(storage_path) - 1] == '/') {
         return ERROR(
             ERR_INVALID_ARG, "Storage path must not end with '/': '%s'",
@@ -123,11 +123,11 @@ error_t *label_validate_storage(const char *storage_path) {
 
     /* SECURITY: Tail components must not be `.` or `..`. A component is one by
      * its first bytes and whatever ends it, so the walk reads neither a length
-     * nor a token; the label itself ("home"/"root"/"custom") is constant and never
-     * a traversal token, so only the tail is walked. An empty component — the one
-     * a `//` or a trailing `/` leaves — was refused above in its own words and
-     * does not reach here. The message names the path the user typed, not the tail
-     * it is walking. */
+     * nor a token; the label itself ("home"/"root"/"custom") is constant and
+     * never a traversal token, so only the tail is walked. An empty component —
+     * the one a `//` or a trailing `/` leaves — was refused above in its own
+     * words and does not reach here. The message names the path the user typed,
+     * not the tail it is walking. */
     for (const char *comp = split.tail; comp != NULL;) {
         if (comp[0] == '.' &&
             comp[1] == '.' && (comp[2] == '/' || comp[2] == '\0')) {
@@ -151,9 +151,12 @@ error_t *label_validate_storage(const char *storage_path) {
 }
 
 const char *label_compose(arena_t *arena, label_t label, const char *tail) {
-    /* The write side of the rule the two projections assert: a label alone is no
-     * storage name (infra/label.h). */
-    assert(tail && *tail);
+    /* The write side of the split's boundary, read from the other side: the
+     * separator stands iff something stands past the word, and an empty tail
+     * spells the word alone. Asserted as the two projections assert theirs. */
+    assert(tail);
 
-    return arena_str_format(arena, "%s/%s", label_words[label], tail);
+    return arena_str_format(
+        arena, "%s%s%s", label_words[label], *tail ? "/" : "", tail
+    );
 }

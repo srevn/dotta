@@ -56,16 +56,14 @@
  * is read: label_validate_storage in the walk callback, the same check the view
  * makes for the same reason (core/manifest.c manifest_claim_blob) and therefore
  * already made for every row the location arm reads, and, for the claim sheet,
- * its own loader (core/metadata.c). The branch root is the one rung no storage
- * grammar covers, because nothing standing there is a storage path: a name is
- * content there iff it is a label naming a tree, which the whole-profile walk
- * prunes by and the name arm refuses by (the content gate, infra/label.h
- * label_prefixes). So every FILE and SYMLINK entry carries a validated storage
- * path — the metadata key and the associated data both — where a DIRECTORY entry
- * may carry a label, which keys nothing and seals nothing. The remaining escape
- * vector — a pre-existing symlink at a content-dictated path below the root —
- * is refused in phase 1, which can see every such path because the entry list
- * is completed first: every directory the copy needs is an entry of it.
+ * its own loader (core/metadata.c). Every rung is read against the grammar, the
+ * branch root's included, and what prunes machinery there is the content gate
+ * every walk asks of a name (infra/label.h label_prefixes). So every entry this
+ * walk collects carries a validated storage path — the metadata key and the
+ * associated data both. The remaining escape vector — a pre-existing symlink at
+ * a content-dictated path below the root — is refused in phase 1, which can see
+ * every such path because the entry list is completed first: every directory
+ * the copy needs is an entry of it.
  */
 
 #include "cmds/export.h"
@@ -378,20 +376,6 @@ static int collect_tree_callback(
 ) {
     struct collect_ctx *ctx = payload;
     const char *name = git_tree_entry_name(entry);
-    /* The branch root, which only a whole-profile walk has: an empty storage
-     * base is what makes the walked tree the branch's own, and an empty callback
-     * root is its top level. */
-    bool at_branch_root = ctx->storage_base[0] == '\0' && root[0] == '\0';
-
-    /* Whole-profile walks start at branch root, where content lives only under
-     * storage-label subtrees; everything else is machinery. Positive return prunes
-     * the entry (and its subtree, pre-order). What survives is a label exactly
-     * — the whole-name question, which is what label_parse answers — so the shape
-     * check below has nothing left to ask of it. */
-    if (at_branch_root && (git_tree_entry_type(entry) != GIT_OBJECT_TREE ||
-        !label_parse(name, NULL))) {
-        return 1;
-    }
 
     /* Build path relative to the walked tree (root carries its own trailing '/'
      * at nested levels). */
@@ -413,22 +397,32 @@ static int collect_tree_callback(
         return -1;
     }
 
+    /* The content gate every walk over a branch asks (infra/label.h
+     * label_prefixes), of trees as much as blobs: a name in the grammar is content,
+     * and whatever else the branch root holds — dotta's own files, a README a
+     * hand left — is pruned with its subtree by the positive return. Beneath a
+     * label the gate is always passed, and so is every rung of a named export's
+     * walk, whose storage base already stands under one; it prunes at a
+     * whole-profile walk's top level and nowhere else. */
+    if (!label_prefixes(e.storage_path)) {
+        return 1;
+    }
+
     /* The name is Git's, not this machine's: a branch that arrived by clone,
      * push or `dotta git` was validated by whoever wrote it, which is to say
-     * not at all, and a tree can name a subtree "..". Asked of trees as much as
-     * blobs — an empty malicious subtree has no blob for a blob-only check to
-     * meet — and after the join, because the grammar is the whole path's
-     * (core/manifest.c manifest_claim_blob makes the same check in the same words).
-     * A link's target is the link's own business, copied verbatim, and is not a
-     * path of this copy. */
-    if (!at_branch_root) {
-        error_t *shape = label_validate_storage(e.storage_path);
-        if (shape) {
-            ctx->error = error_wrap(
-                shape, "Invalid path in profile '%s'", ctx->profile
-            );
-            return -1;
-        }
+     * not at all, and a tree can name a subtree ".." or an entry "home/../x".
+     * Asked of trees as much as blobs — an empty malicious subtree has no blob
+     * for a blob-only check to meet — of every rung, the branch root's included,
+     * and after the join, because the grammar is the whole path's (core/manifest.c
+     * manifest_claim_blob makes the same check in the same words). A link's target
+     * is the link's own business, copied verbatim, and is not a path of this
+     * copy. */
+    error_t *shape = label_validate_storage(e.storage_path);
+    if (shape) {
+        ctx->error = error_wrap(
+            shape, "Invalid path in profile '%s'", ctx->profile
+        );
+        return -1;
     }
 
     switch (git_tree_entry_type(entry)) {
@@ -564,8 +558,8 @@ static error_t *append_claim_dirs(
  *
  * The root is the destination and no path of the branch names it (dest/home/...,
  * dest/root/...), so the list opens with a root claiming nothing. The walk starts
- * at branch root, where content lives only under storage-label subtrees, and
- * the sheet's blob-less directory claims follow it.
+ * at branch root, where the content gate prunes the machinery beside the labels,
+ * and the sheet's blob-less directory claims follow it.
  *
  * Emptiness is asked here, at the arm's own source: a profile holding nothing
  * but its root has no content to copy.
@@ -625,13 +619,9 @@ cleanup:
 /**
  * The name arm: the branch subtree the name holds, laid out beneath it.
  *
- * `name` is a key in the branch's own tree, and the two a caller can give are
- * not the same kind of word: a storage path, validated where the argument was
- * read (infra/path.h), and a label, which names a namespace and not a path in
- * it — no sheet keys one (core/metadata.c validates every key), nothing was ever
- * sealed under one (infra/content.h), and the branch holds it as the tree the
- * namespace's names stand in. The content gate (infra/label.h label_prefixes)
- * is what tells the two apart, and the blob arm below is the one place it matters.
+ * `name` is a key in the branch's own tree, validated where the argument was
+ * read (infra/path.h) — a name beneath a label, or the label's word alone, which
+ * is the namespace's own directory and a key like any other.
  *
  * What stands at the name is one read of the branch's two documents
  * (core/profiles.h profile_holds), answered four ways. A blob is the single-entry
@@ -720,28 +710,6 @@ static error_t *collect_name(
         }
 
         case PROFILE_HELD_FILE: {
-            /* The content gate, asked of the key this arm was handed rather than
-             * of the names a walk finds beneath it. The only key that can fail
-             * it is a label, and a label names a namespace: the branch holds it
-             * as the tree the namespace's names stand in, so a blob standing at
-             * one is the branch root's own machinery — the entry the whole-profile
-             * walk prunes at that rung — and it has no storage name for the sheet
-             * to key or the cipher to seal under. The word and never the directory
-             * spelling: "custom/" stands under a label and would pass, which is
-             * why the two spellings of one label are pinned together. Refused
-             * aloud where the user named it, pruned in silence where the user
-             * named the profile. */
-            if (!label_prefixes(name)) {
-                err = ERROR(
-                    ERR_NOT_FOUND,
-                    "Profile '%s'%s has no '%s/' content: the branch holds a file "
-                    "at that name\n"
-                    "Hint: Use 'dotta git' for raw repository access",
-                    profile, commit_suffix, name
-                );
-                goto cleanup;
-            }
-
             /* Single-entry export: degenerate case of the walk. */
             export_entry_t e;
             memset(&e, 0, sizeof(e));
@@ -1530,36 +1498,17 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
          * as typed and carries no trailing slash; a filesystem shape was
          * normalized.
          *
-         * Export's own grammar is asked first, over the one input the resolver
-         * has no reading for: a word standing alone means nothing by itself,
-         * and the resolver refuses one because a caller's path slot may hold a
-         * profile (infra/path.h path_input_is_bare). This one cannot —
-         * export_post_parse took the profile — so a word alone here is a name
-         * at the branch root, where a label is the namespace and its whole subtree
-         * (`export p home`, the copy `export p home/` makes) and anything else
-         * is machinery. Every other input is the resolver's to read, and every
-         * refusal it gives is the resolver's to word: a `..` in a tail, a tilde
-         * it cannot expand, an empty path — each named by its own cause rather
-         * than by this arm. */
+         * Every refusal is the resolver's, in the resolver's words: a `..` in a
+         * tail, a tilde it cannot expand, an empty path — and a word standing
+         * alone, which is neither shape and has no reading here either. The three
+         * words are names, and the resolver reads them; anything else standing
+         * alone is a word this verb knows nothing more about than the resolver
+         * does, so export says nothing of its own about one. The branch's own
+         * files beside the labels are not content and `dotta git` reads them
+         * (the help). */
         path_input_t arg;
-        if (path_input_is_bare(opts->file_path)) {
-            label_t label;
-            if (!label_parse(opts->file_path, &label)) {
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' is not exportable content\n"
-                    "Profile content lives under home/, root/, or custom/; "
-                    "anything else is dotta machinery.\n"
-                    "Hint: Use 'dotta git' for raw repository access",
-                    opts->file_path
-                );
-                goto cleanup;
-            }
-            arg = (path_input_t){ .key = PATH_KEY_LABEL, .label = label };
-        } else {
-            err = path_input_resolve(opts->file_path, arena, &arg);
-            if (err) goto cleanup;
-        }
+        err = path_input_resolve(opts->file_path, arena, &arg);
+        if (err) goto cleanup;
 
         switch (arg.key) {
             case PATH_KEY_LOCATION:
@@ -1572,18 +1521,6 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 err = collect_name(
                     ctx, tree, opts->profile, arg.storage_path, commit_suffix,
                     &list
-                );
-                break;
-
-            case PATH_KEY_LABEL:
-                /* The label's whole subtree, looked up as any name is: it is a
-                 * tree entry at the branch root, and the walk beneath it is the
-                 * one a directory name earns. The word alone, which is the spelling
-                 * the name arm's content gate reads — a namespace is a directory
-                 * there, and anything else at that name is machinery. */
-                err = collect_name(
-                    ctx, tree, opts->profile, label_words[arg.label],
-                    commit_suffix, &list
                 );
                 break;
         }
@@ -1721,15 +1658,13 @@ static error_t *export_post_parse(
     char **args = o->positional_args;
 
     /* A path in the profile slot is the one predictable misuse — catch it with
-     * a usage hint instead of a branch-lookup error. Alone, a word under a label
-     * or a label itself is content and never a branch; with a second positional
-     * the first word is the profile, whatever it looks like. The two label
-     * questions are asked as two, the grammar publishing each on its own
-     * (infra/label.h). */
+     * a usage hint instead of a branch-lookup error. Alone, a name in the grammar
+     * — beneath a label or the label's word itself — is content and never a branch;
+     * with a second positional the first word is the profile, whatever it looks
+     * like. */
     const char *first = args[0];
     if (first[0] == '~' || first[0] == '/' ||
-        (o->positional_count == 1 &&
-        (label_prefixes(first) || label_parse(first, NULL)))) {
+        (o->positional_count == 1 && label_prefixes(first))) {
         return ERROR(
             ERR_INVALID_ARG,
             "'%s' looks like a path — export requires an explicit "
@@ -1932,15 +1867,18 @@ const args_command_t spec_export = {
         "Naming what is copied:\n"
         "  Without a path the whole profile is exported, storage layout\n"
         "  mirrored (home/, root/, custom/). A label alone copies one of\n"
-        "  those namespaces whole; a storage path beneath it copies that\n"
-        "  branch subtree. A filesystem path copies what the profile\n"
-        "  PLACES there on this machine — every path it puts at or\n"
-        "  beneath that directory, however each one is stored, laid\n"
-        "  out beneath it. The two can differ: a file captured before\n"
-        "  a profile had a target and one captured after are stored\n"
-        "  two different ways and deploy to the same directory.\n"
-        "  A profile with no deployment target here places none of its\n"
-        "  custom/ paths; export those by name.\n"
+        "  those namespaces whole ('home' or 'home/'); a storage path\n"
+        "  beneath it copies that branch subtree. A filesystem path\n"
+        "  copies what the profile PLACES there on this machine — every\n"
+        "  path it puts at or beneath that directory, however each one\n"
+        "  is stored, laid out beneath it. The two can differ: a file\n"
+        "  captured before a profile had a target and one captured\n"
+        "  after are stored two different ways and deploy to the same\n"
+        "  directory. A profile with no deployment target here places\n"
+        "  none of its custom/ paths; export those by name.\n"
+        "  The branch's own files beside the labels (.dotta/,\n"
+        "  .bootstrap, a README) are not content and never export;\n"
+        "  'dotta git show <profile>:<file>' reads them.\n"
         "\n"
         "Destination:\n"
         "  The refspec form takes its destination as the next argument\n"

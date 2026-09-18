@@ -559,8 +559,8 @@ error_t *metadata_capture_from_directory(
  * it has, as an ancestor claim: the profile does not manage the directory, it
  * passes through it, so `tracked` is absent and the claim binds only dotta's
  * own creation of that path (core/deploy's ancestors pass). The mount root itself
- * is never a key — a target is not a path any profile claims — and neither is
- * the leaf, which is its own capture's business.
+ * is never a rung — the climb's rungs are the separators in the tail, and a word
+ * has none — and neither is the leaf, which is its own capture's business.
  *
  * The name is the whole input, and every rung stands where its own name resolves
  * (mount_resolve, under `profile`'s bindings): the chain's own separators spell

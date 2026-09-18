@@ -1839,10 +1839,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
         if (label_prefixes(file)) {
             /* A storage shape, read by the one resolver that reads input shapes
-             * — a name or a label alone and never a location, since the same
-             * predicate dispatched here. It validates the shape and sheds a
-             * trailing slash, so `add p home/dir/` is the spelling every other
-             * consumer already accepts (infra/path.h). */
+             * — a name and never a location, since the same predicate dispatched
+             * here. It validates the shape and sheds a trailing slash, so `add
+             * p home/dir/` is the spelling every other consumer already accepts,
+             * and `add p home/` names the namespace's own directory as `add p
+             * ~` names the same place by its spelling (infra/path.h). */
             path_input_t arg;
             err = path_input_resolve(file, ctx->arena, &arg);
             if (err) goto cleanup;
@@ -1853,15 +1854,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 case PATH_KEY_STORAGE:
                     typed = arg.storage_path;
                     break;
-
-                case PATH_KEY_LABEL:
-                    /* A label names no path to capture: it is what every name
-                     * this profile holds of that kind begins with, and the
-                     * directory the namespace lands in is named by its own spelling
-                     * — `add p ~`, `add p <target>` — which is the argument arm
-                     * below. */
-                    err = path_input_refuse_label(arg.label);
-                    goto cleanup;
 
                 case PATH_KEY_LOCATION:
                     /* The shape predicate above dispatched here, so the resolver
@@ -2546,8 +2538,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * The walk lists every directory it walks into — including the argument itself
      * — so this loop captures the full tree, not just the named entry points. A
-     * mount root ($HOME, "/", --target) is never listed: it has no storage name;
-     * its descendants are captured normally.
+     * mount root reached by its spelling ($HOME, "/", --target) is not listed:
+     * the namer has no name for it yet, and its descendants are captured normally.
+     * Named by its label's word (`add p home/`) it is listed like any directory.
      *
      * Required, where update's sibling loop warns and carries on: a directory
      * this command listed is the *name* its walk composed beneath, so a claim

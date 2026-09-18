@@ -395,9 +395,9 @@ cleanup:
  * Compose a tree entry's storage path, and say whether the walk should see it
  *
  * Every walk over a profile tree below asks an entry the same three things: is
- * it a blob, does it stand under a storage label, and what is its path within
- * the branch. Answered once here, so each walk differs only in what it does with
- * a path it accepts.
+ * it a blob, does the name it stands at stand in the grammar, and what is its
+ * path within the branch. Answered once here, so each walk differs only in what
+ * it does with a path it accepts.
  *
  * `out_err` receives corruption and nothing else — a truncated join, or a path
  * whose shape no mount can place. An entry that is simply not content leaves it
@@ -422,16 +422,19 @@ static bool tree_entry_content_path(
         return false;
     }
 
-    /* The content gate: a managed path lives under a storage label, so the walk's
-     * own root is the whole test (core/manifest.c reads it the same way). A blob
-     * at the branch root, or beneath a tree no label names, is not content —
-     * dotta's own files sit there, and so does whatever else a hand or a tool
-     * left beside them. */
-    if (!label_prefixes(root)) {
+    const char *name = git_tree_entry_name(entry);
+
+    /* The content gate: a managed path is a name in the grammar — beneath a label,
+     * or the label's word alone, the namespace's own directory — and everything
+     * else the branch carries is machinery, which no walk of content sees
+     * (infra/label.h label_prefixes). Asked of the two strings rather than the
+     * join, on the licence the gate's own header gives: the question reads no
+     * further than the first component, and a walk root is "" or carries one.
+     * So it is asked above the join, where the length a name must fit is the
+     * listing's concern and never machinery's. */
+    if (!label_prefixes(root && root[0] ? root : name)) {
         return false;
     }
-
-    const char *name = git_tree_entry_name(entry);
 
     /* The path within the branch is the walk root and the entry's name: libgit2
      * supplies the root as "" or "dir/", and an empty one is the name alone. */
@@ -679,12 +682,10 @@ error_t *profile_get_tree_stats(
          * the blob its own walk met rather than of the ODB.
          *
          * One question, two witnesses, and they answer alike for every key the
-         * grammar admits: a key is a label and a tail beneath it, so a blob
-         * standing at one lies under the label's own tree and the walk's gate —
-         * infra/label.h label_prefixes, read there on the tree above a blob —
-         * meets it. A label alone would be a key standing at the branch root,
-         * which that gate calls machinery and this probe would call a blob; the
-         * grammar admits none.
+         * grammar admits: the gate is asked of the whole name at every rung,
+         * the branch root's included (tree_entry_content_path), so a blob standing
+         * at a label's own word is a blob to both witnesses as one standing beneath
+         * the word is.
          *
          * Three answers, not two: the entry is there, it is absent, or the tree
          * will not read — and an object that will not load is corruption, never
@@ -1103,28 +1104,6 @@ error_t *profile_discover_claims(
 
     *out = (profile_claims_t){ 0 };
 
-    /* Two keys search, and the third is a caller's bug — said here, above the
-     * enumeration, as mount_resolve states its own (infra/mount.c). This looks
-     * for a claim standing at a key, and a label is the namespace itself: no
-     * branch stands at one, and every branch holds a tree under it, so a search
-     * would answer "held by all" to a question nobody asked. revert, the sole
-     * caller, refuses a label at its own door (cmds/revert.c).
-     *
-     * Above the enumeration and not inside it, because a store with no branches
-     * runs no loop: a door per branch would let a label reach the not-found
-     * sentence below, which reads a key's member on the word of the tag. */
-    switch (arg->key) {
-        case PATH_KEY_LOCATION:
-        case PATH_KEY_STORAGE:
-            break;
-
-        case PATH_KEY_LABEL:
-            return ERROR(
-                ERR_INTERNAL, "profile_discover_claims received the label '%s'",
-                label_words[arg->label]
-            );
-    }
-
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) return err;
@@ -1144,8 +1123,8 @@ error_t *profile_discover_claims(
         const char *branch = branches->items[i];
         const char *storage_path = NULL;
 
-        /* The door left two keys, and each names its own search: the branch's
-         * view of its tip, or its two documents asked for the name. */
+        /* Two keys, and each names its own search: the branch's view of its tip,
+         * or its two documents asked for the name. */
         if (arg->key == PATH_KEY_LOCATION) {
             err = claim_by_location(
                 repo, branch, mounts, arg->location, arena, &storage_path
@@ -1169,8 +1148,8 @@ error_t *profile_discover_claims(
     string_array_free(branches);
     if (err) return err;
 
-    /* The argument in its own key, which the door said is one of two — whatever
-     * the enumeration held, this loop having run or not. */
+    /* The argument in its own key — whatever the enumeration held, this loop
+     * having run or not. */
     if (count == 0) {
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile",

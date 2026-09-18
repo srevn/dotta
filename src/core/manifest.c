@@ -823,10 +823,10 @@ static error_t *manifest_settle(
  *
  * The blob half of the per-profile step, and the whole of it that Git drives:
  * one entry at a time, in one walk, a finished manifest_row_t or nothing. In
- * order — the content gate (a blob under a storage label, and nothing else),
- * the name joined from the walk's root, the location it resolves to, the row,
- * its identity, this profile's claim over it, and the within-profile placement
- * rule that says whether it stands or contends.
+ * order — the name joined from the walk's root, the content gate on it (a name
+ * in the grammar, and nothing else), the location it resolves to, the row, its
+ * identity, this profile's claim over it, and the within-profile placement rule
+ * that says whether it stands or contends.
  *
  * Identity — blob_oid, type and the Git-derived mode — is read off the borrowed
  * entry here, at the one boundary where the entry is valid, so no row carries
@@ -853,17 +853,6 @@ static int manifest_claim_blob(
         return 0;
     }
 
-    /* The content gate: a managed path lives under a storage label, so the walk's
-     * own root is the whole test — a blob at the branch root, or beneath a tree
-     * no label names, is not content. dotta's own files (.dottaignore, .bootstrap,
-     * .dotta/) sit there, and so does whatever else a hand or a tool left beside
-     * them: a README, a LICENSE, a docs/ tree. Asked on the root, before the
-     * join, so machinery costs no allocation and no unlabelled path reaches the
-     * shape check below to be read as corruption. */
-    if (!label_prefixes(root)) {
-        return 0;
-    }
-
     /* Build the full storage path from root + entry name, straight into the arena
      * — the row keeps it, so the join is the allocation, and Git's only bound
      * on a path's length is memory. A skipped entry abandons its string to the
@@ -878,6 +867,20 @@ static int manifest_claim_blob(
     }
     if (root_len > 0) memcpy(storage_path, root, root_len);
     memcpy(storage_path + root_len, name, name_len + 1);
+
+    /* The content gate, asked of the name the entry stands at (infra/label.h
+     * label_prefixes): a managed path is a name in the grammar — beneath a label,
+     * or the label's word alone, the namespace's own directory, which holds what
+     * a directory holds. Everything else the branch carries is machinery: dotta's
+     * own files (.dottaignore, .bootstrap, .dotta/) and whatever else a hand or
+     * a tool left beside them — a README, a LICENSE, a docs/ tree — and no walk
+     * of content sees it. Asked of the whole name because at the branch root
+     * the walk's root is "" and says nothing, and the name is all there is; beneath
+     * a label it is always passed. Skipped in silence, and before the shape rule,
+     * so machinery is never read as corruption. */
+    if (!label_prefixes(storage_path)) {
+        return 0;
+    }
 
     /* The entry name is Git's, not this machine's. mount_resolve joins a label's
      * tail verbatim on the strength of the path having been validated at its

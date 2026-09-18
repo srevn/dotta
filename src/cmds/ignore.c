@@ -808,7 +808,7 @@ static bool stands_as_directory(
  *
  * The argument is one of the two keys a managed path has, and every profile the
  * verdict covers answers the other (infra/path.h — neither is manufactured from
- * the other); or it is the third key, which is no path and so gets no verdict:
+ * the other):
  *
  *   - a storage path is the contract itself: its own tail is the subject, for
  *     every asker alike, and it stands wherever that asker's target puts it —
@@ -821,18 +821,15 @@ static bool stands_as_directory(
  *     a directory the profile already tracks names what lies beneath it, and
  *     only where nothing of the profile's stands above the location do its roots
  *     answer. That is the whole reason a view is built here.
- *   - a label alone (`home/`) names a namespace and no path in it, so nothing
- *     stands at it for a pattern to be matched against. One answer for every
- *     asker, a namespace being the same word on every machine and for every profile
- *     — so it is said once at the door, by nobody, and nothing below it runs:
- *     no view, no rules, no askers, no preamble, no summary, no lstat.
+ *   - a name with an empty tail (`home/`, `home`) is the namespace's own directory
+ *     and is evaluated per asker like any name, on `""`, which no rule reaches.
  *
  * The *shape* is read by label_prefixes and not by the resolver, because a bare
- * name is a filesystem argument here — `dotta ignore --test foo.log` reads it
- * against the working directory, as add's grammar does — and path_input_resolve
- * refuses one, its callers' first positional being a profile. What the shape
- * dispatches to *is* the resolver for a storage spelling, which sheds the directory
- * slash and tells a name from a label; the filesystem arm is the normalizer alone,
+ * name that is none of the three words is a filesystem argument here — `dotta
+ * ignore --test foo.log` reads it against the working directory, as add's grammar
+ * does — and path_input_resolve refuses one, its callers' first positional being
+ * a profile. What the shape dispatches to *is* the resolver for a storage spelling,
+ * which sheds the directory slash; the filesystem arm is the normalizer alone,
  * whose answer is what the view's rows are keyed by too (infra/mount.h). Both
  * are read before the view is built, so a refusal is a plain return.
  *
@@ -905,23 +902,22 @@ static error_t *test_path_ignore(
 
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
-     * own reading. A second reading stands beside it where the key has one — a
-     * name's tail, what the rules see; a location's kind, observed there once;
-     * a namespace has neither, and the door below answers it rather than passing
-     * it on — so the loop reads what the argument gave and asks nothing of it
-     * again. The table is the run's until a view is built, and then the view's
-     * own — the one its rows were placed by. */
+     * own reading. A second reading stands beside it, one per key — a name's
+     * tail, what the rules see; a location's kind, observed there once — so the
+     * loop reads what the argument gave and asks nothing of it again. The table
+     * is the run's until a view is built, and then the view's own — the one its
+     * rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    path_input_t arg;                         /* the key: a name, a location or a namespace */
+    path_input_t arg;                         /* the key: a name or a location */
     const char *argument_subject = NULL;      /* a name's tail, what the rules see */
     bool argument_is_directory = false;       /* a location's kind, observed there once */
 
     if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
-         * name or a label alone and never a location, since the same predicate
-         * dispatched here (cmds/add.c's storage head is the other). A bare name
-         * never arrives: that is this command's own filesystem grammar, and the
-         * predicate above let it past. */
+         * name and never a location, since the same predicate dispatched here
+         * (cmds/add.c's storage head is the other). A bare name that is none of
+         * the three words never arrives: that is this command's own filesystem
+         * grammar, and the predicate above let it past. */
         err = path_input_resolve(test_path, ctx->arena, &arg);
         if (err) return err;
     } else {
@@ -937,28 +933,8 @@ static error_t *test_path_ignore(
     }
 
     /* What each key owes before there is an asker to ask — the door, and the
-     * three keys this command answers (infra/path.h). */
+     * two keys this command answers (infra/path.h). */
     switch (arg.key) {
-        case PATH_KEY_LABEL:
-            /* A label names the namespace every name of its kind begins with
-             * and no path in it, so nothing stands at it for a pattern to be
-             * matched against — and no asker reads that differently, a namespace
-             * being the same word on every machine and for every profile. Said
-             * once, by nobody, above the rules and the askers because none of
-             * them is read to say it. The four verbs that act on one path refuse
-             * this key in the same words (infra/path.h path_input_refuse_label);
-             * --test is a query, so it answers instead and the tail is its own.
-             * The location spelling of a place a namespace lands at earns a
-             * different answer below, for a different reason: there a path stands,
-             * and this asker has no name for it. Nothing is owned yet, so this
-             * leaves the way the two reads above it do. */
-            output_info(
-                out, OUTPUT_NORMAL,
-                "'%s/' names a namespace, not a path in it: no pattern can match it",
-                label_words[arg.label]
-            );
-            return NULL;
-
         case PATH_KEY_STORAGE:
             /* The name's own tail is the subject, for every asker alike. */
             argument_subject = label_tail(arg.storage_path);

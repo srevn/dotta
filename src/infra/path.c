@@ -1,14 +1,12 @@
 /**
  * path.c - The key a CLI path argument names
  *
- * The readings of a flexible CLI path argument, and the one refusal a reading
- * earns:
+ * The readings of a flexible CLI path argument:
  *
  *   path_input_resolve      - the key the input names: a location (a filesystem
- *                             shape, normalized), a storage path (validated, as
- *                             typed) or a label alone (the one address a root
- *                             has) — the pathspec, and every verb that takes a
- *                             path from the command line
+ *                             shape, normalized) or a storage path (validated,
+ *                             as typed) — the pathspec, and every verb that takes
+ *                             a path from the command line
  *
  *   path_input_locate       - the location alone, in the arena: the same reading,
  *                             for a caller whose grammar has no storage arm to
@@ -20,21 +18,15 @@
  *                             HOME; malloc's, for the one reader that replaces
  *                             and frees what it holds (the interactive save)
  *
- *   path_input_refuse_label - the sentence the verbs that act on one path give
- *                             a label: it names a namespace, and no path in one
- *
- *   path_input_is_bare      - the one shape the resolver has no reading for, for
- *                             the caller whose own grammar has one
- *
  *   path_input_announces_path
  *                           - the grammars' question, asked of a positional whose
  *                             slot is still undecided: a path, or a name (list,
  *                             diff, apply, update)
  *
- * One dispatch: the resolver reads the storage label itself and hands every
+ * One dispatch: the resolver reads the storage grammar itself and hands every
  * filesystem spelling (absolute, tilde, relative) to the location door, whose
- * answer is the key. The grammar of a name (infra/label.h: label_split,
- * label_words, label_validate_storage), the filesystem primitives (fs_expand_tilde,
+ * answer is the key. The grammar of a name (infra/label.h: label_prefixes,
+ * label_validate_storage), the filesystem primitives (fs_expand_tilde,
  * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
  * (sys/identity) are delegated to the layers below. The table of roots is not
  * among them: no root's spelling is read here and no root's noun, so this file
@@ -64,17 +56,6 @@ bool path_input_announces_path(const char *input) {
            label_prefixes(input) || strpbrk(input, "*?[") != NULL;
 }
 
-bool path_input_is_bare(const char *input) {
-    if (!input || input[0] == '\0') return false;
-
-    /* A filesystem place announces itself in its first byte — absolute (`/x`),
-     * tilde (`~/x`), relative to the working directory (`./x`, `../x`, a dotfile's
-     * `.x`) — or in a separator anywhere (`a/b`, and every name under a label).
-     * What announces neither stands alone. */
-    if (input[0] == '/' || input[0] == '~' || input[0] == '.') return false;
-    return strchr(input, '/') == NULL;
-}
-
 error_t *path_input_resolve(
     const char *input, arena_t *arena, path_input_t *out
 ) {
@@ -90,37 +71,20 @@ error_t *path_input_resolve(
         return ERROR(ERR_INVALID_ARG, "Path cannot be empty");
     }
 
-    /* A storage shape — read at its label, then the directory spelling shed from
-     * what is left. A trailing '/' is the same path spelled as a directory —
-     * the UI's own listings print directory claims slash-marked — and the
-     * filesystem arm below sheds its own inside fs_normalize_path; shedding here
-     * keeps the two surface forms resolving alike. The grammar folds nothing,
-     * so the shed is this function's, and it walks the tail alone: every trailing
-     * separator is in it, the label's own bytes are not. */
-    label_split_t split = label_split(input);
-    if (split.tail) {
-        size_t tail_len = strlen(split.tail);
-        while (tail_len > 0 && split.tail[tail_len - 1] == '/') tail_len--;
+    /* A storage shape: the name as typed with its directory spelling shed — every
+     * trailing separator, and the shed cannot reach past the word, which ends
+     * in none. What is left is a name beneath the label or the word alone, the
+     * namespace's own directory: one key for both, validated as every key is,
+     * the rule taking the word and refusing the marker (infra/label.h
+     * label_validate_storage). A trailing '/' is the same path spelled as a
+     * directory — the UI's own listings print directory claims slash-marked —
+     * and the filesystem arm below sheds its own inside fs_normalize_path; shedding
+     * here keeps the two surface forms resolving alike. */
+    if (label_prefixes(input)) {
+        size_t len = strlen(input);
+        while (input[len - 1] == '/') len--;
 
-        /* Nothing stands past the label once the shed is done: the root of a
-         * namespace, which is no storage path — label_validate_storage refuses
-         * one — and no location either, since a label is the same word on every
-         * machine while a location is this one's. The answer is the label itself,
-         * a value nothing has to hold or copy. */
-        if (tail_len == 0) {
-            out->key = PATH_KEY_LABEL;
-            out->label = split.label;
-            return NULL;
-        }
-
-        /* A name beneath it, the shed one the split already measured out. The
-         * two refusals a label alone would have earned here are unreachable from
-         * this arm now: the prefix matched, so the byte at the label's own length
-         * is the '/' the split wants, and the shed above took every trailing
-         * one. */
-        const char *storage = arena_strndup(
-            arena, input, (size_t) (split.tail - input) + tail_len
-        );
+        char *storage = arena_strndup(arena, input, len);
         if (!storage) {
             return ERROR(ERR_MEMORY, "Failed to allocate storage path");
         }
@@ -133,17 +97,21 @@ error_t *path_input_resolve(
         return NULL;
     }
 
-    /* A word standing alone is neither shape: a caller's path slot may hold a
-     * profile and this function cannot see whose does, so `./X` is what says a
-     * path was meant. The caller whose slot cannot asks the same question first
-     * and puts its own reading here (infra/path.h path_input_is_bare). */
-    if (path_input_is_bare(input)) {
+    /* A word standing alone — no separator, and no first byte announcing a place
+     * (`/x`, `~/x`, `./x`, `../x`, a dotfile's `.x`) — is neither shape: a caller's
+     * path slot may hold a profile and this function cannot see whose does, so
+     * `./X` is what says a path was meant. One refusal for every verb, and the
+     * only one a word standing alone earns anywhere — the three words are names
+     * and the arm above reads them. A verb that reads a bare word as a path asks
+     * the location door instead (add, the binders, `ignore --test`, the
+     * completion). */
+    if (input[0] != '/' && input[0] != '~' && input[0] != '.' &&
+        !strchr(input, '/')) {
         return ERROR(
             ERR_INVALID_ARG,
             "Path '%s' is neither a valid filesystem path nor storage path\n"
             "Hint: Use absolute (/path), tilde (~/.file), relative (./path),\n"
-            "      storage format (home/..., root/..., custom/...), or a label\n"
-            "      alone (home/, root/, custom/)", input
+            "      or storage format (home/..., root/..., custom/...)", input
         );
     }
 
@@ -173,14 +141,6 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out) 
     free(normalized);
 
     return *out ? NULL : ERROR(ERR_MEMORY, "Failed to allocate the location");
-}
-
-error_t *path_input_refuse_label(label_t label) {
-    return ERROR(
-        ERR_INVALID_ARG,
-        "'%s/' names a namespace, not a path in it: name what is inside it",
-        label_words[label]
-    );
 }
 
 /**

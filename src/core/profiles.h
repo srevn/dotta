@@ -459,16 +459,13 @@ error_t *profile_needs_target(
  * The name `profile` has for `location` in `tree`: the claim standing there, or
  * the name a claim there would take
  *
- * A location key, and the only one. The resolver answers three and the other
- * two are already settled where the argument was read (infra/path.h): a name
- * the user typed is Git's key, so the caller's own read of the branch's two
- * documents decides whether the profile holds it (profile_holds) and there is
- * nothing here to ask — a name no claim sheet mentions, a bare subtree, a name
- * the view did not keep, is held by the branch and never by its view; and a label
- * names the namespace and not a path in it, the profile holding every claim beneath
- * one and none at it, refused at the verb's own door in the one sentence every
- * verb that acts on one path gives it (infra/path.h path_input_refuse_label).
- * What arrives here is the key that needs the branch to answer it.
+ * A location key, and the only one. The resolver answers two and the other is
+ * already settled where the argument was read (infra/path.h): a name the user
+ * typed is Git's key, so the caller's own read of the branch's two documents
+ * decides whether the profile holds it (profile_holds) and there is nothing here
+ * to ask — a name no claim sheet mentions, a bare subtree, a name the view did
+ * not keep, is held by the branch and never by its view. What arrives here is
+ * the key that needs the branch to answer it.
  *
  * Asked of the profile's own view of `tree` (manifest_build_tree, the sheet loaded
  * strictly), in this order: the row standing there answers with its own name
@@ -581,16 +578,10 @@ typedef struct {
  * The key is the input here, where its sibling takes a location outright
  * (profile_claim_name): both keys run this one search — the same enumeration,
  * the same collection, the same refusal when nothing holds it — and the tag chooses
- * which probe each branch is asked. Over there the other two keys are answers
- * the caller already holds, so nothing is left for the call to do with them. A
- * sum that chooses among a function's own behaviours is its input; one whose
- * arm means "there was nothing to ask" is the caller's question smuggled in.
- *
- * So two keys arrive and the third is a caller's bug. A LABEL is refused before
- * asking — revert does, at its door — and is said here as ERR_INTERNAL, above
- * the enumeration and before anything is read: no branch *stands at* a label
- * while every branch holds a tree under one, so a search would answer "held by
- * all" to a question the verb never meant.
+ * which probe each branch is asked. Over there the other key is an answer the
+ * caller already holds, so nothing is left for the call to do with it. A sum
+ * that chooses among a function's own behaviours is its input; one whose arm
+ * means "there was nothing to ask" is the caller's question smuggled in.
  *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)

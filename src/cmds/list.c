@@ -627,25 +627,12 @@ static error_t *list_file_history(
     error_t *err = NULL;
 
     /* The argument first, above the profile question and above anything read
-     * under either: reading one asks no topology (infra/path.h), so a key this
-     * cannot act on is refused in its own words before a branch is opened or a
-     * view built. Read once for both arms, which differ in where each key's answer
-     * comes from and not in which keys they take. */
+     * under either: reading one asks no topology (infra/path.h), so every refusal
+     * it earns is said before a branch is opened or a view built. Read once for
+     * both arms, which differ in where each key's answer comes from and not in
+     * which keys they take. */
     path_input_t arg;
     RETURN_IF_ERROR(path_input_resolve(opts->file_path, ctx->arena, &arg));
-
-    switch (arg.key) {
-        case PATH_KEY_LOCATION:
-        case PATH_KEY_STORAGE:
-            break;
-
-        case PATH_KEY_LABEL:
-            /* A label names the namespace above every path of its kind, and this
-             * lists one file's history. Said without the flag's profile, bound
-             * or not: what a label names is the same on every machine and for
-             * every asker, so there is nothing here for a profile to change. */
-            return path_input_refuse_label(arg.label);
-    }
 
     if (profile) {
         /* The profile named must be here before anything is read under it; then
@@ -658,9 +645,9 @@ static error_t *list_file_history(
             return error_wrap(err, "Failed to load tree for profile '%s'", profile);
         }
 
-        /* The two keys the door left. A name the user typed is Git's key already,
-         * so the pre-check below is what decides whether the profile holds it;
-         * a location is the branch's to name. */
+        /* The two keys, and each names its own read. A name the user typed is
+         * Git's key already, so the pre-check below is what decides whether the
+         * profile holds it; a location is the branch's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {

@@ -42,6 +42,8 @@ custom/etc/nginx.conf         → deploys to <this profile's target>/etc/nginx.c
 
 These names travel with the profile. Each machine supplies its home directory and each profile's [target](profiles.md#targets); `root/` paths stay absolute. A profile needs a target to deploy its `custom/` paths.
 
+The word on its own is a name too — the namespace's own directory. `home` and `home/` both mean your home directory, `root` means `/`, and `custom` means the profile's target, so `dotta add p home/` tracks your home the way `dotta add p ~` does and `dotta remove p custom` takes every `custom/` path the profile holds. Because these are names, commands read them as paths wherever a path is expected: a directory of your own called `home` or `root` beside you is `./home`, and a profile called `home` is named with `-p`.
+
 ### Where a File Goes
 
 **An added pathname keeps its stored name.** Later captures update that entry; setting a target does not rename it. By default, new files are named relative to the closest root: your home, the profile's target, or `/`.

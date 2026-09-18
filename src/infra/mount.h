@@ -407,11 +407,8 @@ const mount_root_t *mount_root_at(
  * two labels, and each label answers its own row here, where the enclosing search
  * and mount_root_at give the binding the tie. Never fails, allocates nothing.
  *
- * Readers: the view's contribution, which asks where each root the sheet scans
- * stands and records the one that stands nowhere (core/manifest.c
- * manifest_contribute); add's receipt, which names the place the custom/ names
- * it captured went under (cmds/add.c report_labels). No walker asks the table:
- * the contribution having asked once, the scan reads the view.
+ * Readers: add's receipt, which names the place the custom/ names it captured
+ * went under (cmds/add.c report_labels).
  */
 const mount_root_t *mount_root_of(
     const mount_table_t *table,

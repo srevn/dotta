@@ -6,7 +6,6 @@
 
 #include <config.h>
 #include <git2.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2182,18 +2181,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * the paths are worth naming rather than counting, an import being what
          * brought them. Both repairs are generic: the (from P) beside every path
          * names the profiles, and a path holding a space would paste into a command
-         * it breaks. An entry is printed as the slice's own word for it
-         * (manifest_unbound_describe): a claim by its name, a root the profile
-         * scans by its contents. */
+         * it breaks. */
         manifest_unbound_t unbound = manifest_unbound(after);
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");
-            char shown[PATH_MAX];
             for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
                 output_styled(
                     out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s {dim}(from %s){reset}\n",
-                    manifest_unbound_describe(&unbound.entries[i], shown, sizeof(shown)),
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unbound.entries[i].storage_path,
+                    path_kind_suffix(unbound.entries[i].kind),
                     unbound.entries[i].profile
                 );
             }
@@ -2205,8 +2202,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Their profile has no deployment target here, so nothing lands them "
-                "and nothing is scanned beneath a root it tracks."
+                "  Their profile has no deployment target here, so nothing lands them."
             );
             output_info(
                 out, OUTPUT_NORMAL,

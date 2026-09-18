@@ -910,7 +910,7 @@ static error_t *profile_enable(
         if (needs_target && !target) {
             output_warning(
                 out, OUTPUT_NORMAL,
-                "Profile '%s' needs a target for custom/ here", profile
+                "Profile '%s' holds custom/ paths and needs a target here", profile
             );
             output_hint(
                 out, OUTPUT_NORMAL, "dotta profile enable %s --target /path", profile

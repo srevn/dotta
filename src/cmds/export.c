@@ -883,18 +883,11 @@ static error_t *collect_location(
     if (!at && beneath.count == 0) {
         /* A claim this machine cannot place stands nowhere and is no row — the
          * likely cause when a profile answers nothing at all, export's own case
-         * being the profile this machine does not deploy. A claim, not a root:
-         * a root the profile scans with no target here is on the slice too and
-         * names no path export could take by name, so a profile holding that
-         * alone gets no hint about paths it has none of. */
-        manifest_unbound_t held = manifest_unbound(view);
-        const char *hint = "";
-        for (size_t i = 0; i < held.count; i++) {
-            if (held.entries[i].kind == MANIFEST_UNBOUND_ROOT) continue;
-            hint = "\nHint: some of this profile's paths have no deployment target on "
-                "this machine and stand nowhere; export them by name (custom/...)";
-            break;
-        }
+         * being the profile this machine does not deploy. */
+        const char *hint = manifest_unbound(view).count > 0
+            ? "\nHint: some of this profile's paths have no deployment target on "
+            "this machine and stand nowhere; export them by name (custom/...)"
+            : "";
         err = ERROR(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'%s",
             profile, commit_suffix, location, hint

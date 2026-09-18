@@ -16,12 +16,11 @@
  * The view has two layers. A **contribution** is one profile's claims placed
  * under this machine's topology: its tree's blobs and its sheet's directory items,
  * one row per location *within the profile*, with what this machine cannot place
- * recorded beside it (manifest_unbound — the claims, and a root the sheet scans
- * that stands nowhere here) and what the profile names twice recorded against
- * the name it kept (manifest_unkept). A contribution is what one branch says
- * about this machine, precedence aside. The **index** is precedence over settled
- * contributions: one winning row per location, a later profile's explicit claim
- * taking a held location and a derived one only filling an empty one.
+ * recorded beside it (manifest_unbound) and what the profile names twice recorded
+ * against the name it kept (manifest_unkept). A contribution is what one branch
+ * says about this machine, precedence aside. The **index** is precedence over
+ * settled contributions: one winning row per location, a later profile's explicit
+ * claim taking a held location and a derived one only filling an empty one.
  *
  * Everything that asks *who wins* reads the index — manifest_lookup, manifest_rows,
  * manifest_lookup_storage, manifest_holders, manifest_diff: deployment, the
@@ -45,11 +44,9 @@
  *
  * Two things a claim can fail to become, and the health channel says both. A
  * claim this machine cannot place has no location: manifest_unbound, the repair
- * a `--target` — and a root the sheet scans that this machine cannot place is
- * on the same slice for the same repair, the one entry that is no claim
- * (manifest_unbound_kind_t). A claim the view did not **keep** has one, and another
- * name of the same profile stands there: manifest_unkept, the repair a `remove`.
- * Both are claims the branch holds and the view has no row for, for two different
+ * a `--target`. A claim the view did not **keep** has one, and another name of
+ * the same profile stands there: manifest_unkept, the repair a `remove`. Both
+ * are claims the branch holds and the view has no row for, for two different
  * reasons; a claim precedence hides is neither — it is **overridden**, the normal
  * shape of layering, and no health question at all. A name the view did not keep
  * is in the branch and in no row, so nothing keyed by the view meets it: no filter,
@@ -590,110 +587,48 @@ error_t *manifest_mount_table(
 );
 
 /**
- * What one entry of the health slice is: the two kinds of claim the build could
- * not place, and the one thing that is no claim — a root the sheet scans, whose
- * scan has no directory to start from here. The slice's own enum and not
- * path_kind_t, because a root is no claim and path_kind_t is a claim's word.
- *
- * Readers, and what each does with a ROOT — a reader not on this list is a bug.
- * The kind is read by one switch, manifest_unbound_describe, which every screen
- * that prints an entry goes through (status's -v line, apply's and sync's "Paths
- * with no target"), so a fourth kind is named by -Wswitch there and the screens
- * cannot drift apart; and by an `if` where a site narrows: status's annotation
- * counts the claims and notes the root apart (cmds/status.c), and export's hint
- * asks whether any entry is a claim (cmds/export.c). The count-only readers —
- * add's enable hint, profile_needs_target, the section gates of the three screens
- * — never read the kind and are right for any kind by construction.
- */
-typedef enum {
-    MANIFEST_UNBOUND_FILE,        /* a blob the tree holds at the name */
-    MANIFEST_UNBOUND_DIRECTORY,   /* a DIRECTORY item of the sheet at the name */
-    MANIFEST_UNBOUND_ROOT,        /* a root the sheet scans: the name is the label alone */
-} manifest_unbound_kind_t;
-
-/**
- * One thing the build could not place: a claim whose profile has no deployment
- * target on this machine, or the root such a profile scans. Recorded, never
- * dropped in silence — the health consumers (status, apply, sync) surface these;
- * export reads the claims alone, for a hint; add's enable hint reads the count
- * over its own opened tree (cmds/add.c); and the count under a table that binds
- * nothing is the answer to whether a branch needs a target at all (core/profiles.h
- * profile_needs_target). The repair is one command (`profile enable <p> --target
- * /path`), the untracking another (`remove`). The screen says **no target** or
- * **needs a target**, never "unbound": the header's word is what the build could
- * not do, the screen's is what the user must give. For a ROOT the screen says
- * "the contents of custom/": the label alone names everything beneath it, and
- * nothing is scanned there until a target places it.
- *
- * `name` is the claim's name — a storage path — for the two claim kinds, and
- * the label alone ("custom", the grammar's own static word, infra/label.h
- * label_words) for a ROOT: the one name a root has, and not a storage path (a
- * reader that resolves it has not read the kind). Strings are the build arena's
- * or the vocabulary's, both outliving the view.
+ * One claim the build could not place: its profile has no deployment target on
+ * this machine. Recorded, never dropped in silence — the health consumers (status,
+ * apply, sync) surface these; export reads the count alone, for a hint, and so
+ * does add's enable hint over its own opened tree (cmds/add.c); and the count
+ * under a table that binds nothing is the answer to whether a branch needs a
+ * target at all (core/profiles.h profile_needs_target). The repair is one command
+ * (`profile enable <p> --target /path`), the untracking another (`remove`). The
+ * screen says **no target** or **needs a target**, never "unbound": the header's
+ * word is what the build could not do, the screen's is what the user must give.
+ * Strings are the build arena's, same lifetime as the rows.
  */
 typedef struct {
     const char *profile;
-    const char *name;             /* the claim's name, or the label alone for a ROOT */
-    manifest_unbound_kind_t kind;
-} manifest_unbound_entry_t;
+    const char *storage_path;
+    path_kind_t kind;             /* FILE for tree blobs, DIRECTORY for metadata items */
+} manifest_unbound_claim_t;
 
 /**
  * Bound carrier for the view's health slice, the manifest_rows_t idiom.
  */
 typedef struct {
-    const manifest_unbound_entry_t *entries;
+    const manifest_unbound_claim_t *entries;
     size_t count;
 } manifest_unbound_t;
 
 /**
- * What the build could not place, grouped by profile
+ * The claims the build could not place, grouped by profile
  *
  * Pure value return — no allocation, no error path. Entries arrive in build order,
- * so one profile's entries are contiguous: its root first, then its blobs, then
- * its sheet's directories. Each (profile, name) appears once and nothing enforces
- * it: the three passes record disjoint names — the root pass a label alone, which
- * carries no separator and no claim can spell; the blob pass those the tree holds
- * a blob at; the directory pass those sheet keys it does not, the content-authority
- * rule having contradicted the rest at the blob (a path is a tree or a blob,
- * and the tree is the content authority) — and within a pass a name is its own,
- * a sheet scanning a root once, a tree holding one blob per path and a sheet
- * one item per key. Empty on every build whose claims all placed — the common
- * case, costing nothing.
+ * so one profile's claims are contiguous. Each (profile, storage path) appears
+ * once and nothing enforces it: the two passes record disjoint names — the blob
+ * pass those the tree holds a blob at, the directory pass those sheet keys it
+ * does not, the content-authority rule having contradicted the rest at the blob
+ * (a path is a tree or a blob, and the tree is the content authority) — and within
+ * a pass a name is its own, a tree holding one blob per path and a sheet one
+ * item per key. Empty on every build whose claims all placed — the common case,
+ * costing nothing.
  *
  * @param manifest Manifest (NULL returns an empty slice)
- * @return Borrowed slice over the recorded entries, valid for the arena's lifetime
+ * @return Borrowed slice over the recorded claims, valid for the arena's lifetime
  */
 manifest_unbound_t manifest_unbound(const manifest_t *manifest);
-
-/**
- * What a screen calls one entry of the slice
- *
- * A claim by its name, slash-marked when it is a directory (the suffix
- * path_kind_suffix gives a claim's kind); a root by the one thing that is unplaced
- * about it — "the contents of custom/" — since the label alone names everything
- * beneath it and nothing stands there until a target does. The one switch over
- * the kind (manifest_unbound_kind_t), so the screens that print an entry read
- * one spelling and a fourth kind is named here.
- *
- * Returns `buf`, so the noun reaches the line it belongs to as a value rather
- * than through a statement of its own, and every screen that prints an entry
- * says it one way. Truncates rather than fails: a screen noun, not a key.
- *
- * Two vocabularies name a root in this tree, by decision: this one a namespace
- * with no place, where nothing was found; infra/mount.h's mount_root_describe a
- * place the table found. Neither is the other's fallback.
- *
- * @param entry The entry (must not be NULL)
- * @param buf Caller's buffer (PATH_MAX at every caller)
- * @param size Its size, one byte at least: the switch's tail is written before
- *             its arms, so an empty buffer is the one thing this cannot take
- * @return `buf`
- */
-const char *manifest_unbound_describe(
-    const manifest_unbound_entry_t *entry,
-    char *buf,
-    size_t size
-);
 
 /**
  * One name a profile holds for a location it also names otherwise, recorded against

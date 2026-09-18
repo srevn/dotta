@@ -7,7 +7,6 @@
 #include <config.h>
 #include <ctype.h>
 #include <git2.h>
-#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1693,9 +1692,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the cost and the way out on their own lines — rather than a warning and a
      * hint, which is how this file speaks about a run and not about a list of
      * paths. Both slices arrive grouped by profile, so the listing reads by profile
-     * unsorted, and both cap where every list in this file caps. An entry is
-     * printed as the slice's own word for it (manifest_unbound_describe): a claim
-     * by its name, a root the profile scans by its contents.
+     * unsorted, and both cap where every list in this file caps.
      *
      * The repairs name neither a profile nor a path: a line above names every
      * profile that carries one, so a filled name would read as the only one,
@@ -1704,12 +1701,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         manifest_unbound_t unbound = manifest_unbound(manifest);
         if (unbound.count > 0) {
             output_section(out, OUTPUT_NORMAL, "Paths with no target");
-            char shown[PATH_MAX];
             for (size_t i = 0; i < unbound.count && i < LIST_LIMIT; i++) {
                 output_styled(
                     out, OUTPUT_NORMAL,
-                    "  {yellow}✗{reset} %s {dim}(from %s){reset}\n",
-                    manifest_unbound_describe(&unbound.entries[i], shown, sizeof(shown)),
+                    "  {yellow}✗{reset} %s%s {dim}(from %s){reset}\n",
+                    unbound.entries[i].storage_path,
+                    path_kind_suffix(unbound.entries[i].kind),
                     unbound.entries[i].profile
                 );
             }
@@ -1721,8 +1718,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
             output_info(
                 out, OUTPUT_NORMAL,
-                "  Their profile has no deployment target here, so nothing lands them "
-                "and nothing is scanned beneath a root it tracks."
+                "  Their profile has no deployment target here, so nothing lands them."
             );
             output_info(
                 out, OUTPUT_NORMAL,

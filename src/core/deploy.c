@@ -86,8 +86,17 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * blob is stored; update is the verb that re-stores it, and
              * deploy_content_conflicts states the same rule for overwrites. A
              * deny-mask rather than an allow-list, so a bit added later inherits
-             * the arm's default: any divergence of the path is work. */
-            return (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
+             * the arm's default: any divergence of the path is work.
+             *
+             * A row beneath a squatter is work whatever its bits, because it
+             * has none: nothing there was looked at (core/workspace.h
+             * workspace_displaced_t). Planned, it is written fresh beneath a
+             * squatter this run replaces, or refused by its ancestry — and either
+             * fate is preflight's to name (check_ancestry). Left out of the plan
+             * it would fall to the clean bucket, which adoption reads, and adopting
+             * a path nobody looked at would take ownership of a stranger's file. */
+            return item->displaced != WORKSPACE_DISPLACED_NONE ||
+                   (item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE;
 
         case WORKSPACE_STATE_ORPHANED:
             /* A record whose path the view lacks.
@@ -178,56 +187,6 @@ static error_t *partition_push(
 }
 
 /**
- * Is `path` beneath a displaced directory this scope converges?
- *
- * A non-directory at a directory row's path is what every probe of the paths
- * beneath it went through — the workspace's lstat, and so its verdicts and the
- * occupant preflight reads off the item; preflight's landing probes. With a symlink
- * to a directory squatting, those probes reach the link's target and come back
- * with answers about *its* tree: a child reads clean, a parent reads present.
- * The directory pass replaces the squatter before anything beneath it is touched
- * (prefix order), so the observations describe a tree the run itself dismantles:
- * after the replace, nothing stands at any path beneath it. Such a path is planned
- * and predicted as absent — work, not occupied, nothing to ask of it — whatever
- * the index says. A file or dangling-link squatter changes nothing: beneath it
- * every probe already failed (ENOTDIR), and absent was the verdict anyway.
- *
- * Displaced is the workspace's fact (workspace_displaced_ancestor — the outermost
- * decides: a deeper displaced directory was itself observed through it, and
- * replacing the outer one empties every path beneath; the view's claims alone,
- * so the answer always has a row), and only a squatter this scope converges counts:
- * a squatted tracked row in scope always has work (the TYPE divergence), so
- * "converged this run" is exactly "a tracked view row this scope accepts and
- * does not exclude" (scope_accepts_entry) — one -e skips is not replaced this
- * run, and a squatted ancestor claim is never planned at all (deploy_plan_build).
- * The plan approximates with scope; preflight exacts the same premise against
- * the fates (check_ancestry) and writes the answer into the verdict's occupant,
- * which is where the executors read it. What the plan declines to call absent
- * is not thereby called safe: a row beneath a squatter this run leaves standing
- * is judged by the ancestry rung, which refuses it whatever bucket it sat in.
- *
- * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
- * @param scope Operation scope, for the ancestor's reach (must not be NULL)
- * @param path Planned path (must not be NULL)
- */
-static bool beneath_squatted_directory(
-    const workspace_t *ws, const scope_t *scope, const char *path
-) {
-    const char *dir = workspace_displaced_ancestor(ws, path);
-
-    if (!dir) {
-        return false;
-    }
-
-    const manifest_row_t *row = workspace_lookup(ws, dir);
-
-    return row->tracked && scope_accepts_entry(
-        scope, row->profile,
-        row->filesystem_path, row->storage_path, PATH_KIND_DIRECTORY
-    );
-}
-
-/**
  * Build the deployment plan
  */
 error_t *deploy_plan_build(
@@ -272,13 +231,11 @@ error_t *deploy_plan_build(
             continue;                        /* out of scope: invisible */
         }
 
-        bool absent = beneath_squatted_directory(ws, scope, row->filesystem_path);
-
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
         err = partition_push(
             &plan->directories, row,
-            absent || deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
+            deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
             scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
@@ -297,24 +254,27 @@ error_t *deploy_plan_build(
         }
 
         const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
-        bool absent = beneath_squatted_directory(ws, scope, row->filesystem_path);
 
         /* Occupancy is the workspace's own lstat, not a fresh probe: a row with
          * work always has an item (deploy_needs_work(NULL) is false), and lstat
          * truth counts a broken symlink as occupying the path — which is what
          * the flag says, and what a stat that follows links could not tell us.
-         * A path planned as absent is the one exception: its lstat reached the
-         * squatter's target, and nothing will occupy the path once the squatter
-         * goes — so the flag has nothing to preserve there. -e still holds: a
-         * named path is intent, not an observation. */
+         * A row beneath a squatter is the one exception: no lstat was taken there
+         * (core/workspace.h workspace_displaced_t), so nothing is "existing"
+         * for the flag to keep — the path is empty once the squatter this run
+         * replaces is gone, and one it leaves standing is refused by the ancestry
+         * rung either way. Both fates are preflight's (check_ancestry). -e still
+         * holds: a named path is intent, not an observation. */
         skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
             skip = SKIP_EXCLUDED;
-        } else if (skip_existing && !absent && item && item->occupant != FS_OCCUPANT_NONE) {
+        } else if (skip_existing && item &&
+            item->displaced == WORKSPACE_DISPLACED_NONE &&
+            item->occupant != FS_OCCUPANT_NONE) {
             skip = SKIP_EXISTING;
         }
 
-        err = partition_push(&plan->files, row, absent || deploy_needs_work(item), skip);
+        err = partition_push(&plan->files, row, deploy_needs_work(item), skip);
         if (err) goto cleanup;
     }
 

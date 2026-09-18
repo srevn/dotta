@@ -759,7 +759,10 @@ static void print_deploy_results(
             }
             output_print(out, OUTPUT_VERBOSE, ")");
 
-            /* What was fixed: the divergence the planner saw */
+            /* What was fixed: the divergence the planner saw — and a row beneath
+             * a squatter carries none, so the annotation can no longer name a
+             * bit read off the squatter's target (core/workspace.h
+             * workspace_displaced_t). */
             const workspace_item_t *item = v->item;
             bool mode_differs = item && (item->divergence & DIVERGENCE_MODE);
             bool ownership_differs = item && (item->divergence & DIVERGENCE_OWNERSHIP);
@@ -1993,12 +1996,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * involved, and preflight's answer does not change it. */
             if (!claimed[b].clean) continue;
 
-            /* A clean row observed through a displaced managed directory is not
-             * acknowledged this run (the adoption and acknowledgement loops take
-             * the same gate, row-keyed; the field on this item is that gate's
-             * answer at its path), so the preview must not promise it. */
-            if (item->displaced != WORKSPACE_DISPLACED_NONE) continue;
-
             if (workspace_reassigned(item->row, item->anchor)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
@@ -2065,23 +2062,22 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * it reads clean. A release beside a [modified] row, or a conflict, adopts
      * nothing, and the path leaves the ownership gate until a forced apply or
      * an update converges it; [stale] alone is deployed and anchored by the same
-     * run. */
+     * run.
+     *
+     * No row beneath a squatter reaches either loop, and none needs a gate: the
+     * workspace looked at nothing there, so such a row carries a displaced item,
+     * the work predicate reads it, and the plan puts it in pending or excluded
+     * — never in clean (core/workspace.h workspace_displaced_t, core/deploy.c
+     * deploy_needs_work). Which is the answer these loops want: adopting a path
+     * nobody looked at would set deployed_at on a stranger's file, and
+     * acknowledging one would re-stamp an owned record with a proof no look
+     * gave. */
     size_t adopted_count = 0;
     size_t acknowledged_count = 0;
     manifest_rows_t adoptable = manifest_rows_view(&deploy_plan->files.clean);
 
     for (size_t i = 0; i < adoptable.count; i++) {
         const manifest_row_t *file = adoptable.entries[i];
-
-        /* Observed through a displaced managed directory: what read clean was
-         * the squatter's target, not this path. Adopting it would set deployed_at
-         * on a path dotta never put there and hand a stranger's file to the prune
-         * at the next scope exit; an acknowledgement would re-stamp an owned
-         * record with a proof the observation cannot give. The handover stays
-         * pending until a run converges the ancestor. Row-keyed: a clean row
-         * has no item to carry the fact, and the probe answers view-side, which
-         * is what the field on an item would say (workspace_displaced_t). */
-        if (workspace_displaced_ancestor(ws, file->filesystem_path)) continue;
 
         const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
         bool adopt = !anchor || anchor->deployed_at == 0;
@@ -2157,10 +2153,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     for (size_t i = 0; i < ackable.count; i++) {
         const manifest_row_t *dir = ackable.entries[i];
-
-        /* The file loop's displaced gate, same rationale — and row-keyed for
-         * the same reason. */
-        if (workspace_displaced_ancestor(ws, dir->filesystem_path)) continue;
 
         const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
@@ -2779,6 +2771,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             for (size_t i = 0; i < copy_count; i++) {
                 const released_copy_t *copy = &copies[i];
+
+                /* Beneath a squatter, no look and no forget: an lstat there would
+                 * answer for the occupant, and a fact is retired on a proof or
+                 * not at all (core/workspace.h workspace_displaced_t). A squatter
+                 * this run replaced is the one over-conservative case, and keeping
+                 * a fact the flush's join or a later sweep will reap costs nothing
+                 * — where forgetting one wrongly costs the next load its base
+                 * and turns dotta's own deployed bytes into the user's edit. */
+                if (workspace_displaced_ancestor(ws, copy->filesystem_path)) continue;
 
                 struct stat live;
                 fs_occupant_t occupant = fs_lstat_occupant(copy->filesystem_path, &live);

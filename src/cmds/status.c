@@ -295,7 +295,10 @@ static void display_manifest(
          * and [clean], which promises that nothing diverged, would be a promise
          * dotta never checked. One that DID diverge keeps its own tags: absence
          * and a squatter are read of both classes, and they already say the
-         * actionable thing. */
+         * actionable thing. A row beneath a squatter never reaches this arm at
+         * all: nothing there was looked at, so it always has an item
+         * (core/workspace.h workspace_displaced_t) and neither word could be
+         * honest of it. */
         const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
         if (item) {
             if (!workspace_item_extract_display_info(

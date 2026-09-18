@@ -217,9 +217,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
 cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     if (item->occupant == FS_OCCUPANT_NONE) {
         /* Already gone: nothing to protect, nothing to remove — a pure state
-         * reclaim whatever Git or the divergence bits say. True through a squatting
-         * ancestor too: a path the lstat could not reach holds no copy for the
-         * prune to miss. */
+         * reclaim whatever Git or the divergence bits say. Absence is an lstat's
+         * answer about this path, which is why no record beneath a squatter reaches
+         * here: none was looked at, so none is absent (core/workspace.h
+         * workspace_displaced_t), and the arm below is the one they take. */
         return CLEANUP_ABSENT;
     }
 
@@ -238,14 +239,14 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     }
 
     if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        /* Observed through a displaced directory: dotta's copy went with the
-         * real directory, and what the lstat reached is the squatter's target —
-         * not dotta's to remove, --force included, and a prune order on the path
-         * does not outrank it (deferred intent never destroys what dotta cannot
-         * vouch is its copy). The path stays, the record retires: the same
-         * letting-go as a kind-displaced path, one level up. Terminal on purpose
-         * — a skip would prune on the NEXT run, once the displaced directory's
-         * own released record has retired and no witness of the squat remains. */
+        /* A squatter stands above the path: dotta's copy went with the real
+         * directory, and nothing at the path was looked at — not dotta's to remove,
+         * --force included, and a prune order on the path does not outrank it
+         * (deferred intent never destroys what dotta cannot vouch is its copy).
+         * The path stays, the record retires: the same letting-go as a
+         * kind-displaced path, one level up. Terminal on purpose — a skip would
+         * prune on the NEXT run, once the displaced directory's own released
+         * record has retired and no witness of the squat remains. */
         return CLEANUP_RELEASED;
     }
 

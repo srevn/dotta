@@ -75,18 +75,20 @@ typedef struct {
  * Everything a consumer needs and nothing it has to go and get: the row, its
  * analysis, what stands at its path, and the metadata the write applies. The
  * occupant is the workspace's lstat, never a fresh one — or FS_OCCUPANT_NONE
- * for a row planned beneath a squatter this run replaces first (deploy_plan_build),
- * whose own observation went through the squatter and describes a tree the run
- * dismantles. The occupant is also the receipt's verb for a directory: NONE →
- * created, DIRECTORY → fixed, anything else → replaced (deploy_convergence).
+ * for a row preflight planned absent beneath a squatter this run replaces first
+ * (check_ancestry), whose own path the workspace never looked at and which the
+ * run empties before anything lands there. The occupant is also the receipt's
+ * verb for a directory: NONE → created, DIRECTORY → fixed, anything else → replaced
+ * (deploy_convergence).
  *
  * The item is the index's answer, looked up once where the fate is decided and
  * filled verbatim on every arm — the planned-absent arms included. An item's
- * join facts (row, anchor, profile) are sound on every verdict; its observation
- * may speak for the squatter's target, which is why the fate's own occupant says
- * what the run will find. What a fate declines to consult it declines at the
- * reader, never by blanking the pointer. NULL only where the index holds nothing
- * — a clean row planned beneath a replaced squatter has no divergence to index.
+ * join facts (row, anchor, profile) are sound on every verdict; a row beneath a
+ * squatter carries no observation at all (core/workspace.h workspace_displaced_t),
+ * which is why the fate's own occupant says what the run will find. What a fate
+ * declines to consult it declines at the reader, never by blanking the pointer.
+ * NULL only where the index holds nothing — a clean row this run judges on its
+ * own account.
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
@@ -525,20 +527,18 @@ typedef struct {
  * Requires a workspace loaded with file AND directory analysis: the plan is derived
  * from the divergence index, and a kind whose analysis did not run plans as clean.
  *
- * One verdict the plan overrules: a path beneath a displaced directory row this
- * scope converges (beneath_squatted_directory — the workspace's displaced fact,
- * gated on the ancestor's row being tracked and in reach) is planned as absent,
- * whatever the index says of it. Everything the workspace observed beneath that
- * ancestor it observed through the squatter — a symlink to a directory answers
- * for the link's target, so a child there reads clean — and the directory pass
- * replaces the squatter before anything beneath it is touched. Such a row is
- * work, and not occupied for --skip-existing's purpose; -e still holds it back.
- * Only an ancestor this scope reaches counts (one -e skips is not replaced this
- * run), and only an in-scope descendant is reached: a row scope itself rejects
- * (-p, a path filter) is not planned on its ancestor's account — Coherent Scope
- * — and converges on the next apply that covers it. Preflight asks the same premise
- * of the fates and carries the answer as the row's verdict or its inherited skip
- * (deploy_preflight).
+ * A path beneath a displaced directory needs no rule of the plan's own: the
+ * workspace looked at nothing there, so the row has an item carrying the displaced
+ * class and no bits at all (core/workspace.h workspace_displaced_t), and the
+ * work predicate reads that class first (deploy_needs_work). Such a row is work,
+ * and not occupied for --skip-existing's purpose; -e still holds it back. What
+ * becomes of it is preflight's alone, asked of this run's own fates rather than
+ * guessed from scope: the directory pass converges the ancestor and the row is
+ * written fresh beneath it, or the pass does not and the row inherits the
+ * ancestor's refusal (check_ancestry, deploy_preflight). Scope still bounds the
+ * plan in the ordinary way — a row scope rejects (-p, a path filter) is not planned
+ * on its ancestor's account, Coherent Scope, and converges on the next apply
+ * that covers it.
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL; read at plan time alone —
@@ -612,13 +612,14 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * winning (deploy_skip_reason_t):
  * - Ancestry — the observation must bind. A displaced directory row above the
  *   path (workspace_displaced_ancestor) voids every probe taken beneath it, the
- *   landing check's included, so this rung runs first and answers from the run's
- *   own fates (check_ancestry): an ancestor the directory pass converges first
- *   means the row is planned absent and asked nothing else; one the pass skips
- *   means the row inherits that skip, ancestor named; one the run never acts on
- *   (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and the remedy
- *   is a run that reaches it, or, for a claim the run cannot reach at all because
- *   nothing plans it, a re-derivation of the chain.
+ *   landing check's included — the workspace took none there at all, so the row
+ *   arrives with nothing measured — so this rung runs first and answers from
+ *   the run's own fates (check_ancestry): an ancestor the directory pass converges
+ *   first means the row is planned absent and asked nothing else; one the pass
+ *   skips means the row inherits that skip, ancestor named; one the run never
+ *   acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and
+ *   the remedy is a run that reaches it, or, for a claim the run cannot reach
+ *   at all because nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file renamed over the target, a symlink unlinked
  *   and re-made, a mkdir — so the path's own permissions are never the question,

@@ -86,8 +86,8 @@ typedef struct {
  * row whose class names the claim, and the orphan analyzer's retyped arm, over
  * a directory record. Each notes its own where it observed it (note_displaced),
  * so the claim is the producer's and is never read back off an item. The path
- * is the row's or the record's (borrowed), its length hoisted for the two
- * outermost-match scans (stamp_displaced, workspace_displaced_ancestor).
+ * is the row's or the record's (borrowed), its length hoisted for the one
+ * outermost-match scan (displaced_ancestor).
  */
 typedef struct {
     const char *path;             /* The row's or the record's filesystem_path (borrowed) */
@@ -198,11 +198,10 @@ struct workspace {
 
     /* The displaced directories: every path a claim names as a directory that
      * the load observed occupied by anything else, with the claim. Noted by each
-     * analysis where it observed one (note_displaced) and stamped onto every item
-     * they reach once both have run (stamp_displaced, workspace_item_t.displaced);
-     * arena-backed, paths borrowed from the rows and the records. Almost always
-     * empty, which is what makes the stamp and the probe
-     * (workspace_displaced_ancestor) free. */
+     * analysis where it observed one (note_displaced), asked before every look
+     * the load takes after it and by the one producer of items (displaced_ancestor,
+     * workspace_item_t.displaced); arena-backed, paths borrowed from the rows
+     * and the records. Almost always empty, which is what makes every ask free. */
     displaced_dir_t *displaced;                  /* One per displaced directory; NULL until the first */
     size_t displaced_count;
 
@@ -348,6 +347,57 @@ static workspace_fault_t fault_of(error_t *err) {
 }
 
 /**
+ * The displaced directory that reaches `path`, or NULL — the reach rule as a scan
+ *
+ * Proper ancestors only (str_path_beneath is strict), so a squatter is never
+ * its own answer, and the outermost among those that reach the asker: the shortest
+ * match, because a deeper displaced directory was itself observed through the
+ * outer one and the outer occupant's fate settles both. The list is unordered —
+ * two analyses fill it — so the scan asks for the minimum rather than the first
+ * hit. Whose claims reach the asker is the rule's one input: a view claim reaches
+ * every path beneath it, a record's memory (WORKSPACE_DISPLACED_RECORD) the record
+ * family alone (workspace_displaced_t).
+ *
+ * Nothing beneath a squatter that reaches it is looked at, so nothing there is
+ * ever noted: the list holds no view claim beneath a view claim and no record
+ * claim beneath anything. It can hold a view claim beneath a record claim — a
+ * directory row beneath a retyped directory record is looked at, the record's
+ * memory not reaching it, and may be a squatter of its own — so the minimum is
+ * load-bearing for an orphan beneath both, and costs the same scan either way.
+ *
+ * Empty on every healthy load, which is what makes every ask free.
+ *
+ * Readers: the three analyzers, before every look they take
+ * (analyze_file_divergence, analyze_directory_metadata_divergence,
+ * analyze_orphans), workspace_add_diverged, which classes the fact onto every
+ * item, and workspace_displaced_ancestor, the view-only face for a path with no
+ * item in hand.
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param path The asker's path (must not be NULL)
+ * @param record_family Whether the asker is a record of the orphan family
+ */
+static const displaced_dir_t *displaced_ancestor(
+    const workspace_t *ws,
+    const char *path,
+    bool record_family
+) {
+    const displaced_dir_t *outermost = NULL;
+
+    for (size_t i = 0; i < ws->displaced_count; i++) {
+        const displaced_dir_t *dir = &ws->displaced[i];
+
+        if (dir->claim == WORKSPACE_DISPLACED_RECORD && !record_family) continue;
+        if (str_path_beneath(path, dir->path, dir->len) &&
+            (!outermost || dir->len < outermost->len)) {
+            outermost = dir;
+        }
+    }
+
+    return outermost;
+}
+
+/**
  * Add a diverged item from the join's sources
  *
  * The three join analyzers produce through here: at least one source is non-NULL,
@@ -357,9 +407,15 @@ static workspace_fault_t fault_of(error_t *err) {
  * producer's own: the file analyzer's rows are blob types, the directory analyzer's
  * DIRECTORY, the orphan loop's the record's.
  *
- * The one verdict decided here rather than handed in: a relocation's class
- * (workspace_relocation_t), which is a reading of the two sources this function
- * already holds and of nothing else.
+ * Two verdicts are decided here rather than handed in, each a reading of what
+ * this function already holds and of nothing else: a relocation's class
+ * (workspace_relocation_t), read off the two sources, and the displaced class
+ * (workspace_displaced_t), read off the squatters noted so far against this item's
+ * own path and the family its state names. The second is what makes the class
+ * total — no item can carry the wrong one, and none can be missing it. That every
+ * displaced item was also spared its look is the analyzers' half, asked before
+ * every look they take, and the two halves meet here: an item that carries a
+ * class is an item with nothing measured.
  *
  * @param ws Workspace context (must not be NULL)
  * @param row The view's claim (NULL for orphans — except a relocated one, whose
@@ -394,8 +450,12 @@ static error_t *workspace_add_diverged(
     item->anchor = anchor;
 
     /* The state names the identity source: ORPHANED/RELEASED are record-defined
-     * — the view lacks the path — and every other state here is a row's. */
-    if (state == WORKSPACE_STATE_ORPHANED || state == WORKSPACE_STATE_RELEASED) {
+     * — the view lacks the path — and every other state here is a row's. The
+     * same reading names the family the reach rule asks for below. */
+    bool record_family = state == WORKSPACE_STATE_ORPHANED ||
+        state == WORKSPACE_STATE_RELEASED;
+
+    if (record_family) {
         CHECK_NULL(anchor);
         item->filesystem_path = anchor->filesystem_path;
         item->storage_path = anchor->storage_path;
@@ -434,6 +494,13 @@ static error_t *workspace_add_diverged(
     item->divergence = divergence;
     item->occupant = occupant;
     item->fault = fault;
+
+    /* Whose squatter stands above the path, or NONE (see the doc above). Read
+     * after identity, because the path is the question's subject. */
+    const displaced_dir_t *above = displaced_ancestor(
+        ws, item->filesystem_path, record_family
+    );
+    item->displaced = above ? above->claim : WORKSPACE_DISPLACED_NONE;
 
     error_t *err = ptr_array_push(&ws->diverged, item);
     if (err) {
@@ -639,12 +706,18 @@ static void workspace_record_observation(
  * the fact keeps the one producer per authority that cleanup.h states for the
  * occupant.
  *
- * Each half is complete the moment its producer has run: the view's after the
- * directory analysis, which every command's load runs (workspace_load_t), the
- * record's after the orphan analysis — which is exactly when it has a reader,
- * since a load that skips it emits no orphan item either and a record's memory
- * reaches nothing else (the reach rule). That is what frees the load to run the
- * join whole before anything optional, and to stamp once after both.
+ * Each half is complete before anything asks it. The view's is complete after
+ * the directory analysis, which every command's load runs first for that reason
+ * (workspace_load_t) and which walks its rows parents-first, so a squatter above
+ * a row is noted before the row's own turn. The record's fills as the orphan
+ * analysis walks, in path order, so a retyped directory record is noted before
+ * any record beneath it comes up — and that is exactly when it has a reader,
+ * since a load that skips the orphan analysis emits no orphan item either and a
+ * record's memory reaches nothing else (the reach rule).
+ *
+ * Nothing beneath a squatter is looked at, so no squatter beneath one is ever
+ * noted: the outermost carries the whole answer, and the list holds one entry
+ * per episode rather than one per rung.
  *
  * One arena block, taken at the first note and sized for every claim that could
  * say a directory stands somewhere — the view's directory rows and the records
@@ -659,9 +732,12 @@ static void workspace_record_observation(
  * own allocation and not a fact about the path, so neither producer wraps it
  * with one.
  *
- * Readers: stamp_displaced (every present item), workspace_displaced_ancestor
- * (a row or a path with no item: apply's two loops, deploy's plan, the scan's
- * roots).
+ * Readers: displaced_ancestor, asked before every look the load takes
+ * (analyze_file_divergence, analyze_directory_metadata_divergence,
+ * analyze_orphans) and by the one producer of items (workspace_add_diverged);
+ * and through workspace_displaced_ancestor by index_entries,
+ * analyze_untracked_files' roots, core/deploy.c check_ancestry and cmds/apply.c's
+ * released-copies sweep.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The squatted path, the row's or the record's (borrowed; workspace
@@ -787,16 +863,29 @@ static error_t *analyze_file_divergence(
      * fast path, and absence reads UNDEPLOYED. */
     const anchor_t *anchor = workspace_get_anchor(ws, fs_path);
 
-    /* A pending handover, for the add-or-not decision below (see the doc above):
-     * the rule read over the pair this analysis already holds. */
-    bool profile_changed = workspace_reassigned(row, anchor);
-
     /* The blob-family verdict (see the doc above): is the blob Git holds for
      * this row stored plaintext where the auto-encrypt policy claims the path?
      * DIVERGENCE_NONE or DIVERGENCE_ENCRYPTION, carried by every return below. */
     divergence_type_t policy =
         encryption_policy_violation(config, storage_path, row->type, row->encrypted)
         ? DIVERGENCE_ENCRYPTION : DIVERGENCE_NONE;
+
+    /* Beneath a squatter the view claims, no look. A look here would answer for
+     * the occupant — a symlink's target, a file's ENOTDIR — and no such answer
+     * is this path's: not a byte, not a mode, not an absence. The row is an item
+     * at birth, DEPLOYED-shaped with nothing measured: UNKNOWN is the occupant
+     * every reader treats as "assumed present, nothing read", and the producer
+     * classes the claim whose squatter every verb resolves first
+     * (workspace_displaced_t). The blob-family bit rides — it is Git's, and the
+     * filesystem is not a party to it — and the record pairs as on every item,
+     * so a pending handover still shows. Nothing is queued: a record is what
+     * dotta saw, and dotta saw nothing here. */
+    if (displaced_ancestor(ws, fs_path, false)) {
+        return workspace_add_diverged(
+            ws, row, anchor, WORKSPACE_STATE_DEPLOYED, policy,
+            FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
+        );
+    }
 
     /* Single stat capture for the entire analysis
      *
@@ -1264,10 +1353,10 @@ static error_t *analyze_file_divergence(
         /* Keep accumulated divergence flags from Phase 1 */
     }
 
-    /* Add to workspace if there's any state change, divergence, or a reassignment
-     * (derived at the top, beside the record pairing). */
+    /* Add to workspace if there's any state change, divergence, or a pending
+     * handover — the rule read over the pair this analysis has held throughout. */
     if (state != WORKSPACE_STATE_DEPLOYED ||
-        divergence != DIVERGENCE_NONE || profile_changed) {
+        divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
         error_t *err = workspace_add_diverged(
             ws, row, anchor, state, divergence, occupant, WORKSPACE_FAULT_NONE
         );
@@ -1892,10 +1981,10 @@ static const anchor_t *standing_record(
  *
  * Three looks decide whether a key names an entry its claim may vouch by, and
  * each of them drops rather than keeps:
- *   - a key beneath a displaced directory: its lstat reached the squatter's target,
- *     which every verdict refuses to act on, so it must vouch for nothing — the
- *     scan driver's own rule for a root (workspace_displaced_ancestor, complete
- *     for the view's claims once the
+ *   - a key beneath a displaced directory: a look there would reach the squatter's
+ *     target, which every verdict refuses to act on, so it must vouch for nothing
+ *     and none is taken — the scan driver's own rule for a root
+ *     (workspace_displaced_ancestor, complete for the view's claims once the
  *     directory analysis has run, which is why this phase follows it);
  *   - a key that does not stand — [undeployed], a chain the invoker cannot read:
  *     an absent row is not the entry a present orphan stands on;
@@ -1910,11 +1999,17 @@ static const anchor_t *standing_record(
  * Dropping withholds — a release where a prune was right, an offer deferred a
  * run; keeping wrongly prunes a managed file or offers one twice. That direction
  * is why each look is named here, and why a fourth would have to be argued rather
- * than added. The record's own squatters need no look of their own: the orphan
- * analysis notes those and has not run yet, and a record-side squatter is by
- * definition a directory record another kind of node stands at — the third look.
- * A record *beneath* one keeps its entry and withholds an offer for the run,
- * which is the direction above.
+ * than added.
+ *
+ * The first look is the view's claims alone, and this phase is the one place
+ * the load looks beneath a squatter at all: the record's own squatters are the
+ * orphan analysis's to note, and it cannot have run yet — its BACKED guard reads
+ * this index. A record-side squatter is by definition a directory record another
+ * kind of node stands at, which the third look drops; a record *beneath* one is
+ * indexed by whatever its key reached, and the cost is an offer withheld for
+ * the run, which is the direction above. So the load's rule — no look beneath a
+ * squatter (workspace.h workspace_displaced_t) — is exact for the view's claims
+ * and bounded here for the record's.
  *
  * The lstats are this phase's own. Not the analyses': a look taken there is the
  * item's, and its answer must not depend on which analyses a caller asked for
@@ -1990,8 +2085,12 @@ static error_t *index_entries(workspace_t *ws) {
  * is here is stored anywhere. Both kinds walk one loop; the record's type says
  * which questions apply.
  *
- * Per orphan, in order — presence, the occupant's kind, the prune order, the
- * ownership gate, then Git authority:
+ * Per orphan, in order — the ancestry, presence, the occupant's kind, the prune
+ * order, the ownership gate, then Git authority:
+ *   - the ancestry, before the look: a squatter above the copy — a directory
+ *     row of the view, or a directory record earlier in this same walk — means
+ *     no look is taken at all, and the record is released with nothing measured
+ *     (displaced_ancestor, and the file analyzer for the rule);
  *   - presence (one lstat, either kind — a dangling link is present): an absent
  *     orphan is a reclaim whatever Git says, which keeps the planners' "absent
  *     ⇒ DIVERGENCE_NONE" rule;
@@ -2087,6 +2186,26 @@ static error_t *analyze_orphans(workspace_t *ws) {
         const char *profile = anchor->profile;
         path_kind_t kind = path_type_kind(anchor->type);
 
+        /* Beneath a squatter of either authority — a record's memory reaches
+         * the record family, which this is (the reach rule, workspace_displaced_t)
+         * — no look, for the reason the file analyzer states. The orphans are
+         * in path order (workspace_partition, over a snapshot SQLite ordered by
+         * filesystem_path, and a parent sorts before everything beneath it), so
+         * a retyped directory record was noted by the arm below before any record
+         * beneath it came up. ORPHANED with nothing measured: cleanup's displaced
+         * arm releases the copy and apply's settle retires the record. */
+        if (displaced_ancestor(ws, fs_path, true)) {
+            err = workspace_add_diverged(
+                ws, NULL, anchor, WORKSPACE_STATE_ORPHANED, DIVERGENCE_NONE,
+                FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
+            );
+            if (err) {
+                err = error_wrap(err, "Failed to add displaced orphan");
+                break;
+            }
+            continue;
+        }
+
         /* Single stat capture, reused for type verification, content comparison,
          * and metadata checks — eliminates redundant lstat syscalls. One rule
          * for every orphan, whatever its kind: FS_OCCUPANT_NONE is the orphan
@@ -2125,8 +2244,9 @@ static error_t *analyze_orphans(workspace_t *ws) {
          * judged. True of an absent directory record too — NONE is neither
          * DIRECTORY nor UNKNOWN — which the ladder's absence arm shadows, and
          * nothing outside the ladder may read this bit without it. The record's
-         * own kind, not the ancestry's: whether the copy was observed through a
-         * squatter above it is the stamp's (stamp_displaced). */
+         * own kind, not the ancestry's: whether a squatter stands above the copy
+         * was asked before the look (displaced_ancestor), and no record that
+         * reached here is beneath one. */
         bool retyped = (kind == PATH_KIND_FILE)
             ? (occupant == FS_OCCUPANT_DIRECTORY)
             : (occupant != FS_OCCUPANT_DIRECTORY && occupant != FS_OCCUPANT_UNKNOWN);
@@ -2339,7 +2459,14 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
                 break;
 
             case WORKSPACE_STATE_DEPLOYED:
-                if (item->divergence != DIVERGENCE_NONE ||
+                /* The displaced read comes first and stands on its own: a row
+                 * beneath a squatter has no bits because nothing there was looked
+                 * at, and reading only the bits would call it clean — true only
+                 * so long as the squatter's own TYPE item happens to be in this
+                 * same fold. A fold over items answers from each item's own
+                 * facts. */
+                if (item->displaced != WORKSPACE_DISPLACED_NONE ||
+                    item->divergence != DIVERGENCE_NONE ||
                     workspace_reassigned(item->row, item->anchor)) {
                     has_warnings = true;
                 }
@@ -2997,12 +3124,26 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * file analyzer makes. */
         const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
-        /* A pending handover, for the add-or-not decision at the bottom: the
-         * rule the file analyzer reads at its own pairing. One rule, both kinds
-         * — and the rule asks the row's class itself, so a derived claim answers
-         * false here whatever its record says, and the tracked gate below is
-         * about everything else this loop measures. */
-        bool profile_changed = workspace_reassigned(row, anchor);
+        /* Beneath a squatter, no look — the file analyzer's rule, stated there.
+         * The rows are walked parents-first (workspace_partition sorts the slice),
+         * so the squatter above this one was noted before this row's turn; a
+         * squatter beneath a squatter is therefore never noted, and the outer
+         * one carries the whole answer. Both classes: an ancestor claim beneath
+         * a squatter is as unlooked-at as a tracked one. */
+        if (displaced_ancestor(ws, filesystem_path, false)) {
+            err = workspace_add_diverged(
+                ws, row, anchor, WORKSPACE_STATE_DEPLOYED, DIVERGENCE_NONE,
+                FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
+            );
+
+            if (err) {
+                return error_wrap(
+                    err, "Failed to record displaced directory '%s'",
+                    filesystem_path
+                );
+            }
+            continue;  /* Recorded, move to next directory */
+        }
 
         /* Stat directory to get current metadata
          *
@@ -3090,9 +3231,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          */
         if (occupant != FS_OCCUPANT_DIRECTORY) {
             /* The squatter, noted where it was observed: absence and an unstattable
-             * path are ruled out above, so something real stands here and every
-             * look taken beneath this path resolved through it. The row's class
-             * is the claim (note_displaced). */
+             * path are ruled out above, so something real stands here and no
+             * look beneath this path is taken at all. The row's class is the
+             * claim (note_displaced). */
             err = note_displaced(
                 ws, filesystem_path,
                 row->tracked ? WORKSPACE_DISPLACED_TRACKED
@@ -3130,6 +3271,9 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
          * class, and it is not split here: classify_absent carries that gate,
          * so the two analyzers cannot read an absent path two ways.
          *
+         * The ancestry is the one question asked ahead of all of them, because
+         * an answer taken beneath a squatter is no answer about this path.
+         *
          * Everything below is the profile's word about a directory it manages,
          * and a derived claim has none to give. Its mode and ownership are a
          * snapshot of the machine the chain was captured on: they say what to
@@ -3150,11 +3294,14 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
         );
 
         /* Record divergence if any metadata differs, or a pending handover stands
-         * (derived at the top, beside the record pairing) — the tail the file
-         * analyzer has: a clean reassigned row emits an item, state DEPLOYED,
-         * divergence NONE, so status's Reassigned section and apply's collection
-         * see both kinds. */
-        if (mode_differs || ownership_differs || profile_changed) {
+         * — the rule read over the pair this loop has held throughout, and the
+         * tail the file analyzer has: a clean reassigned row emits an item, state
+         * DEPLOYED, divergence NONE, so status's Reassigned section and apply's
+         * collection see both kinds. One rule, both kinds — and the rule asks
+         * the row's class itself, so a derived claim answers false here whatever
+         * its record says, and the tracked gate above is about everything else
+         * this loop measures. */
+        if (mode_differs || ownership_differs || workspace_reassigned(row, anchor)) {
             /* Accumulate divergence flags */
             divergence_type_t divergence = DIVERGENCE_NONE;
             if (mode_differs) divergence |= DIVERGENCE_MODE;
@@ -3180,56 +3327,6 @@ static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
     }
 
     return NULL;  /* Success - all directories checked */
-}
-
-/**
- * Stamp every present item with the displaced directory that reaches it
- *
- * The pass the note cannot be: an item is emitted before the squatter above it
- * has necessarily been observed — the file analyzer runs first, and the row that
- * names the squatted rung is the directory analyzer's — so the reach is read
- * once here, after both producers have noted their own (note_displaced) and before
- * the untracked scan, which must not open a directory whose path resolves through
- * a squatter (analyze_untracked_files) and whose items are therefore never stamped.
- *
- * Every present item takes the outermost displaced directory that reaches it
- * (workspace_item_t.displaced) — the reach rule (workspace_displaced_t). Outermost
- * among those that reach, not outermost then tested: a DEPLOYED item beneath a
- * record-remembered rung and, deeper, a tracked squatter is displaced by the
- * tracked one. Absent items are never stamped — an absent reading beneath a
- * squatter is true: the lstat reached nothing, and there is no directory for
- * the path to exist in, so a deletion stays real work to commit and an absent
- * orphan a reclaim. Presence is the whole of the condition.
- *
- * The list is empty on every healthy load and the pass is then one early return
- * — items are zeroed at birth and NONE is that zero, so the return costs the
- * walk and nothing else.
- */
-static void stamp_displaced(workspace_t *ws) {
-    if (ws->displaced_count == 0) {
-        return;
-    }
-
-    for (size_t i = 0; i < ws->diverged.count; i++) {
-        workspace_item_t *item = ws->diverged.items[i];
-
-        if (item->occupant == FS_OCCUPANT_NONE) continue;
-
-        bool record_family = item->state == WORKSPACE_STATE_ORPHANED ||
-            item->state == WORKSPACE_STATE_RELEASED;
-        const displaced_dir_t *outer = NULL;
-
-        for (size_t j = 0; j < ws->displaced_count; j++) {
-            const displaced_dir_t *dir = &ws->displaced[j];
-
-            if (dir->claim == WORKSPACE_DISPLACED_RECORD && !record_family) continue;
-            if (str_path_beneath(item->filesystem_path, dir->path, dir->len) &&
-                (!outer || dir->len < outer->len)) {
-                outer = dir;
-            }
-        }
-        item->displaced = outer ? outer->claim : WORKSPACE_DISPLACED_NONE;
-    }
 }
 
 /**
@@ -3469,19 +3566,11 @@ error_t *workspace_load(
 
     /* The analyses, in the order the load's own contract groups them: the join
      * first and whole — the file and directory analyses, which every command's
-     * load runs (workspace_load_t) — then the optional ones. Each analysis notes
-     * the displaced directories it observed itself (note_displaced), so no phase
-     * waits on a pass over the items and this order says what it means rather
-     * than what a last pass required. */
-
-    /* The join: the view's file rows (most common requirement) */
-    if (options->analyze_files) {
-        err = analyze_files_divergence(ws, config);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze file divergence");
-        }
-    }
+     * load runs (workspace_load_t) — then the optional ones. The directory rows
+     * come first within the join because they are the only producer of the view's
+     * squatters (note_displaced), and every look the load takes after this one
+     * asks first whether a squatter stands above the path: the file rows, the
+     * orphan records, the entries index, the scan's roots. */
 
     /* The join: the view's directory rows; notes the displaced directories a
      * claim of the view holds */
@@ -3490,6 +3579,15 @@ error_t *workspace_load(
         if (err) {
             workspace_free(ws);
             return error_wrap(err, "Failed to analyze directory metadata");
+        }
+    }
+
+    /* The join: the view's file rows (most common requirement) */
+    if (options->analyze_files) {
+        err = analyze_files_divergence(ws, config);
+        if (err) {
+            workspace_free(ws);
+            return error_wrap(err, "Failed to analyze file divergence");
         }
     }
 
@@ -3519,13 +3617,6 @@ error_t *workspace_load(
             return error_wrap(err, "Failed to analyze orphans");
         }
     }
-
-    /* The stamp: every present item takes the outermost displaced directory that
-     * reaches it — the fact every consumer that judges a path beneath one must
-     * ask, established here once and trusted downstream. Both producers have
-     * run by now, and the untracked scan below has not: its items are never stamped
-     * because a walk never enters a squatter. */
-    stamp_displaced(ws);
 
     /* Optional: new files beneath the tracked directories */
     if (options->analyze_untracked) {
@@ -3627,25 +3718,13 @@ const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path
         return NULL;
     }
 
-    const displaced_dir_t *outermost = NULL;
+    /* The view-only face of the one scan (displaced_ancestor): a record's memory
+     * reaches the record family alone, whose items carry the fact themselves
+     * (the reach rule, workspace_displaced_t), and this probe's askers hold no
+     * item. */
+    const displaced_dir_t *dir = displaced_ancestor(ws, path, false);
 
-    /* The shortest match is the outermost ancestor: a deeper displaced directory
-     * was itself observed through the outer one, so the outer occupant's fate
-     * settles both. The list is unordered — two analyses fill it — so the scan
-     * asks for the minimum rather than the first hit. A record's memory is skipped:
-     * it reaches only the record family, whose items carry the fact themselves
-     * (the reach rule, workspace_displaced_t). */
-    for (size_t i = 0; i < ws->displaced_count; i++) {
-        const displaced_dir_t *dir = &ws->displaced[i];
-
-        if (dir->claim == WORKSPACE_DISPLACED_RECORD) continue;
-        if (str_path_beneath(path, dir->path, dir->len) &&
-            (!outermost || dir->len < outermost->len)) {
-            outermost = dir;
-        }
-    }
-
-    return outermost ? outermost->path : NULL;
+    return dir ? dir->path : NULL;
 }
 
 /**
@@ -3958,6 +4037,20 @@ bool workspace_item_extract_display_info(
                     tags_out[tag_count++] = "absent";
                 }
                 *color_out = OUTPUT_COLOR_CYAN;
+
+            } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
+                /* A squatter stands above the path, so nothing there was looked
+                 * at and no bit below was ever read (workspace_displaced_t).
+                 * Checked here for the reason absence is checked above it: such
+                 * an item carries DIVERGENCE_NONE by construction, so the arms
+                 * below would report it clean and promise the prune apply does
+                 * not make — cleanup_verdict releases it and the path stays.
+                 * Ranked as that verdict ranks it, after absence and before the
+                 * bits, and coloured as a release is. */
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "displaced";
+                }
+                *color_out = OUTPUT_COLOR_MAGENTA;
 
             } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
                 /* The failed look, worded by whose remedy it is (workspace_fault_t)

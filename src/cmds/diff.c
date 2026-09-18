@@ -60,13 +60,18 @@ static bool should_show_item_for_direction(
          * commit), and status's Conflicts remedy sends the user here to compare,
          * so hiding it answered that remedy with silence. UNVERIFIED is shown
          * too: a look that failed is a difference nobody has ruled out, and hiding
-         * it reported the tree in sync over a file the user had just edited.
-         * ENCRYPTION alone stays out: how Git stores the blob is no difference
-         * between Git and disk, and apply deploying it changes nothing. */
+         * it reported the tree in sync over a file the user had just edited. A
+         * row beneath a squatter is shown on the same ground and carries no bit
+         * to be shown by: nothing there was looked at (core/workspace.h
+         * workspace_displaced_t), apply writes it fresh once the squatter is
+         * replaced, and the status line says so. ENCRYPTION alone stays out:
+         * how Git stores the blob is no difference between Git and disk, and
+         * apply deploying it changes nothing. */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
-               ((item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
+               (item->displaced != WORKSPACE_DISPLACED_NONE ||
+               (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
                DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
                DIVERGENCE_UNVERIFIED)) || workspace_reassigned(item->row, item->anchor)));
     }

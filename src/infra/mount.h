@@ -94,8 +94,7 @@
  *     (core/manifest.c manifest_ascend): the table hands out what it found and
  *     composes nothing, one reader being no reason to own the sentence.
  *   - Which root stands exactly at a location, and whose: mount_root_at, the
- *     same search with nothing past the root — the climb's question and every
- *     refusal that names a place.
+ *     same search with nothing past the root — every refusal that names a place.
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
  *     than by place — the view's contribution and add's receipt.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
@@ -373,21 +372,19 @@ const mount_root_t *mount_root_above(
  *
  * A root met from above is entered unlisted and its children are named from its
  * label; a symlink standing at one is skipped by a walk and followed by the
- * argument that names it (cmds/add.c, find -H's rule); a claim the climb would
- * author at one is not authored (core/metadata.c). Asked once per chain rung
- * and once per argument that names a place. Never fails, allocates nothing; `table`
- * and `location` must not be NULL, `profile` may be.
+ * argument that names it (cmds/add.c, find -H's rule). Asked once per argument
+ * that names a place. Never fails, allocates nothing; `table` and `location`
+ * must not be NULL, `profile` may be.
  *
- * Readers: the climb's root guard (core/metadata.c capture_ancestor), the claim
- * search's refusal (core/profiles.c profile_claim_name), `ignore --test`'s root
- * line (cmds/ignore.c), add's two root arms — the argument's, whose root-link
- * rule reads its binder, and the already-walked arm (cmds/add.c) — and revert's,
- * asked where its own search answered nothing at the location (cmds/revert.c).
- * Every one of them has an asker to name. A reader holding a view and nobody to
- * name asks core/manifest.h manifest_root_at, which asks this once per profile
- * the view holds: a NULL asker here meets the shared roots alone, so it would
- * answer HOME for a location a profile bound and is no stand-in for the view's
- * own question.
+ * Readers: the claim search's refusal (core/profiles.c profile_claim_name), `ignore
+ * --test`'s root line (cmds/ignore.c), add's two root arms — the argument's,
+ * whose root-link rule reads its binder, and the already-walked arm (cmds/add.c)
+ * — and revert's, asked where its own search answered nothing at the location
+ * (cmds/revert.c). Every one of them has an asker to name. A reader holding a
+ * view and nobody to name asks core/manifest.h manifest_root_at, which asks this
+ * once per profile the view holds: a NULL asker here meets the shared roots alone,
+ * so it would answer HOME for a location a profile bound and is no stand-in for
+ * the view's own question.
  */
 const mount_root_t *mount_root_at(
     const mount_table_t *table,

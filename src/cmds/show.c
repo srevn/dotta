@@ -320,27 +320,29 @@ static void show_provenance(output_t *out, const git_commit *commit) {
  * — a tree without one holds an empty sheet, and one that will not load is folded
  * into an empty sheet too, which then says nothing about anything.
  *
- * The name is looked up once and answered three ways. A blob is printed. A tree
- * and a submodule are each refused by their own noun. Absence asks the sheet,
- * because a tracked directory the branch holds no blob beneath is a claim with
- * no tree entry at all — the profile does hold it, and "not found" would be the
- * wrong word.
+ * The name is asked of both documents at once, the sheet as this verb read it
+ * (core/profiles.h profile_holds), and answered four ways. A blob is printed. A
+ * subtree and a gitlink are each refused by their own noun. A directory claim
+ * the sheet alone holds — a tracked directory the branch holds no blob beneath
+ * — is refused as the directory it is, because the profile does hold it and "not
+ * found" would be the wrong word. Only a name neither document holds is not found.
  */
 static error_t *show_file(
     const dotta_ctx_t *ctx,
     const char *profile,
     const char *storage_path,
-    git_tree *tree
+    const git_tree *tree
 ) {
     git_repository *repo = ctx->run.repo;
 
-    git_tree_entry *entry = NULL;
     metadata_t *metadata = NULL;
 
     /* The sheet of the same tree, for the encryption state print_blob_content
      * validates against. A tree without one loads as an empty sheet; one that
      * would not load is folded into an empty sheet too, and then says nothing —
-     * about the encryption state, and about a directory claim below. */
+     * about the encryption state, and about a directory claim below. Handed to
+     * the read below, so the name is answered from the sheet as this verb read
+     * it, and the sheet is read once. */
     error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         error_free(err);
@@ -350,41 +352,36 @@ static error_t *show_file(
         }
     }
 
-    err = gitops_find_file_in_tree(tree, storage_path, &entry);
-    if (err) {
-        if (error_code(err) != ERR_NOT_FOUND) goto cleanup;
+    profile_held_t held;
+    err = profile_holds(repo, tree, metadata, profile, storage_path, &held);
+    if (err) goto cleanup;
 
-        /* A claim the tree cannot hold: a tracked directory with no blob beneath
-         * it stands in the sheet alone, and the profile does hold it. */
-        const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-        if (item && item->kind == PATH_KIND_DIRECTORY) {
-            error_free(err);
-            err = ERROR(ERR_INVALID_ARG, "'%s' is a directory", storage_path);
-        }
-        goto cleanup;
-    }
+    switch (held.kind) {
+        case PROFILE_HELD_FILE:
+            /* The bytes, decrypted where they are ciphertext: the name is the
+             * one the blob was sealed under (the AAD, infra/content.h), the profile
+             * derives the key, and the sheet says what state to expect. */
+            err = print_blob_content(
+                ctx, &held.oid, storage_path, profile, metadata, held.filemode
+            );
+            break;
 
-    git_object_t entry_type = git_tree_entry_type(entry);
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
+            err = ERROR(
+                ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
+                storage_path,
+                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
+            );
+            break;
 
-    if (entry_type == GIT_OBJECT_BLOB) {
-        /* The bytes, decrypted where they are ciphertext: the name is the one
-         * the blob was sealed under (the AAD, infra/content.h), the profile derives
-         * the key, and the sheet says what state to expect. */
-        err = print_blob_content(
-            ctx, git_tree_entry_id(entry), storage_path, profile, metadata,
-            git_tree_entry_filemode(entry)
-        );
-    } else {
-        err = ERROR(
-            ERR_INVALID_ARG, "'%s' is %s; show prints one file's bytes",
-            storage_path,
-            entry_type == GIT_OBJECT_TREE ? "a directory" : "a submodule"
-        );
+        case PROFILE_HELD_NOTHING:
+            err = ERROR(ERR_NOT_FOUND, "File '%s' not found", storage_path);
+            break;
     }
 
 cleanup:
     metadata_free(metadata);
-    git_tree_entry_free(entry);
 
     return err;
 }
@@ -722,8 +719,8 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
         if (err) goto cleanup;
 
         /* The two keys the door left. A name the user typed is Git's key already,
-         * so show_file's own read of the tree is what decides whether the profile
-         * holds it; a location is the branch's to name. */
+         * so show_file's own read of the branch's two documents is what decides
+         * whether the profile holds it; a location is the branch's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {

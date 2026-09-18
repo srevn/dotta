@@ -633,11 +633,14 @@ cleanup:
  * namespace's names stand in. The content gate (infra/label.h label_prefixes)
  * is what tells the two apart, and the blob arm below is the one place it matters.
  *
- * A blob is the single-entry copy, its destination the user's own path (cp
- * semantics); a tree is the copy's root with its subtree walked beneath it. A
- * name the tree holds nowhere may still be a claim of the sheet — an empty tracked
- * directory has no tree entry, and the export is then the claim itself. Either
- * way the sheet's blob-less claims beneath the name follow the walk.
+ * What stands at the name is one read of the branch's two documents
+ * (core/profiles.h profile_holds), answered four ways. A blob is the single-entry
+ * copy, its destination the user's own path (cp semantics); a directory is the
+ * copy's root, its subtree walked beneath it where the tree holds one and nothing
+ * to walk where the sheet alone makes the claim — an empty tracked directory
+ * has no tree entry, and the export is then the claim itself. Either way the
+ * sheet's blob-less claims beneath the name follow the walk. A gitlink is refused,
+ * and a name neither document holds is not found.
  */
 static error_t *collect_name(
     const dotta_ctx_t *ctx,
@@ -649,7 +652,6 @@ static error_t *collect_name(
 ) {
     arena_t *arena = ctx->arena;
     metadata_t *metadata = NULL;
-    git_tree_entry *target = NULL;
     git_tree *subtree = NULL;
 
     error_t *err = load_sheet(ctx, tree, profile, &metadata);
@@ -657,118 +659,116 @@ static error_t *collect_name(
 
     list->basename = path_basename(name);
 
-    err = gitops_find_file_in_tree(tree, name, &target);
-    if (err) {
-        if (err->code != ERR_NOT_FOUND) goto cleanup;
+    /* The name, answered from both documents at once (core/profiles.h
+     * profile_holds) — the sheet as this verb read it, tolerantly (load_sheet),
+     * so a damaged sheet costs the copy a claim and never the tree's answer. */
+    profile_held_t held;
+    err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
+    if (err) goto cleanup;
 
-        /* Not in the tree. An empty tracked directory has no tree entry — its
-         * claim lives only in the metadata, and the export is then the claim
-         * itself: the directory, at its stored mode. A label is never one of
-         * these: the sheet's loader refuses a key that is not a storage path,
-         * so no sheet holds a claim at a namespace's own name. */
-        const metadata_item_t *claim_item = metadata_lookup(metadata, name);
-        if (!claim_item || claim_item->kind != PATH_KIND_DIRECTORY) {
-            error_free(err);
+    switch (held.kind) {
+        case PROFILE_HELD_NOTHING:
             err = ERROR(
                 ERR_NOT_FOUND, "'%s' not found in profile '%s'%s",
                 name, profile, commit_suffix
             );
             goto cleanup;
-        }
-        error_free(err);
-        err = NULL;
-    }
 
-    bool claim_target = target == NULL;
-    if (claim_target || git_tree_entry_type(target) == GIT_OBJECT_TREE) {
-        /* Directory export: the target is the copy's root, and beneath it the
-         * subtree is walked — or, for a metadata-only claim, there is no subtree
-         * to walk and any children are claims themselves, collected by the append
-         * below. */
-        const metadata_item_t *root_item = metadata_lookup(metadata, name);
-        mode_t root_mode = export_entry_mode(
-            metadata, name, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
-        );
-        err = append_root(
-            list, arena, name, root_mode,
-            root_item && root_item->kind == PATH_KIND_DIRECTORY
-        );
-        if (err) goto cleanup;
-
-        if (!claim_target) {
-            int git_ret = git_tree_lookup(
-                &subtree, ctx->run.repo, git_tree_entry_id(target)
+        case PROFILE_HELD_DIRECTORY: {
+            /* Directory export: the target is the copy's root, and beneath it
+             * the subtree is walked — or, where the sheet alone holds the claim,
+             * there is no subtree to walk and any children are claims themselves,
+             * collected by the append below. An empty tracked directory has no
+             * tree entry, so the read answers it with no mode word at all
+             * (core/profiles.h profile_held_t) and the export is then the claim
+             * itself: the directory, at its stored mode. */
+            const metadata_item_t *root_item = metadata_lookup(metadata, name);
+            mode_t root_mode = export_entry_mode(
+                metadata, name, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
             );
-            if (git_ret < 0) {
-                err = error_from_git(git_ret);
-                goto cleanup;
-            }
-
-            struct collect_ctx cctx = {
-                .metadata     = metadata,
-                .profile      = profile,
-                .storage_base = name,
-                .list         = list,
-                .arena        = arena,
-                .error        = NULL
-            };
-            err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
-            if (cctx.error) {
-                error_free(err);
-                err = cctx.error;
-            }
+            err = append_root(
+                list, arena, name, root_mode,
+                root_item && root_item->kind == PATH_KIND_DIRECTORY
+            );
             if (err) goto cleanup;
-        }
 
-        err = append_claim_dirs(list, arena, metadata, tree, name);
-    } else if (git_tree_entry_type(target) == GIT_OBJECT_BLOB) {
-        /* The content gate, asked of the key this arm was handed rather than of
-         * the names a walk finds beneath it. The only key that can fail it is a
-         * label, and a label names a namespace: the branch holds it as the tree
-         * the namespace's names stand in, so a blob standing at one is the branch
-         * root's own machinery — the entry the whole-profile walk prunes at that
-         * rung — and it has no storage name for the sheet to key or the cipher
-         * to seal under. The word and never the directory spelling: "custom/"
-         * stands under a label and would pass, which is why the two spellings
-         * of one label are pinned together. Refused aloud where the user named
-         * it, pruned in silence where the user named the profile. */
-        if (!label_prefixes(name)) {
-            err = ERROR(
-                ERR_NOT_FOUND,
-                "Profile '%s'%s has no '%s/' content: the branch holds a file "
-                "at that name\n"
-                "Hint: Use 'dotta git' for raw repository access",
-                profile, commit_suffix, name
-            );
+            if (held.filemode == GIT_FILEMODE_TREE) {
+                int git_ret = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
+                if (git_ret < 0) {
+                    err = error_from_git(git_ret);
+                    goto cleanup;
+                }
+
+                struct collect_ctx cctx = {
+                    .metadata     = metadata,
+                    .profile      = profile,
+                    .storage_base = name,
+                    .list         = list,
+                    .arena        = arena,
+                    .error        = NULL
+                };
+                err = gitops_tree_walk(subtree, collect_tree_callback, &cctx);
+                if (cctx.error) {
+                    error_free(err);
+                    err = cctx.error;
+                }
+                if (err) goto cleanup;
+            }
+
+            err = append_claim_dirs(list, arena, metadata, tree, name);
             goto cleanup;
         }
 
-        /* Single-entry export: degenerate case of the walk. */
-        git_filemode_t filemode = git_tree_entry_filemode(target);
+        case PROFILE_HELD_FILE: {
+            /* The content gate, asked of the key this arm was handed rather than
+             * of the names a walk finds beneath it. The only key that can fail
+             * it is a label, and a label names a namespace: the branch holds it
+             * as the tree the namespace's names stand in, so a blob standing at
+             * one is the branch root's own machinery — the entry the whole-profile
+             * walk prunes at that rung — and it has no storage name for the sheet
+             * to key or the cipher to seal under. The word and never the directory
+             * spelling: "custom/" stands under a label and would pass, which is
+             * why the two spellings of one label are pinned together. Refused
+             * aloud where the user named it, pruned in silence where the user
+             * named the profile. */
+            if (!label_prefixes(name)) {
+                err = ERROR(
+                    ERR_NOT_FOUND,
+                    "Profile '%s'%s has no '%s/' content: the branch holds a file "
+                    "at that name\n"
+                    "Hint: Use 'dotta git' for raw repository access",
+                    profile, commit_suffix, name
+                );
+                goto cleanup;
+            }
 
-        export_entry_t e;
-        memset(&e, 0, sizeof(e));
-        e.storage_path = name;
-        e.rel_path = list->basename;
-        git_oid_cpy(&e.blob_oid, git_tree_entry_id(target));
-        if (filemode == GIT_FILEMODE_LINK) {
-            e.kind = EXPORT_ENTRY_SYMLINK;
-        } else {
-            e.kind = EXPORT_ENTRY_FILE;
-            e.mode = export_entry_mode(
-                metadata, name, PATH_KIND_FILE, filemode
-            );
+            /* Single-entry export: degenerate case of the walk. */
+            export_entry_t e;
+            memset(&e, 0, sizeof(e));
+            e.storage_path = name;
+            e.rel_path = list->basename;
+            git_oid_cpy(&e.blob_oid, &held.oid);
+            if (held.filemode == GIT_FILEMODE_LINK) {
+                e.kind = EXPORT_ENTRY_SYMLINK;
+            } else {
+                e.kind = EXPORT_ENTRY_FILE;
+                e.mode = export_entry_mode(
+                    metadata, name, PATH_KIND_FILE, held.filemode
+                );
+            }
+
+            err = entry_list_append(list, arena, &e);
+            goto cleanup;
         }
 
-        err = entry_list_append(list, arena, &e);
-    } else {
-        err = ERROR(
-            ERR_INVALID_ARG, "Unsupported entry type for '%s'", name
-        );
+        case PROFILE_HELD_SUBMODULE:
+            err = ERROR(
+                ERR_INVALID_ARG, "Unsupported entry type for '%s'", name
+            );
+            goto cleanup;
     }
 
 cleanup:
-    if (target) git_tree_entry_free(target);
     if (subtree) git_tree_free(subtree);
     metadata_free(metadata);
     return err;

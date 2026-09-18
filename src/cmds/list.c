@@ -744,24 +744,35 @@ static error_t *list_file_history(
         }
     }
 
-    /* A fast pre-check of the tip, so a deleted file gets its word before the
-     * expensive O(total_commits) history walk. Three answers read as three: an
-     * intermediate object that will not load is a failure to read, never an
-     * absence. The history is one name's — a location's former names under another
-     * contract are the user's to type, a prospective name proving nothing about
-     * what the profile once held there. */
-    git_tree_entry *check = NULL;
-    int rc = git_tree_entry_bypath(&check, tree, storage_path);
+    /* What the tip holds at the name, asked of both documents at once
+     * (core/profiles.h profile_holds), and only a file has a history to list: a
+     * directory is refused as one whichever document holds it, a submodule as
+     * one, and a name neither holds is a deleted file — given its word before
+     * the O(total_commits) walk, which is the search's own. No sheet is handed
+     * in: this verb holds none and reads one only where the tip is silent. The
+     * history is one name's — a location's former names under another contract
+     * are the user's to type, a prospective name proving nothing about what the
+     * profile once held there. */
+    profile_held_t held;
+    err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
     git_tree_free(tree);
+    if (err) return err;
 
-    if (rc == 0) {
-        git_tree_entry_free(check);
-    } else if (rc == GIT_ENOTFOUND) {
-        output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
-    } else {
-        return error_wrap(
-            error_from_git(rc), "Failed to read profile '%s'", profile
-        );
+    switch (held.kind) {
+        case PROFILE_HELD_FILE:
+            break;
+
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
+            return ERROR(
+                ERR_INVALID_ARG, "'%s' is %s; list shows one file's history",
+                storage_path,
+                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule"
+            );
+
+        case PROFILE_HELD_NOTHING:
+            output_info(out, OUTPUT_NORMAL, "File not in current tree, searching history...");
+            break;
     }
 
     /* Get file history */

@@ -747,6 +747,81 @@ error_t *profile_get_stats(
 }
 
 /**
+ * What `profile` holds at `name` in `tree`
+ */
+error_t *profile_holds(
+    git_repository *repo,
+    const git_tree *tree,
+    const metadata_t *sheet,
+    const char *profile,
+    const char *name,
+    profile_held_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(tree);
+    CHECK_NULL(profile);
+    CHECK_NULL(name);
+    CHECK_NULL(out);
+
+    /* The tree first: a name is Git's key, and the tree is the content authority
+     * (core/metadata.h), so an entry here is the whole answer whatever the sheet
+     * says at the name. Three answers read as three: an intermediate object that
+     * will not load is a failure to read, never an absence. */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, tree, name);
+    if (rc == 0) {
+        /* Three kinds and no fourth: git_tree_entry_type reads the entry's mode
+         * word, which is a gitlink, a directory, or a blob — so the last arm is
+         * the gitlink and not a shrug. */
+        profile_held_kind_t kind;
+        switch (git_tree_entry_type(entry)) {
+            case GIT_OBJECT_BLOB: kind = PROFILE_HELD_FILE; break;
+            case GIT_OBJECT_TREE: kind = PROFILE_HELD_DIRECTORY; break;
+            default:              kind = PROFILE_HELD_SUBMODULE; break;
+        }
+
+        *out = (profile_held_t){
+            .kind = kind,
+            .oid = *git_tree_entry_id(entry),
+            .filemode = git_tree_entry_filemode(entry),
+        };
+        git_tree_entry_free(entry);
+
+        return NULL;
+    }
+    if (rc != GIT_ENOTFOUND) {
+        return error_wrap(
+            error_from_git(rc), "Failed to read '%s' in profile '%s'", name,
+            profile
+        );
+    }
+
+    /* The sheet, and only on the tree's silence: a directory claim with nothing
+     * beneath it stands here and nowhere else. The caller's sheet where it holds
+     * one, read as the caller read it; else the tree's own, read strictly and
+     * freed below — `own` marks whose it is, and metadata_free takes a NULL. */
+    metadata_t *own = NULL;
+    if (!sheet) {
+        error_t *err = metadata_load_from_tree(repo, tree, profile, &own);
+        if (err) {
+            return error_wrap(
+                err, "Failed to load metadata for profile '%s'", profile
+            );
+        }
+        sheet = own;
+    }
+
+    const metadata_item_t *item = metadata_lookup(sheet, name);
+    *out = (profile_held_t){
+        .kind = item && item->kind == PATH_KIND_DIRECTORY ? PROFILE_HELD_DIRECTORY
+                                                          : PROFILE_HELD_NOTHING,
+    };
+    metadata_free(own);
+
+    return NULL;
+}
+
+/**
  * Does this profile's branch need a deployment target?
  *
  * The table binds nothing on purpose — HOME and the sentinel alone — so a custom/

@@ -324,23 +324,6 @@ error_t *gitops_tree_walk(
 );
 
 /**
- * Find file by exact path in tree
- *
- * Normalizes path (strips all leading slashes) before lookup.
- *
- * @param tree Tree to search (must not be NULL)
- * @param path File path (must not be NULL)
- * @param out Tree entry (must not be NULL, caller must free with
- *            git_tree_entry_free)
- * @return Error or NULL on success
- */
-error_t *gitops_find_file_in_tree(
-    git_tree *tree,
-    const char *path,
-    git_tree_entry **out
-);
-
-/**
  * Zero-copy view into a git blob's raw bytes.
  *
  * Holds an open git_blob handle and exposes its raw content without copying.

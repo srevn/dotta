@@ -53,15 +53,15 @@ typedef struct {
  * The two names. A revert restores what the commit held into the name the branch
  * tip holds, and the key the user named is the key both trees are asked in. A
  * location asks each tree what claim stood there; a name asks each tree for that
- * name. Only a name a tree does not hold falls back to that tree's claim at its
- * location — never the reverse, because a location is always answerable and a
- * name may simply not exist:
+ * name. Only a name a tree holds in neither of its two documents falls back to
+ * that tree's claim at its location — never the reverse, because a location is
+ * always answerable and a name may simply not exist:
  *
  *              the write's name (the tip)      the read's name (the commit)
  *   LOCATION   the claim standing at L,        the claim standing at L
  *              else the read's own name
- *   STORAGE    the name as typed               that name, else the sheet's claim
- *                                              at it, else the claim at L
+ *   STORAGE    the name as typed               that name in either document,
+ *                                              else the claim at L
  *
  * Reading across names is safe: a name the commit held is a fact, and following
  * it is how a revert survives a contract change. Writing across them is not — a

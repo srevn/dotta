@@ -1259,44 +1259,6 @@ error_t *gitops_resolve_remote_branch_oid(
 }
 
 /**
- * Tree lookups
- */
-error_t *gitops_find_file_in_tree(
-    git_tree *tree, const char *path, git_tree_entry **out
-) {
-    CHECK_NULL(tree);
-    CHECK_NULL(path);
-    CHECK_NULL(out);
-    CHECK_ARG(path[0] != '\0', "Path cannot be empty");
-
-    /* Normalize path: strip all leading slashes. A single-slash strip would leave
-     * "//foo" as "/foo", which git_tree_entry_bypath would reject as an absolute
-     * path. */
-    const char *normalized_path = path;
-    while (*normalized_path == '/') {
-        normalized_path++;
-    }
-    if (*normalized_path == '\0') {
-        return ERROR(
-            ERR_INVALID_ARG, "Path cannot be empty or just slashes"
-        );
-    }
-
-    /* Lookup entry in tree */
-    git_tree_entry *temp_entry = NULL;
-    int ret = git_tree_entry_bypath(&temp_entry, tree, normalized_path);
-    if (ret < 0) {
-        if (ret == GIT_ENOTFOUND) {
-            return ERROR(ERR_NOT_FOUND, "File '%s' not found", path);
-        }
-        return error_from_git(ret);
-    }
-
-    *out = temp_entry;
-    return NULL;
-}
-
-/**
  * Open a zero-copy view onto a blob
  */
 error_t *gitops_blob_view_open(

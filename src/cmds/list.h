@@ -4,7 +4,9 @@
  * Hierarchical listing interface:
  * - Level 1: Profiles (default)
  * - Level 2: Files (with -p flag)
- * - Level 3: File history (with -p flag + file path)
+ * - Level 3: File history (with -p flag + file path) — one file's: a directory
+ *   is refused as one whichever of the branch's two documents holds it, a submodule
+ *   as one, and a name neither holds is searched for through the history
  *
  * The --verbose flag adds detail at each level.
  */

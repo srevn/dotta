@@ -266,41 +266,39 @@ static error_t *refuse_second_name(
  * sees the tip: the read's name is the commit's alone.
  *
  *   a LOCATION  — the claim standing at the location, whatever it is called; the
- *                 tree then says whether that claim is one file.
+ *                 commit's two documents then say whether that claim is one file.
  *   a STORAGE   — the name as typed, because a name is Git's key and does not
  *                 move. Only a name the commit holds neither in its tree nor in
  *                 its sheet is a contract change to find, and then the location
  *                 is the key.
  *
- * The sheet before the fallback, and that is not an optimisation: a DIRECTORY
- * claim can stand at exactly the typed name with no tree entry — a tracked
- * directory with nothing inside it, or an ancestor chain the tree no longer has
- * — and reading its absence as permission to search the location would answer
- * with a *different* claim's blob under the name the user typed.
- *
- * A name kept without an entry is the whole of one case, and that is why the
- * fallback is guarded by the name and not by the entry: a claim stands at the
- * name and the tree holds nothing there, which is the one kind of claim that
- * lives in the sheet alone. Every other absence leaves no name at all, and the
- * two are told apart once, below.
+ * A name is answered by both documents at once (core/profiles.h profile_holds),
+ * and that is what keeps the fallback honest: a DIRECTORY claim standing at the
+ * typed name with no tree entry — a tracked directory with nothing inside it,
+ * an ancestor chain the tree no longer has — answers as the directory it is,
+ * where reading the tree's silence as permission to search the location would
+ * answer with a *different* claim's blob under the name the user typed.
  *
  * Refuses rather than answering nothing, so the caller holds a blob or an error
- * and no third state: a directory or a submodule by its own noun, and an absence
- * worded from the key the user named — a location that is a root of the profile
- * saying so instead, after both rungs have answered rather than before, because
- * a root the commit held a file at is one file.
+ * and no third state: a directory or a submodule by its own noun — under the
+ * fallback's name where the fallback found it, that name not being the one the
+ * user typed, and the difference being the information — and an absence worded
+ * from the key the user named, a location that is a root of the profile saying
+ * so instead, after both rungs have answered rather than before, because a root
+ * the commit held a file at is one file.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param target_tree The target commit's tree (must not be NULL)
- * @param target_sheet The target commit's claim sheet (must not be NULL)
+ * @param target_sheet The target commit's claim sheet, loaded strictly (must
+ *                     not be NULL)
  * @param profile Whose claims these are (must not be NULL)
  * @param arg The argument, in the key it named (must not be NULL)
  * @param location Where both trees may be asked about, or NULL for a custom/
  *                 name this machine cannot place
  * @param commit Abbreviated target commit oid, for the refusals (must not be NULL)
  * @param out_name The name the entry stands under (must not be NULL; borrowed)
- * @param out_entry The entry (must not be NULL; caller frees with
- *                  git_tree_entry_free)
+ * @param out_held The entry, by value: a FILE, its id and its mode word (must
+ *                 not be NULL)
  * @return Error or NULL on success
  */
 static error_t *entry_to_restore(
@@ -312,7 +310,7 @@ static error_t *entry_to_restore(
     const char *location,
     const char *commit,
     const char **out_name,
-    git_tree_entry **out_entry
+    profile_held_t *out_held
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(target_tree);
@@ -321,41 +319,29 @@ static error_t *entry_to_restore(
     CHECK_NULL(arg);
     CHECK_NULL(commit);
     CHECK_NULL(out_name);
-    CHECK_NULL(out_entry);
+    CHECK_NULL(out_held);
 
     *out_name = NULL;
-    *out_entry = NULL;
+    *out_held = (profile_held_t){ 0 };
 
-    const char *name = NULL;
-    git_tree_entry *entry = NULL;
+    git_repository *repo = ctx->run.repo;
 
-    if (arg->key == PATH_KEY_STORAGE) {
-        name = arg->storage_path;
+    /* A typed name is asked first, as typed; a location has no name until the
+     * claim standing there gives it one. */
+    const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
+    profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
 
-        /* git_tree_entry_bypath answers three ways and is read as three: an
-         * intermediate object that will not load is a failure to read, never an
-         * absence. */
-        int rc = git_tree_entry_bypath(&entry, target_tree, name);
-        if (rc < 0 && rc != GIT_ENOTFOUND) {
-            return error_from_git(rc);
-        }
-
-        if (!entry) {
-            /* A DIRECTORY claim standing at exactly this name is a claim and
-             * not an absence, both classes of it. A FILE item without a blob
-             * claims nothing — the tree is the content authority (core/manifest.h)
-             * — and only that one frees the location to answer. */
-            const metadata_item_t *item = metadata_lookup(target_sheet, name);
-            if (!item || item->kind != PATH_KIND_DIRECTORY) {
-                name = NULL;
-            }
-        }
+    if (name) {
+        RETURN_IF_ERROR(
+            profile_holds(repo, target_tree, target_sheet, profile, name, &held)
+        );
     }
 
-    /* The name is the guard, and it also makes the write below safe: the arm
-     * above drops the name only where it found no entry, so no entry can be
-     * standing here to overwrite. */
-    if (!name && location) {
+    /* Only a name the commit holds in neither document falls back to the claim
+     * standing at the location, and a location argument starts here. The claim
+     * is asked by its own name, which the commit holds in one document or the
+     * other by construction: the row came from them. */
+    if (held.kind == PROFILE_HELD_NOTHING && location) {
         const manifest_row_t *row = NULL;
         RETURN_IF_ERROR(
             claim_standing(ctx, target_tree, profile, location, &row)
@@ -363,58 +349,52 @@ static error_t *entry_to_restore(
 
         if (row) {
             name = row->storage_path;
-            int rc = git_tree_entry_bypath(&entry, target_tree, name);
-            if (rc < 0 && rc != GIT_ENOTFOUND) {
-                return error_from_git(rc);
-            }
+            RETURN_IF_ERROR(
+                profile_holds(repo, target_tree, target_sheet, profile, name, &held)
+            );
         }
     }
 
-    if (!entry) {
-        if (name) {
-            /* The sheet claims what the tree does not hold. Where the fallback
-             * found it, this name is not the one the user typed, and that
-             * difference is the information. */
-            return ERROR(
-                ERR_INVALID_ARG,
-                "'%s' is a directory at commit %s; revert restores one file",
-                name, commit
-            );
-        }
+    switch (held.kind) {
+        case PROFILE_HELD_FILE:
+            *out_name = name;
+            *out_held = held;
+            return NULL;
 
-        if (arg->key == PATH_KEY_LOCATION) {
-            const mount_root_t *root =
-                mount_root_at(ctx->run.mounts, profile, arg->location);
-            if (root) {
-                /* A place, not an absence: the sentence is the root's, shared
-                 * with every verb that acts on one path (infra/mount.h). */
-                return mount_root_refuse(root);
-            }
+        case PROFILE_HELD_DIRECTORY:
+        case PROFILE_HELD_SUBMODULE:
             return ERROR(
-                ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
-                profile, arg->location, commit
+                ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
+                name,
+                held.kind == PROFILE_HELD_DIRECTORY ? "a directory" : "a submodule",
+                commit
             );
-        }
 
+        case PROFILE_HELD_NOTHING:
+            break;
+    }
+
+    /* Nothing, in the key the user named. A row found above is held in one document
+     * or the other and cannot reach here; if it ever did, this block is honest
+     * for it too. */
+    if (arg->key == PATH_KEY_LOCATION) {
+        const mount_root_t *root =
+            mount_root_at(ctx->run.mounts, profile, arg->location);
+        if (root) {
+            /* A place, not an absence: the sentence is the root's, shared with
+             * every verb that acts on one path (infra/mount.h). */
+            return mount_root_refuse(root);
+        }
         return ERROR(
-            ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
-            arg->storage_path, commit, profile
+            ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
+            profile, arg->location, commit
         );
     }
 
-    git_object_t type = git_tree_entry_type(entry);
-    if (type != GIT_OBJECT_BLOB) {
-        git_tree_entry_free(entry);
-        return ERROR(
-            ERR_INVALID_ARG, "'%s' is %s at commit %s; revert restores one file",
-            name, type == GIT_OBJECT_TREE ? "a directory" : "a submodule", commit
-        );
-    }
-
-    *out_name = name;
-    *out_entry = entry;
-
-    return NULL;
+    return ERROR(
+        ERR_NOT_FOUND, "File '%s' not found at commit %s in profile '%s'",
+        arg->storage_path, commit, profile
+    );
 }
 
 /**
@@ -777,7 +757,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     stage_t *stage = NULL;
     git_tree *target_tree = NULL;
     git_tree_entry *standing_entry = NULL;
-    git_tree_entry *target_entry = NULL;
+    profile_held_t target_held = { 0 };
     metadata_t *standing_sheet = NULL;
     metadata_t *target_sheet = NULL;
     metadata_item_t *restored_claim = NULL;
@@ -909,17 +889,18 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * needed none of it.) */
     err = entry_to_restore(
         ctx, target_tree, target_sheet, profile, &arg, location, oid_str,
-        &target_name, &target_entry
+        &target_name, &target_held
     );
     if (err) goto cleanup;
 
-    /* The blob the commit holds and the mode Git records for it. `restored_blob`
-     * is a value and not the entry's own pointer, because a reseal under another
-     * name (step 13) names an object no tree holds yet — and it is that object
-     * the preview describes, the gate compares and the write stores. */
-    const git_oid *target_blob = git_tree_entry_id(target_entry);
-    git_filemode_t restored_mode = git_tree_entry_filemode(target_entry);
-    git_oid restored_blob = *target_blob;
+    /* The blob the commit holds and the mode Git records for it, by value already
+     * (core/profiles.h profile_held_t). `restored_blob` is its own copy because
+     * a reseal under another name (step 13) names an object no tree holds yet —
+     * and it is that object the preview describes, the gate compares and the
+     * write stores. */
+    const git_oid *target_blob = &target_held.oid;
+    git_filemode_t restored_mode = target_held.filemode;
+    git_oid restored_blob = target_held.oid;
 
     /* Step 9: and the bytes behind it, read once. The kind is what the claim's
      * encrypted bit is stamped from (step 14) and what decides whether the bytes
@@ -965,7 +946,13 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 11: what stands at that name in the tip. It may be absent — a path
      * the profile deleted is exactly what a revert brings back — and wherever
-     * it stands it is a blob, because a revert restores one file's bytes. */
+     * it stands it is a blob, because a revert restores one file's bytes.
+     *
+     * The tree alone, on purpose: this asks Git's one-entry rule about the name
+     * the write uses, and a directory claim the sheet holds there is retired by
+     * the write (step 14) rather than standing in its way. So the sheet must
+     * not answer here, which is why core/profiles.h profile_holds names this
+     * read as one of its non-readers. */
     ret = git_tree_entry_bypath(&standing_entry, stage_tree(stage), restored_name);
     if (ret < 0 && ret != GIT_ENOTFOUND) {
         err = error_from_git(ret);
@@ -1309,7 +1296,6 @@ cleanup:
     if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);
     if (standing_entry) git_tree_entry_free(standing_entry);
-    if (target_entry) git_tree_entry_free(target_entry);
     if (target_tree) git_tree_free(target_tree);
     stage_free(stage);
     if (target_commit) git_commit_free(target_commit);

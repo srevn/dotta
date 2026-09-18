@@ -2768,10 +2768,13 @@ static error_t *scan_directory_for_untracked(
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's scratch");
     }
 
-    /* "/" is the one directory whose spelling ends in its separator. No tracked
-     * directory stands there on any table this machine can build, and the join
-     * does not lean on it: add's walk, whose frame 0 is a typed argument, reads
-     * the same rule (cmds/add.c collect_tree). */
+    /* "/" is the one directory whose spelling ends in its separator, and a tracked
+     * directory can stand there: `add p /` writes a `root` item, a `home` or
+     * `custom` one places there on a machine whose HOME or target is "/", and
+     * the driver walks it from a depth 0 of its own. Joined with none, then, or
+     * every child would read "//etc" — a key the view holds no row at and the
+     * namer composes as "root//etc". add's walk, whose frame 0 is a typed argument,
+     * reads the same rule (cmds/add.c collect_tree). */
     const char *separator = directory[1] ? "/" : "";
 
     for (size_t i = 0; i < listing->count; i++) {
@@ -2870,9 +2873,8 @@ static error_t *scan_directory_for_untracked(
 
         /* What this profile calls the child — the claim standing there, else
          * the composition beneath the nearest directory claim above it, else
-         * the label of the root it lies under — or nothing when the child is
-         * one of this profile's own roots, which has no name in the namespace
-         * and so is neither excludable nor offerable. */
+         * the label of the root it lies under, the word alone where the child
+         * is one of this profile's own roots. */
         const char *name = NULL;
         err = manifest_name(ws->manifest, scan->profile, child, NULL, scratch, &name);
         if (err) {
@@ -2880,37 +2882,32 @@ static error_t *scan_directory_for_untracked(
             goto cleanup;
         }
 
-        if (!name) {
-            /* A root of this profile: entered when it is a directory, and asked
-             * of no ignore layer — a verdict is about entries the scan would
-             * offer, and a root is entered, never offered. A symlink standing
-             * at one is skipped: the walk does not follow a link, and the root
-             * has no name to offer it under. */
-            if (!is_dir) continue;
-        } else {
-            /* Check if ignored: the rules on the mount-relative path; where no
-             * layer decided, the source tree's .gitignore on the location (its
-             * root is that repo's) — the lowest layer, so a `!` rule above it
-             * wins. The layer's own failure leaves no verdict, as today; its
-             * allocation failure is the run's. */
-            gitignore_match_t match;
-            gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
-            bool ignored = match.decided && match.ignored;
-            if (!match.decided && scan->source_filter) {
-                error_t *layer = source_filter_is_excluded(
-                    scan->source_filter, child, is_dir, &ignored
-                );
-                if (error_code(layer) == ERR_MEMORY) {
-                    err = layer;
-                    goto cleanup;
-                }
-                error_free(layer);
+        /* Check if ignored: the rules on the mount-relative path, which is ""
+         * at a root of this profile — no rule reaches an empty subject
+         * (base/gitignore.c), so a root's entries are matched and a root is not.
+         * Where no layer decided, the source tree's .gitignore on the location
+         * (its root is that repo's) — the lowest layer, so a `!` rule above it
+         * wins. That one reads the place and not the subject, so a root standing
+         * inside a repository whose rules name it is not entered, which is the
+         * answer the directory would get under any other name. The layer's own
+         * failure leaves no verdict, as today; its allocation failure is the
+         * run's. */
+        gitignore_match_t match;
+        gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
+        bool ignored = match.decided && match.ignored;
+        if (!match.decided && scan->source_filter) {
+            error_t *layer = source_filter_is_excluded(
+                scan->source_filter, child, is_dir, &ignored
+            );
+            if (error_code(layer) == ERR_MEMORY) {
+                err = layer;
+                goto cleanup;
             }
-            if (ignored) continue;
+            error_free(layer);
         }
+        if (ignored) continue;
 
-        /* Settled either way, so the descent is one statement: a directory descends
-         * whether it was named or entered as a root, and nothing else does. */
+        /* Settled, so the descent is one statement. */
         err = is_dir ? scan_directory_for_untracked(scan, child, depth + 1)
                      : workspace_add_untracked(ws, child, name, scan->profile, occupant);
         if (err) goto cleanup;
@@ -2965,7 +2962,12 @@ static error_t *analyze_untracked_files(
         return error_from_errno(errno, "Failed to stat the store at '%s'", store_path);
     }
 
-    /* The scan roots: every tracked directory that is a directory on disk, one
+    /* Sized by the directory rows, which bounds the appends: a row is tested
+     * once per profile and matches its own alone, so it is a candidate in exactly
+     * one pass and `dirs.count` counts every candidate there is. A row that
+     * coincides with one already registered overwrites it rather than appending.
+     *
+     * The scan roots: every tracked directory that is a directory on disk, one
      * per directory. An ancestor claim is not one — the profile passes through
      * the directory on the way to something beneath it, and what it does manage
      * inside has its own tracked row, registered here on its own. A row beneath

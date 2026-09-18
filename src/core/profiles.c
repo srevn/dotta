@@ -988,31 +988,18 @@ error_t *profile_claim_name(
 
     /* The claim standing there, before the name one would take: a derived claim
      * is held and names nothing, so the ascent climbs past it and would answer
-     * a name the branch never held. */
+     * a name the branch never held. Else the name the profile would give the
+     * place — its label's word at a root of its own. Either answer is the arena's
+     * and outlives the view freed here, as claim_by_location's is. */
     const manifest_row_t *row = manifest_lookup_claim(view, profile, location);
     if (row) {
-        *out_storage = row->storage_path;   /* the arena's: outlives the view */
-        manifest_free(view);
-        return NULL;
+        *out_storage = row->storage_path;
+    } else {
+        err = manifest_name(view, profile, location, NULL, arena, out_storage);
     }
-
-    /* Nothing stands there, so the name the profile would give the place — NULL
-     * at a root of its own namespace, and the refusal below is that. */
-    err = manifest_name(view, profile, location, NULL, arena, out_storage);
     manifest_free(view);
-    if (err) return err;
 
-    if (!*out_storage) {
-        /* A root of the profile with no claim on it, and the table says which:
-         * the namer's last rung is the deepest root of this very table, asker
-         * and location (core/manifest.c manifest_ascend), and it answers NULL
-         * there and nowhere else — which is mount_root_at's own definition. The
-         * sentence is the root's, shared with every verb that acts on one path
-         * (infra/mount.h mount_root_refuse). */
-        return mount_root_refuse(mount_root_at(mounts, profile, location));
-    }
-
-    return NULL;
+    return err;
 }
 
 /**

@@ -225,16 +225,15 @@ error_t *mount_table_build(
      * target: a nameless binding is a caller's bug, and it would be a root of
      * every namespace — the machine-wide name this module does not produce.
      * Establishing it here is what lets namespace_holds read `m->profile` as
-     * the whole of whose a root is, for both views at once, and lets the noun
-     * name a binder without asking whether there is one (mount_root_describe).
-     * The target is the type's contract too, and is refused when it is not absolute
-     * and folded (sys/filesystem.h fs_is_folded): a relative row is no path on
-     * this machine, and a `//`, a `.` or a trailing slash would key claims no
-     * argument can spell. Neither reaches here — a row's target is the store's,
-     * whose column holds no other shape (core/state.c), and a command's own binding
-     * passed mount_validate_target — so one arriving is a caller's bug, refused
-     * as a nameless binding is, naming the profile. Establishing both here is
-     * what lets mount_resolve join every root with one separator, unconditionally.
+     * the whole of whose a root is, for both views at once. The target is the
+     * type's contract too, and is refused when it is not absolute and folded
+     * (sys/filesystem.h fs_is_folded): a relative row is no path on this machine,
+     * and a `//`, a `.` or a trailing slash would key claims no argument can
+     * spell. Neither reaches here — a row's target is the store's, whose column
+     * holds no other shape (core/state.c), and a command's own binding passed
+     * mount_validate_target — so one arriving is a caller's bug, refused as a
+     * nameless binding is, naming the profile. Establishing both here is what
+     * lets mount_resolve join every root with one separator, unconditionally.
      * NULL contributes no mount: the profile is bound nowhere in this table,
      * which the view records (core/manifest.h manifest_unbound). */
     size_t n = 0;
@@ -295,16 +294,6 @@ error_t *mount_table_build(
     return NULL;
 }
 
-const mount_root_t *mount_root_at(
-    const mount_table_t *table, const char *profile, const char *location
-) {
-    const char *tail = NULL;
-    const mount_root_t *root =
-        mount_root_above(table, profile, location, &tail);
-
-    return root && *tail == '\0' ? root : NULL;
-}
-
 const mount_root_t *mount_root_of(
     const mount_table_t *table, const char *profile, label_t label
 ) {
@@ -314,46 +303,6 @@ const mount_root_t *mount_root_of(
     }
 
     return NULL;
-}
-
-const char *mount_root_describe(
-    const mount_root_t *root, char *buf, size_t size
-) {
-    /* The switch's tail, a defined answer and not the caller's stack: -Wswitch
-     * proves no label reaches it, so the check is elided and a `%s` would print
-     * whatever the buffer held. A default: would buy the same and lose the
-     * exhaustiveness proof — core/metadata.c metadata_ownership's ruling, and
-     * the reading core/workspace.c's relocation switch gets from its memset. */
-    buf[0] = '\0';
-
-    /* The one switch over a label's meaning on a screen. A bound root names its
-     * binder: the profile is the build's, refused when a binding names none
-     * (mount_table_build), so there is no arm where it could be absent. */
-    switch (root->label) {
-        case LABEL_HOME:
-            snprintf(buf, size, "your home directory");
-            break;
-        case LABEL_ROOT:
-            snprintf(buf, size, "the filesystem root");
-            break;
-        case LABEL_CUSTOM:
-            snprintf(buf, size, "the deployment target of profile '%s'", root->profile);
-            break;
-    }
-
-    return buf;
-}
-
-/* The one sentence four verbs share, said of the root and nothing else: the place
- * is the root's own spelling, which is the argument's too — a key is folded where
- * it is made and a find answers by exact equality (infra/mount.h). */
-error_t *mount_root_refuse(const mount_root_t *root) {
-    char buf[MOUNT_NOUN_MAX];
-
-    return ERROR(
-        ERR_INVALID_ARG, "'%s' is %s: name what is inside it", root->location,
-        mount_root_describe(root, buf, sizeof(buf))
-    );
 }
 
 error_t *mount_resolve(

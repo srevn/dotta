@@ -77,18 +77,16 @@ typedef struct {
  * The walk: what every frame reads, and the two lists it fills
  *
  * `listing` is this command's own claims, which is exactly the layer
- * manifest_name reads as `pending`: location -> &item->claim, with a NULL *value*
- * for a location entered without claiming (a root met from above). hashmap_has
- * says this command settled the location, hashmap_get says it claimed it. So
- * overlapping CLI arguments (~/.config and ~/.config/fish) list each path once
- * — a directory already walked is skipped with its subtree, a file already listed
- * is not listed again — and every path beneath one already listed is named from
- * its claim, which is why no frame is carried down the walk. The key is the
- * location, so two spellings of one argument — `~/x` beside its absolute, `./x`
- * beside `~/x` from inside HOME — are one key; a link is a component, so a path
- * through one and the path around it are two, as two claims through and around
- * it are two claims (infra/mount.h). Keys and values borrow the arena the items
- * live in.
+ * manifest_name reads as `pending`: location -> &item->claim, one entry per
+ * location this command settled and every entry a claim (list_path). So overlapping
+ * CLI arguments (~/.config and ~/.config/fish) list each path once — a directory
+ * already walked is skipped with its subtree, a file already listed is not listed
+ * again — and every path beneath one already listed is named from its claim,
+ * which is why no frame is carried down the walk. The key is the location, so
+ * two spellings of one argument — `~/x` beside its absolute, `./x` beside `~/x`
+ * from inside HOME — are one key; a link is a component, so a path through one
+ * and the path around it are two, as two claims through and around it are two
+ * claims (infra/mount.h). Keys and values borrow the arena the items live in.
  *
  * `view` is the branch as this command opened it: this profile's contribution
  * alone, from the tree the stage opened at, under this command's table. Every
@@ -570,8 +568,8 @@ static error_t *admit_name(
  * manifest_name over `listing`) — and the recursion names it again for no one.
  * Another profile's target is an ordinary directory here: the walk lists it and
  * enters it, and what it finds beneath is named portably (infra/mount.h). A child
- * that is one of *this* profile's roots has no name at all: it is entered unlisted
- * when it is a directory, and skipped otherwise.
+ * that is one of *this* profile's roots is named by its label's word and listed
+ * like any directory — or, a link standing at the spelling, like any link.
  *
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
  * kind the profile's own claim at the location contradicts, and a name the commit
@@ -687,9 +685,8 @@ static error_t *collect_tree(
 
         /* The crossing: what this profile calls the child — the claim standing
          * there, this command's own or the branch's, else the composition beneath
-         * the nearest claim above it — or nothing when the child is one of the
-         * profile's own roots, which has no name in the namespace and so is neither
-         * excludable nor listed. */
+         * the nearest claim above it, else the label of the root it lies under,
+         * the word alone where the child is one of this profile's own roots. */
         const char *child_storage = NULL;
         err = manifest_name(
             walk->view, walk->profile, child_fs, walk->listing, arena,
@@ -700,86 +697,70 @@ static error_t *collect_tree(
             goto cleanup;
         }
 
-        if (!child_storage) {
-            if (kind != PATH_KIND_DIRECTORY) {
-                /* A symlink standing at one of this profile's own roots — a target
-                 * bound through a link, met beneath the directory that holds
-                 * it. The walk does not follow symlinks (find -H's rule, whose
-                 * other half is the argument arm: a root named on the command
-                 * line is followed, cmd_add), and the root itself has no name. */
-                output_info(out, OUTPUT_VERBOSE, "Skipped root: %s", child_fs);
-                continue;
+        /* Check exclude patterns */
+        gitignore_match_t match;
+        if (is_excluded(walk, child_fs, child_storage, kind, &match)) {
+            if (match.decided) {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
+                    ignore_origin_describe((ignore_origin_t) match.origin),
+                    match.source
+                );
+            } else {
+                output_info(
+                    out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
+                    child_fs
+                );
             }
+            continue;
+        }
 
-            /* A root met from above: entered and never listed, so the frames
-             * below it compose beneath its label and nothing is settled twice. */
-            err = hashmap_set(walk->listing, child_fs, NULL);
-        } else {
-            /* Check exclude patterns */
-            gitignore_match_t match;
-            if (is_excluded(walk, child_fs, child_storage, kind, &match)) {
-                if (match.decided) {
-                    output_info(
-                        out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
-                        ignore_origin_describe((ignore_origin_t) match.origin),
-                        match.source
-                    );
-                } else {
-                    output_info(
-                        out, OUTPUT_VERBOSE, "Excluded: %s (source .gitignore)",
-                        child_fs
-                    );
-                }
-                continue;
-            }
-
-            /* What the profile already claims at the location, against what stands
-             * there now. The row is the location's own authority on kind, a derived
-             * one included — it says the profile holds a subtree beneath the
-             * path, which a path that became a file cannot carry — and it is
-             * the one reading that sees a claim with nothing beneath it for either
-             * of the branch's documents to find, where admit_name below covers
-             * the rest, by the name. */
-            const manifest_row_t *held = manifest_lookup_claim(
-                walk->view, walk->profile, child_fs
+        /* What the profile already claims at the location, against what stands
+         * there now. The row is the location's own authority on kind, a derived
+         * one included — it says the profile holds a subtree beneath the path,
+         * which a path that became a file cannot carry — and it is the one reading
+         * that sees a claim with nothing beneath it for either of the branch's
+         * documents to find, where admit_name below covers the rest, by the
+         * name. */
+        const manifest_row_t *held = manifest_lookup_claim(
+            walk->view, walk->profile, child_fs
+        );
+        if (held && path_type_kind(held->type) != kind) {
+            output_warning(
+                out, OUTPUT_NORMAL,
+                "Skipping '%s': profile '%s' holds it as the %s '%s', and a "
+                "%s stands there now", child_fs, walk->profile,
+                held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
+                held->storage_path, fs_stat_noun(&st)
             );
-            if (held && path_type_kind(held->type) != kind) {
-                output_warning(
-                    out, OUTPUT_NORMAL,
-                    "Skipping '%s': profile '%s' holds it as the %s '%s', and a "
-                    "%s stands there now", child_fs, walk->profile,
-                    held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
-                    held->storage_path, fs_stat_noun(&st)
-                );
-                continue;
-            }
-
-            /* What the commit can hold, asked before a byte is read. Only a
-             * conflict is a verdict about the path — a name the tree or the sheet
-             * has no room for, or one Git will not hold (sys/stage.h); a failure
-             * to decide is the run failing, and publishing a selection past one
-             * would commit a silently partial capture. */
-            err = admit_name(walk, child_storage, kind);
-            if (err) {
-                if (error_code(err) != ERR_CONFLICT) goto cleanup;
-                output_warning(
-                    out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
-                    error_message(err)
-                );
-                error_free(err);
-                err = NULL;
-                continue;
-            }
-
-            err = list_path(walk, child_fs, child_storage, occupant);
+            continue;
         }
 
-        /* Settled either way, so the descent is one statement: a listed directory
-         * and a root entered unlisted are both walked, and nothing else is. */
-        if (!err && kind == PATH_KIND_DIRECTORY) {
-            err = collect_tree(walk, child_fs, depth + 1);
+        /* What the commit can hold, asked before a byte is read. Only a conflict
+         * is a verdict about the path — a name the tree or the sheet has no room
+         * for, or one Git will not hold (sys/stage.h); a failure to decide is
+         * the run failing, and publishing a selection past one would commit a
+         * silently partial capture. */
+        err = admit_name(walk, child_storage, kind);
+        if (err) {
+            if (error_code(err) != ERR_CONFLICT) goto cleanup;
+            output_warning(
+                out, OUTPUT_NORMAL, "Skipping '%s': %s", child_fs,
+                error_message(err)
+            );
+            error_free(err);
+            err = NULL;
+            continue;
         }
+
+        err = list_path(walk, child_fs, child_storage, occupant);
         if (err) goto cleanup;
+
+        /* Settled, so the descent is one statement. */
+        if (kind == PATH_KIND_DIRECTORY) {
+            err = collect_tree(walk, child_fs, depth + 1);
+            if (err) goto cleanup;
+        }
     }
 
 cleanup:
@@ -833,11 +814,6 @@ static error_t *refuse_moved_name(const add_walk_t *walk) {
         if (err) {
             return error_wrap(err, "Failed to name '%s'", location);
         }
-        /* `next` is never NULL: every location in this slice is one the profile
-         * names more than once, a contested group holds only explicit rows — a
-         * derived claim is skipped where one is held and replaced where it holds
-         * (core/manifest.c manifest_contribute) — so the namer's leaf clause
-         * answers a name there and the ascent is not reached. */
         if (strcmp(kept, next) == 0) continue;   /* nothing moved here */
 
         /* The one selection that may move a name: the command captured the location
@@ -1144,10 +1120,9 @@ static error_t *create_commit(
     CHECK_NULL(out_committed);
 
     /* The names this commit takes, borrowed from the claims the walk listed them
-     * under: every listed path has one (list_path), where a location entered
-     * without claiming is the listing's NULL value and no list's member. Both
-     * kinds, in the order every other reader of the two takes them. The message
-     * reads them once and the arena outlives the call, so nothing is copied. */
+     * under: every listed path has one (list_path). Both kinds, in the order
+     * every other reader of the two takes them. The message reads them once and
+     * the arena outlives the call, so nothing is copied. */
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
     size_t count = walk->files.count + walk->directories.count;
 
@@ -1983,7 +1958,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * and never a skip. No gate on the kind: an inode is unique to its device,
          * so nothing but the store's own directory can carry the store's pair,
          * and the lstat is the argument's own — a symlink that reaches the store
-         * is a leaf here, and the root arm below asks the other stat. */
+         * is a leaf here, and is captured as one. */
         if (st.st_dev == walk.store_dev && st.st_ino == walk.store_ino) {
             err = ERROR(
                 ERR_INVALID_ARG,
@@ -1997,41 +1972,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * new — a second spelling of one argument, or an argument beneath a
          * directory already walked — and a spelling simply moves on. A typed
          * name is the one input that can disagree with what was settled, so it
-         * is the only one the gate owes a sentence. */
-        if (hashmap_has(walk.listing, location)) {
-            if (!typed) continue;
-
-            const manifest_claim_t *listed = hashmap_get(walk.listing, location);
-            if (!listed) {
-                /* Entered without claiming, which happens at a root of the profile
-                 * alone — so the table answers, as it did when the entry was
-                 * made. The walk beneath it has already composed its children
-                 * under the root's label, and a claim admitted now would move
-                 * their prefix.
-                 *
-                 * Two structures could disagree here — this command's listing
-                 * and the table it was built from — so the miss is said rather
-                 * than dereferenced, which every other noun site can do because
-                 * a find two lines above established its root. */
-                const mount_root_t *root = mount_root_at(mounts, opts->profile, location);
-                if (!root) {
-                    err = ERROR(
-                        ERR_INTERNAL,
-                        "'%s' was entered as a root the table does not hold", file
-                    );
-                    goto cleanup;
-                }
-                char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(root, buf, sizeof(buf));
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "'%s' names %s, which this command has already walked through\n\n"
-                    "A directory must be named before the paths beneath it.",
-                    file, noun
-                );
-                goto cleanup;
-            }
-            if (strcmp(listed->storage_path, typed) != 0) {
+         * is the only one the gate owes a sentence. One lookup answers both:
+         * every location this command listed carries the claim it was listed
+         * under (list_path), a root's included, so an entry is a claim and there
+         * is no absent value to fold. */
+        const manifest_claim_t *listed = hashmap_get(walk.listing, location);
+        if (listed) {
+            if (typed && strcmp(listed->storage_path, typed) != 0) {
                 char shown[PATH_MAX];
                 output_format_path(location, identity()->home, shown, sizeof(shown));
                 err = ERROR(
@@ -2052,8 +1999,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         /* The name the capture lands under: the user's own where they typed one,
          * and otherwise what this profile calls the location — the claim standing
          * there, this command's own or the branch's, else the composition beneath
-         * the nearest claim above it, else what the profile's own roots make of
-         * it, which is NULL at a root. */
+         * the nearest claim above it, else the label of the root it lies under,
+         * which at the root itself is the word alone. */
         const char *storage_path = typed;
         if (!storage_path) {
             err = manifest_name(
@@ -2066,178 +2013,101 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         }
 
-        if (!storage_path) {
-            /* One of this profile's own roots ($HOME, "/", its target), which
-             * has no name: a directory is walked through unlisted and its
-             * descendants are listed. A root is entered by its spelling whatever
-             * stands there — the command line named it, and a link standing at
-             * a root reaches the directory the binding means: find -H's rule,
-             * one rule with two halves, of which collect_tree's "Skipped root"
-             * arm is the other (a link met in a walk is not followed). A link
-             * to nothing, and anything that is not a directory, still cannot be
-             * added itself. A root the machine's own word placed, whose link
-             * reaches the filesystem root, is refused: it would name the whole
-             * machine home/, a portable label that lands under the next machine's
-             * HOME. A root the user bound may reach it — the machine is then
-             * named custom/, which the next machine binds where it likes, a target
-             * at "/" being a binding like any other (infra/mount.h) — so the
-             * exemption reads which profile bound the root, and no label, and a
-             * binding at HOME's own spelling is that profile's binding by the
-             * table's tie. A link that reaches dotta's own store is refused under
-             * every label: the exemption the filesystem root gives a target has
-             * no counterpart here, a custom/ binding at the store being the worst
-             * of the three rather than the tolerable one. A link is the only
-             * shape asked, that being what the command line brought; a root
-             * standing at the filesystem root as a directory in its own right —
-             * a bind mount at HOME — is entered like any other, and one standing
-             * at the store was refused by its own lstat above. A typed name never
-             * arrives here, the user's own name being the answer.
-             *
-             * `root` is non-NULL: manifest_name answered NULL, which it does
-             * only where a root of the profile stands at the location —
-             * mount_root_at's own definition (infra/mount.h). */
-            const mount_root_t *root = mount_root_at(mounts, opts->profile, location);
-            struct stat reached;
-            if (occupant == FS_OCCUPANT_SYMLINK && fs_stat(location, &reached) == 0 &&
-                S_ISDIR(reached.st_mode)) {
-                struct stat slash;
-                if (!root->profile && fs_stat("/", &slash) == 0 &&
-                    reached.st_dev == slash.st_dev && reached.st_ino == slash.st_ino) {
-                    err = ERROR(
-                        ERR_INVALID_ARG,
-                        "'%s' reaches the filesystem root and cannot be added "
-                        "itself; name what is inside it", file
-                    );
-                    goto cleanup;
-                }
-
-                /* The other directory no root may reach. This is the one stat
-                 * that sees through the link, and the promotion below is what
-                 * makes the walk follow it — so a root whose spelling reaches
-                 * the store would enumerate the object database under the root's
-                 * own label, and the next apply would write the profile's bytes
-                 * back over it. No remedy is named: the store has no inside a
-                 * profile may hold. */
-                if (reached.st_dev == walk.store_dev &&
-                    reached.st_ino == walk.store_ino) {
-                    err = ERROR(
-                        ERR_INVALID_ARG,
-                        "'%s' reaches dotta's own store, and a profile holds no "
-                        "part of it", file
-                    );
-                    goto cleanup;
-                }
-
-                kind = PATH_KIND_DIRECTORY;
-            }
-            if (kind != PATH_KIND_DIRECTORY) {
-                char buf[MOUNT_NOUN_MAX];
-                const char *noun = mount_root_describe(root, buf, sizeof(buf));
+        /* A path named on the command line is subject to the rules like any the
+         * walk finds, but a verdict against it is an error, not a silent skip:
+         * the user asked for it by name, and the answer says which rule stands
+         * in the way and how to get past it. The source tree's .gitignore reads
+         * the location and not the name, so a root standing inside a repository
+         * whose rules name it is refused here as any ignored directory is; at
+         * "/" the filter names no entry and asks nothing (sys/source.h). */
+        gitignore_match_t match;
+        if (is_excluded(&walk, location, storage_path, kind, &match)) {
+            if (match.decided) {
+                err = ERROR(
+                    ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
+                    "Add it anyway with -e '!%s' — one -e per rule that "
+                    "excludes it — or edit the rule with 'dotta ignore'",
+                    file, ignore_origin_describe((ignore_origin_t) match.origin),
+                    match.source, match.source
+                );
+            } else {
                 err = ERROR(
                     ERR_INVALID_ARG,
-                    "'%s' is %s and cannot be added itself; name what is inside it",
-                    file, noun
+                    "'%s' is ignored by its source tree's .gitignore\n"
+                    "Set respect_gitignore = false in the config to add it",
+                    file
                 );
-                goto cleanup;
             }
-
-            err = hashmap_set(walk.listing, location, NULL);
-            if (err) goto cleanup;
-        } else {
-            /* A path named on the command line is subject to the rules like any
-             * the walk finds, but a verdict against it is an error, not a silent
-             * skip: the user asked for it by name, and the answer says which
-             * rule stands in the way and how to get past it. */
-            gitignore_match_t match;
-            if (is_excluded(&walk, location, storage_path, kind, &match)) {
-                if (match.decided) {
-                    err = ERROR(
-                        ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
-                        "Add it anyway with -e '!%s' — one -e per rule that "
-                        "excludes it — or edit the rule with 'dotta ignore'",
-                        file, ignore_origin_describe((ignore_origin_t) match.origin),
-                        match.source, match.source
-                    );
-                } else {
-                    err = ERROR(
-                        ERR_INVALID_ARG,
-                        "'%s' is ignored by its source tree's .gitignore\n"
-                        "Set respect_gitignore = false in the config to add it",
-                        file
-                    );
-                }
-                goto cleanup;
-            }
-
-            /* What the profile already claims at the location, against what stands
-             * there now. The row is the location's own authority on kind, a derived
-             * one included — it says the profile holds a subtree beneath the
-             * path, which a path that became a file cannot carry — and it is
-             * the one reading that sees a claim with nothing beneath it for either
-             * document to find, where the name's own admission below covers the
-             * rest. The removal is name-shaped: it takes that claim and everything
-             * beneath it, under every topology, where a filesystem-shaped one
-             * addresses another key at a binder's own spelling. */
-            const manifest_row_t *held = manifest_lookup_claim(
-                view, opts->profile, location
-            );
-            if (held && path_type_kind(held->type) != kind) {
-                char shown[PATH_MAX];
-                output_format_path(location, identity()->home, shown, sizeof(shown));
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Profile '%s' holds '%s' as the %s '%s', and a %s stands "
-                    "there now\n\n"
-                    "  dotta remove %s %s   gives that claim up, and everything "
-                    "beneath it",
-                    opts->profile, shown,
-                    held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
-                    held->storage_path, fs_stat_noun(&st),
-                    opts->profile, held->storage_path
-                );
-                goto cleanup;
-            }
-
-            /* The name, by the profile's own claims — the authority on names. A
-             * typed name is the one input the namer did not produce, so it is
-             * the one place a second name for one location can be born; a name
-             * the profile already holds is a re-capture, gated by --force at
-             * the pre-flight, and a derived claim names nothing and blocks nothing
-             * (core/manifest.h manifest_is_derived). revert.c refuse_second_name
-             * is the same condition for the same rule, with its own verb's
-             * remedies. */
-            if (typed && held && !manifest_is_derived(held) &&
-                !manifest_holds_name(view, opts->profile, location, typed)) {
-                char shown[PATH_MAX];
-                output_format_path(location, identity()->home, shown, sizeof(shown));
-                err = ERROR(
-                    ERR_INVALID_ARG,
-                    "Profile '%s' names '%s' as '%s'\n\n"
-                    "'%s' would be a second name for it, and a profile names a "
-                    "location once.\n"
-                    "  dotta add %s --force %s   re-captures it under the name "
-                    "it has\n"
-                    "  dotta remove %s %s   gives that name up first",
-                    opts->profile, shown, held->storage_path, typed,
-                    opts->profile, held->storage_path,
-                    opts->profile, held->storage_path
-                );
-                goto cleanup;
-            }
-
-            /* What the commit can hold, before a byte is read. The verdict a
-             * walked entry answers with a skip is an error here: the user asked
-             * for this path by name, and working around a claim they did not
-             * mention is not this command's to do. */
-            err = admit_name(&walk, storage_path, kind);
-            if (err) {
-                err = error_wrap(err, "Cannot add '%s'", file);
-                goto cleanup;
-            }
-
-            err = list_path(&walk, location, storage_path, occupant);
-            if (err) goto cleanup;
+            goto cleanup;
         }
+
+        /* What the profile already claims at the location, against what stands
+         * there now. The row is the location's own authority on kind, a derived
+         * one included — it says the profile holds a subtree beneath the path,
+         * which a path that became a file cannot carry — and it is the one reading
+         * that sees a claim with nothing beneath it for either document to find,
+         * where the name's own admission below covers the rest. The removal is
+         * name-shaped: it takes that claim and everything beneath it, under every
+         * topology, where a filesystem-shaped one addresses another key at a
+         * binder's own spelling. */
+        const manifest_row_t *held = manifest_lookup_claim(
+            view, opts->profile, location
+        );
+        if (held && path_type_kind(held->type) != kind) {
+            char shown[PATH_MAX];
+            output_format_path(location, identity()->home, shown, sizeof(shown));
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Profile '%s' holds '%s' as the %s '%s', and a %s stands "
+                "there now\n\n"
+                "  dotta remove %s %s   gives that claim up, and everything "
+                "beneath it",
+                opts->profile, shown,
+                held->type == PATH_TYPE_DIRECTORY ? "directory" : "file",
+                held->storage_path, fs_stat_noun(&st),
+                opts->profile, held->storage_path
+            );
+            goto cleanup;
+        }
+
+        /* The name, by the profile's own claims — the authority on names. A typed
+         * name is the one input the namer did not produce, so it is the one place
+         * a second name for one location can be born; a name the profile already
+         * holds is a re-capture, gated by --force at the pre-flight, and a derived
+         * claim names nothing and blocks nothing (core/manifest.h
+         * manifest_is_derived). revert.c refuse_second_name is the same condition
+         * for the same rule, with its own verb's remedies. */
+        if (typed && held && !manifest_is_derived(held) &&
+            !manifest_holds_name(view, opts->profile, location, typed)) {
+            char shown[PATH_MAX];
+            output_format_path(location, identity()->home, shown, sizeof(shown));
+            err = ERROR(
+                ERR_INVALID_ARG,
+                "Profile '%s' names '%s' as '%s'\n\n"
+                "'%s' would be a second name for it, and a profile names a "
+                "location once.\n"
+                "  dotta add %s --force %s   re-captures it under the name "
+                "it has\n"
+                "  dotta remove %s %s   gives that name up first",
+                opts->profile, shown, held->storage_path, typed,
+                opts->profile, held->storage_path,
+                opts->profile, held->storage_path
+            );
+            goto cleanup;
+        }
+
+        /* What the commit can hold, before a byte is read. The verdict a walked
+         * entry answers with a skip is an error here: the user asked for this
+         * path by name, and working around a claim they did not mention is not
+         * this command's to do. */
+        err = admit_name(&walk, storage_path, kind);
+        if (err) {
+            err = error_wrap(err, "Cannot add '%s'", file);
+            goto cleanup;
+        }
+
+        err = list_path(&walk, location, storage_path, occupant);
+        if (err) goto cleanup;
 
         if (kind == PATH_KIND_DIRECTORY) {
             err = collect_tree(&walk, location, 0);
@@ -2255,16 +2125,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 dirs_found, dirs_found == 1 ? "y" : "ies", location
             );
         }
-    }
-
-    /* Check if we have anything to add (files or directories). A named path the
-     * rules refused was an error above, so this is a mount root the walk found
-     * nothing listable beneath — either because nothing is there, or because
-     * every entry was excluded, unsupported, or a name the commit has no room
-     * for. */
-    if (walk.files.count == 0 && walk.directories.count == 0) {
-        err = ERROR(ERR_INVALID_ARG, "No files or directories to add");
-        goto cleanup;
     }
 
     /* A file listed at a name the sheet claims a directory at takes that claim's
@@ -2538,9 +2398,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * The walk lists every directory it walks into — including the argument itself
      * — so this loop captures the full tree, not just the named entry points. A
-     * mount root reached by its spelling ($HOME, "/", --target) is not listed:
-     * the namer has no name for it yet, and its descendants are captured normally.
-     * Named by its label's word (`add p home/`) it is listed like any directory.
+     * root named by its spelling ($HOME, "/", --target) or by its label's word
+     * (`add p home/`) is listed like any directory, and captured like one.
      *
      * Required, where update's sibling loop warns and carries on: a directory
      * this command listed is the *name* its walk composed beneath, so a claim
@@ -2728,9 +2587,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * rolled back — and not a lock nothing will use again. */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
-    /* Show summary on success. The empty selection was refused above and both
-     * capture loops are total over their lists, so there is always something to
-     * report here. */
+    /* Show summary on success. Every argument lists itself or ends the command,
+     * and both capture loops are total over their lists, so there is always
+     * something to report here. */
 
     /* What the capture took, both kinds. A commit that moved nothing names what
      * it found already standing, both kinds in one phrase — the directories were
@@ -2811,7 +2670,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     } else if (record.enabled) {
         /* What the record took of what the capture listed. The unit is the path
          * — one row per managed path, both kinds — and the kinds are named where
-         * they were captured, above. */
+         * they were captured, above. Never zero: every argument lists itself or
+         * ends the command (cmd_add's loop), so the count line and the notes
+         * below always have a capture to speak of. */
         const size_t captured = walk.files.count + walk.directories.count;
         const bool whole = record.anchored == captured;
 

@@ -56,12 +56,14 @@ typedef struct {
  * other path is named by the claim standing at it — this command's own where it
  * has listed one there, else the profile's, else the composition beneath the
  * nearest directory claim above it, else the label of the root it lies under
- * (core/manifest.h manifest_name). So a re-capture lands on the name the profile
- * already has, whatever binding arrived since, and a fresh path beneath a tracked
- * directory takes that directory's name. A typed name is refused where it would
- * give the profile a second name for one location, which is the one place a second
- * name could be born. The receipt counts the paths captured under each label:
- * which label a name keeps is the profile's history, and no argument says it.
+ * (core/manifest.h manifest_name) — the word alone at the root itself, so `add
+ * p ~` and `add p home/` name one claim. So a re-capture lands on the name the
+ * profile already has, whatever binding arrived since, and a fresh path beneath
+ * a tracked directory takes that directory's name. A typed name is refused where
+ * it would give the profile a second name for one location, which is the one
+ * place a second name could be born. The receipt counts the paths captured under
+ * each label: which label a name keeps is the profile's history, and no argument
+ * says it.
  *
  * **The chosen name is the subject of two matchers**, its label stripped: the
  * `.dottaignore` layers and the auto-encryption patterns (core/ignore,

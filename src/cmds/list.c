@@ -674,18 +674,6 @@ static error_t *list_file_history(
         const manifest_row_t *row = NULL;
         if (arg.key == PATH_KEY_LOCATION) {
             row = manifest_lookup(manifest, arg.location);
-            if (!row) {
-                /* No row is not the same as no thing: a location standing at a
-                 * root of the view is a place, and is refused in the root's own
-                 * words as it is under -p (core/manifest.h manifest_root_at). A
-                 * name is never a root, so only this arm asks. The root is the
-                 * table's and outlives the index freed here. */
-                const mount_root_t *root = manifest_root_at(manifest, arg.location);
-                if (root) {
-                    manifest_free(manifest);
-                    return mount_root_refuse(root);
-                }
-            }
         } else {
             size_t holders = manifest_holders(manifest, arg.storage_path, &row);
             if (holders > 1) {

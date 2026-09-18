@@ -844,16 +844,12 @@ static bool stands_as_directory(
  * the enabled set's. Neither is declared: `ignore` is an editing command whose
  * other four surfaces must build nothing.
  *
- * A NULL name is a root of that asker with no claim standing on it — a root has
- * no canonical name and no pattern can match it — and is answered inside the
- * asker's own turn, the one place that can name the root a binding's own target
- * is. A label argument is not that answer known earlier: a place this asker has
- * no name for and a namespace that names no place are two facts, and only the
- * first is an asker's. An asker that never got a subject cast no verdict, which
- * is why the summary reads two accumulators and not one: a path no asker can
- * name is neither ignored nor tracked. Neither accumulator is written for a label,
- * and that is the other half of why the door answers above them: they report
- * turns taken, and a namespace takes none.
+ * Every asker gets a subject, so every turn casts a verdict: a name's own tail,
+ * or the tail of the name the asker gives the location — `""` at a root of its
+ * own, which no rule reaches (base/gitignore.c), so a root tests NOT IGNORED
+ * for every asker and its entries are what a pattern can name. The summary
+ * therefore reads one accumulator: a run over enabled profiles ends TRACKED or
+ * IGNORED, and there is no third thing for it to say.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -1027,16 +1023,13 @@ static error_t *test_path_ignore(
     }
 
     bool any_ignored = false;
-    bool any_named = false;
 
     for (size_t i = 0; i < asker_count; i++) {
         const char *asker = askers[i];
 
         /* Whose answer this is, on every line of the turn. One value, so each
          * message below is spelled once and no site can forget the form the asker
-         * that is no profile needs. Every line of this loop is one asker's, which
-         * is why the door above answers a label rather than taking a turn here:
-         * that answer is nobody's. */
+         * that is no profile needs. */
         char who[IGNORE_ASKER_MAX] = "";
         if (asker) {
             snprintf(who, sizeof(who), "Profile '%s': ", asker);
@@ -1060,26 +1053,13 @@ static error_t *test_path_ignore(
             );
         } else {
             /* What this asker calls the location: the claims it holds above it,
-             * else its own roots. NULL is a root of this asker with no claim
-             * standing on it — the namer answers NULL there and nowhere else,
-             * so the table says which root it is, and no pattern can match a
-             * root. */
+             * else its own roots — the word alone at one of them, whose tail is
+             * "" and which no rule reaches. */
             const char *name = NULL;
             err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
             if (err) goto cleanup;
-            if (!name) {
-                const mount_root_t *root = mount_root_at(mounts, asker, location);
-                char buf[MOUNT_NOUN_MAX];
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "%s'%s' is %s: it has no name for a pattern to match",
-                    who, test_path, mount_root_describe(root, buf, sizeof(buf))
-                );
-                continue;
-            }
             subject = label_tail(name);
         }
-        any_named = true;
 
         output_info(
             out, OUTPUT_VERBOSE, "%sMatching '%s' as '%s'%s", who, test_path,
@@ -1125,13 +1105,8 @@ static error_t *test_path_ignore(
                 out, OUTPUT_NORMAL,
                 "Result: Path would be IGNORED during add/update operations"
             );
-        } else if (any_named) {
-            output_success(out, OUTPUT_NORMAL, "Result: Path would be TRACKED");
         } else {
-            output_info(
-                out, OUTPUT_NORMAL,
-                "Result: No enabled profile has a name for this path"
-            );
+            output_success(out, OUTPUT_NORMAL, "Result: Path would be TRACKED");
         }
     }
 

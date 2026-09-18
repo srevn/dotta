@@ -296,9 +296,10 @@ static error_t *refuse_second_name(
  * and no third state: a directory or a submodule by its own noun — under the
  * fallback's name where the fallback found it, that name not being the one the
  * user typed, and the difference being the information — and an absence worded
- * from the key the user named, a location that is a root of the profile saying
- * so instead, after both rungs have answered rather than before, because a root
- * the commit held a file at is one file.
+ * from the key the user named, a location the commit held nothing at included,
+ * whether or not a root of the profile stands there: a root is a directory the
+ * profile may hold a claim at like any other, so what the commit held is the
+ * whole question and where the place stands is none of it.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param target_tree The target commit's tree (must not be NULL)
@@ -391,13 +392,6 @@ static error_t *entry_to_restore(
      * or the other and cannot reach here; if it ever did, this block is honest
      * for it too. */
     if (arg->key == PATH_KEY_LOCATION) {
-        const mount_root_t *root =
-            mount_root_at(ctx->run.mounts, profile, arg->location);
-        if (root) {
-            /* A place, not an absence: the sentence is the root's, shared with
-             * every verb that acts on one path (infra/mount.h). */
-            return mount_root_refuse(root);
-        }
         return ERROR(
             ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
             profile, arg->location, commit

@@ -454,9 +454,12 @@ static manifest_claim_t manifest_row_claim(const manifest_row_t *row) {
  * settle will keep (209 C3 §1.10). Spelling the rule once is what keeps the name
  * the view keeps and the name a namer gives from drifting apart.
  *
- * `fresh` is NULL where the location is a root of the profile — the ascent's
- * own answer, a root having no name — and the bytewise-least then stands, no
- * name being the fresh one there.
+ * At a root of the profile the fresh name is the word the table's tie chose, so
+ * a group holding both `home` and `root` on a machine whose HOME is "/" keeps
+ * `root` — the portable reading, and the one every path beneath that directory
+ * composes under (infra/mount.h mount_root_above). Read the other way the view
+ * and the table would disagree about one directory: the group would keep `home`
+ * as the bytewise-least while the ascent named `/etc/x` beneath the sentinel.
  *
  * @param n What the question is asked under (must not be NULL)
  * @param location The location the group contends for (must not be NULL)
@@ -481,7 +484,7 @@ static error_t *manifest_decide(
 
     /* The fresh name if a member is it, else the bytewise-least. */
     *out_kept = group[0];
-    for (size_t g = 0; fresh && group[g]; g++) {
+    for (size_t g = 0; group[g]; g++) {
         if (strcmp(group[g]->storage_path, fresh) != 0) continue;
         *out_kept = group[g];
         break;
@@ -509,10 +512,8 @@ static error_t *manifest_decide(
  * committed answers alone, whatever its kind: it is the nearer statement about
  * the place, so a staged FILE names its own location and nothing under it,
  * shadowing a tracked directory the branch holds at the same location exactly
- * as it will once committed. A location the verb entered without claiming holds
- * a NULL value, and hashmap_get folds "absent" and "entered, claimed nothing"
- * into the one answer the layer below is owed. Where the command claimed nothing
- * the profile's own committed row speaks, projected into the same pair.
+ * as it will once committed. Where the command claimed nothing the profile's
+ * own committed row speaks, projected into the same pair.
  *
  * The answer is what the profile's next contribution will stand at the location,
  * given the claims the asker has admitted **so far**: naming is a snapshot taken
@@ -585,9 +586,8 @@ static error_t *manifest_standing(
  * layer (manifest_claim_beneath). An ancestor claim names nothing, and a blob
  * names its own location and nothing under it — a name beneath a file is a tree
  * entry the stage refuses — so both are climbed past. Where no claim above gave
- * a name, the root's label and the tail spell one (infra/label.h label_compose);
- * a location that *is* a root has none at all, which is the absence this answers
- * with.
+ * a name, the root's label and the tail spell one (infra/label.h label_compose),
+ * the word alone at the root itself.
  *
  * The root is the floor and not a per-rung test, because no root of the profile
  * can stand strictly between it and the location — one that did would enclose
@@ -608,15 +608,16 @@ static error_t *manifest_standing(
  * contradicts.
  *
  * The scratch copy is the arena's and abandoned, the module's idiom, and is taken
- * only where there is a rung to read: not at a root, and not for a location no
- * root encloses. How often the rest is paid is not "once per newly listed path":
- * the ascent runs for every location nothing stands at — including one a caller
- * goes on to exclude or refuse — and again at every contested location a namer
- * reads, and again at every contested rung one of those ascents passes through.
+ * for every location a root encloses — at a root the loop reads nothing of it,
+ * one bump an arm to skip it is not worth, a root being one location of at most
+ * three. How often the rest is paid is not "once per newly listed path": the
+ * ascent runs for every location nothing stands at — including one a caller goes
+ * on to exclude or refuse — and again at every contested location a namer reads,
+ * and again at every contested rung one of those ascents passes through.
  *
  * @param n What the question is asked under (must not be NULL)
  * @param location Absolute location (must not be NULL)
- * @param out_storage The composed name, NULL at a root (must not be NULL)
+ * @param out_storage The composed name, never NULL on success (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *manifest_ascend(
@@ -632,10 +633,6 @@ static error_t *manifest_ascend(
     if (!root) {
         return ERROR(ERR_INTERNAL, "No root encloses '%s'", location);
     }
-
-    /* A root of the profile: nothing of the profile's stands above its own root,
-     * and a root has no name. The absence is the answer, already written. */
-    if (*tail == '\0') return NULL;
 
     char *rung = arena_strdup(n->arena, location);
     if (!rung) {
@@ -672,7 +669,8 @@ static error_t *manifest_ascend(
         return NULL;
     }
 
-    /* Nothing of the profile's above it: the root's own label, and the tail. */
+    /* Nothing of the profile's above it: the root's own label, and the tail —
+     * the word alone at the root itself. */
     *out_storage = label_compose(n->arena, root->label, tail);
     if (!*out_storage) {
         return ERROR(ERR_MEMORY, "Failed to compose the name");
@@ -1806,29 +1804,6 @@ error_t *manifest_name(
     }
 
     return manifest_ascend(&n, location, out_storage);
-}
-
-/**
- * The root standing at a location, read through the view's precedence
- */
-const mount_root_t *manifest_root_at(
-    const manifest_t *manifest, const char *location
-) {
-    if (!manifest || !location) return NULL;
-
-    /* A binding is the more specific statement and the table gives it the tie,
-     * so every profile is asked before the machine's own roots answer: an answer
-     * carrying a binder is this profile's own — the table admits no other's —
-     * and a shared root is every profile's and belongs to the fallback, which
-     * is why only an owned answer ends the loop. Highest precedence first, as
-     * the index reads its own rows. */
-    for (size_t i = manifest->profile_count; i-- > 0;) {
-        const mount_root_t *root =
-            mount_root_at(manifest->mounts, manifest->profiles[i], location);
-        if (root && root->profile) return root;
-    }
-
-    return mount_root_at(manifest->mounts, NULL, location);
 }
 
 /**

@@ -472,9 +472,9 @@ error_t *profile_needs_target(
  * whatever its kind, so home/jail/etc/x under a binding at ~/jail is found by
  * ~/jail/etc/x and the chain above a file captured before the binding answers
  * as the claim it is; else the name the profile would give the location
- * (manifest_name) — the word a history search and a not-found line need; else a
- * root of the profile with no claim on it, refused in the root's own words
- * (infra/mount.h mount_root_refuse), one thing not being a root.
+ * (manifest_name) — the word a history search and a not-found line need, which
+ * at a root of the profile's own is that root's label's word. Two arms and no
+ * third: naming is total, so every location this is asked about has a name.
  *
  * The row before the namer is the contract, not a shortcut: a derived claim is
  * something the profile holds and nothing it names (manifest_is_derived), so

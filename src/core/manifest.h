@@ -80,10 +80,8 @@
  *     path under one profile, linear), manifest_holders (how many rows hold a
  *     name, and the one when one does), manifest_lookup_claim, manifest_name
  *     and manifest_holds_name (one profile's own contribution, whoever won the
- *     location), manifest_root_at (which root stands at a location, with nobody
- *     named — the view's precedence over the table it lends); and manifest_diff,
- *     the per-profile delta between two views that the scope-changing verbs and
- *     sync print their receipts from.
+ *     location); and manifest_diff, the per-profile delta between two views that
+ *     the scope-changing verbs and sync print their receipts from.
  *
  * Core Principles:
  *   - Pure: the view is a function of Git, the state's rows and $HOME — the same
@@ -524,8 +522,7 @@ const char *const *manifest_profiles(const manifest_t *manifest, size_t *count);
  * view, include/runtime.h); a filesystem argument to `ignore --test` and add's
  * label receipt, each of which builds a view of its own and reads the table back
  * from it rather than beside it. Show and list build one too and ask it nothing:
- * their arm reads the view by key alone, and the root question it asks over the
- * table is the view's own (manifest_root_at).
+ * their arm reads the view by key alone.
  *
  * Pure value return — no allocation, no error path.
  *
@@ -897,10 +894,10 @@ bool manifest_holds_name(
  * and the map is the asking profile's own listing, a claim of it standing in
  * for that profile's committed row at the same place and for no other profile's.
  *
- * A stored claim always names. A location a verb entered without claiming (a
- * root met from above) is stored with a NULL *value*: hashmap_has says walked,
- * hashmap_get says claimed. A NULL `storage_path` is nothing standing, and `kind`
- * says nothing then.
+ * A stored claim always names: every location the verb listed carries the claim
+ * it listed it under, a root's included (cmds/add.c list_path), so an entry in
+ * such a map is a claim and one lookup answers both questions a reader has of
+ * it. A NULL `storage_path` is nothing standing, and `kind` says nothing then.
  */
 typedef struct {
     const char *storage_path;
@@ -944,7 +941,7 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * the profile's own root and *before* that root decides, so a claim standing at
  * the root itself outranks it; else the label of the root it lies under and the
  * tail past it (infra/mount.h mount_root_above, infra/label.h label_compose),
- * which is NULL when the location is one of them. An ancestor claim names nothing,
+ * which at the root itself is the word alone. An ancestor claim names nothing,
  * and nothing is named beneath a blob. The profile's own contribution is read,
  * never the index: a location it lost to a higher profile is still named by what
  * it holds. `profile` may be NULL — the shared roots alone, as the table reads
@@ -978,7 +975,10 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * made — a cost, never a difference — and the cost exists only where a branch
  * arrived holding two names for one path.
  *
- * The answer is the caller's arena's, whichever rung produced it; NULL is a root.
+ * The answer is the caller's arena's, whichever rung produced it, and never NULL:
+ * naming is total over the locations a root encloses, which is every absolute
+ * path — the sentinel encloses them all — so no reader meets an absence and none
+ * asks a second authority what one would have meant.
  *
  * Readers: `ignore --test`'s subject, one per asker (cmds/ignore.c); the
  * prospective name a claim search falls through to (core/profiles.c
@@ -995,8 +995,8 @@ static inline const char *manifest_claim_beneath(manifest_claim_t claim) {
  * @param pending The asking profile's uncommitted claims, keyed by location
  *                (manifest_claim_t), or NULL
  * @param arena Arena that owns `*out_storage` (must not be NULL)
- * @param out_storage Arena-backed storage path, NULL at a root (must not be NULL;
- *                    NULL after an error)
+ * @param out_storage Arena-backed storage path, never NULL on success (must not
+ *                    be NULL; NULL after an error)
  * @return Error or NULL on success
  */
 error_t *manifest_name(
@@ -1006,48 +1006,6 @@ error_t *manifest_name(
     const hashmap_t *pending,
     arena_t *arena,
     const char **out_storage
-);
-
-/**
- * The root standing at `location`, read through the view's precedence
- *
- * A root is a place, so "is this location one" needs no profile named — but two
- * roots can stand at one directory (a binding over HOME, two profiles bound at
- * one target), and the table holds its roots unordered: it breaks a tie between
- * two roots of one asker and has no order to break one between two askers
- * (infra/mount.h mount_root_above). The view has one, so the view is where the
- * question is asked with nobody named: each profile in turn, highest precedence
- * first, and its own binding answers where it has one — this loop *is* the
- * tie-break, run the way the view breaks every other. The machine's own roots,
- * HOME and the sentinel, are every profile's and nobody's, so they answer last
- * and answer whatever the view holds, an empty view included.
- *
- * The profiles are the view's: the enabled set less the branches that are gone
- * (manifest_profiles). A binding whose branch left the tree stands in the table
- * and is no root this answers — that is `dotta profile validate`'s business and
- * not this one.
- *
- * `location` is a location key — absolute and folded, as every producer of one
- * makes it (infra/path.h path_input_locate, mount_resolve) — and never a storage
- * path: a name stands under no root, so a caller holding a path_input_t asks
- * this in the location arm alone.
- *
- * The answer is the table's row, lent, and the table is not the index: it outlives
- * manifest_free (manifest_mounts — the arena's for a built view, the caller's
- * for a tree view), which is what lets a caller free the view and then return
- * the refusal the root earns (infra/mount.h mount_root_refuse). A reader that
- * outlives the arena copies what it keeps, as a reader of a row does.
- *
- * Readers: show and list without a profile, where the view has no row at the
- * location — an absence there is a place, and is said as one.
- *
- * @param manifest Manifest (NULL returns NULL)
- * @param location Absolute location (NULL returns NULL)
- * @return Borrowed root, or NULL when no root of the view's stands there
- */
-const mount_root_t *manifest_root_at(
-    const manifest_t *manifest,
-    const char *location
 );
 
 /**

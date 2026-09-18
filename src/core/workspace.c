@@ -2498,14 +2498,25 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * A directory has one key — the one its frame joined, which is the one the view
  * holds a row at: the two producers of a key, mount_resolve and the walk's join,
  * agree by construction (infra/mount.h) — so one climb answers. Each step is
- * the last separator's index, or 1 beneath the root, so a rung is strictly shorter
- * than the one before it and "/" ends the climb — where no name spells a mount
- * root anyway. The key is absolute; the copy the climb truncates is the caller's
- * scratch, and abandoned.
+ * the last separator's index, or 1 for a rung beneath the root directory, so a
+ * rung is strictly shorter than the one before it; the root directory is read
+ * and ends the climb, because a claim can stand there — `root` spells it, and
+ * `home` or `custom` on a machine whose HOME or target is one (infra/label.h) —
+ * and the view places a blob at any of the three as a FILE row at that directory
+ * (core/manifest.c manifest_claim_blob). The key is absolute; the copy the climb
+ * truncates is the caller's scratch, and abandoned.
+ *
+ * The ascent over these very rungs floors on the asker's own root (core/manifest.c
+ * manifest_ascend): it is naming a location for one profile, and nothing of that
+ * profile's stands above its root. This climb has no asker — it asks what stands
+ * at a location, whoever holds it — so the root directory is its floor, as it
+ * is deploy's (core/deploy.c nearest_ancestor).
  *
  * Readers: the walk, of every directory child, and the driver, of every tracked
  * directory it is about to enumerate — an independent tracked root beneath a
  * file claim is as much beneath it as a child the walk would have stopped at.
+ * The driver probes the same rungs from a deeper start, so a blob at the root
+ * directory is always the driver's to meet first.
  *
  * @param view      The precedence-resolved view (must not be NULL)
  * @param directory The directory's key (must not be NULL)
@@ -2526,17 +2537,20 @@ static error_t *blob_over(
         return ERROR(ERR_MEMORY, "Failed to copy path");
     }
 
-    while (rung[1]) {
+    /* The guard is on the truncation and not on the read, because the root
+     * directory is its own parent (base/string.h str_path_parent_len): a climb
+     * that tested before reading would never read it, and one that truncated
+     * after it would never leave. */
+    for (;;) {
         const manifest_row_t *row = manifest_lookup(view, rung);
         if (row && row->type != PATH_TYPE_DIRECTORY) {
             *out = row;
             return NULL;
         }
+        if (!rung[1]) return NULL;
 
         rung[str_path_parent_len(rung)] = '\0';
     }
-
-    return NULL;
 }
 
 /**

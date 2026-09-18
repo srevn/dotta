@@ -2535,14 +2535,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * on disk, so its record's content-proof is kept through state_release
          * — except where the copy provably is not, or may not be, dotta's: a
          * TYPE-displaced item's path holds another kind of node, and a path beneath
-         * a displaced managed directory was only ever observed through the
-         * squatter, so what stands there is the link target's, whatever the bytes
-         * said. Either way the released fact would be false at birth, and the
-         * item takes the plain retire (a released directory needs no carve-out
-         * — the release verb's blob guard makes it a plain retire on its own).
-         * Non-fatal per row: the filesystem effect, if any, already happened,
-         * and a record that fails to settle is reported and read as an orphan
-         * again by the next apply. */
+         * a displaced managed directory was never looked at, so nothing vouches
+         * that what stands there is dotta's copy. Either way the released fact
+         * would be false at birth, and the item takes the plain retire (a released
+         * directory needs no carve-out — the release verb's blob guard makes it
+         * a plain retire on its own). Non-fatal per row: the filesystem effect,
+         * if any, already happened, and a record that fails to settle is reported
+         * and read as an orphan again by the next apply. */
         if (cleanup_result) {
             print_cleanup_results(out, cleanup_verdicts, cleanup_result);
 

@@ -537,8 +537,8 @@ static void display_workspace_status(
                         switch (workspace_item_route(item)) {
                             case WORKSPACE_ROUTE_DISPLACED_TRACKED:
                             case WORKSPACE_ROUTE_DISPLACED_DERIVED:
-                                /* Observed through a squatter: its own bits name
-                                 * nothing, the squatter's section does */
+                                /* Not looked at, so no bits of its own — the
+                                 * squatter's section names the way out */
                                 displaced[displaced_count++] = item;
                                 break;
 
@@ -684,19 +684,22 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 3: Displaced paths — observed through a squatter one of
-             * the two sections above holds (the route's DISPLACED_* arms, the
-             * claimant's): every bit was read off the squatter's target, so the
-             * line shows the one tag and the header sends the user to the squatter,
-             * whose own section names its verb. Named by section rather than
-             * "above": under -p the squatter's row may be filtered while a child
-             * is not, and the bare status lists both. */
+            /* Section 3: Displaced paths — beneath a squatter one of the two
+             * sections above holds (the route's DISPLACED_* arms, the claimant's):
+             * nothing there was looked at, so the line shows the one tag and
+             * the header sends the user to the squatter, whose own section names
+             * its verb. The header opens with the predicate, as every sentence
+             * about such a path does, and spells the squatter out where the other
+             * four name it with the word — this is where the word is grounded
+             * (core/workspace.h workspace_displaced_t). Named by section rather
+             * than "above": under -p the squatter's row may be filtered while a
+             * child is not, and the bare status lists both. */
             if (displaced_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Displaced paths",
-                    "observed through a directory another kind stands at; "
-                    "resolve that directory first (\"dotta status\" lists it "
-                    "under Conflicts or Squatted ancestors)"
+                    "not looked at: a different kind stands at a directory above "
+                    "them; resolve that directory first (\"dotta status\" lists "
+                    "it under Conflicts or Squatted ancestors)"
                 );
 
                 if (list) {
@@ -1038,13 +1041,12 @@ static void display_workspace_status(
                                 break;
 
                             case CLEANUP_RELEASED:
-                                /* The displaced read comes first: such an item's
-                                 * own bits were computed through the squatter,
-                                 * so neither sibling sentence is true of it —
-                                 * the same precedence the verdict's own arms
-                                 * take. */
+                                /* The displaced read comes first: such an item
+                                 * was never looked at, so neither sibling sentence
+                                 * is true of it — the same precedence the verdict's
+                                 * own arms take. */
                                 hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
-                                    ? "observed through a displaced directory; "
+                                    ? "not looked at, beneath a squatted directory; "
                                     "apply releases its entry, the path stays"
                                     : (orphaned[i]->divergence & DIVERGENCE_TYPE)
                                     ? "what dotta put there is gone, another kind of "

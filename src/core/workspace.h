@@ -172,6 +172,16 @@ typedef enum {
  * displaced_ancestor) — so the class is total, and the two halves meet: an item
  * that carries one is an item with nothing measured.
  *
+ * The words on screen, so the sentences cannot drift apart again: the directory
+ * another kind stands at is *squatted*, the path beneath it is *displaced* —
+ * the tag, status's section, this class — and every sentence about such a path
+ * opens "not looked at", the predicate its neighbours spell "locked", "cannot
+ * be read" and "could not be verified". The four that name the squatter say
+ * "beneath a squatted directory" (cmds/update.c cmd_update's two census lines,
+ * cmds/diff.c get_status_message_from_item, cmds/sync.c cmd_sync's note,
+ * cmds/status.c display_workspace_status's Issues hint); the Displaced paths
+ * header, where the word is grounded, spells the squatter out instead.
+ *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test), workspace.c
  * compute_workspace_status, workspace_item_extract_display_info (the DEPLOYED
@@ -314,11 +324,11 @@ typedef enum {
  * the occupant is not the row's or the record's kind); every consumer that once
  * re-probed the path to learn its type reads this field instead, so status, deploy
  * and cleanup cannot see three different occupants at one path. Beside it, whether
- * the lstat reached this path at all: the displaced class (workspace_displaced_t)
- * names the claim whose squatter the look resolved through, and every bit the
- * divergence carries was read off that squatter's target when it is not NONE.
- * And where a look failed outright, whose remedy that is: the fault
- * (workspace_fault_t), NONE on every item the analysis could verify.
+ * a look was taken at all: the displaced class (workspace_displaced_t) names
+ * the claim whose squatter stands above the path, and an item carrying one measured
+ * nothing — not a byte, not a mode, not an absence. And where a look failed
+ * outright, whose remedy that is: the fault (workspace_fault_t), NONE on every
+ * item the analysis could verify.
  *
  * Lifetime — every borrowed pointer on the item is arena-backed and valid for
  * the workspace's lifetime (the arena outlives it): the view's rows, the anchors
@@ -366,7 +376,7 @@ typedef struct {
 
     /* The observation */
     fs_occupant_t occupant;           /* What the analysis's lstat found at the path (see above) */
-    workspace_displaced_t displaced;  /* Whose squatter the lstat resolved through, or NONE */
+    workspace_displaced_t displaced;  /* Whose squatter stands above it, or NONE */
     workspace_fault_t fault;          /* Whose remedy the failed look is; NONE unless UNVERIFIED */
 } workspace_item_t;
 
@@ -511,15 +521,15 @@ typedef enum {
  * divergence, kind, occupant, reassignment. No syscall, no options; first match
  * wins:
  *
- *   displaced, TRACKED       DISPLACED_TRACKED — the observation resolved
- *                            through a squatter a tracked row claims, so every
- *                            bit below was read off the squatter's target and
- *                            not this path: no judgment made through it can outrank
- *                            the fact (deploy's ANCESTOR rung and cleanup_verdict's
- *                            displaced arm rank it the same way). apply --force
- *                            replaces the squatter and writes the row fresh beneath
- *                            it.
- *   displaced, DERIVED       DISPLACED_DERIVED — the same, through a rung
+ *   displaced, TRACKED       DISPLACED_TRACKED — a squatter a tracked row
+ *                            claims stands above the path, so nothing there was
+ *                            looked at and the item carries no bit for the arms
+ *                            below to rank: no verdict can outrank the fact that
+ *                            voided every look (deploy's ANCESTOR rung and
+ *                            cleanup_verdict's displaced arm rank it the same
+ *                            way). apply --force replaces the squatter and writes
+ *                            the row fresh beneath it.
+ *   displaced, DERIVED       DISPLACED_DERIVED — the same, beneath a rung
  *                            dotta only passes through, which no plan holds:
  *                            'dotta update <dir>' re-derives the way there. RECORD
  *                            stands on no deployed item (the reach rule,

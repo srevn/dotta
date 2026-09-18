@@ -706,10 +706,9 @@ static error_t *update_profile(
      * kinds, a captured tracked directory having a chain of its own; and never
      * over a deleted item — the absence of a leaf says nothing about the chain
      * that led to it. This trigger authors and refreshes but structurally never
-     * retires: a leaf read through a squatted rung was refused at the filter
-     * (the route's displaced arms), whichever profile's claim the squatter
-     * displaced, so a chain that reaches here holds directories at every claimed
-     * rung. */
+     * retires: a leaf beneath a squatted rung was refused at the filter (the
+     * route's displaced arms), whichever profile's claim the squatter displaced,
+     * so a chain that reaches here holds directories at every claimed rung. */
     for (size_t i = 0; i < commit->captured_count; i++) {
         const workspace_item_t *item = commit->captured[i].item;
 
@@ -1687,7 +1686,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu path%s skipped: observed through a displaced directory — "
+            "%zu path%s skipped: not looked at, beneath a squatted directory — "
             "'dotta apply --force' replaces the squatter first",
             refused[WORKSPACE_ROUTE_DISPLACED_TRACKED],
             refused[WORKSPACE_ROUTE_DISPLACED_TRACKED] == 1 ? "" : "s"
@@ -1696,7 +1695,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu path%s skipped: observed through a displaced directory — "
+            "%zu path%s skipped: not looked at, beneath a squatted directory — "
             "'dotta update <dir>' re-derives the way there",
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED],
             refused[WORKSPACE_ROUTE_DISPLACED_DERIVED] == 1 ? "" : "s"

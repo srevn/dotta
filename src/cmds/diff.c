@@ -128,17 +128,19 @@ static const char *get_status_message_from_item(
                 : "deleted locally (would be removed by update)";
     }
 
-    /* Observed through a squatted directory: every bit below was read off the
-     * squatter's target, so neither sibling sentence is true of the path, and
-     * the way there is the claimant's — the route's two arms, said in a
-     * comparison's own words. Upstream only in practice: the downstream filter
-     * admits nothing but the capture route. */
+    /* Beneath a squatted directory: nothing there was looked at, so no sentence
+     * below is true of the path and it carries no bit for one to be read off,
+     * and the way there is the claimant's — the route's two arms, said in a
+     * comparison's own words. The predicate opens the line, as it does on every
+     * screen that speaks of such a path (core/workspace.h workspace_displaced_t).
+     * Upstream only in practice: the downstream filter admits nothing but the
+     * capture route. */
     if (item->displaced == WORKSPACE_DISPLACED_TRACKED) {
-        return "observed through a squatted directory "
+        return "not looked at, beneath a squatted directory "
                "(apply --force replaces it, then writes this fresh)";
     }
     if (item->displaced == WORKSPACE_DISPLACED_DERIVED) {
-        return "observed through a squatted directory "
+        return "not looked at, beneath a squatted directory "
                "('dotta update <dir>' re-derives the way there)";
     }
 
@@ -267,7 +269,7 @@ static error_t *show_file_diff_from_workspace(
         item->state == WORKSPACE_STATE_UNDEPLOYED) {
         status_color = OUTPUT_COLOR_RED;
     } else if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-        status_color = OUTPUT_COLOR_YELLOW;  /* the bits were read off the squatter's target */
+        status_color = OUTPUT_COLOR_YELLOW;  /* nothing here was looked at */
     } else if (item->divergence & DIVERGENCE_UNVERIFIED) {
         status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
     } else if (item->divergence & DIVERGENCE_TYPE) {
@@ -290,10 +292,10 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* Observed through a squatter: there are no bytes of this path's to compare
-     * — Git's blob against the squatter's target's file would be a diff of two
-     * unrelated things, and nothing here is overwritten (apply --force replaces
-     * the squatter and writes the row fresh). */
+    /* Beneath a squatter: there are no bytes of this path's to compare — Git's
+     * blob against the squatter's target's file would be a diff of two unrelated
+     * things, and nothing here is overwritten (apply --force replaces the squatter
+     * and writes the row fresh). */
     if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         return NULL;
     }

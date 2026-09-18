@@ -351,12 +351,12 @@ static workspace_fault_t fault_of(error_t *err) {
  *
  * Proper ancestors only (str_path_beneath is strict), so a squatter is never
  * its own answer, and the outermost among those that reach the asker: the shortest
- * match, because a deeper displaced directory was itself observed through the
- * outer one and the outer occupant's fate settles both. The list is unordered —
- * two analyses fill it — so the scan asks for the minimum rather than the first
- * hit. Whose claims reach the asker is the rule's one input: a view claim reaches
- * every path beneath it, a record's memory (WORKSPACE_DISPLACED_RECORD) the record
- * family alone (workspace_displaced_t).
+ * match, because the true offender is the one whose fate settles every claim
+ * beneath it. The list is unordered — two analyses fill it — so the scan asks
+ * for the minimum rather than the first hit. Whose claims reach the asker is
+ * the rule's one input: a view claim reaches every path beneath it, a record's
+ * memory (WORKSPACE_DISPLACED_RECORD) the record family alone
+ * (workspace_displaced_t).
  *
  * Nothing beneath a squatter that reaches it is looked at, so nothing there is
  * ever noted: the list holds no view claim beneath a view claim and no record
@@ -3755,9 +3755,9 @@ const anchor_t *workspace_get_anchor(
 workspace_route_t workspace_item_route(const workspace_item_t *item) {
     divergence_type_t divergence = item->divergence;
 
-    /* An observation taken through a squatter the view claims is void: no bit
-     * below was read off this path's tree — deploy's ANCESTOR rung and
-     * cleanup_verdict's displaced arm rank the same fact the same way. RECORD
+    /* A squatter the view claims stands above the path, so nothing there was
+     * looked at and no bit below can be this path's — deploy's ANCESTOR rung
+     * and cleanup_verdict's displaced arm rank the same fact the same way. RECORD
      * never stands on a deployed item (the reach rule), so the two view classes
      * are the whole test and falling through is what a record's memory says of
      * a view row. */
@@ -3888,12 +3888,12 @@ bool workspace_item_extract_display_info(
 
         case WORKSPACE_STATE_DEPLOYED: {
             if (item->displaced != WORKSPACE_DISPLACED_NONE) {
-                /* Observed through a squatter (workspace_displaced_t): every
-                 * divergence bit was read off the squatter's target, so none of
-                 * the tags below is true of this path — [modified] on a stranger's
-                 * bytes would name work no verb takes. The one tag, at the default
-                 * colour: the squatter's own row carries the severity, and the
-                 * route lists this item under it. */
+                /* Beneath a squatter (workspace_displaced_t): nothing here was
+                 * looked at, so the item carries none of the bits the tags below
+                 * name — and a tag read off a look nobody took would name work
+                 * no verb takes. The one tag, at the default colour: the squatter's
+                 * own row carries the severity, and the route lists this item
+                 * under it. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "displaced";
                 }

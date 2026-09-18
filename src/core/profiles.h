@@ -543,12 +543,13 @@ typedef struct {
 /**
  * Every claim standing at what the user named, across the local branches
  *
- * A STORAGE argument: every branch whose tree holds the name, one lookup each
- * (a subtree counts, as a name has always counted); the claim is the name as
- * typed. A LOCATION argument: every branch whose view of its own tip, under this
- * machine's table, holds a row there — the claim being that branch's own name
- * for the place, since a location may be held under a non-canonical name and
- * the caller must not name it again.
+ * A STORAGE argument: every branch that holds the name — in its tree, a subtree
+ * counting as a name has always counted, or, where the tree is silent, as a
+ * directory claim in its sheet (profile_holds); the claim is the name as typed.
+ * A LOCATION argument: every branch whose view of its own tip, under this machine's
+ * table, holds a row there — the claim being that branch's own name for the place,
+ * since a location may be held under a non-canonical name and the caller must
+ * not name it again.
  *
  * The table is this machine's, and this machine's table is the enabled set's
  * (core/manifest.h manifest_mount_table): a profile nothing has enabled has no
@@ -565,9 +566,13 @@ typedef struct {
  *
  * Cost, and the asymmetry it carries: a location builds one view per branch — a
  * tree walk and a sheet load each, every branch's rows kept in the arena until
- * the command ends — where a name is one tree lookup per branch. So a branch
- * whose sheet will not load refuses `revert <location>` and not `revert <name>`,
- * the strict/tolerant split the view draws everywhere.
+ * the command ends — where a name is one tree lookup per branch and a sheet parse
+ * for each branch whose tree is silent about it, which for a name one branch
+ * holds is every other branch. So a branch whose sheet will not load refuses
+ * `revert <location>` always and `revert <name>` wherever its tree does not hold
+ * the name; a name its tree holds is answered without its sheet, which is all
+ * that is left of the strict/tolerant split here. Naming the profile skips the
+ * search entirely, and the one caller says so where it refuses.
  *
  * Reader: revert without a profile, whose question is every local branch and
  * not the enabled set. A caller that wants the owning profile among the enabled

@@ -1021,12 +1021,12 @@ error_t *profile_claim_name(
  * the branch's — a binding's, or one kept from before the binding — and never
  * one this machine composed. The view is strict (core/manifest.h): a sheet that
  * will not load is this branch's error, which is the whole cost a location argument
- * carries over a name.
+ * carries over a name the tree answers.
  *
  * The answer is the row's own string, the arena's, and outlives the view freed
  * here.
  */
-static error_t *claim_in_view(
+static error_t *claim_by_location(
     git_repository *repo,
     const char *branch,
     const mount_table_t *mounts,
@@ -1052,12 +1052,16 @@ static error_t *claim_in_view(
 /**
  * The claim `branch` holds under `storage_path`, or NULL
  *
- * A name is Git's key, so one lookup in the branch's tip answers it — a subtree
- * counts, as a name has always counted. Three answers read as three: an
- * intermediate object that will not load is a failure to read, never an absence.
- * No sheet, no table, no view — the tolerant half of the split above.
+ * A name is Git's key, and one question of the branch's two documents answers
+ * it (profile_holds): the tree first — a subtree counts, as a name has always
+ * counted — and the sheet where the tree is silent, because a directory claim
+ * with nothing beneath it stands there alone, held by the branch as surely as a
+ * blob is. Complete or an error on both documents: an object that will not load
+ * and a sheet that will not parse are each this branch's failure, never an absence
+ * — and the sheet is opened only where the tree did not answer, which is the
+ * whole of what a name still costs less than a location.
  */
-static error_t *claim_in_tree(
+static error_t *claim_by_name(
     git_repository *repo,
     const char *branch,
     const char *storage_path,
@@ -1071,20 +1075,12 @@ static error_t *claim_in_tree(
         return error_wrap(err, "Failed to load tree for profile '%s'", branch);
     }
 
-    git_tree_entry *entry = NULL;
-    int rc = git_tree_entry_bypath(&entry, tree, storage_path);
+    profile_held_t held;
+    err = profile_holds(repo, tree, NULL, branch, storage_path, &held);
     git_tree_free(tree);
+    if (err) return err;
 
-    if (rc == 0) {
-        git_tree_entry_free(entry);
-        *out_storage = storage_path;
-        return NULL;
-    }
-    if (rc != GIT_ENOTFOUND) {
-        return error_wrap(
-            error_from_git(rc), "Failed to read profile '%s'", branch
-        );
-    }
+    if (held.kind != PROFILE_HELD_NOTHING) *out_storage = storage_path;
 
     return NULL;
 }
@@ -1149,13 +1145,13 @@ error_t *profile_discover_claims(
         const char *storage_path = NULL;
 
         /* The door left two keys, and each names its own search: the branch's
-         * view of its tip, or one lookup in its tree. */
+         * view of its tip, or its two documents asked for the name. */
         if (arg->key == PATH_KEY_LOCATION) {
-            err = claim_in_view(
+            err = claim_by_location(
                 repo, branch, mounts, arg->location, arena, &storage_path
             );
         } else {
-            err = claim_in_tree(repo, branch, arg->storage_path, &storage_path);
+            err = claim_by_name(repo, branch, arg->storage_path, &storage_path);
         }
         if (err) break;
         if (!storage_path) continue;

@@ -87,8 +87,16 @@ typedef struct {
  * squatter carries no observation at all (core/workspace.h workspace_displaced_t),
  * which is why the fate's own occupant says what the run will find. What a fate
  * declines to consult it declines at the reader, never by blanking the pointer.
- * NULL only where the index holds nothing — a clean row this run judges on its
- * own account.
+ *
+ * Never NULL, so a reader dereferences it without a test. A verdict is taken
+ * for a pending row or for an ancestor, and each holds an item by construction:
+ * a pending row because that is what put it in the bucket (deploy_needs_work(NULL)
+ * is false), an ancestor because the pass admits one only where the item itself
+ * read absent or where the ancestry rung did; and a row the rung planned absent
+ * holds one because the load emits an item for every path it declined to look
+ * at, asked with the same probe this pass asks (check_ancestry, core/workspace.h
+ * workspace_displaced_t). The skip array is where the pointer can be NULL, and
+ * for its own reason (deploy_skip_t).
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
@@ -99,7 +107,7 @@ typedef struct {
  */
 typedef struct {
     const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;    /* The analysis object, or NULL — looked up once */
+    const workspace_item_t *item;    /* The analysis object — looked up once, never NULL */
     fs_occupant_t occupant;          /* What the run will find at the path */
     uid_t uid;                       /* Ownership the write applies; -1 = no change */
     gid_t gid;
@@ -311,20 +319,22 @@ typedef enum {
  * refusing node. `ancestor_class` says which claim holds the named path —
  * ANCESTOR's alone (deploy_ancestor_class_t), NONE wherever the reason is another.
  *
- * The item is the verdict's rule with the one inversion a skip forces: a
- * self-judged skip carries its analysis object (a CONTENT skip carries one by
- * construction — content_conflicts(NULL) is false), while a row judged by its
- * ancestry, or planned absent beneath an ancestor this run converges, carries
- * NULL. Its own item describes the squatter's target, and a walker must not mistake
- * an inheriting row for the squatter itself; a skip has no occupant field to
- * express that refusal, so here NULL is the override.
+ * The item is the verdict's with the one inversion a skip forces: a self-judged
+ * skip carries its analysis object (a CONTENT skip carries one by construction
+ * — content_conflicts(NULL) is false), while a row judged by its ancestry, or
+ * planned absent beneath an ancestor this run converges, carries NULL. Its own
+ * item says nothing about the path — nothing there was looked at, so the occupant
+ * on it is UNKNOWN and every bit unset (core/workspace.h workspace_displaced_t)
+ * — and a walker must not read that as presence, nor mistake an inheriting row
+ * for the squatter itself; a skip has no occupant field to express either refusal,
+ * so here NULL is the override.
  *
  * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
  * in this module is.
  */
 typedef struct {
     const manifest_row_t *row;              /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;           /* As the verdict's; NULL for a row judged by its ancestry */
+    const workspace_item_t *item;           /* The analysis object; NULL for a row judged by its ancestry */
     deploy_skip_reason_t reason;
     size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
     deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at the named path */

@@ -764,8 +764,8 @@ static void print_deploy_results(
              * bit read off the squatter's target (core/workspace.h
              * workspace_displaced_t). */
             const workspace_item_t *item = v->item;
-            bool mode_differs = item && (item->divergence & DIVERGENCE_MODE);
-            bool ownership_differs = item && (item->divergence & DIVERGENCE_OWNERSHIP);
+            bool mode_differs = item->divergence & DIVERGENCE_MODE;
+            bool ownership_differs = item->divergence & DIVERGENCE_OWNERSHIP;
 
             if (mode_differs || ownership_differs) {
                 output_print(
@@ -2317,10 +2317,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* The pending half of the collection, off the verdicts: a row preflight skipped
      * is not here — its handover rides a deployment that will not happen — and
      * a deployable row's record is rewritten only by the record step, after this
-     * is printed. The item is the verdict's, verbatim (deploy_verdict_t): NULL
-     * where the index holds nothing, and its join facts sound wherever it is
-     * not. The ancestors are outside the plan and stay uncounted, as the record
-     * step leaves them. */
+     * is printed. The item is the verdict's, verbatim (deploy_verdict_t): never
+     * NULL, and its join facts sound on every one. The ancestors are outside
+     * the plan and stay uncounted, as the record step leaves them. */
     const deploy_verdicts_t *kinds[] = {
         &deploy_verdicts->files,
         &deploy_verdicts->directories,
@@ -2330,7 +2329,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
             const workspace_item_t *item = kinds[k]->entries[i].item;
 
-            if (item && workspace_reassigned(item->row, item->anchor)) {
+            if (workspace_reassigned(item->row, item->anchor)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
@@ -2684,7 +2683,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
                 const workspace_item_t *item = o->verdict->item;
-                bool acknowledges = item && workspace_reassigned(item->row, item->anchor);
+                bool acknowledges = workspace_reassigned(item->row, item->anchor);
 
                 error_t *anchor_err = workspace_anchor(ws, file, &o->stat, now);
                 if (anchor_err) {
@@ -2710,7 +2709,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 bool made = deploy_convergence(o->verdict->occupant) != DEPLOY_CONVERGE_FIX;
 
                 const workspace_item_t *item = o->verdict->item;
-                bool acknowledges = item && workspace_reassigned(item->row, item->anchor);
+                bool acknowledges = workspace_reassigned(item->row, item->anchor);
 
                 if (!made && !acknowledges) continue;
 
@@ -2777,7 +2776,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * this run replaced is the one over-conservative case, and keeping
                  * a fact the flush's join or a later sweep will reap costs nothing
                  * — where forgetting one wrongly costs the next load its base
-                 * and turns dotta's own deployed bytes into the user's edit. */
+                 * and turns dotta's own deployed bytes into the user's edit.
+                 *
+                 * The view's claims alone, which is the whole of what a sweep
+                 * needs: they are the squatters that outlive the run, where a
+                 * record-remembered one has just retired in the settle above —
+                 * its own witness gone, its copies would face this lstat on the
+                 * next apply whatever this one skipped. */
                 if (workspace_displaced_ancestor(ws, copy->filesystem_path)) continue;
 
                 struct stat live;

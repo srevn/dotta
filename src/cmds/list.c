@@ -22,7 +22,6 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
-#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
@@ -177,7 +176,9 @@ static error_t *list_profiles(
      * a branch actually has, and a size runs from "0 B" to four digits and a
      * unit — so neither is guessed. One profile_get_stats per branch, the expensive
      * part of a verbose line, runs here rather than again at render time; a branch
-     * that cannot be read is warned about and left with an empty phrase. */
+     * that cannot be read is warned about and left with an empty phrase, in the
+     * words the other screen of this file uses for the same producer's refusal:
+     * what failed is the count, however far down the read it failed. */
     profile_line_t *lines = NULL;
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
@@ -195,8 +196,8 @@ static error_t *list_profiles(
             err = profile_get_stats(repo, bname, &stats);
             if (err) {
                 output_warning(
-                    out, OUTPUT_NORMAL, "Failed to load profile '%s': %s",
-                    bname, error_message(err)
+                    out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
+                    bname, error_message(error_root(err))
                 );
                 error_free(err);
                 err = NULL;
@@ -354,8 +355,8 @@ static error_t *list_files(
     bool verbose = output_is_verbose(out);
 
     /* One branch read serves the whole listing: the file walk, the verbose
-     * per-entry lookups and commit map, and the metadata (the directory count
-     * when the file list is empty). */
+     * per-entry lookups and commit map, and the statistics (what else the branch
+     * holds, when the file list is empty). */
     error_t *err = profile_require(repo, opts->profile);
     if (err) return err;
 
@@ -378,38 +379,38 @@ static error_t *list_files(
 
     if (files->count == 0) {
         /* Directory claims are not listed — no size, no history — but the count
-         * of the tracked ones keeps "nothing" honest for a branch that tracks
-         * only them. An ancestor claim is not the branch's to count: the profile
-         * passes through the directory on the way to something beneath it and
-         * manages nothing there.
+         * of them keeps "nothing" honest for a branch whose whole content is
+         * its claims. It is what the branch holds less the files, so it comes
+         * from the one producer of that number (core/profiles.h
+         * profile_get_tree_stats), over the tree already open: an ancestor claim
+         * excluded there, the tree-versus-blob rule asked there, and no second
+         * reading of the sheet to drift from it.
          *
-         * The tree-versus-blob rule the two other readers of this sheet make
-         * (core/manifest.c manifest_contribute, core/profiles.c profile_get_stats)
-         * is not asked here and cannot be owed: a stale item is one the tree
-         * holds a blob at, and a blob at a directory item's key is a content
-         * path, so this arm — reached only where the branch has no content blobs
-         * at all — can never meet one. */
-        size_t dir_count = 0;
-        metadata_t *empty_meta = NULL;
-        error_t *meta_err = metadata_load_from_tree(
-            repo, tree, opts->profile, &empty_meta
-        );
-        if (meta_err) {
-            error_free(meta_err);  /* an unreadable sheet: no claims to count */
-        } else {
-            size_t item_count = 0;
-            const metadata_item_t *const *items = metadata_items(empty_meta, &item_count);
-            for (size_t i = 0; i < item_count; i++) {
-                if (items[i]->kind == PATH_KIND_DIRECTORY && items[i]->tracked) {
-                    dir_count++;
-                }
-            }
-            metadata_free(empty_meta);
+         * A branch that will not read says so. Silence would spell an unreadable
+         * sheet exactly as it spells an empty branch, and the count exists to
+         * tell those apart. The sheet is the whole of what can refuse here: the
+         * walk above and the count's own read one gate (core/profiles.c
+         * tree_entry_content_path), so a file list that came back empty is an
+         * empty one there too and no blob header is read. Which is why the refusal
+         * is rendered from its root — between it and here the chain names the
+         * profile twice more and nothing else, and this line names it a third
+         * time (base/error.h error_root). */
+        profile_stats_t stats = { 0 };
+        error_t *stats_err = profile_get_tree_stats(repo, tree, opts->profile, &stats);
+        if (stats_err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to count what profile '%s' holds: %s",
+                opts->profile, error_message(error_root(stats_err))
+            );
+            error_free(stats_err);
         }
 
-        if (dir_count > 0) {
+        /* Either the count stands or the statistics wrote nothing at all (their
+         * all-or-nothing `out`), so a sheet that would not read counts as no
+         * claim and the warning above is what says which of the two this is. */
+        if (stats.directory_count > 0) {
             char counts[64];
-            output_format_counts(0, dir_count, counts, sizeof(counts));
+            output_format_counts(0, stats.directory_count, counts, sizeof(counts));
             output_info(
                 out, OUTPUT_NORMAL, "No files in profile '%s' (%s)",
                 opts->profile, counts

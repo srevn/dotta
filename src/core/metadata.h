@@ -648,11 +648,21 @@ error_t *metadata_load_from_branch(
  *
  * The view holds to that without exception: both builders load the sheet of the
  * tree they read, and one that will not load fails the build (core/manifest.h).
- * Three readers deliberately do otherwise, each on its own screen and for its
- * own reason — export's materialisation floor (the bytes come out of a damaged
- * profile, warned), show's encryption annotation, list's directory count. Those
- * are those commands' decisions about their own output, never a second answer
- * from here; a fourth would have to argue for one.
+ * So does the branch statistics' count, which is where a listing's question of
+ * what a profile holds ends (core/profiles.h profile_get_tree_stats).
+ *
+ * The readers that deliberately do otherwise are counted across both doors —
+ * this one and metadata_load_from_branch above, which is this call — and each
+ * is that command's decision about its own output, never a second answer from
+ * here: export's materialisation floor (cmds/export.c load_sheet; the bytes come
+ * out of a damaged profile, warned), show's encryption annotation (cmds/show.c
+ * show_file), the orphan authority's third answer (core/workspace.c
+ * compute_orphan_authority, which folds to UNVERIFIED and never to "no claims")
+ * and the completion's offer (cmds/completion.c completion_directories). One
+ * reader folds without deciding to: the deletion's hook universe (cmds/remove.c
+ * delete_profile_branch) drops every directory claim from DOTTA_FILE_n on a sheet
+ * it cannot read, where its own sibling a screen up propagates. A further reader
+ * would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

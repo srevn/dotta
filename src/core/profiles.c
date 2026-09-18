@@ -610,32 +610,23 @@ static int stats_walk_callback(
 }
 
 /**
- * Count what a profile branch holds
+ * Count what a profile branch holds, in a tree already open
  */
-error_t *profile_get_stats(
+error_t *profile_get_tree_stats(
     git_repository *repo,
+    const git_tree *tree,
     const char *profile,
     profile_stats_t *out
 ) {
     CHECK_NULL(repo);
+    CHECK_NULL(tree);
     CHECK_NULL(profile);
     CHECK_NULL(out);
-
-    *out = (profile_stats_t){ 0 };
-
-    git_tree *tree = NULL;
-    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load tree for profile '%s'", profile
-        );
-    }
 
     /* The files: one walk, one ODB handle, sizes read from the object headers. */
     git_odb *odb = NULL;
     int git_err = git_repository_odb(&odb, repo);
     if (git_err < 0) {
-        git_tree_free(tree);
         return error_from_git(git_err);
     }
 
@@ -646,7 +637,7 @@ error_t *profile_get_stats(
         .error      = NULL
     };
 
-    err = gitops_tree_walk(tree, stats_walk_callback, &data);
+    error_t *err = gitops_tree_walk(tree, stats_walk_callback, &data);
     git_odb_free(odb);
 
     if (err || data.error) {
@@ -655,14 +646,10 @@ error_t *profile_get_stats(
             error_free(err);
             err = data.error;
         }
-        git_tree_free(tree);
         return error_wrap(
             err, "Failed to read statistics for profile '%s'", profile
         );
     }
-
-    out->file_count = data.file_count;
-    out->total_size = data.total_size;
 
     /* The directories: the branch's own metadata, the same source the view's
      * claim routine reads. A tree without a sheet loads as an empty one — no
@@ -671,12 +658,12 @@ error_t *profile_get_stats(
     metadata_t *metadata = NULL;
     err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
-        git_tree_free(tree);
         return error_wrap(
             err, "Failed to load metadata for profile '%s'", profile
         );
     }
 
+    size_t directory_count = 0;
     size_t item_count = 0;
     const metadata_item_t *const *items = metadata_items(metadata, &item_count);
     for (size_t i = 0; i < item_count; i++) {
@@ -691,6 +678,14 @@ error_t *profile_get_stats(
          * (core/manifest.c manifest_contribute), asked there of the sheet at
          * the blob its own walk met rather than of the ODB.
          *
+         * One question, two witnesses, and they answer alike for every key the
+         * grammar admits: a key is a label and a tail beneath it, so a blob
+         * standing at one lies under the label's own tree and the walk's gate —
+         * infra/label.h label_prefixes, read there on the tree above a blob —
+         * meets it. A label alone would be a key standing at the branch root,
+         * which that gate calls machinery and this probe would call a blob; the
+         * grammar admits none.
+         *
          * Three answers, not two: the entry is there, it is absent, or the tree
          * will not read — and an object that will not load is corruption, never
          * an absence, so the count refuses rather than counts a directory the
@@ -703,20 +698,52 @@ error_t *profile_get_stats(
             if (is_blob) continue;
         } else if (rc != GIT_ENOTFOUND) {
             metadata_free(metadata);
-            git_tree_free(tree);
             return error_wrap(
                 error_from_git(rc), "Failed to read '%s' in profile '%s'",
                 items[i]->key, profile
             );
         }
 
-        out->directory_count++;
+        directory_count++;
     }
 
     metadata_free(metadata);
-    git_tree_free(tree);
+
+    /* Both sides at once, and only here: a walk that stopped short or a probe
+     * that refused has already returned, so what the caller supplied is either
+     * replaced whole or never touched. */
+    *out = (profile_stats_t){
+        .file_count = data.file_count,
+        .directory_count = directory_count,
+        .total_size = data.total_size,
+    };
 
     return NULL;
+}
+
+/**
+ * Count what a profile branch holds
+ */
+error_t *profile_get_stats(
+    git_repository *repo,
+    const char *profile,
+    profile_stats_t *out
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(profile);
+    CHECK_NULL(out);
+
+    git_tree *tree = NULL;
+    error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
+    if (err) {
+        return error_wrap(
+            err, "Failed to load tree for profile '%s'", profile
+        );
+    }
+
+    err = profile_get_tree_stats(repo, tree, profile, out);
+    git_tree_free(tree);
+    return err;
 }
 
 /**

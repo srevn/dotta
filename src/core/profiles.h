@@ -167,7 +167,22 @@ error_t *profile_require(git_repository *repo, const char *name);
  * *is* enabled (manifest_contribute) — the tree's content blobs and the branch
  * metadata's tracked directories — and both sides read one content gate
  * (infra/label.h label_prefixes), so a profile that wins every path it claims
- * counts the same here as its rows do there.
+ * counts the same here as its rows do there. The directory side's staleness probe
+ * is the one place the two builds read different witnesses: the view contradicts
+ * a claim from the blob its own walk met, this count asks the tree (core/profiles.c
+ * profile_get_tree_stats). They answer alike for every key the grammar admits,
+ * and the proof is written where the probe is.
+ *
+ * Readers: the screens that name what a branch holds — `dotta list`'s profile
+ * rows and its no-files arm (cmds/list.c list_profiles, cmds/list.c list_files),
+ * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
+ * and the deletion's preview and confirmation (cmds/remove.c
+ * delete_profile_branch). A reader not on this list is a bug, and a screen that
+ * counts what a branch holds beside this one is the second producer this count
+ * exists to be: list_files kept its own directory fold until it took this one.
+ * `status -v` is no such screen — it counts the view's rows a profile wins
+ * (cmds/status.c display_enabled_profiles), the other half of the holds/wins
+ * split above, and the two are free to disagree (docs/profiles.md).
  */
 typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */
@@ -176,21 +191,51 @@ typedef struct {
 } profile_stats_t;
 
 /**
- * Count what a profile branch holds
+ * Count what a profile branch holds, in a tree already open
  *
- * One walk of the branch tree — each content blob counted and its size taken
- * from the object header, nothing inflated — then the branch metadata's DIRECTORY
- * items. A branch with no metadata.json claims no directories; that absence is
- * not a failure.
+ * One walk of the tree — each content blob counted and its size taken from the
+ * object header, nothing inflated — then the branch metadata's DIRECTORY items.
+ * A branch with no metadata.json claims no directories; that absence is not a
+ * failure. For callers that already hold the tree, so one branch read serves
+ * the count and whatever else the caller does with it; the tree is borrowed and
+ * never freed here.
  *
- * The walk is complete or an error, as the listing's is: an entry whose path no
- * mount can place fails the count rather than being skipped past.
+ * Complete or an error on both sides: an entry whose path no mount can place
+ * fails the count rather than being skipped past, and a sheet that will not load
+ * fails it rather than reading as a branch with no claims (core/metadata.h
+ * metadata_load_from_tree). A caller that would rather print than refuse decides
+ * that on its own screen, as the listings do.
+ *
+ * `out` is written once, at the end and on success alone: a walk that stopped
+ * short or a probe that refused leaves it as the caller supplied it, so no screen
+ * can print half a count.
  *
  * Performance: O(files + directories), one tree walk and one metadata load.
  *
+ * @param repo Repository (must not be NULL) — the object database the blob sizes
+ *             and the sheet are read through
+ * @param tree Git tree to count over (must not be NULL)
+ * @param profile Profile name (must not be NULL)
+ * @param out Statistics (must not be NULL; written on success, untouched otherwise)
+ * @return Error or NULL on success
+ */
+error_t *profile_get_tree_stats(
+    git_repository *repo,
+    const git_tree *tree,
+    const char *profile,
+    profile_stats_t *out
+);
+
+/**
+ * Count what a profile branch holds
+ *
+ * Loads the profile's Git tree internally and counts over it. Tree is freed before
+ * return. The count is profile_get_tree_stats', and so are its answer to a branch
+ * that will not read and its all-or-nothing write of `out`.
+ *
  * @param repo Repository (must not be NULL)
  * @param profile Profile name (must not be NULL)
- * @param out Statistics (must not be NULL; zeroed, then filled)
+ * @param out Statistics (must not be NULL; written on success, untouched otherwise)
  * @return Error or NULL on success
  */
 error_t *profile_get_stats(

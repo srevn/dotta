@@ -28,10 +28,11 @@
  * and C cannot say so, so label_of, label_tail and label_compose assert what
  * they cannot declare — the two projections where they take a name, the compose
  * where it makes one. The assert is not theatre against an invented bug: this
- * tree holds a bare word in a field typed as a name by design (the health slice's
- * ROOT entry, core/manifest.h), so "looks like a name, is not one" is a real
- * inhabitant here, and one abort per verb is what stands against it where a header
- * sentence is all that otherwise would.
+ * tree holds a bare word in a field typed as a name by design (a pathspec entry's
+ * prefix, the label every name of that namespace is beneath — infra/pathspec.c
+ * pathspec_create), so "looks like a name, is not one" is a real inhabitant here,
+ * and one abort per verb is what stands against it where a header sentence is
+ * all that otherwise would.
  */
 
 #ifndef DOTTA_LABEL_H
@@ -43,11 +44,12 @@
  * The three labels — one per namespace a profile names its content under.
  *
  * The vocabulary's one currency: what a reader holds, passes, stores and loops
- * over. A label indexes (the sheet's roots, a receipt's counts) and costs nothing
- * to keep. Its word is read from label_words where a string is printed, written
- * or matched, and parsed back into a label where a document, a tree or an argument
- * is read (label_parse, label_of). No reader holds a label's word in a label's
- * place: the word is `label_words[label]` at the point of use.
+ * over. A label indexes — label_words at every word reader, a receipt's counts
+ * at cmds/add.c report_labels — and costs nothing to keep. Its word is read from
+ * label_words where a string is printed, written or matched, and parsed back
+ * into a label where a tree or an argument is read (label_parse, label_of). No
+ * reader holds a label's word in a label's place: the word is `label_words[label]`
+ * at the point of use.
  *
  * A fourth label is an enumerator here, an entry in label_words, one more slot
  * in every array sized by LABEL_COUNT, a decision at every reader that derives
@@ -61,10 +63,10 @@ typedef enum {
 } label_t;
 
 /**
- * The labels' arity, for a walk over them (cmds/add.c's receipt, the sheet's
- * writer, the view's contribution) and for an array with one slot per label (the
- * sheet's roots, the receipt's counts). A macro, not an enumerator, so the type
- * holds no sentinel: every label_t a reader holds subscripts label_words in range.
+ * The labels' arity, for a walk over them (the grammar's own, and cmds/add.c
+ * report_labels) and for an array with one slot per label (label_words itself,
+ * and that receipt's counts). A macro, not an enumerator, so the type holds no
+ * sentinel: every label_t a reader holds subscripts label_words in range.
  */
 #define LABEL_COUNT (LABEL_CUSTOM + 1)
 
@@ -72,11 +74,11 @@ typedef enum {
  * The word of each label — "home", "root", "custom".
  *
  * Read where a string is printed, written or matched. Static, and outliving every
- * arena, which is what lets a word read from here be kept without a copy (the
- * view's health slice, core/manifest.h). The sheet writes its `roots` array in
- * this order under a claim of byte-determinism, so the order is persisted: a
- * permutation rewrites every sheet that scans two roots (core/metadata.c
- * metadata_to_json).
+ * arena, so a word read from here may be kept without a copy. Nothing persists
+ * a label's ordinal — the sheet keys by name, the record by path, and the cipher
+ * seals the name's own bytes — so the order here is free: a permutation moves
+ * one screen, the receipt's label lines, which add prints in it (cmds/add.c
+ * report_labels).
  */
 extern const char *const label_words[LABEL_COUNT];
 
@@ -89,8 +91,8 @@ extern const char *const label_words[LABEL_COUNT];
  * its siblings). "" is a tail: a label spelled as a directory ("home/") stands
  * under its label with nothing past it, and "home//" is a tail of separators.
  * Nothing here folds — a caller that reads a directory spelling as the label
- * alone sheds its own separators first (infra/path.c) — and the tail aliases
- * the input, so the two share a lifetime.
+ * alone sheds its own separators first (infra/path.c path_input_resolve) — and
+ * the tail aliases the input, so the two share a lifetime.
  */
 typedef struct {
     label_t label;       /* Which namespace the string is in */
@@ -139,14 +141,14 @@ label_split_t label_split(const char *s);
  * nothing needs to: a branch may hold what it likes next to the labels, and no
  * walk of content sees it. A caller *handed* such a name rather than finding it
  * refuses in its own words — export's name arm, which takes a label as a key
- * and meets whatever stands there (cmds/export.c). And it is the shape dispatch
- * on an argument, which reads a storage shape before the filesystem shapes —
- * asked there through label_split, that arm wanting the tail as well as the
- * verdict. A label alone, with no separator, stands under none: that is the
- * whole-word question, label_parse, and a caller wanting either asks both
- * (cmds/export.c's grammar). A label spelled as a directory does stand under
- * one — "custom/" is the label and an empty tail — so a gate meant to catch a
- * label asks it of the word.
+ * and meets whatever stands there (cmds/export.c collect_name). And it is the
+ * shape dispatch on an argument, which reads a storage shape before the filesystem
+ * shapes — asked there through label_split, that arm wanting the tail as well
+ * as the verdict. A label alone, with no separator, stands under none: that is
+ * the whole-word question, label_parse, and a caller wanting either asks both
+ * (cmds/export.c export_post_parse). A label spelled as a directory does stand
+ * under one — "custom/" is the label and an empty tail — so a gate meant to catch
+ * a label asks it of the word.
  *
  * Readers: the view's claim routine (core/manifest.c manifest_claim_blob), the
  * file listing and the branch statistics (core/profiles.c tree_entry_content_path),
@@ -168,9 +170,10 @@ bool label_prefixes(const char *s);
  * and every reader holds a path that does: a name the namer composed beneath a
  * root's label (core/manifest.h manifest_name), a row's or a record's, validated
  * where the branch or the sheet was read (label_validate_storage), or an argument
- * the resolver's first arm dispatched on that very test (infra/path.c). Asserted,
- * never answered: a path under no label is a caller's bug, and no label may stand
- * in for it — least of all LABEL_ROOT in silence.
+ * the resolver's first arm dispatched on that very test (infra/path.c
+ * path_input_resolve). Asserted, never answered: a path under no label is a
+ * caller's bug, and no label may stand in for it — least of all LABEL_ROOT in
+ * silence.
  *
  * Readers: the two that derive a consequence from the namespace, each an exhaustive
  * switch — what the sheet reads into an absent ownership claim (core/metadata.c
@@ -217,21 +220,19 @@ const char *label_tail(const char *storage_path);
  * The whole name and not a prefix, which is what tells this apart from
  * label_prefixes: "home/x" names no label here, and "home" stands under no label
  * there. The two are the vocabulary's atoms, and a caller wanting either spells
- * the union at its own site (cmds/export.c's grammar, where a lone positional
- * that is content rather than a profile is one or the other).
+ * the union at its own site (cmds/export.c export_post_parse, where a lone
+ * positional that is content rather than a profile is one or the other).
  *
  * Writes `*out` and answers true when `word` is a label; false, `*out` untouched,
- * when it is not — an unknown word is the caller's to refuse in its own sentence,
- * the sheet's and export's differing. `out` may be NULL for a caller that asks
- * only whether, and `word` may be NULL, which names nothing. Walks label_words,
- * so a fourth label needs no edit here.
+ * when it is not — an unknown word is the caller's to refuse in its own sentence.
+ * `out` may be NULL for a caller that asks only whether, and `word` may be NULL,
+ * which names nothing. Walks label_words, so a fourth label needs no edit here.
  *
- * Readers: the sheet's parser, one entry of `roots` at a time (core/metadata.c
- * metadata_from_json); and export's three — its bare-word arm, which makes the
- * resolver's key out of the word its own grammar allows (cmds/export.c cmd_export),
- * its branch-root walk, where a top-level tree entry is content iff its name is
- * a label (collect_tree_callback), and the catch that reads a lone positional
- * in the profile slot as the user's misuse (export_post_parse).
+ * Readers: export's three — its bare-word arm, which makes the resolver's key
+ * out of the word its own grammar allows (cmds/export.c cmd_export), its
+ * branch-root walk, where a top-level tree entry is content iff its name is a
+ * label (collect_tree_callback), and the catch that reads a lone positional in
+ * the profile slot as the user's misuse (export_post_parse).
  */
 bool label_parse(const char *word, label_t *out);
 

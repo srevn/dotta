@@ -1116,8 +1116,7 @@ static void display_workspace_status(
                                 break;
 
                             case CLEANUP_PRUNABLE:
-                                if (orphaned[i]->relocation !=
-                                    WORKSPACE_RELOCATION_NONE) {
+                                if (orphaned[i]->relocation != WORKSPACE_RELOCATION_NONE) {
                                     hint = relocated_hint;
                                 } else if (is_dir) {
                                     hint = "apply prunes it; a directory still holding "

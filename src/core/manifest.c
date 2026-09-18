@@ -599,12 +599,13 @@ static error_t *manifest_standing(
  * target would be climbed past, and web's name for what lies beneath it would
  * be the binding's rather than its own claim's.
  *
- * The root "/" is a rung the ascent passes through and never reads: no storage
- * path spells it, so nothing can be listed or tracked there. The skip is
- * load-bearing, not an optimisation: the tail arithmetic below assumes a separator
- * where the rung ends, which the root directory does not have — and it is also
- * the floor whenever it is reached, so the condition ends the walk on the next
- * turn rather than one rung later.
+ * The root directory is that rung on a machine where more than one root stands
+ * at it — a HOME of "/" (a container's bare uid) or a target of one — because
+ * one label takes the tie there (infra/mount.h mount_root_above) while a claim
+ * keyed by any of the three words may stand at the same directory. Read, the
+ * claim names what lies beneath it; skipped, the tie's label does, and a walk
+ * beneath a tracked root offers its finds under a word the profile's own claim
+ * contradicts.
  *
  * The scratch copy is the arena's and abandoned, the module's idiom, and is taken
  * only where there is a rung to read: not at a root, and not for a location no
@@ -646,7 +647,6 @@ static error_t *manifest_ascend(
     while (len > floor) {
         len = str_path_parent_len(rung);
         rung[len] = '\0';
-        if (len < 2) continue;  /* "/" names nothing, and is the floor — see above */
 
         /* What stands at this rung, and only a directory naming what lies beneath
          * it. */
@@ -657,7 +657,15 @@ static error_t *manifest_ascend(
         const char *above = manifest_claim_beneath(claim);
         if (!above) continue;
 
-        *out_storage = arena_str_format(n->arena, "%s/%s", above, location + len + 1);
+        /* Past the rung and its separator — which the root directory, being its
+         * own separator, does not have: the boundary infra/mount.c tail_under_root
+         * reads at a root and infra/label.c label_split at a word, read here at
+         * a rung. Off `location`, because the truncation above took `rung`'s
+         * byte at that offset. */
+        const char *past = location + len;
+        if (*past == '/') past++;
+
+        *out_storage = arena_str_format(n->arena, "%s/%s", above, past);
         if (!*out_storage) {
             return ERROR(ERR_MEMORY, "Failed to compose the name");
         }

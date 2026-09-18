@@ -64,6 +64,18 @@ dotta add web --force home/jail/etc   # new children use home/jail/etc/...
 
 Existing children keep their names. A nested home or target starts fresh, unless you've explicitly named its directory. `update --include-new` uses the same naming rules for files it discovers.
 
+**The home directory, a target and `/` are directories that can be added.** Each has a name of its own — `home`, `custom`, `root` — so both spellings work:
+
+```bash
+dotta add web ~            # tracks the home directory as home
+dotta add web home/        # the same thing
+dotta add web /            # tracks the machine's root as root
+```
+
+A tracked home is just a tracked directory: `apply` restores its permissions, `update --include-new` looks inside it for new files, and on scope exit it is released while anything dotta did not put there still stands in it. Once it holds nothing but dotta's own copies, dotta removes it — the same rule every directory gets.
+
+Ignore patterns cannot exclude a root. A pattern is matched against the stored name with `home/`, `root/` or `custom/` stripped off, and a root's name is just that word, so nothing is left to match. `dotta add web ~ -e '*'` tracks the home directory and nothing inside it. One exception: a home that sits inside a Git repository whose `.gitignore` excludes it is refused, with a message saying so — set `respect_gitignore = false` to add it anyway.
+
 Use `add --force` to update an existing entry. To give the same pathname another stored name, remove its entry first.
 
 Each profile chooses its own names. For example, `web` can store `~/jail/etc/x` as `custom/etc/x` while `global` stores it as `home/jail/etc/x`. Because both deploy to the same pathname, [profile precedence](profiles.md#layering-and-precedence) decides which one wins.
@@ -72,7 +84,14 @@ Each profile also maintains a `.dotta/metadata.json` file recording the permissi
 
 ### Spellings and Symlinks
 
-Dotta treats symlinks as path components. `home/.config/app.conf` keeps that name even if `~/.config` points to `~/dotfiles/config`. File access follows the link; the pathname keeps `.config`. Adding the link itself stores a symlink, while naming your home or target root enters its contents.
+Dotta treats symlinks as path components. `home/.config/app.conf` keeps that name even if `~/.config` points to `~/dotfiles/config`. File access follows the link; the pathname keeps `.config`. Adding the link itself stores a symlink.
+
+Dotta never follows a link named as an argument, including one standing at a root. A home or a target that is itself a link is stored as the link. To track what stands behind it, name what is inside instead:
+
+```bash
+dotta add web --target ~/jail ~/jail     # ~/jail is a link → stores the link
+dotta add web ~/jail/etc                 # tracks the directory it points at
+```
 
 Use the home or target spelling dotta knows, or a stored name such as `home/.config/app.conf`. Another spelling of the same file is a different path to dotta, even within one profile. Directory walks keep the pathnames they encounter, and profiles layer only where their destination pathnames match.
 
@@ -82,7 +101,7 @@ Relative paths start at your working directory. `..` removes the preceding path 
 
 Dotta remembers two kinds of directory, and treats them very differently.
 
-**A directory you added** — `dotta add p ~/.config/nvim` — is one the profile manages in its own right. Dotta creates it even when it would be empty, and restores its permissions on `apply` (its owner too, under `root/` and `custom/`). It reports the directory in `dotta status` when it drifts, and looks inside it for new files under `dotta update --include-new`.
+**A directory you added** — `dotta add p ~/.config/nvim` — is one the profile manages in its own right. Dotta creates it even when it would be empty, and restores its permissions on `apply` (its owner too, under `root/` and `custom/`). It reports the directory in `dotta status` when it drifts, and looks inside it for new files under `dotta update --include-new`. The home directory, a target and `/` count as added directories, and everything here applies to them too.
 
 **A directory dotta passed through** on its way to a file you added is just a recipe for re-creating it. When dotta has to make that directory to put a file in it, it uses the permissions it saw at the time; a directory that already exists is never touched, never checked and never searched. And if part of the path was a symlink when the file was added, dotta records nothing for that component at all — a symlinked config directory is left alone, and dotta writes straight through it.
 

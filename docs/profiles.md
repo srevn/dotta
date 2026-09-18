@@ -90,6 +90,15 @@ Use `./` or `../` for a path relative to your working directory; with the flag, 
 
 Keep using the target spelling shown by `profile list`. If you supply another spelling of the same directory, dotta keeps and reports the saved spelling. `add --target` reads its arguments under that spelling.
 
+**The target itself can be tracked**, by its own path or by the name `custom`:
+
+```bash
+dotta add web --target ~/jail ~/jail   # tracks the jail as custom
+dotta add web custom/                  # the same thing
+```
+
+It then behaves like any [added directory](concepts.md#directories): `apply` creates it and restores its permissions, `update --include-new` scans it, and disabling the profile removes it once nothing but dotta's own copies is left inside. A target that is a symlink is stored as the link instead — name what is inside it to track the directory it points at.
+
 **To move the `custom/` files**, run `dotta profile enable <name> --target <new>`. The next `apply` deploys them at the new target and cleans up the old copies under the [usual cleanup rules](concepts.md#the-view-and-the-record).
 
 Profiles with `custom/` paths need a target to be enabled. `clone` and `profile enable --all` leave them disabled and show how to set one. If sync brings `custom/` paths into an enabled profile, `status` asks you to choose a target.

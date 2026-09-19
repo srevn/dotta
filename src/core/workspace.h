@@ -606,34 +606,36 @@ typedef enum {
 } workspace_status_t;
 
 /**
- * Workspace load options
+ * Workspace load options — the two analyses a caller may decline
  *
- * Controls which analyses workspace_load() performs. All flags default to false
- * when zero-initialized. Build custom options by setting specific flags. The
- * analyses are independent: the partition that every load runs is what decides
- * which rows are active and which records are orphans, and each analysis walks
- * its own slice.
+ * What every load does is workspace_load's own contract, stated there. These
+ * two are optional because each walks a set the join does not, at a cost, for a
+ * reader that may not exist:
  *
- * Two of them are the join, and every command's load sets both: the file and
- * the directory analyses look at the view's rows. The directory analysis runs
- * first, because it is the only producer of the view's squatters (note_displaced)
- * and every look the load takes after it asks first whether a squatter stands
- * above the path. The other two are optional because each has a cost and a reader
- * that may not exist: the orphan analysis (a Git probe per profile; read by the
- * settle — apply's cleanup — and status's Issues) and the untracked scan (a readdir
- * walk per tracked directory; read by update --include-new and status's New files).
+ * - analyze_orphans — every record whose path the view lacks, either kind:
+ *   presence, ownership, divergence and Git authority, at one ref lookup and a
+ *   lazy tree or metadata load per profile with present, owned orphans. Read by
+ *   core/cleanup.c cleanup_plan_build (the settle, apply's cleanup) and
+ *   cmds/status.c display_workspace_status (Issues).
+ * - analyze_untracked — every regular file and symlink beneath a tracked directory
+ *   that no enabled profile manages and dotta has no record of, at a readdir
+ *   walk per tracked directory. Read by cmds/update.c filter_items_for_update,
+ *   cmds/status.c display_workspace_status (New files) and cmds/sync.c cmd_sync
+ *   (the clean-workspace guard). Declined for a second reason the orphan analysis
+ *   has no equivalent of: auto_detect_new_files and --include-new are the user
+ *   saying whether to look at all, so this one is a config read where the other
+ *   is a per-command constant.
  *
- * Lifetime: Options are read-only during workspace_load(), safe to stack-allocate.
+ * A reader not named above is a bug. Declining an analysis declines its items;
+ * it never asserts there are none — a load with the orphan analysis off reads
+ * an empty orphan set because nobody looked, not because the machine is clean.
+ *
+ * Lifetime: read-only during workspace_load(), safe to stack-allocate.
  */
 typedef struct {
-    bool analyze_files;        /* File divergence detection */
-    /* Orphan analysis — presence, ownership, divergence and Git authority of
-     * every record whose path the view lacks, either kind (one ref lookup and a
-     * lazy tree or metadata load per profile with present, owned orphans) */
-    bool analyze_orphans;
-    bool analyze_untracked;    /* Directory scanning for new files (EXPENSIVE!) */
-    bool analyze_directories;  /* Directory metadata checks */
-} workspace_load_t;
+    bool analyze_orphans;      /* The records the view lacks (a Git probe per profile) */
+    bool analyze_untracked;    /* New files under tracked directories (a readdir each) */
+} workspace_options_t;
 
 /**
  * Load workspace from repository
@@ -642,7 +644,21 @@ typedef struct {
  * the filesystem:
  * - The view: every enabled profile's tree and metadata at HEAD
  * - The record: the path_anchors in the store's dotta.db
- * - The filesystem: actual files on disk
+ * - The filesystem: one look per row, either kind — and none beneath a squatter
+ *   (workspace_displaced_t)
+ *
+ * The join is every load's and no caller's to decline: the view's directory rows,
+ * then its file rows. Both kinds, because a kind nobody analyzed has no item at
+ * all, and a consumer that reads the divergence index per row finds nothing to
+ * do at every one of them — which for apply is adoption, taking ownership of
+ * paths it never looked at (core/deploy.c deploy_plan_build, where a row with
+ * no item is clean by definition). Directories first, because that walk is the
+ * only producer of the view's squatters (note_displaced) and every look the load
+ * takes after it asks that fact before taking one: run the file rows without it
+ * and a row beneath a squatter is looked at *through* the squatter —
+ * workspace_displaced_t names what such a look answers — carrying no displaced
+ * field to say so, so its bits come back as the user's own work
+ * (workspace_item_route).
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
  * symlink beneath a tracked directory that no enabled profile manages and dotta
@@ -653,8 +669,8 @@ typedef struct {
  * blob at, where no apply could ever place it. A best-effort look that says what
  * it could not list or look at and goes on with the siblings
  * (analyze_untracked_files). The record's half is a load fact, not an analysis's:
- * a path dotta remembers is no discovery on any surface, whichever of the analyses
- * above the caller asked for — and so is the entry each row and each record stands
+ * a path dotta remembers is no discovery on any surface, whichever of the two
+ * the caller asked for — and so is the entry each row and each record stands
  * on, so a path dotta manages or remembers under another spelling is no discovery
  * either (see Identity above).
  *
@@ -684,7 +700,7 @@ typedef struct {
  *                 which the command's spec declares with `.manifest`; no command
  *                 mutates Git or the enabled set between dispatch and
  *                 workspace_load, so it is current)
- * @param options Analysis options (must not be NULL)
+ * @param opts The two analyses this load may decline (must not be NULL)
  * @param arena Borrowed allocator backing every workspace-lifetime string (the
  *              view's rows, the record, diverged items, partition pointer arrays).
  *              Must outlive workspace_free; in practice `ctx->arena` (must not
@@ -698,7 +714,7 @@ error_t *workspace_load(
     const struct config *config,
     content_cache_t *content_cache,
     const manifest_t *manifest,
-    const workspace_load_t *options,
+    const workspace_options_t *opts,
     arena_t *arena,
     workspace_t **out
 );
@@ -847,7 +863,7 @@ const manifest_row_t *workspace_lookup(
  *
  * The answer is noted by the analyses where they observed each squatter
  * (note_displaced), and the directory analysis runs before any file row, orphan
- * record or scan root is looked at (workspace_load_t), so it is complete before
+ * record or scan root is looked at (workspace_load), so it is complete before
  * anything asks. The outermost such ancestor is returned: the true offender,
  * whose presence voids every path beneath it. Fate-blind by construction — whether
  * *this run* converges the displacement is deploy's question, asked of its own

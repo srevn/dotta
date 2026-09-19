@@ -1527,11 +1527,9 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
      * so orphan detection is exact whatever -p narrowed.
      */
     if (opts->show_local) {
-        workspace_load_t ws_opts = {
-            .analyze_files       = true,
-            .analyze_orphans     = true,
-            .analyze_untracked   = config->auto_detect_new_files,
-            .analyze_directories = true
+        workspace_options_t ws_opts = {
+            .analyze_orphans   = true,
+            .analyze_untracked = config->auto_detect_new_files
         };
         err = workspace_load(
             repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws

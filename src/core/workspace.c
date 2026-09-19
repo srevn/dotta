@@ -711,7 +711,7 @@ static void workspace_record_observation(
  *
  * Each half is complete before anything asks it. The view's is complete after
  * the directory analysis, which every command's load runs first for that reason
- * (workspace_load_t) and which walks its rows parents-first, so a squatter above
+ * (workspace_load) and which walks its rows parents-first, so a squatter above
  * a row is noted before the row's own turn. The record's fills as the orphan
  * analysis walks, in path order, so a retyped directory record is noted before
  * any record beneath it comes up — and that is exactly when it has a reader,
@@ -1979,13 +1979,13 @@ static const anchor_t *standing_record(
  *
  * The lstats are this phase's own. Not the analyses': a look taken there is the
  * item's, and its answer must not depend on which analyses a caller asked for
- * (the leaf probe's record guard learned that, workspace_load_t). Not the scan's:
- * its roots are a selection over the tracked directories — the later profile
- * wins a directory — not an index (scan_root_t). One allocation sized by the
- * view's rows and the orphans; the cost is rows + orphans syscalls once, on a
- * load a reader will run in, and nothing at all on any other. A later shape that
- * kept one look per path on the join would replace the two fs_lstat lines here
- * and move no reader.
+ * (the leaf probe's record guard learned that, workspace_options_t). Not the
+ * scan's: its roots are a selection over the tracked directories — the later
+ * profile wins a directory — not an index (scan_root_t). One allocation sized
+ * by the view's rows and the orphans; the cost is rows + orphans syscalls once,
+ * on a load a reader will run in, and nothing at all on any other. A later shape
+ * that kept one look per path on the join would replace the two fs_lstat lines
+ * here and move no reader.
  *
  * Readers: standing_row (the orphan analysis's BACKED arm, the untracked scan's
  * leaf probe), standing_record (the leaf probe).
@@ -3456,7 +3456,7 @@ error_t *workspace_load(
     const config_t *config,
     content_cache_t *content_cache,
     const manifest_t *manifest,
-    const workspace_load_t *options,
+    const workspace_options_t *opts,
     arena_t *arena,
     workspace_t **out
 ) {
@@ -3464,7 +3464,7 @@ error_t *workspace_load(
     CHECK_NULL(state);
     CHECK_NULL(content_cache);
     CHECK_NULL(manifest);
-    CHECK_NULL(options);
+    CHECK_NULL(opts);
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -3501,31 +3501,21 @@ error_t *workspace_load(
         return error_wrap(err, "Failed to partition workspace");
     }
 
-    /* The analyses, in the order the load's own contract groups them: the join
-     * first and whole — the file and directory analyses, which every command's
-     * load runs (workspace_load_t) — then the optional ones. The directory rows
-     * come first within the join because they are the only producer of the view's
-     * squatters (note_displaced), and every look the load takes after this one
-     * asks first whether a squatter stands above the path: the file rows, the
-     * orphan records, the entries index, the scan's roots. */
-
-    /* The join: the view's directory rows; notes the displaced directories a
-     * claim of the view holds */
-    if (options->analyze_directories) {
-        err = analyze_directories_divergence(ws);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze directory divergence");
-        }
+    /* The join, in its order. The directory rows first: they are the only producer
+     * of the view's squatters (note_displaced), and every look below asks that
+     * fact before taking one — the file rows, the orphan records, the entries
+     * index, the scan's roots. Neither half is a caller's to decline; why not
+     * is workspace_load's own contract. */
+    err = analyze_directories_divergence(ws);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to analyze directory divergence");
     }
 
-    /* The join: the view's file rows (most common requirement) */
-    if (options->analyze_files) {
-        err = analyze_files_divergence(ws, config);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze file divergence");
-        }
+    err = analyze_files_divergence(ws, config);
+    if (err) {
+        workspace_free(ws);
+        return error_wrap(err, "Failed to analyze file divergence");
     }
 
     /* The entries — where every row and every orphan record stands, by identity
@@ -3536,7 +3526,7 @@ error_t *workspace_load(
      * analysis returns at its first line with no orphan, and the scan asks per
      * offer. Every ask below is therefore made on a load this built the index
      * in (find_entries). */
-    if ((options->analyze_orphans && ws->orphan_count > 0) || options->analyze_untracked) {
+    if ((opts->analyze_orphans && ws->orphan_count > 0) || opts->analyze_untracked) {
         err = index_entries(ws);
         if (err) {
             workspace_free(ws);
@@ -3547,7 +3537,7 @@ error_t *workspace_load(
     /* Optional: the orphans (records of either kind the view lacks); notes the
      * displaced directories only a record remembers, and its guard reads the
      * entries */
-    if (options->analyze_orphans) {
+    if (opts->analyze_orphans) {
         err = analyze_orphans(ws);
         if (err) {
             workspace_free(ws);
@@ -3556,7 +3546,7 @@ error_t *workspace_load(
     }
 
     /* Optional: new files beneath the tracked directories */
-    if (options->analyze_untracked) {
+    if (opts->analyze_untracked) {
         err = analyze_untracked_files(ws, config);
         if (err) {
             workspace_free(ws);

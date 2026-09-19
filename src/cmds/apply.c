@@ -1639,14 +1639,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      */
     output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
 
-    /* Apply needs file AND directory divergence (deploy_plan_build derives both
-     * kinds from the divergence index — an unanalyzed kind plans as clean) plus
-     * orphan detection for cleanup. */
-    workspace_load_t ws_opts = {
-        .analyze_files       = true,
-        .analyze_orphans     = true,
-        .analyze_untracked   = false,            /* Skip expensive directory scan */
-        .analyze_directories = true              /* Directory metadata convergence */
+    /* Orphan detection for the settle; the directory scan is update's, and no
+     * apply reads a new file. */
+    workspace_options_t ws_opts = {
+        .analyze_orphans   = true,
+        .analyze_untracked = false
     };
     err = workspace_load(
         repo, state, config, content_cache, manifest, &ws_opts, ctx->arena, &ws

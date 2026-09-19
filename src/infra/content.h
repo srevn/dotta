@@ -315,11 +315,15 @@ error_t *content_rebind(
  * route on a stale or wrong-blob "encrypted" flag. The fact about the blob lives
  * with the blob, not with any external proxy.
  *
+ * The seam routes; it does not look. Both routes end in infra/compare.h's pair,
+ * whose one look is the caller's own, so the stat is forwarded and required here
+ * for the same reason it is required there.
+ *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID to compare against (must not be NULL)
  * @param fs_path Filesystem path to compare to (must not be NULL)
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
- * @param initial_stat Pre-captured stat to skip an lstat (can be NULL)
+ * @param st The look the caller took at fs_path (must not be NULL)
  * @param storage_path Storage path; used as AAD when blob is encrypted (must
  *          not be NULL, must match Git tree path)
  * @param profile Profile name for key derivation when encrypted (must not be NULL)
@@ -334,7 +338,7 @@ error_t *content_compare_blob_to_disk(
     const git_oid *blob_oid,
     const char *fs_path,
     git_filemode_t expected_mode,
-    const struct stat *initial_stat,
+    const struct stat *st,
     const char *storage_path,
     const char *profile,
     content_cache_t *cache,

@@ -1370,7 +1370,7 @@ static error_t *analyze_file_divergence(
  *   on: a match means the exact node dotta wrote, no hashing
  * - Leverages content cache with transparent encryption handling
  * - Full-bit permission checking against the record's mode, ownership beside it
- * - Single-stat-per-file (caller provides pre-captured stat)
+ * - Single-stat-per-file (the caller's look, which nothing below retakes)
  *
  * Performance Safeguards:
  * - 100MB size limit (prevents loading huge files into memory)
@@ -1387,7 +1387,7 @@ static error_t *analyze_file_divergence(
  * @param ws Workspace (provides content_cache, repo)
  * @param anchor The record dotta keeps of the path (must not be NULL;
  *               non-zero blob_oid)
- * @param in_stat Pre-captured stat from caller (must not be NULL)
+ * @param st The look the caller took at the record's path (must not be NULL)
  * @param out Receives the divergence flags (must not be NULL); DIVERGENCE_NONE
  *            when the look failed and the error is returned
  * @return The look's error when the compare could not be made; NULL otherwise
@@ -1395,7 +1395,7 @@ static error_t *analyze_file_divergence(
 static error_t *compute_orphan_divergence(
     workspace_t *ws,
     const anchor_t *anchor,
-    const struct stat *in_stat,
+    const struct stat *st,
     divergence_type_t *out
 ) {
     *out = DIVERGENCE_NONE;
@@ -1435,8 +1435,9 @@ static error_t *compute_orphan_divergence(
      * the blob, so the orphan walker cannot route a different blob's state by a
      * cached flag by accident — the record carries no encrypted flag, and the
      * blob dotta deployed may sit on the other side of an encryption-policy flip
-     * from what Git holds now. in_stat is forwarded to avoid redundant lstat. */
-    if (stat_cache_matches(&anchor->stat, in_stat)) {
+     * from what Git holds now. The caller's look is forwarded: the seam routes,
+     * the pair judges, and neither takes a look of its own. */
+    if (stat_cache_matches(&anchor->stat, st)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         cmp_result = CMP_EQUAL;
     } else {
@@ -1445,7 +1446,7 @@ static error_t *compute_orphan_divergence(
             reference,
             fs_path,
             expected_filemode,
-            in_stat,
+            st,
             storage_path,
             profile,
             ws->content_cache,
@@ -1515,11 +1516,11 @@ static error_t *compute_orphan_divergence(
      */
     if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
         if (anchor->type != PATH_TYPE_SYMLINK
-            && (in_stat->st_mode & 0777) != anchor->mode) {
+            && (st->st_mode & 0777) != anchor->mode) {
             divergence |= DIVERGENCE_MODE;
         }
         if (ownership_diverges(
-            anchor->storage_path, anchor->owner, anchor->group, in_stat
+            anchor->storage_path, anchor->owner, anchor->group, st
             )) {
             divergence |= DIVERGENCE_OWNERSHIP;
         }

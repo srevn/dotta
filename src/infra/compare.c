@@ -23,8 +23,8 @@
  * and compare_oid_to_disk ask one question with the reference in two encodings,
  * and the encoding matters at two points only: the size fast path (a buffer knows
  * its size; an id does not) and the judgment (memcmp, or hash and compare). Every
- * other step — the stat, the type against the expected mode, the read of a link's
- * target or a file's bytes — is one look, spelled once below.
+ * other step — the type against the expected mode, off the caller's look, and
+ * the read of a link's target or a file's bytes — is spelled once below.
  */
 typedef struct {
     const buffer_t *content;    /* The plaintext bytes, or NULL */
@@ -55,8 +55,7 @@ static error_t *judge(
          * and memcmp is undefined over a null pointer even across zero bytes —
          * which every tracked empty file this repository holds would ask it to
          * do. */
-        bool equal = (copy->size == ref->content->size) &&
-            (copy->size == 0 ||
+        bool equal = (copy->size == ref->content->size) && (copy->size == 0 ||
             memcmp(ref->content->data, copy->data, copy->size) == 0);
         *result = equal ? CMP_EQUAL : CMP_DIFFERENT;
         return NULL;
@@ -86,10 +85,10 @@ static error_t *judge(
  * directory would be opened and judged, and mode_stands below would ask a regular
  * file's question about it.
  *
- * Asked ahead of the look so one caller error has one answer. It used to sit
- * after the pair's stat, where an unsupported mode at an absent path was answered
- * CMP_MISSING with no in_stat and refused with one in hand — the same mistake,
- * told two ways by whether the caller had looked.
+ * Asked first in both ladders, so one caller error has one answer wherever it
+ * is made. It used to sit after the pair's own stat, where an unsupported mode
+ * at an absent path read CMP_MISSING and the same mode at a live one was refused
+ * — one mistake, answered by what happened to stand at the path.
  */
 static error_t *validate_mode(git_filemode_t expected_mode) {
     if (expected_mode != GIT_FILEMODE_LINK && expected_mode != GIT_FILEMODE_BLOB &&
@@ -167,13 +166,17 @@ static error_t *read_copy(
 }
 
 /**
- * One look at the disk copy, judged against the reference
+ * The caller's look at the disk copy, judged against the reference
  *
- * The caller's stat or one lstat, and every question is asked off that one look:
- * the kind against the expected mode, and for a regular file under a buffer the
- * size too — so a copy of the wrong kind or the wrong size is a verdict with no
- * open at all. The bytes are read_copy's and the judgment is judge's, so a caller
- * that renders reads the same two through the same pair of functions.
+ * The look is handed in, and every question is asked off that one stat: the kind
+ * against the expected mode, and for a regular file under a buffer the size too
+ * — so a copy of the wrong kind or the wrong size is a verdict with no open at
+ * all. The bytes are read_copy's and the judgment is judge's, so a caller that
+ * renders reads the same two through the same pair of functions.
+ *
+ * No look is taken here. Absence at the look's own moment is the caller's to
+ * name and it never gets this far — the one absence this function reports is
+ * the read's, a path that left between the look and it.
  *
  * NOTE: We do NOT check permissions here. Permission validation is a core-layer
  * concern handled by workspace.c, which checks:
@@ -185,39 +188,12 @@ static error_t *read_copy(
  */
 static error_t *compare_reference_to_disk(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
-    const struct stat *in_stat, compare_result_t *result
+    const struct stat *st, compare_result_t *result
 ) {
     RETURN_IF_ERROR(validate_mode(expected_mode));
 
-    struct stat st;
-    const struct stat *stat_ptr;
-
-    /* Stat handling: use provided stat or capture new one
-     *
-     * Single-stat-per-file principle: When caller has already stat'd the file
-     * (e.g., for existence check), we reuse that stat to avoid redundant syscall.
-     * This is critical for performance in hot paths like workspace analysis.
-     */
-    if (in_stat) {
-        /* Caller provided stat - use it (zero syscalls) */
-        stat_ptr = in_stat;
-    } else {
-        /* Need to stat - use lstat to detect symlinks correctly */
-        if (fs_lstat(disk_path, &st) != 0) {
-            if (errno == ENOENT || errno == ENOTDIR) {
-                /* File doesn't exist - not an error, just report it (ENOTDIR: a
-                 * component above is no longer a directory — same absence) */
-                *result = CMP_MISSING;
-                return NULL;
-            }
-            return error_from_errno(errno, "Failed to stat '%s'", disk_path);
-        }
-        stat_ptr = &st;
-    }
-
-    /* Check disk holds the kind the expected mode names (using captured stat -
-     * no syscall) */
-    if (!mode_stands(stat_ptr, expected_mode)) {
+    /* Does disk hold the kind the expected mode names? Off the look, no syscall. */
+    if (!mode_stands(st, expected_mode)) {
         *result = CMP_TYPE_DIFF;
         return NULL;
     }
@@ -227,7 +203,7 @@ static error_t *compare_reference_to_disk(
      * is the filesystem's), and an id knows nothing of the size and reads
      * regardless. */
     if (expected_mode != GIT_FILEMODE_LINK && ref->content &&
-        ref->content->size != (size_t) stat_ptr->st_size) {
+        ref->content->size != (size_t) st->st_size) {
         *result = CMP_DIFFERENT;
         return NULL;
     }
@@ -261,34 +237,32 @@ error_t *compare_buffer_to_disk(
     const buffer_t *content,
     const char *disk_path,
     git_filemode_t expected_mode,
-    const struct stat *in_stat,
+    const struct stat *st,
     compare_result_t *result
 ) {
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
+    CHECK_NULL(st);
     CHECK_NULL(result);
 
     reference_t ref = { .content = content };
-    return compare_reference_to_disk(
-        &ref, disk_path, expected_mode, in_stat, result
-    );
+    return compare_reference_to_disk(&ref, disk_path, expected_mode, st, result);
 }
 
 error_t *compare_oid_to_disk(
     const git_oid *blob_oid,
     const char *disk_path,
     git_filemode_t expected_mode,
-    const struct stat *in_stat,
+    const struct stat *st,
     compare_result_t *result
 ) {
     CHECK_NULL(blob_oid);
     CHECK_NULL(disk_path);
+    CHECK_NULL(st);
     CHECK_NULL(result);
 
     reference_t ref = { .oid = blob_oid };
-    return compare_reference_to_disk(
-        &ref, disk_path, expected_mode, in_stat, result
-    );
+    return compare_reference_to_disk(&ref, disk_path, expected_mode, st, result);
 }
 
 /**

@@ -12,20 +12,21 @@
  *    to an expected git blob OID. Used for non-encrypted files where OID comparison
  *    avoids expensive blob loading from pack files.
  *
- * 3. Rendering (compare_generate_diff): the same look, taken for itself rather
- *    than for a caller, and the bytes it read rendered as a unified diff. It
- *    reaches its verdict through the same kind test and the same judgment as
+ * 3. Rendering (compare_generate_diff): the module's one look, taken for itself
+ *    rather than for a caller, and the bytes it read rendered as a unified diff.
+ *    It reaches its verdict through the same kind test and the same judgment as
  *    the two above, and hands nothing else back — the pair returns a verdict,
  *    and a caller that wants a look takes one.
  *
- * The first two are handed the caller's look, and all three return compare_result_t
- * for uniform caller integration. None of them accesses the git repository or
- * object database — all operations are pure computation against the filesystem.
+ * The first two judge the look their caller took, and all three return
+ * compare_result_t for uniform caller integration. None of them accesses the
+ * git repository or object database — all operations are pure computation against
+ * the filesystem.
  *
  * Design principles:
  * - Handle all file types (regular, symlink)
  * - Clear comparison results
- * - A look is the caller's to take, and none is handed back
+ * - A look is the caller's to take: the pair is handed one and takes none
  * - The disk copy is wiped before it is freed, by whichever of the two readers
  *   of the read took it: for an encrypted row it is the plaintext, the twin of
  *   the buffer the content cache wipes on its side
@@ -82,33 +83,31 @@ typedef struct {
 /**
  * Does the disk copy match the reference? — the pair
  *
- * One look at the disk copy, judged against a reference in one of two encodings:
- * the plaintext bytes (compare_buffer_to_disk) or the blob's id
- * (compare_oid_to_disk). The look is the same for both — the stat, the type against
- * the expected mode, a link's target or a file's bytes through one descriptor —
- * and the encoding matters at two points only: a buffer knows its size, so a
+ * The caller's look at the disk copy, judged against a reference in one of two
+ * encodings: the plaintext bytes (compare_buffer_to_disk) or the blob's id
+ * (compare_oid_to_disk). The ladder is the same for both — the type against the
+ * expected mode, then a link's target or a file's bytes through one descriptor
+ * — and the encoding matters at two points only: a buffer knows its size, so a
  * size that differs is a verdict with no open needed; and the judgment is memcmp
  * for a buffer, hash-and-compare for an id (SHA-1("blob <size>\0" + bytes), Git's
  * own — a symlink is a blob holding its target). Pure with respect to git and
  * encryption otherwise: zero blob loading, zero decryption.
  *
- * Tests:
- * 1. File exists on disk
- * 2. File type matches (regular/symlink)
- * 3. Content matches (byte-for-byte, or by id)
+ * The ladder, in order:
+ * 1. The kind the expected mode names is the kind the look found
+ * 2. For a buffer, the size — a difference here is a verdict with no open
+ * 3. The bytes, read and judged (byte-for-byte, or by id)
  *
- * Stat propagation optimization:
- * - If in_stat != NULL: Uses provided stat data (zero syscalls)
- * - If in_stat == NULL: Performs lstat() internally
- * - Single stat used for all checks (type, size, mode)
+ * The look is the caller's: the stat it took before it called, required, taken
+ * nowhere here and handed back nowhere. Steps 1 and 2 are asked off it, so the
+ * pair spends no syscall of its own before step 3, and a caller that wants a
+ * look takes one — compare_generate_diff below is the module's only looker.
  *
- * Nothing is handed back: a caller that wants a look takes one, and
- * compare_generate_diff below is the caller that does.
- *
- * CMP_MISSING means the look itself met the absence — ENOENT/ENOTDIR at the stat,
- * or ERR_NOT_FOUND from the read of either kind — the path was absent at the
- * look's own moment. Returned with or without in_stat; a caller that supplied a
- * stat learns its stat is one moment stale.
+ * CMP_MISSING means the *read* met the absence — ENOENT/ENOTDIR at the open, or
+ * ERR_NOT_FOUND from the link's read — so the path left between the caller's
+ * look and it, and the caller learns its look is one moment stale. Absence at
+ * the look's own moment is the caller's own to name, in whatever vocabulary that
+ * caller keeps for it; it never reaches here.
  *
  * The id form is for plaintext blobs only: an encrypted blob's id is the hash
  * of ciphertext, while the filesystem holds plaintext, so the comparison would
@@ -127,7 +126,7 @@ typedef struct {
  * @param content Buffer containing expected content (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
  * @param expected_mode Expected git filemode (for type/mode checking)
- * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
+ * @param st The look the caller took at disk_path (must not be NULL)
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
@@ -135,7 +134,7 @@ error_t *compare_buffer_to_disk(
     const buffer_t *content,
     const char *disk_path,
     git_filemode_t expected_mode,
-    const struct stat *in_stat,
+    const struct stat *st,
     compare_result_t *result
 );
 
@@ -145,7 +144,7 @@ error_t *compare_buffer_to_disk(
  * @param blob_oid Expected blob OID from manifest (must not be NULL)
  * @param disk_path Path to file on disk (must not be NULL)
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
- * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
+ * @param st The look the caller took at disk_path (must not be NULL)
  * @param result Comparison result (must not be NULL)
  * @return Error or NULL on success
  */
@@ -153,7 +152,7 @@ error_t *compare_oid_to_disk(
     const git_oid *blob_oid,
     const char *disk_path,
     git_filemode_t expected_mode,
-    const struct stat *in_stat,
+    const struct stat *st,
     compare_result_t *result
 );
 

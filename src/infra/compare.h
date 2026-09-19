@@ -1,7 +1,7 @@
 /**
  * compare.h - File comparison engine
  *
- * Compares expected content with filesystem state using two strategies:
+ * Compares expected content with filesystem state, and renders the difference:
  *
  * 1. Buffer-based (compare_buffer_to_disk): Compares plaintext buffers provided
  *    by the content layer (src/infra/content.h). Used for encrypted files where
@@ -12,18 +12,25 @@
  *    to an expected git blob OID. Used for non-encrypted files where OID comparison
  *    avoids expensive blob loading from pack files.
  *
- * Both strategies share the same stat propagation convention and return
- * compare_result_t for uniform caller integration. Neither strategy accesses
- * the git repository or object database — all operations are pure computation
- * against the filesystem.
+ * 3. Rendering (compare_generate_diff): the same look, taken for itself rather
+ *    than for a caller, and the bytes it read rendered as a unified diff. It
+ *    reaches its verdict through the same kind test and the same judgment as
+ *    the two above, and hands nothing else back — the pair returns a verdict,
+ *    and a caller that wants a look takes one.
+ *
+ * The first two share the same stat propagation convention, and all three return
+ * compare_result_t for uniform caller integration. None of them accesses the
+ * git repository or object database — all operations are pure computation against
+ * the filesystem.
  *
  * Design principles:
  * - Handle all file types (regular, symlink)
  * - Compare permissions accurately (executable bit)
  * - Clear comparison results
  * - Stat propagation to minimize redundant syscalls
- * - The disk copy is wiped before it is freed: for an encrypted row it is the
- *   plaintext, the twin of the buffer the content cache wipes on its side
+ * - The disk copy is wiped before it is freed, by whichever of the two readers
+ *   of the read took it: for an encrypted row it is the plaintext, the twin of
+ *   the buffer the content cache wipes on its side
  */
 
 #ifndef DOTTA_COMPARE_H
@@ -61,7 +68,7 @@ typedef enum {
 } compare_result_t;
 
 /**
- * A rendering: the comparison's verdict, and the text for it
+ * A rendering: the verdict the renderer's own look reached, and the text for it
  *
  * The struct is the caller's — a stack local, cleared by compare_generate_diff
  * once its arguments are accepted — and one thing in it is owned: `diff_text`,
@@ -70,7 +77,7 @@ typedef enum {
  * verdict may ignore.
  */
 typedef struct {
-    compare_result_t status; /* what the comparison found */
+    compare_result_t status; /* what the look found */
     char *diff_text;         /* the text for it, NULL for a match */
 } file_diff_t;
 
@@ -101,8 +108,8 @@ typedef struct {
  * This eliminates redundant stat calls when integrated with metadata checking,
  * reducing filesystem syscalls by ~5x in hot paths.
  *
- * CMP_MISSING means the look itself met the absence — ENOENT/ENOTDIR at the stat
- * or the open, ERR_NOT_FOUND from the link's read — the path was absent at the
+ * CMP_MISSING means the look itself met the absence — ENOENT/ENOTDIR at the stat,
+ * or ERR_NOT_FOUND from the read of either kind — the path was absent at the
  * look's own moment. Returned with or without in_stat; a caller that supplied a
  * stat learns its stat is one moment stale.
  *
@@ -172,19 +179,28 @@ typedef enum {
 } compare_direction_t;
 
 /**
- * Generate diff from buffer content to disk file
+ * Render the disk copy's difference from the reference — the renderer's own look
+ *
+ * One lstat names what stands at the path; where it is the kind the mode expects,
+ * one read takes the bytes that are judged and, where they differ, rendered. So
+ * a file is read once, and no stat is carried out of a comparison to make it
+ * happen: the pair above returns a verdict and nothing else, and a caller that
+ * wants a look takes one.
+ *
+ * `out->status` is that look's verdict, reached through the same judge and the
+ * same kind test the pair uses, so a status line printed from one and a text
+ * rendered by the other cannot call one path two things. A caller with no verdict
+ * of its own reads it here rather than comparing first; a caller that already
+ * holds one gets a look one moment fresher, and where the disk moved since, a
+ * text that says so.
  *
  * Works with decrypted content from the content layer. Uses libgit2's
  * git_diff_buffers for pure in-memory diff generation.
  *
- * Stat propagation: Accepts pre-captured stat to avoid redundant syscalls during
- * comparison phase. If in_stat is NULL, performs lstat() internally.
- *
  * @param content Content buffer (e.g., decrypted content, must not be NULL)
  * @param disk_path Disk file path (must not be NULL)
- * @param path_label Label for diff output (can be NULL, defaults to disk_path)
+ * @param path_label Label for diff output (must not be NULL)
  * @param mode Expected git filemode (for type/mode checking)
- * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
  * @param direction Diff direction
  * @param out Rendering (must not be NULL; cleared on entry, and left cleared on
  *            failure, so freeing it is correct either way)
@@ -195,7 +211,6 @@ error_t *compare_generate_diff(
     const char *disk_path,
     const char *path_label,
     git_filemode_t mode,
-    const struct stat *in_stat,
     compare_direction_t direction,
     file_diff_t *out
 );

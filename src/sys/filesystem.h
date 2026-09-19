@@ -896,9 +896,11 @@ bool fs_stat_is_directory(const struct stat *st);
  *
  * "regular file", "symlink", "directory", "FIFO", "socket", "character device",
  * "block device", "special file" — one spelling for the verbs that must name an
- * occupant they cannot take: the capture's refusal (infra/content) and add's
- * walk and argument arm. The input is a successful lstat's; there is no noun
- * for NONE or UNKNOWN, which are answers about the call and not about an occupant.
+ * occupant they cannot take: the capture's refusal (infra/content), add's walk
+ * and argument arm, and one that is not the kind a claim expects (infra/compare.c
+ * compare_generate_diff, the type-mismatch line a diff renders). The input is a
+ * successful lstat's; there is no noun for NONE or UNKNOWN, which are answers
+ * about the call and not about an occupant.
  *
  * Why the stat and not fs_occupant_t: the enum deliberately folds FIFO, socket
  * and both devices into FS_OCCUPANT_OTHER, and the noun is exactly the reading

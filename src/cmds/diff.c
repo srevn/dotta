@@ -337,8 +337,7 @@ static error_t *show_file_diff_from_workspace(
 
     file_diff_t diff = { 0 };
     err = compare_generate_diff(
-        content, item->filesystem_path, file->storage_path, mode, NULL,
-        cmp_dir, &diff
+        content, item->filesystem_path, file->storage_path, mode, cmp_dir, &diff
     );
 
     if (err) {
@@ -348,8 +347,13 @@ static error_t *show_file_diff_from_workspace(
         );
     }
 
-    output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-    output_print_diff(out, diff.diff_text);
+    /* The separator belongs to a text, not to a verdict: where the renderer's
+     * own look found the copy matching after all — the one thing that can change
+     * between the load and here — the status line above stands alone. */
+    if (diff.diff_text) {
+        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+        output_print_diff(out, diff.diff_text);
+    }
 
     compare_free_diff(&diff);
 
@@ -780,7 +784,10 @@ static error_t *compare_tree_files_to_filesystem(
             continue;
         }
 
-        /* Full diff output */
+        /* Full diff output: the renderer takes the one look, and the verdict is
+         * read off its result — so the bytes judged are the bytes rendered, where
+         * this loop used to compare the row itself and then hand the renderer
+         * the same question four lines later. */
         const buffer_t *hist_content = NULL;
         error_t *err = content_cache_get_from_blob_oid(
             cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
@@ -792,80 +799,66 @@ static error_t *compare_tree_files_to_filesystem(
             );
         }
 
-        /* Compare with filesystem */
-        compare_result_t result;
-        err = compare_buffer_to_disk(
-            hist_content, fs_path, mode, NULL, &result, NULL
-        );
-        if (err) {
-            return error_wrap(err, "Failed to compare '%s'", fs_path);
-        }
-
-        /* Skip if identical */
-        if (result == CMP_EQUAL) {
-            continue;
-        }
-
-        /* Blank line between entries for readability */
-        if (*diff_count > 0) {
-            output_newline(out, OUTPUT_NORMAL);
-        }
-
-        /* Show file header */
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
-            profile
-        );
-        output_styled(
-            out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
-            storage_path
-        );
-
-        /* Show status message */
-        const char *status_msg = NULL;
-        output_color_t status_color = OUTPUT_COLOR_YELLOW;
-
-        switch (result) {
-            case CMP_MISSING:
-                status_msg = "deleted locally (file missing)";
-                status_color = OUTPUT_COLOR_RED;
-                break;
-            case CMP_DIFFERENT:
-                status_msg = "modified locally since commit";
-                status_color = OUTPUT_COLOR_YELLOW;
-                break;
-            case CMP_TYPE_DIFF:
-                status_msg = "type changed locally";
-                status_color = OUTPUT_COLOR_RED;
-                break;
-            default:
-                status_msg = "unknown";
-                break;
-        }
-
-        output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
-        output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
-
-        /* For missing files or type changes, no content diff */
-        if (result == CMP_MISSING || result == CMP_TYPE_DIFF) {
-            (*diff_count)++;
-            continue;
-        }
-
         file_diff_t diff = { 0 };
         err = compare_generate_diff(
-            hist_content, fs_path, storage_path, mode, NULL,
-            CMP_DIR_DOWNSTREAM, &diff
+            hist_content, fs_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
         );
         if (err) {
             return error_wrap(err, "Failed to generate diff for '%s'", fs_path);
         }
 
-        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-        output_print_diff(out, diff.diff_text);
+        /* The status message, in the commit's words rather than the renderer's
+         * — and the verdict this form has no line for is a copy that is the
+         * commit's, which prints nothing at all. The renderer's own text for
+         * the two verdicts with no bytes to show is generated and dropped here:
+         * it is the workspace arm's fallback, not this loop's vocabulary. */
+        const char *status_msg = NULL;
+        output_color_t status_color = OUTPUT_COLOR_RED;
+
+        switch (diff.status) {
+            case CMP_EQUAL:
+                break;
+            case CMP_MISSING:
+                status_msg = "deleted locally (file missing)";
+                break;
+            case CMP_TYPE_DIFF:
+                status_msg = "type changed locally";
+                break;
+            case CMP_DIFFERENT:
+                status_msg = "modified locally since commit";
+                status_color = OUTPUT_COLOR_YELLOW;
+                break;
+        }
+
+        if (status_msg) {
+            /* Blank line between entries for readability */
+            if (*diff_count > 0) {
+                output_newline(out, OUTPUT_NORMAL);
+            }
+
+            /* Show file header */
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Profile:{reset} %s\n",
+                profile
+            );
+            output_styled(
+                out, OUTPUT_NORMAL, "{dim}# Path:{reset}    %s\n",
+                storage_path
+            );
+
+            output_styled(out, OUTPUT_NORMAL, "{dim}# Status:{reset}  ");
+            output_colored(out, OUTPUT_NORMAL, status_color, "%s\n", status_msg);
+
+            /* Only a content difference has bytes to render */
+            if (diff.status == CMP_DIFFERENT) {
+                output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+                output_print_diff(out, diff.diff_text);
+            }
+
+            (*diff_count)++;
+        }
 
         compare_free_diff(&diff);
-        (*diff_count)++;
     }
 
     return NULL;

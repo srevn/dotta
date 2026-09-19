@@ -1052,25 +1052,16 @@ static error_t *analyze_file_divergence(
         /* BASE FAST PATH (safety-grade)
          *
          * The base binds the blob dotta last confirmed on disk and the stat triple
-         * captured at that confirmation. If the live stat matches the triple,
-         * the following invariant holds by construction:
-         *
-         *     stat_match  ⟹  disk == base blob
-         *
-         * The pair is advanced only after dotta has verified disk content —
-         * state_anchor and state_confirm are its writers, and a released row's
-         * pair was copied verbatim from a record those verbs advanced, so the
-         * proof holds through the copy. A stat match is a cryptographically-grade
-         * proof that disk still equals the base blob — no re-hash needed, and
+         * captured at that confirmation. A live look that still stands behind
+         * that triple is proof that disk equals the base blob — why it is proof
+         * and not a guess is the triple's own to say (core/state.h
+         * stat_cache_matches) — so no blob is loaded and nothing is hashed, and
          * the second question is answered for free: ours == base. Whether that
          * is CMP_EQUAL (base == theirs: clean) or CMP_DIFFERENT (Git moved: STALE
-         * alone) is then read straight from git_moved, without loading blobs or
-         * hashing. A path with no base has no triple to match. */
-        if (base_stat && base_stat->mtime != 0
-            && base_stat->mtime == (int64_t) initial_stat.st_mtime
-            && base_stat->size == (int64_t) initial_stat.st_size
-            && base_stat->ino == (uint64_t) initial_stat.st_ino) {
-            /* stat match ⟹ disk == base blob */
+         * alone) is then read straight from git_moved. A path with no base has
+         * no triple to match. */
+        if (base_stat && stat_cache_matches(base_stat, &initial_stat)) {
+            /* the look stands behind the proof ⟹ disk == base blob */
             file_stat = initial_stat;
             disk_at_base = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
@@ -1440,10 +1431,10 @@ static error_t *compute_orphan_divergence(
 
     /* Step 3: Content and type comparison.
      *
-     * Anchor fast path first: a live stat matching the triple captured at the
-     * last confirmation is proof that disk still equals anchor.blob_oid (see
-     * analyze_file_divergence for the invariant), so the exact node dotta wrote
-     * is recognised without loading or hashing anything.
+     * Anchor fast path first: a live look that still stands behind the triple
+     * captured at the last confirmation is proof that disk still equals
+     * anchor.blob_oid (core/state.h stat_cache_matches), so the exact node dotta
+     * wrote is recognised without loading or hashing anything.
      *
      * Otherwise content_compare_blob_to_disk classifies the blob by magic header
      * and routes; plaintext takes the fast OID-hash-of-disk path, encrypted
@@ -1452,11 +1443,8 @@ static error_t *compute_orphan_divergence(
      * cached flag by accident — the record carries no encrypted flag, and the
      * blob dotta deployed may sit on the other side of an encryption-policy flip
      * from what Git holds now. in_stat is forwarded to avoid redundant lstat. */
-    if (anchor->stat.mtime != 0
-        && anchor->stat.mtime == (int64_t) in_stat->st_mtime
-        && anchor->stat.size == (int64_t) in_stat->st_size
-        && anchor->stat.ino == (uint64_t) in_stat->st_ino) {
-        /* stat match ⟹ disk == anchor.blob_oid */
+    if (stat_cache_matches(&anchor->stat, in_stat)) {
+        /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         fresh_stat = *in_stat;
         cmp_result = CMP_EQUAL;
     } else {

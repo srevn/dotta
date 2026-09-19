@@ -96,6 +96,44 @@ typedef struct {
 } displaced_dir_t;
 
 /**
+ * The look the load took at one path
+ *
+ * One lstat per row of the view, taken by the analysis that judges the row and
+ * kept for the phases after it — the triple fs_lstat_occupant gives, frozen where
+ * the looker stood (sys/filesystem.h). Neither analysis is a caller's to decline
+ * (workspace_load), so every slot is filled on every load, and a later phase
+ * reads the entry its item was judged on rather than taking a look of its own
+ * at another moment: the index cannot disagree with the item it indexes.
+ *
+ * Two writers and no third: the looker, and the file judge alone, which retracts
+ * the occupant to FS_OCCUPANT_NONE when the read meets absence against a look
+ * that said a file stood there — the look follows the verdict, so the item and
+ * the index say one thing (analyze_file_divergence's CMP_MISSING arm). The orphan
+ * judge's CMP_MISSING retracts nothing: its entry was built a phase earlier and
+ * is a vanished file's identity for the rest of the run, the same window cleanup's
+ * re-probe closes at the act.
+ *
+ * `st` is meaningful for a present kind alone, and `lstat_errno` on
+ * FS_OCCUPANT_UNKNOWN from a look that failed. A look never taken — beneath a
+ * squatter, where a look would answer for the occupant and nothing it said would
+ * be this path's — leaves UNKNOWN and a zero errno; the two UNKNOWNs are told
+ * apart by the frame that wrote them and never by the slot, which is why no reader
+ * tells them apart (claim_stands answers false for either).
+ *
+ * The identity (st_dev, st_ino) is what index_entries projects; st_nlink and
+ * st_mode are read off the asker's own fresh stat (same_entry), so no reader
+ * judges a link count this table froze. The whole struct stat, because
+ * compute_orphan_divergence, content_compare_blob_to_disk and ownership_diverges
+ * each take one — 152 bytes a slot, 316 KB on a 2081-path load against a 7.8 MB
+ * peak, where a narrowed row would have to synthesize one back for all three.
+ */
+typedef struct {
+    fs_occupant_t occupant;   /* What the look found; NONE and UNKNOWN both withhold */
+    int lstat_errno;          /* lstat's, on UNKNOWN from a look that failed */
+    struct stat st;           /* Meaningful for a present kind alone */
+} look_t;
+
+/**
  * One entry the load knows, and what stands on it
  *
  * An entry is a name in a directory; a key is one spelling of it, and the two
@@ -140,11 +178,16 @@ struct workspace {
 
     /* Active slices, both kinds, each in filesystem_path order — the view's rows
      * split by kind and sorted, so deploy's parent-before-child walk sees prefix
-     * order. Pointer arrays into the view (arena-allocated). */
+     * order. Pointer arrays into the view (arena-allocated), and beside each
+     * the look the join took at its rows: slot i is the look at slice element
+     * i, written by the analysis that walks the slice and read by every phase
+     * after it (look_t). */
     const manifest_row_t **active_files;         /* Active file rows (arena-allocated array) */
-    size_t active_file_count;                    /* Number of active file rows */
+    look_t *file_looks;                          /* The join's look at each, by the same index */
+    size_t active_file_count;                    /* Number of active file rows, and of looks */
     const manifest_row_t **active_dirs;          /* Active directory rows (arena-allocated array) */
-    size_t active_dir_count;                     /* Number of active directory rows */
+    look_t *dir_looks;                           /* The join's look at each, by the same index */
+    size_t active_dir_count;                     /* Number of active directory rows, and of looks */
 
     /* The record: every anchor, snapshot at load in filesystem_path order and
      * indexed by path. Values are mutable — workspace_observe and workspace_anchor
@@ -846,12 +889,16 @@ static workspace_state_t classify_absent(
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active view row (must not be NULL)
+ * @param look The slot this row's look is taken into, ws->file_looks[i] for the
+ *             row at ws->active_files[i] (must not be NULL). Every arm below
+ *             fills it before it leaves, and the phases after the join read it
  * @param config Configuration for the auto-encrypt ruleset (can be NULL)
  * @return Error or NULL on success
  */
 static error_t *analyze_file_divergence(
     workspace_t *ws,
     const manifest_row_t *row,
+    look_t *look,
     const config_t *config
 ) {
     CHECK_NULL(ws);
@@ -882,26 +929,27 @@ static error_t *analyze_file_divergence(
      * (workspace_displaced_t). The blob-family bit rides — it is Git's, and the
      * filesystem is not a party to it — and the record pairs as on every item,
      * so a pending handover still shows. Nothing is queued: a record is what
-     * dotta saw, and dotta saw nothing here. */
+     * dotta saw, and dotta saw nothing here. The slot says the same to the phases
+     * after: UNKNOWN with nothing behind it, written rather than left to the
+     * allocator's zero, which spells FS_OCCUPANT_NONE. */
     if (displaced_ancestor(ws, fs_path, false)) {
+        *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
+
         return workspace_add_diverged(
             ws, row, anchor, WORKSPACE_STATE_DEPLOYED, policy,
             FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
         );
     }
 
-    /* Single stat capture for the entire analysis
-     *
-     * This stat is reused for:
-     * 1. Existence check (the occupant)
-     * 2. Type verification in comparison functions
-     * 3. Metadata divergence checks (mode, ownership)
-     */
-    struct stat initial_stat;
-    fs_occupant_t occupant = fs_lstat_occupant(fs_path, &initial_stat);
-    int lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
+    /* The load's one look at this path, taken into the row's own slot: the
+     * existence question, the kind the comparisons verify, the mode and ownership
+     * the metadata checks read — and, after this analysis has run, the identity
+     * index_entries projects. Nothing below retakes it, and nothing after the
+     * join does either (look_t). */
+    look->occupant = fs_lstat_occupant(fs_path, &look->st);
+    look->lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
-    if (occupant == FS_OCCUPANT_UNKNOWN) {
+    if (look->occupant == FS_OCCUPANT_UNKNOWN) {
         /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
          * fs_lstat_occupant reads it so). Same policy as the orphan path below:
          * assume the path is there and record the uncertainty, rather than failing
@@ -920,20 +968,9 @@ static error_t *analyze_file_divergence(
         return workspace_add_diverged(
             ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
             DIVERGENCE_UNVERIFIED | policy,
-            occupant,                    /* assumed present */
-            fault_class(error_code_from_errno(lstat_errno))
+            look->occupant,              /* assumed present */
+            fault_class(error_code_from_errno(look->lstat_errno))
         );
-    }
-
-    /* The lstat just observed the path in scope (any type counts). A path with
-     * no record gets one — presence only; a CMP_EQUAL below supersedes it with
-     * a confirmation, and the flush writes each path once. Closes the "user created
-     * the path after scope entry" gap: the next absence reads DELETED, not
-     * UNDEPLOYED. Nothing zeroes initial_stat on the absent arm: the slot is
-     * meaningful only for a present occupant (sys/filesystem.h fs_lstat_occupant)
-     * and every read below stands under that same condition. */
-    if (occupant != FS_OCCUPANT_NONE && !anchor) {
-        workspace_record_observation(ws, row);
     }
 
     /* Divergence accumulator (bit flags, can combine), opened with the blob-family
@@ -943,7 +980,11 @@ static error_t *analyze_file_divergence(
     /* State will be determined in PHASE 2 based on deployment status */
     workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
 
-    /* PHASE 1: Content and type analysis (if file exists) Buffer-based comparison
+    /* The look found the path standing, and two things follow from that one fact:
+     * the sighting the record does not yet hold, and the verdict over what stands
+     * there. One read of the look, where two stood.
+     *
+     * PHASE 1: Content and type analysis (if file exists) Buffer-based comparison
      * for accurate divergence detection.
      *
      * Architecture:
@@ -982,7 +1023,16 @@ static error_t *analyze_file_divergence(
      * A path with neither has no base. Cross-process correct by construction —
      * every invocation sees the same answer.
      */
-    if (occupant != FS_OCCUPANT_NONE) {
+    if (look->occupant != FS_OCCUPANT_NONE) {
+        /* The look just observed the path in scope (any type counts). A path
+         * with no record gets one — presence only; a CMP_EQUAL below supersedes
+         * it with a confirmation, and the flush writes each path once. Closes
+         * the "user created the path after scope entry" gap: the next absence
+         * reads DELETED, not UNDEPLOYED. */
+        if (!anchor) {
+            workspace_record_observation(ws, row);
+        }
+
         /* The row's blob_oid is already a 20-byte binary OID — no parse step. */
         const git_oid *blob_oid_ptr = &row->blob_oid;
 
@@ -1053,7 +1103,7 @@ static error_t *analyze_file_divergence(
          * is CMP_EQUAL (base == theirs: clean) or CMP_DIFFERENT (Git moved: STALE
          * alone) is then read straight from git_moved. A path with no base has
          * no triple to match. */
-        if (base_stat && stat_cache_matches(base_stat, &initial_stat)) {
+        if (base_stat && stat_cache_matches(base_stat, &look->st)) {
             /* the look stands behind the proof ⟹ disk == base blob */
             disk_at_base = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
@@ -1066,7 +1116,7 @@ static error_t *analyze_file_divergence(
              * the blob, and the flush's join then forgets the released row the
              * fresher confirmation subsumes. */
             if (cmp_result == CMP_EQUAL && released) {
-                workspace_record_confirmation(ws, row, anchor, &initial_stat);
+                workspace_record_confirmation(ws, row, anchor, &look->st);
             }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
@@ -1075,7 +1125,7 @@ static error_t *analyze_file_divergence(
              * - Non-encrypted: Hash filesystem file and compare OID directly
              * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
              *
-             * Both paths receive initial_stat to avoid redundant lstat syscalls.
+             * Both paths receive the load's look to avoid redundant lstat syscalls.
              *
              * Asymmetry with the second question below: that one routes through
              * content_compare_blob_to_disk (byte-classify internally) because
@@ -1091,7 +1141,7 @@ static error_t *analyze_file_divergence(
                     blob_oid_ptr,
                     fs_path,
                     expected_filemode,
-                    &initial_stat,
+                    &look->st,
                     &cmp_result
                 );
             } else {
@@ -1110,7 +1160,7 @@ static error_t *analyze_file_divergence(
                         expected_content,
                         fs_path,
                         expected_filemode,
-                        &initial_stat,
+                        &look->st,
                         &cmp_result
                     );
                 }
@@ -1132,7 +1182,7 @@ static error_t *analyze_file_divergence(
                  * they would have skipped themselves. */
                 return workspace_add_diverged(
                     ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_UNVERIFIED | policy, occupant, fault_of(err)
+                    DIVERGENCE_UNVERIFIED | policy, look->occupant, fault_of(err)
                 );
             }
 
@@ -1140,7 +1190,7 @@ static error_t *analyze_file_divergence(
              * with the row's blob and the look the verdict was reached from, so
              * the next run can short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_confirmation(ws, row, anchor, &initial_stat);
+                workspace_record_confirmation(ws, row, anchor, &look->st);
             }
 
             /* Second question — ours vs base — asked once, where it can change
@@ -1188,7 +1238,7 @@ static error_t *analyze_file_divergence(
                     base_blob,
                     fs_path,
                     path_type_to_git_filemode(base_type),
-                    &initial_stat,
+                    &look->st,
                     base_storage,
                     base_profile,
                     ws->content_cache,
@@ -1236,7 +1286,7 @@ static error_t *analyze_file_divergence(
                  * a type change. */
                 return workspace_add_diverged(
                     ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE | policy, occupant, WORKSPACE_FAULT_NONE
+                    DIVERGENCE_TYPE | policy, look->occupant, WORKSPACE_FAULT_NONE
                 );
 
             case CMP_MISSING:
@@ -1247,12 +1297,19 @@ static error_t *analyze_file_divergence(
                  * one (nothing queues observations between the lstat and here;
                  * an OOM-dropped sighting simply is not there to retract). The
                  * record follows the run's verdict, never a moment the run itself
-                 * outlived. Skip the permission checks below. */
+                 * outlived. Skip the permission checks below.
+                 *
+                 * And the look follows the verdict with it — the one retraction
+                 * of a slot in the whole load (look_t): a read that met absence
+                 * against a look that said a file stood there is the truer answer
+                 * about the path, so the phases after the join read absence and
+                 * index nothing, where an identity left standing would vouch
+                 * for a vanished file and could meet a reused inode. */
                 if (!anchor && ws->observation_count > 0 &&
                     ws->observations[ws->observation_count - 1] == row) {
                     ws->observation_count--;
                 }
-                occupant = FS_OCCUPANT_NONE;
+                look->occupant = FS_OCCUPANT_NONE;
                 break;
         }
 
@@ -1275,11 +1332,11 @@ static error_t *analyze_file_divergence(
          */
         if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
             if (row->type != PATH_TYPE_SYMLINK &&
-                (initial_stat.st_mode & 0777) != row->mode) {
+                (look->st.st_mode & 0777) != row->mode) {
                 divergence |= DIVERGENCE_MODE;
             }
             if (ownership_diverges(
-                row->storage_path, row->owner, row->group, &initial_stat
+                row->storage_path, row->owner, row->group, &look->st
                 )) {
                 divergence |= DIVERGENCE_OWNERSHIP;
             }
@@ -1314,7 +1371,7 @@ static error_t *analyze_file_divergence(
      * "(deployed X ago)" display and the adoption-loop gate; it just no longer
      * controls classification.
      */
-    if (occupant == FS_OCCUPANT_NONE) {
+    if (look->occupant == FS_OCCUPANT_NONE) {
         /* Row claims this path but the filesystem doesn't have it. classify_absent
          * decides (see the classification table above; its claim gate is inert
          * here — a file row asserts its path by holding a blob for it). */
@@ -1336,7 +1393,7 @@ static error_t *analyze_file_divergence(
     if (state != WORKSPACE_STATE_DEPLOYED ||
         divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
         error_t *err = workspace_add_diverged(
-            ws, row, anchor, state, divergence, occupant, WORKSPACE_FAULT_NONE
+            ws, row, anchor, state, divergence, look->occupant, WORKSPACE_FAULT_NONE
         );
         if (err) return err;
     }
@@ -1937,55 +1994,89 @@ static const anchor_t *standing_record(
 }
 
 /**
- * The load's look at where every row and every orphan record stands
+ * Does the look find the claim's own kind standing at its key?
  *
- * One lstat per winning row of either kind and per orphan record, the entry it
- * found kept beside its source and sorted by identity, so a reader's ask is a
- * binary search (find_entries). Two passes over two disjoint sets — the view's
- * rows all stand at their own keys, and an orphan is exactly a record no row
- * stands at — which is what makes each element one or the other (entry_t).
- *
- * Three looks decide whether a key names an entry its claim may vouch by, and
- * each of them drops rather than keeps:
- *   - a key beneath a displaced directory: a look there would reach the squatter's
- *     target, which every verdict refuses to act on, so it must vouch for nothing
- *     and none is taken — the scan driver's own rule for a root
- *     (workspace_displaced_ancestor, complete for the view's claims once the
- *     directory analysis has run, which is why this phase follows it);
- *   - a key that does not stand — [undeployed], a chain the invoker cannot read:
- *     an absent row is not the entry a present orphan stands on;
- *   - a key another kind of node holds — a directory claim with a symlink or a
- *     file in its place, a file claim with a directory: a squatted claim's own
- *     lstat is the squatter's, so the entry it names is exactly the one the
- *     verdicts refuse. The retyped arm's rule read at the build (analyze_orphans:
+ * The three ways a key fails to name an entry its claim may vouch by, in one
+ * expression — and each of them drops rather than keeps:
+ *   - nothing stands there: [undeployed], or a chain whose component is no
+ *     directory. An absent row is not the entry a present orphan stands on;
+ *   - nothing was read: a look that failed (EACCES, ELOOP, EIO) or one never
+ *     taken, beneath a squatter, where a look would have reached the squatter's
+ *     target and vouched for something that is not this path's. Both are UNKNOWN
+ *     and neither may vouch, which is why the slot need not tell them apart;
+ *   - another kind of node holds the place — a directory claim with a symlink
+ *     or a file in it, a file claim with a directory: a squatted claim's own
+ *     look is the squatter's, so the entry it names is exactly the one every
+ *     verdict refuses. The retyped arm's rule read at the build (analyze_orphans:
  *     two occupants cannot share an inode, a claim and an occupant can), and
- *     the probe above is why it is needed — that one answers for proper ancestors
- *     alone, so a claim whose own path is squatted is one rung past its reach.
+ *     the reason a proper-ancestor probe cannot stand alone — that one answers
+ *     for ancestors, so a claim whose own path is squatted is one rung past its
+ *     reach.
  *
  * Dropping withholds — a release where a prune was right, an offer deferred a
  * run; keeping wrongly prunes a managed file or offers one twice. That direction
- * is why each look is named here, and why a fourth would have to be argued rather
+ * is why each is named here, and why a fourth would have to be argued rather
  * than added.
  *
- * The first look is the view's claims alone, and this phase is the one place
- * the load looks beneath a squatter at all: the record's own squatters are the
- * orphan analysis's to note, and it cannot have run yet — its BACKED guard reads
- * this index. A record-side squatter is by definition a directory record another
- * kind of node stands at, which the third look drops; a record *beneath* one is
- * indexed by whatever its key reached, and the cost is an offer withheld for
- * the run, which is the direction above. So the load's rule — no look beneath a
- * squatter (workspace.h workspace_displaced_t) — is exact for the view's claims
- * and bounded here for the record's.
+ * Read by index_entries' three passes, over a row's type or a record's; the scan's
+ * roots ask the same question of their own rows directly. infra/compare.c
+ * mode_stands is this one layer down, over a stat and a git_filemode_t — the
+ * vocabulary each layer speaks. Not core/deploy.c occupant_conflicts, which tells
+ * REGULAR from SYMLINK because deploy must replace one with the other: a different
+ * question that happens to look alike.
  *
- * The lstats are this phase's own. Not the analyses': a look taken there is the
- * item's, and its answer must not depend on which analyses a caller asked for
- * (the leaf probe's record guard learned that, workspace_options_t). Not the
- * scan's: its roots are a selection over the tracked directories — the later
- * profile wins a directory — not an index (scan_root_t). One allocation sized
- * by the view's rows and the orphans; the cost is rows + orphans syscalls once,
- * on a load a reader will run in, and nothing at all on any other. A later shape
- * that kept one look per path on the join would replace the two fs_lstat lines
- * here and move no reader.
+ * @param occupant What the look found (look_t)
+ * @param type The kind the claim names — a row's or a record's
+ */
+static bool claim_stands(fs_occupant_t occupant, path_type_t type) {
+    if (occupant == FS_OCCUPANT_NONE || occupant == FS_OCCUPANT_UNKNOWN) {
+        return false;
+    }
+
+    return (occupant == FS_OCCUPANT_DIRECTORY) == (type == PATH_TYPE_DIRECTORY);
+}
+
+/**
+ * Where every row and every orphan record stands, by identity
+ *
+ * One look per winning row of either kind and per orphan record, the entry it
+ * found kept beside its source and sorted by identity, so a reader's ask is a
+ * binary search (find_entries). Three passes over three disjoint sets — the two
+ * slices, whose rows all stand at their own keys, and the orphans, each exactly
+ * a record no row stands at — which is what makes each element one or the other
+ * (entry_t). Whether a key may vouch at all is claim_stands, one rule read three
+ * times.
+ *
+ * The rows' looks are the join's, read here and not retaken: slot i of each slice's
+ * look table is the look the analysis that judged row i took (look_t), so the
+ * entry indexed is the entry that row's item was judged on and the two cannot
+ * disagree. Legal because neither analysis is a caller's to decline
+ * (workspace_load) — were the join optional, an index built from it would answer
+ * differently by which analyses a caller asked for, and the leaf probe's record
+ * guard is exactly where that would be felt (workspace_options_t).
+ *
+ * The orphans' look is this phase's own, and must stay so for that same reason
+ * in reverse: sync and update run the scan with the orphan analysis off, so a
+ * record half built inside that analysis would be empty on exactly those two
+ * commands, standing_record would answer NULL, and the scan would offer a child
+ * a record stands on under another spelling. Not the scan's either: its roots
+ * are a selection over the tracked directories — the later profile wins a directory
+ * — not an index (scan_root_t).
+ *
+ * That look is also the one place the load looks beneath a squatter at all: the
+ * record's own squatters are the orphan analysis's to note, and it cannot have
+ * run yet — its BACKED guard reads this index. So the displaced probe here is
+ * the view's claims alone (workspace_displaced_ancestor). A record-side squatter
+ * is by definition a directory record another kind of node stands at, which
+ * claim_stands drops; a record *beneath* one is indexed by whatever its key
+ * reached, and the cost is an offer withheld for the run, which is the direction
+ * above. So the load's rule — no look beneath a squatter (workspace.h
+ * workspace_displaced_t) — is exact for the view's claims and bounded here for
+ * the record's.
+ *
+ * One allocation sized by the view's rows and the orphans; the cost is the orphans'
+ * syscalls alone, on a load a reader will run in, and nothing at all on any other
+ * — the rows cost none.
  *
  * Readers: standing_row (the orphan analysis's BACKED arm, the untracked scan's
  * leaf probe), standing_record (the leaf probe).
@@ -1994,8 +2085,7 @@ static const anchor_t *standing_record(
  * @return Error or NULL on success
  */
 static error_t *index_entries(workspace_t *ws) {
-    manifest_rows_t rows = manifest_rows(ws->manifest);
-    size_t cap = rows.count + ws->orphan_count;
+    size_t cap = ws->active_dir_count + ws->active_file_count + ws->orphan_count;
 
     if (cap == 0) {
         return NULL;
@@ -2006,18 +2096,25 @@ static error_t *index_entries(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to allocate the entries");
     }
 
-    for (size_t i = 0; i < rows.count; i++) {
-        const manifest_row_t *row = rows.entries[i];
-        struct stat st;
+    for (size_t i = 0; i < ws->active_dir_count; i++) {
+        const manifest_row_t *row = ws->active_dirs[i];
+        const look_t *look = &ws->dir_looks[i];
 
-        if (workspace_displaced_ancestor(ws, row->filesystem_path)) continue;
-        if (fs_lstat(row->filesystem_path, &st) != 0) continue;
-
-        bool is_dir = S_ISDIR(st.st_mode);
-        if (is_dir != (row->type == PATH_TYPE_DIRECTORY)) continue;
+        if (!claim_stands(look->occupant, row->type)) continue;
 
         ws->entries[ws->entry_count++] = (entry_t){
-            .dev = st.st_dev, .ino = st.st_ino, .row = row,
+            .dev = look->st.st_dev, .ino = look->st.st_ino, .row = row,
+        };
+    }
+
+    for (size_t i = 0; i < ws->active_file_count; i++) {
+        const manifest_row_t *row = ws->active_files[i];
+        const look_t *look = &ws->file_looks[i];
+
+        if (!claim_stands(look->occupant, row->type)) continue;
+
+        ws->entries[ws->entry_count++] = (entry_t){
+            .dev = look->st.st_dev, .ino = look->st.st_ino, .row = row,
         };
     }
 
@@ -2026,10 +2123,9 @@ static error_t *index_entries(workspace_t *ws) {
         struct stat st;
 
         if (workspace_displaced_ancestor(ws, anchor->filesystem_path)) continue;
-        if (fs_lstat(anchor->filesystem_path, &st) != 0) continue;
 
-        bool is_dir = S_ISDIR(st.st_mode);
-        if (is_dir != (anchor->type == PATH_TYPE_DIRECTORY)) continue;
+        fs_occupant_t occupant = fs_lstat_occupant(anchor->filesystem_path, &st);
+        if (!claim_stands(occupant, anchor->type)) continue;
 
         ws->entries[ws->entry_count++] = (entry_t){
             .dev = st.st_dev, .ino = st.st_ino, .anchor = anchor,
@@ -2142,6 +2238,10 @@ static error_t *analyze_orphans(workspace_t *ws) {
         return ERROR(ERR_MEMORY, "Failed to create authority cache");
     }
 
+    /* The loop's one error, and it has one writer: workspace_add_diverged, whose
+     * every failure ends the walk. A folded error is not the loop's — the probe's
+     * failures are the orphan's hold and the measure's are its bit, and each is
+     * read and consumed where it was raised, under its own name. */
     error_t *err = NULL;
 
     for (size_t i = 0; i < ws->orphan_count; i++) {
@@ -2333,12 +2433,15 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * can be: one dotta cannot stat or cannot read is held, as an
              * unstattable file is, until the user can say what is in it. */
             if (kind == PATH_KIND_FILE && occupant != FS_OCCUPANT_UNKNOWN) {
-                error_t *look = compute_orphan_divergence(
+                /* Named for the measure it is the failure of: `look` is the load's
+                 * word for the slot a row's lstat is taken into (look_t), and a
+                 * local holds a value, not a verdict. */
+                error_t *measure_err = compute_orphan_divergence(
                     ws, anchor, &orphan_stat, &divergence
                 );
-                if (look) {
+                if (measure_err) {
                     divergence = DIVERGENCE_UNVERIFIED;
-                    fault = fault_of(look);
+                    fault = fault_of(measure_err);
                 }
             } else if (occupant == FS_OCCUPANT_UNKNOWN) {
                 /* Present but unstattable, either kind: nothing to measure the
@@ -2373,6 +2476,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
  * Analyze divergence for every active file row
  *
  * Walks the active file slice and compares each row against filesystem reality.
+ * Each row is handed its own look slot from the same index, which is the whole
+ * of the pairing the later phases read (look_t).
  *
  * Performance: O(N) where N = active row count. The row (blob_oid, type, mode,
  * etc.) and the indexed record eliminate N+1 database queries.
@@ -2381,7 +2486,9 @@ static error_t *analyze_files_divergence(workspace_t *ws, const config_t *config
     CHECK_NULL(ws);
 
     for (size_t i = 0; i < ws->active_file_count; i++) {
-        error_t *err = analyze_file_divergence(ws, ws->active_files[i], config);
+        error_t *err = analyze_file_divergence(
+            ws, ws->active_files[i], &ws->file_looks[i], config
+        );
         if (err) {
             return err;
         }
@@ -3085,6 +3192,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
 
     for (size_t i = 0; i < ws->active_dir_count; i++) {
         const manifest_row_t *row = ws->active_dirs[i];
+        look_t *look = &ws->dir_looks[i];   /* This row's slot, by the same index */
 
         /* Directory rows carry:
          * - filesystem_path: Already resolved with target (mount table)
@@ -3104,8 +3212,12 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * so the squatter above this one was noted before this row's turn; a
          * squatter beneath a squatter is therefore never noted, and the outer
          * one carries the whole answer. Both classes: an ancestor claim beneath
-         * a squatter is as unlooked-at as a tracked one. */
+         * a squatter is as unlooked-at as a tracked one. The slot says the same
+         * to the phases after: UNKNOWN with nothing behind it, written rather
+         * than left to the allocator's zero, which spells FS_OCCUPANT_NONE. */
         if (displaced_ancestor(ws, filesystem_path, false)) {
+            *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
+
             err = workspace_add_diverged(
                 ws, row, anchor, WORKSPACE_STATE_DEPLOYED, DIVERGENCE_NONE,
                 FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
@@ -3120,20 +3232,18 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
             continue;  /* Recorded, move to next directory */
         }
 
-        /* Stat directory to get current metadata
-         *
-         * One lstat, read as fs_lstat_occupant names it:
+        /* The load's one look at this row, taken into its own slot and kept for
+         * the phases after (look_t). Read as fs_lstat_occupant names it:
          * - NONE: Directory truly deleted, or a component above it is not a
          *   directory — nothing can be at the path either
          * - UNKNOWN: Inaccessible — state undeterminable, not absent
          * - Anything but DIRECTORY: Type changed (file, symlink - including broken
          *   ones)
          * - DIRECTORY: Actual directory, check metadata */
-        struct stat dir_stat;
-        fs_occupant_t occupant = fs_lstat_occupant(filesystem_path, &dir_stat);
-        int lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
+        look->occupant = fs_lstat_occupant(filesystem_path, &look->st);
+        look->lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
-        if (occupant == FS_OCCUPANT_NONE) {
+        if (look->occupant == FS_OCCUPANT_NONE) {
             /* Absent path: classify_absent decides, and this is where its claim
              * gate earns its keep. An observed tracked directory was deleted by
              * the user (update propagates the removal); a never-observed one
@@ -3148,7 +3258,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
                 anchor,
                 classify_absent(row, anchor),
                 DIVERGENCE_NONE,          /* Divergence: none (path is absent) */
-                occupant,
+                look->occupant,
                 WORKSPACE_FAULT_NONE
             );
 
@@ -3161,7 +3271,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
             continue;  /* Successfully recorded, check next directory */
         }
 
-        if (occupant == FS_OCCUPANT_UNKNOWN) {
+        if (look->occupant == FS_OCCUPANT_UNKNOWN) {
             /* Inaccessible, not absent: record the uncertainty rather than dropping
              * the row, which left status reporting a clean workspace for a path
              * it had just failed to read. Same three-way policy as the file
@@ -3172,8 +3282,8 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,
                 DIVERGENCE_UNVERIFIED,    /* Divergence: state undeterminable */
-                occupant,                 /* assumed present */
-                fault_class(error_code_from_errno(lstat_errno))
+                look->occupant,           /* assumed present */
+                fault_class(error_code_from_errno(look->lstat_errno))
             );
 
             if (err) {
@@ -3204,7 +3314,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * - preflight blocks without --force
          * - apply clears and recreates with --force
          */
-        if (occupant != FS_OCCUPANT_DIRECTORY) {
+        if (look->occupant != FS_OCCUPANT_DIRECTORY) {
             /* The squatter, noted where it was observed: absence and an unstattable
              * path are ruled out above, so something real stands here and no
              * look beneath this path is taken at all. The row's class is the
@@ -3222,7 +3332,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* Path exists, just wrong type */
                 DIVERGENCE_TYPE,           /* Type changed (dir -> file/symlink) */
-                occupant,                  /* path exists, wrong type */
+                look->occupant,            /* path exists, wrong type */
                 WORKSPACE_FAULT_NONE
             );
 
@@ -3263,9 +3373,9 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
 
         /* One rule, three analyzers: the row's mode is total (claim or floor)
          * and a directory row is never a link, so the compare needs no gate. */
-        bool mode_differs = (dir_stat.st_mode & 0777) != row->mode;
+        bool mode_differs = (look->st.st_mode & 0777) != row->mode;
         bool ownership_differs = ownership_diverges(
-            row->storage_path, row->owner, row->group, &dir_stat
+            row->storage_path, row->owner, row->group, &look->st
         );
 
         /* Record divergence if any metadata differs, or a pending handover stands
@@ -3288,7 +3398,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
                 anchor,
                 WORKSPACE_STATE_DEPLOYED,  /* State: directory exists as expected */
                 divergence,                /* Divergence: mode/ownership flags */
-                occupant,
+                look->occupant,
                 WORKSPACE_FAULT_NONE
             );
 
@@ -3324,7 +3434,8 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * The join at the centre of every load. The expected side — every enabled profile
  * at HEAD, both kinds, one row per path — is ws->manifest, the dispatcher's view;
  * its rows are split into ws->active_files / ws->active_dirs (+ counts) and each
- * slice is sorted by filesystem_path. Then the anchors snapshot
+ * slice is sorted by filesystem_path, with an empty look slot per row beside it
+ * for the analysis that walks the slice to fill (look_t). Then the anchors snapshot
  * (state_get_all_anchors) is indexed by path as ws->anchor_index — the analyses
  * pair each row with its record through workspace_get_anchor, and the two writers
  * patch the index's values — and every record whose path the view lacks is
@@ -3338,10 +3449,10 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * set walk the active slices. No defensive cleanup on error: workspace_free is
  * the single cleanup authority.
  *
- * Lifetime: every pointer (the slices, the snapshot, the orphans array) lives
- * in ws->arena, beside the view's rows. The anchors index is heap-allocated,
- * freed in workspace_free through hashmap_free; the view's index is the
- * dispatcher's.
+ * Lifetime: every pointer (the slices and their looks, the snapshot, the orphans
+ * array) lives in ws->arena, beside the view's rows. The anchors index is
+ * heap-allocated, freed in workspace_free through hashmap_free; the view's index
+ * is the dispatcher's.
  *
  * Performance: O(M log M + A) — two sorts and one pass over the record; no Git,
  * no probes.
@@ -3369,11 +3480,19 @@ static error_t *workspace_partition(workspace_t *ws) {
         if (!ws->active_files) {
             return ERROR(ERR_MEMORY, "Failed to allocate file slice");
         }
+        ws->file_looks = arena_calloc(ws->arena, file_count, sizeof(*ws->file_looks));
+        if (!ws->file_looks) {
+            return ERROR(ERR_MEMORY, "Failed to allocate the file slice's looks");
+        }
     }
     if (dir_count > 0) {
         ws->active_dirs = arena_calloc(ws->arena, dir_count, sizeof(*ws->active_dirs));
         if (!ws->active_dirs) {
             return ERROR(ERR_MEMORY, "Failed to allocate directory slice");
+        }
+        ws->dir_looks = arena_calloc(ws->arena, dir_count, sizeof(*ws->dir_looks));
+        if (!ws->dir_looks) {
+            return ERROR(ERR_MEMORY, "Failed to allocate the directory slice's looks");
         }
     }
 
@@ -3557,13 +3676,18 @@ error_t *workspace_load(
     }
 
     /* The entries — where every row and every orphan record stands, by identity
-     * — for the two verbs that act on an entry through a string. After the
-     * directory analysis, whose displaced set says which rows were observed at
-     * their own path; before the orphan analysis, whose guard reads it; and only
-     * where a reader may ask, which is this gate said once for both: the orphan
-     * analysis returns at its first line with no orphan, and the scan asks per
-     * offer. Every ask below is therefore made on a load this built the index
-     * in (find_entries). */
+     * — for the two verbs that act on an entry through a string. After both halves
+     * of the join, which is where the rows' looks are taken and where the view's
+     * displaced set is completed; before the orphan analysis, whose guard reads
+     * it; and only where a reader may ask, which is this gate said once for both:
+     * the orphan analysis returns at its first line with no orphan, and the scan
+     * asks per offer. Every ask below is therefore made on a load this built
+     * the index in (find_entries).
+     *
+     * The rows now cost the index no look of its own, so what the gate buys is
+     * the array and its sort — 2081 entries built and ordered for a reader that
+     * would return at its first line — and, with the orphan pass, the only looks
+     * left in the phase. */
     if ((opts->analyze_orphans && ws->orphan_count > 0) || opts->analyze_untracked) {
         err = index_entries(ws);
         if (err) {

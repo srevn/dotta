@@ -27,9 +27,9 @@
  * - Handle all file types (regular, symlink)
  * - Clear comparison results
  * - A look is the caller's to take: the pair is handed one and takes none
- * - The disk copy is wiped before it is freed, by whichever of the two readers
- *   of the read took it: for an encrypted row it is the plaintext, the twin of
- *   the buffer the content cache wipes on its side
+ * - The disk copy is wiped before it is freed, by whichever of the two callers
+ *   took it: for an encrypted row it is the plaintext, the twin of the buffer
+ *   the content cache wipes on its side
  */
 
 #ifndef DOTTA_COMPARE_H

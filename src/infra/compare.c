@@ -39,9 +39,9 @@ typedef struct {
  * the target as raw bytes). A buffer is judged by comparing them; an id by hashing
  * them as Git does — SHA-1("blob <size>\0" + bytes) — and comparing the ids.
  *
- * Two readers, and one verdict: compare_reference_to_disk, which hands it back,
- * and compare_generate_diff, which renders off it. A status line printed from
- * the one and a text rendered by the other must not disagree about one path.
+ * One reader, judge_copy, which reaches it for both of the module's ladders:
+ * the bytes in hand are whatever that read returned, and the verdict over them
+ * is the same verdict whichever caller asked.
  */
 static error_t *judge(
     const reference_t *ref, const buffer_t *copy, const char *disk_path,
@@ -133,9 +133,9 @@ static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
  *
  * Absence is the caller's to read: ENOENT/ENOTDIR at the open, or from the link's
  * read, come back as ERR_NOT_FOUND — the path left between the look and this
- * read — and both callers map that one code to CMP_MISSING, the absence rule
- * compare.h states once. Two readers, one read each: compare_reference_to_disk,
- * which judges and discards, and compare_generate_diff, which judges and renders.
+ * read. One reader, judge_copy, which maps that one code to CMP_MISSING and every
+ * other failure to a failed look, so the absence rule compare.h states once is
+ * spelled once.
  */
 static error_t *read_copy(
     const char *disk_path, git_filemode_t expected_mode, buffer_t *out
@@ -166,13 +166,48 @@ static error_t *read_copy(
 }
 
 /**
+ * The verdict over the disk copy, read and judged — the ladder's third step
+ *
+ * The bytes are read_copy's and the judgment is judge's; the absence between
+ * them is spelled here, once, for the two ladders that must not answer it
+ * differently: a read that met ENOENT/ENOTDIR is the verdict CMP_MISSING — the
+ * path left between the look and the read — where any other failure is a failed
+ * look and the caller's to carry. So a status line printed off the pair's verdict
+ * and a text rendered off the renderer's cannot call one path two things.
+ *
+ * `copy` is filled whole and is the caller's on every exit: wiped and freed by
+ * whichever of the two took it, whatever the verdict (compare.h).
+ */
+static error_t *judge_copy(
+    const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
+    buffer_t *copy, compare_result_t *result
+) {
+    error_t *err = read_copy(disk_path, expected_mode, copy);
+
+    if (!err) {
+        return judge(ref, copy, disk_path, result);
+    }
+    if (error_code(err) != ERR_NOT_FOUND) {
+        return err;
+    }
+
+    /* The read met the absence: the path left between the look and the read. A
+     * verdict, not a failed look. */
+    error_free(err);
+    *result = CMP_MISSING;
+
+    return NULL;
+}
+
+/**
  * The caller's look at the disk copy, judged against the reference
  *
  * The look is handed in, and every question is asked off that one stat: the kind
  * against the expected mode, and for a regular file under a buffer the size too
  * — so a copy of the wrong kind or the wrong size is a verdict with no open at
- * all. The bytes are read_copy's and the judgment is judge's, so a caller that
- * renders reads the same two through the same pair of functions.
+ * all. Past those the step is judge_copy's, the same one the renderer takes, so
+ * the bytes a status line is printed from are read and judged exactly as the
+ * bytes a text is rendered from.
  *
  * No look is taken here. Absence at the look's own moment is the caller's to
  * name and it never gets this far — the one absence this function reports is
@@ -209,17 +244,7 @@ static error_t *compare_reference_to_disk(
     }
 
     buffer_t copy = BUFFER_INIT;
-    error_t *err = read_copy(disk_path, expected_mode, &copy);
-
-    if (!err) {
-        err = judge(ref, &copy, disk_path, result);
-    } else if (error_code(err) == ERR_NOT_FOUND) {
-        /* The read met the absence: the path left between the look and the read.
-         * A verdict, not a failed look. */
-        error_free(err);
-        err = NULL;
-        *result = CMP_MISSING;
-    }
+    error_t *err = judge_copy(ref, disk_path, expected_mode, &copy, result);
 
     /* For an encrypted row the disk copy is the plaintext — the twin of the buffer
      * the content cache wipes before it frees. Wiped like it, whatever the read
@@ -461,28 +486,19 @@ error_t *compare_generate_diff(
     error_t *err = NULL;
 
     if (fs_lstat(disk_path, &st) != 0) {
-        if (errno == ENOENT || errno == ENOTDIR) {
-            /* Nothing stands here — the look met the absence (ENOTDIR: a component
-             * above is no longer a directory — same absence). */
-            out->status = CMP_MISSING;
-        } else {
+        if (errno != ENOENT && errno != ENOTDIR) {
             err = error_from_errno(errno, "Failed to stat '%s'", disk_path);
             goto cleanup;
         }
+
+        /* Nothing stands here — the look met the absence (ENOTDIR: a component
+         * above is no longer a directory — same absence). */
+        out->status = CMP_MISSING;
     } else if (!mode_stands(&st, mode)) {
         out->status = CMP_TYPE_DIFF;
     } else {
-        err = read_copy(disk_path, mode, &copy);
-        if (!err) {
-            reference_t ref = { .content = content };
-            err = judge(&ref, &copy, disk_path, &out->status);
-        } else if (error_code(err) == ERR_NOT_FOUND) {
-            /* The read met the absence: the path left between the look and the
-             * read. A verdict, not a failed look. */
-            error_free(err);
-            err = NULL;
-            out->status = CMP_MISSING;
-        }
+        reference_t ref = { .content = content };
+        err = judge_copy(&ref, disk_path, mode, &copy, &out->status);
         if (err) goto cleanup;
     }
 

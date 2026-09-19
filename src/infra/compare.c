@@ -185,7 +185,7 @@ static error_t *read_copy(
  */
 static error_t *compare_reference_to_disk(
     const reference_t *ref, const char *disk_path, git_filemode_t expected_mode,
-    const struct stat *in_stat, compare_result_t *result, struct stat *out_stat
+    const struct stat *in_stat, compare_result_t *result
 ) {
     RETURN_IF_ERROR(validate_mode(expected_mode));
 
@@ -201,7 +201,6 @@ static error_t *compare_reference_to_disk(
     if (in_stat) {
         /* Caller provided stat - use it (zero syscalls) */
         stat_ptr = in_stat;
-        if (out_stat) memcpy(out_stat, in_stat, sizeof(struct stat));
     } else {
         /* Need to stat - use lstat to detect symlinks correctly */
         if (fs_lstat(disk_path, &st) != 0) {
@@ -209,17 +208,11 @@ static error_t *compare_reference_to_disk(
                 /* File doesn't exist - not an error, just report it (ENOTDIR: a
                  * component above is no longer a directory — same absence) */
                 *result = CMP_MISSING;
-                if (out_stat) {
-                    memset(out_stat, 0, sizeof(*out_stat));
-                }
                 return NULL;
             }
             return error_from_errno(errno, "Failed to stat '%s'", disk_path);
         }
         stat_ptr = &st;
-        if (out_stat) {
-            memcpy(out_stat, &st, sizeof(struct stat));
-        }
     }
 
     /* Check disk holds the kind the expected mode names (using captured stat -
@@ -269,8 +262,7 @@ error_t *compare_buffer_to_disk(
     const char *disk_path,
     git_filemode_t expected_mode,
     const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
+    compare_result_t *result
 ) {
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
@@ -278,7 +270,7 @@ error_t *compare_buffer_to_disk(
 
     reference_t ref = { .content = content };
     return compare_reference_to_disk(
-        &ref, disk_path, expected_mode, in_stat, result, out_stat
+        &ref, disk_path, expected_mode, in_stat, result
     );
 }
 
@@ -287,8 +279,7 @@ error_t *compare_oid_to_disk(
     const char *disk_path,
     git_filemode_t expected_mode,
     const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
+    compare_result_t *result
 ) {
     CHECK_NULL(blob_oid);
     CHECK_NULL(disk_path);
@@ -296,7 +287,7 @@ error_t *compare_oid_to_disk(
 
     reference_t ref = { .oid = blob_oid };
     return compare_reference_to_disk(
-        &ref, disk_path, expected_mode, in_stat, result, out_stat
+        &ref, disk_path, expected_mode, in_stat, result
     );
 }
 

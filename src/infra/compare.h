@@ -18,16 +18,14 @@
  *    the two above, and hands nothing else back — the pair returns a verdict,
  *    and a caller that wants a look takes one.
  *
- * The first two share the same stat propagation convention, and all three return
- * compare_result_t for uniform caller integration. None of them accesses the
- * git repository or object database — all operations are pure computation against
- * the filesystem.
+ * The first two are handed the caller's look, and all three return compare_result_t
+ * for uniform caller integration. None of them accesses the git repository or
+ * object database — all operations are pure computation against the filesystem.
  *
  * Design principles:
  * - Handle all file types (regular, symlink)
- * - Compare permissions accurately (executable bit)
  * - Clear comparison results
- * - Stat propagation to minimize redundant syscalls
+ * - A look is the caller's to take, and none is handed back
  * - The disk copy is wiped before it is freed, by whichever of the two readers
  *   of the read took it: for an encrypted row it is the plaintext, the twin of
  *   the buffer the content cache wipes on its side
@@ -102,11 +100,10 @@ typedef struct {
  * Stat propagation optimization:
  * - If in_stat != NULL: Uses provided stat data (zero syscalls)
  * - If in_stat == NULL: Performs lstat() internally
- * - If out_stat != NULL: Returns stat data for caller reuse
  * - Single stat used for all checks (type, size, mode)
  *
- * This eliminates redundant stat calls when integrated with metadata checking,
- * reducing filesystem syscalls by ~5x in hot paths.
+ * Nothing is handed back: a caller that wants a look takes one, and
+ * compare_generate_diff below is the caller that does.
  *
  * CMP_MISSING means the look itself met the absence — ENOENT/ENOTDIR at the stat,
  * or ERR_NOT_FOUND from the read of either kind — the path was absent at the
@@ -132,7 +129,6 @@ typedef struct {
  * @param expected_mode Expected git filemode (for type/mode checking)
  * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
  * @param result Comparison result (must not be NULL)
- * @param out_stat Optional stat output (can be NULL, filled if provided)
  * @return Error or NULL on success
  */
 error_t *compare_buffer_to_disk(
@@ -140,8 +136,7 @@ error_t *compare_buffer_to_disk(
     const char *disk_path,
     git_filemode_t expected_mode,
     const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
+    compare_result_t *result
 );
 
 /**
@@ -152,7 +147,6 @@ error_t *compare_buffer_to_disk(
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
  * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
  * @param result Comparison result (must not be NULL)
- * @param out_stat Optional stat output (can be NULL, filled if provided)
  * @return Error or NULL on success
  */
 error_t *compare_oid_to_disk(
@@ -160,8 +154,7 @@ error_t *compare_oid_to_disk(
     const char *disk_path,
     git_filemode_t expected_mode,
     const struct stat *in_stat,
-    compare_result_t *result,
-    struct stat *out_stat
+    compare_result_t *result
 );
 
 /**

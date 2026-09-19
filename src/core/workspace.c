@@ -926,17 +926,15 @@ static error_t *analyze_file_divergence(
         );
     }
 
-    if (occupant == FS_OCCUPANT_NONE) {
-        memset(&initial_stat, 0, sizeof(initial_stat));
-    } else {
-        /* The lstat just observed the path in scope (any type counts). A path
-         * with no record gets one — presence only; a CMP_EQUAL below supersedes
-         * it with a confirmation, and the flush writes each path once. Closes
-         * the "user created the path after scope entry" gap: the next absence
-         * reads DELETED, not UNDEPLOYED. */
-        if (!anchor) {
-            workspace_record_observation(ws, row);
-        }
+    /* The lstat just observed the path in scope (any type counts). A path with
+     * no record gets one — presence only; a CMP_EQUAL below supersedes it with
+     * a confirmation, and the flush writes each path once. Closes the "user created
+     * the path after scope entry" gap: the next absence reads DELETED, not
+     * UNDEPLOYED. Nothing zeroes initial_stat on the absent arm: the slot is
+     * meaningful only for a present occupant (sys/filesystem.h fs_lstat_occupant)
+     * and every read below stands under that same condition. */
+    if (occupant != FS_OCCUPANT_NONE && !anchor) {
+        workspace_record_observation(ws, row);
     }
 
     /* Divergence accumulator (bit flags, can combine), opened with the blob-family
@@ -953,13 +951,12 @@ static error_t *analyze_file_divergence(
      * - Use the row's blob_oid for content loading
      * - Extract expected mode from the row's type field
      * - Compare directly to filesystem file (compare_buffer_to_disk)
-     * - Capture stat for permission checking (zero extra syscalls)
      *
      * This provides:
      * - Architectural consistency (blob_oid unification)
      * - Accurate byte-level comparison with early exit
      * - Transparent encryption handling via content cache
-     * - Stat propagation (single stat used for all checks)
+     * - The look above handed in, and every question below asked off it
      * - TOCTOU-aware (handles files deleted during analysis)
      *
      * The content verdict is a three-way comparison with dotta's last content
@@ -997,9 +994,6 @@ static error_t *analyze_file_divergence(
          */
         git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
 
-        /* Prepare for comparison - both paths capture stat for permission checking */
-        struct stat file_stat;
-        memset(&file_stat, 0, sizeof(file_stat));
         compare_result_t cmp_result;
 
         /* The base: dotta's last content confirmation at this path — the record's,
@@ -1062,7 +1056,6 @@ static error_t *analyze_file_divergence(
          * no triple to match. */
         if (base_stat && stat_cache_matches(base_stat, &initial_stat)) {
             /* the look stands behind the proof ⟹ disk == base blob */
-            file_stat = initial_stat;
             disk_at_base = true;
             cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
 
@@ -1074,7 +1067,7 @@ static error_t *analyze_file_divergence(
              * the blob, and the flush's join then forgets the released row the
              * fresher confirmation subsumes. */
             if (cmp_result == CMP_EQUAL && released) {
-                workspace_record_confirmation(ws, row, anchor, &file_stat);
+                workspace_record_confirmation(ws, row, anchor, &initial_stat);
             }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
@@ -1100,8 +1093,7 @@ static error_t *analyze_file_divergence(
                     fs_path,
                     expected_filemode,
                     &initial_stat,
-                    &cmp_result,
-                    &file_stat
+                    &cmp_result
                 );
             } else {
                 const buffer_t *expected_content = NULL;
@@ -1120,8 +1112,7 @@ static error_t *analyze_file_divergence(
                         fs_path,
                         expected_filemode,
                         &initial_stat,
-                        &cmp_result,
-                        &file_stat
+                        &cmp_result
                     );
                 }
                 /* Note: Don't free expected_content - cache owns it! */
@@ -1147,10 +1138,10 @@ static error_t *analyze_file_divergence(
             }
 
             /* Slow path confirmed disk == expected blob — confirm the record
-             * with the row's blob and the current stat so the next run can
-             * short-circuit via the fast path above. */
+             * with the row's blob and the look the verdict was reached from, so
+             * the next run can short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_confirmation(ws, row, anchor, &file_stat);
+                workspace_record_confirmation(ws, row, anchor, &initial_stat);
             }
 
             /* Second question — ours vs base — asked once, where it can change
@@ -1202,8 +1193,7 @@ static error_t *analyze_file_divergence(
                     base_storage,
                     base_profile,
                     ws->content_cache,
-                    &at_base,
-                    NULL
+                    &at_base
                 );
 
                 if (verify_err) {
@@ -1269,23 +1259,29 @@ static error_t *analyze_file_divergence(
 
         /* PERMISSION CHECKING
          *
-         * Only when the path still stands and the content phase did not already
-         * rule it absent or another type — properties of what is not there (or
-         * not that) cannot be compared.
+         * Only when the content phase ruled neither absence nor another kind —
+         * the two verdicts under which the stat says nothing about the row, and
+         * CMP_MISSING is the one that retracts the look above. Read off the verdict
+         * alone: the enclosing block opened over a present occupant, and the
+         * only write to it since is the CMP_MISSING arm's, so a third conjunct
+         * naming the occupant would spell that verdict twice.
+         * compute_orphan_divergence keeps the same guard.
          *
          * The row's mode is total for every kind that carries one — the claim,
          * or the filemode floor manifest_build resolved absence into — so one
          * full-bit compare answers, the executable bit riding in it; a symlink
          * row is never asked (its 0 is a don't-care, not a value). Ownership is
-         * its own axis, links included. Both read the same file_stat captured
-         * above — no extra syscalls.
+         * its own axis, links included. Both read the load's one look — the stat
+         * the content verdict was made from — for no extra syscalls.
          */
-        if (occupant != FS_OCCUPANT_NONE &&
-            cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-            if (row->type != PATH_TYPE_SYMLINK && (file_stat.st_mode & 0777) != row->mode) {
+        if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
+            if (row->type != PATH_TYPE_SYMLINK &&
+                (initial_stat.st_mode & 0777) != row->mode) {
                 divergence |= DIVERGENCE_MODE;
             }
-            if (ownership_diverges(row->storage_path, row->owner, row->group, &file_stat)) {
+            if (ownership_diverges(
+                row->storage_path, row->owner, row->group, &initial_stat
+                )) {
                 divergence |= DIVERGENCE_OWNERSHIP;
             }
         }
@@ -1379,7 +1375,7 @@ static error_t *analyze_file_divergence(
  * Performance Safeguards:
  * - 100MB size limit (prevents loading huge files into memory)
  * - Content cache (reuses decrypted content across checks)
- * - Stat propagation (zero redundant lstat syscalls)
+ * - The caller's look, forwarded (zero redundant lstat syscalls)
  *
  * A measure that can fail says so: the look's error is returned and the caller
  * decides what a failure to look means, which is the rule the active analyzer
@@ -1423,9 +1419,6 @@ static error_t *compute_orphan_divergence(
      */
     git_filemode_t expected_filemode = path_type_to_git_filemode(anchor->type);
 
-    /* Stat for permission checking (receives copy from in_stat via comparison functions) */
-    struct stat fresh_stat;
-    memset(&fresh_stat, 0, sizeof(fresh_stat));
     compare_result_t cmp_result;
     error_t *err = NULL;
 
@@ -1445,7 +1438,6 @@ static error_t *compute_orphan_divergence(
      * from what Git holds now. in_stat is forwarded to avoid redundant lstat. */
     if (stat_cache_matches(&anchor->stat, in_stat)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
-        fresh_stat = *in_stat;
         cmp_result = CMP_EQUAL;
     } else {
         err = content_compare_blob_to_disk(
@@ -1457,8 +1449,7 @@ static error_t *compute_orphan_divergence(
             storage_path,
             profile,
             ws->content_cache,
-            &cmp_result,
-            &fresh_stat
+            &cmp_result
         );
 
         if (err) {
@@ -1477,7 +1468,6 @@ static error_t *compute_orphan_divergence(
      * Use switch statement (not if-else) for exhaustive handling.
      */
     divergence_type_t divergence = DIVERGENCE_NONE;
-    bool file_exists = true;  /* Track for permission checking guard */
 
     switch (cmp_result) {
         case CMP_EQUAL:
@@ -1506,29 +1496,30 @@ static error_t *compute_orphan_divergence(
              *
              * Report as DIVERGENCE_NONE - the orphan was already removed manually.
              * Apply will skip it (nothing to remove; cleanup's execute re-probes
-             * presence), state will be pruned.
+             * presence), state will be pruned. The permission checks below read
+             * the verdict and skip themselves.
              */
-            file_exists = false;
             break;
     }
 
     /* Step 5: Permission checking (if the path still stands)
      *
-     * Only when the file still exists and its type still matches the record — a
-     * mode question over a different type answers nothing. The record's mode is
-     * total for every kind that carries one (written from a view row after the
-     * build resolved absence), so one full-bit compare answers; a symlink record
-     * is never asked. Both halves read fresh_stat — the stat the content verdict
-     * was made from (the fast path's, or the compare's out-param), not the caller's
-     * earlier look — for zero extra syscalls.
+     * Only when the content phase ruled neither absence nor another kind — a
+     * mode question over what is not there, or is not that, answers nothing.
+     * Read off the verdict alone, the guard analyze_file_divergence keeps: a
+     * bit this function has just set is the verdict spelled twice. The record's
+     * mode is total for every kind that carries one (written from a view row
+     * after the build resolved absence), so one full-bit compare answers; a symlink
+     * record is never asked. Both halves read the caller's look — the one stat
+     * the content verdict was made from — for zero extra syscalls.
      */
-    if (file_exists && !(divergence & DIVERGENCE_TYPE)) {
+    if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
         if (anchor->type != PATH_TYPE_SYMLINK
-            && (fresh_stat.st_mode & 0777) != anchor->mode) {
+            && (in_stat->st_mode & 0777) != anchor->mode) {
             divergence |= DIVERGENCE_MODE;
         }
         if (ownership_diverges(
-            anchor->storage_path, anchor->owner, anchor->group, &fresh_stat
+            anchor->storage_path, anchor->owner, anchor->group, in_stat
             )) {
             divergence |= DIVERGENCE_OWNERSHIP;
         }

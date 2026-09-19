@@ -746,12 +746,16 @@ static error_t *compare_tree_files_to_filesystem(
 
         /* Name-only output */
         if (opts->name_only) {
-            /* Use lstat to detect the path itself (broken symlinks are present,
-             * not missing — only the target is absent). */
+            /* One look, handed to the comparison below rather than left for it
+             * to take one of its own: the lstat names the path itself (a broken
+             * symlink is present — only its target is absent), and a path nothing
+             * stands at is named before a blob is loaded, there being nothing
+             * to compare against. So this form asks its question through the
+             * window the full form already has — the renderer's own look, then
+             * its read — where it used to look twice and could see two different
+             * worlds. */
             struct stat st;
-            bool exists = (fs_lstat(fs_path, &st) == 0);
-
-            if (!exists) {
+            if (fs_lstat(fs_path, &st) != 0) {
                 output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);
                 (*diff_count)++;
                 continue;
@@ -771,7 +775,7 @@ static error_t *compare_tree_files_to_filesystem(
             /* Compare with filesystem */
             compare_result_t result;
             err = compare_buffer_to_disk(
-                hist_content, fs_path, mode, NULL, &result, NULL
+                hist_content, fs_path, mode, &st, &result
             );
             if (err) {
                 return error_wrap(err, "Failed to compare '%s'", fs_path);

@@ -326,7 +326,6 @@ error_t *content_rebind(
  * @param cache Content cache (must not be NULL; used by the encrypted route so
  *          repeated callers do not redecrypt the same blob)
  * @param out_result Comparison result (must not be NULL)
- * @param out_stat Optional stat output (can be NULL)
  * @return Error or NULL on success. Errors propagate from classification,
  *          decryption, or the underlying compare primitives.
  */
@@ -339,8 +338,7 @@ error_t *content_compare_blob_to_disk(
     const char *storage_path,
     const char *profile,
     content_cache_t *cache,
-    compare_result_t *out_result,
-    struct stat *out_stat
+    compare_result_t *out_result
 );
 
 /**

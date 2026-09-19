@@ -500,8 +500,7 @@ error_t *content_compare_blob_to_disk(
     const char *storage_path,
     const char *profile,
     content_cache_t *cache,
-    compare_result_t *out_result,
-    struct stat *out_stat
+    compare_result_t *out_result
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
@@ -526,7 +525,7 @@ error_t *content_compare_blob_to_disk(
         /* Fast path: hash the disk file, compare to OID. The stored Git blob is
          * never inflated for the comparison itself. */
         return compare_oid_to_disk(
-            blob_oid, fs_path, expected_mode, initial_stat, out_result, out_stat
+            blob_oid, fs_path, expected_mode, initial_stat, out_result
         );
     }
 
@@ -543,7 +542,7 @@ error_t *content_compare_blob_to_disk(
     }
 
     return compare_buffer_to_disk(
-        content, fs_path, expected_mode, initial_stat, out_result, out_stat
+        content, fs_path, expected_mode, initial_stat, out_result
     );
 }
 

@@ -377,10 +377,15 @@ static workspace_fault_t fault_class(error_code_t code) {
 }
 
 /**
- * Class a failed look's error, and consume it
+ * Class a look's outcome, and consume its error
  *
  * The class is all the item keeps: the message is the failing verb's to print,
  * and this analysis is not failing — it is reporting a path it could not read.
+ * WORKSPACE_FAULT_NONE where the look succeeded and there is nothing to consume
+ * — total over the convention every verb in the tree returns by, so a fold can
+ * be written at the call itself rather than through a local whose only job is
+ * to outlive the test (analyze_orphans' measure; Rule 5).
+ *
  * Called at the two folds that hold an error of the look they just made —
  * analyze_file_divergence's look at the content, analyze_orphans' measure. The
  * four that hold an errno instead reach fault_class directly:
@@ -388,6 +393,10 @@ static workspace_fault_t fault_class(error_code_t code) {
  * analyze_orphans at its own and at a directory's access check.
  */
 static workspace_fault_t fault_of(error_t *err) {
+    if (!err) {
+        return WORKSPACE_FAULT_NONE;
+    }
+
     workspace_fault_t fault = fault_class(error_code(error_root(err)));
     error_free(err);
     return fault;
@@ -2241,7 +2250,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
     /* The loop's one error, and it has one writer: workspace_add_diverged, whose
      * every failure ends the walk. A folded error is not the loop's — the probe's
      * failures are the orphan's hold and the measure's are its bit, and each is
-     * read and consumed where it was raised, under its own name. */
+     * consumed at the call that raised it, never carried. */
     error_t *err = NULL;
 
     for (size_t i = 0; i < ws->orphan_count; i++) {
@@ -2431,29 +2440,33 @@ static error_t *analyze_orphans(workspace_t *ws) {
             /* A file: disk against what dotta last deployed. A directory: nothing
              * to measure — cleanup's emptiness rule decides — only whether it
              * can be: one dotta cannot stat or cannot read is held, as an
-             * unstattable file is, until the user can say what is in it. */
+             * unstattable file is, until the user can say what is in it.
+             *
+             * Each arm answers one question and only that one — whose refusal,
+             * if any — and the tail answers the other for all three: a copy dotta
+             * could not measure reads unverified, whoever refused. The measure's
+             * error is classed at the call, the producer still handing it back
+             * for the caller to decide what a failure to look means
+             * (compute_orphan_divergence). `fault` is NONE on every path into
+             * this block: the one arm above that sets it leaves the copy unmeasured
+             * and never prunable. */
             if (kind == PATH_KIND_FILE && occupant != FS_OCCUPANT_UNKNOWN) {
-                /* Named for the measure it is the failure of: `look` is the load's
-                 * word for the slot a row's lstat is taken into (look_t), and a
-                 * local holds a value, not a verdict. */
-                error_t *measure_err = compute_orphan_divergence(
-                    ws, anchor, &orphan_stat, &divergence
+                fault = fault_of(
+                    compute_orphan_divergence(ws, anchor, &orphan_stat, &divergence)
                 );
-                if (measure_err) {
-                    divergence = DIVERGENCE_UNVERIFIED;
-                    fault = fault_of(measure_err);
-                }
             } else if (occupant == FS_OCCUPANT_UNKNOWN) {
                 /* Present but unstattable, either kind: nothing to measure the
                  * copy with, and the errno says whose refusal it was. */
-                divergence = DIVERGENCE_UNVERIFIED;
                 fault = fault_class(error_code_from_errno(lstat_errno));
             } else if (!fs_eaccess(fs_path, R_OK | X_OK)) {
                 /* A directory: read for the readdir, search for the walk's look
                  * at an entry named like OS metadata (fs_directory_emptiness).
                  * fs_eaccess leaves faccessat's errno on false. */
-                divergence = DIVERGENCE_UNVERIFIED;
                 fault = fault_class(error_code_from_errno(errno));
+            }
+
+            if (fault != WORKSPACE_FAULT_NONE) {
+                divergence = DIVERGENCE_UNVERIFIED;
             }
         }
 

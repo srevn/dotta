@@ -353,37 +353,22 @@ cleanup:
  * Generate symlink diff from buffer
  *
  * Helper for compare_generate_diff(). Generates a human-readable diff for symlink
- * target changes, from the two targets in hand — the reference's and the one
- * the caller's look read.
+ * target changes, from the two targets in hand — old side first, the order the
+ * caller read off the direction.
  */
 static error_t *generate_symlink_diff(
-    const buffer_t *content,
-    const buffer_t *copy,
-    compare_direction_t direction,
+    const buffer_t *old_side,
+    const buffer_t *new_side,
     char **diff_text
 ) {
-    /* Format diff based on direction */
-    error_t *err = NULL;
     buffer_t buf = BUFFER_INIT;
 
-    err = buffer_append_string(&buf, "Symlink target changed:\n");
-    if (err) goto cleanup;
-
-    if (direction == CMP_DIR_UPSTREAM) {
-        /* Upstream: show filesystem → repo (what apply would do) */
-        err = buffer_append_string(&buf, "- ");
-        if (!err) err = buffer_append(&buf, copy->data, copy->size);
-        if (!err) err = buffer_append_string(&buf, "\n+ ");
-        if (!err) err = buffer_append(&buf, content->data, content->size);
-        if (!err) err = buffer_append_string(&buf, "\n");
-    } else {
-        /* Downstream: show repo → filesystem (what update would commit) */
-        err = buffer_append_string(&buf, "- ");
-        if (!err) err = buffer_append(&buf, content->data, content->size);
-        if (!err) err = buffer_append_string(&buf, "\n+ ");
-        if (!err) err = buffer_append(&buf, copy->data, copy->size);
-        if (!err) err = buffer_append_string(&buf, "\n");
-    }
+    error_t *err = buffer_append_string(&buf, "Symlink target changed:\n");
+    if (!err) err = buffer_append_string(&buf, "- ");
+    if (!err) err = buffer_append(&buf, old_side->data, old_side->size);
+    if (!err) err = buffer_append_string(&buf, "\n+ ");
+    if (!err) err = buffer_append(&buf, new_side->data, new_side->size);
+    if (!err) err = buffer_append_string(&buf, "\n");
     if (err) goto cleanup;
 
     /* Transfer ownership and free buffer structure */
@@ -398,14 +383,13 @@ cleanup:
  * Generate text diff from buffer
  *
  * Helper for compare_generate_diff(). Uses in-memory buffers with libgit2's
- * buffer-based diff API — the reference's bytes and the ones the caller's look
- * read, both in hand.
+ * buffer-based diff API — the two sides in hand, old first, the order the caller
+ * read off the direction.
  */
 static error_t *generate_text_diff(
-    const buffer_t *content,
-    const buffer_t *copy,
+    const buffer_t *old_side,
+    const buffer_t *new_side,
     const char *path_label,
-    compare_direction_t direction,
     char **diff_text
 ) {
     /* Output buffer passed directly as callback payload */
@@ -418,35 +402,17 @@ static error_t *generate_text_diff(
     diff_opts.interhunk_lines = 0;
     diff_opts.flags = GIT_DIFF_NORMAL;
 
-    /* Generate diff based on direction using buffer-to-buffer diff */
-    int git_err;
-    if (direction == CMP_DIR_UPSTREAM) {
-        /* Upstream: filesystem → repo (what apply would do) */
-        /* Show diff: disk (old) → repo (new) */
-        git_err = git_diff_buffers(
-            copy->data, copy->size, path_label,
-            content->data, content->size, path_label,
-            &diff_opts,
-            NULL,  /* file callback */
-            NULL,  /* binary callback */
-            NULL,  /* hunk callback */
-            diff_line_callback,
-            &diff_output
-        );
-    } else {
-        /* Downstream: repo → filesystem (what update would commit) */
-        /* Show diff: repo (old) → disk (new) */
-        git_err = git_diff_buffers(
-            content->data, content->size, path_label,
-            copy->data, copy->size, path_label,
-            &diff_opts,
-            NULL,  /* file callback */
-            NULL,  /* binary callback */
-            NULL,  /* hunk callback */
-            diff_line_callback,
-            &diff_output
-        );
-    }
+    /* Buffer to buffer, the two sides in the order they were handed in */
+    int git_err = git_diff_buffers(
+        old_side->data, old_side->size, path_label,
+        new_side->data, new_side->size, path_label,
+        &diff_opts,
+        NULL,  /* file callback */
+        NULL,  /* binary callback */
+        NULL,  /* hunk callback */
+        diff_line_callback,
+        &diff_output
+    );
 
     if (git_err < 0) {
         buffer_free(&diff_output);
@@ -526,10 +492,16 @@ error_t *compare_generate_diff(
             break;
         }
 
-        case CMP_DIFFERENT:
+        case CMP_DIFFERENT: {
+            /* Which side the hunk shows first, read off the direction once for
+             * the module: upstream renders disk → repo, what apply would write;
+             * downstream repo → disk, what update would commit. */
+            const buffer_t *old_side = direction == CMP_DIR_UPSTREAM ? &copy : content;
+            const buffer_t *new_side = direction == CMP_DIR_UPSTREAM ? content : &copy;
+
             err = mode == GIT_FILEMODE_LINK
-                ? generate_symlink_diff(content, &copy, direction, &out->diff_text)
-                : generate_text_diff(content, &copy, path_label, direction, &out->diff_text);
+                ? generate_symlink_diff(old_side, new_side, &out->diff_text)
+                : generate_text_diff(old_side, new_side, path_label, &out->diff_text);
             if (err) goto cleanup;
 
             /* Binary files: libgit2 skips the line callback entirely when it
@@ -537,6 +509,7 @@ error_t *compare_generate_diff(
              * an explicit message rather than silent empty output. */
             if (!out->diff_text) out->diff_text = strdup("Binary files differ");
             break;
+        }
     }
 
 cleanup:

@@ -30,17 +30,11 @@
  * (repo_is_store, repo_open): the local-side counterpart of the epoch's role on
  * the remote side, where `dotta clone` gates on the ref being advertised.
  *
- * Which *directory* the store is, for the readers that must stay out of it, is
- * `git_repository_path` on the open handle and not `resolve_repo_path`: the two
- * name one directory for the bare repository dotta makes and two for a non-bare
- * one a hand declared, where the store's own files sit in the `.git/` and the
- * path resolves to the worktree beside it. core/state.c get_db_path reads that
- * path as a path, joining its database onto it; the two readers that stay *out*
- * of the directory take the pair (dev, ino) once and compare it inline, because
- * the store is the same directory under every name and its location is the run's,
- * which no ignore pattern could say: cmds/add.c cmd_add (no argument names it,
- * no frame of the walk enters it) and core/workspace.c analyze_untracked_files
- * (no row registers it as a scan root, no frame of the scan enters it).
+ * Which *directory* the store is is `git_repository_path` on the open handle
+ * and not `resolve_repo_path`: the two name one directory for the bare repository
+ * dotta makes and two for a non-bare one a hand declared, where the store's own
+ * files sit in the `.git/` and the path resolves to the worktree beside it. One
+ * reader — core/state.c get_db_path, joining the database onto it.
  */
 
 #ifndef DOTTA_REPO_H

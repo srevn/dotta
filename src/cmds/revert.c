@@ -759,7 +759,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     const char *profile = NULL;
     const char *target_name = NULL;
     const char *restored_name = NULL;
-    git_oid target_commit_oid = { { 0 } };
     git_commit *target_commit = NULL;
     stage_t *stage = NULL;
     git_tree *target_tree = NULL;
@@ -793,12 +792,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     );
 
     err = gitops_resolve_commit_in_branch(
-        repo, profile, opts->commit, &target_commit_oid, &target_commit
+        repo, profile, opts->commit, &target_commit
     );
     if (err) goto cleanup;
 
     char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &target_commit_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(target_commit));
 
     /* Step 4: The branch's stage — its tip is the current state the preview
      * compares against and the parent the revert's commit will have, so a branch
@@ -1246,7 +1245,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     msg = build_revert_commit_message(
-        config, profile, restored_name, &target_commit_oid, opts->message
+        config, profile, restored_name, git_commit_id(target_commit), opts->message
     );
     if (!msg) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit message");

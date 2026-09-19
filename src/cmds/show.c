@@ -240,10 +240,9 @@ static error_t *show_source(
         return NULL;
     }
 
-    git_oid commit_oid;
     git_commit *commit = NULL;
     error_t *err = gitops_resolve_commit_in_branch(
-        repo, profile, commit_ref, &commit_oid, &commit
+        repo, profile, commit_ref, &commit
     );
     if (err) return err;
 
@@ -459,7 +458,6 @@ static error_t *show_commit(
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    git_oid commit_oid;
     git_commit *commit = NULL;
     git_tree *commit_tree = NULL;
     git_tree *parent_tree = NULL;
@@ -470,9 +468,7 @@ static error_t *show_commit(
      * branch in every fate it has (sys/gitops.h), so there is nothing to restate
      * here — and the sentence that used to stand over it said "not found" of an
      * ancestry the walk could not read. */
-    err = gitops_resolve_commit_in_branch(
-        repo, profile, commit_ref, &commit_oid, &commit
-    );
+    err = gitops_resolve_commit_in_branch(repo, profile, commit_ref, &commit);
     if (err) goto cleanup;
 
     /* Get commit tree — from the commit in hand, not by a second lookup */
@@ -498,7 +494,7 @@ static error_t *show_commit(
 
     /* Commit header with color (matching diff command style) */
     char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
     const git_signature *author = git_commit_author(commit);
     time_t commit_time = (time_t) author->when.time;

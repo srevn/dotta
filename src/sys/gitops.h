@@ -433,19 +433,21 @@ error_t *gitops_get_commit(
  * saying "not found" over one of them would name a fate this function did not
  * reach.
  *
+ * The commit is the whole answer, and its OID is read off it (git_commit_id):
+ * nothing is handed back beside it, so no caller holds two views of one fact
+ * and none looks the commit up a second time to reach its tree.
+ *
  * @param repo Repository (must not be NULL)
  * @param branch_name Branch name (must not be NULL)
  * @param commit_ref Commit reference (must not be NULL)
- * @param out_oid Resolved commit OID (must not be NULL)
- * @param out_commit Resolved commit object (can be NULL if not needed, caller
- *                   must free)
+ * @param out_commit Resolved commit object (must not be NULL, caller must free
+ *                   with git_commit_free)
  * @return Error or NULL on success
  */
 error_t *gitops_resolve_commit_in_branch(
     git_repository *repo,
     const char *branch_name,
     const char *commit_ref,
-    git_oid *out_oid,
     git_commit **out_commit
 );
 

@@ -1336,12 +1336,12 @@ error_t *gitops_read_blob_content(
  */
 error_t *gitops_resolve_commit_in_branch(
     git_repository *repo, const char *branch_name, const char *commit_ref,
-    git_oid *out_oid, git_commit **out_commit
+    git_commit **out_commit
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(branch_name);
     CHECK_NULL(commit_ref);
-    CHECK_NULL(out_oid);
+    CHECK_NULL(out_commit);
 
     /* Build the branch refname. */
     char ref_name[DOTTA_REFNAME_MAX];
@@ -1382,15 +1382,12 @@ error_t *gitops_resolve_commit_in_branch(
      * Skips revparse and the reachability check below — both would be redundant
      * since the tip is, by definition, reachable from itself. */
     if (strcmp(commit_ref, "HEAD") == 0) {
-        git_oid_cpy(out_oid, &branch_tip_oid);
-        if (out_commit) {
-            ret = git_commit_lookup(out_commit, repo, out_oid);
-            if (ret < 0) {
-                return error_wrap(
-                    error_from_git(ret), "Cannot read the tip of branch '%s'",
-                    branch_name
-                );
-            }
+        ret = git_commit_lookup(out_commit, repo, &branch_tip_oid);
+        if (ret < 0) {
+            return error_wrap(
+                error_from_git(ret), "Cannot read the tip of branch '%s'",
+                branch_name
+            );
         }
         return NULL;
     }
@@ -1432,8 +1429,8 @@ error_t *gitops_resolve_commit_in_branch(
      *
      * Annotated tags wrap commits — git_revparse_single returns the tag object
      * whose OID is the tag's, not the commit's. Peeling normalises
-     * tag/commit/symbolic-ref inputs to a commit so out_oid always names a commit
-     * and the reachability check below operates on commit OIDs (as
+     * tag/commit/symbolic-ref inputs to a commit so what is handed back is always
+     * a commit and the reachability check below operates on commit OIDs (as
      * git_graph_descendant_of requires).
      *
      * For inputs that are already commits, peel returns a refcount-bumped reference
@@ -1484,14 +1481,8 @@ error_t *gitops_resolve_commit_in_branch(
         }
     }
 
-    git_oid_cpy(out_oid, resolved_oid);
-
-    if (out_commit) {
-        /* SAFETY: peel(GIT_OBJECT_COMMIT) guarantees commit_obj's type. */
-        *out_commit = (git_commit *) commit_obj;
-    } else {
-        git_object_free(commit_obj);
-    }
+    /* SAFETY: peel(GIT_OBJECT_COMMIT) guarantees commit_obj's type. */
+    *out_commit = (git_commit *) commit_obj;
 
     return NULL;
 }

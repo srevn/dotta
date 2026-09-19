@@ -459,8 +459,7 @@ static error_t *present_diffs_for_direction(
  * @param repo Repository (must not be NULL)
  * @param profiles Selected profiles to search (must not be NULL)
  * @param commit_ref Commit reference (must not be NULL)
- * @param out_oid Resolved commit OID (must not be NULL)
- * @param out_commit Resolved commit object (can be NULL, caller must free)
+ * @param out_commit Resolved commit object (must not be NULL, caller must free)
  * @param out_profile Found profile name (can be NULL, caller must free)
  * @return Error or NULL on success
  */
@@ -468,14 +467,13 @@ static error_t *resolve_commit_in_profiles(
     git_repository *repo,
     const string_array_t *profiles,
     const char *commit_ref,
-    git_oid *out_oid,
     git_commit **out_commit,
     char **out_profile
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
     CHECK_NULL(commit_ref);
-    CHECK_NULL(out_oid);
+    CHECK_NULL(out_commit);
 
     error_t *last_err = NULL;
 
@@ -484,7 +482,7 @@ static error_t *resolve_commit_in_profiles(
         const char *profile = profiles->items[i];
 
         error_t *err = gitops_resolve_commit_in_branch(
-            repo, profile, commit_ref, out_oid, out_commit
+            repo, profile, commit_ref, out_commit
         );
 
         if (!err) {
@@ -536,11 +534,10 @@ static error_t *resolve_commit_in_profiles(
 static void print_commit_header(
     output_t *out,
     const git_commit *commit,
-    const git_oid *commit_oid,
     const char *profile
 ) {
     char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), commit_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
     const git_signature *author = git_commit_author(commit);
     time_t commit_time = (time_t) author->when.time;
@@ -1008,7 +1005,6 @@ static error_t *diff_commit_to_workspace(
     const pathspec_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
-    git_oid commit_oid;
     git_commit *commit = NULL;
     char *profile = NULL;
     git_tree *tree = NULL;
@@ -1018,7 +1014,7 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 1: Resolve commit to find which profile contains it */
     err = resolve_commit_in_profiles(
-        repo, profiles, commit_ref, &commit_oid, &commit, &profile
+        repo, profiles, commit_ref, &commit, &profile
     );
     if (err) {
         goto cleanup;
@@ -1026,7 +1022,7 @@ static error_t *diff_commit_to_workspace(
 
     /* Step 2: Print commit header */
     char oid_str[8];
-    git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+    git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
 
     /* Warn when multiple profiles are enabled: only the profile containing the
      * commit is compared against the filesystem. */
@@ -1043,13 +1039,15 @@ static error_t *diff_commit_to_workspace(
         oid_str
     );
 
-    print_commit_header(out, commit, &commit_oid, profile);
+    print_commit_header(out, commit, profile);
 
-    /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) */
+    /* Step 3: Get tree from THE HISTORICAL COMMIT (not HEAD!) — from the commit
+     * in hand, the OID helper beside it being a second lookup of what is here. */
     int git_err = git_commit_tree(&tree, commit);
     if (git_err < 0) {
-        err = error_from_git(git_err);
-        err = error_wrap(err, "Failed to get tree from commit");
+        err = error_wrap(
+            error_from_git(git_err), "Failed to get tree from commit"
+        );
         goto cleanup;
     }
 
@@ -1236,7 +1234,6 @@ static error_t *diff_commits(
     const pathspec_t *file_filter = scope_paths(scope);
 
     error_t *err = NULL;
-    git_oid commit1_oid, commit2_oid;
     git_commit *commit1 = NULL;
     git_commit *commit2 = NULL;
     char *profile1_name = NULL;
@@ -1247,7 +1244,7 @@ static error_t *diff_commits(
 
     /* Resolve first commit */
     err = resolve_commit_in_profiles(
-        repo, profiles, commit1_ref, &commit1_oid, &commit1, &profile1_name
+        repo, profiles, commit1_ref, &commit1, &profile1_name
     );
     if (err) {
         goto cleanup;
@@ -1255,7 +1252,7 @@ static error_t *diff_commits(
 
     /* Resolve second commit */
     err = resolve_commit_in_profiles(
-        repo, profiles, commit2_ref, &commit2_oid, &commit2, &profile2_name
+        repo, profiles, commit2_ref, &commit2, &profile2_name
     );
     if (err) {
         goto cleanup;
@@ -1276,8 +1273,8 @@ static error_t *diff_commits(
 
     /* Print diff range header */
     char oid1_str[8], oid2_str[8];
-    git_oid_tostr(oid1_str, sizeof(oid1_str), &commit1_oid);
-    git_oid_tostr(oid2_str, sizeof(oid2_str), &commit2_oid);
+    git_oid_tostr(oid1_str, sizeof(oid1_str), git_commit_id(commit1));
+    git_oid_tostr(oid2_str, sizeof(oid2_str), git_commit_id(commit2));
 
     output_styled(
         out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n\n",
@@ -1285,23 +1282,23 @@ static error_t *diff_commits(
     );
 
     /* Print second commit header (the "new" one) */
-    print_commit_header(out, commit2, &commit2_oid, profile2_name);
+    print_commit_header(out, commit2, profile2_name);
 
-    /* Get trees from commits */
-    err = gitops_get_tree_from_commit(repo, &commit1_oid, &tree1);
-    if (err) {
+    /* Get trees from the two commits in hand — the OID helper beside this one
+     * would look each of them up a second time (the workspace arm above reads
+     * its tree the same way). */
+    int ret = git_commit_tree(&tree1, commit1);
+    if (ret < 0) {
         err = error_wrap(
-            err, "Failed to get tree from commit %s",
-            oid1_str
+            error_from_git(ret), "Failed to get tree from commit %s", oid1_str
         );
         goto cleanup;
     }
 
-    err = gitops_get_tree_from_commit(repo, &commit2_oid, &tree2);
-    if (err) {
+    ret = git_commit_tree(&tree2, commit2);
+    if (ret < 0) {
         err = error_wrap(
-            err, "Failed to get tree from commit %s",
-            oid2_str
+            error_from_git(ret), "Failed to get tree from commit %s", oid2_str
         );
         goto cleanup;
     }
@@ -1333,7 +1330,7 @@ static error_t *diff_commits(
 
     if (opts->name_only) {
         /* Name-only: list changed file paths without diff content or stats */
-        int ret = git_diff_print(
+        ret = git_diff_print(
             diff, GIT_DIFF_FORMAT_NAME_ONLY, print_diff_line_cb, out
         );
         if (ret < 0) {
@@ -1347,7 +1344,7 @@ static error_t *diff_commits(
 
         output_newline(out, OUTPUT_NORMAL);
 
-        int ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
+        ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
         if (ret < 0) {
             err = error_from_git(ret);
             goto cleanup;

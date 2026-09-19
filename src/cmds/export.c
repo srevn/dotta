@@ -1458,12 +1458,11 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
      * — its claim sheet included — so historical exports get historical modes
      * and encryption flags. */
     if (opts->commit) {
-        git_oid commit_oid;
         /* The resolution names both the commit and the branch in every fate it
          * has (sys/gitops.h): nothing to restate, and the sentence that used to
          * stand over it said "not found" of an ancestry the walk could not read. */
         err = gitops_resolve_commit_in_branch(
-            repo, opts->profile, opts->commit, &commit_oid, &commit
+            repo, opts->profile, opts->commit, &commit
         );
         if (err) goto cleanup;
 
@@ -1479,7 +1478,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         }
 
         char oid_str[8];
-        git_oid_tostr(oid_str, sizeof(oid_str), &commit_oid);
+        git_oid_tostr(oid_str, sizeof(oid_str), git_commit_id(commit));
         snprintf(commit_suffix, sizeof(commit_suffix), " @ %s", oid_str);
     } else {
         err = gitops_load_branch_tree(repo, opts->profile, &tree, NULL);

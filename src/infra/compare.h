@@ -24,12 +24,16 @@
  * the filesystem.
  *
  * Design principles:
- * - Handle all file types (regular, symlink)
- * - Clear comparison results
+ * - A blob's two spellings and a link are the whole domain: a mode outside them
+ *   is the caller's error, refused by both ladders before the disk is touched
  * - A look is the caller's to take: the pair is handed one and takes none
  * - The disk copy is wiped before it is freed, by whichever of the two callers
  *   took it: for an encrypted row it is the plaintext, the twin of the buffer
- *   the content cache wipes on its side
+ *   the content cache wipes on its side. The rule covers the copies read here
+ *   and not a rendering made from them: git_diff_buffers takes both sides into
+ *   structures of its own and frees them plainly, where nothing above libgit2
+ *   can reach, so file_diff_t.diff_text is freed plainly too — a wipe there would
+ *   make the rule read total while half of the plaintext stayed loose
  */
 
 #ifndef DOTTA_COMPARE_H
@@ -65,20 +69,6 @@ typedef enum {
     CMP_MISSING,    /* Nothing stands there — the look met the absence */
     CMP_TYPE_DIFF   /* Another kind does — a link, a directory, a device */
 } compare_result_t;
-
-/**
- * A rendering: the verdict the renderer's own look reached, and the text for it
- *
- * The struct is the caller's — a stack local, cleared by compare_generate_diff
- * once its arguments are accepted — and one thing in it is owned: `diff_text`,
- * which compare_free_diff frees and resets. NULL there is a copy that matches;
- * every other verdict has a text, which a caller holding its own words for that
- * verdict may ignore.
- */
-typedef struct {
-    compare_result_t status; /* what the look found */
-    char *diff_text;         /* the text for it, NULL for a match */
-} file_diff_t;
 
 /**
  * Does the disk copy match the reference? — the pair
@@ -171,6 +161,20 @@ typedef enum {
 } compare_direction_t;
 
 /**
+ * A rendering: the verdict the renderer's own look reached, and the text for it
+ *
+ * The struct is the caller's — a stack local, cleared by compare_generate_diff
+ * once its arguments are accepted — and one thing in it is owned: `diff_text`,
+ * which compare_free_diff frees and resets. NULL there is a copy that matches;
+ * every other verdict has a text, which a caller holding its own words for that
+ * verdict may ignore.
+ */
+typedef struct {
+    compare_result_t status; /* what the look found */
+    char *diff_text;         /* the text for it, NULL for a match */
+} file_diff_t;
+
+/**
  * Render the disk copy's difference from the reference — the renderer's own look
  *
  * One lstat names what stands at the path; where it is the kind the mode expects,
@@ -194,8 +198,9 @@ typedef enum {
  * @param path_label Label for diff output (must not be NULL)
  * @param mode Expected git filemode (for type/mode checking)
  * @param direction Diff direction
- * @param out Rendering (must not be NULL; cleared on entry, and left cleared on
- *            failure, so freeing it is correct either way)
+ * @param out Rendering (must not be NULL; cleared once the arguments are accepted,
+ *            and left owning nothing on failure, so freeing it is correct either
+ *            way)
  * @return Error or NULL on success
  */
 error_t *compare_generate_diff(

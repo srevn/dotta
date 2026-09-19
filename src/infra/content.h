@@ -305,7 +305,7 @@ error_t *content_rebind(
  *
  * The single seam for "is this blob equal to this disk file?". Internally
  * classifies the blob as an entry of `expected_mode` (content_classify) and routes:
- *   - PLAINTEXT           → fast path: stream-hash disk, compare to OID.
+ *   - PLAINTEXT           → fast path: hash the disk copy, compare to OID.
  *                           Avoids inflating the stored Git blob. A link always.
  *   - ENCRYPTED           → slow path: decrypt via cache, byte-compare to disk.
  *   - UNSUPPORTED_VERSION → slow path; surfaces ERR_CRYPTO with a clear

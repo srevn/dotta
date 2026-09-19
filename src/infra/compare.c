@@ -484,7 +484,9 @@ error_t *compare_generate_diff(
         case CMP_TYPE_DIFF: {
             /* Both kinds named, the disk's off this function's own look.
              * fs_stat_noun reads the type bits whole, so a directory or a device
-             * standing here is named rather than folded into "regular file". */
+             * standing here is named rather than folded into "regular file";
+             * the expected kind is spelled in that same function's words, so
+             * the two halves of one sentence name their kinds alike. */
             int n = asprintf(
                 &out->diff_text, "Type mismatch: expected %s, found %s",
                 mode == GIT_FILEMODE_LINK ? "symlink" : "regular file", fs_stat_noun(&st)

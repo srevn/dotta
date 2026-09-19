@@ -43,20 +43,22 @@
  *
  * Identity:
  *   The join is by spelling, and so is every fact the workspace holds about a
- *   path but one: where each row and each orphan record stands, read once per
- *   load as a (dev, ino) index for the two verbs that act on an entry through a
- *   string and could otherwise act on a spelling the load knows the entry by
- *   another name of — cleanup's unlink (an owned, backed orphan whose entry a
- *   row stands on is a stale key: released, never pruned) and the scan's offer
- *   (a child whose entry a row or a record stands on is no discovery). An entry
- *   is a name in a directory; a key is one spelling of it, and a filesystem can
- *   reach one entry through as many spellings as there are links above it, folds
- *   it performs on the name, and roots the table spells two ways (infra/mount.h).
+ *   path but one: where each row and each orphan record stands, indexed by the
+ *   (dev, ino) the load's own look at that path found, for the two verbs that
+ *   act on an entry through a string and could otherwise act on a spelling the
+ *   load knows the entry by another name of — cleanup's unlink (an owned, backed
+ *   orphan whose entry a row stands on is a stale key: released, never pruned)
+ *   and the scan's offer (a child whose entry a row or a record stands on is no
+ *   discovery). An entry is a name in a directory; a key is one spelling of it,
+ *   and a filesystem can reach one entry through as many spellings as there are
+ *   links above it, folds it performs on the name, and roots the table spells
+ *   two ways (infra/mount.h).
  *
  *   The scan's roots read identity for a third reason of their own — one walk
- *   per directory (analyze_untracked_files). No other reader asks the disk which
- *   entry a string names; a filter, a namer or a join that wanted to is asking
- *   a question the model does not answer.
+ *   per directory (analyze_untracked_files) — and read it off that same look.
+ *   Only the untracked walk asks the disk which entry a string names, at a child
+ *   no claim settles; a filter, a namer or a join that wanted to is asking a
+ *   question the model does not answer.
  */
 
 #ifndef DOTTA_WORKSPACE_H
@@ -785,6 +787,10 @@ const workspace_item_t *workspace_get_item(
  * Returns a borrowed view over the view's file rows — every path an enabled profile
  * claims as a file, the winning profile's claim applied — in filesystem_path
  * order. Pure value return — no allocation, no error path.
+ *
+ * The whole enabled set, never a command's own filter: the workspace is loaded
+ * over the persistent set for every command, and a -p or a pathspec narrows what
+ * the caller does with these rows, afterwards and on its own (core/scope.h).
  *
  * The pointers reference the view's rows, built into the arena at workspace_load
  * time; the arena outlives the workspace so the slice is valid for the workspace's

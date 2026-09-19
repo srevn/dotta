@@ -16,6 +16,18 @@
  * here (workspace_observe, workspace_anchor) advance it only after a live look
  * at disk. A record whose path the view lacks is an orphan, and the orphan analysis
  * asks Git — the only authority that knows — why it is one.
+ *
+ * The filesystem side is looked at once. Three families, three phases: the
+ * directory rows, the file rows, and the records the view lacks, each looked at
+ * by the phase that owns it — one lstat per path into a slot beside that path
+ * (look_t) — and every phase after reads the slot rather than looking again.
+ * The entries index projects the identity off it, the orphan judge measures the
+ * copy off the same stat and reads the same errno, the scan's roots take their
+ * kind and identity off the directory analysis's own look. So no two phases can
+ * disagree about what stands somewhere, and the load's cost is one look per managed
+ * path and per orphan record. The one look taken after the join is the untracked
+ * walk's, at a child no claim settles — the one path the load holds no fact about
+ * at all.
  */
 
 #include "core/workspace.h"
@@ -3858,7 +3870,7 @@ const workspace_item_t *workspace_get_item(
 }
 
 /**
- * Get the active in-scope file slice
+ * Get the active file slice
  *
  * The const on the outer pointer level is added implicitly — safe per the C
  * standard's "const T ** → const T *const *" rule.
@@ -3872,7 +3884,7 @@ manifest_rows_t workspace_files(const workspace_t *ws) {
 }
 
 /**
- * Get the active in-scope directory slice
+ * Get the active directory slice
  */
 manifest_rows_t workspace_directories(const workspace_t *ws) {
     if (!ws) return (manifest_rows_t){ 0 };

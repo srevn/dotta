@@ -34,7 +34,19 @@
 #include <types.h>
 
 /**
- * Comparison result
+ * Comparison result — what a completed look found
+ *
+ * Total over a look that completed: the copy is the reference, it is the
+ * reference's kind holding other bytes, nothing stands at the path, or another
+ * kind does. A look that could not be made is none of them — it is the error
+ * the function returns, and what a failure means is the caller's. This module
+ * cannot know whether an unreadable path annotates a row or sinks the command,
+ * and the tree answers it three ways: core/workspace.c analyze_file_divergence
+ * and analyze_orphans hold the path (DIVERGENCE_UNVERIFIED and a fault class,
+ * never fatal to the load); the second question the first of them asks — ours
+ * against the base — reads a failure as "not at base", the conservative answer;
+ * cmds/diff.c show_file_diff_from_workspace and compare_tree_files_to_filesystem
+ * fail the run.
  *
  * NOTE: Permission checking is explicitly NOT part of this module. The compare
  * module is infrastructure-layer, handling only content and type. Permission
@@ -42,11 +54,10 @@
  * workspace.c using metadata from .dotta/metadata.json.
  */
 typedef enum {
-    CMP_EQUAL,       /* Files are identical (content and type) */
-    CMP_DIFFERENT,   /* Files have different content */
-    CMP_MISSING,     /* File doesn't exist on disk */
-    CMP_TYPE_DIFF,   /* Different types (file vs symlink) */
-    CMP_UNVERIFIED   /* Verification skipped (file too large or error) */
+    CMP_EQUAL,      /* The copy is the reference — kind and content */
+    CMP_DIFFERENT,  /* The reference's kind, other bytes */
+    CMP_MISSING,    /* Nothing stands there — the look met the absence */
+    CMP_TYPE_DIFF   /* Another kind does — a link, a directory, a device */
 } compare_result_t;
 
 /**
@@ -189,13 +200,5 @@ error_t *compare_generate_diff(
  * @param diff Diff to free (can be NULL)
  */
 void compare_free_diff(file_diff_t *diff);
-
-/**
- * Get result description
- *
- * @param result Comparison result
- * @return Human-readable description
- */
-const char *compare_result_string(compare_result_t result);
 
 #endif /* DOTTA_COMPARE_H */

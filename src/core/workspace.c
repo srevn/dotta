@@ -338,7 +338,11 @@ static workspace_fault_t fault_class(error_code_t code) {
  *
  * The class is all the item keeps: the message is the failing verb's to print,
  * and this analysis is not failing — it is reporting a path it could not read.
- * Five folds call this, each holding the error of the look it just made.
+ * Called at the two folds that hold an error of the look they just made —
+ * analyze_file_divergence's look at the content, analyze_orphans' measure. The
+ * four that hold an errno instead reach fault_class directly:
+ * analyze_file_divergence and analyze_directory_metadata_divergence at their
+ * lstat, analyze_orphans at its own and at a directory's access check.
  */
 static workspace_fault_t fault_of(error_t *err) {
     workspace_fault_t fault = fault_class(error_code(error_root(err)));
@@ -904,7 +908,7 @@ static error_t *analyze_file_divergence(
          * assume the path is there and record the uncertainty, rather than failing
          * the load and taking every other managed path down with one unreadable
          * one. The content phase honours the same policy for the look it makes:
-         * a blob it cannot load, decrypt, or compare maps to CMP_UNVERIFIED at
+         * a blob it cannot load, decrypt, or compare is the UNVERIFIED item at
          * the call, never out of the load.
          *
          * DEPLOYED is the load-bearing half — absence must never be inferred
@@ -997,13 +1001,6 @@ static error_t *analyze_file_divergence(
         struct stat file_stat;
         memset(&file_stat, 0, sizeof(file_stat));
         compare_result_t cmp_result;
-
-        /* Whose remedy a failed look is, folded where it fails and read by the
-         * CMP_UNVERIFIED arm below — the one arm that can see it, since that
-         * verdict has no other producer. */
-        workspace_fault_t fault = WORKSPACE_FAULT_NONE;
-
-        error_t *err = NULL;
 
         /* The base: dotta's last content confirmation at this path — the record's,
          * when it carries one; the released fact's, when it does not (a released
@@ -1104,6 +1101,8 @@ static error_t *analyze_file_divergence(
              * — the cache IS byte-truth for *this* blob via the Phase 2 write-time
              * invariant in content_stage_file.
              */
+            error_t *err = NULL;
+
             if (!row->encrypted) {
                 err = compare_oid_to_disk(
                     blob_oid_ptr,
@@ -1142,11 +1141,18 @@ static error_t *analyze_file_divergence(
                  * list (missing key, wrong passphrase, cipher-version skew, I/O
                  * error, missing blob) and the same word. The path is there (the
                  * lstat said so); only the look at its content failed, and a
-                 * failed look is never fatal to the load. The CMP_UNVERIFIED
-                 * arm below routes it; the confirmation and base-question gates
-                 * between read EQUAL and DIFFERENT, so they skip themselves. */
-                fault = fault_of(err);
-                cmp_result = CMP_UNVERIFIED;
+                 * failed look is never fatal to the load. Returned as the item
+                 * here, the unstattable arm's shape: UNVERIFIED beside the blob
+                 * bit, the stat valid so the mode checks below could run, but
+                 * every consumer reads UNVERIFIED first and accumulated path
+                 * bits would change nothing; the orphan slice answers a failed
+                 * look this way, and one policy beats two. The two gates below
+                 * read EQUAL and DIFFERENT, so returning here skips only what
+                 * they would have skipped themselves. */
+                return workspace_add_diverged(
+                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+                    DIVERGENCE_UNVERIFIED | policy, occupant, fault_of(err)
+                );
             }
 
             /* Slow path confirmed disk == expected blob — confirm the record
@@ -1268,18 +1274,6 @@ static error_t *analyze_file_divergence(
                 }
                 occupant = FS_OCCUPANT_NONE;
                 break;
-
-            case CMP_UNVERIFIED:
-                /* The failed look, mapped above — no compare path returns this
-                 * verdict itself. UNVERIFIED beside the blob bit, the unstattable
-                 * arm's shape: the stat is valid so the mode checks below could
-                 * run, but every consumer reads UNVERIFIED first, so accumulated
-                 * path bits would change nothing; the orphan slice already answers
-                 * a failed look this way, and one policy beats two. */
-                return workspace_add_diverged(
-                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_UNVERIFIED | policy, occupant, fault
-                );
         }
 
         /* PERMISSION CHECKING
@@ -1527,11 +1521,6 @@ static error_t *compute_orphan_divergence(
              * presence), state will be pruned.
              */
             file_exists = false;
-            break;
-
-        case CMP_UNVERIFIED:
-            /* Unreachable: a look that failed returned its error above, and no
-             * compare path produces this verdict of its own. */
             break;
     }
 

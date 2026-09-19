@@ -1612,19 +1612,6 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
     return NULL;
 }
 
-bool fs_is_symlink(const char *path) {
-    if (!path || path[0] == '\0') {
-        return false;
-    }
-
-    struct stat st;
-    if (fs_lstat(path, &st) < 0) {
-        return false;
-    }
-
-    return S_ISLNK(st.st_mode);
-}
-
 /**
  * Permission operations
  */
@@ -1701,38 +1688,7 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st) {
     return FS_OCCUPANT_OTHER;
 }
 
-/**
- * Stat-based type checking helpers
- */
-bool fs_stat_is_symlink(const struct stat *st) {
-    if (!st) {
-        return false;
-    }
-
-    return S_ISLNK(st->st_mode);
-}
-
-bool fs_stat_is_regular(const struct stat *st) {
-    if (!st) {
-        return false;
-    }
-
-    return S_ISREG(st->st_mode);
-}
-
-bool fs_stat_is_directory(const struct stat *st) {
-    if (!st) {
-        return false;
-    }
-
-    return S_ISDIR(st->st_mode);
-}
-
 const char *fs_stat_noun(const struct stat *st) {
-    if (!st) {
-        return "special file";
-    }
-
     return S_ISREG(st->st_mode) ? "regular file" :
            S_ISLNK(st->st_mode) ? "symlink" :
            S_ISDIR(st->st_mode) ? "directory" :

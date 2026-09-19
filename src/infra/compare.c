@@ -106,13 +106,13 @@ static error_t *validate_mode(git_filemode_t expected_mode) {
  * socket, or a link — for either blob mode, which is the whole of the domain
  * validate_mode admits. Two readers that must not disagree about one path: the
  * pair, whose answer is the CMP_TYPE_DIFF verdict, and the renderer, whose answer
- * is the line a caller prints beside that verdict. core/workspace.c claim_stands
- * is the same question one layer up, over an occupant and a path_type_t — the
- * vocabulary each layer speaks.
+ * is the line a caller prints beside that verdict. core/workspace.c asks the
+ * same question one layer up, over an occupant and a path_type_t — the vocabulary
+ * each layer speaks.
  */
 static bool mode_stands(const struct stat *st, git_filemode_t expected_mode) {
-    return expected_mode == GIT_FILEMODE_LINK ? fs_stat_is_symlink(st)
-                                              : fs_stat_is_regular(st);
+    return expected_mode == GIT_FILEMODE_LINK ? S_ISLNK(st->st_mode)
+                                              : S_ISREG(st->st_mode);
 }
 
 /**

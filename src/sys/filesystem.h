@@ -769,14 +769,6 @@ error_t *fs_create_symlink(
 error_t *fs_read_symlink(const char *linkpath, char **out);
 
 /**
- * Check if path is a symbolic link
- *
- * @param path Path to check (must not be NULL)
- * @return true if path is a symbolic link
- */
-bool fs_is_symlink(const char *path);
-
-/**
  * Permission operations
  */
 
@@ -861,54 +853,29 @@ typedef enum {
 fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
 
 /**
- * Stat-based type checking helpers
- *
- * These helpers accept pre-captured stat data to avoid redundant syscalls. Use
- * these when you've already stat'd a file and need to check its type.
- */
-
-/**
- * Check if stat represents a symlink
- *
- * @param st Stat data (must not be NULL)
- * @return true if S_ISLNK(st->st_mode)
- */
-bool fs_stat_is_symlink(const struct stat *st);
-
-/**
- * Check if stat represents a regular file
- *
- * @param st Stat data (must not be NULL)
- * @return true if S_ISREG(st->st_mode)
- */
-bool fs_stat_is_regular(const struct stat *st);
-
-/**
- * Check if stat represents a directory
- *
- * @param st Stat data (must not be NULL)
- * @return true if S_ISDIR(st->st_mode)
- */
-bool fs_stat_is_directory(const struct stat *st);
-
-/**
- * The noun for what an lstat found
+ * The noun for what a look found
  *
  * "regular file", "symlink", "directory", "FIFO", "socket", "character device",
  * "block device", "special file" — one spelling for the verbs that must name an
- * occupant they cannot take: the capture's refusal (infra/content), add's walk
- * and argument arm, and one that is not the kind a claim expects (infra/compare.c
- * compare_generate_diff, the type-mismatch line a diff renders). The input is a
- * successful lstat's; there is no noun for NONE or UNKNOWN, which are answers
- * about the call and not about an occupant.
+ * occupant they cannot take: infra/content.c content_stage_file and
+ * content_stage_link (the capture's refusal), cmds/add.c collect_tree and cmd_add
+ * (the walk's skip and the argument's) — or one that is not the kind a claim
+ * expects (infra/compare.c compare_generate_diff, the type-mismatch line a diff
+ * renders). The input is that look's own stat: an lstat's, or the fstat of the
+ * descriptor a capture already holds. There is no noun for NONE or UNKNOWN, which
+ * are answers about the call and not about an occupant, and none for a look never
+ * taken — what this returns is printed, so a noun made for a NULL would reach
+ * the user as a kind nothing stands as.
  *
  * Why the stat and not fs_occupant_t: the enum deliberately folds FIFO, socket
  * and both devices into FS_OCCUPANT_OTHER, and the noun is exactly the reading
- * OTHER withholds. So the key is the stat, and this joins the fs_stat_is_* family.
- * Total over the type bits even where a reader reaches only some of them — a
- * total mapping over a total input has no unreached arm.
+ * OTHER withholds, so the key is the stat. Total over the type bits even where
+ * a reader reaches only some of them — a total mapping over a total input has
+ * no unreached arm. The test is not here: a kind asked of a path is
+ * fs_lstat_occupant's, and one asked of a look already in hand is S_ISREG, S_ISLNK
+ * or S_ISDIR where it is asked, as the rest of the tree spells it.
  *
- * @param st Stat data (must not be NULL)
+ * @param st The look's stat (must not be NULL)
  * @return The noun, a string literal that outlives every caller
  */
 const char *fs_stat_noun(const struct stat *st);

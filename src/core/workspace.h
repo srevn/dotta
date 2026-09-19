@@ -855,20 +855,19 @@ const manifest_row_t *workspace_lookup(
  * The record's claims do not qualify here: a directory only a record remembers
  * displaces the record's own family alone (the reach rule, workspace_displaced_t),
  * and every item of that family carries the fact on itself. This probe is for a
- * caller holding a path and no item: the scan's roots (workspace.c
- * analyze_untracked_files), the fate of a planned row (core/deploy.c
+ * caller holding a path and no item: the fate of a planned row (core/deploy.c
  * check_ancestry) and the released-copies sweep (cmds/apply.c cmd_apply). A view
  * row beneath a record-remembered squatter is the through-capture the rule leaves
  * to its own occupant. So the answer is the view's claims alone, and on an item
  * it is exactly that item's displaced field.
  *
- * The answer is noted by the analyses where they observed each squatter
- * (note_displaced), and the directory analysis runs before any file row, orphan
- * record or scan root is looked at (workspace_load), so it is complete before
- * anything asks. The outermost such ancestor is returned: the true offender,
- * whose presence voids every path beneath it. Fate-blind by construction — whether
- * *this run* converges the displacement is deploy's question, asked of its own
- * fates against this answer (check_ancestry).
+ * The answer is noted by the phase that looked at each squatter (note_displaced),
+ * and the directory analysis runs before any file row or orphan record is looked
+ * at (workspace_load), so it is complete before anything asks — a scan root is
+ * chosen off the look that analysis took, later still. The outermost such ancestor
+ * is returned: the true offender, whose presence voids every path beneath it.
+ * Fate-blind by construction — whether *this run* converges the displacement is
+ * deploy's question, asked of its own fates against this answer (check_ancestry).
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a

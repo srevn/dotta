@@ -806,8 +806,7 @@ static void workspace_record_observation(
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), by
  * the orphan judge for the item it emits (analyze_orphans) and by the one producer
  * of items (workspace_add_diverged); and through workspace_displaced_ancestor
- * by analyze_untracked_files' roots, core/deploy.c check_ancestry and
- * cmds/apply.c's released-copies sweep.
+ * by core/deploy.c check_ancestry and cmds/apply.c's released-copies sweep.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The squatted path, the row's or the record's (borrowed; workspace
@@ -2722,7 +2721,7 @@ static error_t *blob_over(
  * the view's, borrowed, the rows and this array being one arena's
  * (include/runtime.h).
  *
- * Keyed by the directory's identity — the (dev, ino) the driver's look found at
+ * Keyed by the directory's identity — the (dev, ino) the join's look found at
  * the spelling it registers — because a traversal must not enumerate one directory
  * twice, and which directory a frame stands in is a fact about the filesystem,
  * not about naming: two tracked rows spelled through different links stand at
@@ -2739,7 +2738,7 @@ static error_t *blob_over(
  * stand at one directory under two spellings, the later-enabled profile's walk
  * is the one that runs, and the other's namespace never sees an offer beneath it.
  *
- * The entries index (entry_t) reads the same fact off the same rows, for the
+ * The entries index (entry_t) reads the same look off the same rows, for the
  * two verbs that act on an entry through a string, and the two are not one
  * structure: a root is a selection with a winner and a mutable registration, an
  * entry an observation with a run of equals — and the shapes differ with them,
@@ -3109,12 +3108,10 @@ static error_t *analyze_untracked_files(
 ) {
     CHECK_NULL(ws);
 
-    manifest_rows_t dirs = workspace_directories(ws);
-
     /* Sized by the directory rows, which bounds the appends: a row is tested
      * once per profile and matches its own alone, so it is a candidate in exactly
-     * one pass and `dirs.count` counts every candidate there is. A row that
-     * coincides with one already registered overwrites it rather than appending.
+     * one pass and the slice counts every candidate there is. A row that coincides
+     * with one already registered overwrites it rather than appending.
      *
      * The scan roots: every tracked directory that is a directory on disk, one
      * per directory. An ancestor claim is not one — the profile passes through
@@ -3124,16 +3121,22 @@ static error_t *analyze_untracked_files(
      * find: the key resolves through the squatter, so the directory found is
      * one the claim has no standing at — apply refuses beneath a squatter by
      * the same probe — and registering it would make that directory a boundary
-     * no honest walk may enter. Asked of the key, the workspace's fact about
-     * it, before the look. The look is at the row's own key, the link itself
-     * and never what it reaches: a claim of a directory that is a link now is
-     * the [type] the directory analysis said, and enumerating the link's target
-     * would offer that directory's files as this row's. Registered in the view's
+     * no honest walk may enter. Both are read off the join's look at the row
+     * (look_t): a row beneath a displaced ancestor was never looked at and reads
+     * UNKNOWN; a row whose own key a link or a file holds reads that occupant,
+     * the link itself and never what it reaches — a claim of a directory that
+     * is a link now is the [type] the directory analysis said, and enumerating
+     * the link's target would offer that directory's files as this row's. The
+     * kind test is the walk's own question, not the index's — is there a directory
+     * here to enumerate, where claim_stands asks whether a claim's kind stands
+     * — and over this slice the row's type is a constant. The slice is walked
+     * rather than workspace_directories(ws): the look table is indexed by the
+     * slice, and that pairing must not cross an accessor. Registered in the view's
      * order, lowest profile first, so a later profile's row standing at a directory
      * an earlier one already stands at takes it — the index's own rule for a
      * contested location (core/manifest.c manifest_layer), applied where the
      * keys differ — and within one profile the later row in path order. */
-    scan_root_t *roots = arena_calloc(ws->arena, dirs.count, sizeof(*roots));
+    scan_root_t *roots = arena_calloc(ws->arena, ws->active_dir_count, sizeof(*roots));
     if (!roots) {
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's roots");
     }
@@ -3143,19 +3146,20 @@ static error_t *analyze_untracked_files(
     const char *const *profiles = manifest_profiles(ws->manifest, &profile_count);
 
     for (size_t p = 0; p < profile_count; p++) {
-        for (size_t i = 0; i < dirs.count; i++) {
-            const manifest_row_t *row = dirs.entries[i];
-            struct stat st;
+        for (size_t i = 0; i < ws->active_dir_count; i++) {
+            const manifest_row_t *row = ws->active_dirs[i];
+            const look_t *look = &ws->dir_looks[i];
 
             if (!row->tracked || strcmp(row->profile, profiles[p]) != 0) continue;
-            if (workspace_displaced_ancestor(ws, row->filesystem_path)) continue;
-            if (fs_lstat_occupant(row->filesystem_path, &st) != FS_OCCUPANT_DIRECTORY) continue;
+            if (look->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
-            scan_root_t *root = find_scan_root(roots, root_count, st.st_dev, st.st_ino);
+            scan_root_t *root = find_scan_root(
+                roots, root_count, look->st.st_dev, look->st.st_ino
+            );
             if (!root) root = &roots[root_count++];
 
             *root = (scan_root_t){
-                .dev = st.st_dev, .ino = st.st_ino,
+                .dev = look->st.st_dev, .ino = look->st.st_ino,
                 .profile = row->profile, .directory = row->filesystem_path,
             };
         }

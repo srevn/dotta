@@ -222,11 +222,17 @@ static inline bool manifest_is_claim(
  * never a name (manifest_lookup_claim's note). False on every other kind, where
  * `tracked` is false and nothing reads it.
  *
- * Readers: the projection a namer reads a row through, the two claim passes and
- * the layering (core/manifest.c); the handover predicate and the absence rule
- * (core/workspace.h workspace_reassigned, core/workspace.c classify_absent);
- * the route table's derived arm (core/workspace.c workspace_item_route); status's
- * --full window and update's derive-scope slice (cmds/status.c, cmds/update.c).
+ * Readers: the projection a namer reads a row through, the two claim passes,
+ * the layering and the name test (core/manifest.c manifest_row_claim,
+ * manifest_claim_blob, manifest_contribute, manifest_layer, manifest_holds_name);
+ * the handover predicate, the absence rule and the route table's derived arm
+ * (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
+ * workspace_item_route); the untracked scan's word at a child, a rung being the
+ * one claim that settles nothing about the location it stands at (core/workspace.c
+ * scan_directory_for_untracked); status's --full window and update's derive-scope
+ * slice (cmds/status.c display_manifest, cmds/update.c cmd_update); and the two
+ * refusals of a second name for one location, where a derived claim names nothing
+ * and so blocks nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name).
  * Every other `tracked` read in the tree stands where the kind is already settled
  * and asks the field's own meaning, not this predicate.
  */

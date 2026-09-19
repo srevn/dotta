@@ -667,12 +667,12 @@ typedef struct {
  * at one directory — under the name that profile's own claims give it and minus
  * what its ignore layers exclude — and nothing beneath a path the view holds a
  * blob at, where no apply could ever place it. A best-effort look that says what
- * it could not list or look at and goes on with the siblings
- * (analyze_untracked_files). The record's half is a load fact, not an analysis's:
- * a path dotta remembers is no discovery on any surface, whichever of the two
- * the caller asked for — and so is the entry each row and each record stands
- * on, so a path dotta manages or remembers under another spelling is no discovery
- * either (see Identity above).
+ * it could not list or look at — never a path the view settles, which the join
+ * has already named — and goes on with the siblings (analyze_untracked_files).
+ * The record's half is a load fact, not an analysis's: a path dotta remembers
+ * is no discovery on any surface, whichever of the two the caller asked for —
+ * and so is the entry each row and each record stands on, so a path dotta manages
+ * or remembers under another spelling is no discovery either (see Identity above).
  *
  * The workspace is scoped to the persistent enabled profile set — the view is
  * built over exactly those profiles, and a record under any other profile is an

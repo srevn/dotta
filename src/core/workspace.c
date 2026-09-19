@@ -2461,16 +2461,17 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * itself nor anything beneath it (manifest_is_derived), which is why a derived
  * row at one key is no answer about the other.
  *
- * A directory has one key — the one its frame joined, which is the one the view
- * holds a row at: the two producers of a key, mount_resolve and the walk's join,
- * agree by construction (infra/mount.h) — so one climb answers. Each step is
- * the last separator's index, or 1 for a rung beneath the root directory, so a
- * rung is strictly shorter than the one before it; the root directory is read
- * and ends the climb, because a claim can stand there — `root` spells it, and
- * `home` or `custom` on a machine whose HOME or target is one (infra/label.h) —
- * and the view places a blob at any of the three as a FILE row at that directory
- * (core/manifest.c manifest_claim_blob). The key is absolute; the copy the climb
- * truncates is the caller's scratch, and abandoned.
+ * A directory has one key — the tracked row's own, which mount_resolve spelled
+ * — and the walk's joins beneath it are keys by the same construction
+ * (infra/mount.h: a child joined onto a key is a key), so one climb here answers
+ * for every path in that walk. Each step is the last separator's index, or 1
+ * for a rung beneath the root directory, so a rung is strictly shorter than the
+ * one before it; the root directory is read and ends the climb, because a claim
+ * can stand there — `root` spells it, and `home` or `custom` on a machine whose
+ * HOME or target is one (infra/label.h) — and the view places a blob at any of
+ * the three as a FILE row at that directory (core/manifest.c manifest_claim_blob).
+ * The key is absolute; the copy the climb truncates is the caller's arena's,
+ * one per ask, and abandoned.
  *
  * The ascent over these very rungs floors on the asker's own root (core/manifest.c
  * manifest_ascend): it is naming a location for one profile, and nothing of that
@@ -2478,11 +2479,11 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * at a location, whoever holds it — so the root directory is its floor, as it
  * is deploy's (core/deploy.c nearest_ancestor).
  *
- * Readers: the walk, of every directory child, and the driver, of every tracked
- * directory it is about to enumerate — an independent tracked root beneath a
- * file claim is as much beneath it as a child the walk would have stopped at.
- * The driver probes the same rungs from a deeper start, so a blob at the root
- * directory is always the driver's to meet first.
+ * Reader: the scan driver (analyze_untracked_files), of every tracked directory
+ * it is about to enumerate — an independent tracked root beneath a file claim
+ * is as much beneath it as a child the walk would have stopped at. One ask per
+ * root and none per child: the walk asks the view at each child's own key, which
+ * is the one rung a frame adds to this answer (scan_directory_for_untracked).
  *
  * @param view      The precedence-resolved view (must not be NULL)
  * @param directory The directory's key (must not be NULL)
@@ -2623,43 +2624,59 @@ typedef struct {
  * reaches a directory outside every root's subtree, which two walks may then
  * enumerate — the limit a visited set would close, left stated.
  *
- * Each kind asks the view its own question before the name, and they are not
- * the same question: a leaf asks whether its own path is already spoken for —
- * by its string, then by its entry — a directory whether anything beneath it
- * can be (blob_over). That is why neither needs the other's — a leaf's container
- * was cleared before this frame entered it, so a leaf climbs nothing; no offer
- * is ever made *at* a directory, so a directory asks no record. A directory the
- * record remembers is entered like any other: a record bounds what is offered,
+ * One question opens both kinds, and it is the view's word at the child's own
+ * key: a claim that names its own location settles the child whatever stands
+ * there, for no look at all — manifest_is_derived names the one row that names
+ * no location, and the walk passes through it as through any unclaimed directory.
+ * What the two kinds ask after the look is not the same question: a directory
+ * asks the identity — is this another root's? — because a root is reached by
+ * whatever spelling a frame joined and the key above answered one of them; a
+ * leaf asks whether the record speaks for its path, and then whether a row or a
+ * record stands on its very entry. Neither needs the other's: no offer is ever
+ * made *at* a directory, so a directory asks no record, and a leaf is reached
+ * by a frame that was cleared before it was entered, so a leaf climbs nothing.
+ * A directory the record remembers is entered like any other — the view says
+ * what belongs at a location whatever stands there, where a record says what
+ * dotta put there, which only a look confirms: a record bounds what is offered,
  * never where the walk goes.
  *
- * The order is the order. The lstat first, because the kind and the identity
- * decide every arm; the occupant skip before any lookup, because nothing can
- * hold what it names; identity before the climb and the namer, because another
- * root's directory needs no string; the guards before the name, because an ascent
- * is paid only where a name is used and in a tracked directory most leaves are
- * managed; the name before the ignore layers, the name being the first layer's
- * subject; the layers before the descent, because an excluded directory is not
- * entered.
+ * Nothing beneath a blob the view holds is offered, and the climb that says so
+ * is the driver's, asked once of the directory a walk begins at
+ * (analyze_untracked_files, blob_over). A frame adds exactly one rung to that
+ * answer — the child's own key, which is the question above — and every rung
+ * over it was answered before the frame was entered, no frame being entered whose
+ * directory a blob stands at or over. So the rule is this walk's induction rather
+ * than a climb per child, and `directory` carries it as a precondition.
+ *
+ * The order is the order. The view's word first, because a claim that names its
+ * own location settles the child whatever stands there and costs no look; the
+ * lstat next, because the kind and the identity decide every arm that is left;
+ * the occupant skip before the identity and the record, because nothing can hold
+ * what it names; the guards before the name, because an ascent is paid only where
+ * a name is used and in a tracked directory most leaves are managed; the name
+ * before the ignore layers, the name being the first layer's subject; the layers
+ * before the descent, because an excluded directory is not entered.
  *
  * A best-effort look, and neither a snapshot nor an admission: what the commit
  * can hold at an offered name is update's question at its capture (cmds/update.c).
- * The climb closes the one class the view can decide for itself and closes no
- * other — a name the branch's tree or its claim sheet cannot hold is still the
- * capture's to refuse.
+ * The view's word closes the one class the view can decide for itself and closes
+ * no other — a name the branch's tree or its claim sheet cannot hold is still
+ * the capture's to refuse.
  *
- * One arrangement the climb does not reach, and need not: where a later profile's
- * explicit DIRECTORY claim wins a location an earlier one holds a blob at, the
- * index answers with the directory row. That row is necessarily tracked — a derived
- * row never takes a held location — so it is a scan root, and the walk stops at
- * it by identity before the climb is asked; the directory is the winner's to
- * enumerate, under the winner's name.
+ * One arrangement the blob rule does not reach, and need not: where a later
+ * profile's explicit DIRECTORY claim wins a location an earlier one holds a blob
+ * at, the index answers with the directory row. That row is necessarily tracked
+ * — a derived row never takes a held location — so the question above settles
+ * the child by the view's own word, and the directory is the winner's to enumerate,
+ * under the winner's name, from a depth 0 of its own.
  *
  * What the filesystem refuses is said where it happens and the siblings go on,
  * absence is silent, and an allocation anywhere is the run failing. The lines
  * go to stderr, as the driver's do — core has no output handle.
  *
  * @param scan      What the walk runs under (must not be NULL)
- * @param directory The location this frame enumerates (must not be NULL)
+ * @param directory The location this frame enumerates: a key the view holds no
+ *                  blob at or over (must not be NULL)
  * @param depth     Frames beneath the tracked directory the driver started at
  * @return Error or NULL on success
  */
@@ -2743,12 +2760,29 @@ static error_t *scan_directory_for_untracked(
             goto cleanup;
         }
 
+        /* The view's word at the child's own key, before any look. A claim that
+         * names its own location settles the child whatever stands there: a blob
+         * bounds the walk (the induction above), and a tracked directory is the
+         * driver's to enumerate, from a depth 0 of its own, or the [type] the
+         * directory analysis already said. Either way the load holds one verdict
+         * for the path and says it on its own screen, where the remedies are —
+         * the join is every load's (core/workspace.h workspace_options_t), so a
+         * path this walk leaves unsaid is one the load has said already. An
+         * ancestor claim is the one row that names neither itself nor what lies
+         * beneath it (core/manifest.h manifest_is_derived): the walk passes through
+         * it as through any unclaimed directory, and a look is paid there, and
+         * for what no claim names at all. */
+        const manifest_row_t *claim = manifest_lookup(ws->manifest, child);
+        if (claim && !manifest_is_derived(claim)) continue;
+
         /* One lstat names what stands there — its kind, and for a directory its
          * identity: a symlink is never a directory here. Absence is a skip —
          * the listing and this look are two moments. A look that failed is said,
          * its errno read in the line itself (sys/filesystem.h: it is lstat's
          * until something else runs): nothing downstream can name a path it could
-         * not see. What no branch can hold — a device, a socket, a FIFO — is
+         * not see, and a claim that settles the child was skipped above, so what
+         * reaches that line is an unclaimed child or a rung the walk only passes
+         * through. What no branch can hold — a device, a socket, a FIFO — is
          * not a new file; offered, the capture refuses it by its noun and takes
          * the whole profile's update with it (cmds/add.c reads it the same way). */
         struct stat st;
@@ -2778,42 +2812,37 @@ static error_t *scan_directory_for_untracked(
         if (is_dir) {
             /* Another scan root's directory — by identity, whatever this frame
              * joined — is that root's to enumerate, from a depth 0 of its own
-             * and under its owner's names and rules. Asked before the name and
-             * before any rule: an owner's exclusion is the owner's, and a walk
-             * from outside inherits none of it. */
-            if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) continue;
-
-            /* A blob the view holds at the directory or above it. Asked before
-             * the name and before any rule: an offer beneath it is one no apply
-             * can place, whoever would name it, and committing it turns a
-             * view-versus-disk conflict the user can resolve into a
-             * view-versus-view one only `remove` can. Said on its own screen
-             * rather than here — the file analysis stands the [type] at the blob's
-             * own path, with the remedies beside it. */
-            const manifest_row_t *blob = NULL;
-            err = blob_over(ws->manifest, child, scratch, &blob);
-            if (err) goto cleanup;
-            if (blob) continue;
-        } else if (manifest_lookup(ws->manifest, child) || workspace_get_anchor(ws, child) ||
+             * and under its owner's names and rules. Asked of the identity, the
+             * one thing the key above could not answer: a root is reached by
+             * whatever spelling a frame joins, and the view holds a row at one
+             * of them. Asked before the name and before any rule: an owner's
+             * exclusion is the owner's, and a walk from outside inherits none
+             * of it. */
+            if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) {
+                continue;
+            }
+        } else if (claim || workspace_get_anchor(ws, child) ||
             standing_row(ws, child, &st) || standing_record(ws, child, &st)) {
             /* Whether anything already speaks for the leaf — by its spelling
              * and then by its entry, in descending order of standing. The view
-             * holds it: a claim of any kind puts a row at the location, a directory
-             * row at a file's path being the [type] the directory analysis said.
-             * The record holds it: dotta managed the path and has not let go —
-             * an orphan for cleanup to prune or release, or a path `remove
-             * --delete-files` has ordered deleted and still remembers — never a
-             * discovery, and a discovery again only once the record is retired.
-             * And either of the two under another spelling of the same entry: a
-             * row or a record standing on the very file this frame joined its
-             * way to — a link no binding names, a root two profiles spell two
-             * ways, a name the volume folds — is managed or remembered however
-             * it is spelled, and offering it would commit one file twice or promise
-             * a commit of a copy cleanup is about to prune. All four are the
-             * load's own facts, built before any analysis runs
-             * (workspace_partition, index_entries), so status, sync and update
-             * read one answer whatever else each ran. The two identity probes
-             * are paid only for a child neither string claimed — the offers. */
+             * holds it: after the question above only a rung can stand here, an
+             * ancestor claim with a file in its place — the [type] the directory
+             * analysis said as a derived row — and offering it would tell a second,
+             * contradicting story about one path. The record holds it: dotta
+             * managed the path and has not let go — an orphan for cleanup to
+             * prune or release, or a path `remove --delete-files` has ordered
+             * deleted and still remembers — never a discovery, and a discovery
+             * again only once the record is retired. And either of the two under
+             * another spelling of the same entry: a row or a record standing on
+             * the very file this frame joined its way to — a link no binding
+             * names, a root two profiles spell two ways, a name the volume folds
+             * — is managed or remembered however it is spelled, and offering it
+             * would commit one file twice or promise a commit of a copy cleanup
+             * is about to prune. All four are the load's own facts, built before
+             * any analysis runs (workspace_partition, index_entries), so status,
+             * sync and update read one answer whatever else each ran. The two
+             * identity probes are paid only for a child neither string claimed
+             * — the offers. */
             continue;
         }
 
@@ -2972,12 +3001,21 @@ static error_t *analyze_untracked_files(
     for (size_t r = 0; r < root_count; r++) {
         const scan_root_t *root = &roots[r];
 
-        /* The same question at a root the driver reached directly: an independent
+        /* A blob the view holds at this directory or over it, asked once for
+         * the whole walk beneath it: an offer under a blob is one no apply can
+         * place, whoever would name it, and committing it turns a view-versus-disk
+         * conflict the user can resolve into a view-versus-view one only `remove`
+         * can. Said on its own screen rather than here — the file analysis stands
+         * the [type] at the blob's own path, with the remedies beside it. The
+         * same question at a root the driver reached directly: an independent
          * scan root beneath a file claim is as much beneath it as a child the
          * walk would have stopped at. An owner that cannot be enumerated is not
          * replaced: the directory stays a boundary and is not scanned, whatever
          * a lower row standing at it under a cleaner spelling could have offered
-         * — the view's word about the directory is its owner's. */
+         * — the view's word about the directory is its owner's. The walk beneath
+         * inherits this answer and climbs nothing of its own: it asks the view
+         * at each child's own key, and every rung over that key is this one
+         * (scan_directory_for_untracked). */
         const manifest_row_t *blob = NULL;
         err = blob_over(ws->manifest, root->directory, ws->arena, &blob);
         if (err) goto cleanup;

@@ -20,6 +20,7 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
+#include "core/profiles.h"
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
@@ -448,84 +449,6 @@ static error_t *present_diffs_for_direction(
     }
 
     return NULL;
-}
-
-/**
- * Resolve commit reference across enabled profiles
- *
- * Searches for the commit in enabled profiles in order. Returns the first match
- * found.
- *
- * @param repo Repository (must not be NULL)
- * @param profiles Selected profiles to search (must not be NULL)
- * @param commit_ref Commit reference (must not be NULL)
- * @param out_commit Resolved commit object (must not be NULL, caller must free)
- * @param out_profile Found profile name (can be NULL, caller must free)
- * @return Error or NULL on success
- */
-static error_t *resolve_commit_in_profiles(
-    git_repository *repo,
-    const string_array_t *profiles,
-    const char *commit_ref,
-    git_commit **out_commit,
-    char **out_profile
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(profiles);
-    CHECK_NULL(commit_ref);
-    CHECK_NULL(out_commit);
-
-    error_t *last_err = NULL;
-
-    /* Search profiles in order */
-    for (size_t i = 0; i < profiles->count; i++) {
-        const char *profile = profiles->items[i];
-
-        error_t *err = gitops_resolve_commit_in_branch(
-            repo, profile, commit_ref, out_commit
-        );
-
-        if (!err) {
-            /* Found it! */
-            if (out_profile) {
-                *out_profile = strdup(profile);
-
-                if (!*out_profile) {
-                    if (out_commit && *out_commit) {
-                        git_commit_free(*out_commit);
-                        *out_commit = NULL;
-                    }
-                    return ERROR(
-                        ERR_MEMORY, "Failed to allocate profile name"
-                    );
-                }
-            }
-            if (last_err) {
-                error_free(last_err);
-            }
-            return NULL;
-        }
-
-        /* Save last error for reporting if we don't find anything */
-        if (last_err) {
-            error_free(last_err);
-        }
-        last_err = err;
-    }
-
-    /* Not found in any profile */
-    if (last_err) {
-        error_t *wrapped = error_wrap(
-            last_err, "Commit '%s' not found in any enabled profile",
-            commit_ref
-        );
-        return wrapped;
-    }
-
-    return ERROR(
-        ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile",
-        commit_ref
-    );
 }
 
 /**
@@ -1006,16 +929,17 @@ static error_t *diff_commit_to_workspace(
 
     error_t *err = NULL;
     git_commit *commit = NULL;
-    char *profile = NULL;
+    const char *profile = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
     manifest_t *historical = NULL;
     manifest_rows_t tree_files = { 0 };
     manifest_rows_t tree_dirs = { 0 };
 
-    /* Step 1: Resolve commit to find which profile contains it */
-    err = resolve_commit_in_profiles(
-        repo, profiles, commit_ref, &commit, &profile
-    );
+    /* Step 1: Resolve commit to find which profile contains it. The search is
+     * the enabled set's and answers for every profile ahead of the holder, so a
+     * profile that will not read cancels the diff rather than let a later one
+     * answer in its place (core/profiles.h). */
+    err = profile_resolve_commit(repo, profiles, commit_ref, &commit, &profile);
     if (err) {
         goto cleanup;
     }
@@ -1121,7 +1045,6 @@ cleanup:
     manifest_free(historical);
     git_tree_free(tree);
     git_commit_free(commit);
-    free(profile);
 
     return err;
 }
@@ -1236,22 +1159,24 @@ static error_t *diff_commits(
     error_t *err = NULL;
     git_commit *commit1 = NULL;
     git_commit *commit2 = NULL;
-    char *profile1_name = NULL;
-    char *profile2_name = NULL;
+    /* Both borrowed from the enabled set, which outlives this call. */
+    const char *profile1_name = NULL;
+    const char *profile2_name = NULL;
     git_tree *tree1 = NULL;
     git_tree *tree2 = NULL;
     git_diff *diff = NULL;
 
-    /* Resolve first commit */
-    err = resolve_commit_in_profiles(
+    /* Resolve each end in the enabled set, the search answering for every profile
+     * ahead of the holder (core/profiles.h): a profile that will not read cancels
+     * the range rather than let a later one answer for it. */
+    err = profile_resolve_commit(
         repo, profiles, commit1_ref, &commit1, &profile1_name
     );
     if (err) {
         goto cleanup;
     }
 
-    /* Resolve second commit */
-    err = resolve_commit_in_profiles(
+    err = profile_resolve_commit(
         repo, profiles, commit2_ref, &commit2, &profile2_name
     );
     if (err) {
@@ -1357,8 +1282,6 @@ cleanup:
     if (tree1) git_tree_free(tree1);
     if (commit2) git_commit_free(commit2);
     if (commit1) git_commit_free(commit1);
-    if (profile2_name) free(profile2_name);
-    if (profile1_name) free(profile1_name);
 
     return err;
 }

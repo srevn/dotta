@@ -431,7 +431,12 @@ error_t *gitops_get_commit(
  * not decide — and each is ERR_GIT under a sentence naming both the rung and
  * the branch. A caller therefore adds nothing by restating the subject: a wrap
  * saying "not found" over one of them would name a fate this function did not
- * reach.
+ * reach. Readers, none of which wraps: export.c cmd_export (the refspec's
+ * @commit), revert.c cmd_revert (the commit reverted to), show.c show_source
+ * and cmd_show (a file's tree, and a commit shown under a named profile), and
+ * profiles.c profile_resolve_commit, which asks a whole set and is the one reader
+ * that reads the code — ERR_NOT_FOUND meaning "not this branch's, ask the next"
+ * and every other code ending its search.
  *
  * The commit is the whole answer, and its OID is read off it (git_commit_id):
  * nothing is handed back beside it, so no caller holds two views of one fact

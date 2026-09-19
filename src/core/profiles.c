@@ -392,6 +392,58 @@ cleanup:
 }
 
 /**
+ * Which enabled profile holds a commit
+ */
+error_t *profile_resolve_commit(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const char *commit_ref,
+    git_commit **out_commit,
+    const char **out_profile
+) {
+    CHECK_NULL(repo);
+    CHECK_NULL(enabled);
+    CHECK_NULL(commit_ref);
+    CHECK_NULL(out_commit);
+    CHECK_NULL(out_profile);
+
+    for (size_t i = 0; i < enabled->count; i++) {
+        const char *profile = enabled->items[i];
+        git_commit *commit = NULL;
+
+        error_t *err = gitops_resolve_commit_in_branch(
+            repo, profile, commit_ref, &commit
+        );
+
+        if (!err) {
+            /* Nothing is published until a profile answers. */
+            *out_commit = commit;
+            *out_profile = profile;
+            return NULL;
+        }
+
+        /* ERR_NOT_FOUND is this profile's own answer — the commit is not its,
+         * and the search moves on. Every other code is a rung of the resolution
+         * that could not be made (sys/gitops.h), and it ends the search where
+         * it stands, whatever a later profile would have said: what comes back
+         * is the first holder in precedence order, a claim about every profile
+         * ahead of it, and a branch that would not read is one the claim cannot
+         * be made over. */
+        if (error_code(err) != ERR_NOT_FOUND) {
+            return err;
+        }
+
+        error_free(err);
+    }
+
+    /* Every profile was asked, and each said the commit is not its. No cause
+     * under it: one profile's sentence is not this one's. */
+    return ERROR(
+        ERR_NOT_FOUND, "Commit '%s' not found in any enabled profile", commit_ref
+    );
+}
+
+/**
  * Compose a tree entry's storage path, and say whether the walk should see it
  *
  * Every walk over a profile tree below asks an entry the same three things: is

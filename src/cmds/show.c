@@ -445,31 +445,28 @@ static int print_diff_line_cb(
 
 /**
  * Show commit with diff
+ *
+ * A commit already resolved, and the profile it was resolved in: whichever arm
+ * of cmd_show named the profile did the resolving, so nothing here can fail with
+ * the absence a search reads as "try the next profile" (core/profiles.h
+ * profile_resolve_commit). Both are borrowed — the commit is the caller's to free.
  */
 static error_t *show_commit(
     git_repository *repo,
-    const char *commit_ref,
+    const git_commit *commit,
     const char *profile,
     output_t *out
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(commit_ref);
+    CHECK_NULL(commit);
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    git_commit *commit = NULL;
     git_tree *commit_tree = NULL;
     git_tree *parent_tree = NULL;
     git_diff *diff = NULL;
     git_diff_stats *stats = NULL;
-
-    /* Resolve commit in profile. The resolution names both the commit and the
-     * branch in every fate it has (sys/gitops.h), so there is nothing to restate
-     * here — and the sentence that used to stand over it said "not found" of an
-     * ancestry the walk could not read. */
-    err = gitops_resolve_commit_in_branch(repo, profile, commit_ref, &commit);
-    if (err) goto cleanup;
 
     /* Get commit tree — from the commit in hand, not by a second lookup */
     int ret = git_commit_tree(&commit_tree, commit);
@@ -590,7 +587,6 @@ cleanup:
     if (diff) git_diff_free(diff);
     if (parent_tree) git_tree_free(parent_tree);
     if (commit_tree) git_tree_free(commit_tree);
-    if (commit) git_commit_free(commit);
 
     return err;
 }
@@ -620,8 +616,22 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     if (opts->mode == SHOW_COMMIT) {
         CHECK_NULL(opts->commit);
 
-        if (!profile) {
-            /* No profile specified - use enabled profiles */
+        /* The commit, resolved before anything of it is printed: a profile named
+         * settles which branch it is looked for in, and without one the enabled
+         * set answers as a whole — the first holder in precedence order, and a
+         * profile that will not read ends that search rather than let a later
+         * one answer in its place (core/profiles.h profile_resolve_commit). Either
+         * way the printer below is handed a commit and a profile, and no rung
+         * of it can be mistaken for "not this profile's, try the next". */
+        if (profile) {
+            err = profile_require(repo, profile);
+            if (err) goto cleanup;
+
+            err = gitops_resolve_commit_in_branch(
+                repo, profile, opts->commit, &source
+            );
+            if (err) goto cleanup;
+        } else {
             err = profile_resolve_enabled(repo, state, &profiles);
             if (err) {
                 if (error_code(err) == ERR_NOT_FOUND) {
@@ -641,37 +651,13 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
                 goto cleanup;
             }
 
-            /* Try to find commit in enabled profiles (in order) */
-            for (size_t i = 0; i < profiles->count; i++) {
-                profile = profiles->items[i];
-                error_t *try_err = show_commit(repo, opts->commit, profile, out);
-
-                /* If found, we're done */
-                if (!try_err) {
-                    goto cleanup;
-                }
-
-                /* If error is not "commit not found", save and bail out */
-                if (try_err->code != ERR_NOT_FOUND) {
-                    err = try_err;
-                    goto cleanup;
-                }
-
-                error_free(try_err);
-            }
-
-            err = ERROR(
-                ERR_NOT_FOUND, "Commit '%s' not found in enabled profiles",
-                opts->commit
+            err = profile_resolve_commit(
+                repo, profiles, opts->commit, &source, &profile
             );
-            goto cleanup;
+            if (err) goto cleanup;
         }
 
-        /* Profile specified - show commit from that profile */
-        err = profile_require(repo, profile);
-        if (err) goto cleanup;
-
-        err = show_commit(repo, opts->commit, profile, out);
+        err = show_commit(repo, source, profile, out);
         goto cleanup;
     }
 

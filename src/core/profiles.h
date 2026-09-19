@@ -131,6 +131,52 @@ error_t *profile_resolve_enabled(
 );
 
 /**
+ * The enabled profile that holds a commit, and the commit
+ *
+ * The set is asked in the order it is given — the enabled set's precedence order
+ * at both readers — and the first profile the commit is reachable from is the
+ * answer. A profile behind that one is never asked: the order has already decided.
+ *
+ * Answered for every profile ahead of the answer, or an error. ERR_NOT_FOUND is
+ * one profile's own answer — the commit is not its — and the search moves on;
+ * every other code is a rung of the resolution that could not be made, arriving
+ * under a sentence that names both the rung and the branch (sys/gitops.h), and
+ * it ends the search where it stands, whatever a later profile would have said.
+ * The asymmetry is the whole of the rule: what comes back is the first holder
+ * *in precedence order*, which is a claim about every profile ahead of it, and
+ * a branch that would not read is one the claim cannot be made over — where a
+ * profile after the holder was never part of the answer. This is the first-match
+ * shape of what the complete searches beside it promise (profile_discover_claims:
+ * a falsely unique answer is one a verb acts on).
+ *
+ * Absence is every profile's: ERR_NOT_FOUND naming the commit, with no cause
+ * under it, because one profile's sentence is not this one's. An empty set is
+ * that same absence; both readers refuse an empty enabled set in their own words
+ * before they ask.
+ *
+ * Readers: diff.c diff_commit_to_workspace and diff_commits (the workspace arm,
+ * and both ends of a range), show.c cmd_show (a commit named with no profile).
+ * A caller that names the profile resolves in it directly
+ * (gitops_resolve_commit_in_branch) — the question there is not which profile.
+ *
+ * @param repo Repository (must not be NULL)
+ * @param enabled Profile names, asked in this order (must not be NULL)
+ * @param commit_ref Commit reference (must not be NULL)
+ * @param out_commit The resolved commit (must not be NULL, caller must free with
+ *                   git_commit_free); its OID is git_commit_id's
+ * @param out_profile The profile that holds it (must not be NULL; borrowed from
+ *                    `enabled`, valid for as long as it is)
+ * @return Error (ERR_NOT_FOUND when no profile holds it) or NULL on success
+ */
+error_t *profile_resolve_commit(
+    git_repository *repo,
+    const string_array_t *enabled,
+    const char *commit_ref,
+    git_commit **out_commit,
+    const char **out_profile
+);
+
+/**
  * Is there a profile of this name here, or refuse
  *
  * The refusing shape of gitops_branch_exists, for the verbs whose only use of

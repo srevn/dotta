@@ -48,9 +48,16 @@ static error_t *judge(
     compare_result_t *result
 ) {
     if (ref->content) {
-        /* Re-check size: file may have changed between stat and read */
+        /* Re-check size: file may have changed between stat and read. Two empty
+         * byte sequences are equal, and nothing is asked of a pointer to say
+         * so: an empty blob's buffer carries no pointer at all (infra/content.c
+         * get_plaintext_from_blob leaves it cleared for a zero-length blob),
+         * and memcmp is undefined over a null pointer even across zero bytes —
+         * which every tracked empty file this repository holds would ask it to
+         * do. */
         bool equal = (copy->size == ref->content->size) &&
-            (memcmp(ref->content->data, copy->data, copy->size) == 0);
+            (copy->size == 0 ||
+            memcmp(ref->content->data, copy->data, copy->size) == 0);
         *result = equal ? CMP_EQUAL : CMP_DIFFERENT;
         return NULL;
     }

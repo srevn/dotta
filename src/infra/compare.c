@@ -91,7 +91,8 @@ static error_t *judge(
  * — one mistake, answered by what happened to stand at the path.
  */
 static error_t *validate_mode(git_filemode_t expected_mode) {
-    if (expected_mode != GIT_FILEMODE_LINK && expected_mode != GIT_FILEMODE_BLOB &&
+    if (expected_mode != GIT_FILEMODE_LINK &&
+        expected_mode != GIT_FILEMODE_BLOB &&
         expected_mode != GIT_FILEMODE_BLOB_EXECUTABLE) {
         return ERROR(ERR_INTERNAL, "Unsupported git filemode: %d", expected_mode);
     }
@@ -292,6 +293,10 @@ error_t *compare_oid_to_disk(
 
 /**
  * Diff line callback - accumulates diff output into a buffer_t payload
+ *
+ * The payload is the one buffer generate_text_diff hands git_diff_buffers, passed
+ * back through untouched, so nothing here re-asks what that one call site
+ * established.
  */
 static int diff_line_callback(
     const git_diff_delta *delta,
@@ -304,10 +309,6 @@ static int diff_line_callback(
     /* Suppress unused parameter warnings */
     (void) delta;
     (void) hunk;
-
-    if (!output) {
-        return -1;
-    }
 
     /* Skip EOFNL lines — the manual marker below handles "no newline at end
      * of file" for all line types.  Letting EOFNL lines through would

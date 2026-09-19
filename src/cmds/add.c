@@ -1591,10 +1591,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * that answers where the store's own files sit (utils/repo.h), which
      * core/workspace.c's scan reads too. Not `repo_path`, which is in scope one
      * line from `repo` and is the wrong answer for a store a hand made
-     * (add_walk_t). Read by the target's validator first — no binding reaches
-     * the store — and by the walk after. Fatal: a store that will not stat has
-     * already failed the open, and a walk that ran carrying no identity for it
-     * would be this rule silently disarmed. */
+     * (add_walk_t). Read by the walk alone. Fatal: a store that will not stat
+     * has already failed the open, and a walk that ran carrying no identity for
+     * it would be this rule silently disarmed. */
     const char *store_path = git_repository_path(repo);
     struct stat store;
     if (fs_stat(store_path, &store) != 0) {
@@ -1610,7 +1609,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (opts->target) {
         err = path_input_locate(opts->target, ctx->arena, &target);
         if (err) goto cleanup;
-        err = mount_validate_target(target, walk.store_dev, walk.store_ino);
+        err = mount_validate_target(target);
         if (err) goto cleanup;
 
         /* Refuse a silent move, before the commit it would have shaped. A branch

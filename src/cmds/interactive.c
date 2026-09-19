@@ -8,7 +8,6 @@
 
 #include "cmds/interactive.h"
 
-#include <errno.h>
 #include <limits.h>
 #include <runtime.h>
 #include <stdbool.h>
@@ -16,7 +15,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 #include "base/arena.h"
 #include "base/array.h"
@@ -29,7 +27,6 @@
 #include "core/state.h"
 #include "infra/mount.h"
 #include "infra/path.h"
-#include "sys/filesystem.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 
@@ -543,24 +540,14 @@ static error_t *plan_classify(
  * without it is a normal lifecycle stage the health channel names (core/manifest.h
  * manifest_unbound) — the OFF→ON prompt asks for a target, a row already enabled
  * without one keeps that, and nothing downstream refuses either. No second guard
- * here.
- *
- * The validator's last rule needs dotta's own store — the one directory no binding
- * may reach — as the walkers take it (utils/repo.h): the directory the state
- * opened its database beside, stat'd once per save. Fatal, as their stat is: a
- * store that will not stat has already failed the open. */
-static error_t *plan_validate(git_repository *repo, const plan_t *plan) {
-    struct stat store;
-    if (fs_stat(git_repository_path(repo), &store) != 0) {
-        return error_from_errno(errno, "Failed to stat the store");
-    }
-
+ * here. */
+static error_t *plan_validate(const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;
         const item_t *it = plan->new_order_items[i];
         if (!it->target) continue;
 
-        error_t *err = mount_validate_target(it->target, store.st_dev, store.st_ino);
+        error_t *err = mount_validate_target(it->target);
         if (err) {
             return error_wrap(
                 err, "Invalid deployment target for profile '%s'", it->name
@@ -645,7 +632,7 @@ static error_t *save_order(
     err = plan_classify(arena, deploy_state, &plan);
     if (err) goto rollback;
 
-    err = plan_validate(repo, &plan);
+    err = plan_validate(&plan);
     if (err) goto rollback;
 
     err = plan_apply(deploy_state, &plan);

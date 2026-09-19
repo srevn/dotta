@@ -18,7 +18,7 @@
 #include "sys/filesystem.h"
 #include "sys/identity.h"
 
-error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_ino) {
+error_t *mount_validate_target(const char *target) {
     CHECK_NULL(target);
 
     /* The shape: absolute and folded, as the normalizer spells every argument
@@ -60,21 +60,6 @@ error_t *mount_validate_target(const char *target, dev_t store_dev, ino_t store_
     if (!S_ISDIR(st.st_mode)) {
         return ERROR(
             ERR_INVALID_ARG, "Target must be a directory: '%s'", target
-        );
-    }
-
-    /* The store: the one directory no binding may reach, however it is spelled.
-     * A profile's custom/ tree deployed there lands over the store's own files
-     * — measured: one `apply --force` wrote a profile's blob over `config`, and
-     * every verb then read "not a dotta store". By identity, off the stat above:
-     * a link to it reaches it, and a second spelling is the same directory. No
-     * remedy is named, as the walkers name none (cmds/add.c): the store has no
-     * inside a profile may hold. */
-    if (st.st_dev == store_dev && st.st_ino == store_ino) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Target '%s' is dotta's own store, and a profile holds no part of it",
-            target
         );
     }
 

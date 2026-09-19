@@ -1156,15 +1156,26 @@ static error_t *analyze_file_divergence(
                 workspace_record_confirmation(ws, row, anchor, &file_stat);
             }
 
-            /* Second question — ours vs base — asked only when it can change
-             * the verdict: Git moved, and the stat triple did not vouch for disk
-             * (touch(1), an editor's rename-write, a fresh checkout) although
-             * disk content may still be the blob dotta last deployed.
+            /* Second question — ours vs base — asked once, where it can change
+             * the verdict: Git moved, and the first question found a difference
+             * (of bytes or of kind) although the stat triple did not vouch for
+             * disk (touch(1), an editor's rename-write, a fresh checkout) and
+             * disk may still be the copy dotta last deployed. git_moved carries
+             * both halves of the gate: without a base there is no second question,
+             * and a base equal to theirs deduces the answer from the first.
              *
-             * Route the base comparison by the base blob's own bytes.
+             * Route the base comparison by the base blob's own kind and its own
+             * bytes — each question is put to the side it compares against, where
+             * the first is put under the row's. The kind is what makes the two
+             * verdicts one: a base the row has since retyped is a link where a
+             * file now stands, and reading disk as the row's kind hashes a regular
+             * file the user wrote against the link's target — Git hashes a target
+             * exactly as it hashes content — and calls it exactly what dotta
+             * deployed. One place asks it, because two askers of one fact can
+             * disagree, and the kind is where these two did.
              *
-             * The latent bug class this avoids: routing on row->encrypted silently
-             * miscategorised the staleness check across encryption-policy
+             * The latent bug class the bytes avoid: routing on row->encrypted
+             * silently miscategorised the staleness check across encryption-policy
              * transitions. Both directions failed:
              *   - encrypted base / plaintext current → compare_oid_to_disk hashed
              *     plaintext disk against an encrypted-blob OID, never equal,
@@ -1177,18 +1188,19 @@ static error_t *analyze_file_divergence(
              * decision lives with the blob whose comparison we are doing. A
              * routing-on-stale-flag bug is structurally impossible.
              *
-             * A failed or inconclusive compare leaves disk_at_base false: the
+             * A failed look answers nothing and leaves disk_at_base false: the
              * edit is taken as real (CONTENT), the conservative answer — STALE
              * still holds, because git_moved is a fact about two OIDs. A failed
              * look on a released base retires nothing: only the sweep and the
              * join forget rows, and neither reads compare results. */
-            if (cmp_result == CMP_DIFFERENT && git_moved) {
-                compare_result_t at_base = CMP_UNVERIFIED;
+            if (git_moved &&
+                (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
+                compare_result_t at_base;
                 error_t *verify_err = content_compare_blob_to_disk(
                     ws->repo,
                     base_blob,
                     fs_path,
-                    expected_filemode,
+                    path_type_to_git_filemode(base_type),
                     &initial_stat,
                     base_storage,
                     base_profile,
@@ -1196,8 +1208,12 @@ static error_t *analyze_file_divergence(
                     &at_base,
                     NULL
                 );
-                if (verify_err) error_free(verify_err);
-                disk_at_base = (at_base == CMP_EQUAL);
+
+                if (verify_err) {
+                    error_free(verify_err);
+                } else {
+                    disk_at_base = (at_base == CMP_EQUAL);
+                }
             }
         }
 
@@ -1218,32 +1234,14 @@ static error_t *analyze_file_divergence(
                 /* The occupant is not the row's kind (file ↔ symlink, or a
                  * directory, FIFO, socket or device standing on the row). When
                  * Git moved the kind out from under an untouched deployment,
-                 * the second question — asked against the base, routed by the
-                 * base's own kind — answers it: an occupant that is exactly what
-                 * dotta confirmed, kind and content, diverges by Git's move alone.
-                 * STALE, the fast path's answer for the same state when the triple
-                 * vouches for it; the base's kind is what keeps the two paths
-                 * agreeing — the module's invariant that the verdict must not
-                 * depend on which path looked rests on this routing. */
-                if (git_moved) {
-                    compare_result_t at_base = CMP_UNVERIFIED;
-                    error_t *verify_err = content_compare_blob_to_disk(
-                        ws->repo,
-                        base_blob,
-                        fs_path,
-                        path_type_to_git_filemode(base_type),
-                        &initial_stat,
-                        base_storage,
-                        base_profile,
-                        ws->content_cache,
-                        &at_base,
-                        NULL
-                    );
-                    if (verify_err) error_free(verify_err);
-                    if (at_base == CMP_EQUAL) {
-                        divergence |= DIVERGENCE_STALE;
-                        break;
-                    }
+                 * the second question above answers it: an occupant that is exactly
+                 * what dotta confirmed, kind and content, diverges by Git's move
+                 * alone. STALE, the fast path's answer for the same state when
+                 * the triple vouches for it — the two paths agree because both
+                 * read one question, asked under the base's own kind. */
+                if (disk_at_base) {
+                    divergence |= DIVERGENCE_STALE;
+                    break;
                 }
 
                 /* Anything else is a blocking condition: return immediately with

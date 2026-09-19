@@ -335,7 +335,7 @@ static error_t *show_file_diff_from_workspace(
     compare_direction_t cmp_dir = (direction == DIFF_UPSTREAM)
                                 ? CMP_DIR_UPSTREAM : CMP_DIR_DOWNSTREAM;
 
-    file_diff_t *diff = NULL;
+    file_diff_t diff = { 0 };
     err = compare_generate_diff(
         content, item->filesystem_path, file->storage_path, mode, NULL,
         cmp_dir, &diff
@@ -348,12 +348,10 @@ static error_t *show_file_diff_from_workspace(
         );
     }
 
-    if (diff) {
-        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-        output_print_diff(out, diff->diff_text);
-    }
+    output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+    output_print_diff(out, diff.diff_text);
 
-    compare_free_diff(diff);
+    compare_free_diff(&diff);
 
     return NULL;
 }
@@ -728,8 +726,6 @@ static error_t *compare_tree_files_to_filesystem(
     CHECK_NULL(diff_count);
 
     *diff_count = 0;
-    error_t *err = NULL;
-    file_diff_t *diff = NULL;
 
     /* Iterate through all files in the historical slice */
     for (size_t i = 0; i < files.count; i++) {
@@ -759,14 +755,13 @@ static error_t *compare_tree_files_to_filesystem(
 
             /* Get content from historical commit (cached) */
             const buffer_t *hist_content = NULL;
-            err = content_cache_get_from_blob_oid(
+            error_t *err = content_cache_get_from_blob_oid(
                 cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
             );
             if (err) {
-                err = error_wrap(
+                return error_wrap(
                     err, "Failed to get historical content for '%s'", fs_path
                 );
-                goto cleanup;
             }
 
             /* Compare with filesystem */
@@ -775,8 +770,7 @@ static error_t *compare_tree_files_to_filesystem(
                 hist_content, fs_path, mode, NULL, &result, NULL
             );
             if (err) {
-                err = error_wrap(err, "Failed to compare '%s'", fs_path);
-                goto cleanup;
+                return error_wrap(err, "Failed to compare '%s'", fs_path);
             }
 
             if (result != CMP_EQUAL) {
@@ -788,15 +782,14 @@ static error_t *compare_tree_files_to_filesystem(
 
         /* Full diff output */
         const buffer_t *hist_content = NULL;
-        err = content_cache_get_from_blob_oid(
+        error_t *err = content_cache_get_from_blob_oid(
             cache, &entry->blob_oid, mode, storage_path, profile, &hist_content
         );
         if (err) {
-            err = error_wrap(
+            return error_wrap(
                 err, "Failed to get historical content for '%s'",
                 fs_path
             );
-            goto cleanup;
         }
 
         /* Compare with filesystem */
@@ -805,11 +798,7 @@ static error_t *compare_tree_files_to_filesystem(
             hist_content, fs_path, mode, NULL, &result, NULL
         );
         if (err) {
-            err = error_wrap(
-                err, "Failed to compare '%s'",
-                fs_path
-            );
-            goto cleanup;
+            return error_wrap(err, "Failed to compare '%s'", fs_path);
         }
 
         /* Skip if identical */
@@ -863,28 +852,23 @@ static error_t *compare_tree_files_to_filesystem(
             continue;
         }
 
+        file_diff_t diff = { 0 };
         err = compare_generate_diff(
             hist_content, fs_path, storage_path, mode, NULL,
             CMP_DIR_DOWNSTREAM, &diff
         );
         if (err) {
-            err = error_wrap(err, "Failed to generate diff for '%s'", fs_path);
-            goto cleanup;
+            return error_wrap(err, "Failed to generate diff for '%s'", fs_path);
         }
 
-        if (diff) {
-            output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-            output_print_diff(out, diff->diff_text);
-        }
+        output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
+        output_print_diff(out, diff.diff_text);
 
-        compare_free_diff(diff);
-        diff = NULL;
+        compare_free_diff(&diff);
         (*diff_count)++;
     }
 
-cleanup:
-    compare_free_diff(diff);
-    return err;
+    return NULL;
 }
 
 /**

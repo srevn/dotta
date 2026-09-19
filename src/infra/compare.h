@@ -61,12 +61,17 @@ typedef enum {
 } compare_result_t;
 
 /**
- * File diff information
+ * A rendering: the comparison's verdict, and the text for it
+ *
+ * The struct is the caller's — a stack local, cleared by compare_generate_diff
+ * once its arguments are accepted — and one thing in it is owned: `diff_text`,
+ * which compare_free_diff frees and resets. NULL there is a copy that matches;
+ * every other verdict has a text, which a caller holding its own words for that
+ * verdict may ignore.
  */
 typedef struct {
-    char *path;              /* File path */
-    compare_result_t status; /* Comparison status */
-    char *diff_text;         /* Diff output (can be NULL) */
+    compare_result_t status; /* what the comparison found */
+    char *diff_text;         /* the text for it, NULL for a match */
 } file_diff_t;
 
 /**
@@ -181,7 +186,8 @@ typedef enum {
  * @param mode Expected git filemode (for type/mode checking)
  * @param in_stat Optional pre-captured stat (can be NULL for internal lstat)
  * @param direction Diff direction
- * @param out Diff information (must not be NULL, caller must free)
+ * @param out Rendering (must not be NULL; cleared on entry, and left cleared on
+ *            failure, so freeing it is correct either way)
  * @return Error or NULL on success
  */
 error_t *compare_generate_diff(
@@ -191,13 +197,16 @@ error_t *compare_generate_diff(
     git_filemode_t mode,
     const struct stat *in_stat,
     compare_direction_t direction,
-    file_diff_t **out
+    file_diff_t *out
 );
 
 /**
- * Free diff structure
+ * Free a rendering's text and reset it
  *
- * @param diff Diff to free (can be NULL)
+ * buffer_free's shape: the contents go, the struct stays the caller's and is
+ * left as if it had never been filled. Safe on a cleared struct, and safe twice.
+ *
+ * @param diff Rendering (can be NULL)
  */
 void compare_free_diff(file_diff_t *diff);
 

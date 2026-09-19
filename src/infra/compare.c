@@ -476,39 +476,26 @@ error_t *compare_generate_diff(
     git_filemode_t mode,
     const struct stat *in_stat,
     compare_direction_t direction,
-    file_diff_t **out
+    file_diff_t *out
 ) {
     CHECK_NULL(content);
     CHECK_NULL(disk_path);
     CHECK_NULL(out);
 
-    /* Allocate diff structure */
-    file_diff_t *diff = calloc(1, sizeof(file_diff_t));
-    if (!diff) {
-        return ERROR(ERR_MEMORY, "Failed to allocate diff structure");
-    }
-
-    diff->path = strdup(disk_path);
-    if (!diff->path) {
-        free(diff);
-        return ERROR(ERR_MEMORY, "Failed to allocate path");
-    }
+    *out = (file_diff_t){ 0 };
 
     /* Perform comparison using buffer with optional stat */
     struct stat file_stat;
-    error_t *err = compare_buffer_to_disk(
-        content, disk_path, mode, in_stat, &diff->status, &file_stat
+    RETURN_IF_ERROR(
+        compare_buffer_to_disk(
+        content, disk_path, mode, in_stat, &out->status, &file_stat
+        )
     );
-    if (err) {
-        free(diff->path);
-        free(diff);
-        return err;
-    }
 
     /* Generate diff text based on status */
-    if (diff->status == CMP_MISSING) {
-        diff->diff_text = strdup("File not deployed on disk");
-    } else if (diff->status == CMP_TYPE_DIFF) {
+    if (out->status == CMP_MISSING) {
+        out->diff_text = strdup("File not deployed on disk");
+    } else if (out->status == CMP_TYPE_DIFF) {
         /* Type mismatch - describe what's different using captured stat */
         const char *expected = (mode == GIT_FILEMODE_LINK) ? "symlink" : "regular file";
         const char *actual = "unknown";
@@ -519,52 +506,48 @@ error_t *compare_generate_diff(
         }
 
         if (asprintf(
-            &diff->diff_text,
+            &out->diff_text,
             "Type mismatch: expected %s, found %s", expected, actual
             ) < 0) {
-            diff->diff_text = NULL;
+            out->diff_text = NULL;
         }
-    } else if (diff->status == CMP_DIFFERENT) {
+    } else if (out->status == CMP_DIFFERENT) {
         /* Generate actual unified diff */
         if (mode == GIT_FILEMODE_LINK) {
             /* Symlink diff - use buffer directly */
-            err = generate_symlink_diff(
-                content, disk_path, direction, &diff->diff_text
+            RETURN_IF_ERROR(
+                generate_symlink_diff(
+                content, disk_path, direction, &out->diff_text
+                )
             );
         } else {
             /* Regular file diff - use in-memory buffer diff */
-            err = generate_text_diff(
-                content, disk_path, path_label, direction, &diff->diff_text
+            RETURN_IF_ERROR(
+                generate_text_diff(
+                content, disk_path, path_label, direction, &out->diff_text
+                )
             );
-        }
-
-        if (err) {
-            free(diff->path);
-            free(diff);
-            return err;
         }
 
         /* Binary files: libgit2 skips the line callback entirely when it detects
          * binary content, so generate_text_diff returns NULL. Provide an explicit
          * message rather than silent empty output. */
-        if (!diff->diff_text) {
-            diff->diff_text = strdup("Binary files differ");
+        if (!out->diff_text) {
+            out->diff_text = strdup("Binary files differ");
         }
     }
 
-    *out = diff;
     return NULL;
 }
 
 /**
- * Free diff structure
+ * Free a rendering's text and reset it
  */
 void compare_free_diff(file_diff_t *diff) {
     if (!diff) {
         return;
     }
 
-    free(diff->path);
     free(diff->diff_text);
-    free(diff);
+    *diff = (file_diff_t){ 0 };
 }

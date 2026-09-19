@@ -166,11 +166,11 @@ typedef enum {
  * the ask is of proper ancestors, so a squatter is never its own answer and carries
  * its own TYPE verdict instead.
  *
- * Noted by each analysis where it observed the squatter (note_displaced) and
- * assigned at birth by the one producer of items (workspace_add_diverged), from
- * the same scan the analyzers ask before every look (workspace.c
- * displaced_ancestor) — so the class is total, and the two halves meet: an item
- * that carries one is an item with nothing measured.
+ * Noted by the phase that looked at the squatted path, where it looked
+ * (note_displaced), and assigned at birth by the one producer of items
+ * (workspace_add_diverged), from the same scan the analyzers ask before every
+ * look (workspace.c displaced_ancestor) — so the class is total, and the two
+ * halves meet: an item that carries one is an item with nothing measured.
  *
  * The words on screen, so the sentences cannot drift apart again: the directory
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
@@ -644,8 +644,9 @@ typedef struct {
  * the filesystem:
  * - The view: every enabled profile's tree and metadata at HEAD
  * - The record: the path_anchors in the store's dotta.db
- * - The filesystem: one look per row, either kind — and none beneath a squatter
- *   (workspace_displaced_t)
+ * - The filesystem: one look per row, either kind, and one per record the view
+ *   lacks where a reader asks for it — and none beneath a squatter that reaches
+ *   the asker (workspace_displaced_t)
  *
  * The join is every load's and no caller's to decline: the view's directory rows,
  * then its file rows. Both kinds, because a kind nobody analyzed has no item at
@@ -854,12 +855,12 @@ const manifest_row_t *workspace_lookup(
  * The record's claims do not qualify here: a directory only a record remembers
  * displaces the record's own family alone (the reach rule, workspace_displaced_t),
  * and every item of that family carries the fact on itself. This probe is for a
- * caller holding a path and no item: the entries index (workspace.c index_entries),
- * the scan's roots (analyze_untracked_files), the fate of a planned row
- * (core/deploy.c check_ancestry) and the released-copies sweep (cmds/apply.c
- * cmd_apply). A view row beneath a record-remembered squatter is the
- * through-capture the rule leaves to its own occupant. So the answer is the view's
- * claims alone, and on an item it is exactly that item's displaced field.
+ * caller holding a path and no item: the scan's roots (workspace.c
+ * analyze_untracked_files), the fate of a planned row (core/deploy.c
+ * check_ancestry) and the released-copies sweep (cmds/apply.c cmd_apply). A view
+ * row beneath a record-remembered squatter is the through-capture the rule leaves
+ * to its own occupant. So the answer is the view's claims alone, and on an item
+ * it is exactly that item's displaced field.
  *
  * The answer is noted by the analyses where they observed each squatter
  * (note_displaced), and the directory analysis runs before any file row, orphan

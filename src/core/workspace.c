@@ -341,8 +341,8 @@ static workspace_fault_t fault_class(error_code_t code) {
  * Called at the two folds that hold an error of the look they just made —
  * analyze_file_divergence's look at the content, analyze_orphans' measure. The
  * four that hold an errno instead reach fault_class directly:
- * analyze_file_divergence and analyze_directory_metadata_divergence at their
- * lstat, analyze_orphans at its own and at a directory's access check.
+ * analyze_file_divergence and analyze_directories_divergence at their lstat,
+ * analyze_orphans at its own and at a directory's access check.
  */
 static workspace_fault_t fault_of(error_t *err) {
     workspace_fault_t fault = fault_class(error_code(error_root(err)));
@@ -372,10 +372,9 @@ static workspace_fault_t fault_of(error_t *err) {
  * Empty on every healthy load, which is what makes every ask free.
  *
  * Readers: the three analyzers, before every look they take
- * (analyze_file_divergence, analyze_directory_metadata_divergence,
- * analyze_orphans), workspace_add_diverged, which classes the fact onto every
- * item, and workspace_displaced_ancestor, the view-only face for a path with no
- * item in hand.
+ * (analyze_file_divergence, analyze_directories_divergence, analyze_orphans),
+ * workspace_add_diverged, which classes the fact onto every item, and
+ * workspace_displaced_ancestor, the view-only face for a path with no item in hand.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
@@ -737,7 +736,7 @@ static void workspace_record_observation(
  * with one.
  *
  * Readers: displaced_ancestor, asked before every look the load takes
- * (analyze_file_divergence, analyze_directory_metadata_divergence,
+ * (analyze_file_divergence, analyze_directories_divergence,
  * analyze_orphans) and by the one producer of items (workspace_add_diverged);
  * and through workspace_displaced_ancestor by index_entries,
  * analyze_untracked_files' roots, core/deploy.c check_ancestry and cmds/apply.c's
@@ -3019,7 +3018,7 @@ cleanup:
 }
 
 /**
- * Analyze directory metadata for divergence
+ * Analyze divergence for every active directory row
  *
  * Detects, for every directory row:
  * - DELETED state: Directory removed from filesystem
@@ -3041,7 +3040,7 @@ cleanup:
  * construction a directory row of the view. No scope checks: the class is the
  * only thing this loop asks of a row beyond its path.
  */
-static error_t *analyze_directory_metadata_divergence(workspace_t *ws) {
+static error_t *analyze_directories_divergence(workspace_t *ws) {
     CHECK_NULL(ws);
 
     error_t *err = NULL;
@@ -3513,10 +3512,10 @@ error_t *workspace_load(
     /* The join: the view's directory rows; notes the displaced directories a
      * claim of the view holds */
     if (options->analyze_directories) {
-        err = analyze_directory_metadata_divergence(ws);
+        err = analyze_directories_divergence(ws);
         if (err) {
             workspace_free(ws);
-            return error_wrap(err, "Failed to analyze directory metadata");
+            return error_wrap(err, "Failed to analyze directory divergence");
         }
     }
 

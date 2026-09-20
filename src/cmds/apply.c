@@ -2137,6 +2137,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (adopt) adopted_count++;
         else if (reassigns) acknowledged_count++;
     }
+
+    /* What the run's reading of the present has to say, in one block: the rows
+     * it claimed, the files Git has moved under it, the work its flags withheld.
+     * One boundary above the three, asked here and paid by whichever of them is
+     * the first to print — a block that says nothing leaves the debt standing
+     * for the next one (base/output.h). At normal nothing stands above it yet,
+     * so the boundary is refused and the block opens the report. */
+    output_gap(out, OUTPUT_NORMAL);
+
     if (adopted_count > 0) {
         output_styled(
             out, OUTPUT_NORMAL,

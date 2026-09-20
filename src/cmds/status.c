@@ -193,7 +193,7 @@ static void display_enabled_profiles(
             }
         }
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     /* The repairs, in the shape this screen spells a repair: a dimmed key and a
@@ -1284,7 +1284,7 @@ static error_t *display_remote_status(
                     output_clear_line(out);
                 } else if (fetch_err) {
                     /* Non-TTY + error: finish the line before the warning */
-                    output_newline(out, OUTPUT_VERBOSE);
+                    output_endline(out, OUTPUT_VERBOSE);
                 } else {
                     /* Non-TTY + success: inline resolution */
                     output_print(out, OUTPUT_VERBOSE, " done.\n");

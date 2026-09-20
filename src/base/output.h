@@ -301,10 +301,28 @@ void output_hintline(
 ) __attribute__((format(printf, 3, 4)));
 
 /**
- * Print newline (respects verbosity)
+ * End the line this code is building
  *
- * Use this instead of fprintf(out->stream, "\n") for consistent output that
- * respects verbosity settings.
+ * For a line assembled from several output_print / output_styled / output_colored
+ * calls whose formats carry no trailing newline. Not a separator: output_newline
+ * is the blank line between two blocks, and the two were one word until 0.148.7.
+ *
+ * Its level is the level of the line it ends, which is the level of that line's
+ * first part — an endline below its opener writes a bare newline into a run where
+ * the line itself never printed.
+ *
+ * @param ctx Output context
+ * @param min_level Minimum verbosity level
+ */
+void output_endline(output_t *ctx, output_verbosity_t min_level);
+
+/**
+ * Print a blank line between two blocks
+ *
+ * The separator, not a line's end: output_endline closes a line this code is
+ * assembling. Writes unconditionally, so a block that asks for one on behalf of
+ * a follower that never comes — because nothing follows, or because the verbosity
+ * suppressed it — leaves a blank line at the end of the report.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level

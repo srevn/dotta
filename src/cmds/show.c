@@ -152,7 +152,7 @@ static error_t *print_blob_content(
         if (encrypted) {
             output_print(out, OUTPUT_NORMAL, " (encrypted)");
         }
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     /* The entry's claims, by the projection's own rule: mode only where the type
@@ -437,7 +437,7 @@ static int print_diff_line_cb(
     /* Add newline if not present */
     if (line->content_len == 0 ||
         line->content[line->content_len - 1] != '\n') {
-        output_print(out, OUTPUT_NORMAL, "\n");
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     return 0;
@@ -560,7 +560,8 @@ static error_t *show_commit(
         );
     }
 
-    output_print(out, OUTPUT_NORMAL, "\n\n");
+    output_endline(out, OUTPUT_NORMAL);
+    output_newline(out, OUTPUT_NORMAL);
 
     /* Print the diff with color */
     ret = git_diff_print(

@@ -774,7 +774,7 @@ static void print_deploy_results(
                     ownership_differs ? "ownership" : ""
                 );
             }
-            output_print(out, OUTPUT_VERBOSE, "\n");
+            output_endline(out, OUTPUT_VERBOSE);
         }
     }
 

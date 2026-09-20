@@ -307,7 +307,7 @@ static error_t *list_profiles(
             }
         }
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     /* Print remote legend if shown */
@@ -548,7 +548,7 @@ static error_t *list_files(
             }
         }
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     /* Print summary */

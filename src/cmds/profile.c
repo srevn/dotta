@@ -264,7 +264,7 @@ static error_t *profile_list(
                 output_format_path(target, identity()->home, shown, sizeof(shown));
                 output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         }
     } else {
         output_info(out, OUTPUT_NORMAL, "No enabled profiles");
@@ -305,7 +305,7 @@ static error_t *profile_list(
                     output_styled(out, OUTPUT_NORMAL, " {dim}(needs a target){reset}");
                 }
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         }
     }
 
@@ -1309,7 +1309,7 @@ static error_t *profile_disable(
                         out, OUTPUT_NORMAL, " (forgets target %s)", forgotten[i]
                     );
                 }
-                output_newline(out, OUTPUT_NORMAL);
+                output_endline(out, OUTPUT_NORMAL);
             }
             output_newline(out, OUTPUT_NORMAL);
             output_info(
@@ -1576,7 +1576,7 @@ static error_t *profile_reorder(
             current_enabled->items[i]
         );
     }
-    output_newline(out, OUTPUT_VERBOSE);
+    output_endline(out, OUTPUT_VERBOSE);
 
     output_print(out, OUTPUT_VERBOSE, "  After: ");
     for (size_t i = 0; i < opts->profile_count; i++) {
@@ -1585,7 +1585,7 @@ static error_t *profile_reorder(
             opts->profiles[i]
         );
     }
-    output_newline(out, OUTPUT_VERBOSE);
+    output_endline(out, OUTPUT_VERBOSE);
 
     /* Update state with new order */
     string_array_t new_order = {

@@ -209,7 +209,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
                     minutes, minutes == 1 ? "" : "s"
                 );
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         } else {
             output_print(
                 out, OUTPUT_NORMAL, "no expiration\n"
@@ -282,7 +282,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             output_print(out, OUTPUT_NORMAL, ")");
         }
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     } else {
         output_styled(out, OUTPUT_NORMAL, "{yellow}no{reset}\n");
 

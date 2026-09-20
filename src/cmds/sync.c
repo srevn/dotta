@@ -280,7 +280,7 @@ static error_t *sync_fetch_phase(
         if (ephemeral) {
             output_clear_line(out);
         } else {
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         }
         return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
     }
@@ -308,7 +308,7 @@ static error_t *sync_fetch_phase(
         if (ephemeral) {
             output_clear_line(out);
         } else {
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         }
         return err;
     }
@@ -319,7 +319,7 @@ static error_t *sync_fetch_phase(
         if (ephemeral) {
             output_clear_line(out);
         } else {
-            output_newline(out, OUTPUT_NORMAL);
+            output_endline(out, OUTPUT_NORMAL);
         }
         return NULL;
     }
@@ -337,7 +337,7 @@ static error_t *sync_fetch_phase(
     if (ephemeral) {
         output_clear_line(out);
     } else {
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     if (err) {
@@ -2163,7 +2163,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     out, OUTPUT_NORMAL, "%s%zu reassigned", sep, s->reassigned
                 );
             }
-            output_print(out, OUTPUT_NORMAL, "\n");
+            output_endline(out, OUTPUT_NORMAL);
         }
 
         /* The import's health, in the receipt's own shape and apply's: the paths

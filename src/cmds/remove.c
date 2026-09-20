@@ -600,7 +600,7 @@ static void display_overlaps(
                 );
             }
         }
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     /* Explain implications */

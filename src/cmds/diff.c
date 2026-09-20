@@ -486,7 +486,7 @@ static void print_commit_header(
             profile
         );
     }
-    output_newline(out, OUTPUT_NORMAL);
+    output_endline(out, OUTPUT_NORMAL);
 
     output_styled(
         out, OUTPUT_NORMAL, "{bold}Author:{reset} %s <%s>\n",
@@ -550,7 +550,7 @@ static error_t *print_diff_stats(
         );
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_endline(out, OUTPUT_NORMAL);
 
     git_diff_stats_free(stats);
 
@@ -605,7 +605,7 @@ static int print_diff_line_cb(
 
     /* Add newline if not present */
     if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        output_newline(out, OUTPUT_NORMAL);
+        output_endline(out, OUTPUT_NORMAL);
     }
 
     return 0;

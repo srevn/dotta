@@ -689,6 +689,11 @@ void output_hintline(
     fputc('\n', ctx->stream);
 }
 
+void output_endline(output_t *ctx, output_verbosity_t min_level) {
+    if (!ctx || ctx->verbosity < min_level) return;
+    fputc('\n', ctx->stream);
+}
+
 void output_newline(output_t *ctx, output_verbosity_t min_level) {
     if (!ctx || ctx->verbosity < min_level) return;
     fputc('\n', ctx->stream);

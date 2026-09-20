@@ -953,7 +953,7 @@ static error_t *diff_commit_to_workspace(
     if (profiles->count > 1) {
         output_info(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
-            "(commit-to-workspace compares one profile at a time)\n", profile
+            "(commit-to-workspace compares one profile at a time)", profile
         );
         output_newline(out, OUTPUT_NORMAL);
     }
@@ -1033,7 +1033,7 @@ static error_t *diff_commit_to_workspace(
 
         if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
             output_info(
-                out, OUTPUT_NORMAL, "No differences between commit and workspace\n"
+                out, OUTPUT_NORMAL, "No differences between commit and workspace"
             );
         }
     }
@@ -1377,7 +1377,8 @@ static error_t *diff_workspace(
 
         /* Upstream section */
         output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
-        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change\n");
+        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
+        output_newline(out, OUTPUT_NORMAL);
 
         err = present_diffs_for_direction(
             diverged, cache, DIFF_UPSTREAM, scope, opts, out,
@@ -1386,18 +1387,19 @@ static error_t *diff_workspace(
         if (err) goto cleanup;
 
         if (upstream_count == 0 && !opts->name_only) {
-            output_info(out, OUTPUT_NORMAL, "No upstream differences\n");
+            output_info(out, OUTPUT_NORMAL, "No upstream differences");
         }
         if (unverified > 0 && !opts->name_only) {
             output_info(
-                out, OUTPUT_NORMAL, "%zu file%s could not be verified\n",
+                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
                 unverified, unverified == 1 ? "" : "s"
             );
         }
 
         /* Downstream section */
         output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
-        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit\n");
+        output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
+        output_newline(out, OUTPUT_NORMAL);
 
         err = present_diffs_for_direction(
             diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,
@@ -1406,11 +1408,11 @@ static error_t *diff_workspace(
         if (err) goto cleanup;
 
         if (downstream_count == 0 && !opts->name_only) {
-            output_info(out, OUTPUT_NORMAL, "No downstream differences\n");
+            output_info(out, OUTPUT_NORMAL, "No downstream differences");
         }
         if (unverified > 0 && !opts->name_only) {
             output_info(
-                out, OUTPUT_NORMAL, "%zu file%s could not be verified\n",
+                out, OUTPUT_NORMAL, "%zu file%s could not be verified",
                 unverified, unverified == 1 ? "" : "s"
             );
         }

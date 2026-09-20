@@ -45,7 +45,14 @@ struct content_cache {
  *
  * Used by content cache to ensure plaintext doesn't linger in memory.
  *
- * @param buf_ptr Buffer to free (cast from void* for hashmap_free compatibility)
+ * The NULL-and-size test in front of the wipe is redundant — secure_wipe answers
+ * a NULL pointer and a zero length itself (base/secure.h), so the wipe is total
+ * without one — and is kept here and at this module's other wipes because one
+ * module spells one thing one way. infra/compare states the same rule from the
+ * other side and drops the test; the two are a style apart, not a disagreement
+ * about what the primitive does.
+ *
+ * @param ptr Buffer to free (cast from void* for hashmap_free compatibility)
  */
 static void buffer_destroy_secure(void *ptr) {
     buffer_t *buf = ptr;

@@ -52,10 +52,10 @@
  * one already listed is named from it and the walk carries no frame of its own.
  *
  * `occupant` is what the listing's lstat found there, and it chooses the capture:
- * a link's (content_stage_link) or a regular file's (content_stage_file), each
- * refusing the other's occupant, so a path is captured as the kind it was listed
- * as or not at all. The claim's kind is derived from it where the path is listed
- * (list_path), so the two cannot disagree.
+ * a link's (content_capture_link) or a regular file's (content_capture_file),
+ * each refusing the other's occupant, so a path is captured as the kind it was
+ * listed as or not at all. The claim's kind is derived from it where the path
+ * is listed (list_path), so the two cannot disagree.
  *
  * `should_encrypt` is the decision pass's verdict (cmd_add), reached with the
  * name before any capture runs — false but for a regular file, since a link's
@@ -973,8 +973,10 @@ static void report_labels(const add_walk_t *walk) {
  * refuses the other's (infra/content.h), so a path whose kind changed after its
  * listing is refused rather than read as what it has become — and the verdict
  * the decision pass reached for a regular file is read by a regular file's capture
- * alone. Sealed as that pass decided. The claim comes from the capture's own
- * stat, which is also the triple the record binds (path->stat).
+ * alone. Sealed as that pass decided. The capture answers with the entry's bytes
+ * and the look they were read with; this function places both — the entry on
+ * the stage, the claim on the sheet — and the look is also the triple the record
+ * binds (path->stat).
  *
  * @param ctx Dispatch context (must not be NULL; the key manager for a seal,
  *            and the output)
@@ -1005,35 +1007,47 @@ static error_t *add_file_to_stage(
      * own stat — a link's before its target, the link's uid/gid and not the
      * target's; a file's the fstat of the descriptor its bytes came off, bytes
      * and triple one inode by construction — and that stat is the claim's and
-     * the record's both. */
-    struct stat st;
+     * the record's both.
+     *
+     * Then the entry, at the name the capture was made under: a sealed capture
+     * binds it (infra/content.h), so the put repeats it and never a second name.
+     * One tail past the door — the bytes are the stage's now, or nobody's, and
+     * the look stays readable for the claim and the record below. */
+    content_capture_t capture = { 0 };
     error_t *err = NULL;
     if (path->occupant == FS_OCCUPANT_SYMLINK) {
-        err = content_stage_link(stage, location, storage_path, &st);
+        err = content_capture_link(location, &capture);
     } else {
-        err = content_stage_file(
-            stage, location, storage_path, profile, ctx->run.keymgr,
-            path->should_encrypt, &st
+        err = content_capture_file(
+            location, storage_path, profile, ctx->run.keymgr,
+            path->should_encrypt, &capture
         );
     }
+    if (!err) {
+        err = stage_put(
+            stage, storage_path, capture.bytes.data, capture.bytes.size,
+            capture.mode
+        );
+    }
+    content_capture_free(&capture);
     if (err) {
         return err;
     }
-    path->stat = stat_cache_from_stat(&st);
+    path->stat = stat_cache_from_stat(&capture.st);
 
-    /* The claim from the capture's own look, sealed as the decision pass said:
-     * the capture's write-time invariant makes the decision the byte truth (a
-     * plaintext that would read as ciphertext is refused there), so the claim
-     * and every reader of the bytes agree — and a link is never sealed. */
+    /* The claim from the capture's own look, sealed as the capture says: its
+     * write-time invariant makes that verdict the byte truth (a plaintext that
+     * would read as ciphertext is refused there), so the claim and every reader
+     * of the bytes agree — and a link is never sealed. */
     metadata_item_t *item = NULL;
     err = metadata_capture_from_file(
-        storage_path, &st, path->should_encrypt, &item
+        storage_path, &capture.st, capture.encrypted, &item
     );
     if (err) {
         return error_wrap(err, "Failed to capture metadata for '%s'", location);
     }
 
-    if (path->should_encrypt) {
+    if (capture.encrypted) {
         output_info(
             out, OUTPUT_VERBOSE, "Encrypted: %s -> %s", location, storage_path
         );

@@ -857,8 +857,8 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
  *
  * "regular file", "symlink", "directory", "FIFO", "socket", "character device",
  * "block device", "special file" — one spelling for the verbs that must name an
- * occupant they cannot take: infra/content.c content_stage_file and
- * content_stage_link (the capture's refusal), cmds/add.c collect_tree and cmd_add
+ * occupant they cannot take: infra/content.c content_capture_file and
+ * content_capture_link (the capture's refusal), cmds/add.c collect_tree and cmd_add
  * (the walk's skip and the argument's) — or one that is not the kind a claim
  * expects (infra/compare.c compare_generate_diff, the type-mismatch line a diff
  * renders). The input is that look's own stat: an lstat's, or the fstat of the

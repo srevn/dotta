@@ -304,7 +304,7 @@ Bytes are the single authoritative source for "is this blob encrypted?":
 
 ### Store refusal and write-time invariant
 
-Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_stage_file` refuses them with `ERR_VALIDATION`:
+Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_capture_file` refuses them with `ERR_VALIDATION`:
 ```
 Cannot capture '%s' as plaintext: its first bytes are dotta's cipher magic, so every reader would take it for ciphertext; add it with --encrypt, or change them
 ```
@@ -684,7 +684,7 @@ Validation is performed at the boundary where parameters enter the system:
 | Unlock proof & key manager | `src/crypto/keymgr` | `keymgr_create`, `keymgr_encrypt`, `keymgr_decrypt`, `keymgr_set`, `keymgr_clear`, `keymgr_cached`, `keymgr_epoch`, `keymgr_rekey`, `keymgr_witness`, `keymgr_free` |
 | On-disk epoch session cache | `src/crypto/session` | `session_save`, `session_load`, `session_clear` |
 | Repository epoch lifecycle & census | `src/infra/epoch` | `epoch_init`, `epoch_load`, `epoch_push`, `epoch_fetch`, `epoch_resolve`, `epoch_find_ciphertext`, `walk_ciphertext` |
-| Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_stage_file` |
+| Content abstraction & cache | `src/infra/content` | `content_cache_*`, `content_classify*`, `content_capture_file`, `content_capture_link` |
 | Memory protection | `src/base/secure` | `secure_alloc`, `secure_free`, `secure_wipe` |
 | Passphrase acquisition | `src/sys/passphrase` | `passphrase_prompt`, `passphrase_from_env` |
 | CSPRNG entropy | `src/sys/entropy` | `entropy_fill` |

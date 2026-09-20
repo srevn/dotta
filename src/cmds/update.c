@@ -38,7 +38,7 @@
 #include "utils/hooks.h"
 
 /**
- * Capture a file from the filesystem onto the stage (with optional encryption)
+ * Capture a path from the filesystem as the entry it becomes
  *
  * A regular file is sealed as the policy decides (core/policy.h), and the seal
  * it keeps — priority 3 — is read from the entry the stage holds at this name,
@@ -56,31 +56,36 @@
  * refused rather than read as what it has become, which is the refusal a second
  * look here would only have moved one frame earlier.
  *
+ * This routes, decides and captures; the entry the capture becomes is the caller's
+ * to put, beside the claim and the record it also writes. So the stage is read
+ * here and never written: the only question asked of it is the prior entry above.
+ *
  * @param ctx Dispatch context (must not be NULL; supplies the repository, the
  *            key and the encryption policy)
  * @param stage The profile's stage (must not be NULL; the entry it holds at the
- *              item's name is the prior this capture replaces)
+ *              item's name is the prior this capture's policy reads)
  * @param item The path to capture (must not be NULL; its occupant chooses the
- *             capture, its two keys name the source and the entry)
+ *             capture, its two keys name the source and the seal)
  * @param profile The profile, for the seal's key (must not be NULL)
- * @param out_was_encrypted Set to true if the file was encrypted (must not be NULL)
- * @param out_stat The capture's own stat (infra/content.h): the lstat before a
- *                 link's target, the fstat beside a file's bytes (must not be NULL)
+ * @param out The capture (must not be NULL; cleared here before the policy can
+ *            refuse, so freeing it is correct on every path)
  */
 static error_t *capture_file(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const workspace_item_t *item,
     const char *profile,
-    bool *out_was_encrypted,
-    struct stat *out_stat
+    content_capture_t *out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(stage);
     CHECK_NULL(item);
     CHECK_NULL(profile);
-    CHECK_NULL(out_was_encrypted);
-    CHECK_NULL(out_stat);
+    CHECK_NULL(out);
+
+    /* The captures clear this too, but the policy below stands in front of them
+     * and can refuse. */
+    *out = (content_capture_t){ 0 };
 
     const char *filesystem_path = item->filesystem_path;
     const char *storage_path = item->storage_path;
@@ -88,11 +93,7 @@ static error_t *capture_file(
 
     if (item->occupant == FS_OCCUPANT_SYMLINK) {
         /* The entry is the link's target, never encrypted */
-        RETURN_IF_ERROR(
-            content_stage_link(stage, filesystem_path, storage_path, out_stat)
-        );
-        *out_was_encrypted = false;
-        return NULL;
+        return content_capture_link(filesystem_path, out);
     }
 
     /* Priority 3's source: the entry the stage holds at this name — the branch
@@ -129,28 +130,12 @@ static error_t *capture_file(
         return err;
     }
 
-    /* Capture onto the stage (read → encrypt → the entry) and take the stat.
-     * ARCHITECTURE: the capture's fstat of the descriptor it read is propagated
-     * to the caller for metadata operations — bytes and stat one inode by
-     * construction. */
-    err = content_stage_file(
-        stage,
-        filesystem_path,
-        storage_path,
-        profile,
-        keymgr,
-        should_encrypt,
-        out_stat
+    /* The entry the file becomes: read → seal as decided → the bytes, the mode
+     * and the fstat of the descriptor they came off, bytes and look one inode
+     * by construction (infra/content.h content_capture_t). */
+    return content_capture_file(
+        filesystem_path, storage_path, profile, keymgr, should_encrypt, out
     );
-    if (err) {
-        return err;
-    }
-
-    /* The capture's write-time invariant: the bytes it staged classify as the
-     * decision says (a plaintext that would not is refused there), so the decision
-     * is what the caller stamps. */
-    *out_was_encrypted = should_encrypt;
-    return NULL;
 }
 
 /**
@@ -178,7 +163,7 @@ typedef struct {
  * One path an update commit captured from disk
  *
  * A file's triple is the one the capture took from the bytes it committed
- * (content_stage_file's fstat of the fd it read), so the record binds the blob
+ * (content_capture_file's fstat of the fd it read), so the record binds the blob
  * to the stat that matched it — not to a later lstat that could see an edit made
  * since. A directory's is unset: a directory has no content confirmation, and
  * its record carries none.
@@ -499,12 +484,19 @@ static error_t *update_profile(
 
                 output_info(out, OUTPUT_VERBOSE, "  %s", item->filesystem_path);
 
-                /* Capture onto the stage, and the stat beside it */
-                struct stat capture_stat;
-                bool capture_encrypted = false;
-                err = capture_file(
-                    ctx, stage, item, profile, &capture_encrypted, &capture_stat
-                );
+                /* The capture, and the entry it becomes on the stage, at the
+                 * name the seal was made under (infra/content.h). One tail past
+                 * the door: the bytes are released whichever step refused, and
+                 * either refusal names the path the same way. */
+                content_capture_t capture = { 0 };
+                err = capture_file(ctx, stage, item, profile, &capture);
+                if (!err) {
+                    err = stage_put(
+                        stage, item->storage_path, capture.bytes.data,
+                        capture.bytes.size, capture.mode
+                    );
+                }
+                content_capture_free(&capture);
                 if (err) {
                     err = error_wrap(err, "Failed to capture '%s'", item->filesystem_path);
                     goto cleanup;
@@ -517,8 +509,8 @@ static error_t *update_profile(
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_file(
                     item->storage_path,
-                    &capture_stat,
-                    capture_encrypted,
+                    &capture.st,
+                    capture.encrypted,
                     &meta_item
                 );
                 if (err) {
@@ -582,7 +574,7 @@ static error_t *update_profile(
 
                 commit->captured[commit->captured_count++] = (update_capture_t){
                     .item = item,
-                    .stat = stat_cache_from_stat(&capture_stat)
+                    .stat = stat_cache_from_stat(&capture.st)
                 };
                 break;
             }

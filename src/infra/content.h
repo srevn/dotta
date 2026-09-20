@@ -1,10 +1,12 @@
 /**
- * content.h - Transparent content provider with automatic decryption
+ * content.h - The codec between an entry's bytes and a file's bytes
  *
- * Provides unified access to git blob content with automatic decryption for
- * encrypted files. This layer abstracts away encryption complexity, allowing
- * higher-level code to work with plaintext content regardless of whether files
- * are encrypted in Git.
+ * One module for both directions of the seal, keyed by the claim the cipher binds
+ * (the profile, the storage path). The read side answers a blob's plaintext,
+ * classifies an entry by its bytes and compares one against disk; the write side
+ * answers what a path on disk — or a sealed blob under another name — becomes
+ * as an entry. Either way the encryption complexity stops here: higher layers
+ * work in plaintext and name no cipher.
  *
  * Features:
  * - Transparent decryption (callers always get plaintext)
@@ -33,11 +35,31 @@
  *   }
  *   content_cache_free(cache);  // Frees all cached buffers
  *
+ * The write side:
+ *
+ * Nothing here writes. Not to the object database, not to an index, not to disk:
+ * every door reads — a blob, a file, a link — and answers with bytes, and the
+ * caller places them. So a capture that is refused leaves the repository exactly
+ * as it found it, there is no repository to place into by mistake, a dry run
+ * that decides before it reads is neutral by construction, and sys/stage keeps
+ * the tree's one blob writer (sys/stage.h stage_put).
+ *
+ * Three doors: content_capture_file and content_capture_link, a path on disk as
+ * the entry it becomes; content_rebind, a sealed blob's content under a second
+ * name. A link's capture holds no crypto at all and is here for content's own
+ * rule — a link's bytes are its target and never a seal, whatever they begin
+ * with — the same rule the classifier and the cache's key spell on the read side;
+ * a capture's `encrypted` false for a link is that rule stated as a value.
+ *
+ * The plaintext a seal consumes never leaves this module: the encrypt runs inside
+ * the capture and the plaintext is wiped there, whichever way the seal went.
+ * What crosses is what the tree will hold.
+ *
  * Architectural placement:
  * - Layer: Infrastructure (src/infra/)
- * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops, stage),
- *   crypto (cipher for the format's constants and header, keymgr for every encrypt
- *   and decrypt)
+ * - Depends on: base (buffer, hashmap, secure), sys (filesystem, gitops), crypto
+ *   (cipher for the format's constants and header, keymgr for every encrypt and
+ *   decrypt)
  * - Used by: infra/epoch (the census classifies), core (workspace's looks, deploy's
  *   reads, policy's byte truth), commands (show, diff, export, revert, list;
  *   add and update through the two captures)
@@ -51,11 +73,9 @@
 #include <types.h>
 
 #include "infra/compare.h"
-#include "sys/stage.h"
 
 /* Forward declarations */
 typedef struct keymgr keymgr;
-typedef struct metadata metadata_t;
 
 /**
  * Classification of a Git blob's content kind.
@@ -63,11 +83,11 @@ typedef struct metadata metadata_t;
  * Determined by inspecting the blob's magic header, for a content entry. The
  * cipher's MAC binds the magic header into authentication, so a content entry's
  * bytes are the authoritative source of truth for its encryption state. A link's
- * bytes are its target — stored as read and never sealed (content_stage_link) —
- * so a link is PLAINTEXT whatever they begin with, and every function below that
- * answers for a blob takes the filemode of the entry it stands in. Any external
- * record (metadata.json, the view row's flag) is by definition a cache that derives
- * from byte sniffing.
+ * bytes are its target — stored as read and never sealed (content_capture_link)
+ * — so a link is PLAINTEXT whatever they begin with, and every function below
+ * that answers for a blob takes the filemode of the entry it stands in. Any
+ * external record (metadata.json, the view row's flag) is by definition a cache
+ * that derives from byte sniffing.
  *
  * Three-way discrimination matches the cipher format's contract:
  *   - CONTENT_PLAINTEXT: blob does not begin with the cipher magic prefix, or
@@ -246,18 +266,18 @@ error_t *content_get_from_blob_oid(
  * Domain: bytes that carry a binding. A blob content_classify calls PLAINTEXT
  * is refused (ERR_INTERNAL) rather than copied — an unbound blob's id travels
  * unchanged, and the caller that reads the kind for its own claim already knows
- * which it holds, the way content_stage_file refuses everything but a regular
- * file and content_stage_link everything but a link. UNSUPPORTED_VERSION is refused
- * in get_plaintext_from_blob's own words: this build cannot open the bytes, so
- * it cannot seal them under another name, and entering them under one would leave
- * a claim no key will ever read.
+ * which it holds, the way content_capture_file refuses everything but a regular
+ * file and content_capture_link everything but a link. UNSUPPORTED_VERSION is
+ * refused in get_plaintext_from_blob's own words: this build cannot open the
+ * bytes, so it cannot seal them under another name, and entering them under one
+ * would leave a claim no key will ever read.
  *
  * A link is not content and never reaches here: its bytes are a target path,
  * and Git's filemode is the authority on that at every boundary
- * (content_stage_link's capture, every read here — each takes the entry's filemode
- * — core/manifest.c's link row, cmds/revert.c's claim).
+ * (content_capture_link, every read here — each takes the entry's filemode —
+ * core/manifest.c's link row, cmds/revert.c's claim).
  *
- * The write-boundary invariant content_stage_file states holds here too: what
+ * The write-boundary invariant content_capture_file states holds here too: what
  * is answered classifies ENCRYPTED, as the source did, so a caller stamping
  * metadata.encrypted from the source blob describes what it stores.
  *
@@ -412,8 +432,12 @@ void content_cache_free(content_cache_t *cache);
  * with a key manager present this answers NULL, and whether it obtains a master
  * is its ladder's question, asked at the seal, where a prompt belongs.
  *
- * Readers: content_stage_file, before it opens anything; cmds/add's decision
- * pass, before any capture has begun — so a refusal there stores nothing.
+ * Readers: content_capture_file, before it opens anything; cmds/add.c cmd_add's
+ * decision pass, before any capture has begun — so a refusal there names nothing
+ * and reads nothing. Both are load-bearing and neither is the other's duplicate:
+ * add asks early because its preview must refuse in the same words as its run,
+ * and update has no decision pass at all, so the capture's own ask is the only
+ * one on that route.
  *
  * @param keymgr The run's key manager (NULL when encryption is turned off)
  * @param storage_path The path the seal was for (must not be NULL)
@@ -425,47 +449,97 @@ error_t *content_require_encryption(
 );
 
 /**
- * Capture a regular file onto a stage, encrypting it or not
+ * What a path on disk becomes: an entry's content, and the look it was taken at
  *
- * The capture add and update share: read the file → encrypt (if asked) → the
- * entry at `storage_path` on the stage, with the mode the file's own stat says.
+ * Everything a tree entry holds but its name, beside the stat its bytes were
+ * read with. One act, because the bytes and the look are one inode: a file's
+ * stat is the fstat of the descriptor its bytes came off, a link's the lstat
+ * taken before its target was read and held to one link by a second.
+ *
+ * `mode` and `encrypted` are read off the other two — the entry's mode from the
+ * look, the verdict from the bytes this module made. They are members because
+ * the module that made the bytes is the one that answers for them, not to spare
+ * a caller a line: update has no other producer for the verdict, and add's decision
+ * pass is a policy where this is byte truth.
+ *
+ * The struct is the caller's — a stack local, cleared by either capture once
+ * its arguments are accepted and filled once, on success — so a refused capture
+ * leaves the cleared struct and freeing it is a no-op.
+ *
+ * One member is owned: `bytes`, which content_capture_free wipes and releases.
+ * That free is the one in this tree that is not total, and the reason is that
+ * the other three are values rather than resources, read by both callers past
+ * it — the bytes go on the stage (bytes, mode), the claim is authored from the
+ * look (core/metadata.h metadata_capture_from_file: st, encrypted) and the record
+ * is bound to it (core/state.h stat_cache_from_stat: st). A free written to its
+ * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_free_diff
+ * and gitops_blob_view_close are written — would leave both commands anchoring
+ * a zero stat: a wrong record, with no crash.
+ *
+ * Readers: cmds/add.c add_file_to_stage, cmds/update.c update_profile.
+ */
+typedef struct {
+    buffer_t bytes;        /* What the entry holds: the bytes as read, sealed as told, a link's target */
+    git_filemode_t mode;   /* Git's reading of the look: BLOB, BLOB_EXECUTABLE or LINK */
+    bool encrypted;        /* What `bytes` classify as, as the entry they stand in; false for a link */
+    struct stat st;        /* The fstat beside a file's bytes; the lstat before a link's target */
+} content_capture_t;
+
+/**
+ * Capture a regular file as the entry it becomes, encrypting it or not
+ *
+ * The capture add and update share: one look, read the file, seal it if asked —
+ * and the bytes, the mode and the look answered to the caller, which puts the
+ * entry at a name of its own.
  *
  * Process:
  * 1. Open the file, fstat the descriptor, read it to EOF — the captured stat
- *    and the stored bytes are one inode by construction
+ *    and the captured bytes are one inode by construction
  * 2. If should_encrypt=true: a. Get profile key from keymgr b. Encrypt content
- *    c. Stage the ciphertext
+ *    c. Answer the ciphertext
  * 3. If should_encrypt=false: refuse a plaintext whose first bytes are the cipher
- *    magic, else stage the plaintext
+ *    magic, else answer the plaintext
  *
  * The entry's mode is Git's reading of the fstat: executable iff the owner's
  * execute bit is set (index.c's git_index__create_mode), regular otherwise. A
- * symlink is content_stage_link's; this capture refuses everything but a regular
- * file. The caller still decides policy via should_encrypt; use
- * encryption_policy_should_encrypt() to compute it. Encryption asked on a run
- * with no key manager is refused before anything is opened
- * (content_require_encryption).
+ * symlink is content_capture_link's; this capture refuses everything but a regular
+ * file.
  *
- * Write-time invariant: the bytes staged classify (content_classify_bytes) as
- * `should_encrypt` says — ENCRYPTED iff true. An encrypt writes the magic, and
- * a plaintext that would read as ciphertext is refused, so the caller stamps
- * metadata.encrypted from `should_encrypt` and every reader, which classifies
- * the bytes, agrees with the stamp for any blob this capture wrote. The one
- * collision the model has — a plaintext file whose first six bytes happen to be
- * `"DOTTA" || CIPHER_VERSION` — is therefore refused here with its way out
- * (--encrypt, or change the bytes), never staged under a claim every reader would
- * contradict.
+ * `should_encrypt` and `keymgr` are two facts and do not collapse into one: the
+ * first is the policy's verdict for this name (core/policy.h
+ * encryption_policy_should_encrypt), the second is whether the run can seal at
+ * all, and content_require_encryption is where they meet. Reading a NULL key
+ * manager as "plaintext" would store in the clear exactly the file the policy
+ * asked to seal.
  *
- * @param stage The stage the entry goes on (must not be NULL)
+ * Write-time invariant: the bytes answered classify (content_classify) as
+ * `encrypted` says — ENCRYPTED iff true. An encrypt writes the magic, and a
+ * plaintext that would read as ciphertext is refused, so a claim stamped from
+ * the answer and every reader of the bytes, which classifies them, agree for
+ * any blob this capture made. The one collision the model has — a plaintext file
+ * whose first six bytes happen to be `"DOTTA" || CIPHER_VERSION` — is therefore
+ * refused here with its way out (--encrypt, or change the bytes), never answered
+ * under a verdict every reader would contradict.
+ *
+ * The plaintext lives only inside this call: under a seal it is wiped before
+ * the ciphertext is answered, whichever way the encrypt went. With no seal the
+ * file's own bytes are the answer — headed for the object database in the clear
+ * by the policy's own verdict — and content_capture_free wipes them all the same.
+ *
  * @param filesystem_path Path to source file on filesystem (must not be NULL)
- * @param storage_path Storage path in profile (must not be NULL; the entry's
- *                     path, and the AAD for encryption)
+ * @param storage_path The name the seal binds (must not be NULL; the AAD). Under
+ *          should_encrypt the caller's put MUST use this same name: the seal
+ *          binds it, so bytes entered under another are a blob no key will ever
+ *          open — silent at the commit, ERR_CRYPTO at every read after. That is
+ *          the cost a name change has, and why content_rebind exists
+ *          (crypto/cipher.h "Path binding"). Plaintext bytes carry no binding
+ *          and stand at any name. The round trip is the `encrypt` suite's.
  * @param profile Profile name (for key derivation, must not be NULL)
  * @param keymgr Key manager (can be NULL if should_encrypt=false)
  * @param should_encrypt Policy decision from caller (true = encrypt, false =
  *                       plaintext)
- * @param out_stat The capture's stat: the fstat of the descriptor whose bytes
- *                 were staged (must not be NULL; set on every success)
+ * @param out The capture (must not be NULL; cleared once the arguments are accepted
+ *            and filled on success, so freeing it is correct either way)
  * @return Error or NULL on success
  *
  * Errors:
@@ -474,27 +548,26 @@ error_t *content_require_encryption(
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
  * - ERR_CRYPTO: Encryption failed
- * - ERR_CONFLICT: The stage refused the entry (a file/directory collision, or a
- *   name Git will not hold)
  * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a regular file
  */
-error_t *content_stage_file(
-    stage_t *stage,
+error_t *content_capture_file(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
-    struct stat *out_stat
+    content_capture_t *out
 );
 
 /**
- * Capture a symlink onto a stage
+ * Capture a symlink as the entry it becomes
  *
- * The capture's other half: a link's bytes are its target, stored as read and
+ * The capture's other half: a link's bytes are its target, taken as read and
  * never sealed — deploy's symlink(2) and every readlink expose the target whatever
  * the branch holds, so a secret target belongs in an encrypted regular file
- * (core/policy.h) — under GIT_FILEMODE_LINK.
+ * (core/policy.h) — under GIT_FILEMODE_LINK, with `encrypted` false. It takes
+ * no name, no profile and no key: everything a seal needs is a seal's, and a
+ * link has no seal.
  *
  * One lstat names the occupant and is the stat the capture keeps; the target is
  * read after it. So the stat is the earlier look, which is the order the record
@@ -503,34 +576,42 @@ error_t *content_stage_file(
  * look and the read to one link — the same device and inode, and a ctime that
  * has not moved, since a new link at a freed inode carries its own — so the target,
  * the stat and the ownership a claim takes from it are one link's, as
- * content_stage_file's are one inode's by its descriptor. A link has no descriptor
- * to pin it, and this is the portable spelling of one. Residue, accepted: a link
- * made, read and replaced within one second, on a filesystem that hands a freed
- * inode straight back — the tree reads no sub-second field, and the record's
- * safety is the order's, not this check's.
+ * content_capture_file's are one inode's by its descriptor. A link has no
+ * descriptor to pin it, and this is the portable spelling of one. Residue,
+ * accepted: a link made, read and replaced within one second, on a filesystem
+ * that hands a freed inode straight back — the tree reads no sub-second field,
+ * and the record's safety is the order's, not this check's.
  *
  * The capture's own refusals — not a link, or a link that changed — come before
- * anything is staged or stored.
+ * anything is answered.
  *
- * @param stage The stage the entry goes on (must not be NULL)
  * @param filesystem_path The link (must not be NULL; never followed)
- * @param storage_path Storage path in profile (must not be NULL; the entry's path)
- * @param out_stat The capture's stat: the lstat taken before the target was read
- *                 (must not be NULL; set on every success)
+ * @param out The capture (must not be NULL; cleared once the arguments are accepted
+ *            and filled on success, so freeing it is correct either way)
  * @return Error or NULL on success
  *
  * Errors:
  * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a symlink
- * - ERR_CONFLICT: The link changed while it was read, or the stage refused the
- *   entry (a file/directory collision, or a name Git will not hold)
+ * - ERR_CONFLICT: The link changed while it was read
  * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The look or the read, by its errno
  *   (a target too long to read whole is ENAMETOOLONG)
  */
-error_t *content_stage_link(
-    stage_t *stage,
+error_t *content_capture_link(
     const char *filesystem_path,
-    const char *storage_path,
-    struct stat *out_stat
+    content_capture_t *out
 );
+
+/**
+ * Release a capture's bytes, and nothing else
+ *
+ * Wiped before they are released — content's rule for every buffer it hands back,
+ * asked of nothing, so a reader never has to know which captures held a secret.
+ * The look, the mode and the verdict are values and stay readable afterwards,
+ * which is what both callers do with them (content_capture_t). Safe on a cleared
+ * capture, and safe twice.
+ *
+ * @param capture The capture (can be NULL)
+ */
+void content_capture_free(content_capture_t *capture);
 
 #endif /* DOTTA_CONTENT_H */

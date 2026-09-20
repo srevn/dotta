@@ -84,10 +84,7 @@ static void buffer_destroy_secure(void *ptr) {
  * offsets (CIPHER_OFFSET_VERSION) opaque to this layer; the static_assert in
  * cipher.c guards their equivalence.
  */
-content_kind_t content_classify_bytes(
-    const uint8_t *data,
-    size_t size
-) {
+content_kind_t content_classify_bytes(const uint8_t *data, size_t size) {
     if (!data || size < CIPHER_DETECT_BYTES) {
         return CONTENT_PLAINTEXT;
     }
@@ -366,8 +363,8 @@ error_t *content_rebind(
         plaintext.size, out_bytes
     );
 
-    /* The disposal is unconditional where the capture's is inside its own guard:
-     * there the success path goes on using the buffer, here nothing does. */
+    /* The plaintext ends here whichever way the seal went, as the file capture's
+     * does: only the ciphertext goes on, and it is the caller's. */
     if (plaintext.data) {
         secure_wipe(plaintext.data, plaintext.size);
     }
@@ -380,10 +377,7 @@ error_t *content_rebind(
     return NULL;
 }
 
-content_cache_t *content_cache_create(
-    git_repository *repo,
-    keymgr *keymgr
-) {
+content_cache_t *content_cache_create(git_repository *repo, keymgr *keymgr) {
     if (!repo) {
         return NULL;
     }
@@ -532,9 +526,7 @@ error_t *content_compare_blob_to_disk(
     if (kind == CONTENT_PLAINTEXT) {
         /* Fast path: hash the disk file, compare to OID. The stored Git blob is
          * never inflated for the comparison itself. */
-        return compare_oid_to_disk(
-            blob_oid, fs_path, expected_mode, st, out_result
-        );
+        return compare_oid_to_disk(blob_oid, fs_path, expected_mode, st, out_result);
     }
 
     /* Encrypted or unsupported-version blob: load via cache. The cache call routes
@@ -568,10 +560,7 @@ void content_cache_free(content_cache_t *cache) {
     free(cache);
 }
 
-error_t *content_require_encryption(
-    const keymgr *keymgr,
-    const char *storage_path
-) {
+error_t *content_require_encryption(const keymgr *keymgr, const char *storage_path) {
     CHECK_NULL(storage_path);
 
     if (keymgr) {
@@ -579,25 +568,27 @@ error_t *content_require_encryption(
     }
 
     return error_wrap(
-        ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED), "Cannot encrypt '%s'",
-        storage_path
+        ERROR(ERR_LOCKED, "%s", ENCRYPTION_DISABLED),
+        "Cannot encrypt '%s'", storage_path
     );
 }
 
-error_t *content_stage_file(
-    stage_t *stage,
+error_t *content_capture_file(
     const char *filesystem_path,
     const char *storage_path,
     const char *profile,
     keymgr *keymgr,
     bool should_encrypt,
-    struct stat *out_stat
+    content_capture_t *out
 ) {
-    CHECK_NULL(stage);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
-    CHECK_NULL(out_stat);
+    CHECK_NULL(out);
+
+    /* Filled once, at the end: a refusal past here leaves the cleared capture,
+     * so no caller can read a look the bytes it names were never taken with. */
+    *out = (content_capture_t){ 0 };
 
     /* The capture's twin of the read's locked root, asked before anything is
      * opened: a seal on a run with no key in reach at all. */
@@ -605,12 +596,12 @@ error_t *content_stage_file(
         RETURN_IF_ERROR(content_require_encryption(keymgr, storage_path));
     }
 
-    /* Step 1: One look — open the descriptor whose bytes will be staged
+    /* Step 1: One look — open the descriptor whose bytes are answered
      *
-     * The reported stat is the fstat of that fd, so the stat and the bytes are
+     * The answered stat is the fstat of that fd, so the stat and the bytes are
      * one inode by construction; the old shape (lstat, then a path re-open inside
      * the read) let a swap between the two looks bind one file's triple to another
-     * file's blob. O_NOFOLLOW refuses a symlink (a link is content_stage_link's),
+     * file's blob. O_NOFOLLOW refuses a symlink (a link is content_capture_link's),
      * O_NONBLOCK keeps a FIFO with no writer from wedging the open (harmless
      * for a regular file), O_CLOEXEC is hygiene. */
     int fd = fs_open(
@@ -623,37 +614,30 @@ error_t *content_stage_file(
          * below name the type as before; it binds nothing. */
         int open_errno = errno;
         if (fs_lstat(filesystem_path, &st) != 0 || S_ISREG(st.st_mode)) {
-            return error_from_errno(
-                open_errno, "Failed to open '%s'", filesystem_path
-            );
+            return error_from_errno(open_errno, "Failed to open '%s'", filesystem_path);
         }
     } else if (fstat(fd, &st) < 0) {
         int stat_errno = errno;
         close(fd);
-        return error_from_errno(
-            stat_errno, "Failed to stat '%s'", filesystem_path
-        );
+        return error_from_errno(stat_errno, "Failed to stat '%s'", filesystem_path);
     }
 
     if (!S_ISREG(st.st_mode)) {
         if (fd >= 0) close(fd);
 
         /* This capture's own requirement, not a product rule: a symlink is
-         * content_stage_link's (the header), and the walk lists one as a leaf;
+         * content_capture_link's (the header), and the walk lists one as a leaf;
          * what cannot be captured at all is a special file. */
         return ERROR(
-            ERR_INVALID_ARG,
-            "Cannot capture '%s': it is a %s, not a regular file.",
+            ERR_INVALID_ARG, "Cannot capture '%s': it is a %s, not a regular file.",
             filesystem_path, fs_stat_noun(&st)
         );
     }
 
-    /* The capture's stat: the fd's own, taken beside the bytes read below. The
-     * entry's mode is Git's reading of it — executable iff the owner's execute
-     * bit is set (libgit2's git_index__create_mode), regular otherwise. */
-    memcpy(out_stat, &st, sizeof(struct stat));
-    git_filemode_t mode = (st.st_mode & S_IXUSR)
-        ? GIT_FILEMODE_BLOB_EXECUTABLE : GIT_FILEMODE_BLOB;
+    /* The entry's mode is Git's reading of the look: executable iff the owner's
+     * execute bit is set (libgit2's git_index__create_mode), regular otherwise. */
+    git_filemode_t mode = (st.st_mode & S_IXUSR) ? GIT_FILEMODE_BLOB_EXECUTABLE
+                                                 : GIT_FILEMODE_BLOB;
 
     /* Step 2: Read the descriptor to EOF
      *
@@ -661,71 +645,72 @@ error_t *content_stage_file(
      * point; the encrypt path rejects oversize input after this read. For the
      * plaintext path we rely on fs_read_fd's own bounds and libgit2's blob handling
      * rather than duplicating the policy here. */
-    buffer_t content = BUFFER_INIT;
-    error_t *err = fs_read_fd(fd, &content);
+    buffer_t bytes = BUFFER_INIT;
+    error_t *err = fs_read_fd(fd, &bytes);
     close(fd);
     if (err) {
         return error_wrap(err, "Failed to read file '%s'", filesystem_path);
     }
 
-    /* Step 3: The entry — the ciphertext when encryption was asked, else the
-     * plaintext, unless it would read as ciphertext.
+    /* Step 3: The entry's bytes — the ciphertext when encryption was asked, else
+     * the file's own, unless they would read as ciphertext.
      *
      * Every reader classifies the stored bytes by their magic (content_classify:
      * bytes win over any external claim), so this is the one boundary where the
      * claim and the bytes are made to agree: an encrypt writes the magic, and a
-     * plaintext whose first bytes already are the magic is refused — staged, it
-     * would be stamped plaintext by the caller and read as ciphertext by every
+     * plaintext whose first bytes already are the magic is refused — entered,
+     * it would be stamped plaintext by the caller and read as ciphertext by every
      * reader after, and no key would open it. With the refusal, `should_encrypt`
-     * is the byte truth. The blob is the stage's to write, so the plaintext's
-     * lifetime ends in this frame, whichever arm ran. */
+     * is the byte truth. The plaintext a seal consumes ends in this frame; what
+     * leaves under no seal is the file's own bytes, which the caller releases
+     * through content_capture_free. */
     if (should_encrypt) {
-        buffer_t ciphertext = BUFFER_INIT;
+        buffer_t sealed = BUFFER_INIT;
         err = keymgr_encrypt(
-            keymgr, profile, storage_path, (const uint8_t *) content.data,
-            content.size, &ciphertext
+            keymgr, profile, storage_path, (const uint8_t *) bytes.data,
+            bytes.size, &sealed
         );
+
+        /* Unconditional, as content_rebind's is: the plaintext ends here whichever
+         * way the seal went, and only the ciphertext goes on. */
+        if (bytes.data) {
+            secure_wipe(bytes.data, bytes.size);
+        }
+        buffer_free(&bytes);
+
         if (err) {
-            if (content.data) secure_wipe(content.data, content.size);
-            buffer_free(&content);
+            buffer_free(&sealed);
             return error_wrap(err, "Cannot encrypt '%s'", storage_path);
         }
 
-        err = stage_put(
-            stage, storage_path, ciphertext.data, ciphertext.size, mode
-        );
-        buffer_free(&ciphertext);
-    } else if (content_classify_bytes((const uint8_t *) content.data, content.size)
+        bytes = sealed;
+    } else if (content_classify_bytes((const uint8_t *) bytes.data, bytes.size)
         != CONTENT_PLAINTEXT) {
-        if (content.data) secure_wipe(content.data, content.size);
-        buffer_free(&content);
+        if (bytes.data) {
+            secure_wipe(bytes.data, bytes.size);
+        }
+        buffer_free(&bytes);
         return ERROR(
             ERR_VALIDATION,
             "Cannot capture '%s' as plaintext: its first bytes are dotta's "
             "cipher magic, so every reader would take it for ciphertext; add it "
             "with --encrypt, or change them", filesystem_path
         );
-    } else {
-        err = stage_put(stage, storage_path, content.data, content.size, mode);
     }
 
-    /* Cleanup (secure: plaintext may contain sensitive data) */
-    if (content.data) secure_wipe(content.data, content.size);
-    buffer_free(&content);
+    *out = (content_capture_t){
+        .bytes = bytes, .mode = mode, .encrypted = should_encrypt, .st = st
+    };
 
-    return err;
+    return NULL;
 }
 
-error_t *content_stage_link(
-    stage_t *stage,
-    const char *filesystem_path,
-    const char *storage_path,
-    struct stat *out_stat
-) {
-    CHECK_NULL(stage);
+error_t *content_capture_link(const char *filesystem_path, content_capture_t *out) {
     CHECK_NULL(filesystem_path);
-    CHECK_NULL(storage_path);
-    CHECK_NULL(out_stat);
+    CHECK_NULL(out);
+
+    /* Filled once, at the end, as the file capture is. */
+    *out = (content_capture_t){ 0 };
 
     /* The look: what stands here, and the stat the capture keeps */
     struct stat st;
@@ -733,7 +718,7 @@ error_t *content_stage_link(
         return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
     }
     if (!S_ISLNK(st.st_mode)) {
-        /* This capture's own requirement, as content_stage_file's is: a regular
+        /* This capture's own requirement, as content_capture_file's is: a regular
          * file is that capture's, and what cannot be captured at all is a special
          * file. */
         return ERROR(
@@ -758,14 +743,32 @@ error_t *content_stage_link(
         );
     }
 
-    /* Copied before the put, as content_stage_file copies before its read: the
-     * caller reads it on success alone. */
-    memcpy(out_stat, &st, sizeof(struct stat));
-
-    error_t *err = stage_put(
-        stage, storage_path, target, strlen(target), GIT_FILEMODE_LINK
-    );
+    /* The entry's bytes are the target, as read: never judged, never sealed. */
+    buffer_t bytes = BUFFER_INIT;
+    error_t *err = buffer_append_string(&bytes, target);
     free(target);
+    if (err) {
+        buffer_free(&bytes);
+        return err;
+    }
 
-    return err;
+    *out = (content_capture_t){
+        .bytes = bytes, .mode = GIT_FILEMODE_LINK, .encrypted = false, .st = st
+    };
+
+    return NULL;
+}
+
+void content_capture_free(content_capture_t *capture) {
+    if (!capture) {
+        return;
+    }
+
+    /* Content's rule for every buffer it releases, and nothing else: the look,
+     * the mode and the verdict are values, and both callers read them past this
+     * (the header). */
+    if (capture->bytes.data) {
+        secure_wipe(capture->bytes.data, capture->bytes.size);
+    }
+    buffer_free(&capture->bytes);
 }

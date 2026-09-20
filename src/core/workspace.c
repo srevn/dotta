@@ -1167,7 +1167,7 @@ static error_t *analyze_file_divergence(
              * anchor.blob_oid can differ from row->blob_oid and there is no
              * anchor-side cache to trust. Here we route on row->encrypted directly
              * — the cache IS byte-truth for *this* blob via the Phase 2 write-time
-             * invariant in content_stage_file.
+             * invariant in content_capture_file.
              */
             error_t *err = NULL;
 

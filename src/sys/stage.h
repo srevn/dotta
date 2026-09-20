@@ -71,8 +71,7 @@
  * mounts, content or dotta's vocabulary. Called by the commands that write trees
  * (add, update, remove, revert, bootstrap), by core/metadata's sheet writer,
  * core/ignore's two writers (a profile's .dottaignore, the machine's baseline),
- * infra/content's two captures and infra/epoch's mint; add alone creates an
- * admission.
+ * and infra/epoch's mint; add alone creates an admission.
  */
 
 #ifndef DOTTA_STAGE_H
@@ -252,12 +251,12 @@ void stage_admission_free(stage_admission_t *adm);
 /**
  * A blob from bytes, then the entry at `path`
  *
- * `mode` is the caller's — a capture's own stat mapped by the caller, never a
- * re-stat here — and one of GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE or
- * GIT_FILEMODE_LINK; a link's bytes are its target. An entry already at the path
- * is replaced. A file where a directory is needed, a directory where the file
- * goes, or a name Git will not hold, is refused (ERR_CONFLICT) and the index is
- * unchanged; a mode or a path shape outside the contract is refused
+ * `mode` is the caller's — a capture's own stat mapped where it was taken, never
+ * a re-stat here — and one of GIT_FILEMODE_BLOB, GIT_FILEMODE_BLOB_EXECUTABLE
+ * or GIT_FILEMODE_LINK; a link's bytes are its target. An entry already at the
+ * path is replaced. A file where a directory is needed, a directory where the
+ * file goes, or a name Git will not hold, is refused (ERR_CONFLICT) and the index
+ * is unchanged; a mode or a path shape outside the contract is refused
  * (ERR_INVALID_ARG).
  *
  * @param st Stage (must not be NULL)

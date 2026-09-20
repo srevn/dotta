@@ -1100,12 +1100,12 @@ static error_t *remove_files_from_profile(
         /* The claims the arguments took: the user's word reaches all of them
          * (settle_let_go). */
         for (size_t i = 0; !record_err && i < claim_count; i++) {
-            const char *fs_path = claims[i].filesystem_path;
-            if (!fs_path) continue;
-            const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
+            const char *filesystem_path = claims[i].filesystem_path;
+            if (!filesystem_path) continue;
+            const anchor_t *anchor = hashmap_get(anchor_index, filesystem_path);
             if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
-                .path = fs_path, .anchor = anchor, .named = true
+                .path = filesystem_path, .anchor = anchor, .named = true
             };
         }
 
@@ -1114,19 +1114,19 @@ static error_t *remove_files_from_profile(
          * — Git stands, and an unsettled record is the orphan the next apply
          * reads and releases. */
         for (size_t i = 0; !record_err && i < pruned_dirs.count; i++) {
-            const char *fs_path = NULL;
+            const char *filesystem_path = NULL;
             error_t *resolve_err = mount_resolve(
-                mounts, opts->profile, pruned_dirs.items[i], ctx->arena, &fs_path
+                mounts, opts->profile, pruned_dirs.items[i], ctx->arena, &filesystem_path
             );
             if (resolve_err) {
                 error_free(resolve_err);
                 continue;
             }
-            if (!fs_path) continue;
-            const anchor_t *anchor = hashmap_get(anchor_index, fs_path);
+            if (!filesystem_path) continue;
+            const anchor_t *anchor = hashmap_get(anchor_index, filesystem_path);
             if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
-                .path = fs_path, .anchor = anchor, .named = false
+                .path = filesystem_path, .anchor = anchor, .named = false
             };
         }
     }
@@ -1266,7 +1266,7 @@ static error_t *delete_profile_branch(
     string_array_t *all_profiles = NULL;
     string_array_t *files = NULL;
     string_array_t *hook_storage = NULL;
-    string_array_t *hook_fs_paths = NULL;
+    string_array_t *hook_filesystem = NULL;
     bool performed = false;
 
     /* CLI flags override config */
@@ -1555,16 +1555,16 @@ static error_t *delete_profile_branch(
      * fails (allocation failure or malformed input — non-fatal here), the loop
      * substitutes the storage path so the hook sees a meaningful name. */
     if (hook_storage) {
-        hook_fs_paths = string_array_new(0);
-        if (hook_fs_paths) {
+        hook_filesystem = string_array_new(0);
+        if (hook_filesystem) {
             for (size_t i = 0; i < hook_storage->count; i++) {
-                const char *fs_path = NULL;
+                const char *filesystem_path = NULL;
                 error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, hook_storage->items[i], ctx->arena, &fs_path
+                    mounts, opts->profile, hook_storage->items[i], ctx->arena, &filesystem_path
                 );
                 if (conv_err) error_free(conv_err);
                 string_array_push(
-                    hook_fs_paths, fs_path ? fs_path : hook_storage->items[i]
+                    hook_filesystem, filesystem_path ? filesystem_path : hook_storage->items[i]
                 );
             }
         }
@@ -1574,7 +1574,7 @@ static error_t *delete_profile_branch(
      * file-removal subcommand); fall back to the storage-path universe — or,
      * failing that too, the file list — if synthesis was skipped. The arrays
      * live until cleanup. */
-    const string_array_t *hook_files = hook_fs_paths ? hook_fs_paths
+    const string_array_t *hook_files = hook_filesystem ? hook_filesystem
                                      : hook_storage ? hook_storage
                                      : files;
     const hook_invocation_t hook_inv = {
@@ -1770,7 +1770,7 @@ cleanup:
      * post-deletion transaction on an error path. */
     state_rollback(state);
 
-    if (hook_fs_paths) string_array_free(hook_fs_paths);
+    if (hook_filesystem) string_array_free(hook_filesystem);
     if (hook_storage) string_array_free(hook_storage);
     if (files) string_array_free(files);
     if (all_profiles) string_array_free(all_profiles);

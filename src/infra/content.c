@@ -495,7 +495,7 @@ error_t *content_cache_get_from_blob_oid(
 error_t *content_compare_blob_to_disk(
     git_repository *repo,
     const git_oid *blob_oid,
-    const char *fs_path,
+    const char *filesystem_path,
     git_filemode_t expected_mode,
     const struct stat *st,
     const char *storage_path,
@@ -505,7 +505,7 @@ error_t *content_compare_blob_to_disk(
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(blob_oid);
-    CHECK_NULL(fs_path);
+    CHECK_NULL(filesystem_path);
     CHECK_NULL(st);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
@@ -526,7 +526,7 @@ error_t *content_compare_blob_to_disk(
     if (kind == CONTENT_PLAINTEXT) {
         /* Fast path: hash the disk file, compare to OID. The stored Git blob is
          * never inflated for the comparison itself. */
-        return compare_oid_to_disk(blob_oid, fs_path, expected_mode, st, out_result);
+        return compare_oid_to_disk(blob_oid, filesystem_path, expected_mode, st, out_result);
     }
 
     /* Encrypted or unsupported-version blob: load via cache. The cache call routes
@@ -541,7 +541,7 @@ error_t *content_compare_blob_to_disk(
         return err;
     }
 
-    return compare_buffer_to_disk(content, fs_path, expected_mode, st, out_result);
+    return compare_buffer_to_disk(content, filesystem_path, expected_mode, st, out_result);
 }
 
 void content_cache_free(content_cache_t *cache) {

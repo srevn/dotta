@@ -1451,13 +1451,13 @@ static error_t *write_record(
      * is this profile's word about its own claim, never about the path — and an
      * unbound claim names nothing on this machine to retire. */
     for (size_t i = 0; i < retired->count; i++) {
-        const char *fs_path = NULL;
+        const char *filesystem_path = NULL;
 
-        err = mount_resolve(mounts, profile, retired->items[i], ctx->arena, &fs_path);
+        err = mount_resolve(mounts, profile, retired->items[i], ctx->arena, &filesystem_path);
         if (err) goto cleanup;
-        if (!fs_path || manifest_lookup(manifest, fs_path)) continue;
+        if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
 
-        err = state_retire_anchor(state, fs_path);
+        err = state_retire_anchor(state, filesystem_path);
         if (err) goto cleanup;
     }
 

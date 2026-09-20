@@ -999,20 +999,20 @@ static error_t *update_write_record(
         const string_array_t *let_go[] = { &commit->pruned, &commit->retired };
         for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
             for (size_t i = 0; i < let_go[b]->count; i++) {
-                const char *fs_path = NULL;
+                const char *filesystem_path = NULL;
                 err = mount_resolve(
-                    mounts, commit->profile, let_go[b]->items[i], ctx->arena, &fs_path
+                    mounts, commit->profile, let_go[b]->items[i], ctx->arena, &filesystem_path
                 );
                 if (err) goto cleanup;
                 /* An unbound claim resolves nowhere on this machine: no filesystem
                  * path, so nothing to look up and no record of this run's to
                  * retire. Whatever record a once-bound era may have left is an
                  * orphan the next load's analysis settles. */
-                if (!fs_path) continue;
+                if (!filesystem_path) continue;
 
-                const manifest_row_t *row = manifest_lookup(manifest, fs_path);
+                const manifest_row_t *row = manifest_lookup(manifest, filesystem_path);
                 if (!row) {
-                    err = state_retire_anchor(state, fs_path);
+                    err = state_retire_anchor(state, filesystem_path);
                     if (err) goto cleanup;
                     removed++;
                 } else if (strcmp(row->profile, commit->profile) != 0) {

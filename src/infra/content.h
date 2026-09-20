@@ -341,9 +341,9 @@ error_t *content_rebind(
  *
  * @param repo Git repository (must not be NULL)
  * @param blob_oid Blob OID to compare against (must not be NULL)
- * @param fs_path Filesystem path to compare to (must not be NULL)
+ * @param filesystem_path Filesystem path to compare to (must not be NULL)
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
- * @param st The look the caller took at fs_path (must not be NULL)
+ * @param st The look the caller took at filesystem_path (must not be NULL)
  * @param storage_path Storage path; used as AAD when blob is encrypted (must
  *          not be NULL, must match Git tree path)
  * @param profile Profile name for key derivation when encrypted (must not be NULL)
@@ -356,7 +356,7 @@ error_t *content_rebind(
 error_t *content_compare_blob_to_disk(
     git_repository *repo,
     const git_oid *blob_oid,
-    const char *fs_path,
+    const char *filesystem_path,
     git_filemode_t expected_mode,
     const struct stat *st,
     const char *storage_path,

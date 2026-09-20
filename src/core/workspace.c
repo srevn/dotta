@@ -216,7 +216,7 @@ struct workspace {
      * later reader in the run sees the post-write value. */
     anchor_t *anchors;                           /* Arena snapshot from state_get_all_anchors */
     size_t anchor_count;                         /* Number of anchors in the snapshot */
-    hashmap_t *anchor_index;                     /* fs_path → anchor_t * (heap-allocated) */
+    hashmap_t *anchor_index;                     /* filesystem_path → anchor_t * (heap-allocated) */
 
     /* Orphans: the records whose path the view lacks, in the snapshot's path
      * order. Read-only — no row names an orphan's path, so no writer ever reaches
@@ -234,7 +234,7 @@ struct workspace {
      * the table is empty (the probes are NULL-safe). */
     char **orders;                               /* Arena snapshot from state_get_prune_orders */
     size_t order_count;                          /* Number of orders */
-    hashmap_t *order_index;                      /* fs_path → the order (membership; heap-allocated) */
+    hashmap_t *order_index;                      /* filesystem_path → the order (membership; heap-allocated) */
 
     /* The released copies, snapshot at load the same way. Two readers only, by
      * design: the base derivation in analyze_file_divergence (through the index,
@@ -243,7 +243,7 @@ struct workspace {
      * reader may grow without revisiting the reap design. */
     released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
-    hashmap_t *released_index;                   /* fs_path → released_copy_t * (heap-allocated) */
+    hashmap_t *released_index;                   /* filesystem_path → released_copy_t * (heap-allocated) */
 
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition for the three snapshots above,
@@ -939,14 +939,14 @@ static error_t *analyze_file_divergence(
     CHECK_NULL(ws);
     CHECK_NULL(row);
 
-    const char *fs_path = row->filesystem_path;
+    const char *filesystem_path = row->filesystem_path;
     const char *storage_path = row->storage_path;
     const char *profile = row->profile;
 
     /* The record dotta keeps of this path, if any. NULL means dotta has never
      * observed the path on disk in scope: no base for the content question, no
      * fast path, and absence reads UNDEPLOYED. */
-    const anchor_t *anchor = workspace_get_anchor(ws, fs_path);
+    const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
     /* The blob-family verdict (see the doc above): is the blob Git holds for
      * this row stored plaintext where the auto-encrypt policy claims the path?
@@ -967,7 +967,7 @@ static error_t *analyze_file_divergence(
      * dotta saw, and dotta saw nothing here. The slot says the same to the phases
      * after: UNKNOWN with nothing behind it, written rather than left to the
      * allocator's zero, which spells FS_OCCUPANT_NONE. */
-    if (displaced_ancestor(ws, fs_path, false)) {
+    if (displaced_ancestor(ws, filesystem_path, false)) {
         *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
 
         return workspace_add_diverged(
@@ -981,7 +981,7 @@ static error_t *analyze_file_divergence(
      * the metadata checks read — and, after this analysis has run, the identity
      * index_entries projects. Nothing below retakes it, and nothing after the
      * join does either (look_t). */
-    look->occupant = fs_lstat_occupant(fs_path, &look->st);
+    look->occupant = fs_lstat_occupant(filesystem_path, &look->st);
     look->lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
 
     if (look->occupant == FS_OCCUPANT_UNKNOWN) {
@@ -1095,7 +1095,7 @@ static error_t *analyze_file_divergence(
          * path it was never sealed at. */
         bool anchor_has_blob = anchor && !git_oid_is_zero(&anchor->blob_oid);
         const released_copy_t *released = anchor_has_blob ? NULL
-            : hashmap_get(ws->released_index, fs_path);
+            : hashmap_get(ws->released_index, filesystem_path);
 
         /* No base by default — the NULL blob is the no-base state; the row-derived
          * type and pair beside it are never read as a base's (every base question
@@ -1174,7 +1174,7 @@ static error_t *analyze_file_divergence(
             if (!row->encrypted) {
                 err = compare_oid_to_disk(
                     blob_oid_ptr,
-                    fs_path,
+                    filesystem_path,
                     expected_filemode,
                     &look->st,
                     &cmp_result
@@ -1193,7 +1193,7 @@ static error_t *analyze_file_divergence(
                 if (!err) {
                     err = compare_buffer_to_disk(
                         expected_content,
-                        fs_path,
+                        filesystem_path,
                         expected_filemode,
                         &look->st,
                         &cmp_result
@@ -1271,7 +1271,7 @@ static error_t *analyze_file_divergence(
                 error_t *verify_err = content_compare_blob_to_disk(
                     ws->repo,
                     base_blob,
-                    fs_path,
+                    filesystem_path,
                     path_type_to_git_filemode(base_type),
                     &look->st,
                     base_storage,
@@ -1491,7 +1491,7 @@ static error_t *compute_orphan_divergence(
 ) {
     *out = DIVERGENCE_NONE;
 
-    const char *fs_path = anchor->filesystem_path;
+    const char *filesystem_path = anchor->filesystem_path;
     const char *storage_path = anchor->storage_path;
     const char *profile = anchor->profile;
 
@@ -1535,7 +1535,7 @@ static error_t *compute_orphan_divergence(
         err = content_compare_blob_to_disk(
             ws->repo,
             reference,
-            fs_path,
+            filesystem_path,
             expected_filemode,
             st,
             storage_path,
@@ -2352,7 +2352,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
     for (size_t i = 0; i < ws->orphan_count; i++) {
         const anchor_t *anchor = ws->orphans[i];
 
-        const char *fs_path = anchor->filesystem_path;
+        const char *filesystem_path = anchor->filesystem_path;
         const char *storage_path = anchor->storage_path;
         const char *profile = anchor->profile;
         path_kind_t kind = path_type_kind(anchor->type);
@@ -2362,7 +2362,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
          * — no look was taken (look_orphans), and the item says so: ORPHANED
          * with nothing measured; cleanup's displaced arm releases the copy and
          * apply's settle retires the record. */
-        if (displaced_ancestor(ws, fs_path, true)) {
+        if (displaced_ancestor(ws, filesystem_path, true)) {
             err = workspace_add_diverged(
                 ws, NULL, anchor, WORKSPACE_STATE_ORPHANED, DIVERGENCE_NONE,
                 FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
@@ -2434,7 +2434,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state = WORKSPACE_STATE_RELEASED;
             divergence = DIVERGENCE_TYPE;
 
-        } else if (hashmap_has(ws->order_index, fs_path) && measurable) {
+        } else if (hashmap_has(ws->order_index, filesystem_path) && measurable) {
             /* The user ordered the copy pruned — remove --delete-files over a
              * path the removal named or a copy dotta deployed, the only births
              * an order has (state_order_prune); Git is not asked. Read ahead of
@@ -2474,7 +2474,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * there is nothing a content comparison would decide. */
                 item_state = WORKSPACE_STATE_RELEASED;
             } else if (look->occupant != FS_OCCUPANT_UNKNOWN &&
-                standing_row(ws, fs_path, &look->st)) {
+                standing_row(ws, filesystem_path, &look->st)) {
                 /* The guard — BACKED only, which is what these two arms are. A
                  * row of the view stands on this very entry under another spelling
                  * of its path: this profile's own claim after its root was
@@ -2540,7 +2540,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
                 /* Present but unstattable, either kind: nothing to measure the
                  * copy with, and the errno says whose refusal it was. */
                 fault = fault_class(error_code_from_errno(look->lstat_errno));
-            } else if (!fs_eaccess(fs_path, R_OK | X_OK)) {
+            } else if (!fs_eaccess(filesystem_path, R_OK | X_OK)) {
                 /* A directory: read for the readdir, search for the walk's look
                  * at an entry named like OS metadata (fs_directory_emptiness).
                  * fs_eaccess leaves faccessat's errno on false. */

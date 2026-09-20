@@ -1567,7 +1567,7 @@ error_t *state_get_all_anchors(
          *         observed_at, deployed_at) */
         anchor_t *anchor = &anchors[i];
 
-        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
@@ -1589,13 +1589,13 @@ error_t *state_get_all_anchors(
         }
 
         /* Validate non-nullable string columns */
-        if (!fs_path || !storage_path || !profile || !type_str) {
+        if (!filesystem_path || !storage_path || !profile || !type_str) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_STATE_INVALID, "NULL value in required column at anchor %zu", i);
         }
 
         /* Copy strings into arena */
-        anchor->filesystem_path = DUP(fs_path);
+        anchor->filesystem_path = DUP(filesystem_path);
         anchor->storage_path = DUP(storage_path);
         anchor->profile = DUP(profile);
         anchor->type = path_type_from_sql_text(type_str);
@@ -1969,13 +1969,13 @@ error_t *state_get_prune_orders(
 
     size_t i = 0;
     while (rc == SQLITE_ROW && i < order_count) {
-        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
-        if (!fs_path) {
+        const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
+        if (!filesystem_path) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_STATE_INVALID, "NULL filesystem_path in order %zu", i);
         }
 
-        paths[i] = arena_strdup(arena, fs_path);
+        paths[i] = arena_strdup(arena, filesystem_path);
         if (!paths[i]) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to copy order path");
@@ -2101,19 +2101,19 @@ error_t *state_get_released_copies(
     while (rc == SQLITE_ROW && i < released_count) {
         released_copy_t *row = &rows[i];
 
-        const char *fs_path = (const char *) sqlite3_column_text(stmt, 0);
+        const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
         const char *profile = (const char *) sqlite3_column_text(stmt, 2);
         const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
 
-        if (!fs_path || !storage_path || !profile || !type_str) {
+        if (!filesystem_path || !storage_path || !profile || !type_str) {
             sqlite3_finalize(stmt);
             return ERROR(
                 ERR_STATE_INVALID, "NULL value in required column at released copy %zu", i
             );
         }
 
-        row->filesystem_path = arena_strdup(arena, fs_path);
+        row->filesystem_path = arena_strdup(arena, filesystem_path);
         row->storage_path = arena_strdup(arena, storage_path);
         row->profile = arena_strdup(arena, profile);
         row->type = path_type_from_sql_text(type_str);

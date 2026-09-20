@@ -654,11 +654,11 @@ static error_t *compare_tree_files_to_filesystem(
     /* Iterate through all files in the historical slice */
     for (size_t i = 0; i < files.count; i++) {
         const manifest_row_t *entry = files.entries[i];
-        const char *fs_path = entry->filesystem_path;
+        const char *filesystem_path = entry->filesystem_path;
         const char *storage_path = entry->storage_path;
 
         /* Check file filter */
-        if (!pathspec_matches(file_filter, fs_path, storage_path, PATH_KIND_FILE)) {
+        if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
             continue;
         }
 
@@ -675,8 +675,8 @@ static error_t *compare_tree_files_to_filesystem(
              * its read — where it used to look twice and could see two different
              * worlds. */
             struct stat st;
-            if (fs_lstat(fs_path, &st) != 0) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);
+            if (fs_lstat(filesystem_path, &st) != 0) {
+                output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
                 (*diff_count)++;
                 continue;
             }
@@ -688,21 +688,21 @@ static error_t *compare_tree_files_to_filesystem(
             );
             if (err) {
                 return error_wrap(
-                    err, "Failed to get historical content for '%s'", fs_path
+                    err, "Failed to get historical content for '%s'", filesystem_path
                 );
             }
 
             /* Compare with filesystem */
             compare_result_t result;
             err = compare_buffer_to_disk(
-                hist_content, fs_path, mode, &st, &result
+                hist_content, filesystem_path, mode, &st, &result
             );
             if (err) {
-                return error_wrap(err, "Failed to compare '%s'", fs_path);
+                return error_wrap(err, "Failed to compare '%s'", filesystem_path);
             }
 
             if (result != CMP_EQUAL) {
-                output_print(out, OUTPUT_NORMAL, "%s\n", fs_path);
+                output_print(out, OUTPUT_NORMAL, "%s\n", filesystem_path);
                 (*diff_count)++;
             }
             continue;
@@ -719,16 +719,16 @@ static error_t *compare_tree_files_to_filesystem(
         if (err) {
             return error_wrap(
                 err, "Failed to get historical content for '%s'",
-                fs_path
+                filesystem_path
             );
         }
 
         file_diff_t diff = { 0 };
         err = compare_generate_diff(
-            hist_content, fs_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
+            hist_content, filesystem_path, storage_path, mode, CMP_DIR_DOWNSTREAM, &diff
         );
         if (err) {
-            return error_wrap(err, "Failed to generate diff for '%s'", fs_path);
+            return error_wrap(err, "Failed to generate diff for '%s'", filesystem_path);
         }
 
         /* The status message, in the commit's words rather than the renderer's

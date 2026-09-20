@@ -604,7 +604,7 @@ static void display_overlaps(
     }
 
     /* Explain implications */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_info(
         out, OUTPUT_NORMAL,
         "These paths will be removed only from profile '%s'.",
@@ -637,7 +637,7 @@ static void display_overlaps(
             current_profile
         );
     }
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -746,7 +746,7 @@ static bool confirm_profile_deletion(
         return true;
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL, "This will delete profile '%s' (%s)",
         profile, counts
@@ -762,8 +762,6 @@ static bool confirm_profile_deletion(
             "         Deployed paths will be released from management."
         );
     }
-    output_newline(out, OUTPUT_NORMAL);
-
     bool confirmed = output_confirm_destructive(
         out, config ? config->confirm_destructive : true, "Continue?", opts->force
     );
@@ -863,9 +861,10 @@ static error_t *remove_files_from_profile(
         }
         char counts[64];
         format_claim_counts(counts, sizeof(counts), dry_files, dry_dirs);
+        output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
-            "\nTotal: %s would be removed from profile\n",
+            "Total: %s would be removed from profile\n",
             counts
         );
         if (opts->delete_files) {
@@ -1222,7 +1221,6 @@ static error_t *remove_files_from_profile(
                 "Paths released from management (no apply needed)"
             );
         }
-        output_newline(out, OUTPUT_NORMAL);
     }
 
 cleanup:
@@ -1389,10 +1387,9 @@ static error_t *delete_profile_branch(
 
     /* Warn about unpushed changes (only if profile has remote tracking) */
     if (has_unpushed && !opts->force) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_warning(out, OUTPUT_NORMAL, "Profile '%s' has unpushed changes!", opts->profile);
         output_hint(out, OUTPUT_NORMAL, "Run 'dotta sync' first to avoid data loss");
-        output_newline(out, OUTPUT_NORMAL);
     } else if (is_local_only) {
         /* Inform about local-only status in verbose mode (not a warning) */
         output_info(
@@ -1461,7 +1458,7 @@ static error_t *delete_profile_branch(
      * still provides — is promised the fate it will not take; the receipt corrects
      * it. */
     if (candidate_count > 0) {
-        output_newline(out, OUTPUT_VERBOSE);
+        output_gap(out, OUTPUT_VERBOSE);
         if (opts->delete_files && deployed_count > 0) {
             if (deployed_count < candidate_count) {
                 output_info(
@@ -1498,13 +1495,13 @@ static error_t *delete_profile_branch(
                 "      These will be released from management."
             );
         }
-        output_newline(out, OUTPUT_VERBOSE);
     }
 
     /* Confirm deletion */
     if (!confirm_profile_deletion(
         opts->profile, counts, opts, config, out
         )) {
+        output_gap(out, OUTPUT_NORMAL);
         output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -1759,7 +1756,6 @@ static error_t *delete_profile_branch(
                 "Paths released from management (no apply needed)"
             );
         }
-        output_newline(out, OUTPUT_NORMAL);
     }
 
 cleanup:

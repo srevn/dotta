@@ -522,7 +522,7 @@ static error_t *show_commit(
         time_buf, relative_buf
     );
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Commit message (indented). A line and its newline are one step; the last
      * line needs no newline, so a blank line inside a message survives. */
@@ -533,7 +533,7 @@ static error_t *show_commit(
         line += len + (line[len] == '\n');
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Diff stats with color */
     err = gitops_diff_get_stats(diff, &stats);
@@ -561,7 +561,7 @@ static error_t *show_commit(
     }
 
     output_endline(out, OUTPUT_NORMAL);
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Print the diff with color */
     ret = git_diff_print(

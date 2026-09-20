@@ -682,6 +682,10 @@ static void print_deploy_results(
         }
     }
 
+    /* The receipt is a block: the previews above it close with nothing, and at
+     * NORMAL the summary below is the first line it has. */
+    output_gap(out, OUTPUT_NORMAL);
+
     /* Verbose mode: show individual items per outcome */
     if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
@@ -904,6 +908,9 @@ static void print_cleanup_results(
     const cleanup_preflight_result_t *verdicts,
     const cleanup_result_t *result
 ) {
+    /* The receipt is a block, the same way deploy's is. */
+    output_gap(out, OUTPUT_NORMAL);
+
     /* Verbose mode: show individual items per outcome */
     if (result->pruned_files.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Pruned orphaned files");
@@ -1613,8 +1620,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     if (scope_has_paths(scope)) {
         size_t filter_count = pathspec_count(scope_paths(scope));
+        output_gap(out, OUTPUT_VERBOSE);
         output_print(
-            out, OUTPUT_VERBOSE, "\nPath filter: %zu path%s specified\n",
+            out, OUTPUT_VERBOSE, "Path filter: %zu path%s specified\n",
             filter_count, filter_count == 1 ? "" : "s"
         );
     }
@@ -1637,7 +1645,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Pass state handle to workspace so it analyzes within our write transaction.
      * This ensures consistency and eliminates redundant database connections.
      */
-    output_print(out, OUTPUT_VERBOSE, "\nLoading workspace...\n");
+    output_gap(out, OUTPUT_VERBOSE);
+    output_print(out, OUTPUT_VERBOSE, "Loading workspace...\n");
 
     /* Orphan detection for the settle; the directory scan is update's, and no
      * apply reads a new file. */
@@ -1771,7 +1780,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * computed fresh divergence for every active row; the planner gates each
      * row on scope and classifies it by deploy's work predicate into pending /
      * clean, or into one of the two skipped buckets (-e, --skip-existing). */
-    output_print(out, OUTPUT_VERBOSE, "\nPlanning deployment...\n");
+    output_gap(out, OUTPUT_VERBOSE);
+    output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
 
     err = deploy_plan_build(ws, scope, opts->skip_existing, &deploy_plan);
     if (err) {
@@ -1868,7 +1878,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * --keep-orphans plans nothing. The empty plan is what every later stage
      * reads, so no stage re-encodes the flag. */
-    output_print(out, OUTPUT_VERBOSE, "\nPlanning cleanup...\n");
+    output_gap(out, OUTPUT_VERBOSE);
+    output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
     err = cleanup_plan_build(ws, scope, opts->keep_orphans, &cleanup_plan);
     if (err) {
@@ -2229,8 +2240,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * disk — pure state bookkeeping skips them. Nothing is written past the
      * checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
+        output_gap(out, OUTPUT_NORMAL);
         if (reassigned_count > 0) {
             print_reassignments(out, reassigned, reassigned_count);
+            output_gap(out, OUTPUT_NORMAL);
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_NORMAL,
@@ -2285,11 +2298,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * way — an owner this system does not know — print as warnings closing the
      * preview.
      */
-    /* The trailing blank is this heading's own: the first preview section after
-     * it is the run's first section, so output_section has no separator to emit
-     * (has_content is still false). "Executing deployment plan..." needs none —
-     * by then the preview has printed and the separator comes for free. */
-    output_print(out, OUTPUT_VERBOSE, "\nRunning pre-flight checks...\n\n");
+    output_gap(out, OUTPUT_VERBOSE);
+    output_print(out, OUTPUT_VERBOSE, "Running pre-flight checks...\n");
 
     deploy_options_t deploy_opts = {
         .force            = opts->force,
@@ -2347,13 +2357,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     print_cleanup_preview(out, cleanup_verdicts);
     print_cleanup_skips(out, cleanup_verdicts);
     print_cleanup_refused(out, cleanup_verdicts);
-
-    /* The previews are over: one blank before whatever follows — the prompt, a
-     * dry run's tail, the run's trace. Unconditional, because past the
-     * nothing-to-do exit some plan is non-empty, a non-empty plan yields a
-     * non-empty fate set on its side (the two totality equations), and a non-empty
-     * fate set prints a section. */
-    output_newline(out, OUTPUT_NORMAL);
 
     /* Neither engine's skips abort: what can be deployed is deployed, what can
      * be pruned is pruned, and what cannot is named with its remedy — better
@@ -2440,6 +2443,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             prompt[0] = (char) toupper((unsigned char) prompt[0]);
 
             if (!output_confirm(out, prompt, false)) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Cancelled");
                 err = NULL;  /* Not an error - user cancelled */
                 goto cleanup;
@@ -2452,6 +2456,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * dry run nothing it does not already know. Everything below is for the run
      * that writes — the two engines, then the record of what they did. */
     if (opts->dry_run) {
+        output_gap(out, OUTPUT_VERBOSE);
         output_print(out, OUTPUT_VERBOSE, "Dry-run mode - no paths will be modified\n");
     } else {
         /* Carry the verdicts out (files-only, directories-only, or mixed — one
@@ -2461,6 +2466,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * the skip block was its whole story, and "no work in scope" would misname
          * it. */
         if (deploy_verdicts->files.count + deploy_verdicts->directories.count > 0) {
+            output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Executing deployment plan...\n");
 
             /* The content cache was populated with decrypted content during
@@ -2807,6 +2813,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * adoption and acknowledgement loops re-stamped, the pending ones the record
      * step rewrote behind the run's own writes (deployed files; converged
      * directories). Dry-run previews the in-scope set the preview named. */
+    output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
         if (reassigned_count > 0) {
             output_info(

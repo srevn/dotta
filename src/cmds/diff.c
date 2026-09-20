@@ -430,9 +430,9 @@ static error_t *present_diffs_for_direction(
             continue;
         }
 
-        /* Blank line between entries for readability */
-        if (*diff_count > 0 && !opts->name_only) {
-            output_newline(out, OUTPUT_NORMAL);
+        /* Each entry is a block; a name-only listing has none */
+        if (!opts->name_only) {
+            output_gap(out, OUTPUT_NORMAL);
         }
 
         /* Show the diff (content already analyzed by workspace) */
@@ -496,7 +496,7 @@ static void print_commit_header(
         out, OUTPUT_NORMAL, "{bold}Date:{reset}   %s (%s)\n",
         time_buf, relative_buf
     );
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Commit message (indented). A line and its newline are one step; the last
      * line needs no newline, so a blank line inside a message survives. */
@@ -507,7 +507,7 @@ static void print_commit_header(
         line += len + (line[len] == '\n');
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 }
 
 /**
@@ -750,10 +750,7 @@ static error_t *compare_tree_files_to_filesystem(
         }
 
         if (status_msg) {
-            /* Blank line between entries for readability */
-            if (*diff_count > 0) {
-                output_newline(out, OUTPUT_NORMAL);
-            }
+            output_gap(out, OUTPUT_NORMAL);
 
             /* Show file header */
             output_styled(
@@ -950,13 +947,14 @@ static error_t *diff_commit_to_workspace(
             out, OUTPUT_NORMAL, "Note: comparing commit against profile '%s' only "
             "(commit-to-workspace compares one profile at a time)", profile
         );
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
     }
 
     output_styled(
-        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n\n",
+        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..workspace{reset}\n",
         oid_str
     );
+    output_gap(out, OUTPUT_NORMAL);
 
     print_commit_header(out, commit, profile);
 
@@ -1203,9 +1201,10 @@ static error_t *diff_commits(
     git_oid_tostr(oid2_str, sizeof(oid2_str), git_commit_id(commit2));
 
     output_styled(
-        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n\n",
+        out, OUTPUT_NORMAL, "{bold}diff --dotta %s..%s{reset}\n",
         oid1_str, oid2_str
     );
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Print second commit header (the "new" one) */
     print_commit_header(out, commit2, profile2_name);
@@ -1268,7 +1267,7 @@ static error_t *diff_commits(
         err = print_diff_stats(out, diff);
         if (err) goto cleanup;
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
 
         ret = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, print_diff_line_cb, out);
         if (ret < 0) {
@@ -1373,7 +1372,7 @@ static error_t *diff_workspace(
         /* Upstream section */
         output_section(out, OUTPUT_NORMAL, "Upstream (repository → filesystem)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta apply' would change");
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
 
         err = present_diffs_for_direction(
             diverged, cache, DIFF_UPSTREAM, scope, opts, out,
@@ -1394,7 +1393,7 @@ static error_t *diff_workspace(
         /* Downstream section */
         output_section(out, OUTPUT_NORMAL, "Downstream (filesystem → repository)");
         output_info(out, OUTPUT_NORMAL, "Shows what 'dotta update' would commit");
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
 
         err = present_diffs_for_direction(
             diverged, cache, DIFF_DOWNSTREAM, scope, opts, out,

@@ -68,8 +68,6 @@ static void print_manifest_enable_stats(
                 staged
             );
         }
-
-        output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
         if (staged > 0) {
@@ -138,8 +136,6 @@ static void print_manifest_disable_stats(
                 stats->orphans.observed == 1 ? "" : "s"
             );
         }
-
-        output_newline(out, OUTPUT_VERBOSE);
     } else {
         /* Compact summary */
         if (stats->orphans.owned > 0) {
@@ -367,7 +363,6 @@ static error_t *profile_list(
                                 out, OUTPUT_NORMAL, "  • %s\n", remote_only->items[i]
                             );
                         }
-                        output_newline(out, OUTPUT_NORMAL);
                     }
                 }
             }
@@ -531,7 +526,6 @@ static error_t *profile_fetch(
                         available_remote->items[i]
                     );
                 }
-                output_newline(out, OUTPUT_NORMAL);
             }
             string_array_free(available_remote);
             err = ERROR(
@@ -597,7 +591,7 @@ cleanup:
     }
 
     /* Summary (only shown on success) */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     if (fetched_count > 0) {
         output_success(
             out, OUTPUT_NORMAL, "Fetched %zu profile%s",
@@ -918,9 +912,7 @@ static error_t *profile_enable(
      * owns its complete UX below — the live-path summary is unreachable on this
      * branch (goto cleanup bypasses it). */
     if (opts->dry_run) {
-        if (!output_is_verbose(out)) {
-            output_newline(out, OUTPUT_NORMAL);
-        }
+        output_gap(out, OUTPUT_NORMAL);
 
         size_t would_enable = to_enable_validated->count - (retarget ? 1 : 0);
         if (would_enable > 0) {
@@ -941,7 +933,7 @@ static error_t *profile_enable(
             );
         }
         if (to_enable_validated->count > 0) {
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy paths"
             );
@@ -1053,9 +1045,7 @@ static error_t *profile_enable(
     /* Live summary — only runs on non-dry-run, non-error completion. Any Phase
      * 2-3 failure sets err and jumps to cleanup, skipping the summary; dry-run
      * owns its own messaging above. */
-    if (!output_is_verbose(out)) {
-        output_newline(out, OUTPUT_NORMAL);
-    }
+    output_gap(out, OUTPUT_NORMAL);
 
     {
         size_t enabled_count = to_enable_validated->count - (retarget ? 1 : 0);
@@ -1290,9 +1280,7 @@ static error_t *profile_disable(
      * owns its complete UX below — the live-path summary is unreachable on this
      * branch (goto cleanup bypasses it). */
     if (opts->dry_run) {
-        if (!output_is_verbose(out)) {
-            output_newline(out, OUTPUT_NORMAL);
-        }
+        output_gap(out, OUTPUT_NORMAL);
 
         if (to_disable_validated->count > 0) {
             output_info(
@@ -1311,7 +1299,7 @@ static error_t *profile_disable(
                 }
                 output_endline(out, OUTPUT_NORMAL);
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
             output_info(
                 out, OUTPUT_NORMAL, "Run 'dotta apply' to remove deployed paths"
             );
@@ -1426,9 +1414,7 @@ static error_t *profile_disable(
      *   - count == 0 && not_enabled == 0 is unreachable: the explicit-args path
      *     requires opts->profile_count > 0 (caught earlier), and the --all-on-empty
      *     case is caught by the early exit. */
-    if (!output_is_verbose(out)) {
-        output_newline(out, OUTPUT_NORMAL);
-    }
+    output_gap(out, OUTPUT_NORMAL);
 
     if (to_disable_validated->count > 0) {
         output_success(
@@ -1612,7 +1598,7 @@ static error_t *profile_reorder(
 
     /* Success message */
     if (!opts->quiet) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_success(
             out, OUTPUT_NORMAL, "Reordered %zu profile%s",
             opts->profile_count, opts->profile_count == 1 ? "" : "s"
@@ -1818,7 +1804,7 @@ cleanup:
     if (err) return err;
 
     /* Summary (only shown on success) */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     if (!has_issues) {
         output_success(out, OUTPUT_NORMAL, "Profile state is valid");
     } else {

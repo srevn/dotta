@@ -266,7 +266,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
 
     /* Success */
     output_success(out, OUTPUT_NORMAL, "Initialized dotta repository in %s", path);
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* A repository outside the configured location is one no later command will
      * find: every one of them resolves that location and stops there, so the
@@ -281,7 +281,7 @@ error_t *cmd_init(const dotta_ctx_t *ctx, const cmd_init_options_t *opts) {
         output_hintline(
             out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
         );
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
     }
 
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");

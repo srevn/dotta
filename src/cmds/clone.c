@@ -562,7 +562,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             for (size_t i = 0; i < detected_profiles->count; i++) {
                 output_info(out, OUTPUT_NORMAL, "  • %s", detected_profiles->items[i]);
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
 
             /* Make the detected profiles local */
             size_t fetched_count = 0;
@@ -594,7 +594,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                 for (size_t i = 0; i < remote_branches->count; i++) {
                     output_info(out, OUTPUT_NORMAL, "  • %s", remote_branches->items[i]);
                 }
-                output_newline(out, OUTPUT_NORMAL);
+                output_gap(out, OUTPUT_NORMAL);
             }
             output_info(out, OUTPUT_NORMAL, "Run 'dotta profile enable <name>' after setup");
         }
@@ -695,7 +695,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
                     bootstrap_found.items[i], BOOTSTRAP_SCRIPT_NAME
                 );
             }
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
 
             /* Determine if we should run bootstrap */
             if (opts->bootstrap_mode == CLONE_BOOTSTRAP_FORCE) {
@@ -712,7 +712,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Execute bootstrap if requested */
     if (run_bootstrap && bootstrap_found.count > 0) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         bootstrap_spec_t spec = {
             .repo          = repo,
             .repo_dir      = local_path,
@@ -734,7 +734,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
     }
 
     /* Success - print messages before cleanup */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_success(out, OUTPUT_NORMAL, "Dotta repository cloned successfully!");
 
     if (run_bootstrap) {
@@ -758,9 +758,9 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         output_hintline(
             out, OUTPUT_NORMAL, "  or set repo_dir under [core] in the config file"
         );
-        output_newline(out, OUTPUT_NORMAL);
     }
 
+    output_gap(out, OUTPUT_NORMAL);
     output_hintline(out, OUTPUT_NORMAL, "Next steps:");
     if (!run_bootstrap && bootstrap_available) {
         output_hintline(out, OUTPUT_NORMAL, "  Run bootstrap:  dotta bootstrap");

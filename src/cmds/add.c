@@ -2336,7 +2336,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 opts->profile
             );
         }
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
 
         /* The one fact of the record a preview has: no row holds the profile
          * and this add does not create it — the receipt's `enabled`, read before
@@ -2349,7 +2349,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 "Profile not enabled - nothing would be marked as deployed"
             );
             report_enable_hint(out, opts->profile, opts->target, view);
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
         }
 
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
@@ -2609,7 +2609,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         );
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* The record phase's own screen, below the ✓ lines the add earned: the cause
      * and what it left standing, what the rows took, or the fact that no row

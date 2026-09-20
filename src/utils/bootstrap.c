@@ -330,7 +330,7 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
 
     if (fail_count == 0) return NULL;
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
         fail_count, fail_count == 1 ? "" : "s"

@@ -156,8 +156,6 @@ static error_t *remote_list(
         }
     }
 
-    output_newline(out, OUTPUT_NORMAL);
-
     git_strarray_dispose(&remotes);
 
     return NULL;

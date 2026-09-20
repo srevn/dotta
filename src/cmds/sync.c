@@ -429,7 +429,6 @@ static error_t *attempt_rollback(
             "    {red}✗{reset} Critical: Rollback failed: %s\n",
             error_message(err)
         );
-        output_newline(out, OUTPUT_NORMAL);
         return error_wrap(
             err, "Failed to rollback branch '%s' after %s.\n"
             "Repository may be in an inconsistent state.\n"
@@ -1153,7 +1152,7 @@ static void sync_render_dry_run(
         }
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_info(out, OUTPUT_NORMAL, "Dry run: no changes made");
 }
 
@@ -1279,7 +1278,7 @@ static void sync_render_summary(
      * block is a delta and prints once; the hint prints for as long as the work
      * stands. */
     if (manifest_changed || apply_pending) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_hint(
             out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy, or 'dotta status' to review"
         );
@@ -1781,7 +1780,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                  * unverifiable count rides along as an advisory so the paths
                  * the analysis could not settle are never silent. */
                 output_section(out, OUTPUT_NORMAL, "Workspace has uncommitted changes");
-                output_newline(out, OUTPUT_NORMAL);
+                output_gap(out, OUTPUT_NORMAL);
 
                 if (uncommitted_count > 0) {
                     output_info(
@@ -1826,9 +1825,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                     );
                 }
 
-                output_newline(out, OUTPUT_NORMAL);
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Sync requires a clean workspace.");
-                output_newline(out, OUTPUT_NORMAL);
+                output_gap(out, OUTPUT_NORMAL);
                 output_hintline(out, OUTPUT_NORMAL, "Next steps:");
                 if (conflict_count > 0) {
                     output_hintline(
@@ -1898,13 +1897,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             }
 
             output_info(out, OUTPUT_NORMAL, "Syncing before 'update' may lead to conflicts.");
-            output_newline(out, OUTPUT_NORMAL);
 
             /* Confirmation with safe defaults:
              * - Interactive: defaults to NO (user must explicitly type 'y')
              * - Non-interactive (CI/CD): refuses automatically
              */
             if (!output_confirm_or_default(out, "Continue anyway?", false, false)) {
+                output_gap(out, OUTPUT_NORMAL);
                 output_info(out, OUTPUT_NORMAL, "Sync cancelled");
                 if (conflict_count > 0) {
                     output_hint(
@@ -1925,7 +1924,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             /* User confirmed - proceed with sync */
             output_info(out, OUTPUT_VERBOSE, "Proceeding with uncommitted changes");
-            output_newline(out, OUTPUT_NORMAL);
         } else {
             /* Nothing blocks, but not every path is settled: say so and proceed.
              * Silence here once hid real divergence — the one route the old fold

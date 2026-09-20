@@ -1003,7 +1003,7 @@ static error_t *test_path_ignore(
             asker_count = enabled->count;
             output_info(out, OUTPUT_NORMAL, "Testing path: %s", test_path);
             output_info(out, OUTPUT_NORMAL, "Enabled profiles: %zu", asker_count);
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
         } else {
             output_info(out, OUTPUT_NORMAL, "No enabled profiles found");
             output_info(
@@ -1101,7 +1101,7 @@ static error_t *test_path_ignore(
     }
 
     if (enabled) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         if (any_ignored) {
             output_info(
                 out, OUTPUT_NORMAL,

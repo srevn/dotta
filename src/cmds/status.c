@@ -211,7 +211,7 @@ static void display_enabled_profiles(
      * Both are worth a line at all because nothing else offers them — neither
      * claim has a row, so no completion source reaches one. */
     if (unbound_shown || unused_shown) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         if (unbound_shown) {
             output_hintline(
                 out, OUTPUT_NORMAL,
@@ -831,7 +831,7 @@ static void display_workspace_status(
                     output_list_free(list);
 
                     if (legend_count > 0) {
-                        output_newline(out, OUTPUT_NORMAL);
+                        output_gap(out, OUTPUT_NORMAL);
                         for (size_t i = 0; i < legend_count; i++) {
                             output_hintline(
                                 out, OUTPUT_NORMAL, "  %-*s - %s",
@@ -1160,7 +1160,7 @@ static void display_workspace_status(
                     output_list_free(list);
 
                     if (legend_count > 0) {
-                        output_newline(out, OUTPUT_NORMAL);
+                        output_gap(out, OUTPUT_NORMAL);
                         for (size_t i = 0; i < legend_count; i++) {
                             output_hintline(
                                 out, OUTPUT_NORMAL, "  %-*s - %s",
@@ -1383,7 +1383,7 @@ static error_t *display_remote_status(
             /* Verbose mode: show detailed commit info. The enclosing branch has
              * already filtered out NO_REMOTE/UNKNOWN, so both local and remote
              * refs are guaranteed to exist on every state reaching this block. */
-            output_newline(out, OUTPUT_VERBOSE);
+            output_gap(out, OUTPUT_VERBOSE);
             output_print(out, OUTPUT_VERBOSE, "Profile: %s\n", profile);
 
             /* Get local commit info */

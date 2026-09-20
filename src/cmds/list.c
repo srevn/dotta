@@ -312,7 +312,7 @@ static error_t *list_profiles(
 
     /* Print remote legend if shown */
     if (show_remote) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
             "Remote tracking (from %s):\n",
@@ -427,7 +427,7 @@ static error_t *list_files(
 
     /* Print header */
     output_section(out, OUTPUT_NORMAL, "Files in profile '{cyan}%s{reset}'", opts->profile);
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Sort for consistent output */
     string_array_sort(files);
@@ -552,7 +552,7 @@ static error_t *list_files(
     }
 
     /* Print summary */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     if (verbose) {
         char size_str[32];
         output_format_size(total_size, size_str, sizeof(size_str));
@@ -765,7 +765,7 @@ static error_t *list_file_history(
         out, OUTPUT_NORMAL, "History of '{cyan}%s{reset}' in profile '{cyan}%s{reset}'",
         storage_path, profile
     );
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Calculate max message length for alignment (oneline mode only) */
     size_t max_msg_len = 0;
@@ -790,6 +790,7 @@ static error_t *list_file_history(
             char oid_str[GIT_OID_SHA1_HEXSIZE + 1];
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
+            output_gap(out, OUTPUT_VERBOSE);
             output_styled(
                 out, OUTPUT_VERBOSE, "{bold}commit {yellow}%s{reset}\n",
                 oid_str
@@ -807,11 +808,8 @@ static error_t *list_file_history(
                 );
             }
 
-            output_print(out, OUTPUT_VERBOSE, "\n    %s\n", commit->summary);
-
-            if (i < history->count - 1) {
-                output_newline(out, OUTPUT_NORMAL);
-            }
+            output_gap(out, OUTPUT_VERBOSE);
+            output_print(out, OUTPUT_VERBOSE, "    %s\n", commit->summary);
         } else {
             /* Default: Oneline format */
             char oid_str[LIST_SHORT_OID_BUF_SIZE];

@@ -344,7 +344,7 @@ static error_t *bootstrap_list(
         }
     }
 
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
     output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
     return NULL;
@@ -479,13 +479,12 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         output_info(
             out, OUTPUT_NORMAL, "No bootstrap scripts found in enabled profiles."
         );
-        output_newline(out, OUTPUT_NORMAL);
         output_section(out, OUTPUT_NORMAL, "Profiles checked");
 
         for (size_t i = 0; i < profiles->count; i++) {
             output_print(out, OUTPUT_NORMAL, "  - %s\n", profiles->items[i]);
         }
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
         output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
         goto cleanup;
@@ -499,7 +498,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
             found.items[i], BOOTSTRAP_SCRIPT_NAME
         );
     }
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Prompt for confirmation unless --yes or --dry-run */
     if (!opts->yes && !opts->dry_run) {
@@ -534,13 +533,13 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
     }
 
     if (!opts->dry_run) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         if (had_failures) {
             output_warning(out, OUTPUT_NORMAL, "Bootstrap completed with errors.");
         } else {
             output_success(out, OUTPUT_NORMAL, "Bootstrap complete!");
         }
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_hintline(out, OUTPUT_NORMAL, "Next steps:");
         output_hintline(out, OUTPUT_NORMAL, "  Apply profiles:  dotta apply");
         output_hintline(out, OUTPUT_NORMAL, "  View state:      dotta status");

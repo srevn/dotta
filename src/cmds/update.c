@@ -1502,7 +1502,7 @@ static error_t *update_display_preview(
             output_list_free(list);
         }
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "These files will be encrypted on the next commit, "
             "per auto_encrypt in your config's [encryption] section."
@@ -1613,19 +1613,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* The run's filter context, ahead of everything the filter says against it:
      * the verbose "Excluded" log, the census, the nothing-exit and the preview */
-    bool has_filters = false;
     if (opts->only_new) {
         output_info(
             out, OUTPUT_NORMAL,
             "Filter: Showing only new files (--only-new)"
         );
-        has_filters = true;
     } else if (opts->include_new) {
         output_info(
             out, OUTPUT_NORMAL,
             "Filter: Including new files from tracked directories (--include-new)"
         );
-        has_filters = true;
     }
     if (opts->file_count > 0) {
         output_info(
@@ -1633,7 +1630,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "Filter: Limiting to %zu specified path%s",
             opts->file_count, opts->file_count == 1 ? "" : "s"
         );
-        has_filters = true;
     }
     if (opts->exclude_count > 0) {
         output_info(
@@ -1641,10 +1637,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
             "Filter: Excluding %zu pattern%s",
             opts->exclude_count, opts->exclude_count == 1 ? "" : "s"
         );
-        has_filters = true;
-    }
-    if (has_filters) {
-        output_newline(out, OUTPUT_NORMAL);
     }
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
@@ -1976,7 +1968,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* Summary — one truthful line */
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
         output_info(out, OUTPUT_NORMAL, "Dry run: nothing was committed");
     } else if (commit_count == 0) {

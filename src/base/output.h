@@ -46,6 +46,38 @@ typedef enum {
 } output_color_t;
 
 /**
+ * Where the report stands on its stream
+ *
+ * A report is a sequence of blocks on `stream`: between two blocks there is exactly
+ * one blank line, before the first and after the last there is none. No block
+ * knows whether another follows it, so no block writes that separator — it *owes*
+ * one (output_gap), and the next line that lands pays it, on whatever stream
+ * that line writes to (base/output.c `land`).
+ *
+ * Three guarantees fall out of that, and none of them needs a call site to reason
+ * about its neighbours. A debt nobody pays writes nothing, so a report cannot
+ * end in a blank line. A debt asked before any line stands is refused, so a report
+ * cannot begin with one. A debt asked twice is one debt, so a block and whatever
+ * precedes it may each ask for the boundary between them without knowing of the
+ * other.
+ *
+ * The position is the report's alone. A failure or a question on stderr settles
+ * a standing debt there — the blank lands above the block it belongs to on a
+ * terminal, and a redirected report keeps no blank it never earned — but neither
+ * makes the report stand: a run whose first line is a failure opens no report
+ * to separate from. Moving the report to another stream (output_set_stream) starts
+ * it over, because the new stream holds none of it.
+ *
+ * Read in two places, both in base/output.c: `land` asks what is owed, and
+ * output_gap asks whether anything stands to owe it.
+ */
+typedef enum {
+    OUTPUT_REPORT_START,  /* Nothing of the report stands on `stream` */
+    OUTPUT_REPORT_LINE,   /* A line stands; the next one follows it */
+    OUTPUT_REPORT_GAP     /* A line stands; a blank is owed before the next */
+} output_report_t;
+
+/**
  * Output context
  */
 typedef struct output {
@@ -54,7 +86,7 @@ typedef struct output {
     output_color_mode_t color_mode;
     bool color_enabled;         /* Computed from color_mode for stream */
     bool stderr_color_enabled;  /* Computed from color_mode for stderr (errors, prompts) */
-    bool has_content;           /* Section/list rendered — drives automatic spacing */
+    output_report_t report;     /* Where the report stands on `stream` */
 } output_t;
 
 /**
@@ -110,6 +142,10 @@ void output_set_verbosity(output_t *ctx, output_verbosity_t verbosity);
  * to the given stream so the payload arrives alone. Color capability is recomputed
  * for the new stream: under AUTO, the payload's pipe and the chatter's tty are
  * different answers. Errors and prompts already live on stderr and are unaffected.
+ *
+ * The report starts over, because the new stream holds none of it: a boundary
+ * owed on the old one is dropped rather than paid somewhere it does not belong,
+ * and the first line to land on the new one opens a report with nothing above it.
  */
 void output_set_stream(output_t *ctx, FILE *stream);
 
@@ -213,7 +249,9 @@ void output_colored(
  * Print error message
  *
  * The terminal failure: stderr, no verbosity gate, and the report is flushed
- * first so it lands after the partial run it ends.
+ * first so it lands after the partial run it ends. A boundary the report owes
+ * is paid here rather than left standing, but an error asks none of its own:
+ * one that follows a complete block prints directly under it.
  */
 void output_error(output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
@@ -304,12 +342,16 @@ void output_hintline(
  * End the line this code is building
  *
  * For a line assembled from several output_print / output_styled / output_colored
- * calls whose formats carry no trailing newline. Not a separator: output_newline
- * is the blank line between two blocks, and the two were one word until 0.148.7.
+ * calls whose formats carry no trailing newline. Not a separator: output_gap is
+ * the boundary between two blocks, and the two were one word until 0.148.7.
  *
  * Its level is the level of the line it ends, which is the level of that line's
  * first part — an endline below its opener writes a bare newline into a run where
  * the line itself never printed.
+ *
+ * Alone among the words that write, it moves the report nowhere: the line it
+ * ends already stands, and a boundary asked mid-line is left standing so the
+ * block that follows still pays it — or, if none follows, so nobody does.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -317,23 +359,36 @@ void output_hintline(
 void output_endline(output_t *ctx, output_verbosity_t min_level);
 
 /**
- * Print a blank line between two blocks
+ * A block boundary belongs here
  *
- * The separator, not a line's end: output_endline closes a line this code is
- * assembling. Writes unconditionally, so a block that asks for one on behalf of
- * a follower that never comes — because nothing follows, or because the verbosity
- * suppressed it — leaves a blank line at the end of the report.
+ * Records that a blank line is owed; writes nothing. The next line that lands
+ * pays it — on whatever stream that line lands, so a question pays it on stderr
+ * — and a line that never comes pays nothing. Refused while no line of the report
+ * stands, so a boundary at the top of a run is silent; idempotent, so a block
+ * and whatever precedes it may both ask for the one between them.
+ *
+ * The level is the block's own. A boundary at OUTPUT_VERBOSE before a verbose
+ * trace line is not owed in a normal run, so the normal block that follows spaces
+ * itself against what actually printed rather than against what would have.
+ *
+ * Every block opens with its boundary and no block closes with one. output_section,
+ * output_list_render and the three prompts ask theirs inside, so a call site
+ * places one only above a block the layer does not recognise as one — a verdict
+ * line, a warning, a hint, a row of its own.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  */
-void output_newline(output_t *ctx, output_verbosity_t min_level);
+void output_gap(output_t *ctx, output_verbosity_t min_level);
 
 /**
  * Print section header
  *
- * Supports printf-style format strings for dynamic titles. Automatically adds a
- * leading blank line between sections (tracked via has_content in output context).
+ * Supports printf-style format strings for dynamic titles. Opens with its own
+ * boundary (output_gap at `min_level`), so a section is separated from whatever
+ * stands above it — another section, a plain line, a hint — and from nothing at
+ * all when it is the report's first. A section the verbosity suppresses asks
+ * for none, so the block that follows spaces itself against what printed.
  *
  * @param ctx Output context
  * @param min_level Minimum verbosity level
@@ -453,6 +508,11 @@ void output_format_path(
  * Displays a yes/no prompt and waits for user input. Handles input buffer clearing
  * to prevent pollution. Uses stderr for prompts (standard practice).
  *
+ * A question is a block, so it opens with its own boundary — paid on stderr,
+ * where the blank stands above the question on a terminal and never reaches a
+ * redirected report. The boundary is asked at OUTPUT_QUIET because a prompt has
+ * no verbosity gate either.
+ *
  * @param ctx Output context (for color/format settings)
  * @param message Confirmation message to display
  * @param default_value Default if user just presses Enter (true=Y, false=N)
@@ -470,6 +530,10 @@ bool output_confirm(
  * Like output_confirm() but handles non-interactive mode gracefully. When stdin
  * is not a TTY (e.g., piped input, CI/CD), uses the non_interactive_default value
  * and prints a warning or error.
+ *
+ * Both arms are the same block, so the boundary is asked once above the branch.
+ * The interactive arm delegates to output_confirm, which asks again — and that
+ * second ask is the idempotency clause earning its place: one debt, one blank.
  *
  * @param ctx Output context
  * @param message Confirmation message
@@ -489,6 +553,11 @@ bool output_confirm_or_default(
  *
  * Specialized confirmation for destructive operations. Shows warning before
  * prompting. Always defaults to NO for safety.
+ *
+ * The warning and the question are one block, so the boundary is asked once above
+ * both and paid by whichever lands first — the warning on the interactive path,
+ * the refusal on the other. Only the code here knows they are one block, which
+ * is why the question it asks goes through no boundary of its own.
  *
  * @param ctx Output context
  * @param confirm_destructive Whether to require confirmation (false = skip prompt)
@@ -562,8 +631,10 @@ int output_list_add(
 /**
  * Render list with auto-calculated alignment
  *
- * Automatically adds a leading blank line between sections/lists (tracked via
- * has_content in output context).
+ * Opens with its own boundary (output_gap), so a list is separated from whatever
+ * stands above it. The blank between its title and its first row is the list's
+ * shape rather than a boundary, and is written either way. An empty list asks
+ * for nothing and writes nothing.
  *
  * Performs two-pass rendering:
  *   Pass 1: Calculate maximum tag width across all items Pass 2: Render all items

@@ -535,7 +535,7 @@ static error_t *show_diff_preview(
         out, OUTPUT_NORMAL, "  Changes: {green}+%zu{reset} / {red}-%zu{reset}\n",
         additions, deletions
     );
-    output_newline(out, OUTPUT_NORMAL);
+    output_gap(out, OUTPUT_NORMAL);
 
     /* Print patch */
     git_buf buf = { 0 };
@@ -1135,7 +1135,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * filemode. It is said here, with the rest of what the write will do, and
      * only once the write is going to happen. */
     if (reconstructed) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         /* What is missing is a *file* claim, which is not the same as a missing
          * sheet: a DIRECTORY item can stand at this very key and claim nothing
          * about this file, the tree being the content authority. Both reach here,
@@ -1160,12 +1160,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * fields of the claim beside it, so the sentence names those rather than
      * two of them. */
     if (!standing_entry) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL, "{green}Restoring a deleted file{reset}\n"
         );
     } else if (git_oid_equal(git_tree_entry_id(standing_entry), &restored_blob)) {
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_styled(
             out, OUTPUT_NORMAL,
             "{green}Contents unchanged; restoring the recorded mode, ownership "
@@ -1196,7 +1196,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 18: Early exit for dry-run (preview shown, no changes to make) */
     if (opts->dry_run) {
-        output_info(out, OUTPUT_NORMAL, "\nDry-run mode: No changes made");
+        output_gap(out, OUTPUT_NORMAL);
+        output_info(out, OUTPUT_NORMAL, "Dry-run mode: No changes made");
         goto cleanup;
     }
 
@@ -1208,7 +1209,8 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;  /* err is NULL here: an abort is not a failure */
     }
 
-    output_print(out, OUTPUT_VERBOSE, "\nReverting file...\n");
+    output_gap(out, OUTPUT_VERBOSE);
+    output_print(out, OUTPUT_VERBOSE, "Reverting file...\n");
 
     /* Step 20: the write, on the stage opened at the preview's tip — the entry
      * put at step 16 and the merged sheet beside it, in one commit, all of it
@@ -1266,15 +1268,17 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* The one line after it differs: a profile this machine has not enabled has
      * nothing to apply the revert to. */
     if (!state_has_profile(state, profile)) {
+        output_gap(out, OUTPUT_NORMAL);
         output_info(
-            out, OUTPUT_NORMAL, "\nNote: Profile '%s' is not enabled on this machine",
+            out, OUTPUT_NORMAL, "Note: Profile '%s' is not enabled on this machine",
             profile
         );
         goto cleanup;
     }
 
+    output_gap(out, OUTPUT_NORMAL);
     output_info(
-        out, OUTPUT_NORMAL, "\nRun 'dotta apply' to deploy changes to filesystem"
+        out, OUTPUT_NORMAL, "Run 'dotta apply' to deploy changes to filesystem"
     );
 
 cleanup:

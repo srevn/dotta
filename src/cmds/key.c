@@ -133,9 +133,10 @@ static error_t *cmd_key_clear(const dotta_ctx_t *ctx) {
         output_success(out, OUTPUT_NORMAL, "No session cache to clear");
     }
 
+    output_gap(out, OUTPUT_VERBOSE);
     output_print(
         out, OUTPUT_VERBOSE,
-        "\nCache location: ~/.cache/dotta/session-<epoch>\n"
+        "Cache location: ~/.cache/dotta/session-<epoch>\n"
         "You will be prompted for your passphrase on the next "
         "operation that requires encryption or decryption.\n"
     );
@@ -236,7 +237,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
             out, OUTPUT_NORMAL, "  Status: {red}disabled{reset}\n"
         );
 
-        output_newline(out, OUTPUT_NORMAL);
+        output_gap(out, OUTPUT_NORMAL);
         output_hint(out, OUTPUT_NORMAL, "To enable encryption, add to config file:");
         output_hintline(out, OUTPUT_NORMAL, "  [encryption]");
         output_hintline(out, OUTPUT_NORMAL, "  enabled = true");
@@ -322,7 +323,7 @@ static error_t *cmd_key_status(const dotta_ctx_t *ctx) {
         );
 
         if (encrypted_count == 0) {
-            output_newline(out, OUTPUT_NORMAL);
+            output_gap(out, OUTPUT_NORMAL);
             output_hint(out, OUTPUT_NORMAL, "To encrypt files, use:");
             output_hintline(out, OUTPUT_NORMAL, "  dotta add --encrypt -p <profile> <file>");
         }

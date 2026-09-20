@@ -219,10 +219,7 @@ static const style_tag_t *resolve_tag(const char *name, size_t len) {
  * @return true if tag was recognized, false to pass through literally
  */
 static bool expand_tag(
-    style_buf_t *sb,
-    bool color_on,
-    const char *tag,
-    size_t tag_len
+    style_buf_t *sb, bool color_on, const char *tag, size_t tag_len
 ) {
     const style_tag_t *resolved[8];
     size_t count = 0;
@@ -332,10 +329,7 @@ static bool expand_format(bool color_on, const char *fmt, style_buf_t *sb) {
  * Core output primitive — all styled variadic output routes through here.
  */
 static void styled_vfprintf(
-    bool color_on,
-    FILE *stream,
-    const char *fmt,
-    va_list args
+    bool color_on, FILE *stream, const char *fmt, va_list args
 ) {
     style_buf_t sb;
     style_buf_init(&sb);
@@ -401,9 +395,7 @@ static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 output_t *output_create(
-    FILE *stream,
-    output_verbosity_t verbosity,
-    output_color_mode_t color_mode
+    FILE *stream, output_verbosity_t verbosity, output_color_mode_t color_mode
 ) {
     output_t *ctx = calloc(1, sizeof(output_t));
     if (!ctx) {
@@ -438,6 +430,10 @@ void output_set_stream(output_t *ctx, FILE *stream) {
 
     ctx->stream = stream;
     ctx->color_enabled = should_enable_colors(ctx->color_mode, stream);
+
+    /* The new stream holds none of the report, so a boundary owed on the old
+     * one is dropped rather than paid where it does not belong. */
+    ctx->report = OUTPUT_REPORT_START;
 }
 
 error_t *output_parse_verbosity(const char *word, output_verbosity_t *out) {
@@ -507,14 +503,44 @@ const char *output_color_code(const output_t *ctx, output_color_t color) {
  * Formatted Output
  * ═══════════════════════════════════════════════════════════════════ */
 
+/**
+ * A line of the report is about to land on `stream`
+ *
+ * Every emitter's first act, past its gate. Three things happen here and nowhere
+ * else: the report is flushed when this line crosses to another stream, so a
+ * question or a failure arrives under the run it is about rather than inside
+ * it; a boundary the report owes is paid, on the stream this line lands on; and
+ * the report is recorded as standing, which is what lets the next block ask for
+ * a boundary at all.
+ *
+ * A line on stderr settles the debt but does not make the report stand — a run
+ * whose first line is a failure opens no report to separate from. output_endline
+ * comes nowhere near here: it ends a line that already stands, so there is nothing
+ * to record, and a boundary asked mid-line is better left standing than spent
+ * closing a line (output.h).
+ */
+static void land(output_t *ctx, FILE *stream) {
+    if (stream != ctx->stream) {
+        fflush(ctx->stream);
+    }
+
+    if (ctx->report == OUTPUT_REPORT_GAP) {
+        fputc('\n', stream);
+        ctx->report = OUTPUT_REPORT_LINE;
+    }
+
+    if (stream == ctx->stream) {
+        ctx->report = OUTPUT_REPORT_LINE;
+    }
+}
+
 void output_print(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
@@ -523,13 +549,12 @@ void output_print(
 }
 
 void output_styled(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
@@ -538,14 +563,13 @@ void output_styled(
 }
 
 void output_colored(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    output_color_t color,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, output_color_t color,
+    const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     bool apply_color = color != OUTPUT_COLOR_RESET
         && ctx->color_enabled && (unsigned) color < ANSI_CODE_COUNT;
@@ -563,7 +587,7 @@ void output_colored(
 void output_error(output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
-    fflush(ctx->stream);
+    land(ctx, stderr);
 
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
@@ -579,13 +603,12 @@ void output_error(output_t *ctx, const char *fmt, ...) {
 }
 
 void output_warning(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     styled_fputs(
         ctx->color_enabled, ctx->stream,
@@ -601,13 +624,12 @@ void output_warning(
 }
 
 void output_success(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     styled_fputs(
         ctx->color_enabled, ctx->stream,
@@ -623,13 +645,12 @@ void output_success(
 }
 
 void output_info(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     va_list args;
     va_start(args, fmt);
@@ -640,13 +661,12 @@ void output_info(
 }
 
 void output_hint(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     /* Preserve leading whitespace (printed uncolored for indentation) */
     const char *p = fmt;
@@ -670,13 +690,12 @@ void output_hint(
 }
 
 void output_hintline(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
+
+    land(ctx, ctx->stream);
 
     if (ctx->color_enabled) fputs(ANSI_DIM, ctx->stream);
 
@@ -694,25 +713,20 @@ void output_endline(output_t *ctx, output_verbosity_t min_level) {
     fputc('\n', ctx->stream);
 }
 
-void output_newline(output_t *ctx, output_verbosity_t min_level) {
+void output_gap(output_t *ctx, output_verbosity_t min_level) {
     if (!ctx || ctx->verbosity < min_level) return;
-    fputc('\n', ctx->stream);
+    if (ctx->report == OUTPUT_REPORT_LINE) ctx->report = OUTPUT_REPORT_GAP;
 }
 
 void output_section(
-    output_t *ctx,
-    output_verbosity_t min_level,
-    const char *fmt,
-    ...
+    output_t *ctx, output_verbosity_t min_level, const char *fmt, ...
 ) {
     if (!ctx || !fmt) return;
     if (ctx->verbosity < min_level) return;
 
-    /* Automatic section separator */
-    if (ctx->has_content) {
-        fputc('\n', ctx->stream);
-    }
-    ctx->has_content = true;
+    /* A section is a block, and it owns the boundary above it */
+    output_gap(ctx, min_level);
+    land(ctx, ctx->stream);
 
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
@@ -764,6 +778,8 @@ void output_print_diff(
     if (!ctx || !diff_text || !*diff_text) return;
     if (ctx->verbosity < min_level) return;
 
+    land(ctx, ctx->stream);
+
     const char *line = diff_text;
 
     /* A line and its newline are one step; the last line needs no newline. */
@@ -813,10 +829,7 @@ void output_format_size(size_t bytes, char *buffer, size_t buffer_size) {
 }
 
 void output_format_counts(
-    size_t files,
-    size_t directories,
-    char *buffer,
-    size_t buffer_size
+    size_t files, size_t directories, char *buffer, size_t buffer_size
 ) {
     if (!buffer || buffer_size == 0) return;
 
@@ -841,10 +854,7 @@ void output_format_counts(
 }
 
 void output_format_path(
-    const char *path,
-    const char *home,
-    char *buffer,
-    size_t buffer_size
+    const char *path, const char *home, char *buffer, size_t buffer_size
 ) {
     if (!buffer || buffer_size == 0) return;
 
@@ -882,39 +892,56 @@ static bool read_user_response(bool default_value) {
     return (response[0] == 'y' || response[0] == 'Y');
 }
 
-bool output_confirm(
-    output_t *ctx,
-    const char *message,
-    bool default_value
+/**
+ * Put the question and read the answer
+ *
+ * The question alone, with no boundary of its own: the block it closes is the
+ * caller's, and only the caller knows how much of it has already printed — a
+ * destructive prompt's warning and its question are one block, and asking twice
+ * inside it would put a blank between them.
+ */
+static bool confirm_ask(
+    output_t *ctx, const char *message, bool default_value
 ) {
-    if (!ctx || !message) return false;
+    /* The preview this asks about is the report above it, and the question must
+     * not land inside the line it ends on. */
+    land(ctx, stderr);
 
-    /* Finish the report's line: the preview this asks about is the line above,
-     * and the question must not land inside it. */
-    fflush(ctx->stream);
-
-    FILE *prompt = stderr;
     const char *suffix = default_value ? " [Y/n] " : " [y/N] ";
 
     const char *bold = ctx->stderr_color_enabled ? ANSI_BOLD : "";
     const char *reset = ctx->stderr_color_enabled ? ANSI_RESET : "";
 
-    fprintf(prompt, "%s%s%s%s", bold, message, reset, suffix);
-    fflush(prompt);
+    fprintf(stderr, "%s%s%s%s", bold, message, reset, suffix);
+    fflush(stderr);
 
     return read_user_response(default_value);
 }
 
+bool output_confirm(
+    output_t *ctx, const char *message, bool default_value
+) {
+    if (!ctx || !message) return false;
+
+    /* A question is a block. Asked at QUIET because a prompt is not gated. */
+    output_gap(ctx, OUTPUT_QUIET);
+
+    return confirm_ask(ctx, message, default_value);
+}
+
 bool output_confirm_or_default(
-    output_t *ctx,
-    const char *message,
-    bool default_value,
+    output_t *ctx, const char *message, bool default_value,
     bool non_interactive_default
 ) {
     if (!ctx || !message) return false;
 
+    /* Both arms are the same block, so the boundary is asked once above the branch;
+     * the interactive arm asks again inside output_confirm, and one debt asked
+     * twice is one blank. */
+    output_gap(ctx, OUTPUT_QUIET);
+
     if (!isatty(STDIN_FILENO)) {
-        fflush(ctx->stream);
+        land(ctx, stderr);
 
         if (non_interactive_default) {
             styled_fputs(
@@ -944,19 +971,19 @@ bool output_confirm_or_default(
 }
 
 bool output_confirm_destructive(
-    output_t *ctx,
-    bool confirm_destructive,
-    const char *message,
+    output_t *ctx, bool confirm_destructive, const char *message,
     bool force_flag
 ) {
     if (!ctx || !message) return false;
     if (force_flag) return true;
     if (!confirm_destructive) return true;
 
-    /* Finish the report's line before crossing to stderr */
-    fflush(ctx->stream);
+    /* The warning and the question are one block: one boundary, above both, paid
+     * by whichever of them lands first. */
+    output_gap(ctx, OUTPUT_QUIET);
 
     if (!isatty(STDIN_FILENO)) {
+        land(ctx, stderr);
         styled_fputs(
             ctx->stderr_color_enabled, stderr,
             "{bold;red}Error:{reset} "
@@ -969,12 +996,13 @@ bool output_confirm_destructive(
         return false;
     }
 
+    land(ctx, stderr);
     styled_fputs(
         ctx->stderr_color_enabled, stderr,
         "{bold;yellow}Warning:{reset} This is a destructive operation!\n"
     );
 
-    return output_confirm(ctx, message, false);
+    return confirm_ask(ctx, message, false);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -1032,10 +1060,7 @@ static int list_ensure_capacity(output_list_t *list) {
 }
 
 static void format_tags_with_brackets(
-    char **tags,
-    size_t tag_count,
-    char *buffer,
-    size_t buffer_size
+    char **tags, size_t tag_count, char *buffer, size_t buffer_size
 ) {
     if (!tags || tag_count == 0 || !buffer || buffer_size == 0) {
         if (buffer && buffer_size > 0) buffer[0] = '\0';
@@ -1054,9 +1079,7 @@ static void format_tags_with_brackets(
 }
 
 output_list_t *output_list_create(
-    output_t *ctx,
-    const char *title,
-    const char *hint
+    output_t *ctx, const char *title, const char *hint
 ) {
     if (!ctx || !title) return NULL;
 
@@ -1090,11 +1113,8 @@ cleanup:
 }
 
 int output_list_add(
-    output_list_t *list,
-    const char **tags,
-    size_t tag_count,
-    output_color_t color,
-    const char *content,
+    output_list_t *list, const char **tags, size_t tag_count,
+    output_color_t color, const char *content,
     const char *metadata
 ) {
     if (!list) return -1;
@@ -1146,11 +1166,10 @@ void output_list_render(output_list_t *list) {
     output_t *ctx = list->ctx;
     if (ctx->verbosity < OUTPUT_NORMAL) return;
 
-    /* Automatic section separator */
-    if (ctx->has_content) {
-        fputc('\n', ctx->stream);
-    }
-    ctx->has_content = true;
+    /* A list is a block, and it owns the boundary above it. Its level is the
+     * gate's: a list is a NORMAL block or it is nothing. */
+    output_gap(ctx, OUTPUT_NORMAL);
+    land(ctx, ctx->stream);
 
     /* Pass 1: Calculate maximum tag width */
     size_t max_tag_width = 0;

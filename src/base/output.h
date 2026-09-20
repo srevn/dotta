@@ -406,12 +406,12 @@ void output_format_counts(
  * passed in because the base layer reads no identity, and every reader passes
  * the invoker's: the screens that print a bound target (profile list, status,
  * the interactive rows, disable's receipt, add's label line), and the sentences
- * that name a location beside its names — status's unused-path listing, where
- * the location is the shared term of three paths on one line and the absolute
- * spelling would be the longest of them, and add's and revert's refusals that
- * say which name a location has. A screen listing managed paths one to a line
- * prints them absolute and does not come here. PATH_MAX bytes hold any path the
- * table validated.
+ * that name a path beside its names — status's unused-path listing, where the
+ * path is the shared term of three paths on one line and the absolute spelling
+ * would be the longest of them, and add's and revert's refusals that say which
+ * name a path has. A screen listing managed paths one to a line prints them
+ * absolute and does not come here. PATH_MAX bytes hold any path the table
+ * validated.
  *
  * @param path Absolute path to spell (must not be NULL)
  * @param home The directory `~` stands for (must not be NULL; no trailing slash)

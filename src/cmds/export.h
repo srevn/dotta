@@ -39,7 +39,7 @@ typedef struct {
  * profile, never the enabled set — layering is not composed. What is copied is
  * named three ways, each laying the copy out in its own key: a profile mirrors
  * its branch, a storage path copies that branch subtree, and a filesystem path
- * copies what the profile places at and beneath that location on this machine.
+ * copies what the profile places at and beneath that path on this machine.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param opts Command options (must not be NULL)

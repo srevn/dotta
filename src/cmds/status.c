@@ -41,9 +41,9 @@
  * @param unbound The view's health slice: the claims the build could not place,
  *                annotated onto their profile's line (a count, the paths under
  *                -v), the repair a legend line under the block
- * @param unkept Its sibling: the names a profile holds for a location it also
- *               names otherwise, annotated and listed the same way. Both say a
- *               profile carries more than it projects, for two different reasons
+ * @param unkept Its sibling: the names a profile holds for a path it also names
+ *               otherwise, annotated and listed the same way. Both say a profile
+ *               carries more than it projects, for two different reasons
  */
 static void display_enabled_profiles(
     output_t *out,
@@ -170,13 +170,13 @@ static void display_enabled_profiles(
             /* The file is what makes the pair legible: two storage paths side
              * by side say nothing about being one thing, and this is the only
              * screen that says either is unused — `list -p` serves both, unmarked.
-             * Named, not used: the kept name is what this profile calls the
-             * location, while the window onto the view may show a higher profile
-             * there. The location is the shared term of three paths on one line
-             * and takes the target's own spelling a few lines above, not the
-             * window's absolute one: `~/jail/etc/x` beside two storage paths
-             * reads, where the absolute form is the longest thing on the line
-             * and is mostly the storage path with its label spelled out. */
+             * Named, not used: the kept name is what this profile calls the path,
+             * while the window onto the view may show a higher profile there.
+             * The path is the shared term of three paths on one line and takes
+             * the target's own spelling a few lines above, not the window's
+             * absolute one: `~/jail/etc/x` beside two storage paths reads, where
+             * the absolute form is the longest thing on the line and is mostly
+             * the storage path with its label spelled out. */
             char shown[PATH_MAX];
             for (size_t j = 0; j < unkept.count; j++) {
                 if (strcmp(unkept.entries[j].profile, profile) != 0) continue;
@@ -608,7 +608,7 @@ static void display_workspace_status(
              * has the next section, since no flag lifts it). `add --force` is
              * qualified because it takes one of the two and not the other: a
              * kind change is a re-shaping of the tree and add refuses it by the
-             * claim standing at the location, naming `dotta remove` (cmds/add.c) */
+             * claim standing at the path, naming `dotta remove` (cmds/add.c) */
             if (conflict_count > 0) {
                 output_list_t *list = output_list_create(
                     out, "Conflicts",

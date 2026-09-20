@@ -1052,17 +1052,17 @@ cleanup:
 /**
  * The selection of a commit range: what select_delta reads and what it leaves
  *
- * The filter, and what a delta's location is resolved through — the profile the
- * range belongs to and this machine's table, under which a past tree's names
- * are placed where the binding stands now, as the commit-to-workspace arm places
- * them (manifest_build_tree). A resolve that fails cancels the diff and is kept
- * here, the error libgit2's wrapped cancel is replaced with.
+ * The filter, and what a delta's path is resolved through — the profile the range
+ * belongs to and this machine's table, under which a past tree's names are placed
+ * where the binding stands now, as the commit-to-workspace arm places them
+ * (manifest_build_tree). A resolve that fails cancels the diff and is kept here,
+ * the error libgit2's wrapped cancel is replaced with.
  */
 typedef struct {
     const pathspec_t *filter;       /* never NULL: the callback is installed under a filter alone */
     const mount_table_t *mounts;
     const char *profile;
-    arena_t *arena;                 /* the locations' lifetime: the command's */
+    arena_t *arena;                 /* the paths' lifetime: the command's */
     error_t *err;                   /* a resolve that failed; NULL until one does */
 } delta_select_t;
 
@@ -1073,13 +1073,13 @@ typedef struct {
  * the diff (an unmodified pair never reaches it): 0 keeps the delta, a positive
  * return drops it, a negative one cancels the diff. The one matcher every other
  * filter site reads decides here too, by both of the delta's names — its storage
- * path, and the location the profile's binding gives it, NULL for a claim this
- * machine cannot place, which a storage-shaped entry alone then selects — so a
- * commit range and the workspace read one filter alike: a location filter selects
- * the deltas standing beneath it whatever label they carry, a pattern is anchored
- * where gitignore anchors it, and `*` stops at a slash. Handing libgit2 the entries
- * as its own pathspec read them by fnmatch instead, where `home/<star>.lua` reached
- * `home/dir/b.lua`.
+ * path, and the filesystem path the profile's binding gives it, NULL for a claim
+ * this machine cannot place, which a storage-shaped entry alone then selects —
+ * so a commit range and the workspace read one filter alike: a filesystem filter
+ * selects the deltas standing beneath it whatever label they carry, a pattern
+ * is anchored where gitignore anchors it, and `*` stops at a slash. Handing libgit2
+ * the entries as its own pathspec read them by fnmatch instead, where
+ * `home/<star>.lua` reached `home/dir/b.lua`.
  *
  * Installed only when a filter was given: the diff under none holds every delta,
  * the repository's own files included, and prints as it always has. Under a filter
@@ -1101,6 +1101,7 @@ static int select_delta(
 ) {
     (void) diff;
     (void) matched;
+
     delta_select_t *sel = payload;
     const char *path = delta->new_file.path;
 
@@ -1108,12 +1109,17 @@ static int select_delta(
         return 1;
     }
 
-    const char *location = NULL;
-    sel->err = mount_resolve(sel->mounts, sel->profile, path, sel->arena, &location);
+    const char *filesystem_path = NULL;
+    sel->err = mount_resolve(
+        sel->mounts, sel->profile, path, sel->arena, &filesystem_path
+    );
     if (sel->err) {
         return -1;
     }
-    return pathspec_matches(sel->filter, location, path, PATH_KIND_FILE) ? 0 : 1;
+
+    return pathspec_matches(
+        sel->filter, filesystem_path, path, PATH_KIND_FILE
+    ) ? 0 : 1;
 }
 
 /**

@@ -25,8 +25,8 @@
  *             names when one was given, else equal to enabled. "What the user
  *             asked for, not the underlying world."
  *   paths   — the CLI-derived path filter (NULL when no positional args), one
- *             matcher over the two keys a managed path has: its location and
- *             its storage path (infra/pathspec). Exposed for diff's historical
+ *             matcher over the two keys a managed path has: its filesystem path
+ *             and its storage path (infra/pathspec). Exposed for diff's historical
  *             arms, which select a commit range delta by delta and answer the
  *             filter's coverage themselves (pathspec_entry_at,
  *             pathspec_entry_matches_at), and for apply's count line
@@ -210,10 +210,10 @@ bool scope_accepts_profile(const scope_t *s, const char *profile);
  * Path dimension check.
  *
  * Both names of the subject: a filter entry reads the one in its own vocabulary
- * — a filesystem shape the location, a storage shape or a bare pattern the name
- * (pathspec_matches). When no path filter was built, every subject matches. A
- * name the caller does not have is NULL and is read by no entry of that vocabulary;
- * a subject with neither name matches nothing under a filter.
+ * — a filesystem shape the filesystem path, a storage shape or a bare pattern
+ * the name (pathspec_matches). When no path filter was built, every subject
+ * matches. A name the caller does not have is NULL and is read by no entry of
+ * that vocabulary; a subject with neither name matches nothing under a filter.
  *
  * `kind` is the manifest's kind of the path — PATH_KIND_DIRECTORY for a tracked
  * directory even when a file currently squats it on disk. State file rows are

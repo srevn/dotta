@@ -1591,7 +1591,7 @@ cleanup:
 }
 
 /**
- * Deploy a single view row to its target filesystem location.
+ * Deploy a single view row to its filesystem path.
  *
  * Mechanism only: the verdict says what stands at the path and what the write
  * applies, and this lands it — missing parents first, then the one arm the row's

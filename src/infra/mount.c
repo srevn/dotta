@@ -96,7 +96,7 @@ static bool namespace_holds(const char *profile, const mount_root_t *m) {
 }
 
 /**
- * The prefix a location is matched against and joined beneath.
+ * The prefix a path is matched against and joined beneath.
  *
  * A root is a path wherever it is read (infra/mount.h), and the root directory
  * is the one root that *is* its separator: the two string verbs read it one byte
@@ -111,42 +111,42 @@ static bool namespace_holds(const char *profile, const mount_root_t *m) {
  * (mount_resolve).
  */
 static const char *join_prefix(const mount_root_t *root) {
-    return root->location[1] ? root->location : "";
+    return root->filesystem_path[1] ? root->filesystem_path : "";
 }
 
 /**
- * The tail of `location` past `prefix`, on a component boundary.
+ * The tail of `filesystem_path` past `prefix`, on a component boundary.
  *
  *   /home/user encloses /home/user/.bashrc; it does NOT enclose
  *   /home/username/.bashrc
  *
  * `prefix` is a root's, as join_prefix reads it — never a `--target` as such.
- * Returns NULL when it does not enclose `location` or the boundary fails; otherwise
- * a pointer into `location` — the empty string when the two name one directory,
+ * Returns NULL when it does not enclose `filesystem_path` or the boundary fails;
+ * otherwise a pointer into it — the empty string when the two name one directory,
  * the tail past it otherwise. The root directory's "" encloses every absolute
  * path at depth zero, and only those: a relative path's first byte is no boundary.
  */
-static const char *tail_under_root(const char *location, const char *prefix) {
+static const char *tail_under_root(const char *filesystem_path, const char *prefix) {
     size_t prefix_len = strlen(prefix);
-    if (strncmp(location, prefix, prefix_len) != 0) return NULL;
+    if (strncmp(filesystem_path, prefix, prefix_len) != 0) return NULL;
 
     /* Boundary: next character must be '/' or '\0'. */
-    char boundary = location[prefix_len];
+    char boundary = filesystem_path[prefix_len];
     if (boundary != '/' && boundary != '\0') return NULL;
 
-    const char *tail = location + prefix_len;
+    const char *tail = filesystem_path + prefix_len;
     if (*tail == '/') tail++;
 
     return tail;  /* "" when the two name one directory, non-empty otherwise */
 }
 
 /* The search, whose contract — the tie, the boundary, the absence — is the header's
- * (infra/mount.h). A root encloses the location iff its prefix is a prefix of
- * it on a component boundary (tail_under_root), the root itself included with
- * the empty tail: every key is a string of the rows' own, so no second spelling
- * of a root is owed a match. */
+ * (infra/mount.h). A root encloses the path iff its prefix is a prefix of it on
+ * a component boundary (tail_under_root), the root itself included with the empty
+ * tail: every key is a string of the rows' own, so no second spelling of a root
+ * is owed a match. */
 const mount_root_t *mount_root_above(
-    const mount_table_t *table, const char *profile, const char *location,
+    const mount_table_t *table, const char *profile, const char *filesystem_path,
     const char **out_tail
 ) {
     const mount_root_t *winner = NULL;
@@ -159,10 +159,10 @@ const mount_root_t *mount_root_above(
          * directory in this namespace, and never competes on depth. */
         if (!namespace_holds(profile, m)) continue;
 
-        const char *tail = tail_under_root(location, join_prefix(m));
+        const char *tail = tail_under_root(filesystem_path, join_prefix(m));
         if (!tail) continue;
 
-        /* Every tail points into `location` at its root's length, so pointer
+        /* Every tail points into the subject at its root's length, so pointer
          * order is depth order. The tie reads as the incumbent's veto and holds
          * under any row order: it keeps an equal depth when it is a binding —
          * the more specific statement, the row's own fact — or when the challenger
@@ -244,13 +244,13 @@ error_t *mount_table_build(
          * that is its own separator is read a byte shorter where it is matched
          * and joined (join_prefix); the tie between the three is
          * mount_root_above's. */
-        const char *location = arena_strdup(arena, raw);
+        const char *filesystem_path = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
-        if (!location || !profile) {
+        if (!filesystem_path || !profile) {
             return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
         }
         roots[n++] = (mount_root_t){
-            .label = LABEL_CUSTOM, .location = location, .profile = profile,
+            .label = LABEL_CUSTOM, .filesystem_path = filesystem_path, .profile = profile,
         };
     }
 
@@ -263,13 +263,13 @@ error_t *mount_table_build(
         return ERROR(ERR_MEMORY, "Failed to copy the home directory into the arena");
     }
     roots[n++] = (mount_root_t){
-        .label = LABEL_HOME, .location = home, .profile = NULL,
+        .label = LABEL_HOME, .filesystem_path = home, .profile = NULL,
     };
     /* The sentinel: every absolute path stands under the root directory at depth
      * zero, so the fallback needs no case of its own anywhere. A literal, not
      * the arena's. */
     roots[n++] = (mount_root_t){
-        .label = LABEL_ROOT, .location = "/", .profile = NULL,
+        .label = LABEL_ROOT, .filesystem_path = "/", .profile = NULL,
     };
 
     table->roots = roots;
@@ -292,14 +292,14 @@ const mount_root_t *mount_root_of(
 
 error_t *mount_resolve(
     const mount_table_t *table, const char *profile, const char *storage_path,
-    arena_t *arena, const char **out_location
+    arena_t *arena, const char **out_filesystem_path
 ) {
     CHECK_NULL(table);
     CHECK_NULL(storage_path);
     CHECK_NULL(arena);
-    CHECK_NULL(out_location);
+    CHECK_NULL(out_filesystem_path);
 
-    *out_location = NULL;
+    *out_filesystem_path = NULL;
 
     /* Storage paths arriving here are validated at their write boundary —
      * metadata.json parse (metadata.c), Git tree commit (add.c, update.c validate
@@ -330,14 +330,15 @@ error_t *mount_resolve(
      *   ROOT:   "" + "/" + "etc/hosts"         -> "/etc/hosts"
      *   HOME:   "/home/user" + "/" + ".bashrc" -> "/home/user/.bashrc"
      *   CUSTOM: "/jail/web" + "/" + "etc/foo"  -> "/jail/web/etc/foo"
-     *   the word alone                         -> the root's location, "/" included
+     *   the word alone                         -> the root itself, "/" included
      * No prefix ends in a slash — the root directory's is "", HOME is folded by
      * the identity (sys/identity), and a target is absolute and folded, the build's
      * own refusal (mount_table_build) — so the join is unconditional. */
-    *out_location = *split.tail
+    *out_filesystem_path = *split.tail
         ? arena_str_format(arena, "%s/%s", join_prefix(root), split.tail)
-        : arena_strdup(arena, root->location);
-    if (!*out_location) {
+        : arena_strdup(arena, root->filesystem_path);
+
+    if (!*out_filesystem_path) {
         return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
     }
 

@@ -1,13 +1,25 @@
 /**
  * path.h - The key a CLI path argument names
  *
- * A location keys across profiles — the view's rows, the record, every screen —
- * and a storage path keys within one (infra/label.h). The resolver answers in
- * the one the user named and manufactures neither from the other: what a profile
- * calls a location is a claim standing in a branch, and a command asks the branch
- * (core/manifest.h, the view by location; core/profiles.h profile_claim_name,
- * one profile's own). There is no exception left: nothing here manufactures one
- * key from the other, and no surface below offers to.
+ * A filesystem path keys across profiles — the view's rows, the record, every
+ * screen — and a storage path keys within one (infra/label.h). The resolver answers
+ * in the one the user named and manufactures neither from the other: what a profile
+ * calls a filesystem path is a claim standing in a branch, and a
+ * command asks the branch (core/manifest.h, the view by filesystem path;
+ * core/profiles.h profile_claim_name, one profile's own). There is no exception
+ * left: nothing here manufactures one key from the other, and no surface below
+ * offers to.
+ *
+ * Each key is named for its medium wherever it is held — `filesystem_path` and
+ * `storage_path`, parameter, field or local, at every layer. A function marked
+ * for one carries that medium alone as a tail (core/manifest.h
+ * manifest_lookup_storage, infra/label.h label_validate_storage), and one that
+ * can mean only this key needs no mark (manifest_lookup). Every other word in
+ * the vocabulary names a *role* and takes its medium from that: a name is what
+ * a profile calls a claim (core/profiles.h), a prefix what an entry matches beneath
+ * (infra/pathspec.c), and an anchor, a rung and a destination are what their
+ * own readers say. A second word for a key is not a register — it is a translation
+ * the next reader has to carry.
  *
  * There is no third key: a label alone is a name like any other, the one that
  * names the namespace's own directory (infra/label.h), and it reads in the storage
@@ -18,7 +30,7 @@
  * (infra/label.h: label_prefixes, label_validate_storage) and nothing of the
  * table of roots: no root's spelling is read to make a key and no root's noun
  * to refuse one, so the answer is the argument, HOME and the working directory
- * and nothing else. That is what lets the location door stand beside
+ * and nothing else. That is what lets the argument's door stand beside
  * mount_resolve's join as a producer of one key (infra/mount.h, the four
  * producers), and why no caller hands a topology down to read an argument.
  *
@@ -37,7 +49,7 @@
  * The key an argument names.
  */
 typedef enum {
-    PATH_KEY_LOCATION,          /* a filesystem shape: absolute, tilde, relative */
+    PATH_KEY_FILESYSTEM,        /* a filesystem shape: absolute, tilde, relative */
     PATH_KEY_STORAGE,           /* a storage shape: home/…, root/…, custom/…, or the word alone */
 } path_key_t;
 
@@ -46,8 +58,8 @@ typedef enum {
  *
  * A sum type, spelled the way C spells one: the tag says which member is set,
  * and the member keeps its vocabulary at the use site — a reader that switches
- * on the key reads `location` in one arm and `storage_path` in the next, and no
- * second pointer promises to be NULL.
+ * on the key reads `filesystem_path` in one arm and `storage_path` in the next,
+ * and no second pointer promises to be NULL.
  *
  * The union holds two members of one type on purpose. It states "one of these,
  * never both" where a struct would state "both, one of them NULL", and it keeps
@@ -60,8 +72,8 @@ typedef enum {
 typedef struct {
     path_key_t key;
     union {
-        const char *location;       /* PATH_KEY_LOCATION: absolute, normalized */
-        const char *storage_path;   /* PATH_KEY_STORAGE: validated, the directory spelling shed */
+        const char *filesystem_path; /* PATH_KEY_FILESYSTEM: absolute, normalized */
+        const char *storage_path;    /* PATH_KEY_STORAGE: validated, the directory spelling shed */
     };
 } path_input_t;
 
@@ -120,35 +132,36 @@ bool path_input_announces_path(const char *input);
  * listings print directory claims slash-marked, and the filesystem arm sheds
  * its own inside the normalizer; the two surface forms resolve alike): a name
  * beneath a label, or the word alone, which is the namespace's own directory
- * and a key like any name. A filesystem shape is located (path_input_locate:
- * tilde, the working directory, `.`/`..`/`//` folded), and that spelling is the
- * key: a location is a string of its own, a link in it a component, so the answer
- * keys against the view's rows by strcmp when it was spelled the way the rows
- * were (infra/mount.h). No profile, no name, no stat, no table: the argument
- * need not exist, and a root named by its own spelling (`~`, a target's path)
- * is a location like any other, where the same root named by its label's word
- * is a name — two keys for one place, and the verb decides what to do with each.
- * A word standing alone that is none of the three is refused, because a caller's
- * path slot may hold a profile and the resolver cannot see whose does: add's
- * grammar reads one as the jail's or the working directory's and reads it through
- * the location door (cmds/add.c spell_argument).
+ * and a key like any name. A filesystem shape is read through the argument's
+ * door (path_input_filesystem_path: tilde, the working directory, `.`/`..`/`//`
+ * folded), and that spelling is the key: a filesystem path is a string of its
+ * own, a link in it a component, so the answer keys against the view's rows by
+ * strcmp when it was spelled the way the rows were (infra/mount.h). No profile,
+ * no name, no stat, no table: the argument need not exist, and a root named by
+ * its own spelling (`~`, a target's path) is a filesystem path like any other,
+ * where the same root named by its label's word is a name — two keys for one
+ * place, and the verb decides what to do with each. A word standing alone that
+ * is none of the three is refused, because a caller's path slot may hold a profile
+ * and the resolver cannot see whose does: add's grammar reads one as the jail's
+ * or the working directory's and reads it through that same door (cmds/add.c
+ * spell_argument).
  *
- *   ~/.bashrc                 -> LOCATION  $HOME/.bashrc    (HOME as the identity spells it)
- *   ./config    (in /etc)     -> LOCATION  /etc/config
- *   .bashrc     (in $HOME)    -> LOCATION  $HOME/.bashrc
+ *   ~/.bashrc                 -> FILESYSTEM $HOME/.bashrc   (HOME as the identity spells it)
+ *   ./config    (in /etc)     -> FILESYSTEM /etc/config
+ *   .bashrc     (in $HOME)    -> FILESYSTEM $HOME/.bashrc
  *   ~/link/x    (~/link -> ~/real, bound or not)
- *                             -> LOCATION  $HOME/link/x     (the link is a component)
- *   ~/link/../x               -> LOCATION  $HOME/x          ('..' pops the link's spelling)
- *   ~                         -> LOCATION  $HOME            (a root is a location; the verb decides)
- *   home/.config/nvim/        -> STORAGE   home/.config/nvim
- *   custom/                   -> STORAGE   custom           (the namespace's own directory)
- *   home                      -> STORAGE   home
- *   home/../x                 -> refused   (label_validate_storage)
- *   config                    -> refused   (a word standing alone)
+ *                             -> FILESYSTEM $HOME/link/x    (the link is a component)
+ *   ~/link/../x               -> FILESYSTEM $HOME/x         ('..' pops the link's spelling)
+ *   ~                         -> FILESYSTEM $HOME           (a root is a path; the verb decides)
+ *   home/.config/nvim/        -> STORAGE    home/.config/nvim
+ *   custom/                   -> STORAGE    custom          (the namespace's own directory)
+ *   home                      -> STORAGE    home
+ *   home/../x                 -> refused    (label_validate_storage)
+ *   config                    -> refused    (a word standing alone)
  *
  * `*out` is zeroed on entry: after an error it is no answer, and a reader that
  * ignores the error meets a NULL rather than a stale string — the zeroed key is
- * PATH_KEY_LOCATION, whose member is then NULL.
+ * PATH_KEY_FILESYSTEM, whose member is then NULL.
  *
  * Readers, and what each does with the two keys — a reader not on this list is
  * a bug. A verb that admits only some of them says so in a switch, where -Wswitch
@@ -159,23 +172,24 @@ bool path_input_announces_path(const char *input);
  * key it cannot says so in its arm (cmds/add.c, cmds/ignore.c):
  *
  *   - the pathspec's exact entries (infra/pathspec) take either: a name matches
- *     against a claim's name and a location against where it stands, and the
- *     word alone is the name every name of its namespace is beneath. The anchors
- *     of its filesystem-shaped rules are located, never resolved.
+ *     against a claim's name and a filesystem path against where it stands, and
+ *     the word alone is the name every name of its namespace is beneath. The
+ *     anchors of its filesystem-shaped rules go through the door, never the
+ *     resolver.
  *   - remove (cmds/remove.c) takes either: the claims beneath the subject, matched
  *     by name or by place, the name being the one form that reaches a profile
  *     with no binding here.
  *   - export (cmds/export.c) takes either, one arm each: a name is a key in the
- *     branch's own tree, a location is a selection of the profile's rows.
+ *     branch's own tree, a filesystem path a selection of the profile's rows.
  *   - show, list and revert (cmds/) take either: a name the user typed is Git's
- *     key already, and a location is the branch's to name (core/profiles.h
+ *     key already, and a filesystem path is the branch's to name (core/profiles.h
  *     profile_claim_name, profile_discover_claims).
  *   - add's storage head (cmds/add.c) takes the name alone: its own predicate
- *     dispatched on the storage shape, so a location arriving there is its bug
- *     and says so.
+ *     dispatched on the storage shape, so a filesystem path arriving there is
+ *     its bug and says so.
  *   - `ignore --test` (cmds/ignore.c) takes either, per asker: a name's subject
  *     is its tail — "" at the namespace's own directory, which no rule reaches
- *     — and a location's is the name each asker has for it.
+ *     — and a filesystem path's is the name each asker has for it.
  *
  * @param input User-provided path string (must not be NULL)
  * @param arena Arena that owns the answer's string (must not be NULL)
@@ -185,22 +199,22 @@ bool path_input_announces_path(const char *input);
 error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out);
 
 /**
- * The location a filesystem-shaped argument names, in the arena
+ * The filesystem path a filesystem-shaped argument names, in the arena
  *
  * path_input_normalize's reading, copied once into the arena the caller keys
- * from: the one door a location key is read through, standing beside
- * mount_resolve's join (infra/mount.h, the four producers of one location). `*out`
- * is the location on success and NULL after an error, so a reader that ignores
- * the error meets a NULL rather than a stale string.
+ * from: the one door this key is read through from an argument, standing beside
+ * mount_resolve's join (infra/mount.h, the four producers of one). `*out` is
+ * the path on success and NULL after an error, so a reader that ignores the error
+ * meets a NULL rather than a stale string.
  *
  * One grammar, not three: every input is read as a filesystem spelling, so `home/x`
  * is the working directory's `home/x` and never a name, and a bare `config` is
  * the working directory's too where path_input_resolve refuses it. Which door a
  * verb reads through is its own positional grammar's answer — one whose first
  * positional may be a profile reads the key, and one that has ruled the storage
- * vocabulary out already, or never had one, reads the location here — so a name
- * handed to this door comes back as a filesystem reading of itself, which is
- * the whole reason the two are named apart.
+ * vocabulary out already, or never had one, reads the path here — so a name handed
+ * to this door comes back as a filesystem reading of itself, which is the whole
+ * reason the two are named apart.
  *
  * Readers, and what makes each one this door's — a reader not on this list is a
  * bug:
@@ -218,10 +232,11 @@ error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL)
  * @param arena Arena that owns the answer (must not be NULL)
- * @param out   The location: absolute, folded, the arena's (must not be NULL)
+ * @param out   The filesystem path: absolute, folded, the arena's (must not be
+ *              NULL)
  * @return Error or NULL on success
  */
-error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
+error_t *path_input_filesystem_path(const char *input, arena_t *arena, const char **out);
 
 /**
  * Normalize a CLI filesystem-path argument to an absolute path
@@ -254,21 +269,21 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out);
  *   home/../c   (in HOME's parent, spelled physically)
  *                             -> <parent>/c    (the tail is the user's)
  *
- * The reading every location key is made by: path_input_locate is this function
- * and a copy, and everything that keys from an argument — the resolver's own
- * filesystem arm, add's grammar, the two binders, `ignore --test`, the completion,
- * a glob's anchor — goes through that door. A target given as an absolute or
- * tilde path is the user's own; one given relatively is spelled by the rule above
- * like any other relative argument. Storage-path inputs ("home/", "root/",
- * "custom/") are not this function's — they are validated and placed at the call
- * site (infra/label.h label_validate_storage, infra/mount.h mount_resolve). add's
- * re-rooting under --target is add's own grammar, spelled around the door
- * (cmds/add.c, spell_argument).
+ * The reading every filesystem key is made by: path_input_filesystem_path is
+ * this function and a copy, and everything that keys from an argument — the
+ * resolver's own filesystem arm, add's grammar, the two binders, `ignore --test`,
+ * the completion, a glob's anchor — goes through that door. A target given as
+ * an absolute or tilde path is the user's own; one given relatively is spelled
+ * by the rule above like any other relative argument. Storage-path inputs ("home/",
+ * "root/", "custom/") are not this function's — they are validated and placed
+ * at the call site (infra/label.h label_validate_storage, infra/mount.h
+ * mount_resolve). add's re-rooting under --target is add's own grammar, spelled
+ * around the door (cmds/add.c, spell_argument).
  *
  * The answer is malloc's, and one reader wants it that way: the interactive save's
  * per-edit target (cmds/interactive.c), replaced on every commit of the prompt
  * and freed with the item it is on — which an arena cannot do. A reader that
- * keys from the answer is path_input_locate's, not this function's.
+ * keys from the answer is path_input_filesystem_path's, not this function's.
  *
  * @param input User-provided path (filesystem or tilde; must not be NULL)
  * @param out   Normalized absolute path (caller must free, must not be NULL)

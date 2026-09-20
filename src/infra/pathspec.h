@@ -2,23 +2,23 @@
  * pathspec.h - The positional path filter
  *
  * Every input compiled into one matcher over the two keys a managed path has
- * (infra/path.h) — its location and its storage path — each entry read against
- * the subject of its own vocabulary. The vocabulary is the input's shape, never
- * an asker's: a filesystem shape is a location, a storage shape or a bare pattern
- * is a name. An exact entry selects the path it names and everything beneath
- * it. A rule — an input holding a glob metacharacter, in gitignore's grammar —
- * is one line of one ordered program: at each rung of the subject, deepest first,
- * the rules in reverse, each against its own vocabulary's subject, and the first
- * to match decides, a negation deciding "not in scope". An exact hit selects
- * whatever any rule says. Every rule stands as typed: the pathspec selects rows
- * and walks nothing, so gitignore's "a parent directory cannot be re-included"
- * — a rule about a traversal git prunes, and the ruleset's own walk where it
- * has a subject — has none here, and each rule is parsed and asked on its own
- * (base/gitignore.h, the rule alone). A filesystem-shaped rule is an anchor and
- * a tail: the components before the first that holds a wildcard are a directory
- * spelling, normalized and compared literally; the rest is the pattern, rooted
- * there as a `.gitignore` is rooted in its directory. The rungs are the matcher's
- * own walk.
+ * (infra/path.h) — its filesystem path and its storage path — each entry read
+ * against the subject of its own vocabulary. The vocabulary is the input's shape,
+ * never an asker's: a filesystem shape is a filesystem path, a storage shape or
+ * a bare pattern is a name. An exact entry selects the path it names and everything
+ * beneath it. A rule — an input holding a glob metacharacter, in gitignore's
+ * grammar — is one line of one ordered program: at each rung of the subject,
+ * deepest first, the rules in reverse, each against its own vocabulary's subject,
+ * and the first to match decides, a negation deciding "not in scope". An exact
+ * hit selects whatever any rule says. Every rule stands as typed: the pathspec
+ * selects rows and walks nothing, so gitignore's "a parent directory cannot be
+ * re-included" — a rule about a traversal git prunes, and the ruleset's own walk
+ * where it has a subject — has none here, and each rule is parsed and asked on
+ * its own (base/gitignore.h, the rule alone). A filesystem-shaped rule is an
+ * anchor and a tail: the components before the first that holds a wildcard are
+ * a directory spelling, normalized and compared literally; the rest is the pattern,
+ * rooted there as a `.gitignore` is rooted in its directory. The rungs are the
+ * matcher's own walk.
  *
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
@@ -38,7 +38,7 @@ typedef struct pathspec pathspec_t;
 
 /**
  * One compiled input, as the coverage answers read it: the input as typed, and
- * whether it is a rule. The input is the one honest echo — a location rule is
+ * whether it is a rule. The input is the one honest echo — a filesystem rule is
  * an anchor and a tail and has no one compiled string — and it is what the user
  * wrote. Borrowed; lives with the pathspec.
  */
@@ -55,10 +55,10 @@ typedef struct {
  * normalized, a storage path validated and kept as typed). A label selects
  * everything of its kind — `custom/` is the namespace's own directory and every
  * custom/ claim beneath it, including those of a profile bound nowhere here,
- * which no location can reach — and is matched in the storage vocabulary like
- * any name, which after the shed it is. Two inputs naming one key — two spellings
- * of one location, one storage path typed twice — are one exact entry; a name
- * beside a location is two, since they are two keys. Rules are never collapsed:
+ * which no filesystem path can reach — and is matched in the storage vocabulary
+ * like any name, which after the shed it is. Two inputs naming one key — two
+ * spellings of one path, one storage path typed twice — are one exact entry; a
+ * name beside a path is two, since they are two keys. Rules are never collapsed:
  * their order is their meaning.
  *
  * Glob rules:
@@ -102,27 +102,28 @@ error_t *pathspec_create(
  * Return true when the subject is in the matcher's scope.
  *
  * Every site has both names (a row, an item); a subject the caller has no name
- * for is NULL and is read by no entry of that vocabulary — a delta with no location
- * here (an unbound custom/ claim) is selected by a storage-shaped entry alone.
+ * for is NULL and is read by no entry of that vocabulary — a delta that stands
+ * nowhere here (an unbound custom/ claim) is selected by a storage-shaped entry
+ * alone.
  *
- * The exact entries first: the location against a location entry, itself or beneath
- * it (an entry of "/" is beneath everything); the storage path against a storage
- * entry likewise, down to its label. An exact hit selects whatever any rule says:
- * two tiers, one policy. Then the rules, one program over both subjects, read
- * rung by rung from the leaf (`kind` says whether the leaf is a directory; every
- * rung above it is): the rules in reverse insertion order, each read at the rung
- * of its own vocabulary — a storage rule the storage rung, a location rule the
- * location rung past its anchor and nothing at or above it — and the first to
- * match decides. In one sentence, the nearest rung at which any rule matches
- * decides, and at that rung the later input wins, a negation deciding "not in
- * scope". The rungs of the two subjects are counted from the leaf — the tail is
- * one tail under two roots — and the storage subject runs out at its label while
- * the location climbs to the root, so `~/etc/<star>.conf` followed by
- * `!<star>.conf` excludes what the first selected whichever vocabulary each is
- * written in, which two rulesets OR'd would have broken. The last storage rung
- * is the label, as gitignore's walk stops at the last component: `*.conf` reaches
- * a conf at any depth, `cache/` a file beneath any cache directory, and a bare
- * rule meets the label itself at the last rung.
+ * The exact entries first: the filesystem path against a filesystem entry, itself
+ * or beneath it (an entry of "/" is beneath everything); the storage path against
+ * a storage entry likewise, down to its label. An exact hit selects whatever
+ * any rule says: two tiers, one policy. Then the rules, one program over both
+ * subjects, read rung by rung from the leaf (`kind` says whether the leaf is a
+ * directory; every rung above it is): the rules in reverse insertion order, each
+ * read at the rung of its own vocabulary — a storage rule the storage rung, a
+ * filesystem rule the filesystem rung past its anchor and nothing at or above
+ * it — and the first to match decides. In one sentence, the nearest rung at which
+ * any rule matches decides, and at that rung the later input wins, a negation
+ * deciding "not in scope". The rungs of the two subjects are counted from the
+ * leaf — the tail is one tail under two roots — and the storage subject runs
+ * out at its label while the filesystem subject climbs to the root, so
+ * `~/etc/<star>.conf` followed by `!<star>.conf` excludes what the first selected
+ * whichever vocabulary each is written in, which two rulesets OR'd would have
+ * broken. The last storage rung is the label, as gitignore's walk stops at the
+ * last component: `*.conf` reaches a conf at any depth, `cache/` a file beneath
+ * any cache directory, and a bare rule meets the label itself at the last rung.
  *
  * `kind` is the manifest's kind of the path (a tracked directory squatted by a
  * file is still a directory): gitignore's directory-only rules (`dir/`) match a
@@ -132,14 +133,14 @@ error_t *pathspec_create(
  * other — and the answer is the leaf's.
  *
  * @param spec         Pathspec (NULL = match all)
- * @param location     The path's location (NULL: no location entry reads it)
+ * @param filesystem_path Where the path stands (NULL: no filesystem entry reads it)
  * @param storage_path The path's storage path (NULL: no storage entry reads it)
  * @param kind         What the path refers to in the manifest
  * @return true when matches
  */
 bool pathspec_matches(
     const pathspec_t *spec,
-    const char *location,
+    const char *filesystem_path,
     const char *storage_path,
     path_kind_t kind
 );
@@ -173,7 +174,7 @@ pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
 bool pathspec_entry_matches_at(
     const pathspec_t *spec,
     size_t i,
-    const char *location,
+    const char *filesystem_path,
     const char *storage_path,
     path_kind_t kind
 );

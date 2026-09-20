@@ -217,15 +217,15 @@ typedef enum dotta_crypto_mode {
  * ------
  * This machine's topology over the enabled set — `manifest_mount_table` over
  * the state's rows and `$HOME` — for placing a storage path the command reads
- * (`mount_resolve`). Naming a location beneath its roots is the view's own over
- * the table it lends and no verb here (`core/manifest.h` `manifest_name`). Requires
+ * (`mount_resolve`). Naming a path beneath its roots is the view's own over the
+ * table it lends and no verb here (`core/manifest.h` `manifest_name`). Requires
  * `state`. A command declares it when it asks one of the table's verbs: where a
  * claim stands (`mount_resolve`: diff, ignore, remove, revert, update),
  * a view of one branch placed by it (`manifest_build_tree`: diff, export, revert;
  * `manifest_build_branch`: ignore), a claim's ancestors climbed
  * (`metadata_capture_ancestors`: update),
  * or a claim found by its key (`profile_claim_name`: list, show;
- * `profile_discover_claims`: revert; `profile_build_location_index`: remove).
+ * `profile_discover_claims`: revert; `profile_build_filesystem_index`: remove).
  * Reading a CLI path is not one of those verbs: an argument's key is the
  * normalizer's own string and no root's spelling is read to make it
  * (`infra/path.h`), so apply, whose path filter is those strings, and status
@@ -237,8 +237,8 @@ typedef enum dotta_crypto_mode {
  * well borrows the view's table — `manifest_mounts`, the one the builder derived
  * from the rows it read — so the names it places and the rows it selects read
  * one value; a command that declares `mounts` alone gets its own build from the
- * same rows. Every location the run spells — a row's, a record's, an argument's
- * — is a root's spelling and a tail, the binder's or the user's own
+ * same rows. Every filesystem path the run spells — a row's, a record's, an
+ * argument's — is a root's spelling and a tail, the binder's or the user's own
  * (`infra/mount.h`).
  *
  * crypto

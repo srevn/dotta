@@ -3,8 +3,8 @@
  *
  * Handles profile detection, name resolution, and branch-level queries. The
  * questions asked of one branch, or of every branch, answered from Git and this
- * machine's topology; the searches by location build one branch's view to ask
- * it (core/manifest.h) and free it before they answer, so no manifest type crosses
+ * machine's topology; the searches by path build one branch's view to ask it
+ * (core/manifest.h) and free it before they answer, so no manifest type crosses
  * this surface.
  *
  * The layering convention, least specific first:
@@ -350,7 +350,7 @@ typedef struct {
  * that entry's for the three answers the tree gives, and both are zero exactly
  * where the sheet alone answered — the one convention this contract asks a reader
  * to know, and the one reader that needs it is export's name arm, which walks a
- * subtree where the tree held one (cmds/export.c collect_name reads `filemode
+ * subtree where the tree held one (cmds/export.c collect_storage reads `filemode
  * == GIT_FILEMODE_TREE`). No other reader looks past `kind`.
  *
  * `out` is written on success alone; on any error it is left as the caller supplied
@@ -359,17 +359,18 @@ typedef struct {
  * Readers: the four verbs that act on one name — `show -p` (cmds/show.c show_file),
  * the entry a revert restores (cmds/revert.c entry_to_restore), the history's
  * pre-check (cmds/list.c list_file_history), export's name arm (cmds/export.c
- * collect_name) — and the search by name across the local branches (core/profiles.c
- * claim_by_name). A reader not on this list is a bug. Three neighbours ask a
- * different question and are not readers: revert's read of the tip at the name
- * it writes (cmds/revert.c cmd_revert, step 11) asks Git's one-entry rule, which
- * the sheet must not answer — a directory claim there is retired by the write,
- * not refused; the orphan probe (core/workspace.c compute_orphan_authority) asks
- * the one document the record's kind lives in and folds every failure to
- * UNVERIFIED; the count's staleness probe (core/profiles.c profile_get_tree_stats)
- * and export's claim append (cmds/export.c append_claim_dirs) hold the sheet's
- * item and ask whether the tree contradicts it, which is the enumeration's question
- * (core/manifest.c manifest_claim_blob's contradiction index).
+ * collect_storage) — and the search by name across the local branches
+ * (core/profiles.c claim_by_name). A reader not on this list is a bug. Three
+ * neighbours ask a different question and are not readers: revert's read of the
+ * tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks Git's
+ * one-entry rule, which the sheet must not answer — a directory claim there is
+ * retired by the write, not refused; the orphan probe (core/workspace.c
+ * compute_orphan_authority) asks the one document the record's kind lives in
+ * and folds every failure to UNVERIFIED; the count's staleness probe
+ * (core/profiles.c profile_get_tree_stats) and export's claim append (cmds/export.c
+ * append_claim_dirs) hold the sheet's item and ask whether the tree contradicts
+ * it, which is the enumeration's question (core/manifest.c manifest_claim_blob's
+ * contradiction index).
  *
  * The point query, where the enumeration is its sibling: "what does this branch
  * hold" is asked of one name here and of the whole branch at the sites the
@@ -502,10 +503,10 @@ error_t *profile_needs_target(
 );
 
 /**
- * The name `profile` has for `location` in `tree`: the claim standing there, or
- * the name a claim there would take
+ * The name `profile` has for `filesystem_path` in `tree`: the claim standing
+ * there, or the name a claim there would take
  *
- * A location key, and the only one. The resolver answers two and the other is
+ * A filesystem key, and the only one. The resolver answers two and the other is
  * already settled where the argument was read (infra/path.h): a name the user
  * typed is Git's key, so the caller's own read of the branch's two documents
  * decides whether the profile holds it (profile_holds) and there is nothing here
@@ -517,27 +518,27 @@ error_t *profile_needs_target(
  * strictly), in this order: the row standing there answers with its own name
  * whatever its kind, so home/jail/etc/x under a binding at ~/jail is found by
  * ~/jail/etc/x and the chain above a file captured before the binding answers
- * as the claim it is; else the name the profile would give the location
- * (manifest_name) — the word a history search and a not-found line need, which
- * at a root of the profile's own is that root's label's word. Two arms and no
- * third: naming is total, so every location this is asked about has a name.
+ * as the claim it is; else the name the profile would give the path (manifest_name)
+ * — the word a history search and a not-found line need, which at a root of the
+ * profile's own is that root's label's word. Two arms and no third: naming is
+ * total, so every path this is asked about has a name.
  *
  * The row before the namer is the contract, not a shortcut: a derived claim is
  * something the profile holds and nothing it names (manifest_is_derived), so
  * the namer alone would climb past it and answer a name the branch never held.
  * Search first, name second.
  *
- * A name, never an enumeration. A DIRECTORY claim names its location and says
+ * A name, never an enumeration. A DIRECTORY claim names its path and says
  * nothing about what stands beneath it (core/manifest.h manifest_lookup_claim);
- * a verb that means everything at a place selects rows by location (cmds/export.c)
+ * a verb that means everything at a place selects rows by path (cmds/export.c)
  * and never walks this answer's subtree.
  *
- * `mounts` is the table the rows are placed by, and the location keys against
- * them by strcmp (infra/mount.h). The answer is the arena's — the view's own
- * row string, or the namer's — and outlives the view this call builds and frees.
+ * `mounts` is the table the rows are placed by, and the path keys against them
+ * by strcmp (infra/mount.h). The answer is the arena's — the view's own row string,
+ * or the namer's — and outlives the view this call builds and frees.
  *
  * Cost: one tree walk and one sheet load, every call. Its other face: a profile
- * whose sheet will not load refuses a location where the name its caller answers
+ * whose sheet will not load refuses a path where the name its caller answers
  * unaided proceeds — the view is strict, a verb's own read is not
  * (core/manifest.h). A ref or a tree that will not load refuses both.
  *
@@ -552,7 +553,8 @@ error_t *profile_needs_target(
  * @param tree The tree the claim is looked for in (must not be NULL)
  * @param mounts The table the rows are placed by (must not be NULL)
  * @param profile Whose claims these are (must not be NULL)
- * @param location Where to ask, spelled as the rows are keyed (must not be NULL)
+ * @param filesystem_path Where to ask, spelled as the rows are keyed (must not
+ *        be NULL)
  * @param arena Arena that owns the answer (must not be NULL)
  * @param out_storage Arena-borrowed storage path; NULL after an error (must not
  *                    be NULL)
@@ -563,7 +565,7 @@ error_t *profile_claim_name(
     const git_tree *tree,
     const mount_table_t *mounts,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     arena_t *arena,
     const char **out_storage
 );
@@ -591,12 +593,12 @@ typedef struct {
  * directory claim in its sheet (profile_holds); the claim is the name as typed.
  * A LOCATION argument: every branch whose view of its own tip, under this machine's
  * table, holds a row there — the claim being that branch's own name for the place,
- * since a location may be held under a non-canonical name and the caller must
- * not name it again.
+ * since a path may be held under a non-canonical name and the caller must not
+ * name it again.
  *
  * The table is this machine's, and this machine's table is the enabled set's
  * (core/manifest.h manifest_mount_table): a profile nothing has enabled has no
- * binding here at all, so its custom/ claims stand nowhere and no location reaches
+ * binding here at all, so its custom/ claims stand nowhere and no path reaches
  * them. That is the model being consistent, not a gap — by name they are found
  * as they always were.
  *
@@ -607,12 +609,12 @@ typedef struct {
  * list is one enumeration, not a snapshot: a ref born between it and the reads
  * is not consulted.
  *
- * Cost, and the asymmetry it carries: a location builds one view per branch — a
- * tree walk and a sheet load each, every branch's rows kept in the arena until
- * the command ends — where a name is one tree lookup per branch and a sheet parse
+ * Cost, and the asymmetry it carries: a path builds one view per branch — a tree
+ * walk and a sheet load each, every branch's rows kept in the arena until the
+ * command ends — where a name is one tree lookup per branch and a sheet parse
  * for each branch whose tree is silent about it, which for a name one branch
  * holds is every other branch. So a branch whose sheet will not load refuses
- * `revert <location>` always and `revert <name>` wherever its tree does not hold
+ * `revert <path>` always and `revert <name>` wherever its tree does not hold
  * the name; a name its tree holds is answered without its sheet, which is all
  * that is left of the strict/tolerant split here. Naming the profile skips the
  * search entirely, and the one caller says so where it refuses.
@@ -621,7 +623,7 @@ typedef struct {
  * not the enabled set. A caller that wants the owning profile among the enabled
  * set asks the view instead (manifest_lookup, manifest_holders — list, show).
  *
- * The key is the input here, where its sibling takes a location outright
+ * The key is the input here, where its sibling takes a filesystem path outright
  * (profile_claim_name): both keys run this one search — the same enumeration,
  * the same collection, the same refusal when nothing holds it — and the tag chooses
  * which probe each branch is asked. Over there the other key is an answer the
@@ -631,8 +633,8 @@ typedef struct {
  *
  * @param repo Repository (must not be NULL)
  * @param mounts This machine's mount table (must not be NULL)
- * @param arg The argument, in the key it named — a location or a storage path
- *            (must not be NULL)
+ * @param arg The argument, in the key it named — a filesystem path or a storage
+ *        path (must not be NULL)
  * @param arena Arena that owns the claims (must not be NULL)
  * @param out The claims, at least one (must not be NULL; zeroed after an error)
  * @return Error (ERR_NOT_FOUND when no branch holds it) or NULL on success
@@ -646,18 +648,18 @@ error_t *profile_discover_claims(
 );
 
 /**
- * location → the claims every local branch but `exclude` places there
+ * filesystem path → the claims every local branch but `exclude` places there
  *
  * Each branch read once through its own view of its tip under this machine's
  * table, so a claim is keyed by where it stands and never by what it is called:
- * two profiles bound at two targets holding one name are two locations and meet
- * no key of each other's, and one profile's two names for one location are one
- * row and one entry. A claim this machine cannot place stands nowhere and is
- * not indexed. Directory claims are indexed like any row — the branch claims
- * the directory, and a caller asking who else is at a place is owed it.
+ * two profiles bound at two targets holding one name are two paths and meet no
+ * key of each other's, and one profile's two names for one path are one row and
+ * one entry. A claim this machine cannot place stands nowhere and is not indexed.
+ * Directory claims are indexed like any row — the branch claims the directory,
+ * and a caller asking who else is at a place is owed it.
  *
- * The map borrows its keys — a row's own location string, the arena's — and its
- * values are the arena's: free the map alone, hashmap_free(index, NULL).
+ * The map borrows its keys — a row's own path string, the arena's — and its values
+ * are the arena's: free the map alone, hashmap_free(index, NULL).
  *
  * Complete or an error, like its sibling: a short index is an "also in" a user
  * reads as complete. What a failure means is the caller's, and remove's is advisory
@@ -674,11 +676,11 @@ error_t *profile_discover_claims(
  * @param mounts This machine's mount table (must not be NULL)
  * @param exclude A branch to leave out, or NULL for every one of them
  * @param arena Arena that owns the claims (must not be NULL)
- * @param out_index location (const char *) -> profile_claims_t * (must not be
- *                  NULL; free with hashmap_free(index, NULL))
+ * @param out_index filesystem path (const char *) -> profile_claims_t * (must
+ *        not be NULL; free with hashmap_free(index, NULL))
  * @return Error or NULL on success
  */
-error_t *profile_build_location_index(
+error_t *profile_build_filesystem_index(
     git_repository *repo,
     const mount_table_t *mounts,
     const char *exclude,

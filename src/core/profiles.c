@@ -909,26 +909,26 @@ error_t *profile_needs_target(
 }
 
 /**
- * By location, then by profile
+ * By filesystem path, then by profile
  *
- * Equal locations sort together, so the rows standing at one location form a
- * contiguous run; the profile breaks the tie, and the order is total because
- * one branch places one row per location. The name would not be: two branches
- * can hold one name at one location.
+ * Equal paths sort together, so the rows standing at one path form a contiguous
+ * run; the profile breaks the tie, and the order is total because one branch
+ * places one row per path. The name would not be: two branches can hold one name
+ * at one path.
  */
 static int index_order(const void *a, const void *b) {
     const manifest_row_t *const *ra = a;
     const manifest_row_t *const *rb = b;
 
-    int by_location = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
+    int by_path = strcmp((*ra)->filesystem_path, (*rb)->filesystem_path);
 
-    return by_location ? by_location : strcmp((*ra)->profile, (*rb)->profile);
+    return by_path ? by_path : strcmp((*ra)->profile, (*rb)->profile);
 }
 
 /**
- * location → the claims every local branch but `exclude` places there
+ * filesystem path → the claims every local branch but `exclude` places there
  */
-error_t *profile_build_location_index(
+error_t *profile_build_filesystem_index(
     git_repository *repo,
     const mount_table_t *mounts,
     const char *exclude,
@@ -968,26 +968,28 @@ error_t *profile_build_location_index(
     if (err) return err;
 
     /* The runs, typed once: a ptr_array holds void *, and every read below is a
-     * row's location, its profile or its name. */
+     * row's path, its profile or its name. */
     const manifest_row_t **sorted = (const manifest_row_t **) rows.items;
     qsort(sorted, rows.count, sizeof(*sorted), index_order);
 
     hashmap_t *index = hashmap_borrow(rows.count);
     if (!index) {
-        return ERROR(ERR_MEMORY, "Failed to create the location index");
+        return ERROR(ERR_MEMORY, "Failed to create the filesystem path index");
     }
 
     for (size_t i = 0; i < rows.count && !err;) {
-        const char *location = sorted[i]->filesystem_path;
+        const char *filesystem_path = sorted[i]->filesystem_path;
 
         size_t n = 0;
         while (i + n < rows.count &&
-            strcmp(sorted[i + n]->filesystem_path, location) == 0) n++;
+            strcmp(sorted[i + n]->filesystem_path, filesystem_path) == 0) n++;
 
         profile_claim_t *entries = arena_calloc(arena, n, sizeof(*entries));
         profile_claims_t *claims = arena_calloc(arena, 1, sizeof(*claims));
         if (!entries || !claims) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate the claims at a location");
+            err = ERROR(
+                ERR_MEMORY, "Failed to allocate the claims at a filesystem path"
+            );
             break;
         }
         for (size_t g = 0; g < n; g++) {
@@ -999,7 +1001,7 @@ error_t *profile_build_location_index(
 
         /* The key is the row's own string — hashmap_borrow keeps the pointer
          * and compares by content, and the row outlives the map. */
-        err = hashmap_set(index, location, claims);
+        err = hashmap_set(index, filesystem_path, claims);
         i += n;
     }
     if (err) {
@@ -1013,14 +1015,14 @@ error_t *profile_build_location_index(
 }
 
 /**
- * The name `profile` has for `location` in `tree`
+ * The name `profile` has for `filesystem_path` in `tree`
  */
 error_t *profile_claim_name(
     git_repository *repo,
     const git_tree *tree,
     const mount_table_t *mounts,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     arena_t *arena,
     const char **out_storage
 ) {
@@ -1028,7 +1030,7 @@ error_t *profile_claim_name(
     CHECK_NULL(tree);
     CHECK_NULL(mounts);
     CHECK_NULL(profile);
-    CHECK_NULL(location);
+    CHECK_NULL(filesystem_path);
     CHECK_NULL(arena);
     CHECK_NULL(out_storage);
 
@@ -1042,12 +1044,12 @@ error_t *profile_claim_name(
      * is held and names nothing, so the ascent climbs past it and would answer
      * a name the branch never held. Else the name the profile would give the
      * place — its label's word at a root of its own. Either answer is the arena's
-     * and outlives the view freed here, as claim_by_location's is. */
-    const manifest_row_t *row = manifest_lookup_claim(view, profile, location);
+     * and outlives the view freed here, as claim_by_filesystem_path's is. */
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
     if (row) {
         *out_storage = row->storage_path;
     } else {
-        err = manifest_name(view, profile, location, NULL, arena, out_storage);
+        err = manifest_name(view, profile, filesystem_path, NULL, arena, out_storage);
     }
     manifest_free(view);
 
@@ -1055,22 +1057,22 @@ error_t *profile_claim_name(
 }
 
 /**
- * The claim `branch` stands at `location`, or NULL
+ * The claim `branch` stands at `filesystem_path`, or NULL
  *
  * The branch's own view of its tip under this machine's table, so the name is
  * the branch's — a binding's, or one kept from before the binding — and never
  * one this machine composed. The view is strict (core/manifest.h): a sheet that
- * will not load is this branch's error, which is the whole cost a location argument
+ * will not load is this branch's error, which is the whole cost a path argument
  * carries over a name the tree answers.
  *
  * The answer is the row's own string, the arena's, and outlives the view freed
  * here.
  */
-static error_t *claim_by_location(
+static error_t *claim_by_filesystem_path(
     git_repository *repo,
     const char *branch,
     const mount_table_t *mounts,
-    const char *location,
+    const char *filesystem_path,
     arena_t *arena,
     const char **out_storage
 ) {
@@ -1080,7 +1082,7 @@ static error_t *claim_by_location(
     error_t *err = manifest_build_branch(repo, branch, mounts, arena, &view);
     if (err) return err;
 
-    const manifest_row_t *row = manifest_lookup_claim(view, branch, location);
+    const manifest_row_t *row = manifest_lookup_claim(view, branch, filesystem_path);
     if (row) {
         *out_storage = row->storage_path;
     }
@@ -1099,7 +1101,7 @@ static error_t *claim_by_location(
  * blob is. Complete or an error on both documents: an object that will not load
  * and a sheet that will not parse are each this branch's failure, never an absence
  * — and the sheet is opened only where the tree did not answer, which is the
- * whole of what a name still costs less than a location.
+ * whole of what a name still costs less than a path.
  */
 static error_t *claim_by_name(
     git_repository *repo,
@@ -1147,8 +1149,8 @@ error_t *profile_discover_claims(
     error_t *err = gitops_list_branches(repo, &branches);
     if (err) return err;
 
-    /* At most one claim per branch: a branch names a location once and holds a
-     * name once. */
+    /* At most one claim per branch: a branch names a path once and holds a name
+     * once. */
     profile_claim_t *claims = arena_calloc(
         arena, branches->count, sizeof(*claims)
     );
@@ -1164,9 +1166,9 @@ error_t *profile_discover_claims(
 
         /* Two keys, and each names its own search: the branch's view of its tip,
          * or its two documents asked for the name. */
-        if (arg->key == PATH_KEY_LOCATION) {
-            err = claim_by_location(
-                repo, branch, mounts, arg->location, arena, &storage_path
+        if (arg->key == PATH_KEY_FILESYSTEM) {
+            err = claim_by_filesystem_path(
+                repo, branch, mounts, arg->filesystem_path, arena, &storage_path
             );
         } else {
             err = claim_by_name(repo, branch, arg->storage_path, &storage_path);
@@ -1192,7 +1194,7 @@ error_t *profile_discover_claims(
     if (count == 0) {
         return ERROR(
             ERR_NOT_FOUND, "'%s' is not held by any profile",
-            arg->key == PATH_KEY_LOCATION ? arg->location : arg->storage_path
+            arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path : arg->storage_path
         );
     }
 

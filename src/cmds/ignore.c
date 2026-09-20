@@ -744,32 +744,32 @@ static bool source_gitignore_matches(
  * broken one would read as absent; both are answers about something other than
  * the path.
  *
- * `location` is NULL for a custom/ name this asker binds no target for: the name
- * stands nowhere, so nothing can be looked at and the source tree has no path
- * to be asked about either. That, an absent path and an unreadable one are one
- * answer — the kind was not observed and the trailing-slash hint stands in, which
- * is what lets a rule be tested against a path that does not exist yet — and
- * each says which at VERBOSE, so a verdict that leaned on the hint says so. An
- * unreadable path is never reported as an absent one (sys/filesystem.h: a reader
- * must never infer absence from a failure to look).
+ * `filesystem_path` is NULL for a custom/ name this asker binds no target for:
+ * the name stands nowhere, so nothing can be looked at and the source tree has
+ * no path to be asked about either. That, an absent path and an unreadable one
+ * are one answer — the kind was not observed and the trailing-slash hint stands
+ * in, which is what lets a rule be tested against a path that does not exist
+ * yet — and each says which at VERBOSE, so a verdict that leaned on the hint
+ * says so. An unreadable path is never reported as an absent one (sys/filesystem.h:
+ * a reader must never infer absence from a failure to look).
  *
  * An observed leaf is a leaf whatever the hint says: `--test ~/foo/` where ~/foo
  * is a file is matched as a file.
  *
- * `who` names the asker whose reading this is, or is empty: a location is one
- * reading for every asker and is observed once, before the loop; a storage name
- * stands where each asker's own target puts it, and each says so in its own turn.
- * `typed` is the argument as the user wrote it — the only thing there is to name
- * when nothing stands anywhere for it to be.
+ * `who` names the asker whose reading this is, or is empty: a path is one reading
+ * for every asker and is observed once, before the loop; a storage name stands
+ * where each asker's own target puts it, and each says so in its own turn. `typed`
+ * is the argument as the user wrote it — the only thing there is to name when
+ * nothing stands anywhere for it to be.
  */
 static bool stands_as_directory(
     const char *who,
     const char *typed,
-    const char *location,
+    const char *filesystem_path,
     bool trailing_slash,
     output_t *out
 ) {
-    if (!location) {
+    if (!filesystem_path) {
         output_info(
             out, OUTPUT_VERBOSE,
             "%s'%s' has no deployment target here: only the name is matched",
@@ -778,7 +778,7 @@ static bool stands_as_directory(
         return trailing_slash;
     }
 
-    switch (fs_lstat_occupant(location, NULL)) {
+    switch (fs_lstat_occupant(filesystem_path, NULL)) {
         case FS_OCCUPANT_DIRECTORY:
             return true;
 
@@ -789,13 +789,15 @@ static bool stands_as_directory(
 
         case FS_OCCUPANT_NONE:
             output_info(
-                out, OUTPUT_VERBOSE, "%sPath does not exist: %s", who, location
+                out, OUTPUT_VERBOSE, "%sPath does not exist: %s",
+                who, filesystem_path
             );
             break;
 
         case FS_OCCUPANT_UNKNOWN:
             output_info(
-                out, OUTPUT_VERBOSE, "%sPath cannot be read: %s", who, location
+                out, OUTPUT_VERBOSE, "%sPath cannot be read: %s",
+                who, filesystem_path
             );
             break;
     }
@@ -812,14 +814,14 @@ static bool stands_as_directory(
  *
  *   - a storage path is the contract itself: its own tail is the subject, for
  *     every asker alike, and it stands wherever that asker's target puts it —
- *     so the location, and the kind and source verdict that follow from it, are
- *     read once per asker. Nothing here names anything, so no view is built: a
- *     literal name stays testable on a repository whose claim sheets will not load.
- *   - a filesystem path (absolute, tilde, relative, a bare name) is one location
+ *     so the path, and the kind and source verdict that follow from it, are read
+ *     once per asker. Nothing here names anything, so no view is built: a literal
+ *     name stays testable on a repository whose claim sheets will not load.
+ *   - a filesystem path (absolute, tilde, relative, a bare name) is one path
  *     for every asker — the machine's reading, asked once — and each asker names
  *     it from its own claims and its own roots (core/manifest.h manifest_name):
  *     a directory the profile already tracks names what lies beneath it, and
- *     only where nothing of the profile's stands above the location do its roots
+ *     only where nothing of the profile's stands above the path do its roots
  *     answer. That is the whole reason a view is built here.
  *   - a name with an empty tail (`home/`, `home`) is the namespace's own directory
  *     and is evaluated per asker like any name, on `""`, which no rule reaches.
@@ -836,8 +838,8 @@ static bool stands_as_directory(
  * The path need not exist: a trailing slash on one that does not is the directory
  * hint, so directory-only patterns (`cache/`) can be tested. The rules are
  * evaluated on the mount-relative subject, exactly as the walk evaluates them
- * (cmds/add.c is_excluded); the source tree's `.gitignore` is asked on the
- * location, when the asker has one, and only where no `.dottaignore` layer decided.
+ * (cmds/add.c is_excluded); the source tree's `.gitignore` is asked on the path,
+ * when the asker has one, and only where no `.dottaignore` layer decided.
  *
  * The view is the named profile's branch at HEAD — which need not be enabled,
  * and answers when some *other* enabled profile's branch will not build — or
@@ -845,11 +847,11 @@ static bool stands_as_directory(
  * other four surfaces must build nothing.
  *
  * Every asker gets a subject, so every turn casts a verdict: a name's own tail,
- * or the tail of the name the asker gives the location — `""` at a root of its
- * own, which no rule reaches (base/gitignore.c), so a root tests NOT IGNORED
- * for every asker and its entries are what a pattern can name. The summary
- * therefore reads one accumulator: a run over enabled profiles ends TRACKED or
- * IGNORED, and there is no third thing for it to say.
+ * or the tail of the name the asker gives the path — `""` at a root of its own,
+ * which no rule reaches (base/gitignore.c), so a root tests NOT IGNORED for every
+ * asker and its entries are what a pattern can name. The summary therefore reads
+ * one accumulator: a run over enabled profiles ends TRACKED or IGNORED, and there
+ * is no third thing for it to say.
  *
  * Cost: a filesystem argument pays a manifest build — a tree walk and a sheet
  * load per enabled profile — where it read the table alone. cmds/completion.c
@@ -899,30 +901,30 @@ static error_t *test_path_ignore(
     /* The key the user named, fixed for every asker: the resolver's sum, its
      * tag the whole condition the loop's arms read and its member the argument's
      * own reading. A second reading stands beside it, one per key — a name's
-     * tail, what the rules see; a location's kind, observed there once — so the
-     * loop reads what the argument gave and asks nothing of it again. The table
-     * is the run's until a view is built, and then the view's own — the one its
+     * tail, what the rules see; a path's kind, observed there once — so the loop
+     * reads what the argument gave and asks nothing of it again. The table is
+     * the run's until a view is built, and then the view's own — the one its
      * rows were placed by. */
     const mount_table_t *mounts = ctx->run.mounts;
-    path_input_t arg;                         /* the key: a name or a location */
+    path_input_t arg;                         /* the key: a name or a path */
     const char *argument_subject = NULL;      /* a name's tail, what the rules see */
-    bool argument_is_directory = false;       /* a location's kind, observed there once */
+    bool argument_is_directory = false;       /* a path's kind, observed there once */
 
     if (label_prefixes(test_path)) {
         /* A storage shape, read by the one resolver that reads input shapes — a
-         * name and never a location, since the same predicate dispatched here
+         * name and never a path, since the same predicate dispatched here
          * (cmds/add.c's storage head is the other). A bare name that is none of
          * the three words never arrives: that is this command's own filesystem
          * grammar, and the predicate above let it past. */
         err = path_input_resolve(test_path, ctx->arena, &arg);
         if (err) return err;
     } else {
-        /* The key as the location door spells it: absolute, folded, nothing read
-         * through — the resolver's own location arm, read here because the resolver
-         * refuses the bare name this grammar reads (infra/path.h
-         * path_input_locate). */
-        arg.key = PATH_KEY_LOCATION;
-        err = path_input_locate(test_path, ctx->arena, &arg.location);
+        /* The key as the argument's door spells it: absolute, folded, nothing
+         * read through — the resolver's own filesystem arm, read here because
+         * the resolver refuses the bare name this grammar reads (infra/path.h
+         * path_input_filesystem_path). */
+        arg.key = PATH_KEY_FILESYSTEM;
+        err = path_input_filesystem_path(test_path, ctx->arena, &arg.filesystem_path);
         if (err) {
             return error_wrap(err, "Failed to resolve path '%s'", test_path);
         }
@@ -936,8 +938,8 @@ static error_t *test_path_ignore(
             argument_subject = label_tail(arg.storage_path);
             break;
 
-        case PATH_KEY_LOCATION:
-            /* Each asker names the location from its own claims and its own roots,
+        case PATH_KEY_FILESYSTEM:
+            /* Each asker names the path from its own claims and its own roots,
              * so a view is built and the table the rows were placed by is the
              * view's from here on — the named profile's arm hands in the very
              * table this lends back (core/manifest.h manifest_mounts). Both
@@ -1016,9 +1018,9 @@ static error_t *test_path_ignore(
      * than where the key was read, so the note it may print stands under the
      * same header the per-asker notes of a storage name stand under — one command
      * saying one thing in one order. */
-    if (arg.key == PATH_KEY_LOCATION) {
+    if (arg.key == PATH_KEY_FILESYSTEM) {
         argument_is_directory = stands_as_directory(
-            "", test_path, arg.location, trailing_slash, out
+            "", test_path, arg.filesystem_path, trailing_slash, out
         );
     }
 
@@ -1036,27 +1038,27 @@ static error_t *test_path_ignore(
         }
 
         /* The asker's reading, seeded with the key the user named: a storage
-         * name is one subject for every asker alike, a location is the machine's
+         * name is one subject for every asker alike, a path is the machine's
          * one reading and the kind observed there once. The arm fills the half
          * the argument did not name. */
         const char *subject = argument_subject;
-        const char *location = arg.key == PATH_KEY_LOCATION ? arg.location : NULL;
+        const char *filesystem_path = arg.key == PATH_KEY_FILESYSTEM ? arg.filesystem_path : NULL;
         bool is_directory = argument_is_directory;
 
         if (arg.key == PATH_KEY_STORAGE) {
             /* Where this asker's target puts the name, and what stands there: a
              * custom/ name places only under a profile with a target. */
-            err = mount_resolve(mounts, asker, arg.storage_path, ctx->arena, &location);
+            err = mount_resolve(mounts, asker, arg.storage_path, ctx->arena, &filesystem_path);
             if (err) goto cleanup;
             is_directory = stands_as_directory(
-                who, test_path, location, trailing_slash, out
+                who, test_path, filesystem_path, trailing_slash, out
             );
         } else {
-            /* What this asker calls the location: the claims it holds above it,
-             * else its own roots — the word alone at one of them, whose tail is
-             * "" and which no rule reaches. */
+            /* What this asker calls the path: the claims it holds above it, else
+             * its own roots — the word alone at one of them, whose tail is ""
+             * and which no rule reaches. */
             const char *name = NULL;
-            err = manifest_name(view, asker, location, NULL, ctx->arena, &name);
+            err = manifest_name(view, asker, filesystem_path, NULL, ctx->arena, &name);
             if (err) goto cleanup;
             subject = label_tail(name);
         }
@@ -1074,12 +1076,12 @@ static error_t *test_path_ignore(
         }
 
         /* The rules on the subject; where no layer decided, the source tree's
-         * .gitignore on the location — the lowest layer, so a `!` above it wins. */
+         * .gitignore on the path — the lowest layer, so a `!` above it wins. */
         gitignore_match_t match;
         gitignore_eval(rules, subject, is_directory, &match);
         bool ignored = match.decided
             ? match.ignored
-            : source_gitignore_matches(source_filter, location, is_directory, out);
+            : source_gitignore_matches(source_filter, filesystem_path, is_directory, out);
 
         if (ignored) {
             output_styled(out, OUTPUT_NORMAL, "{red}✗{reset} %sIGNORED\n", who);

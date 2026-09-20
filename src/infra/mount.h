@@ -11,10 +11,10 @@
  *   custom/X - X under a per-profile, per-machine deployment target (configured
  *              via `--target` at profile-enable time)
  *
- * Storage paths are stable across machines; the per-machine filesystem location
- * of a label is decided by the mount table below. The grammar of a name — the
- * three words, the shape rule and the split beneath both — is the layer under
- * this one: this module reads it, and it reads nothing of the table.
+ * Storage paths are stable across machines; where a label lands on this machine
+ * is decided by the mount table below. The grammar of a name — the three words,
+ * the shape rule and the split beneath both — is the layer under this one: this
+ * module reads it, and it reads nothing of the table.
  *
  * The table
  * ---------
@@ -26,17 +26,18 @@
  * lifetime. The build reads no disk: the table is a pure function of the rows
  * and the identity, and every verb over it is string work.
  *
- * A location — where a claim stands on this machine: the key the view's rows,
- * the record and every screen share — is a root's spelling joined with a tail.
- * A key is the spelling its writer typed, and the four producers of one agree
- * because they read the same strings: mount_resolve (a root's spelling and a
- * claim's tail), the location door (an argument, folded; infra/path.h
- * path_input_locate), a walk's join (a parent and a name) and a climb's cut — a
- * key truncated at a separator, which is a root's spelling and a shorter tail
- * whichever label named it, so an ancestor's key is never manufactured a second
- * way (core/manifest.c manifest_ascend, core/workspace.c blob_over, core/cleanup.c,
- * infra/pathspec.c). So two locations are one path iff they are one string, and
- * a symlink anywhere in a path is a component like any other:
+ * A filesystem path — where a claim stands on this machine: the key the view's
+ * rows, the record and every screen share, `filesystem_path` in every identifier
+ * that holds one (infra/path.h, the rule) — is a root's spelling joined with a
+ * tail. A key is the spelling its writer typed, and the four producers of one
+ * agree because they read the same strings: mount_resolve (a root's spelling
+ * and a claim's tail), the argument's door (an argument, folded; infra/path.h
+ * path_input_filesystem_path), a walk's join (a parent and a name) and a climb's
+ * cut — a key truncated at a separator, which is a root's spelling and a shorter
+ * tail whichever label named it, so an ancestor's key is never manufactured a
+ * second way (core/manifest.c manifest_ascend, core/workspace.c blob_over,
+ * core/cleanup.c, infra/pathspec.c). So two spellings are one path iff they are
+ * one string, and a symlink anywhere in a path is a component like any other:
  * nothing here reads through one, `~/.config -> ~/dotfiles/config` stays the
  * entry it is, and two claims through and around it are two claims. A filesystem
  * that folds case or normalization can stand one entry at two strings; the two
@@ -81,30 +82,29 @@
  * a table of its own.
  *
  * A namespace is one profile's view over the table. N profiles may claim one
- * location under N names; the view layers them by precedence (core/manifest),
- * and within one profile the view keeps one. Nothing is exclusive: a binding
- * says where a profile's names resolve, not who owns the files there.
+ * path under N names; the view layers them by precedence (core/manifest), and
+ * within one profile the view keeps one. Nothing is exclusive: a binding says
+ * where a profile's names resolve, not who owns the files there.
  *
  * Three questions over two searches. Two answer a root of the asker's — the table's
  * own, lent (mount_root_t) — and the third a string the table composed:
- *   - Which root encloses a location, and what lies past it: mount_root_above,
- *     the search itself, asked once per name by the view's ascent. A name is
- *     what that root's label and that tail spell — the word alone where the
- *     location *is* the root — and the ascent spells it there (core/manifest.c
- *     manifest_ascend): the table hands out what it found and composes nothing,
- *     one reader being no reason to own the sentence.
+ *   - Which root encloses a path, and what lies past it: mount_root_above, the
+ *     search itself, asked once per name by the view's ascent. A name is what
+ *     that root's label and that tail spell — the word alone where the path *is*
+ *     the root — and the ascent spells it there (core/manifest.c manifest_ascend):
+ *     the table hands out what it found and composes nothing, one reader being
+ *     no reason to own the sentence.
  *   - Where the asker's root of a label stands: mount_root_of, by label rather
  *     than by place — the view's contribution and add's receipt.
  *   - Where a profile's claim stands (profile + storage -> filesystem):
  *     mount_resolve — that second find, then the join. A name is composed beneath
- *     a root, so resolving one places it back at the very location it was composed
+ *     a root, so resolving one places it back at the very path it was composed
  *     from. This verb composes where the ascent's does not, because its join
  *     has many readers and the name's has one.
  *
- * No verb answers "is this location a root". Naming is total over the locations
- * a root encloses, so a reader that used to meet the namer's absence and ask
- * that question here has nothing to recover: it holds the name (core/manifest.h
- * manifest_name).
+ * No verb answers "is this path a root". Naming is total over the paths a root
+ * encloses, so a reader that used to meet the namer's absence and ask that question
+ * here has nothing to recover: it holds the name (core/manifest.h manifest_name).
  *
  * Traversal is refused at the boundary and trusted below it: a storage path where
  * a branch, a sheet or an argument is read (infra/label.h label_validate_storage),
@@ -124,10 +124,10 @@
 /**
  * Validate a deployment target (the `--target` argument) as the row will hold it.
  *
- * The binders locate first (infra/path.h path_input_locate: tilde, the working
- * directory, `.`, `..`, `//`), so what reaches here is the absolute path the
- * row stores; the shape rule holds for a caller that did not (the interactive
- * save's validate, on text a resolve refused).
+ * The binders read the argument first (infra/path.h path_input_filesystem_path:
+ * tilde, the working directory, `.`, `..`, `//`), so what reaches here is the
+ * absolute path the row stores; the shape rule holds for a caller that did not
+ * (the interactive save's validate, on text a resolve refused).
  *
  * Refuses, in order, one message each:
  *  - a spelling that is not absolute and folded (sys/filesystem.h fs_is_folded)
@@ -209,8 +209,8 @@ typedef struct {
 /**
  * Build a mount table from a flat array of mounts.
  *
- * Each mount is known by one spelling, its binder's, and every location beneath
- * it is that spelling joined with a tail (the table's paragraph above). The build
+ * Each mount is known by one spelling, its binder's, and every path beneath it
+ * is that spelling joined with a tail (the table's paragraph above). The build
  * reads no disk: the table is a pure function of `mounts` and the identity.
  *
  * The table is augmented internally with:
@@ -276,7 +276,7 @@ error_t *mount_table_build(
 /**
  * One of the asker's roots, as the table holds it.
  *
- * `location` is where the root stands, as a path: every reader prints it, compares
+ * `filesystem_path` is where the root stands: every reader prints it, compares
  * it to an argument the normalizer spelled, or measures a rung against it — and
  * the one root that is its own separator, "/", is spelled so here like any other
  * (the table's paragraph above). `profile` is the whole of whose a root is —
@@ -311,22 +311,23 @@ error_t *mount_table_build(
  * pointers.
  */
 typedef struct {
-    label_t label;          /* The namespace mounted here */
-    const char *location;   /* Where it stands, as a path */
-    const char *profile;    /* The profile that bound it; NULL for HOME and / */
+    label_t label;                 /* The namespace mounted here */
+    const char *filesystem_path;   /* Where it stands, as a path */
+    const char *profile;           /* The profile that bound it; NULL for HOME and / */
 } mount_root_t;
 
 /**
- * The deepest root of `profile` at or above `location`, and the tail past it.
+ * The deepest root of `profile` at or above `filesystem_path`, and the tail past
+ * it.
  *
- * At or above: the tail says which, "" where the location *is* the root, and
- * the ascent then spells the label's word alone (infra/label.h label_compose).
+ * At or above: the tail says which, "" where the path *is* the root, and the
+ * ascent then spells the label's word alone (infra/label.h label_compose).
  *
  * The one search, handed out whole. A namespace is one profile's: the shared
  * roots (HOME, the sentinel, both unbound) and its own binding; another profile's
  * target is skipped before it can win (the "One table, one reading" paragraph
- * above). Tightest container wins, and a root encloses the location iff it is a
- * prefix of it on a component boundary, the root itself included — `location`
+ * above). Tightest container wins, and a root encloses the path iff it is a prefix
+ * of it on a component boundary, the root itself included — `filesystem_path`
  * is a key, so the test is a string's and nothing is respelled or read through.
  *
  * At an equal depth two of the asker's own roots stand at one directory, and
@@ -340,14 +341,14 @@ typedef struct {
  * binding a profile at the root means — and between HOME and the sentinel the
  * portable name wins. One profile has one binding (mount_table_build).
  *
- * `*out_tail` aliases `location`: "" when the location *is* the root, the tail
- * past it otherwise. NULL when no root encloses the location — a malformed table,
- * or a location that is not absolute; the sentinel encloses every absolute path
- * at depth zero, so a well-formed table always answers, and `*out_tail` is then
+ * `*out_tail` aliases `filesystem_path`: "" when the path *is* the root, the
+ * tail past it otherwise. NULL when no root encloses the path — a malformed table,
+ * or a path that is not absolute; the sentinel encloses every absolute path at
+ * depth zero, so a well-formed table always answers, and `*out_tail` is then
  * untouched. Never fails, allocates nothing.
  *
  * Reader: the view's ascent, once per name (core/manifest.c manifest_ascend),
- * which reads all three of the answer — the root ends the climb, its `location`
+ * which reads all three of the answer — the root ends the climb, its own path
  * is the rung it ends at, and its label and the tail compose the name where no
  * claim above gave one (infra/label.h label_compose). Nothing else needs the
  * tail: the one question a command asks is below.
@@ -355,7 +356,7 @@ typedef struct {
 const mount_root_t *mount_root_above(
     const mount_table_t *table,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     const char **out_tail
 );
 
@@ -391,7 +392,7 @@ const mount_root_t *mount_root_of(
  *   root     -> /
  *   custom   -> <profile's target>
  *
- * The location is the root, one separator and the tail — or the root itself where
+ * The path is the root, one separator and the tail — or the root itself where
  * the name is the word alone: the key of the claim either way, and the one every
  * producer of a key agrees on (the table's paragraph above). A link anywhere in
  * it is a component — a claim captured through one stands where its spelling
@@ -399,17 +400,17 @@ const mount_root_t *mount_root_of(
  *
  * Absence is the find's own, handed on unchanged: mount_root_of answers no root
  * of the name's label for this asker, so the two have one producer and one reading
- * between them. `*out_location` is then NULL — the claim is `custom/` and the
- * profile has no target on this machine, a clone before the target is chosen, a
- * sync that pulled another machine's claims — which is how every lookup in the
- * tree answers an absence (manifest_lookup, state_peek_profile_target,
+ * between them. `*out_filesystem_path` is then NULL — the claim is `custom/`
+ * and the profile has no target on this machine, a clone before the target is
+ * chosen, a sync that pulled another machine's claims — which is how every lookup
+ * in the tree answers an absence (manifest_lookup, state_peek_profile_target,
  * hashmap_get), and the callers read it as the fact it is: the manifest's claim
  * routine skips
  * the claim and records it on the view (manifest_unbound, the health channel);
  * user-facing contexts fall back to a display spelling (remove.c) or let a hint
  * stand in (ignore.c). HOME and ROOT lookups always answer — those entries are
- * unconditional in every well-formed mount table. `*out_location` is NULL on
- * entry, so it is NULL after an error too.
+ * unconditional in every well-formed mount table. `*out_filesystem_path` is NULL
+ * on entry, so it is NULL after an error too.
  *
  * Errors:
  *   - ERR_INTERNAL when `storage_path` lacks a known label (the input boundary
@@ -420,9 +421,9 @@ const mount_root_t *mount_root_of(
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)
  * @param storage_path Storage-format path (must not be NULL, validated)
- * @param arena        Arena that owns the location
- * @param out_location Arena-borrowed filesystem path; NULL for a custom/ claim
- *                     the profile cannot place here (must not be NULL)
+ * @param arena        Arena that owns the answer
+ * @param out_filesystem_path Arena-borrowed filesystem path; NULL for a custom/
+ *                            claim the profile cannot place here (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *mount_resolve(
@@ -430,7 +431,7 @@ error_t *mount_resolve(
     const char *profile,
     const char *storage_path,
     arena_t *arena,
-    const char **out_location
+    const char **out_filesystem_path
 );
 
 #endif /* DOTTA_MOUNT_H */

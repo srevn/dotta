@@ -864,7 +864,7 @@ cleanup:
  * is the one thing only it knows about the paths it committed — read off each
  * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
  * no record write. A modified or new file was captured FROM disk, so where the
- * capture's own claim won its location in the post-commit view the record advances
+ * capture's own claim won its path in the post-commit view the record advances
  * to the just-committed blob with the stat the capture took (the next status
  * takes the fast path). A path the commit let go — a deleted item, a directory
  * entry the walk's prune dropped as redundant, or an ancestor claim the derivation
@@ -1926,10 +1926,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         /* Write the record — for the commits that landed, error or no
          *
          * Captured files get their record advanced because UPDATE captures them
-         * FROM the filesystem (already at target locations); the view itself is
-         * computed at every load and needs no update. A mid-sequence stop above
-         * changes nothing here: the landed commits are Git truth and the record
-         * follows them; the profiles that never committed have nothing to write.
+         * FROM the filesystem (already at their target paths); the view itself
+         * is computed at every load and needs no update. A mid-sequence stop
+         * above changes nothing here: the landed commits are Git truth and the
+         * record follows them; the profiles that never committed have nothing
+         * to write.
          *
          * Non-fatal: if the record write fails, Git commits still succeeded;
          * the next status re-confirms the captured files on its slow path.

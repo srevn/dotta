@@ -796,7 +796,7 @@ static error_t *profile_enable(
      * as a missing profile. With the --target-requires-single-profile rule above,
      * a single validation here covers every path that can reach Phase 2. */
     if (opts->target) {
-        err = path_input_locate(opts->target, ctx->arena, &target);
+        err = path_input_filesystem_path(opts->target, ctx->arena, &target);
         if (!err) err = mount_validate_target(target);
         if (err) {
             err = error_wrap(err, "Invalid --target value");

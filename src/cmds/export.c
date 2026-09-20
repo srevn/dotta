@@ -12,12 +12,12 @@
  * was named in. A profile alone mirrors its branch (dest/home/..., dest/root/...).
  * A storage path copies that branch subtree, laid out beneath it. A filesystem
  * path copies what the profile *places* there on this machine — every row its
- * branch and this machine's roots put at and beneath the location, whatever label
- * each is stored under, laid out beneath the location. Only the third reads the
- * mount table, and it is the only one that can answer a place a branch spells
- * under two labels: a file captured before a binding stands beside one captured
- * after, and a name reaches under one label alone. Single files are the degenerate
- * case of each.
+ * branch and this machine's roots put at and beneath the path, whatever label
+ * each is stored under, laid out beneath the path. Only the third reads the mount
+ * table, and it is the only one that can answer a place a branch spells under
+ * two labels: a file captured before a binding stands beside one captured after,
+ * and a name reaches under one label alone. Single files are the degenerate case
+ * of each.
  *
  * Directory modes come off the claim without asking which kind of claim stands
  * there, and that is right rather than incidental: every directory an export
@@ -30,11 +30,11 @@
  *
  * Two sheet policies, one per key, and the split is the view's rather than this
  * file's: an arm that reads the sheet itself reads it tolerantly (load_sheet),
- * while the location arm asks the profile's view, which is strict about the sheet
+ * while the path arm asks the profile's view, which is strict about the sheet
  * by contract (core/manifest.h). So on a branch whose sheet will not load `export
  * p home/x` proceeds with a warning and `export p ~/x` refuses — and that refusal
  * is not "use the name instead": a name is a different selection wherever the
- * location spans two labels, which is the partial copy this arm exists to stop
+ * path spans two labels, which is the partial copy this arm exists to stop
  * offering.
  *
  * Two-phase execution model:
@@ -55,13 +55,13 @@
  * path a source dictates is read against the storage grammar where the source
  * is read: label_validate_storage in the walk callback, the same check the view
  * makes for the same reason (core/manifest.c manifest_claim_blob) and therefore
- * already made for every row the location arm reads, and, for the claim sheet,
- * its own loader (core/metadata.c). Every rung is read against the grammar, the
- * branch root's included, and what prunes machinery there is the content gate
- * every walk asks of a name (infra/label.h label_prefixes). So every entry this
- * walk collects carries a validated storage path — the metadata key and the
- * associated data both. The remaining escape vector — a pre-existing symlink at
- * a content-dictated path below the root — is refused in phase 1, which can see
+ * already made for every row the path arm reads, and, for the claim sheet, its
+ * own loader (core/metadata.c). Every rung is read against the grammar, the branch
+ * root's included, and what prunes machinery there is the content gate every
+ * walk asks of a name (infra/label.h label_prefixes). So every entry this walk
+ * collects carries a validated storage path — the metadata key and the associated
+ * data both. The remaining escape vector — a pre-existing symlink at a
+ * content-dictated path below the root — is refused in phase 1, which can see
  * every such path because the entry list is completed first: every directory
  * the copy needs is an entry of it.
  */
@@ -155,7 +155,7 @@ typedef struct {
     size_t count;
     size_t capacity;
     const char *basename;      /* The last segment of whatever named the copy — the
-                                * profile, the storage path, the location — which a
+                                * profile, the storage path, the path — which a
                                 * directory destination nests the copy under. Every
                                 * arm sets it, and a single-file copy's leaf borrows
                                 * this very pointer as its relative path, so the two
@@ -263,8 +263,8 @@ static const char *path_basename(const char *path) {
  *
  * This rule and `manifest_row_t.mode` are one rule with two spellings — the claim
  * of the matching kind, else the floor (core/manifest.h) — which is what lets
- * the location arm take a row's mode and read no sheet. They agree by contract,
- * not by coincidence: a change to either belongs in both.
+ * the path arm take a row's mode and read no sheet. They agree by contract, not
+ * by coincidence: a change to either belongs in both.
  */
 static mode_t export_entry_mode(
     const metadata_t *metadata,
@@ -632,7 +632,7 @@ cleanup:
  * sheet's blob-less claims beneath the name follow the walk. A gitlink is refused,
  * and a name neither document holds is not found.
  */
-static error_t *collect_name(
+static error_t *collect_storage(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
@@ -745,8 +745,8 @@ cleanup:
 /**
  * A view row as an export entry: the source's name, its bytes, its mode.
  *
- * The projection the location arm reads a row through. Every directory row is a
- * claim of the profile, derived or tracked alike — the file header's own argument:
+ * The projection the path arm reads a row through. Every directory row is a claim
+ * of the profile, derived or tracked alike — the file header's own argument:
  * every directory an export produces is one it creates, and creation is what
  * both classes bind. `encrypted` stays false and is phase 1's to decide, the
  * row's own flag being the sheet's projection of bytes that win either way
@@ -781,34 +781,34 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
 }
 
 /**
- * The location arm: every row the profile places at or beneath the location,
- * laid out beneath it.
+ * The path arm: every row the profile places at or beneath the path, laid out
+ * beneath it.
  *
  * One profile's view of one tree (core/manifest.h manifest_build_tree), built
- * under the run's table — so a location keys against a row by strcmp, both being
+ * under the run's table — so a path keys against a row by strcmp, both being
  * spellings (infra/mount.h) — and read for two questions: what stands at the
- * location, and what stands strictly beneath it. Everything the entries carry
- * is the rows': the mode is the claim or the floor the builder already resolved,
+ * path, and what stands strictly beneath it. Everything the entries carry is
+ * the rows': the mode is the claim or the floor the builder already resolved,
  * which is export_entry_mode's rule under another name, so no sheet is read here;
  * the source name is the row's own, which is the name its blob was sealed under
  * (the AAD, infra/content.h). A name the contribution did not keep is no row
  * and is not copied — the copy is what the profile would place, and that is what
  * the view answers.
  *
- * The row standing at the location decides the shape. A directory row is a claimed
+ * The row standing at the path decides the shape. A directory row is a claimed
  * root at its mode; no row at all is an unclaimed root at the default, the same
  * rung complete_directories supplies. A blob is the single-entry copy — and a
  * blob with rows beneath it refuses the copy, one filesystem being unable to
  * hold both where a branch can, two of its names reaching one chain
  * (core/manifest.h manifest_lookup_claim). A root of this machine's topology is
- * a location like any other here: rows beneath it, and nothing standing at it
- * unless a claim does. The rungs between the rows are complete_directories'.
+ * a path like any other here: rows beneath it, and nothing standing at it unless
+ * a claim does. The rungs between the rows are complete_directories'.
  */
-static error_t *collect_location(
+static error_t *collect_filesystem(
     const dotta_ctx_t *ctx,
     git_tree *tree,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     const char *commit_suffix,
     export_entry_list_t *list
 ) {
@@ -821,26 +821,26 @@ static error_t *collect_location(
     if (err) {
         return error_wrap(
             err, "Failed to read what profile '%s' places at '%s'",
-            profile, location
+            profile, filesystem_path
         );
     }
 
-    /* The location as a prefix: the filesystem root is spelled "" — the one prefix
+    /* The path as a prefix: the filesystem root is spelled "" — the one prefix
      * every absolute path is beneath, as the table spells it and the pathspec
-     * reads it (infra/pathspec.c prefix_location). The row standing at the location
-     * is taken by the location itself, before the prefix is asked, so the root's
+     * reads it (infra/pathspec.c prefix_filesystem). The row standing at the
+     * path is taken by the path itself, before the prefix is asked, so the root's
      * "" — which encloses "/" as well as everything under it — cannot claim it
      * twice. */
-    const char *base = strcmp(location, "/") == 0 ? "" : location;
+    const char *base = strcmp(filesystem_path, "/") == 0 ? "" : filesystem_path;
     size_t base_len = strlen(base);
-    list->basename = path_basename(location);
+    list->basename = path_basename(filesystem_path);
 
     const manifest_row_t *at = NULL;
     ptr_array_t beneath PTR_ARRAY_AUTO = { 0 };
     manifest_rows_t rows = manifest_rows(view);
     for (size_t i = 0; i < rows.count && !err; i++) {
         const manifest_row_t *row = rows.entries[i];
-        if (strcmp(row->filesystem_path, location) == 0) {
+        if (strcmp(row->filesystem_path, filesystem_path) == 0) {
             at = row;
         } else if (str_path_beneath(row->filesystem_path, base, base_len)) {
             err = ptr_array_push(&beneath, row);
@@ -858,15 +858,15 @@ static error_t *collect_location(
             : "";
         err = ERROR(
             ERR_NOT_FOUND, "Profile '%s'%s places nothing at '%s'%s",
-            profile, commit_suffix, location, hint
+            profile, commit_suffix, filesystem_path, hint
         );
         goto cleanup;
     }
 
     if (at && at->type != PATH_TYPE_DIRECTORY) {
         if (beneath.count > 0) {
-            /* The least location, so the refusal names one thing and names the
-             * same one every run: row order is the view's own business. */
+            /* The least path, so the refusal names one thing and names the same
+             * one every run: row order is the view's own business. */
             const manifest_row_t *first = beneath.items[0];
             for (size_t i = 1; i < beneath.count; i++) {
                 const manifest_row_t *row = beneath.items[i];
@@ -878,7 +878,7 @@ static error_t *collect_location(
                 ERR_CONFLICT,
                 "Cannot export '%s': '%s' is a %s in profile '%s' and '%s' stands "
                 "beneath it — one filesystem cannot hold both",
-                location, at->storage_path,
+                filesystem_path, at->storage_path,
                 at->type == PATH_TYPE_SYMLINK ? "symlink" : "file",
                 profile, first->storage_path
             );
@@ -1491,11 +1491,10 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
     }
 
     if (opts->file_path) {
-        /* Read the argument in the key the user named — a location or a storage
-         * path, neither manufactured from the other (infra/path.h) — and hand
-         * it to the arm that answers in that key. A storage shape was validated
-         * as typed and carries no trailing slash; a filesystem shape was
-         * normalized.
+        /* Read the argument in the key the user named — a path or a storage path,
+         * neither manufactured from the other (infra/path.h) — and hand it to
+         * the arm that answers in that key. A storage shape was validated as
+         * typed and carries no trailing slash; a filesystem shape was normalized.
          *
          * Every refusal is the resolver's, in the resolver's words: a `..` in a
          * tail, a tilde it cannot expand, an empty path — and a word standing
@@ -1510,14 +1509,14 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (err) goto cleanup;
 
         switch (arg.key) {
-            case PATH_KEY_LOCATION:
-                err = collect_location(
-                    ctx, tree, opts->profile, arg.location, commit_suffix, &list
+            case PATH_KEY_FILESYSTEM:
+                err = collect_filesystem(
+                    ctx, tree, opts->profile, arg.filesystem_path, commit_suffix, &list
                 );
                 break;
 
             case PATH_KEY_STORAGE:
-                err = collect_name(
+                err = collect_storage(
                     ctx, tree, opts->profile, arg.storage_path, commit_suffix,
                     &list
                 );

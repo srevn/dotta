@@ -80,8 +80,8 @@
 /**
  * Workspace state - where an item exists
  *
- * Represents the location/deployment status of a file or directory across the
- * view (Git), the record (the store's dotta.db) and the filesystem.
+ * Represents the deployment status of a file or directory across the view (Git),
+ * the record (the store's dotta.db) and the filesystem.
  *
  * This enum captures WHERE an item exists, separate from WHAT is wrong with it
  * (see divergence_type_t). States are mutually exclusive.
@@ -1008,7 +1008,7 @@ error_t *workspace_observe(
  *   - apply's adoption loop (ownership event on first claim, and the
  *     acknowledgement of a clean handover — the record's claim becomes the row's,
  *     whichever half of it moved: another profile's row, or another name of the
- *     same profile that the view gave the location to)
+ *     same profile that the view gave the path to)
  *   - apply's record step (ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path)

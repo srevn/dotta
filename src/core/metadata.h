@@ -579,8 +579,8 @@ error_t *metadata_capture_from_directory(
  * a hole no other machine can fill, and the create there falls back to the default
  * mode (core/deploy's ancestors pass). The climb carries one string, not a pair
  * that must agree — a resolve is a root's spelling and a tail, so the leaf's
- * location cut short would land the same bytes, at the cost of a second string
- * the caller must have got right; one producer places a name.
+ * path cut short would land the same bytes, at the cost of a second string the
+ * caller must have got right; one producer places a name.
  *
  * Per rung, root-first:
  *   - a tracked claim standing at the key is the walk's own word and is left
@@ -593,7 +593,7 @@ error_t *metadata_capture_from_directory(
  *   - anything else on disk -> the derivation claims no directory here, so a
  *     standing ancestor claim is retired (the sheet's own producer rule) and
  *     its key appended to `retired`
- *   - no location here (an unbound custom/ name), nothing there, or nothing this
+ *   - no path here (an unbound custom/ name), nothing there, or nothing this
  *     host could see or name -> the rung has no answer, and no answer is not an
  *     answer of "no": nothing authored, nothing retired
  *
@@ -612,7 +612,7 @@ error_t *metadata_capture_from_directory(
  * @param storage_path Leaf's storage path, under a label — the vocabulary's
  *                     precondition (infra/label.h label_tail), which every caller
  *                     meets with a name it composed or validated (must not be NULL)
- * @param arena Arena the rungs' locations are spelled into (must not be NULL)
+ * @param arena Arena the rungs' paths are spelled into (must not be NULL)
  * @param captured Count of rungs whose claim this call authored or changed, added
  *                 to (must not be NULL)
  * @param retired Keys this call retired, appended (must not be NULL)

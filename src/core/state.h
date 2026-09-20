@@ -238,7 +238,7 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  */
 typedef struct anchor {
     /* Identity — the row's, at the last write */
-    char *filesystem_path;    /* Deployed path (PRIMARY KEY): the location, as spelled */
+    char *filesystem_path;    /* Deployed path (PRIMARY KEY), as spelled */
     char *storage_path;       /* Path in profile (home/.bashrc) */
     char *profile;            /* Profile whose row dotta reconciled the path against */
 

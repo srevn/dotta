@@ -122,10 +122,10 @@ error_t *stage_orphan(git_repository *repo, const char *refname, stage_t **out);
  *
  * Readers: the sheet loader (add, update, revert); add's view of its own branch
  * (manifest_build_tree); and the questions revert and remove ask of the branch
- * as it stood — the claim at a location, the entry at a name, a second name,
- * the claims an argument removes. Never NULL: an orphan's stage stands on the
- * empty tree, and add — the one reader that opens one — reads it as a profile
- * with nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
+ * as it stood — the claim at a path, the entry at a name, a second name, the
+ * claims an argument removes. Never NULL: an orphan's stage stands on the empty
+ * tree, and add — the one reader that opens one — reads it as a profile with
+ * nothing in it yet, no entry and no sheet. Borrowed; valid until stage_free.
  *
  * @param st Stage (must not be NULL)
  * @return The opened tree

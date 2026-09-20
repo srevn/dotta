@@ -3,12 +3,13 @@
  *
  * The readings of a flexible CLI path argument:
  *
- *   path_input_resolve      - the key the input names: a location (a filesystem
- *                             shape, normalized) or a storage path (validated,
- *                             as typed) — the pathspec, and every verb that takes
- *                             a path from the command line
+ *   path_input_resolve      - the key the input names: a filesystem path (a
+ *                             filesystem shape, normalized) or a storage path
+ *                             (validated, as typed) — the pathspec, and every
+ *                             verb that takes a path from the command line
  *
- *   path_input_locate       - the location alone, in the arena: the same reading,
+ *   path_input_filesystem_path
+ *                           - that key alone, in the arena: the same reading,
  *                             for a caller whose grammar has no storage arm to
  *                             dispatch to (add, the binders' --target, ignore
  *                             --test, the completion, a glob's anchor)
@@ -24,7 +25,7 @@
  *                             diff, apply, update)
  *
  * One dispatch: the resolver reads the storage grammar itself and hands every
- * filesystem spelling (absolute, tilde, relative) to the location door, whose
+ * filesystem spelling (absolute, tilde, relative) to the argument's door, whose
  * answer is the key. The grammar of a name (infra/label.h: label_prefixes,
  * label_validate_storage), the filesystem primitives (fs_expand_tilde,
  * fs_working_directory, fs_path_join, fs_normalize_path) and HOME's two spellings
@@ -103,7 +104,7 @@ error_t *path_input_resolve(
      * `./X` is what says a path was meant. One refusal for every verb, and the
      * only one a word standing alone earns anywhere — the three words are names
      * and the arm above reads them. A verb that reads a bare word as a path asks
-     * the location door instead (add, the binders, `ignore --test`, the
+     * the argument's door instead (add, the binders, `ignore --test`, the
      * completion). */
     if (input[0] != '/' && input[0] != '~' && input[0] != '.' &&
         !strchr(input, '/')) {
@@ -116,17 +117,17 @@ error_t *path_input_resolve(
     }
 
     /* A filesystem shape — absolute, tilde, or relative to the working directory
-     * — read as the location it names: one arm for the three spellings, with
-     * `.`, `..` and the directory spelling folded inside it. The key is written
-     * before the answer because the zeroed key is already this one: a read that
-     * fails leaves a NULL beneath it, which is what this function promises after
-     * an error. */
-    out->key = PATH_KEY_LOCATION;
+     * — read as the path it names: one arm for the three spellings, with `.`,
+     * `..` and the directory spelling folded inside it. The key is written before
+     * the answer because the zeroed key is already this one: a read that fails
+     * leaves a NULL beneath it, which is what this function promises after an
+     * error. */
+    out->key = PATH_KEY_FILESYSTEM;
 
-    return path_input_locate(input, arena, &out->location);
+    return path_input_filesystem_path(input, arena, &out->filesystem_path);
 }
 
-error_t *path_input_locate(const char *input, arena_t *arena, const char **out) {
+error_t *path_input_filesystem_path(const char *input, arena_t *arena, const char **out) {
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
@@ -140,7 +141,8 @@ error_t *path_input_locate(const char *input, arena_t *arena, const char **out) 
     *out = arena_strdup(arena, normalized);
     free(normalized);
 
-    return *out ? NULL : ERROR(ERR_MEMORY, "Failed to allocate the location");
+    return *out ? NULL
+                : ERROR(ERR_MEMORY, "Failed to allocate the filesystem path");
 }
 
 /**

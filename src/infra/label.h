@@ -266,8 +266,8 @@ error_t *label_validate_storage(const char *storage_path);
  * projections assert the same rule read from the other side.
  *
  * Reader: the last rung of the namer's ascent, which is the one place in the
- * tree a location becomes a name (core/manifest.c manifest_ascend), over the
- * root the table found for it (infra/mount.h mount_root_above).
+ * tree a filesystem path becomes a name (core/manifest.c manifest_ascend), over
+ * the root the table found for it (infra/mount.h mount_root_above).
  *
  * @param arena Arena that owns the answer (must not be NULL)
  * @param label The namespace the name is in

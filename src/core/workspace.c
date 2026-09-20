@@ -605,7 +605,7 @@ static error_t *workspace_add_diverged(
  * divergence and kind are the constants of the state.
  *
  * This is the one door the walk's strings leave their frame through, and it copies
- * them rather than aliasing: the location the walk joined and the name the namer
+ * them rather than aliasing: the path the walk joined and the name the namer
  * answered live in a frame's scratch arena that the frame's next entry reclaims,
  * while ws->diverged_index borrows the key it is handed (base/hashmap.h) and
  * the item outlives every frame. The profile is the owner's — the row's own,
@@ -618,7 +618,7 @@ static error_t *workspace_add_diverged(
  * by the exactly-once fixtures (tests/test-scan.sh).
  *
  * @param ws Workspace context (must not be NULL)
- * @param filesystem_path The location the walk joined (must not be NULL)
+ * @param filesystem_path The path the walk joined (must not be NULL)
  * @param storage_path The name the namer answered (must not be NULL)
  * @param profile The owner's, the view's row's (must not be NULL)
  * @param occupant What the scan's lstat found at the path (workspace.h)
@@ -1675,8 +1675,8 @@ typedef enum {
  *   - the profile is disabled: its branch still claims the path, and the deployed
  *     copy is dotta's to prune;
  *   - the profile moved: it is enabled, but its --target changed between a disable
- *     and an enable, so Git still backs the storage path at a new location and
- *     the old one is dotta's to prune;
+ *     and an enable, so Git still backs the storage path at a new path and the
+ *     old one is dotta's to prune;
  *   - Git let go: the branch was deleted, rebased or git rm'd behind the record,
  *     an enabled branch is dead, or a pulled removal arrived — the deployed copy
  *     is left alone.
@@ -2658,8 +2658,8 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * said, and nothing beneath it can stand: the view says a file belongs there,
  * so anything offered beneath is something no apply can ever place. Whichever
  * profile's blob, precedence applied (core/manifest.h manifest_lookup) — the
- * question is what stands at the location, not what the scanning profile holds.
- * A directory row of either kind stops nothing: an ancestor claim names neither
+ * question is what stands at the path, not what the scanning profile holds. A
+ * directory row of either kind stops nothing: an ancestor claim names neither
  * itself nor anything beneath it (manifest_is_derived), which is why a derived
  * row at one key is no answer about the other.
  *
@@ -2676,10 +2676,10 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
  * one per ask, and abandoned.
  *
  * The ascent over these very rungs floors on the asker's own root (core/manifest.c
- * manifest_ascend): it is naming a location for one profile, and nothing of that
+ * manifest_ascend): it is naming a path for one profile, and nothing of that
  * profile's stands above its root. This climb has no asker — it asks what stands
- * at a location, whoever holds it — so the root directory is its floor, as it
- * is deploy's (core/deploy.c nearest_ancestor).
+ * at a path, whoever holds it — so the root directory is its floor, as it is
+ * deploy's (core/deploy.c nearest_ancestor).
  *
  * Reader: the scan driver (analyze_untracked_files), of every tracked directory
  * it is about to enumerate — an independent tracked root beneath a file claim
@@ -2744,7 +2744,7 @@ static error_t *blob_over(
  * — a walk stops at any of them it meets, by whichever string (find_scan_root)
  * — and the walks: the driver enumerates each once, from a depth 0 of its own.
  * Where several rows stand at one directory the later-enabled profile's is the
- * one kept, owner and spelling together, the index's rule for a contested location
+ * one kept, owner and spelling together, the index's rule for a contested path
  * (core/manifest.c manifest_layer) applied where the keys differ; among one
  * profile's, the later in path order. The consequence: where two tracked rows
  * stand at one directory under two spellings, the later-enabled profile's walk
@@ -2827,20 +2827,20 @@ typedef struct {
  * enumerate — the limit a visited set would close, left stated.
  *
  * One question opens both kinds, and it is the view's word at the child's own
- * key: a claim that names its own location settles the child whatever stands
- * there, for no look at all — manifest_is_derived names the one row that names
- * no location, and the walk passes through it as through any unclaimed directory.
- * What the two kinds ask after the look is not the same question: a directory
- * asks the identity — is this another root's? — because a root is reached by
- * whatever spelling a frame joined and the key above answered one of them; a
- * leaf asks whether the record speaks for its path, and then whether a row or a
- * record stands on its very entry. Neither needs the other's: no offer is ever
- * made *at* a directory, so a directory asks no record, and a leaf is reached
- * by a frame that was cleared before it was entered, so a leaf climbs nothing.
- * A directory the record remembers is entered like any other — the view says
- * what belongs at a location whatever stands there, where a record says what
- * dotta put there, which only a look confirms: a record bounds what is offered,
- * never where the walk goes.
+ * key: a claim that names its own path settles the child whatever stands there,
+ * for no look at all — manifest_is_derived names the one row that names no path,
+ * and the walk passes through it as through any unclaimed directory. What the
+ * two kinds ask after the look is not the same question: a directory asks the
+ * identity — is this another root's? — because a root is reached by whatever
+ * spelling a frame joined and the key above answered one of them; a leaf asks
+ * whether the record speaks for its path, and then whether a row or a record
+ * stands on its very entry. Neither needs the other's: no offer is ever made
+ * *at* a directory, so a directory asks no record, and a leaf is reached by a
+ * frame that was cleared before it was entered, so a leaf climbs nothing. A
+ * directory the record remembers is entered like any other — the view says what
+ * belongs at a path whatever stands there, where a record says what dotta put
+ * there, which only a look confirms: a record bounds what is offered, never where
+ * the walk goes.
  *
  * Nothing beneath a blob the view holds is offered, and the climb that says so
  * is the driver's, asked once of the directory a walk begins at
@@ -2851,9 +2851,9 @@ typedef struct {
  * than a climb per child, and `directory` carries it as a precondition.
  *
  * The order is the order. The view's word first, because a claim that names its
- * own location settles the child whatever stands there and costs no look; the
- * lstat next, because the kind and the identity decide every arm that is left;
- * the occupant skip before the identity and the record, because nothing can hold
+ * own path settles the child whatever stands there and costs no look; the lstat
+ * next, because the kind and the identity decide every arm that is left; the
+ * occupant skip before the identity and the record, because nothing can hold
  * what it names; the guards before the name, because an ascent is paid only where
  * a name is used and in a tracked directory most leaves are managed; the name
  * before the ignore layers, the name being the first layer's subject; the layers
@@ -2866,10 +2866,10 @@ typedef struct {
  * the capture's to refuse.
  *
  * One arrangement the blob rule does not reach, and need not: where a later
- * profile's explicit DIRECTORY claim wins a location an earlier one holds a blob
+ * profile's explicit DIRECTORY claim wins a path an earlier one holds a blob
  * at, the index answers with the directory row. That row is necessarily tracked
- * — a derived row never takes a held location — so the question above settles
- * the child by the view's own word, and the directory is the winner's to enumerate,
+ * — a derived row never takes a held path — so the question above settles the
+ * child by the view's own word, and the directory is the winner's to enumerate,
  * under the winner's name, from a depth 0 of its own.
  *
  * What the filesystem refuses is said where it happens and the siblings go on,
@@ -2877,8 +2877,8 @@ typedef struct {
  * go to stderr, as the driver's do — core has no output handle.
  *
  * @param scan      What the walk runs under (must not be NULL)
- * @param directory The location this frame enumerates: a key the view holds no
- *                  blob at or over (must not be NULL)
+ * @param directory The path this frame enumerates: a key the view holds no blob
+ *                  at or over (must not be NULL)
  * @param depth     Frames beneath the tracked directory the driver started at
  * @return Error or NULL on success
  */
@@ -2963,7 +2963,7 @@ static error_t *scan_directory_for_untracked(
         }
 
         /* The view's word at the child's own key, before any look. A claim that
-         * names its own location settles the child whatever stands there: a blob
+         * names its own path settles the child whatever stands there: a blob
          * bounds the walk (the induction above), and a tracked directory is the
          * driver's to enumerate, from a depth 0 of its own, or the [type] the
          * directory analysis already said. Either way the load holds one verdict
@@ -3062,13 +3062,12 @@ static error_t *scan_directory_for_untracked(
         /* Check if ignored: the rules on the mount-relative path, which is ""
          * at a root of this profile — no rule reaches an empty subject
          * (base/gitignore.c), so a root's entries are matched and a root is not.
-         * Where no layer decided, the source tree's .gitignore on the location
-         * (its root is that repo's) — the lowest layer, so a `!` rule above it
-         * wins. That one reads the place and not the subject, so a root standing
-         * inside a repository whose rules name it is not entered, which is the
-         * answer the directory would get under any other name. The layer's own
-         * failure leaves no verdict, as today; its allocation failure is the
-         * run's. */
+         * Where no layer decided, the source tree's .gitignore on the path (its
+         * root is that repo's) — the lowest layer, so a `!` rule above it wins.
+         * That one reads the place and not the subject, so a root standing inside
+         * a repository whose rules name it is not entered, which is the answer
+         * the directory would get under any other name. The layer's own failure
+         * leaves no verdict, as today; its allocation failure is the run's. */
         gitignore_match_t match;
         gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
         bool ignored = match.decided && match.ignored;
@@ -3146,8 +3145,8 @@ static error_t *analyze_untracked_files(
      * slice, and that pairing must not cross an accessor. Registered in the view's
      * order, lowest profile first, so a later profile's row standing at a directory
      * an earlier one already stands at takes it — the index's own rule for a
-     * contested location (core/manifest.c manifest_layer), applied where the
-     * keys differ — and within one profile the later row in path order. */
+     * contested path (core/manifest.c manifest_layer), applied where the keys
+     * differ — and within one profile the later row in path order. */
     scan_root_t *roots = arena_calloc(ws->arena, ws->active_dir_count, sizeof(*roots));
     if (!roots) {
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's roots");

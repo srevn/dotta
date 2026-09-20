@@ -60,10 +60,10 @@ typedef struct {
  * p ~` and `add p home/` name one claim. So a re-capture lands on the name the
  * profile already has, whatever binding arrived since, and a fresh path beneath
  * a tracked directory takes that directory's name. A typed name is refused where
- * it would give the profile a second name for one location, which is the one
- * place a second name could be born. The receipt counts the paths captured under
- * each label: which label a name keeps is the profile's history, and no argument
- * says it.
+ * it would give the profile a second name for one path, which is the one place
+ * a second name could be born. The receipt counts the paths captured under each
+ * label: which label a name keeps is the profile's history, and no argument says
+ * it.
  *
  * **The chosen name is the subject of two matchers**, its label stripped: the
  * `.dottaignore` layers and the auto-encryption patterns (core/ignore,
@@ -86,7 +86,7 @@ typedef struct {
  * command lists is the name its walk composed beneath. So one refusal is owed
  * by the completed selection and cannot be reached path by path: where the
  * command's own directory claims would move which of a profile's two names stands
- * at a location, the name that will stand must be a name this command captured.
+ * at a path, the name that will stand must be a name this command captured.
  *
  * What the commit guarantees: its two documents name one namespace. The tree
  * holds every blob and the sheet holds the directories a tree cannot — an empty
@@ -101,17 +101,17 @@ typedef struct {
  * command whichever of the two was walked. A branch that arrived carrying the
  * contradiction refuses too — `dotta remove <profile> <path>` gives the claim
  * up — and a file captured at a directory claim's own name takes the claim's
- * place. The kind a profile's own claim gives a location is the location's question
+ * place. The kind a profile's own claim gives a path is that path's question
  * and is asked of the view: a path whose kind changed under a claim is refused
  * by name and skipped by a walk, and `--force` lifts neither — overwriting bytes
  * under a name the profile holds is not re-shaping the tree.
  *
  * **THE KEY INVARIANT**: for every path this command lists, `mount_resolve` of
- * the claim it was listed under is the location it was read at. A typed name is
- * resolved into its location by construction; a walked one is named from the
- * claim standing at the location the walk reached. That is what lets the record
- * join by the location without a round trip through the name. It holds by
- * construction and nothing moves it: a run holds the store's write lock from
+ * the claim it was listed under is the filesystem path it was read at. A typed
+ * name is resolved into its path by construction; a walked one is named from
+ * the claim standing at the path the walk reached. That is what lets the record
+ * join by the filesystem path without a round trip through the name. It holds
+ * by construction and nothing moves it: a run holds the store's write lock from
  * dispatch, so the rows its table was built from are the rows the record's view
  * is built from, and a key is a string of those rows' own (infra/mount.h), which
  * the disk cannot move. The join still tests it, the test being the NULL-row
@@ -119,14 +119,14 @@ typedef struct {
  *
  * **What the record records**: every capture is an ownership event — the path
  * was put there from disk, so the record binds the committed blob to the stat
- * the capture took and the next status takes its fast path. A capture whose
- * location another profile's row wins, or another name of this profile's own,
- * takes no anchor and the receipt says which; a capture whose claim no longer
- * stands where it was read ends the phase, the topology having moved under the
- * command. The record phase is not the command: a failure leaves Git's commit
- * standing, leaves the record exactly as it was, says so, and names the retry —
- * `--force`, over a branch that now holds the name, because an apply re-earns
- * the event for a file it adopts and never for a directory.
+ * the capture took and the next status takes its fast path. A capture whose path
+ * another profile's row wins, or another name of this profile's own, takes no
+ * anchor and the receipt says which; a capture whose claim no longer stands where
+ * it was read ends the phase, the topology having moved under the command. The
+ * record phase is not the command: a failure leaves Git's commit standing, leaves
+ * the record exactly as it was, says so, and names the retry — `--force`, over
+ * a branch that now holds the name, because an apply re-earns the event for a
+ * file it adopts and never for a directory.
  *
  * **-n previews the add and writes nothing of dotta's.** Every decision this
  * command makes runs and no capture does, so an add refused over a name is a

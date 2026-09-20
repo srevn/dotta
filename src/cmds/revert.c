@@ -77,8 +77,8 @@ static error_t *select_profile(
      * three-positional form: that is the one arm of revert_post_parse that assigns
      * without asking refspec_looks_like_commit whether the second word is a commit,
      * so a tag or a branch name pastes back as readily as an oid does. */
-    const char *subject = arg->key == PATH_KEY_LOCATION ? arg->location
-                                                        : arg->storage_path;
+    const char *subject = arg->key == PATH_KEY_FILESYSTEM ? arg->filesystem_path
+                                                          : arg->storage_path;
 
     profile_claims_t claims = { 0 };
     error_t *err = profile_discover_claims(
@@ -134,9 +134,10 @@ static error_t *select_profile(
 }
 
 /**
- * The claim `profile` stands at `location` in `tree`, or NULL when it stands none
+ * The claim `profile` stands at `filesystem_path` in `tree`, or NULL when it
+ * stands none
  *
- * One contribution of the tree, asked for the row at the location and freed
+ * One contribution of the tree, asked for the row at the path and freed
  * (core/manifest.h manifest_build_tree, manifest_lookup_claim). The row is the
  * arena's and outlives the view — manifest_free releases the heap indexes and
  * nothing else — so the answer survives this call.
@@ -157,7 +158,7 @@ static error_t *select_profile(
  * @param ctx Dispatch context (must not be NULL)
  * @param tree The tree the claim is looked for in (must not be NULL)
  * @param profile Whose claims these are (must not be NULL)
- * @param location Where to ask (must not be NULL)
+ * @param filesystem_path Where to ask (must not be NULL)
  * @param out_row The claim, or NULL where none stands (must not be NULL; the
  *                command arena's, borrowed)
  * @return Error or NULL on success
@@ -166,13 +167,13 @@ static error_t *claim_standing(
     const dotta_ctx_t *ctx,
     const git_tree *tree,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     const manifest_row_t **out_row
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(tree);
     CHECK_NULL(profile);
-    CHECK_NULL(location);
+    CHECK_NULL(filesystem_path);
     CHECK_NULL(out_row);
 
     *out_row = NULL;
@@ -183,14 +184,14 @@ static error_t *claim_standing(
     );
     if (err) return err;
 
-    *out_row = manifest_lookup_claim(view, profile, location);  /* the arena's */
+    *out_row = manifest_lookup_claim(view, profile, filesystem_path);  /* the arena's */
     manifest_free(view);
 
     return NULL;
 }
 
 /**
- * Refuse a typed name that would give the profile a second name for one location
+ * Refuse a typed name that would give the profile a second name for one path
  *
  * The tip's own contribution, asked two questions while it is alive: the claim
  * standing where the name resolves, and whether the profile holds the typed name
@@ -200,10 +201,10 @@ static error_t *claim_standing(
  * which no row carries.
  *
  * A name the profile already holds is a re-capture and authors nothing, whether
- * it is the name standing at the location or one the settle did not keep. Only
- * a name new to the profile at a location it already names is a second name,
- * and that is what this refuses — naming the first, and not skippable by --force:
- * a refusal is not a confirmation.
+ * it is the name standing at the path or one the settle did not keep. Only a
+ * name new to the profile at a path it already names is a second name, and that
+ * is what this refuses — naming the first, and not skippable by --force: a refusal
+ * is not a confirmation.
  *
  * A derived claim names nothing (manifest_is_derived), so it is not a first name
  * and does not block one — explicit outranks derived within a profile as across
@@ -212,7 +213,7 @@ static error_t *claim_standing(
  * @param ctx Dispatch context (must not be NULL)
  * @param tip The tip's tree, whose claims the name would join (must not be NULL)
  * @param profile Whose claims these are (must not be NULL)
- * @param location Where the typed name resolves (must not be NULL)
+ * @param filesystem_path Where the typed name resolves (must not be NULL)
  * @param name The typed name (must not be NULL)
  * @param commit Abbreviated target commit oid, for the remedy (must not be NULL)
  * @return The refusal, or NULL when the name may be authored
@@ -221,14 +222,14 @@ static error_t *refuse_second_name(
     const dotta_ctx_t *ctx,
     const git_tree *tip,
     const char *profile,
-    const char *location,
+    const char *filesystem_path,
     const char *name,
     const char *commit
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(tip);
     CHECK_NULL(profile);
-    CHECK_NULL(location);
+    CHECK_NULL(filesystem_path);
     CHECK_NULL(name);
     CHECK_NULL(commit);
 
@@ -238,17 +239,17 @@ static error_t *refuse_second_name(
     );
     if (err) return err;
 
-    const manifest_row_t *row = manifest_lookup_claim(view, profile, location);
+    const manifest_row_t *row = manifest_lookup_claim(view, profile, filesystem_path);
     if (row && !manifest_is_derived(row) &&
-        !manifest_holds_name(view, profile, location, name)) {
-        /* The location is the shared term of three paths in one sentence, and
-         * the one path here the user never typed — so it is spelled the way the
-         * shell spells it, as the screen that reports the pair this refuses already
+        !manifest_holds_name(view, profile, filesystem_path, name)) {
+        /* The path is the shared term of three paths in one sentence, and the
+         * one path here the user never typed — so it is spelled the way the shell
+         * spells it, as the screen that reports the pair this refuses already
          * spells it (cmds/status.c's unused-path listing, base/output.h
          * output_format_path). The remedy stays runnable: a tilde is what the
          * shell expands back. */
         char shown[PATH_MAX];
-        output_format_path(location, identity()->home, shown, sizeof(shown));
+        output_format_path(filesystem_path, identity()->home, shown, sizeof(shown));
 
         /* Both remedies are spelled to run: the revert in the three-positional
          * form, which assigns its words by position and never asks
@@ -258,8 +259,7 @@ static error_t *refuse_second_name(
         err = ERROR(
             ERR_INVALID_ARG,
             "Profile '%s' names '%s' as '%s'\n\n"
-            "'%s' would be a second name for it, and a profile names a "
-            "location once.\n"
+            "'%s' would be a second name for it, and a profile names a path once.\n"
             "  dotta revert %s %s %s   restores those bytes into it\n"
             "  dotta remove %s %s   gives that name up first",
             profile, shown, row->storage_path, name,
@@ -278,28 +278,28 @@ static error_t *refuse_second_name(
  * Asked in the key the user named (cmds/revert.h, the two names), and it never
  * sees the tip: the read's name is the commit's alone.
  *
- *   a LOCATION  — the claim standing at the location, whatever it is called; the
- *                 commit's two documents then say whether that claim is one file.
- *   a STORAGE   — the name as typed, because a name is Git's key and does not
- *                 move. Only a name the commit holds neither in its tree nor in
- *                 its sheet is a contract change to find, and then the location
- *                 is the key.
+ *   a FILESYSTEM — the claim standing at the path, whatever it is called; the
+ *                  commit's two documents then say whether that claim is one file.
+ *   a STORAGE    — the name as typed, because a name is Git's key and does not
+ *                  move. Only a name the commit holds neither in its tree nor
+ *                  in its sheet is a contract change to find, and then the path
+ *                  is the key.
  *
  * A name is answered by both documents at once (core/profiles.h profile_holds),
  * and that is what keeps the fallback honest: a DIRECTORY claim standing at the
  * typed name with no tree entry — a tracked directory with nothing inside it,
  * an ancestor chain the tree no longer has — answers as the directory it is,
- * where reading the tree's silence as permission to search the location would
- * answer with a *different* claim's blob under the name the user typed.
+ * where reading the tree's silence as permission to search the path would answer
+ * with a *different* claim's blob under the name the user typed.
  *
  * Refuses rather than answering nothing, so the caller holds a blob or an error
  * and no third state: a directory or a submodule by its own noun — under the
  * fallback's name where the fallback found it, that name not being the one the
  * user typed, and the difference being the information — and an absence worded
- * from the key the user named, a location the commit held nothing at included,
- * whether or not a root of the profile stands there: a root is a directory the
- * profile may hold a claim at like any other, so what the commit held is the
- * whole question and where the place stands is none of it.
+ * from the key the user named, a path the commit held nothing at included, whether
+ * or not a root of the profile stands there: a root is a directory the profile
+ * may hold a claim at like any other, so what the commit held is the whole question
+ * and where the place stands is none of it.
  *
  * @param ctx Dispatch context (must not be NULL)
  * @param target_tree The target commit's tree (must not be NULL)
@@ -307,8 +307,8 @@ static error_t *refuse_second_name(
  *                     not be NULL)
  * @param profile Whose claims these are (must not be NULL)
  * @param arg The argument, in the key it named (must not be NULL)
- * @param location Where both trees may be asked about, or NULL for a custom/
- *                 name this machine cannot place
+ * @param filesystem_path Where both trees may be asked about, or NULL for a custom/
+ *        name this machine cannot place
  * @param commit Abbreviated target commit oid, for the refusals (must not be NULL)
  * @param out_name The name the entry stands under (must not be NULL; borrowed)
  * @param out_held The entry, by value: a FILE, its id and its mode word (must
@@ -321,7 +321,7 @@ static error_t *entry_to_restore(
     const metadata_t *target_sheet,
     const char *profile,
     const path_input_t *arg,
-    const char *location,
+    const char *filesystem_path,
     const char *commit,
     const char **out_name,
     profile_held_t *out_held
@@ -340,8 +340,8 @@ static error_t *entry_to_restore(
 
     git_repository *repo = ctx->run.repo;
 
-    /* A typed name is asked first, as typed; a location has no name until the
-     * claim standing there gives it one. */
+    /* A typed name is asked first, as typed; a path has no name until the claim
+     * standing there gives it one. */
     const char *name = arg->key == PATH_KEY_STORAGE ? arg->storage_path : NULL;
     profile_held_t held = { .kind = PROFILE_HELD_NOTHING };
 
@@ -352,13 +352,13 @@ static error_t *entry_to_restore(
     }
 
     /* Only a name the commit holds in neither document falls back to the claim
-     * standing at the location, and a location argument starts here. The claim
-     * is asked by its own name, which the commit holds in one document or the
-     * other by construction: the row came from them. */
-    if (held.kind == PROFILE_HELD_NOTHING && location) {
+     * standing at the path, and a path argument starts here. The claim is asked
+     * by its own name, which the commit holds in one document or the other by
+     * construction: the row came from them. */
+    if (held.kind == PROFILE_HELD_NOTHING && filesystem_path) {
         const manifest_row_t *row = NULL;
         RETURN_IF_ERROR(
-            claim_standing(ctx, target_tree, profile, location, &row)
+            claim_standing(ctx, target_tree, profile, filesystem_path, &row)
         );
 
         if (row) {
@@ -391,10 +391,10 @@ static error_t *entry_to_restore(
     /* Nothing, in the key the user named. A row found above is held in one document
      * or the other and cannot reach here; if it ever did, this block is honest
      * for it too. */
-    if (arg->key == PATH_KEY_LOCATION) {
+    if (arg->key == PATH_KEY_FILESYSTEM) {
         return ERROR(
             ERR_NOT_FOUND, "Profile '%s' held nothing at '%s' at commit %s",
-            profile, arg->location, commit
+            profile, arg->filesystem_path, commit
         );
     }
 
@@ -752,9 +752,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     /* Three prefixes, one per column, and no local needs a comment to say which
      * it is in: `target_` is the commit — what is read — `standing_` is the branch
      * tip, and `restored_` is the write, which is neither of them. A restore
-     * lands on the claim standing at the location, so the standing side has no
-     * name of its own here: wherever the tip holds anything, its name is the
-     * write's, and where it holds nothing there is no name to have. */
+     * lands on the claim standing at the path, so the standing side has no name
+     * of its own here: wherever the tip holds anything, its name is the write's,
+     * and where it holds nothing there is no name to have. */
     error_t *err = NULL;
     const char *profile = NULL;
     const char *target_name = NULL;
@@ -775,9 +775,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         output_set_verbosity(out, OUTPUT_VERBOSE);
     }
 
-    /* Step 2: the argument in the key the user named — a location or a storage
-     * path, neither manufactured from the other (infra/path.h) — and the profile
-     * the revert acts on. */
+    /* Step 2: the argument in the key the user named — a path or a storage path,
+     * neither manufactured from the other (infra/path.h) — and the profile the
+     * revert acts on. */
     path_input_t arg;
     err = path_input_resolve(opts->file_path, ctx->arena, &arg);
     if (err) goto cleanup;
@@ -850,19 +850,19 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
         goto cleanup;
     }
 
-    /* Step 7: the place both trees may be asked about. A location argument is
-     * one already; a typed name resolves to one through the profile's own binding.
+    /* Step 7: the place both trees may be asked about. A path argument is one
+     * already; a typed name resolves to one through the profile's own binding.
      *
      * NULL is a custom/ name this machine cannot place. Then the name is the
      * only key there is: the commit is asked for it alone, nothing can be shown
      * to collide with it, and two such names are both manifest_unbound — the
      * namespace's own hole, and not a revert-shaped one. */
-    const char *location = NULL;
-    if (arg.key == PATH_KEY_LOCATION) {
-        location = arg.location;
+    const char *filesystem_path = NULL;
+    if (arg.key == PATH_KEY_FILESYSTEM) {
+        filesystem_path = arg.filesystem_path;
     } else {
         err = mount_resolve(
-            mounts, profile, arg.storage_path, ctx->arena, &location
+            mounts, profile, arg.storage_path, ctx->arena, &filesystem_path
         );
         if (err) goto cleanup;
     }
@@ -876,7 +876,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * — while a commit object anywhere in the branch could refuse a revert that
      * needed none of it.) */
     err = entry_to_restore(
-        ctx, target_tree, target_sheet, profile, &arg, location, oid_str,
+        ctx, target_tree, target_sheet, profile, &arg, filesystem_path, oid_str,
         &target_name, &target_held
     );
     if (err) goto cleanup;
@@ -910,16 +910,16 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* Step 10: the name the revert writes. A typed name is the user's own choice
      * of contract and is written as typed (cmds/add.c's storage arm is the other
-     * place that choice is made). A location is answered by the claim standing
-     * there, whatever its name and whatever its kind — home/jail/etc/x under a
-     * binding at ~/jail is found by ~/jail/etc/x, and a chain the profile names
-     * nothing by is answered as the claim it is, so the tip's own tree refuses
-     * a file where it holds a subtree (step 11). Where none stands, the commit's
-     * own name is what comes back: a revert restores, and a name composed from
-     * today's roots would choose a deployment contract the user did not. */
-    if (arg.key == PATH_KEY_LOCATION) {
+     * place that choice is made). A path is answered by the claim standing there,
+     * whatever its name and whatever its kind — home/jail/etc/x under a binding
+     * at ~/jail is found by ~/jail/etc/x, and a chain the profile names nothing
+     * by is answered as the claim it is, so the tip's own tree refuses a file
+     * where it holds a subtree (step 11). Where none stands, the commit's own
+     * name is what comes back: a revert restores, and a name composed from today's
+     * roots would choose a deployment contract the user did not. */
+    if (arg.key == PATH_KEY_FILESYSTEM) {
         const manifest_row_t *row = NULL;
-        err = claim_standing(ctx, stage_tree(stage), profile, location, &row);
+        err = claim_standing(ctx, stage_tree(stage), profile, filesystem_path, &row);
         if (err) goto cleanup;
 
         restored_name = row ? row->storage_path : target_name;
@@ -961,7 +961,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     }
 
     /* Step 12: the admission. A typed name the tip's tree does not hold is a
-     * name this command would author, and a profile names a location once
+     * name this command would author, and a profile names a path once
      * (infra/mount.h, core/manifest.h): if the profile already names where this
      * name resolves and does not hold this name for it, authoring it would give
      * the profile a second name for one place — the pair the health channel calls
@@ -969,12 +969,12 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      *
      * The entry test is the authoring question and not a cost guard: a name the
      * tree already holds is not authored, and whether one it lacks is a second
-     * name is the contribution's to answer. A location argument is answered *by*
+     * name is the contribution's to answer. A path argument is answered *by*
      * the claim standing there and can never be a second name, so this arm is
      * the typed one's alone. */
-    if (arg.key == PATH_KEY_STORAGE && !standing_entry && location) {
+    if (arg.key == PATH_KEY_STORAGE && !standing_entry && filesystem_path) {
         err = refuse_second_name(
-            ctx, stage_tree(stage), profile, location, restored_name, opts->commit
+            ctx, stage_tree(stage), profile, filesystem_path, restored_name, opts->commit
         );
         if (err) goto cleanup;
     }

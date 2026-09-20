@@ -647,12 +647,12 @@ static error_t *list_file_history(
 
         /* The two keys, and each names its own read. A name the user typed is
          * Git's key already, so the pre-check below is what decides whether the
-         * profile holds it; a location is the branch's to name. */
+         * profile holds it; a path is the branch's to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {
             err = profile_claim_name(
-                repo, tree, mounts, profile, arg.location, ctx->arena, &storage_path
+                repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
             );
             if (err) {
                 git_tree_free(tree);
@@ -661,19 +661,19 @@ static error_t *list_file_history(
         }
     } else {
         /* The owner is the view's: the enabled set at HEAD, precedence resolved,
-         * asked in the key the argument names. A location is one row, the winner
+         * asked in the key the argument names. A path is one row, the winner
          * standing there whatever its name. A name keys within one profile, so
          * the view may hold it once (home/, root/, or one binding), or once per
          * binding under custom/ — and then no profile is the answer, and each
-         * holder is named with the location that tells them apart. The rows are
-         * the arena's; only the index is released here. */
+         * holder is named with the path that tells them apart. The rows are the
+         * arena's; only the index is released here. */
         manifest_t *manifest = NULL;
         err = manifest_build(repo, state, ctx->arena, &manifest);
         if (err) return err;
 
         const manifest_row_t *row = NULL;
-        if (arg.key == PATH_KEY_LOCATION) {
-            row = manifest_lookup(manifest, arg.location);
+        if (arg.key == PATH_KEY_FILESYSTEM) {
+            row = manifest_lookup(manifest, arg.filesystem_path);
         } else {
             size_t holders = manifest_holders(manifest, arg.storage_path, &row);
             if (holders > 1) {
@@ -725,9 +725,9 @@ static error_t *list_file_history(
      * one, and a name neither holds is a deleted file — given its word before
      * the O(total_commits) walk, which is the search's own. No sheet is handed
      * in: this verb holds none and reads one only where the tip is silent. The
-     * history is one name's — a location's former names under another contract
-     * are the user's to type, a prospective name proving nothing about what the
-     * profile once held there. */
+     * history is one name's — a path's former names under another contract are
+     * the user's to type, a prospective name proving nothing about what the profile
+     * once held there. */
     profile_held_t held;
     err = profile_holds(repo, tree, NULL, profile, storage_path, &held);
     git_tree_free(tree);

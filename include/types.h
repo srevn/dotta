@@ -2,7 +2,8 @@
  * types.h - The vocabulary every layer may assume
  *
  * A prelude, not a module: four opaque handles, base's error codes and transparent
- * containers, and the two words for a managed path. include/config.h is the second
+ * containers, and a managed path's kind and type — not its two keys, which are
+ * strings and declare nothing (infra/path.h). include/config.h is the second
  * prelude — the config layout, read by core without including utils/. base/args.h
  * and base/hashmap.h re-declare the handles they need instead of including this,
  * staying standalone engines with no domain dependency; every other base header

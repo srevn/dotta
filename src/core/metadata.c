@@ -878,7 +878,7 @@ error_t *metadata_capture_from_directory(
  * @param mounts The table the rung's name resolves through (must not be NULL)
  * @param profile The rung's profile, for a custom/ name (must not be NULL)
  * @param storage_path The rung's key (must not be NULL)
- * @param arena Arena the rung's location is spelled into (must not be NULL)
+ * @param arena Arena the rung's path is spelled into (must not be NULL)
  * @param captured Incremented when the rung's claim moved (must not be NULL)
  * @param retired Receives the key when the rung's claim goes (must not be NULL)
  * @return Error or NULL on success
@@ -903,10 +903,10 @@ static error_t *capture_ancestor(
 
     /* Where the rung stands is where its own name resolves. The climb carries
      * one string, not a pair that must agree: a resolve is a root's spelling
-     * and a tail, and truncating the leaf's location would land the same bytes
-     * — at the cost of a second string the caller must have got right, which is
-     * what the cross-check this shape deleted used to assert. One producer places
-     * a name (infra/mount.h mount_resolve); the cost is one table scan per rung
+     * and a tail, and truncating the leaf's path would land the same bytes — at
+     * the cost of a second string the caller must have got right, which is what
+     * the cross-check this shape deleted used to assert. One producer places a
+     * name (infra/mount.h mount_resolve); the cost is one table scan per rung
      * per leaf, bounded by the profile count. */
     const char *filesystem_path = NULL;
     RETURN_IF_ERROR(

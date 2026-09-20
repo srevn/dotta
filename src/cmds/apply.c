@@ -1727,12 +1727,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* Its sibling: the paths a profile holds for a location it also names
-     * otherwise. These have a location and are in no bucket either — one name
-     * of the group stands there and deploys, and the rest are in the branch and
-     * in no row. `--dry-run` is the safety on the way out: dropping a directory
-     * name takes every claim beneath it, and the preview shows that rather than
-     * asserting it. */
+    /* Its sibling: the paths a profile holds for a path it also names otherwise.
+     * These stand somewhere and are in no bucket either — one name of the group
+     * stands there and deploys, and the rest are in the branch and in no row.
+     * `--dry-run` is the safety on the way out: dropping a directory name takes
+     * every claim beneath it, and the preview shows that rather than asserting
+     * it. */
     {
         manifest_unkept_t unkept = manifest_unkept(manifest);
         if (unkept.count > 0) {
@@ -2080,8 +2080,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool adopt = !anchor || anchor->deployed_at == 0;
 
         /* A record dotta owns that names a claim this row is not — another
-         * profile's, or another name of the same profile, whose location the
-         * view gave to this one — is a handover, and this loop is where the record
+         * profile's, or another name of the same profile, whose path the view
+         * gave to this one — is a handover, and this loop is where the record
          * follows it. The whole claim is the test because the whole claim is
          * what a record means: the blob it carries is the blob of the claim it
          * names (core/state.h anchor_t), so a record left on a name no row stands

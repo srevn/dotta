@@ -205,19 +205,19 @@ static error_t *settle_let_go(
  * Where each claim stands is established before the match, not after it, because
  * the match is by the key the argument named (infra/path.h) and neither key is
  * manufactured from the other. A storage argument matches over the claims' names;
- * a location argument matches over the locations they were placed at — so `remove
- * web ~/jail/etc/x` takes the claim standing there under whatever name, and a
- * root takes everything beneath it. Either way an argument matches the exact
- * claim and — at a '/' boundary, never a false prefix like home/dir2 for home/dir
- * — every claim beneath it: naming a directory means untracking it whole. A claim
+ * a path argument matches over the paths they were placed at — so `remove web
+ * ~/jail/etc/x` takes the claim standing there under whatever name, and a root
+ * takes everything beneath it. Either way an argument matches the exact claim
+ * and — at a '/' boundary, never a false prefix like home/dir2 for home/dir —
+ * every claim beneath it: naming a directory means untracking it whole. A claim
  * is removed once, however many arguments match it.
  *
  * A claim this machine places nowhere — an unbound custom/ one — keeps a NULL
- * location and no location argument reaches it; its name still does, which is
- * how such a claim is untracked at all. Nothing stands in for the location: the
- * screens print the name outright, the hook's file list renders it where there
- * is no location to hand over, and the overlap analysis and the record read the
- * NULL as the fact it is.
+ * path and no path argument reaches it; its name still does, which is how such
+ * a claim is untracked at all. Nothing stands in for the path: the screens print
+ * the name outright, the hook's file list renders it where there is no path to
+ * hand over, and the overlap analysis and the record read the NULL as the fact
+ * it is.
  *
  * The branch's metadata rides out through `metadata_out` for the commit's edit
  * — loaded once, where the directory claims are enumerated; an empty sheet when
@@ -333,10 +333,10 @@ static error_t *resolve_removal_claims(
         };
     }
 
-    /* Where each claim stands on this machine, or nowhere: the key a location
+    /* Where each claim stands on this machine, or nowhere: the key a filesystem
      * argument matches against, established before the match rather than after
-     * it. A custom/ claim under a profile with no target here has no location
-     * and gets none — a miss the location arm below reads as "not this claim".
+     * it. A custom/ claim under a profile with no target here stands nowhere
+     * and gets none — a miss the filesystem arm below reads as "not this claim".
      * Every path here is a validated storage path (the tree walk's own gate and
      * the sheet's parse both refuse anything else), so the only failure left is
      * allocation, and that is nobody's to swallow. */
@@ -367,18 +367,18 @@ static error_t *resolve_removal_claims(
         }
 
         /* The sum type, read at the use site and read once: a storage argument
-         * keys against the claims' names and a location against where they stand,
+         * keys against the claims' names and a path against where they stand,
          * the word alone among the names — every claim of its namespace being
          * beneath it — and the form that reaches a profile with no binding here,
-         * whose custom/ claims stand nowhere for a location to match. The
-         * filesystem root is spelled "" — the one prefix every absolute path is
-         * beneath, as the table spells it and the pathspec reads it. */
+         * whose custom/ claims stand nowhere for a path to match. The filesystem
+         * root is spelled "" — the one prefix every absolute path is beneath,
+         * as the table spells it and the pathspec reads it. */
         const char *subject = NULL;
         bool by_name = false;
 
         switch (arg.key) {
-            case PATH_KEY_LOCATION:
-                subject = strcmp(arg.location, "/") == 0 ? "" : arg.location;
+            case PATH_KEY_FILESYSTEM:
+                subject = strcmp(arg.filesystem_path, "/") == 0 ? "" : arg.filesystem_path;
                 break;
 
             case PATH_KEY_STORAGE:
@@ -451,13 +451,13 @@ cleanup:
 }
 
 /**
- * One location this removal shares with other branches
+ * One path this removal shares with other branches
  *
  * The claim removed there — the first, where a pair of the profile's own names
  * is removed at one place — and who else stands there under what name.
  */
 typedef struct {
-    const char *location;
+    const char *filesystem_path;
     const char *storage_path;
     const profile_claims_t *others;
 } removal_overlap_t;
@@ -465,10 +465,9 @@ typedef struct {
 /**
  * The multi-profile section, as data
  *
- * One entry per location this removal shares with another branch, and the one
- * fact its closing line reads: whether the view's winner at any of those locations
- * is a different enabled profile, which is what makes a removal change nothing
- * on disk.
+ * One entry per path this removal shares with another branch, and the one fact
+ * its closing line reads: whether the view's winner at any of those paths is a
+ * different enabled profile, which is what makes a removal change nothing on disk.
  */
 typedef struct {
     const removal_overlap_t *entries;
@@ -479,20 +478,20 @@ typedef struct {
 /**
  * What this removal shares with the other profiles
  *
- * Keyed by location, not by name (core/profiles.h profile_build_location_index):
+ * Keyed by path, not by name (core/profiles.h profile_build_filesystem_index):
  * two profiles bound at two targets holding one name are two paths and share
  * nothing, while a portable name and a binding's name at one place do share and
  * used to go unsaid. A claim this machine places nowhere meets nothing and is
  * skipped.
  *
- * The index is read once per location and taken out of the map, so a pair of
- * the profile's own names removed at one place is one line and one count — the
- * data is the dedup, and no seen-set or second scan is needed.
+ * The index is read once per path and taken out of the map, so a pair of the
+ * profile's own names removed at one place is one line and one count — the data
+ * is the dedup, and no seen-set or second scan is needed.
  *
  * `provided_by_other` is the view's fact, not the record's: the winner at the
- * location is another enabled profile, so the path stays as it is. It is asked
- * only where the index answered, which is sound — a winner other than this profile
- * holds a row at the location and is therefore in the index, the excluded branch
+ * path is another enabled profile, so the path stays as it is. It is asked only
+ * where the index answered, which is sound — a winner other than this profile
+ * holds a row at the path and is therefore in the index, the excluded branch
  * being this profile itself.
  *
  * The view is built here, tolerantly: remove must run on an enabled set the builder
@@ -516,7 +515,7 @@ static error_t *analyze_overlaps(
     *out = (removal_overlaps_t){ 0 };
 
     hashmap_t *index = NULL;
-    error_t *err = profile_build_location_index(
+    error_t *err = profile_build_filesystem_index(
         ctx->run.repo, ctx->run.mounts, current_profile, ctx->arena, &index
     );
     if (err) return err;
@@ -566,10 +565,10 @@ static error_t *analyze_overlaps(
 /**
  * Display the overlap section to the user
  *
- * One line per shared location: the path, then each other profile and — where
- * its name for the place differs from the removed claim's — the name it holds
- * it under, since under two bindings one location wears two names. The closing
- * line names the fate `delete_files` chose.
+ * One line per shared path: the path, then each other profile and — where its
+ * name for the place differs from the removed claim's — the name it holds it
+ * under, since under two bindings one path wears two names. The closing line
+ * names the fate `delete_files` chose.
  */
 static void display_overlaps(
     output_t *out,
@@ -589,7 +588,7 @@ static void display_overlaps(
         const removal_overlap_t *overlap = &overlaps->entries[i];
 
         output_styled(
-            out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->location
+            out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->filesystem_path
         );
         for (size_t j = 0; j < overlap->others->count; j++) {
             const profile_claim_t *other = &overlap->others->entries[j];
@@ -1077,9 +1076,9 @@ static error_t *remove_files_from_profile(
      * settle, and is not one.
      *
      * The two buckets are placed differently because they were placed already,
-     * or never: a removed claim carries the location the resolver established
-     * before the match (resolve_removal_claims), while a pruned directory entry
-     * was no claim of the arguments and is placed here. */
+     * or never: a removed claim carries the path the resolver established before
+     * the match (resolve_removal_claims), while a pruned directory entry was no
+     * claim of the arguments and is placed here. */
     removal_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     if (!record_err && anchor_count > 0) {

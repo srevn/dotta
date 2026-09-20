@@ -501,13 +501,13 @@ bool completion_paths_under(
     /* The flag as the command reads it — absolute, or relative to the working
      * directory the shell completes in (infra/path.h) — so the token is compared
      * against an absolute root, and the row's spelling against the flag's as
-     * the binders compare them. The arena's, as every reader of a location key
-     * is, so the two spellings the root may take are one borrowed pointer with
-     * nothing to free between them. A flag this door cannot read leaves the
-     * completion with no root of its own to offer beneath, so the shell's own
-     * files stand. */
+     * the binders compare them. The arena's, as every reader of a filesystem
+     * key is, so the two spellings the root may take are one borrowed pointer
+     * with nothing to free between them. A flag this door cannot read leaves
+     * the completion with no root of its own to offer beneath, so the shell's
+     * own files stand. */
     const char *root = NULL;
-    error_t *err = path_input_locate(target, ctx->arena, &root);
+    error_t *err = path_input_filesystem_path(target, ctx->arena, &root);
     if (err) {
         error_free(err);
         return false;

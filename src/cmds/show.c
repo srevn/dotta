@@ -687,13 +687,13 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
 
         /* The two keys, and each names its own read. A name the user typed is
          * Git's key already, so show_file's own read of the branch's two documents
-         * is what decides whether the profile holds it; a location is the branch's
+         * is what decides whether the profile holds it; a path is the branch's
          * to name. */
         if (arg.key == PATH_KEY_STORAGE) {
             storage_path = arg.storage_path;
         } else {
             err = profile_claim_name(
-                repo, tree, mounts, profile, arg.location, ctx->arena, &storage_path
+                repo, tree, mounts, profile, arg.filesystem_path, ctx->arena, &storage_path
             );
             if (err) goto cleanup;
         }
@@ -721,17 +721,17 @@ error_t *cmd_show(const dotta_ctx_t *ctx, const cmd_show_options_t *opts) {
     }
 
     /* The owning profile is the view's: the enabled set at HEAD with precedence
-     * resolved, asked in the key the argument names. A location is one row, the
-     * winner standing there whatever its name. A name keys within one profile,
-     * so the view may hold it once (home/, root/, or one binding), or once per
-     * binding under custom/ — and then no profile is the answer, and each holder
-     * is named with the location that tells them apart. */
+     * resolved, asked in the key the argument names. A path is one row, the winner
+     * standing there whatever its name. A name keys within one profile, so the
+     * view may hold it once (home/, root/, or one binding), or once per binding
+     * under custom/ — and then no profile is the answer, and each holder is named
+     * with the path that tells them apart. */
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
     const manifest_row_t *row = NULL;
-    if (arg.key == PATH_KEY_LOCATION) {
-        row = manifest_lookup(manifest, arg.location);
+    if (arg.key == PATH_KEY_FILESYSTEM) {
+        row = manifest_lookup(manifest, arg.filesystem_path);
     } else {
         size_t holders = manifest_holders(manifest, arg.storage_path, &row);
         if (holders > 1) {

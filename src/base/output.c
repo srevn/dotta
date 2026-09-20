@@ -508,7 +508,7 @@ const char *output_color_code(const output_t *ctx, output_color_t color) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 void output_print(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -523,7 +523,7 @@ void output_print(
 }
 
 void output_styled(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -538,7 +538,7 @@ void output_styled(
 }
 
 void output_colored(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     output_color_t color,
     const char *fmt,
@@ -560,7 +560,7 @@ void output_colored(
     if (apply_color) fputs(ANSI_RESET, ctx->stream);
 }
 
-void output_error(const output_t *ctx, const char *fmt, ...) {
+void output_error(output_t *ctx, const char *fmt, ...) {
     if (!ctx || !fmt) return;
 
     fflush(ctx->stream);
@@ -579,7 +579,7 @@ void output_error(const output_t *ctx, const char *fmt, ...) {
 }
 
 void output_warning(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -601,7 +601,7 @@ void output_warning(
 }
 
 void output_success(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -623,7 +623,7 @@ void output_success(
 }
 
 void output_info(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -640,7 +640,7 @@ void output_info(
 }
 
 void output_hint(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -670,7 +670,7 @@ void output_hint(
 }
 
 void output_hintline(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -689,13 +689,13 @@ void output_hintline(
     fputc('\n', ctx->stream);
 }
 
-void output_newline(const output_t *ctx, output_verbosity_t min_level) {
+void output_newline(output_t *ctx, output_verbosity_t min_level) {
     if (!ctx || ctx->verbosity < min_level) return;
     fputc('\n', ctx->stream);
 }
 
 void output_section(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -707,7 +707,7 @@ void output_section(
     if (ctx->has_content) {
         fputc('\n', ctx->stream);
     }
-    ((output_t *) ctx)->has_content = true;
+    ctx->has_content = true;
 
     const char *bold = output_color_code(ctx, OUTPUT_COLOR_BOLD);
     const char *reset = output_color_code(ctx, OUTPUT_COLOR_RESET);
@@ -721,7 +721,7 @@ void output_section(
     fputc('\n', ctx->stream);
 }
 
-void output_clear_line(const output_t *ctx) {
+void output_clear_line(output_t *ctx) {
     if (!ctx) return;
 
     if (isatty(fileno(ctx->stream)))
@@ -754,7 +754,7 @@ static const char *diff_line_color(const char *line) {
 }
 
 void output_print_diff(
-    const output_t *ctx, output_verbosity_t min_level, const char *diff_text
+    output_t *ctx, output_verbosity_t min_level, const char *diff_text
 ) {
     if (!ctx || !diff_text || !*diff_text) return;
     if (ctx->verbosity < min_level) return;
@@ -878,7 +878,7 @@ static bool read_user_response(bool default_value) {
 }
 
 bool output_confirm(
-    const output_t *ctx,
+    output_t *ctx,
     const char *message,
     bool default_value
 ) {
@@ -901,7 +901,7 @@ bool output_confirm(
 }
 
 bool output_confirm_or_default(
-    const output_t *ctx,
+    output_t *ctx,
     const char *message,
     bool default_value,
     bool non_interactive_default
@@ -939,7 +939,7 @@ bool output_confirm_or_default(
 }
 
 bool output_confirm_destructive(
-    const output_t *ctx,
+    output_t *ctx,
     bool confirm_destructive,
     const char *message,
     bool force_flag

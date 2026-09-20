@@ -85,7 +85,7 @@
  * error's message is the count's one home.
  */
 static void print_deploy_skips(
-    const output_t *out, const deploy_preflight_result_t *verdicts
+    output_t *out, const deploy_preflight_result_t *verdicts
 ) {
     if (verdicts->skipped.count == 0) {
         return;
@@ -332,7 +332,7 @@ static void print_deploy_skips(
  * Empty verdicts have nothing to say, and say nothing.
  */
 static void print_deploy_preview(
-    const output_t *out,
+    output_t *out,
     const deploy_preflight_result_t *verdicts
 ) {
     const deploy_verdicts_t *files = &verdicts->files;
@@ -501,7 +501,7 @@ typedef struct {
  * convergence.
  */
 static void print_reassignments(
-    const output_t *out, const reassignment_t *reassigned, size_t count
+    output_t *out, const reassignment_t *reassigned, size_t count
 ) {
     if (count == 0) return;
 
@@ -539,7 +539,7 @@ static void print_reassignments(
  *        an -e pattern spared (must not be NULL)
  */
 static void print_withheld(
-    const output_t *out,
+    output_t *out,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
 ) {
@@ -662,7 +662,7 @@ static void print_withheld(
  * concern and its summary is printed by cmd_apply directly.
  */
 static void print_deploy_results(
-    const output_t *out,
+    output_t *out,
     const deploy_result_t *result
 ) {
     deploy_outcomes_t deployed = result->deployed;
@@ -900,7 +900,7 @@ static void print_deploy_results(
  * each once.
  */
 static void print_cleanup_results(
-    const output_t *out,
+    output_t *out,
     const cleanup_preflight_result_t *verdicts,
     const cleanup_result_t *result
 ) {
@@ -1147,7 +1147,7 @@ static void print_cleanup_results(
  * slash for what it deliberately leaves.
  */
 static void print_path_list(
-    const output_t *out,
+    output_t *out,
     const ptr_array_t *bucket,
     output_color_t color,
     const char *glyph
@@ -1190,7 +1190,7 @@ static void print_path_list(
  * each file; this is display, so it counts nothing and only routes per item.
  */
 static void print_cleanup_preview(
-    const output_t *out,
+    output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
     workspace_items_t released = workspace_items_view(&verdicts->released_files);
@@ -1392,7 +1392,7 @@ static void print_cleanup_preview(
  * at when the confirmation prompt arrives.
  */
 static void print_cleanup_skips(
-    const output_t *out,
+    output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
     workspace_items_t skipped = workspace_items_view(&verdicts->skipped_files);
@@ -1494,7 +1494,7 @@ static void print_cleanup_skips(
  * that holds root, by construction, and prints nothing.
  */
 static void print_cleanup_refused(
-    const output_t *out,
+    output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
     const workspace_items_t kinds[] = {

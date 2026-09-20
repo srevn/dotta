@@ -152,7 +152,7 @@ const char *output_color_code(const output_t *ctx, output_color_t color);
  * Print with verbosity check
  */
 void output_print(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -183,7 +183,7 @@ void output_print(
  *   output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset} → {cyan}%s{reset}\n", old, new);
  */
 void output_styled(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -202,7 +202,7 @@ void output_styled(
  * The format string also supports {tag} markup (routes through the style engine).
  */
 void output_colored(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     output_color_t color,
     const char *fmt,
@@ -215,7 +215,7 @@ void output_colored(
  * The terminal failure: stderr, no verbosity gate, and the report is flushed
  * first so it lands after the partial run it ends.
  */
-void output_error(const output_t *ctx, const char *fmt, ...)
+void output_error(output_t *ctx, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -225,7 +225,7 @@ __attribute__((format(printf, 2, 3)));
  * decision as the section, list or hint it belongs with.
  */
 void output_warning(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -235,7 +235,7 @@ void output_warning(
  * Print success message
  */
 void output_success(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -245,7 +245,7 @@ void output_success(
  * Print info message
  */
 void output_info(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -270,7 +270,7 @@ void output_info(
  *   → "  Hint: Run 'dotta profile fetch foo' first" (dimmed, indented)
  */
 void output_hint(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -294,7 +294,7 @@ void output_hint(
  *   "  dotta bootstrap --profile <profile> --edit" (dimmed)
  */
 void output_hintline(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -309,7 +309,7 @@ void output_hintline(
  * @param ctx Output context
  * @param min_level Minimum verbosity level
  */
-void output_newline(const output_t *ctx, output_verbosity_t min_level);
+void output_newline(output_t *ctx, output_verbosity_t min_level);
 
 /**
  * Print section header
@@ -326,7 +326,7 @@ void output_newline(const output_t *ctx, output_verbosity_t min_level);
  *   output_section(out, OUTPUT_NORMAL, "Second Section");
  */
 void output_section(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *fmt,
     ...
@@ -343,7 +343,7 @@ void output_section(
  *
  * @param ctx Output context
  */
-void output_clear_line(const output_t *ctx);
+void output_clear_line(output_t *ctx);
 
 /**
  * Print a patch, one line at a time
@@ -360,7 +360,7 @@ void output_clear_line(const output_t *ctx);
  * @param diff_text Unified diff text (NULL or empty: no-op)
  */
 void output_print_diff(
-    const output_t *ctx,
+    output_t *ctx,
     output_verbosity_t min_level,
     const char *diff_text
 );
@@ -441,7 +441,7 @@ void output_format_path(
  * @return true if user confirms (y/Y), false otherwise
  */
 bool output_confirm(
-    const output_t *ctx,
+    output_t *ctx,
     const char *message,
     bool default_value
 );
@@ -460,7 +460,7 @@ bool output_confirm(
  * @return true if confirmed or non_interactive_default if not a TTY
  */
 bool output_confirm_or_default(
-    const output_t *ctx,
+    output_t *ctx,
     const char *message,
     bool default_value,
     bool non_interactive_default
@@ -479,7 +479,7 @@ bool output_confirm_or_default(
  * @return true if should proceed, false if user declined
  */
 bool output_confirm_destructive(
-    const output_t *ctx,
+    output_t *ctx,
     bool confirm_destructive,
     const char *message,
     bool force_flag

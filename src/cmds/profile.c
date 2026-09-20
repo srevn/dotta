@@ -41,7 +41,7 @@
  * to say.
  */
 static void print_manifest_enable_stats(
-    const output_t *out,
+    output_t *out,
     const char *profile,
     const manifest_diff_stats_t *stats
 ) {
@@ -93,7 +93,7 @@ static void print_manifest_enable_stats(
  * for apply.
  */
 static void print_manifest_disable_stats(
-    const output_t *out,
+    output_t *out,
     const char *profile,
     const manifest_diff_stats_t *stats
 ) {

@@ -543,7 +543,7 @@ static error_t *show_diff_preview(
     if (ret < 0) {
         output_warning(out, OUTPUT_NORMAL, "Could not format diff output");
     } else if (buf.ptr) {
-        output_print_diff(out, buf.ptr);
+        output_print_diff(out, OUTPUT_NORMAL, buf.ptr);
     }
 
     git_buf_dispose(&buf);

@@ -353,7 +353,7 @@ static error_t *show_file_diff_from_workspace(
      * between the load and here — the status line above stands alone. */
     if (diff.diff_text) {
         output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-        output_print_diff(out, diff.diff_text);
+        output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
     }
 
     compare_free_diff(&diff);
@@ -776,7 +776,7 @@ static error_t *compare_tree_files_to_filesystem(
             /* Only a content difference has bytes to render */
             if (diff.status == CMP_DIFFERENT) {
                 output_styled(out, OUTPUT_NORMAL, "{dim}---{reset}\n");
-                output_print_diff(out, diff.diff_text);
+                output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
             }
 
             (*diff_count)++;

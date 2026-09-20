@@ -346,20 +346,24 @@ void output_section(
 void output_clear_line(const output_t *ctx);
 
 /**
- * Print diff text with line-by-line colorization
+ * Print a patch, one line at a time
  *
- * Parses a unified diff string and applies standard diff colors:
- *   Green  (+): additions (excludes +++ headers)
- *   Red    (-): deletions (excludes --- headers)
- *   Cyan  (@@): hunk headers
+ * Each line is written once and ended once: a patch that already ends in a newline
+ * leaves no blank line behind it, and an empty one writes nothing. The colour a
+ * line carries is read off its origin character — green for an addition, red
+ * for a deletion, cyan for a hunk header, none for a `---` or `+++` file header,
+ * whose second byte repeats its first. It changes a line's bytes and never their
+ * number: the patch a pipe reads and the one a terminal reads have the same shape.
  *
- * When colors are disabled, prints the diff text as-is in one call. No-op when
- * ctx or diff_text is NULL.
- *
- * @param ctx Output context (must not be NULL)
- * @param diff_text Unified diff text (NULL-safe, no-op)
+ * @param ctx Output context (NULL-safe, no-op)
+ * @param min_level Minimum verbosity level
+ * @param diff_text Unified diff text (NULL or empty: no-op)
  */
-void output_print_diff(const output_t *ctx, const char *diff_text);
+void output_print_diff(
+    const output_t *ctx,
+    output_verbosity_t min_level,
+    const char *diff_text
+);
 
 /**
  * Format file size in human-readable form

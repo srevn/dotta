@@ -736,26 +736,35 @@ void output_clear_line(const output_t *ctx) {
  * Diff Output
  * ═══════════════════════════════════════════════════════════════════ */
 
-void output_print_diff(const output_t *ctx, const char *diff_text) {
-    if (!ctx || !diff_text) return;
+/**
+ * The colour a patch line carries, or NULL for one that carries none
+ *
+ * The origin character is the whole rule, and the second byte is what tells a
+ * change from a file header: `+++` and `---` repeat their first byte where `+x`
+ * and `-x` do not. Reading the second needs no length — the caller walks a
+ * NUL-terminated text and enters only on a line that has a first byte, so the
+ * second is at worst the terminator.
+ */
+static const char *diff_line_color(const char *line) {
+    if (line[0] == '+' && line[1] != '+') return ANSI_GREEN;
+    if (line[0] == '-' && line[1] != '-') return ANSI_RED;
+    if (line[0] == '@' && line[1] == '@') return ANSI_CYAN;
 
-    if (!ctx->color_enabled) {
-        output_print(ctx, OUTPUT_NORMAL, "%s\n", diff_text);
-        return;
-    }
+    return NULL;
+}
+
+void output_print_diff(
+    const output_t *ctx, output_verbosity_t min_level, const char *diff_text
+) {
+    if (!ctx || !diff_text || !*diff_text) return;
+    if (ctx->verbosity < min_level) return;
 
     const char *line = diff_text;
-    while (line && *line) {
-        const char *next = strchr(line, '\n');
-        size_t len = next ? (size_t) (next - line) : strlen(line);
 
-        const char *color = NULL;
-        if (len > 0 && line[0] == '+' && (len == 1 || line[1] != '+'))
-            color = ANSI_GREEN;
-        else if (len > 0 && line[0] == '-' && (len == 1 || line[1] != '-'))
-            color = ANSI_RED;
-        else if (len > 1 && line[0] == '@' && line[1] == '@')
-            color = ANSI_CYAN;
+    /* A line and its newline are one step; the last line needs no newline. */
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        const char *color = ctx->color_enabled ? diff_line_color(line) : NULL;
 
         if (color)
             fprintf(
@@ -765,7 +774,7 @@ void output_print_diff(const output_t *ctx, const char *diff_text) {
         else
             fprintf(ctx->stream, "%.*s\n", (int) len, line);
 
-        line = next ? next + 1 : NULL;
+        line += len + (line[len] == '\n');
     }
 }
 

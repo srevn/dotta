@@ -48,10 +48,21 @@
  * contradicted claim the view reads as no claim at all (core/manifest.c) — would
  * otherwise have this capture store a secret in the clear.
  *
+ * Routed by what the load observed at the path, as add routes by what its listing
+ * found there (cmds/add.c add_file_to_stage) — every item on this route carries
+ * an occupant, a diverged file's from the join's look and an offer's from the
+ * walk. No look is taken here: each capture takes its own and refuses the other's
+ * occupant (infra/content.h), so a path whose kind changed since the load is
+ * refused rather than read as what it has become, which is the refusal a second
+ * look here would only have moved one frame earlier.
+ *
  * @param ctx Dispatch context (must not be NULL; supplies the repository, the
  *            key and the encryption policy)
- * @param stage The profile's stage (must not be NULL; the entry it holds at
- *              storage_path is the prior this capture replaces)
+ * @param stage The profile's stage (must not be NULL; the entry it holds at the
+ *              item's name is the prior this capture replaces)
+ * @param item The path to capture (must not be NULL; its occupant chooses the
+ *             capture, its two keys name the source and the entry)
+ * @param profile The profile, for the seal's key (must not be NULL)
  * @param out_was_encrypted Set to true if the file was encrypted (must not be NULL)
  * @param out_stat The capture's own stat (infra/content.h): the lstat before a
  *                 link's target, the fstat beside a file's bytes (must not be NULL)
@@ -59,31 +70,23 @@
 static error_t *capture_file(
     const dotta_ctx_t *ctx,
     stage_t *stage,
-    const char *filesystem_path,
-    const char *storage_path,
+    const workspace_item_t *item,
     const char *profile,
     bool *out_was_encrypted,
     struct stat *out_stat
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(stage);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(storage_path);
+    CHECK_NULL(item);
+    CHECK_NULL(profile);
     CHECK_NULL(out_was_encrypted);
     CHECK_NULL(out_stat);
 
+    const char *filesystem_path = item->filesystem_path;
+    const char *storage_path = item->storage_path;
     keymgr *keymgr = ctx->run.keymgr;
 
-    /* One lstat chooses the capture. Each capture takes its own stat — a link's
-     * before its target, a file's beside its bytes — and refuses the other's
-     * occupant, so a path that changed after this look is refused rather than
-     * read as what it has become (infra/content.h). */
-    struct stat src_stat;
-    if (fs_lstat(filesystem_path, &src_stat) != 0) {
-        return error_from_errno(errno, "Failed to stat '%s'", filesystem_path);
-    }
-
-    if (S_ISLNK(src_stat.st_mode)) {
+    if (item->occupant == FS_OCCUPANT_SYMLINK) {
         /* The entry is the link's target, never encrypted */
         RETURN_IF_ERROR(
             content_stage_link(stage, filesystem_path, storage_path, out_stat)
@@ -500,8 +503,7 @@ static error_t *update_profile(
                 struct stat capture_stat;
                 bool capture_encrypted = false;
                 err = capture_file(
-                    ctx, stage, item->filesystem_path, item->storage_path,
-                    profile, &capture_encrypted, &capture_stat
+                    ctx, stage, item, profile, &capture_encrypted, &capture_stat
                 );
                 if (err) {
                     err = error_wrap(err, "Failed to capture '%s'", item->filesystem_path);

@@ -498,20 +498,15 @@ static void print_commit_header(
     );
     output_newline(out, OUTPUT_NORMAL);
 
-    /* Print commit message with indentation */
-    const char *message = git_commit_message(commit);
-    char *msg_copy = strdup(message);
-    if (!msg_copy) {
-        output_print(out, OUTPUT_NORMAL, "    (message unavailable)\n");
-    } else {
-        char *saveptr = NULL;
-        char *line = strtok_r(msg_copy, "\n", &saveptr);
-        while (line) {
-            output_print(out, OUTPUT_NORMAL, "    %s\n", line);
-            line = strtok_r(NULL, "\n", &saveptr);
-        }
-        free(msg_copy);
+    /* Commit message (indented). A line and its newline are one step; the last
+     * line needs no newline, so a blank line inside a message survives. */
+    const char *line = git_commit_message(commit);
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        output_print(out, OUTPUT_NORMAL, "    %.*s\n", (int) len, line);
+        line += len + (line[len] == '\n');
     }
+
     output_newline(out, OUTPUT_NORMAL);
 }
 

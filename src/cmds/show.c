@@ -524,24 +524,13 @@ static error_t *show_commit(
 
     output_newline(out, OUTPUT_NORMAL);
 
-    /* Commit message (indented) */
-    const char *msg = git_commit_message(commit);
-    if (msg) {
-        const char *line = msg;
-        while (line && *line) {
-            const char *next = strchr(line, '\n');
-            if (next) {
-                output_print(
-                    out, OUTPUT_NORMAL, "    %.*s\n", (int) (next - line), line
-                );
-                line = next + 1;
-            } else {
-                output_print(
-                    out, OUTPUT_NORMAL, "    %s\n", line
-                );
-                break;
-            }
-        }
+    /* Commit message (indented). A line and its newline are one step; the last
+     * line needs no newline, so a blank line inside a message survives. */
+    const char *line = git_commit_message(commit);
+    while (*line) {
+        size_t len = strcspn(line, "\n");
+        output_print(out, OUTPUT_NORMAL, "    %.*s\n", (int) len, line);
+        line += len + (line[len] == '\n');
     }
 
     output_newline(out, OUTPUT_NORMAL);

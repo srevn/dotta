@@ -508,12 +508,15 @@ static error_t *update_profile(
                     goto cleanup;
                 }
 
-                /* Capture metadata from the capture's stat */
+                /* The claim from the capture's own stat, sealed as the capture
+                 * sealed the bytes: its write-time invariant makes that verdict
+                 * the byte truth, so the claim and every reader agree — and a
+                 * link is never sealed. */
                 metadata_item_t *meta_item = NULL;
                 err = metadata_capture_from_file(
-                    item->filesystem_path,
                     item->storage_path,
                     &capture_stat,
+                    capture_encrypted,
                     &meta_item
                 );
                 if (err) {
@@ -529,10 +532,6 @@ static error_t *update_profile(
                  * the standing claim: an item at the key is the replaced
                  * state's. */
                 if (meta_item) {
-                    /* Stamp the encrypted cache from the capture's byte truth
-                     * (false for a link — the capture never encrypts one) */
-                    meta_item->encrypted = capture_encrypted;
-
                     /* Say what the capture took before metadata_add_item takes
                      * it — the claim decides the shape. The fourth combination
                      * (no mode, no ownership) has no line: such an item does

@@ -756,29 +756,30 @@ static error_t *capture_ownership(
  * is authored.
  */
 error_t *metadata_capture_from_file(
-    const char *filesystem_path,
     const char *storage_path,
     const struct stat *st,
+    bool encrypted,
     metadata_item_t **out
 ) {
-    CHECK_NULL(filesystem_path);
     CHECK_NULL(storage_path);
     CHECK_NULL(st);
     CHECK_NULL(out);
 
-    /* Reject devices, FIFOs, sockets */
-    if (!S_ISREG(st->st_mode) && !S_ISLNK(st->st_mode)) {
-        return ERROR(
-            ERR_INVALID_ARG, "Not a regular file or symlink: %s",
-            filesystem_path
-        );
-    }
+    *out = NULL;
+
+    /* The kind the capture established, asked once more as a contract and not
+     * as a refusal: no path reaches here that a capture did not take (the header),
+     * so a device, a FIFO or a socket is a caller's error. */
+    CHECK_ARG(
+        S_ISREG(st->st_mode) || S_ISLNK(st->st_mode),
+        "st must be a regular file's or a symlink's"
+    );
 
     /* A link claims no mode — symlink(2) takes none */
     mode_t mode = S_ISLNK(st->st_mode) ? MODE_UNCLAIMED : (st->st_mode & 0777);
 
     metadata_item_t *item = NULL;
-    error_t *err = metadata_item_create_file(storage_path, mode, false, &item);
+    error_t *err = metadata_item_create_file(storage_path, mode, encrypted, &item);
     if (err) {
         return err;
     }

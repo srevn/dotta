@@ -1021,8 +1021,14 @@ static error_t *add_file_to_stage(
     }
     path->stat = stat_cache_from_stat(&st);
 
+    /* The claim from the capture's own look, sealed as the decision pass said:
+     * the capture's write-time invariant makes the decision the byte truth (a
+     * plaintext that would read as ciphertext is refused there), so the claim
+     * and every reader of the bytes agree — and a link is never sealed. */
     metadata_item_t *item = NULL;
-    err = metadata_capture_from_file(location, storage_path, &st, &item);
+    err = metadata_capture_from_file(
+        storage_path, &st, path->should_encrypt, &item
+    );
     if (err) {
         return error_wrap(err, "Failed to capture metadata for '%s'", location);
     }
@@ -1047,11 +1053,6 @@ static error_t *add_file_to_stage(
         return NULL;
     }
 
-    /* The capture's write-time invariant: the bytes it staged classify as the
-     * decision says (a plaintext that would not is refused there), so the claim
-     * is stamped from the decision and every reader of the bytes agrees with it
-     * — false for a link, which the decision never seals. */
-    item->encrypted = path->should_encrypt;
     report_capture(out, "metadata", location, item);
 
     err = metadata_add_item(metadata, &item);

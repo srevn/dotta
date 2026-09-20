@@ -501,18 +501,27 @@ const metadata_item_t *const *metadata_items(
  *
  * For a symlink, pass lstat data: the link's own uid/gid, not the target's.
  *
- * @param filesystem_path Path to file on disk (must not be NULL, for error
- *                        messages)
+ * The seal is the caller's, as the directory sibling's class is: a stat cannot
+ * say what the bytes an entry holds classify as, so `encrypted` is carried through
+ * to the factory unread. Its producer is the capture that made those bytes, which
+ * is the authority on them (infra/content.h, the capture's write-time invariant).
+ *
+ * `st` is a regular file's or a symlink's, and nothing else — the kind is the
+ * caller's to have established, and both producers take it from a capture that
+ * refuses every other occupant. A stat of any other kind is a contract breach
+ * and reads as one, not as a refusal with a remedy: no user input reaches here.
+ *
  * @param storage_path Path in profile (must not be NULL)
- * @param st File stat data (must not be NULL)
+ * @param st File stat data (must not be NULL; a regular file's or a symlink's)
+ * @param encrypted Whether the entry's bytes are sealed (the caller's word)
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  *            Set to NULL if the capture claims nothing (not an error)
  * @return Error or NULL on success
  */
 error_t *metadata_capture_from_file(
-    const char *filesystem_path,
     const char *storage_path,
     const struct stat *st,
+    bool encrypted,
     metadata_item_t **out
 );
 

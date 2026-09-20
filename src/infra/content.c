@@ -688,7 +688,7 @@ error_t *content_stage_file(
         if (err) {
             if (content.data) secure_wipe(content.data, content.size);
             buffer_free(&content);
-            return error_wrap(err, "Failed to encrypt '%s'", storage_path);
+            return error_wrap(err, "Cannot encrypt '%s'", storage_path);
         }
 
         err = stage_put(

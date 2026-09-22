@@ -16,7 +16,12 @@
  *   state; callers do NOT pass an "expected encrypted" flag and the read path
  *   does NOT cross-check against any external claim. Bytes win. What callers do
  *   pass is the entry's filemode, which says whether the bytes are judged at
- *   all: a link's are its target, never a seal, whatever they begin with.
+ *   all: a link's are its target, never a seal, whatever they begin with. The
+ *   one function here that is handed the answer rather than reading it —
+ *   content_estimated_plaintext_size, the framing taken off a size for a screen
+ *   — opens nothing and routes nothing, and what it is handed is the branch's
+ *   own stamp (core/metadata.h metadata_item_t), never a cross-check of these
+ *   bytes.
  *
  * Two-tier API:
  *
@@ -127,6 +132,22 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * state; this is the canonical entry point for the question "is this entry
  * encrypted?". Header-only inspection — no keymgr required.
  *
+ * Asked where the answer is a decision or a key, never where it is a screen or
+ * a schedule: the store's refusal of a plaintext that reads as ciphertext makes
+ * the branch's stamp true for every file dotta seals, and a screen reads that
+ * stamp instead (core/metadata.h metadata_item_t). Readers: `cmds/add.c cmd_add`
+ * and `cmds/update.c capture_file` (policy priority 3, where a wrong answer commits
+ * a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes, and
+ * existence for every filemode), `infra/epoch.c epoch_walk_cb` (which blobs a
+ * rotation must not orphan, where a false absence outlives the run), and this
+ * module's own reads. A reader not on this list is a bug.
+ *
+ * The price, measured rather than read off the docs: the blob is loaded whole
+ * to reach six bytes, libgit2 offering no partial read of a packed object — and
+ * after any `gc` or any `clone` every object is packed. So the cost is linear
+ * in content bytes, and the remedy for a caller that finds it too dear is never
+ * a cheaper read but a question it did not have to ask.
+ *
  * The filemode says whether the header is read at all. A link's bytes are its
  * target, so a link is PLAINTEXT whatever they begin with; every other mode is
  * judged by its bytes — the regular kinds dotta writes and any other a foreign
@@ -164,30 +185,35 @@ error_t *content_classify(
 );
 
 /**
- * Estimate plaintext size for display from a classified blob.
+ * The bytes an entry stands for, as a screen names them.
  *
  * Wire-format containment helper: the cipher's framing overhead is a crypto-layer
- * constant, but display code in cmds/list wants a sensible size to show users.
- * Centralising the subtraction here keeps crypto/cipher.h imports out of the
- * command layer.
+ * constant, but the screens that size a branch's content want the file's number,
+ * not the framing's. Centralising the subtraction here keeps crypto/cipher.h
+ * imports out of the layers that ask — `cmds/list.c list_files` (the row) and
+ * `core/profiles.c stats_walk_callback` (the fold the row's total must agree
+ * with). A reader not on this list is a bug.
  *
  * Returns:
- *   PLAINTEXT           → blob_size unchanged
- *   ENCRYPTED           → blob_size minus the cipher's fixed overhead when the
- *                         blob is at least that large (a blob of exactly the
- *                         overhead is an empty plaintext sealed); a shorter one
- *                         is truncated — the cipher refuses it — and keeps its
- *                         raw size
- *   UNSUPPORTED_VERSION → blob_size unchanged. Cannot decrypt under this build,
- *                         so subtracting overhead would be a lie.
+ *   plaintext → blob_size unchanged
+ *   sealed    → blob_size minus the cipher's fixed overhead when the blob is at
+ *               least that large (a blob of exactly the overhead is an empty
+ *               plaintext sealed); a shorter one is truncated — the cipher refuses
+ *               it — and keeps its raw size
  *
- * Exact for a well-formed blob — the stream cipher pads nothing, so the body is
- * the plaintext's length — and an estimate only in that nothing here verifies
- * the blob. For the bytes themselves, decrypt via content_get_from_blob_oid.
+ * An estimate twice over. The stream cipher pads nothing, so for a well-formed
+ * blob the body is exactly the plaintext's length; but `encrypted` is the branch's
+ * own stamp rather than a reading of these bytes (core/metadata.h metadata_item_t),
+ * and nothing here opens the blob to check. A hand-written sheet therefore moves
+ * this number by the framing, which is a screen's worth of wrong and no more —
+ * it decides no route and opens no file. A blob written under an encryption version
+ * this build cannot read is stamped like any other and loses the framing here
+ * too: it is a blob no reader can open at all, and its listed size is the least
+ * of what is wrong with it.
+ *
+ * For the bytes themselves, decrypt via content_get_from_blob_oid.
  */
-size_t content_estimated_plaintext_size(
-    content_kind_t kind, size_t blob_size
-);
+size_t content_estimated_plaintext_size(size_t blob_size, bool encrypted);
 
 /**
  * Content cache (opaque)

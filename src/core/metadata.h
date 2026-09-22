@@ -183,11 +183,18 @@
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers: cmds/show.c print_blob_content (the annotation),
- * cmds/export.c collect_tree_callback and collect_storage (which blobs phase 1
- * reads) and, through the projection onto the view's rows (core/manifest.h
- * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
- * analyze_file_divergence and cmds/key.c cmd_key_status.
+ * schedule's. Readers: cmds/show.c print_blob_content (the annotation), cmds/list.c
+ * list_files (the mark, and the framing taken off the size beside it),
+ * core/profiles.c stats_walk_callback (the same framing, in the fold that row's
+ * total must agree with), cmds/export.c collect_tree_callback and collect_storage
+ * (which blobs phase 1 reads) and, through the projection onto the view's rows
+ * (core/manifest.h manifest_row_t.encrypted), cmds/export.c entry_from_row,
+ * core/workspace.c analyze_file_divergence and cmds/key.c cmd_key_status.
+ *
+ * Each reads it where it stands, off the item: there is no per-field reader to
+ * hold the link rule for them, so each spells that rule in its own shape — an
+ * arm where the code already branches on the kind (show, export, the projection),
+ * a conjunction where the row is flat (list, the fold).
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -661,14 +668,16 @@ error_t *metadata_load_from_branch(
  * this one and metadata_load_from_branch above, which is this call — and each
  * is that command's decision about its own output, never a second answer from
  * here: export's materialisation floor (cmds/export.c load_sheet; the bytes come
- * out of a damaged profile, warned), show's encryption annotation (cmds/show.c
- * show_file), the orphan authority's third answer (core/workspace.c
- * compute_orphan_authority, which folds to UNVERIFIED and never to "no claims")
- * and the completion's offer (cmds/completion.c completion_directories). One
- * reader folds without deciding to: the deletion's hook universe (cmds/remove.c
- * delete_profile_branch) drops every directory claim from DOTTA_FILE_n on a sheet
- * it cannot read, where its own sibling a screen up propagates. A further reader
- * would have to argue for one.
+ * out of a damaged profile, warned), the header show prints over a blob it can
+ * read anyway (cmds/show.c show_file — the mode, the ownership and the annotation
+ * alike), the file listing's verbose marks (cmds/list.c list_files, warned; the
+ * listing is the tree's and stands, the marks are the sheet's and do not), the
+ * orphan authority's third answer (core/workspace.c compute_orphan_authority,
+ * which folds to UNVERIFIED and never to "no claims") and the completion's offer
+ * (cmds/completion.c completion_directories). One reader folds without deciding
+ * to: the deletion's hook universe (cmds/remove.c delete_profile_branch) drops
+ * every directory claim from DOTTA_FILE_n on a sheet it cannot read, where its
+ * own sibling a screen up propagates. A further reader would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

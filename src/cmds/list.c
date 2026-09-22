@@ -22,6 +22,7 @@
 #include "base/timeutil.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
+#include "core/metadata.h"
 #include "core/profiles.h"
 #include "core/state.h"
 #include "infra/content.h"
@@ -432,9 +433,32 @@ static error_t *list_files(
     /* Sort for consistent output */
     string_array_sort(files);
 
-    /* Build file→commit map if verbose */
+    /* What a verbose row reads beyond the name: the branch's claims, the history
+     * behind each name, and the width the names need. All three are the whole
+     * listing's, read once before any row prints, the way the profile listing
+     * above reads and measures before its own.
+     *
+     * A sheet that will not read costs the rows their marks and leaves their
+     * sizes the stored blobs' own — the listing itself is the tree's and stands
+     * either way — so it is warned about and folded, and rendered from the root,
+     * where this document's refusals say what is wrong with it. The count's
+     * sentence (list_profiles, and the empty-branch arm above) names what it
+     * failed to do; this one names what it failed to read, which is the other
+     * question about the same document. */
+    metadata_t *metadata = NULL;
     file_commit_map_t *commit_map = NULL;
+    size_t max_path_len = 0;
     if (verbose) {
+        err = metadata_load_from_tree(repo, tree, opts->profile, &metadata);
+        if (err) {
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to read what profile '%s' claims: %s",
+                opts->profile, error_message(error_root(err))
+            );
+            error_free(err);
+            err = NULL;
+        }
+
         err = stats_build_file_commit_map(repo, opts->profile, tree, &commit_map);
         if (err) {
             /* Non-fatal: continue without commit info */
@@ -445,11 +469,7 @@ static error_t *list_files(
             error_free(err);
             err = NULL;
         }
-    }
 
-    /* Calculate max path length for alignment (verbose mode only) */
-    size_t max_path_len = 0;
-    if (verbose) {
         for (size_t i = 0; i < files->count; i++) {
             size_t len = strlen(files->items[i]);
             if (len > max_path_len) {
@@ -465,20 +485,20 @@ static error_t *list_files(
     /* List files */
     size_t total_size = 0;
     for (size_t i = 0; i < files->count; i++) {
-        const char *file_path = files->items[i];
+        const char *storage_path = files->items[i];
 
         /* Print file path (with alignment in verbose mode) */
         if (verbose) {
             /* Verbose: Left-align with padding for column alignment */
             output_styled(
                 out, OUTPUT_VERBOSE, "  {cyan}%-*s{reset}",
-                (int) max_path_len, file_path
+                (int) max_path_len, storage_path
             );
         } else {
             /* Simple: No alignment needed */
             output_styled(
                 out, OUTPUT_NORMAL, "  {cyan}%s{reset}",
-                file_path
+                storage_path
             );
         }
 
@@ -486,44 +506,51 @@ static error_t *list_files(
         if (verbose) {
             /* Get file stats */
             git_tree_entry *entry = NULL;
-            int git_err = git_tree_entry_bypath(&entry, tree, file_path);
+            int git_err = git_tree_entry_bypath(&entry, tree, storage_path);
             if (git_err == 0) {
-                /* The blob's own bytes say whether it is ciphertext, read as
-                 * the entry it is — a link's are its target, never a seal: the
-                 * indicator and the size read one classification, never the claim
-                 * sheet's flag. The size shown is the plaintext's — the cipher's
-                 * framing taken off a blob this build can open — through the
-                 * helper that keeps crypto/cipher.h out of the command layer. */
-                const git_oid *blob_oid = git_tree_entry_id(entry);
-                content_kind_t kind = CONTENT_PLAINTEXT;
-                size_t size = 0;
-                error_t *blob_err = content_classify(
-                    repo, blob_oid, git_tree_entry_filemode(entry), &kind, NULL
-                );
-                if (!blob_err) {
-                    blob_err = stats_get_blob_size(repo, blob_oid, &size);
-                }
-                if (!blob_err) {
-                    if (kind != CONTENT_PLAINTEXT) {
-                        output_styled(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
-                    } else {
-                        /* Space padding to maintain alignment */
-                        output_print(out, OUTPUT_VERBOSE, "      ");
-                    }
+                /* The stamp the branch's own claim makes of this entry, read as
+                 * the view projects it: never onto a link, whose bytes are its
+                 * target and never a seal (core/manifest.c manifest_apply_claim).
+                 * A mark and a number are a screen, so the claim answers and no
+                 * content blob is opened — the store made the stamp true for
+                 * every file it sealed (infra/content.h content_capture_file),
+                 * and a hand-written one is the sheet's word, honoured here as
+                 * its mode and its owner are on every other screen (core/metadata.h
+                 * metadata_item_t). */
+                const metadata_item_t *item = metadata_lookup(metadata, storage_path);
+                bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
+                    && item && item->encrypted;
 
-                    size_t display_size = content_estimated_plaintext_size(kind, size);
+                if (encrypted) {
+                    output_styled(out, OUTPUT_VERBOSE, "  {yellow}[E]{reset} ");
+                } else {
+                    /* Space padding to maintain alignment */
+                    output_print(out, OUTPUT_VERBOSE, "      ");
+                }
+
+                /* The size is the stored blob's own header, the cipher's framing
+                 * taken off a stamped one through the helper that keeps
+                 * crypto/cipher.h out of the command layer. The mark above needed
+                 * no read at all, so a header that will not read costs this row
+                 * its number and nothing else. */
+                size_t size = 0;
+                error_t *size_err = stats_get_blob_size(
+                    repo, git_tree_entry_id(entry), &size
+                );
+                if (!size_err) {
+                    size_t display_size = content_estimated_plaintext_size(size, encrypted);
 
                     char size_str[32];
                     output_format_size(display_size, size_str, sizeof(size_str));
                     output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
                     total_size += display_size;
                 }
-                error_free(blob_err);
+                error_free(size_err);
 
                 /* Get last commit for this file */
                 if (commit_map) {
                     const commit_info_t *commit_info = stats_file_commit_map_get(
-                        commit_map, file_path
+                        commit_map, storage_path
                     );
                     if (commit_info) {
                         char oid_str[LIST_SHORT_OID_BUF_SIZE];
@@ -573,6 +600,7 @@ static error_t *list_files(
     if (commit_map) {
         stats_free_file_commit_map(commit_map);
     }
+    metadata_free(metadata);
     git_tree_free(tree);
     string_array_free(files);
 

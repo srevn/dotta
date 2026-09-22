@@ -302,6 +302,8 @@ Bytes are the single authoritative source for "is this blob encrypted?":
 - `CONTENT_ENCRYPTED` → decrypt via `keymgr_decrypt`.
 - `CONTENT_UNSUPPORTED_VERSION` → `ERR_CRYPTO` with a version-skew diagnostic citing the unrecognized version byte; prevents deploying unrecognized ciphertext verbatim to the filesystem.
 
+That authority is the **read path's**, and it is not the only question asked about a blob. Where the answer is a decision or a key — which route a read takes, whether a capture may store plaintext, which blobs a rotation must not orphan — the bytes answer, and nothing else may. Where the answer is a screen or a schedule, the branch's own claim sheet answers instead: `dotta list -v`'s `[E]` mark and the size beside it, `dotta show`'s `(encrypted)` annotation, and which blobs `dotta export` decrypts before its first write. Those readers open no content blob at all, because a packed object has no partial read and asking six bytes costs the whole file. What makes the sheet trustworthy there is the store refusal below, and a sheet written by hand to lie costs a glyph, a number, or the moment a passphrase prompt appears — never a byte, a secret, or a key.
+
 ### Store refusal and write-time invariant
 
 Plaintext files whose first 6 bytes match `"DOTTA\x09"` cannot be stored as plaintext. `content_capture_file` refuses them with `ERR_VALIDATION`:

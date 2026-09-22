@@ -77,8 +77,12 @@
 #include "infra/content.h"
 #include "sys/filesystem.h"
 
-/* Maximum number of display tags that can be extracted from a workspace item */
-#define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 5
+/* The most tags one item's line carries — six, on a deployed item: [modified],
+ * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that changed
+ * and a look that failed end the measure, so [type] and the fault's tag ride
+ * beside the last two alone (workspace_item_extract_display_info, whose Tag
+ * Priority this counts; a tag added there is counted here). */
+#define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 6
 
 /**
  * Workspace state - where an item exists
@@ -1065,6 +1069,9 @@ const anchor_t *workspace_get_anchor(
  *      The look that failed, worded by the item's fault (workspace_fault_t)
  *      so one path reads the same word wherever it is listed. What settles it
  *      is the block's to say, in its own words, not the row's
+ *   6. "reassigned" (CYAN when alone) - A pending handover (workspace_reassigned),
+ *      last and beside any of the above: the record against the row, no look
+ *      involved
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
@@ -1083,6 +1090,7 @@ const anchor_t *workspace_get_anchor(
  *
  * @param item Workspace item (must not be NULL)
  * @param tags_out Array to receive tag string pointers
+ *                 (WORKSPACE_ITEM_MAX_DISPLAY_TAGS slots)
  * @param tag_count_out Receives number of tags extracted (must not be NULL)
  * @param color_out Receives color for tags (must not be NULL)
  * @param metadata_buf Buffer for formatted metadata (must not be NULL)

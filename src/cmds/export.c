@@ -41,14 +41,20 @@
  *
  *   Phase 1 (read-only): collect entries, complete the copy into a tree, resolve
  *   every final destination path, and validate everything — type collisions,
- *   pre-existing symlinks that would re-route content writes, unsupported blob
- *   formats — then decrypt encrypted files into memory. Every refusal, including
- *   the passphrase prompt and any decryption failure, lands before the first
- *   byte is written. --dry-run is phase 1 alone.
+ *   pre-existing symlinks that would re-route content writes — then read every
+ *   blob the sheet stamps sealed into memory, as plaintext. Every crypto refusal
+ *   those blobs can raise lands before the first byte is written: the passphrase
+ *   prompt, a wrong key, a corrupt ciphertext, a version this build does not
+ *   read. A sheet dotta wrote stamps every sealed blob its branch holds
+ *   (core/metadata.h), so on such a branch that is all of them. --dry-run is
+ *   phase 1 alone.
  *
- *   Phase 2 (write): create directories, write blobs, recreate symlinks. Fail
- *   fast on first error; the remaining failure window is filesystem errors and
- *   repository corruption only.
+ *   Phase 2 (write): create directories, write blobs, recreate symlinks. A blob
+ *   no stamp speaks for is first read here, and read by its bytes, which route
+ *   it correctly whatever the sheet said — so a stamp costs a late prompt and
+ *   never wrong content. Fail fast on first error; the failure window is filesystem
+ *   errors, repository corruption, and the crypto that a sheet speaking for no
+ *   blob of its branch leaves late (load_sheet).
  *
  * Traversal safety is established, not assumed. A tree entry's name is whoever
  * wrote the branch's, and git accepts one called ".." without a murmur, so every
@@ -99,11 +105,17 @@
  * One collected export entry.
  *
  * Paths are arena-owned (command scope). `content` is heap-owned and held only
- * for entries phase 1 must materialize early: decrypted plaintext (so every crypto
- * failure front-loads) and symlink targets (tiny, and the dry-run listing shows
- * them). Plaintext file blobs stay lazy — phase 2 re-reads them so a whole profile
- * is never held in memory, and an ODB read that succeeded in phase 1 can only
- * fail there on repository corruption.
+ * for entries phase 1 must materialize early: the plaintext of every blob the
+ * sheet stamps sealed (so every crypto failure front-loads) and symlink targets
+ * (tiny, and the dry-run listing shows them). Every other file blob stays lazy
+ * — phase 2 reads it, so a whole profile is never held in memory, and that read
+ * is the blob's first: the failure window there is the ODB's own, which the file
+ * header already names.
+ *
+ * `encrypted` is a copy of the claim's word rather than a borrow of it, because
+ * the sheet does not outlive the collector that read it (metadata_free at the
+ * tail of collect_profile and collect_storage) while the entry list lives in
+ * the arena into phase 2. The mode beside it is copied for the same reason.
  */
 typedef enum {
     EXPORT_ENTRY_DIRECTORY,
@@ -122,7 +134,7 @@ typedef struct {
     const char *dest_path;     /* Final filesystem path */
     git_oid blob_oid;          /* FILE / SYMLINK only */
     mode_t mode;               /* Resolved final mode (FILE / DIRECTORY) */
-    bool encrypted;            /* FILE: byte-classified in phase 1 */
+    bool encrypted;            /* FILE: the sheet's stamp, read where the entry is made */
     bool claimed;              /* DIRECTORY: a metadata DIRECTORY at this storage path */
     bool dest_existed;         /* DIRECTORY: phase-1 lstat fact */
     bool content_held;         /* `content` carries bytes from phase 1 */
@@ -292,9 +304,12 @@ static mode_t export_entry_mode(
  *
  * Export's own sheet policy, in one place. A tree with no sheet loads as empty;
  * a sheet that will not load costs the copy its stored modes and its blob-less
- * directory claims — not the copy. The bytes are the tree's own and an export
- * is often the repair, so this says what it lost and lets the walk materialize
- * git filemodes rather than refuse.
+ * directory claims — not the copy — and, an empty sheet stamping nothing, the
+ * pre-write window for whatever of its content is sealed: those blobs are read
+ * in phase 2 instead, by their bytes, so the copy still comes out right and is
+ * no longer all-or-nothing under a key that will not open them. The bytes are
+ * the tree's own and an export is often the repair, so this says what it lost
+ * and lets the walk materialize git filemodes rather than refuse.
  *
  * The two arms that read a sheet call this. The arm that selects rows reads none:
  * it asks the profile's view, which is strict about the sheet by contract
@@ -449,6 +464,7 @@ static int collect_tree_callback(
             } else {
                 e.kind = EXPORT_ENTRY_FILE;
                 e.mode = export_entry_mode(item, PATH_KIND_FILE, filemode);
+                e.encrypted = item && item->encrypted;
             }
             break;
         }
@@ -723,6 +739,7 @@ static error_t *collect_storage(
                 const metadata_item_t *item = metadata_lookup(metadata, name);
                 e.kind = EXPORT_ENTRY_FILE;
                 e.mode = export_entry_mode(item, PATH_KIND_FILE, held.filemode);
+                e.encrypted = item && item->encrypted;
             }
 
             err = entry_list_append(list, arena, &e);
@@ -748,9 +765,10 @@ cleanup:
  * The projection the path arm reads a row through. Every directory row is a claim
  * of the profile, derived or tracked alike — the file header's own argument:
  * every directory an export produces is one it creates, and creation is what
- * both classes bind. `encrypted` stays false and is phase 1's to decide, the
- * row's own flag being the sheet's projection of bytes that win either way
- * (validate_content). A link row carries no mode and needs none.
+ * both classes bind. `encrypted` is the row's own — the sheet's stamp as the
+ * view projects it — and says which blobs phase 1 reads (validate_content). A
+ * link row carries neither a mode nor a stamp and needs neither: its bytes are
+ * its target (core/manifest.h).
  */
 static export_entry_t entry_from_row(const manifest_row_t *row) {
     export_entry_t e;
@@ -773,6 +791,7 @@ static export_entry_t entry_from_row(const manifest_row_t *row) {
         case PATH_TYPE_EXECUTABLE:
             e.kind = EXPORT_ENTRY_FILE;
             e.mode = row->mode;
+            e.encrypted = row->encrypted;
             git_oid_cpy(&e.blob_oid, &row->blob_oid);
             break;
     }
@@ -1137,14 +1156,25 @@ static error_t *validate_destinations(export_entry_list_t *list) {
 /**
  * Phase-1 content validation.
  *
- * Classify every blob by its bytes — the authoritative source of encryption state
- * (metadata's flag is a cache; bytes win) — and read every sealed one NOW, holding
- * the plaintext. The first decryption triggers the passphrase prompt, so the
- * prompt and every crypto failure (no key, wrong key, corruption, path mismatch,
- * a version this build does not read) land in the pre-write window, each in the
- * content reader's own words — its ladder names the path and the cause, and nothing
- * here restates either. Symlink targets are read here too: tiny, needed by phase
- * 2, and shown by --dry-run.
+ * The stamp schedules the read; it never routes it. Every file the sheet stamps
+ * sealed is read NOW and its plaintext held: the first decryption triggers the
+ * passphrase prompt, so the prompt and every crypto failure (no key, wrong key,
+ * corruption, path mismatch, a version this build does not read) land in the
+ * pre-write window, each in the content reader's own words — its ladder names
+ * the path and the cause, and nothing here restates either. Symlink targets are
+ * read here too: tiny, needed by phase 2, and shown by --dry-run.
+ *
+ * What the stamp cannot do is decide a blob's kind, and it is never asked to:
+ * the reader classifies the bytes itself (infra/content.h), so an unstamped blob
+ * the store sealed is read correctly in phase 2 and one stamped over plaintext
+ * is copied. A wrong stamp therefore costs a glyph on two screens, the moment a
+ * prompt appears, or the memory of a blob held early — never a byte. Asking the
+ * bytes here instead would inflate every blob of the copy to read six of them,
+ * and inflate each again to write it, there being no partial read of a packed
+ * object.
+ *
+ * The stamp needs no kind test of its own: a directory claim carries none, by
+ * construction at both of the sheet's boundaries (core/metadata.h).
  */
 static error_t *validate_content(
     const dotta_ctx_t *ctx, const char *profile, export_entry_list_t *list
@@ -1154,49 +1184,51 @@ static error_t *validate_content(
 
     for (size_t i = 0; i < list->count; i++) {
         export_entry_t *e = &list->items[i];
-        error_t *err = NULL;
 
-        if (e->kind == EXPORT_ENTRY_DIRECTORY) continue;
+        switch (e->kind) {
+            case EXPORT_ENTRY_DIRECTORY:
+                break;
 
-        if (e->kind == EXPORT_ENTRY_SYMLINK) {
-            err = content_get_from_blob_oid(
-                repo, &e->blob_oid, GIT_FILEMODE_LINK, e->storage_path, profile,
-                keymgr, &e->content
-            );
-            if (err) {
-                return error_wrap(
-                    err, "Failed to read symlink '%s'", e->storage_path
+            case EXPORT_ENTRY_SYMLINK: {
+                error_t *err = content_get_from_blob_oid(
+                    repo, &e->blob_oid, GIT_FILEMODE_LINK, e->storage_path,
+                    profile, keymgr, &e->content
                 );
+                if (err) {
+                    return error_wrap(
+                        err, "Failed to read symlink '%s'", e->storage_path
+                    );
+                }
+                e->content_held = true;
+                if (e->content.size == 0) {
+                    return ERROR(
+                        ERR_INVALID_ARG, "Symlink '%s' has an empty target",
+                        e->storage_path
+                    );
+                }
+                break;
             }
-            e->content_held = true;
-            if (e->content.size == 0) {
-                return ERROR(
-                    ERR_INVALID_ARG, "Symlink '%s' has an empty target",
-                    e->storage_path
+
+            case EXPORT_ENTRY_FILE: {
+                /* Unstamped: phase 2 reads it, by its bytes, and holds nothing
+                 * until then. */
+                if (!e->encrypted) break;
+
+                /* Sealed — or sealed under a version this build does not read,
+                 * which the reader refuses with the version pair. Its error passes
+                 * through: "Cannot decrypt '<path>'" over the cause is the whole
+                 * story. */
+                error_t *err = content_get_from_blob_oid(
+                    repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,
+                    profile, keymgr, &e->content
                 );
+                if (err) {
+                    return err;
+                }
+                e->content_held = true;
+                break;
             }
-            continue;
         }
-
-        content_kind_t ckind;
-        err = content_classify(repo, &e->blob_oid, GIT_FILEMODE_BLOB, &ckind, NULL);
-        if (err) {
-            return error_wrap(err, "Failed to read '%s'", e->storage_path);
-        }
-        if (ckind == CONTENT_PLAINTEXT) continue;
-
-        /* Sealed — or sealed under a version this build does not read, which
-         * the reader refuses with the version pair. Its error passes through:
-         * "Cannot decrypt '<path>'" over the cause is the whole story. */
-        e->encrypted = (ckind == CONTENT_ENCRYPTED);
-        err = content_get_from_blob_oid(
-            repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path, profile,
-            keymgr, &e->content
-        );
-        if (err) {
-            return err;
-        }
-        e->content_held = true;
     }
 
     return NULL;
@@ -1596,7 +1628,8 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
         if (e->content_held) {
             err = write_bytes_stdout(&e->content);
         } else {
-            /* A file's: a link's target is held since phase 1 (validate_content) */
+            /* An unstamped file's: a link's target and a stamped file's plaintext
+             * are held since phase 1 (validate_content) */
             buffer_t local = BUFFER_INIT;
             err = content_get_from_blob_oid(
                 repo, &e->blob_oid, GIT_FILEMODE_BLOB, e->storage_path,

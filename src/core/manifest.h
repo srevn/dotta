@@ -127,7 +127,8 @@ typedef struct anchor anchor_t;
  *   blob types  — blob_oid is the tree entry; mode is the metadata claim, or
  *                 the filemode floor (0644 / 0755) where none is claimed;
  *                 encrypted is the metadata-projected cache of the blob's own
- *                 bytes (docs/encryption-spec.md)
+ *                 bytes (docs/encryption-spec.md). A link row carries neither:
+ *                 see Totality below
  *   DIRECTORY   — claimed from metadata alone: blob_oid is zero, encrypted is
  *                 false, owner/group are the item's, mode is the claim or
  *                 DIR_MODE_DEFAULT, and tracked is the item's class
@@ -147,11 +148,13 @@ typedef struct anchor anchor_t;
  *
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
  * never a hole; consumers compare and apply it without a fallback. A link row's
- * mode stays 0 as a don't-care (the discriminator is type, the tree's own truth;
- * symlink(2) takes no mode), and MODE_UNCLAIMED never leaves the claim sheet.
- * Authority, stated once: the filemode is authoritative for type, the metadata
- * claim for permission bits — a hand-edit that contradicts the x-bit across the
- * two is resolved by that contract, not detected per-read.
+ * mode and encrypted are both don't-cares, 0 and false: no claim is projected
+ * onto a link row at all (manifest_apply_claim), the discriminator being type,
+ * the tree's own truth — symlink(2) takes no mode, and a link's bytes are its
+ * target rather than content anything could seal. MODE_UNCLAIMED never leaves
+ * the claim sheet. Authority, stated once: the filemode is authoritative for
+ * type, the metadata claim for permission bits — a hand-edit that contradicts
+ * the x-bit across the two is resolved by that contract, not detected per-read.
  *
  * Winner or not: `profile` is the profile whose claim the row is, and a row is
  * never rewritten when a higher profile takes its path. A row read through the

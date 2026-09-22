@@ -183,9 +183,11 @@
  * cross-checked nowhere: the content reader classifies the blob's own bytes and
  * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
  * answers "was it sealed when it was written" — a screen's question, or a
- * schedule's. Readers: cmds/show.c print_blob_content (the annotation) and, through
- * the projection onto the view's rows (core/manifest.h manifest_row_t.encrypted),
- * core/workspace.c analyze_file_divergence and cmds/key.c cmd_key_status.
+ * schedule's. Readers: cmds/show.c print_blob_content (the annotation),
+ * cmds/export.c collect_tree_callback and collect_storage (which blobs phase 1
+ * reads) and, through the projection onto the view's rows (core/manifest.h
+ * manifest_row_t.encrypted), cmds/export.c entry_from_row, core/workspace.c
+ * analyze_file_divergence and cmds/key.c cmd_key_status.
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */

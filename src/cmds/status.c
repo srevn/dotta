@@ -747,10 +747,11 @@ static void display_workspace_status(
                 if (list) {
                     /* Keyed by the exact tags the line shows, the way Issues is
                      * keyed, so the column below reads back against the one above.
-                     * Three classes (workspace_fault_t), and the policy bit can
-                     * ride beside each ([unencrypted] [locked]), so six keys is
-                     * the whole domain. */
-                    struct { char tags[64]; const char *hint; } legend[6];
+                     * Three classes (workspace_fault_t), and the policy bit before
+                     * the class and a pending handover after it can each ride
+                     * on the line ([unencrypted] [unreadable] [reassigned]), so
+                     * twelve keys bound the domain. */
+                    struct { char tags[64]; const char *hint; } legend[12];
                     size_t legend_count = 0;
                     size_t legend_width = 0;
 

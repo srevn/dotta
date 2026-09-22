@@ -773,9 +773,11 @@ error_t *state_confirm(
  *     state_confirm's.
  *   - observed_at is the INSERT arm's alone: now for a new row, untouched for
  *     an existing one.
- *   - stat may be NULL (a directory; a deployed file — no triple survives the
- *     write's own open second; or the caller's establishment did not reach it):
- *     the triple is written as zeros and the next read takes the slow path.
+ *   - stat may be NULL or UNSET, which say the same thing here (a directory; a
+ *     symlink deploy made by path, with no descriptor whose fstat could describe
+ *     it; or a caller whose establishment did not reach a triple): the triple
+ *     is written as zeros and the next read takes the slow path. A deployed file's
+ *     is the write's own (stat_cache_from_write).
  *   - the path's released copy dies with the write, either kind
  *     (state_forget_released): an ownership event says what stands there — the
  *     row's blob, or a directory — so a copy of what stood before is redundant

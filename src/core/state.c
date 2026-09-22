@@ -69,7 +69,7 @@ struct state {
 
     /* Anchor prepared statements (the record's verbs) */
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
-    sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content, CAS) */
+    sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors … RETURNING filesystem_path (content, CAS) */
     sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
 
@@ -266,11 +266,12 @@ static error_t *initialize_schema(sqlite3 *db) {
          * pair), claim-free: disk still held dotta's last confirmation when dotta
          * let go of the path. File kinds only — a directory has no content
          * confirmation to outlive its record (blob IS NOT NULL is the write guard's
-         * filter; the CHECKs are the schema's own restatement). A row lives only
-         * while its fact can still be true: the read verifies it against live
-         * disk before trusting it, the flush's join forgets it once the path's
-         * record again carries a confirmed blob, and apply's sweep retires it
-         * when disk provably left it. */
+         * filter; the CHECKs are the schema's own restatement). A row lives while
+         * its path's record is absent or merely observed and disk may still hold
+         * it: the record's next ownership event or confirmation deletes it in
+         * the same breath (state_anchor, state_confirm — explicit siblings, per
+         * the rule above), and apply's sweep forgets it when disk provably left
+         * it. The read verifies it against live disk before trusting it. */
         "CREATE TABLE released_copies ("
         "    filesystem_path TEXT PRIMARY KEY,"
         "    storage_path TEXT NOT NULL,"
@@ -528,7 +529,12 @@ static error_t *prepare_statements(state_t *state) {
      *   ?9 type  ?10 blob_oid  ?11 stat_mtime  ?12 stat_size  ?13 stat_ino — the
      *             pair the confirmation replaces, as the caller read it; ?10 is
      *             NULL where the record never confirmed a blob, which IS matches
-     *             and = would not */
+     *             and = would not
+     *
+     * RETURNING yields a row iff the WHERE matched — the compare-and-swap's
+     * outcome, read off this statement rather than off the connection's count
+     * of the last change, which any statement after it overwrites. The key it
+     * projects is the row it wrote; the caller asks only whether there was one. */
     const char *sql_confirm =
         "UPDATE path_anchors SET "
         "  type          = ?2, "
@@ -539,7 +545,8 @@ static error_t *prepare_statements(state_t *state) {
         "WHERE filesystem_path = ?1 "
         "  AND profile = ?7 AND storage_path = ?8 "
         "  AND type = ?9 AND blob_oid IS ?10 "
-        "  AND stat_mtime = ?11 AND stat_size = ?12 AND stat_ino = ?13;";
+        "  AND stat_mtime = ?11 AND stat_size = ?12 AND stat_ino = ?13 "
+        "RETURNING filesystem_path;";
 
     rc = sqlite3_prepare_v2(state->db, sql_confirm, -1, &state->stmt_confirm, NULL);
     if (rc != SQLITE_OK) {
@@ -645,9 +652,9 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare release statement");
     }
 
-    /* Forget released: one end of the fact's lifetime — the flush's join (the
-     * path's record again carries a confirmed blob) and apply's sweep (disk
-     * provably left the copy). */
+    /* Forget released: the fact's two ends — the sibling of its record's next
+     * ownership event or confirmation (the record says what stands there now)
+     * and apply's sweep (disk provably left the copy). */
     const char *sql_forget_released =
         "DELETE FROM released_copies WHERE filesystem_path = ?1;";
 
@@ -1791,18 +1798,29 @@ error_t *state_confirm(
     sqlite3_bind_int64(stmt, 12, anchor->stat.size);
     sqlite3_bind_int64(stmt, 13, (sqlite3_int64) anchor->stat.ino);
 
+    /* One row back iff the record matched and was written (sql_confirm). */
     int rc = sqlite3_step(stmt);
+
+    /* Matched nothing: another writer moved the record since the caller read it
+     * — another claim, a newer blob, a fresher proof — and the fact is about a
+     * record no longer there. Nothing is written, nothing forgotten, and *anchor
+     * stays as read. */
+    if (rc == SQLITE_DONE) return NULL;
+
+    /* Wrote: the one row back drains to DONE; anything else is the statement's
+     * own failure. */
+    if (rc == SQLITE_ROW) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to confirm path");
     }
 
-    /* Matched nothing: another writer moved the record since the caller read it
-     * — another claim, a newer blob, a fresher proof — and the fact is about a
-     * record no longer there. Nothing is written, and *anchor stays as read. */
-    if (sqlite3_changes(state->db) == 0) return NULL;
+    /* The record says what stands at the path now, so the released copy there
+     * is subsumed — it dies in the same breath, the way an order dies with its
+     * record. */
+    RETURN_IF_ERROR(state_forget_released(state, row->filesystem_path));
 
-    /* Wrote: the caller's copy follows, on the three columns the statement names
-     * and no other — last, so a failure above leaves it as read. */
+    /* The caller's copy follows, on the three columns the statement names and
+     * no other — last, so a failure above leaves it as read. */
     anchor->type = row->type;
     anchor->blob_oid = row->blob_oid;
     anchor->stat = *stat;
@@ -1818,6 +1836,7 @@ error_t *state_confirm(
  *   - deployed_at = now, both arms.
  *   - observed_at is the INSERT arm's alone.
  *   - stat is always written (zeros when NULL).
+ *   - the path's released copy dies with it, either kind (a second statement).
  *
  * The SQL UPSERT encodes those rules and RETURNING projects the one column the
  * arms decide differently. Callers that mirror an in-memory snapshot pass a
@@ -1910,7 +1929,10 @@ error_t *state_anchor(
         return sqlite_error(state->db, "Failed to anchor path");
     }
 
-    return NULL;
+    /* An ownership event says what stands at the path — the row's blob, or a
+     * directory — so a released copy there is redundant or false either way: it
+     * dies in the same breath, the way an order dies with its record. */
+    return state_forget_released(state, row->filesystem_path);
 }
 
 /**

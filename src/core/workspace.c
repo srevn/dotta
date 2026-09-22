@@ -236,11 +236,13 @@ struct workspace {
     size_t order_count;                          /* Number of orders */
     hashmap_t *order_index;                      /* filesystem_path → the order (membership; heap-allocated) */
 
-    /* The released copies, snapshot at load the same way. Two readers only, by
-     * design: the base derivation in analyze_file_divergence (through the index,
-     * and only when the path's record carries no confirmed blob — a released
-     * fact is not a claim) and the flush's join (through the array). No third
-     * reader may grow without revisiting the reap design. */
+    /* The released copies, snapshot at load the same way. One reader, by design:
+     * the base derivation in analyze_file_divergence, through the index and only
+     * when the path's record carries no confirmed blob — a released fact is not
+     * a claim. Frozen at load: the database forgets a copy with its path's next
+     * ownership event or confirmation (state_anchor, state_confirm), and nothing
+     * here follows, so a reader after the analysis would read copies the database
+     * no longer holds. */
     released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
     hashmap_t *released_index;                   /* filesystem_path → released_copy_t * (heap-allocated) */
@@ -1154,8 +1156,8 @@ static error_t *analyze_file_divergence(
              * released-base hit: the record is blob-less or absent, while an
              * anchored base IS the record's pair and re-writing it would be a
              * no-op (the fast path stays write-free for it). The record gains
-             * the blob, and the flush's join then forgets the released row the
-             * fresher confirmation subsumes.
+             * the blob, and the confirmation that gives it one forgets the released
+             * row it subsumes in the same breath (state_confirm).
              *
              * The verdict is the whole gate: a released base the row has since
              * retyped answers CMP_TYPE_DIFF above, so the pair state_confirm
@@ -1289,8 +1291,9 @@ static error_t *analyze_file_divergence(
              * A failed look answers nothing and leaves disk_at_base false: the
              * edit is taken as real (CONTENT), the conservative answer — STALE
              * still holds, because git_moved is a fact about two OIDs. A failed
-             * look on a released base retires nothing: only the sweep and the
-             * join forget rows, and neither reads compare results. */
+             * look on a released base retires nothing: a row dies only with its
+             * path's next ownership event or confirmation, or at the sweep —
+             * never on a look that could not answer. */
             if (git_moved &&
                 (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
                 compare_result_t at_base;
@@ -3568,8 +3571,10 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * analyses pair each row with its record through workspace_get_anchor, and the
  * two writers patch the index's values — and every record whose path the view
  * lacks is collected into ws->orphans, in the snapshot's path order. The prune
- * orders and the released copies load beside the record, unconditionally (the
- * flush's join needs both even when no analysis consults them).
+ * orders and the released copies load beside the record, unconditionally: the
+ * flush's join needs the orders even when no orphan stands for them, and the
+ * base derivation asks for a released copy at every file row whose record carries
+ * no blob.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -4557,12 +4562,20 @@ error_t *workspace_anchor(
  * The order is load-bearing: a path in both halves had no record at analysis,
  * and a confirmation is an UPDATE that creates nothing — one cannot confirm what
  * one has not seen — so the observation's INSERT must land first. Observed first,
- * the confirmation then finds its row on both sides.
+ * the confirmation then finds the record it binds: the INSERT's own
+ * (workspace_observe).
  *
- * The joins, last — each fact's lifetime rule, enforced where the view, the record
- * and both fact sets are in hand: every prune order whose path the view has is
- * void, and every released copy whose path's record again carries a confirmed
- * blob (post-patch) is forgotten.
+ * Every write here is derived from the load, and outside a run of apply the load
+ * held no lock — another process can commit between it and this flush — so each
+ * is conditional on what the load read: an observation lands only where no record
+ * stands (INSERT OR IGNORE), a confirmation only on the record the comparison
+ * was made against (state_confirm). The void alone names no predecessor: an order
+ * is one column, and one placed again since the load is the row this load read.
+ *
+ * The join, last — the order's view end, the one lifetime end that needs the
+ * view: every prune order the load read whose path the view has is void. A released
+ * copy has no end here; its two are its record's next ownership event or
+ * confirmation, and apply's sweep (core/state.h).
  *
  * Begins its own transaction only when state isn't already in one (status, diff,
  * sync, update, a preview of apply); a run of apply passes its dispatch
@@ -4571,32 +4584,24 @@ error_t *workspace_anchor(
 error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    /* The joins' pending work, counted up front so the gate below is exact: a
-     * pure-join flush (nothing observed, nothing confirmed, one stale order or
-     * subsumed released row) still takes its scoped transaction, and the common
-     * all-empty flush still costs nothing. One loop over each almost-always-empty
-     * set. The released count is read against the pre-patch snapshot — exact
-     * here, because with zero confirmations nothing below patches a record; with
-     * any, the gate passes regardless and the join re-reads post-patch. */
+    /* The join's pending work, counted up front so the gate below is exact: a
+     * pure-join flush (nothing observed, nothing confirmed, one stale order)
+     * still takes its scoped transaction, and the common all-empty flush still
+     * costs nothing. One loop over an almost-always-empty set. */
     size_t pending_voids = 0;
     for (size_t i = 0; i < ws->order_count; i++) {
         if (manifest_lookup(ws->manifest, ws->orders[i])) pending_voids++;
     }
-    size_t pending_forgets = 0;
-    for (size_t i = 0; i < ws->released_count; i++) {
-        const anchor_t *anchor =
-            hashmap_get(ws->anchor_index, ws->released[i].filesystem_path);
-        if (anchor && !git_oid_is_zero(&anchor->blob_oid)) pending_forgets++;
-    }
 
     if (ws->observation_count == 0 && ws->confirmation_count == 0 &&
-        pending_voids == 0 && pending_forgets == 0) {
+        pending_voids == 0) {
         return NULL;
     }
 
     /* Begin our own transaction only when no external transaction is active:
-     *   - apply: state_open -> already in transaction -> skip
-     *   - status/diff/sync: state_load -> no transaction -> begin/commit */
+     *   - a run of apply: state_open -> already in transaction -> skip
+     *   - status, diff, sync, update and a preview of apply: state_load -> no
+     *     transaction -> begin/commit */
     bool needs_transaction = !state_locked(ws->state);
 
     if (needs_transaction) {
@@ -4648,16 +4653,18 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         }
     }
 
-    /* The joins: each fact's lifetime rule, enforced where the view, the record
-     * and both fact sets are in hand.
+    /* The join: the order's view end (state.h's lifetime rule), here because
+     * the view is. An order lives only while its path is out of the view, so
+     * every order whose path the view has is void — the removal it answered was
+     * reverted (a revert, a sync pulling the path back, an enable providing it),
+     * verified or not. Left standing, the order would outlive the removal and
+     * prune the copy at the next scope exit instead of the probe releasing it;
+     * voided here, a later discovered departure executes as a release, which is
+     * the stated policy for every discovered departure.
      *
-     * An order lives only while its path is out of the view, so every order whose
-     * path the view has is void — the removal it answered was reverted (a revert,
-     * a sync pulling the path back, an enable providing it), verified or not.
-     * Left standing, the order would outlive the removal and prune the copy at
-     * the next scope exit instead of the probe releasing it; voided here, a later
-     * discovered departure executes as a release, which is the stated policy
-     * for every discovered departure. */
+     * Selected from the load's own snapshot of orders, never the transaction's:
+     * an order placed since the load answers a removal this load's view predates,
+     * and voiding it would undo the removal's intent. */
     for (size_t i = 0; i < ws->order_count; i++) {
         if (!manifest_lookup(ws->manifest, ws->orders[i])) continue;
 
@@ -4668,32 +4675,6 @@ error_t *workspace_flush_updates(workspace_t *ws) {
             }
             return error_wrap(
                 err, "Failed to void prune order for '%s'", ws->orders[i]
-            );
-        }
-    }
-
-    /* A released copy is subsumed once its path's record again carries a confirmed
-     * blob — the record is then the base and the row is redundant (or false:
-     * the fresher confirmation says what disk holds now). Read against the
-     * post-patch snapshot — the confirmation loop above has advanced it — so a
-     * released-base fast-path hit forgets its row in the same flush that confirms
-     * it. Lazily covers every route back to managed, add/update's workspace-less
-     * captures included: their row dies at the next flush-bearing load, and until
-     * then the base derivation's no-confirmed-blob predicate shadows it
-     * correctly. */
-    for (size_t i = 0; i < ws->released_count; i++) {
-        const anchor_t *anchor =
-            hashmap_get(ws->anchor_index, ws->released[i].filesystem_path);
-        if (!anchor || git_oid_is_zero(&anchor->blob_oid)) continue;
-
-        error_t *err = state_forget_released(ws->state, ws->released[i].filesystem_path);
-        if (err) {
-            if (needs_transaction) {
-                state_rollback(ws->state);
-            }
-            return error_wrap(
-                err, "Failed to forget released copy for '%s'",
-                ws->released[i].filesystem_path
             );
         }
     }

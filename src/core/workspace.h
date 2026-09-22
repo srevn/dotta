@@ -1152,13 +1152,18 @@ error_t *workspace_anchor(
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the
- * observation's INSERT first. DB and memory stay consistent for downstream readers
- * in the same run.
+ * observation's INSERT first. DB and memory agree for downstream readers in the
+ * same run wherever the database still holds what the load read: every write
+ * here is conditional on that reading — an observation lands only where no record
+ * stands, a confirmation only on the record it was made against — so a record
+ * another writer moved since the load is left theirs, and memory behind it, the
+ * direction the next load corrects. The void alone names no predecessor.
  *
- * The joins run last — each fact's lifetime rule (state.h), enforced here because
- * the flush is where the view, the record and both loaded fact sets are in hand:
- * every prune order whose path the view has is void, and every released copy
- * whose path's record again carries a confirmed blob is forgotten.
+ * The join runs last — the order's view end (state.h's lifetime rule), here because
+ * the view is: every prune order the load read whose path the view has is void,
+ * selected from the load's own snapshot, since an order placed after it answers
+ * a removal this view predates. A released copy has no end here: its two are
+ * its record's next ownership event or confirmation, and apply's sweep.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

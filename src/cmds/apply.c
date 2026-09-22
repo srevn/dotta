@@ -2761,8 +2761,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * condition provably ended. A fresh read — the run's own release writes
          * included — then one lstat per row, each forget clause a truth statement:
          * an absent path took the fact's copy with it; a live size that differs
-         * from the recorded triple's proves the bytes are not the blob's (a deploy
-         * this run wrote over a released-base stale path lands here). Everything
+         * from the recorded triple's proves the bytes are not the blob's (an
+         * edit since the release — a deploy never lands here: its anchor forgot
+         * the copy in the same breath, core/state.h state_anchor). Everything
          * else keeps — a same-size drift or an UNSET triple (mtime == 0: no usable
          * size to test) is possibly still true and the read verifies before
          * trusting, and a failed look (EACCES, ...) never retires a fact.
@@ -2790,9 +2791,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * answer for the occupant, and a fact is retired on a proof or
                  * not at all (core/workspace.h workspace_displaced_t). A squatter
                  * this run replaced is the one over-conservative case, and keeping
-                 * a fact the flush's join or a later sweep will reap costs nothing
-                 * — where forgetting one wrongly costs the next load its base
-                 * and turns dotta's own deployed bytes into the user's edit.
+                 * a fact its path's next ownership event or confirmation, or a
+                 * later sweep, will reap costs nothing — where forgetting one
+                 * wrongly costs the next load its base and turns dotta's own
+                 * deployed bytes into the user's edit.
                  *
                  * The view's claims alone, which is the whole of what a sweep
                  * needs: they are the squatters that outlive the run, where a

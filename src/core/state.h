@@ -8,15 +8,17 @@
  * has a one-sentence lifetime rule:
  *   - the enabled set lives until the user changes it;
  *   - a record lives from first observation to explicit retire;
- *   - an order lives only while its path is out of the view — it dies when the
- *     path re-enters (the flush's join), when its record retires (the retire's
- *     sibling delete), or when apply executes it;
- *   - a released copy lives only while its fact can still be true — the read
- *     verifies it against live disk before trusting it, the flush's join forgets
- *     it once its path's record again carries a confirmed blob, and apply's sweep
- *     retires it when disk provably left it.
- * Everything else — what should stand at a path, from whom — is computed from
- * Git at every load (core/manifest.h) and never stored.
+ *   - an order lives while its path is out of the view and its record stands —
+ *     the record's retire deletes it in the same breath (apply executing it is
+ *     one), and the flush voids it where the view holds the path again;
+ *   - a released copy lives while its path's record is absent or merely observed
+ *     and disk may still hold it — the record's next ownership event or
+ *     confirmation deletes it in the same breath, and apply's sweep forgets it
+ *     where disk provably left it.
+ * The two facts die these two ways and no other: with a write to their path's
+ * record, and where their own authority is asked — the view at the flush, the
+ * disk at the sweep. Everything else — what should stand at a path, from whom —
+ * is computed from Git at every load (core/manifest.h) and never stored.
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -709,10 +711,11 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
  * depends on and what it overwrites are bound, and nothing else, so an ownership
  * event that moved neither (an adoption's stamp) lets it land, while a record
  * another writer moved — another claim, a newer blob, a fresher proof — matches
- * nothing, and nothing is written. *anchor follows the statement: advanced on
- * the three columns it names when it wrote, and last, so a failure leaves it as
- * read; left as read when it did not — memory behind the database, the direction
- * the next load corrects.
+ * nothing, and nothing is written. Where it wrote, the path's released copy dies
+ * in the same breath (state_forget_released): the record says what stands there
+ * now. *anchor follows the statement: advanced on the three columns it names
+ * when it wrote, and last, so a failure leaves it as read; left as read when it
+ * did not — memory behind the database, the direction the next load corrects.
  *
  * The claim bound is the row's, never the record's: a blob is written only onto
  * a record that names the pair it opens under, so anchor_t's binding holds at
@@ -773,6 +776,10 @@ error_t *state_confirm(
  *   - stat may be NULL (a directory; a deployed file — no triple survives the
  *     write's own open second; or the caller's establishment did not reach it):
  *     the triple is written as zeros and the next read takes the slow path.
+ *   - the path's released copy dies with the write, either kind
+ *     (state_forget_released): an ownership event says what stands there — the
+ *     row's blob, or a directory — so a copy of what stood before is redundant
+ *     or false.
  *
  * resolved_out semantics:
  *   - If non-NULL, populated with the post-write record: every field the caller
@@ -900,12 +907,12 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
  * row false at birth (the user edited before releasing) degrades safely: the
  * read verifies against live disk before trusting it, and the sweep retires what
  * disk provably left. A rekey'd repository leaves old released rows permanently
- * UNVERIFIED at the read; they die by the same sweep or the flush's join when
- * the path is re-owned. A copy written at a stale key — a path still standing
- * under another spelling, released because a row of the view stands on its very
- * entry (core/workspace.c) — is true and unread for as long as the file stands:
- * it dies when the file goes through that other spelling, or when the record
- * returns to this key.
+ * UNVERIFIED at the read; they die by the same sweep, or with the path's next
+ * ownership event or confirmation. A copy written at a stale key — a path still
+ * standing under another spelling, released because a row of the view stands on
+ * its very entry (core/workspace.c) — is true and unread for as long as the file
+ * stands: it dies when the file goes through that other spelling, or with the
+ * next ownership event or confirmation at this key.
  *
  * A missing record is success: nothing observed, nothing to remember.
  *
@@ -941,12 +948,13 @@ error_t *state_get_released_copies(
 /**
  * Forget one released copy
  *
- * DELETE by filesystem_path; a missing row is success. Two callers, each an end
- * of the fact's lifetime rule: the flush's join (the path's record again carries
- * a confirmed blob — the fresher confirmation subsumes the fact) and apply's
- * sweep (disk provably left the copy: the path is absent, or its live size differs
- * from the recorded triple's). Never a compare-result consumer: a failed look
- * retires no fact.
+ * DELETE by filesystem_path; a missing row is success. Three callers, the fact's
+ * two ends: state_anchor and state_confirm, each in the same breath as its write
+ * (the record says what stands at the path now, so the copy is redundant or false),
+ * and cmds/apply.c cmd_apply's sweep (disk provably left the copy: the path is
+ * absent, or its live size differs from the recorded triple's). A failed look
+ * retires no fact: a confirmation forgets only when its statement wrote, and
+ * the sweep only on a look that answered.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose released copy is forgotten (must not be NULL)

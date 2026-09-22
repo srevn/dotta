@@ -532,7 +532,13 @@ static error_t *list_files(
                  * taken off a stamped one through the helper that keeps
                  * crypto/cipher.h out of the command layer. The mark above needed
                  * no read at all, so a header that will not read costs this row
-                 * its number and nothing else. */
+                 * its number and nothing else — and says so where the number
+                 * would have stood, in the word the row above uses for an entry
+                 * it could not read at all. A total short by a row is then short
+                 * where the reader can see it, which is the whole of what this
+                 * screen can honestly say: the object is missing or corrupt,
+                 * and the count of what the branch holds refuses outright over
+                 * the same failure (core/profiles.h profile_get_tree_stats). */
                 size_t size = 0;
                 error_t *size_err = stats_get_blob_size(
                     repo, git_tree_entry_id(entry), &size
@@ -544,6 +550,8 @@ static error_t *list_files(
                     output_format_size(display_size, size_str, sizeof(size_str));
                     output_print(out, OUTPUT_VERBOSE, " %8s", size_str);
                     total_size += display_size;
+                } else {
+                    output_styled(out, OUTPUT_VERBOSE, " {dim}%8s{reset}", "[?]");
                 }
                 error_free(size_err);
 

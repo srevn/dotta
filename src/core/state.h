@@ -195,20 +195,31 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * exists iff dotta has observed the path on disk while it was managed: there is
  * no "never observed" row, and observed_at is never zero.
  *
- * Three signals, three write rules — one verb each (below):
- *   - blob_oid + stat : content-verified pair. Advanced only after
- *     disk-matches-blob verification — state_confirm (the slow-path CMP_EQUAL)
- *     and state_anchor (apply deploy, adoption, add, update). Zero blob_oid is
- *     no content confirmation — a directory, whose whole confirmed-disk record
- *     is that it was observed (a directory has no content confirmation,
- *     schema-enforced), or a file observed but never confirmed.
- *   - deployed_at     : active-ownership timestamp. Advances to now on
- *     every state_anchor (apply deploy, adoption, acknowledgement, add, update);
- *     untouched by a confirmation. 0 = dotta never put this here.
- *   - observed_at     : first-observation timestamp. Written once, by
+ * Four groups of columns, one write rule each (the verbs below):
+ *   - the binding (profile, storage_path): the row the record follows — who
+ *     deployed what — and the pair its blob was confirmed under. Written from
+ *     one row, at the first sighting (state_observe) and at every ownership event
+ *     (state_anchor: apply deploy, adoption, acknowledgement, add, update); a
+ *     confirmation never moves it.
+ *   - the content (type, blob_oid, stat): the kind the record describes, and
+ *     the blob dotta last verified disk against, with the stat of that moment.
+ *     The first sighting writes the kind alone; the blob and the stat advance
+ *     only after disk-matches-blob verification, the kind with them — state_confirm
+ *     (the slow-path CMP_EQUAL) and state_anchor. Zero blob_oid is no content
+ *     confirmation — a directory, whose whole confirmed-disk record is that it
+ *     was observed (a directory has no content confirmation, schema-enforced),
+ *     or a file observed but never confirmed.
+ *   - the claim (mode, owner, group): what dotta set there, or first saw — the
+ *     row's, at the first sighting and at every ownership event, and nothing
+ *     else writes it. The executable half of the type is copied from the row
+ *     beside it and no verdict reads it: the kind rung takes FILE and EXECUTABLE
+ *     for one kind (core/workspace.h workspace_compare_confirmed), and the mode
+ *     carries the bit.
+ *   - the lifecycle (observed_at, deployed_at): observed_at is written once, by
  *     whichever write creates the row (state_observe, or state_anchor's INSERT
- *     arm), and never again: the first caller wins because no later write names
- *     the column.
+ *     arm), and never again — the first caller wins because no later write names
+ *     the column; deployed_at advances to now on every ownership event and is
+ *     untouched by a confirmation, 0 = dotta never put this here.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
@@ -223,74 +234,75 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.
- *   - the blob a record carries is the blob of the claim the record names. The
- *     pair (profile, storage_path) is the binding that blob was confirmed under,
- *     and an encrypted blob is readable under no other (infra/content) — so the
- *     record's own pair, not the row's, is what a later load decrypts its base
- *     with (core/workspace.c analyze_file_divergence, compute_orphan_divergence).
- *     Kept by each writer on its own: state_anchor writes the claim beside the
- *     blob from one row, and state_confirm's statement matches only a record
- *     that names the claim its row's blob opens under.
+ *   - the blob a record carries is the blob of the row its binding names. An
+ *     encrypted blob is readable under no other binding (infra/content) — so
+ *     the record's own binding, not the row's, is what a later load decrypts
+ *     its base with (core/workspace.c analyze_file_divergence,
+ *     compute_orphan_divergence). Kept by each writer on its own: state_anchor
+ *     writes the binding beside the blob from one row, and state_confirm's
+ *     statement matches only a record whose binding is the one its row's blob
+ *     opens under.
  *
- * The identity and metadata fields (storage_path, profile, type, mode, owner,
- * group) are those of the row the record was written from — who deployed what,
- * under which claim. A confirmation rewrites only what it confirmed (type, blob,
- * stat); the claim — profile, storage path, mode, owner, group — is an ownership
- * event's to change. They are what an orphan (a record whose path no active row
- * names) is measured against, and an owned record whose profile ≠ the active
- * row's profile is a reassignment apply has not acknowledged — on a file row
- * and on a directory the profile manages, never on a derived ancestor claim nobody
- * made (core/workspace.h workspace_reassigned).
+ * The binding and the claim are what an orphan (a record whose path no active
+ * row names) is measured against — the claim is its reference on disk, and the
+ * binding names the branch asked whether it still holds the path — and an owned
+ * record whose profile ≠ the active row's profile is a reassignment apply has
+ * not acknowledged: on a file row and on a directory the profile manages, never
+ * on a derived ancestor claim nobody made (core/workspace.h workspace_reassigned).
  */
 typedef struct anchor {
-    /* Identity — the row's, at the last write */
     char *filesystem_path;    /* Deployed path (PRIMARY KEY), as spelled */
+
+    /* The binding */
     char *storage_path;       /* Path in profile (home/.bashrc) */
-    char *profile;            /* Profile whose row dotta reconciled the path against */
+    char *profile;            /* Profile whose row the record follows */
 
-    /* What dotta set there */
+    /* The content */
     path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
-    mode_t mode;              /* Recorded mode; meaningful iff type != SYMLINK */
-    char *owner;              /* Recorded owner (can be NULL) */
-    char *group;              /* Recorded group (can be NULL) */
-
-    /* What dotta confirmed */
     git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed: a directory, or observed only) */
     stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
+
+    /* The claim */
+    mode_t mode;              /* Meaningful iff type != SYMLINK */
+    char *owner;              /* The claimed owner, or NULL */
+    char *group;              /* The claimed group, or NULL */
+
+    /* The lifecycle */
     time_t observed_at;       /* First sighting on disk in scope (> 0 always: a row exists iff observed) */
-    time_t deployed_at;       /* Last active-ownership event (advances; 0 = never owned) */
+    time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
 } anchor_t;
 
 /**
  * Released copy — a fact that outlives its record (released_copies row)
  *
  * One row says: at this filesystem path, dotta's last content confirmation —
- * this blob, this kind, under this claim pair — was still standing when dotta
- * let go of the path. Exactly the content-proof half of the record it descends
- * from (identity + confirmed pair, verbatim), claim-free: the claim and lifecycle
- * halves died with the record, so a released fact never fabricates a record, a
+ * this blob, this kind, under this binding — was still standing when dotta let
+ * go of the path. Exactly the content-proof half of the record it descends from
+ * (its binding and its content, verbatim), claim-free: the claim and the lifecycle
+ * died with the record, so a released fact never fabricates a record, a
  * reassignment, or a DELETED absence. File kinds only — a directory has no content
  * confirmation to outlive its record.
  *
- * The row is a claim about the past, verified against the present at every use:
- * the analyzer reads it as the base of the three-way content question only when
- * the path's record carries no confirmed blob, and never trusts it without the
- * live stat or content check it performs for any base. The storage_path and profile
- * are the blob's own binding — an encrypted blob decrypts under its writer's
- * subkey (profile name → KDF) with its tree path as AAD — so a released base
- * stays verifiable even after the branch that wrote it is gone. The type is half
- * of what the copy says was standing there, and both questions of the three-way
- * read it: the first asks whether the row's content is this pair's at all
- * (core/workspace.h workspace_stale), the second routes the base read by the
- * base's own kind — which is what keeps the fast and slow paths in agreement.
+ * The row is a statement about the past, verified against the present at every
+ * use: the analyzer reads it as the base of the three-way content question only
+ * when the path's record carries no confirmed blob, and never trusts it without
+ * the live stat or content check it performs for any base. The storage_path and
+ * profile are the blob's own binding — an encrypted blob decrypts under its
+ * writer's subkey (profile name → KDF) with its tree path as AAD — so a released
+ * base stays verifiable even after the branch that wrote it is gone. The type
+ * is half of what the copy says was standing there, and both questions of the
+ * three-way read it: the first asks whether the row's content is this pair's at
+ * all (core/workspace.h workspace_stale), the second routes the base read by
+ * the base's own kind — which is what keeps the fast and slow paths in agreement.
  */
 typedef struct {
-    /* Identity — the record's, at release */
     char *filesystem_path;    /* Released path (PRIMARY KEY) */
+
+    /* The binding, copied verbatim from the record */
     char *storage_path;       /* Path in profile — AAD of an encrypted blob */
     char *profile;            /* Subkey of an encrypted blob */
 
-    /* The confirmed pair, copied verbatim from the record */
+    /* The content, copied verbatim from the record */
     path_type_t type;         /* FILE, SYMLINK or EXECUTABLE — never DIRECTORY */
     git_oid blob_oid;         /* Content-confirmed blob (never zero: the write guard filters) */
     stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
@@ -677,7 +689,7 @@ error_t *state_get_all_anchors(
  * Observe a managed path: record its first sighting on disk
  *
  * Presence only, idempotent. INSERT OR IGNORE creates the record with the row's
- * identity and metadata, no blob, no stat, observed_at = now, and never touches
+ * binding, kind and claim, no blob, no stat, observed_at = now, and never touches
  * an existing row. One caller: the workspace's flush, through workspace_observe,
  * for an active row its load found on disk with no record — the load is where
  * presence is established, so a directory apply fixes rather than makes was present
@@ -696,42 +708,41 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
  * Confirm a managed path: advance its record to what the comparison established
  *
  * The slow path's CMP_EQUAL, persisted: rewrites what the comparison established
- * — the kind (type), the content (blob_oid) and the stat triple captured with
- * it — and nothing of the claim the record carries (profile, storage_path, mode,
- * owner, group): what dotta set there, which only an ownership event changes.
- * The record must exist — one cannot confirm what one has not seen, and the flush
- * observes first. File rows only: a directory has no content to confirm, and
- * row->blob_oid must be non-zero (a zero blob would record "never confirmed"
- * for a path this call claims to have confirmed — rejected here, where the schema's
- * CHECK would only refuse the zeroblob).
+ * — the content: the kind (type), the blob (blob_oid) and the stat triple captured
+ * with it — and neither the binding nor the claim the record carries, which only
+ * an ownership event changes. The record must exist — one cannot confirm what
+ * one has not seen, and the flush observes first. File rows only: a directory
+ * has no content to confirm, and row->blob_oid must be non-zero (a zero blob
+ * would record "never confirmed" for a path this call claims to have confirmed
+ * — rejected here, where the schema's CHECK would only refuse the zeroblob).
  *
  * One UPDATE, a compare-and-swap on the record the caller read: it matches iff
- * the database still names the claim the row's blob opens under and still carries
- * the confirmed pair *anchor holds — its kind, blob and triple. What the fact
- * depends on and what it overwrites are bound, and nothing else, so an ownership
- * event that moved neither (an adoption's stamp) lets it land, while a record
- * another writer moved — another claim, a newer blob, a fresher proof — matches
- * nothing, and nothing is written. Where it wrote, the path's released copy dies
- * in the same breath (state_forget_released): the record says what stands there
- * now. *anchor follows the statement: advanced on the three columns it names
- * when it wrote, and last, so a failure leaves it as read; left as read when it
- * did not — memory behind the database, the direction the next load corrects.
+ * the database still holds the binding the row's blob opens under and the content
+ * *anchor holds — its kind, blob and triple. What the fact depends on and what
+ * it overwrites are bound, and nothing else, so an ownership event that moved
+ * neither (an adoption's stamp) lets it land, while a record another writer moved
+ * — another binding, a newer blob, a fresher proof — matches nothing, and nothing
+ * is written. Where it wrote, the path's released copy dies in the same breath
+ * (state_forget_released): the record says what stands there now. *anchor follows
+ * the statement: advanced on the three columns it names when it wrote, and last,
+ * so a failure leaves it as read; left as read when it did not — memory behind
+ * the database, the direction the next load corrects.
  *
- * The claim bound is the row's, never the record's: a blob is written only onto
- * a record that names the pair it opens under, so anchor_t's binding holds at
- * the write, whoever queued the confirmation. The one place confirmations are
- * queued from asks the same of its snapshot first (core/workspace.c
+ * The binding bound is the row's, never the record's: a blob is written only
+ * onto a record whose binding it opens under, so anchor_t's rule holds at the
+ * write, whoever queued the confirmation. The one place confirmations are queued
+ * from asks the same of its snapshot first (core/workspace.c
  * workspace_record_confirmation), so one that cannot land never opens the flush's
- * transaction. A row that is not the record's claim is a pending handover: apply's
- * acknowledgement moves the record onto it (cmds/apply.c), and until it does
- * the path takes the slow path on every load.
+ * transaction. A row the record's binding does not name is a pending handover:
+ * apply's acknowledgement moves the record onto it (cmds/apply.c), and until it
+ * does the path takes the slow path on every load.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Active row whose blob disk was found equal to (must not be NULL; a
  *            file row with a non-zero blob)
  * @param stat Stat triple captured by the comparison (must not be NULL)
- * @param anchor The path's record as the caller read it — the pair this
- *               confirmation replaces (must not be NULL; its claim is not read,
+ * @param anchor The path's record as the caller read it — the content this
+ *               confirmation replaces (must not be NULL; its binding is not read,
  *               the row's is the one bound); advanced iff the statement wrote
  * @return Error or NULL on success — a record moved since the read is no error
  */
@@ -785,7 +796,7 @@ error_t *state_confirm(
  *
  * resolved_out semantics:
  *   - If non-NULL, populated with the post-write record: every field the caller
- *     supplied — the row's identity and metadata (borrowed: the string pointers
+ *     supplied — the row's binding, kind and claim (borrowed: the string pointers
  *     are the row's, not copies), the blob, the stat, deployed_at = now — plus
  *     the one column the SQL decided, observed_at, read back through RETURNING.
  *     Snapshot mirrors assign it directly; no C-side rule logic is needed because
@@ -897,7 +908,7 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
  * Release a managed path: keep the record's content-proof, retire the record
  *
  * The record's death when the copy stays on disk. The INSERT arm moves the
- * content-proof half (identity + confirmed pair) into released_copies; it inserts
+ * content-proof half (the binding and the content) into released_copies; it inserts
  * nothing for a directory or a never-confirmed record (blob IS NULL) — for those
  * this IS state_retire_anchor, so callers never branch on kind. OR REPLACE: a
  * path can release more than once across its life, and the latest fact is what

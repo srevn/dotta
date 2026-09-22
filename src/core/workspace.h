@@ -107,10 +107,10 @@ typedef enum {
  * Two families, by what the operands are:
  *
  * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, UNVERIFIED — measures
- * the managed path against the view: what stands on disk versus the row's claim
- * (STALE through the record: the blob dotta last deployed versus the row's),
- * UNVERIFIED when the measurement itself could not run. No path bit survives
- * absence — properties of what is not there cannot be compared.
+ * the managed path against the view: what stands on disk versus the row (STALE
+ * through the record: the blob dotta last deployed versus the row's), UNVERIFIED
+ * when the measurement itself could not run. No path bit survives absence —
+ * properties of what is not there cannot be compared.
  *
  * The blob family — ENCRYPTION alone — measures the blob Git holds against the
  * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
@@ -354,13 +354,14 @@ typedef struct {
      * is set except for UNTRACKED items.
      *   row     the view's claim. NULL for an orphan (the view lacks the path)
      *           and for UNTRACKED — except a relocated orphan, where it is the
-     *           record's own claim's row at another file (the orphan analysis
-     *           carried it after its guard found no row standing on the record's
-     *           own entry, so two spellings of one path never read as a move).
-     *           Whether an ORPHANED item is a relocation is asked of `relocation`
-     *           and never of this field: the producer derives the class from
-     *           the row and nothing downstream reads the row again. What it still
-     *           carries is the new location, which no screen names yet.
+     *           row the record's binding names, at another file (the orphan
+     *           analysis carried it after its guard found no row standing on
+     *           the record's own entry, so two spellings of one path never read
+     *           as a move). Whether an ORPHANED item is a relocation is asked
+     *           of `relocation` and never of this field: the producer derives
+     *           the class from the row and nothing downstream reads the row again.
+     *           What it still carries is the new location, which no screen names
+     *           yet.
      *   anchor  the record — always the live snapshot record, the same pointer
      *           workspace_get_anchor returns: the writers patch it in place
      *           (workspace_anchor) or create it and backfill this field
@@ -430,12 +431,13 @@ typedef struct {
  * acknowledgement loops, the writers that move the record onto the row's profile
  * (cmds/apply.c); and sync's apply hint, which asks it of the record against
  * the view with no workspace at all (cmds/sync.c). A record's WRITER asks the
- * whole claim — profile and storage path both — which is manifest_is_claim; this
- * is the half the screens name and the receipts count. Not manifest_diff_stats_t's
- * `reassigned`, which counts one transition's own delta between two views; this
- * is the record against the view, standing from whenever it began.
+ * whole binding — profile and storage path both — which is manifest_is_claim;
+ * this is the half the screens name and the receipts count. Not
+ * manifest_diff_stats_t's `reassigned`, which counts one transition's own delta
+ * between two views; this is the record against the view, standing from whenever
+ * it began.
  *
- * The record against the view has two words, and this is the claim's;
+ * The record against the view has two words, and this is the binding's;
  * workspace_stale below is the content's.
  */
 static inline bool workspace_reassigned(
@@ -458,7 +460,7 @@ static inline bool workspace_reassigned(
  * is the ladder's own — compare.c tests S_ISLNK for a link and S_ISREG for either
  * blob mode, and never the executable bit — so FILE and EXECUTABLE are one kind
  * here, their difference the mode axis's, and a record's type carries the
- * executable half as a copy of the claim rather than as something confirmed
+ * executable half as a copy of the row's rather than as something confirmed
  * (core/state.h anchor_t). A directory is the third kind: it claims no content
  * at all, so a blob row and a directory row are never one another's, whatever
  * their (zero) blobs say.
@@ -943,7 +945,7 @@ const manifest_row_t *workspace_lookup(
  * is not a real directory when the chain is walked: a directory the user had
  * already symlinked never becomes a claim in the first place.
  *
- * The record's claims do not qualify here: a directory only a record remembers
+ * A record's memory does not qualify here: a directory only a record remembers
  * displaces the record's own family alone (the reach rule, workspace_displaced_t),
  * and every item of that family carries the fact on itself. This probe is for a
  * caller holding a path and no item: the fate of a planned row (core/deploy.c
@@ -1091,9 +1093,9 @@ error_t *workspace_observe(
  *
  * Single entry point for every workspace-scope ownership event:
  *   - apply's adoption loop (ownership event on first claim, and the
- *     acknowledgement of a clean handover — the record's claim becomes the row's,
- *     whichever half of it moved: another profile's row, or another name of the
- *     same profile that the view gave the path to)
+ *     acknowledgement of a clean handover — the record's binding becomes the
+ *     row's, whichever half of it moved: another profile's row, or another name
+ *     of the same profile that the view gave the path to)
  *   - apply's record step (ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path)
@@ -1143,24 +1145,24 @@ error_t *workspace_anchor(
  *   blob (state_confirm) lets subsequent runs short-circuit via the fast-path
  *   stat AND — if Git advances blob_oid in the meantime — classify the file as
  *   stale directly from the fast path instead of re-hashing. A confirmation
- *   rewrites only what it confirmed (type, blob, stat); the record's claim —
- *   profile, storage path, mode, owner, group — is an ownership event's to change,
- *   so a clean reassignment keeps reading as one until apply acknowledges it.
- *   And only a row that IS the record's claim is ever queued
- *   (workspace_record_confirmation), where state_confirm would land no other:
- *   the blob a record carries is the blob of the claim it names, so a path whose
- *   record names another claim takes the slow path on every load until an ownership
- *   event moves the record onto the standing one. Each is a compare-and-swap on
- *   the record this load read: written, and the snapshot's record advanced on
- *   the same columns, only where the database still holds that record — one another
- *   writer moved since the load stays theirs, and memory behind it. Nothing is
- *   ever queued from beneath a squatter, because nothing there is looked at
- *   (workspace_displaced_t): a confirmation taken through one would advance the
- *   record's blob to the row's on the strength of the squatter's target, and
- *   the three-way frame would then read the bytes dotta actually deployed as
- *   the user's own edit once the squatter went — apply-side work turned into
- *   update-side work by one squat. Through a symlinked ancestor the view does
- *   not claim, the arrangement is the user's own and so is the proof.
+ *   rewrites only what it confirmed — the content: type, blob, stat; the record's
+ *   binding and claim are an ownership event's to change, so a clean reassignment
+ *   keeps reading as one until apply acknowledges it. And only a row the record's
+ *   binding names is ever queued (workspace_record_confirmation), where
+ *   state_confirm would land no other: the blob a record carries is the blob of
+ *   the row its binding names, so a path whose record is bound to another row
+ *   takes the slow path on every load until an ownership event moves the record
+ *   onto the standing one. Each is a compare-and-swap on the record this load
+ *   read: written, and the snapshot's record advanced on the same columns, only
+ *   where the database still holds that record — one another writer moved since
+ *   the load stays theirs, and memory behind it. Nothing is ever queued from
+ *   beneath a squatter, because nothing there is looked at (workspace_displaced_t):
+ *   a confirmation taken through one would advance the record's blob to the row's
+ *   on the strength of the squatter's target, and the three-way frame would then
+ *   read the bytes dotta actually deployed as the user's own edit once the squatter
+ *   went — apply-side work turned into update-side work by one squat. Through a
+ *   symlinked ancestor the view does not claim, the arrangement is the user's
+ *   own and so is the proof.
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the

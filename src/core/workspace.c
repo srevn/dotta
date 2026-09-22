@@ -75,9 +75,9 @@
  * is handed — a stat triple without a blob is meaningless, and the row is the
  * one the stat was verified against.
  *
- * And the row is the record's own claim: the blob a record carries is the blob
- * of the claim it names (core/state.h anchor_t), which is what makes it readable
- * at all when it is encrypted. A row that is not the record's claim records nothing
+ * And the row is the one the record's binding names: the blob a record carries
+ * is the blob of that row (core/state.h anchor_t), which is what makes it readable
+ * at all when it is encrypted. A row the binding does not name records nothing
  * — see workspace_record_confirmation.
  *
  * The row pointer is borrowed from ws->active_files (workspace lifetime). Carrying
@@ -551,15 +551,15 @@ static error_t *workspace_add_diverged(
         item->item_kind = path_type_kind(row->type);
     }
 
-    /* A row on an ORPHANED item is the relocation: the record's own claim, still
-     * in the view, standing at another path (analyze_orphans). Which of the two
-     * kinds of relocation it is, is the mounting rule of the namespace the claim
-     * is named in — the label alone, and no place: a root's binder answers which
-     * profile bound that one root, where the question here is whether the namespace
-     * is anyone's to re-target (infra/mount.h mount_root_t). The record's name
-     * and the row's are one string (manifest_lookup_storage matches it exactly),
-     * and a name the view holds was validated where the branch was read, so the
-     * projection below asserts nothing not already established. */
+    /* A row on an ORPHANED item is the relocation: the row the record's binding
+     * names, still in the view, standing at another path (analyze_orphans). Which
+     * of the two kinds of relocation it is, is the mounting rule of the namespace
+     * the claim is named in — the label alone, and no place: a root's binder
+     * answers which profile bound that one root, where the question here is whether
+     * the namespace is anyone's to re-target (infra/mount.h mount_root_t). The
+     * record's name and the row's are one string (manifest_lookup_storage matches
+     * it exactly), and a name the view holds was validated where the branch was
+     * read, so the projection below asserts nothing not already established. */
     if (row && state == WORKSPACE_STATE_ORPHANED) {
         switch (label_of(item->storage_path)) {
             case LABEL_HOME:
@@ -676,19 +676,18 @@ static error_t *workspace_add_untracked(
  * workspace_flush_updates() can persist them via state_confirm(). The blob the
  * stat binds to is the row's — disk was found equal to it.
  *
- * A confirmation belongs to the claim the record names: the blob it advances is
- * that claim's, and an encrypted blob opens under one (profile, storage path)
- * pair and no other, so a confirmation taken from another row would leave the
- * record carrying a blob no reader — this analysis's own base least of all —
- * can place. state_confirm's statement refuses exactly that at the write (it
- * binds the row's claim); this asks it of the snapshot first, so a confirmation
- * that cannot land is never queued, and a load with nothing else to write opens
- * no transaction for it. A row that is not the record's claim is a pending
- * handover: apply's acknowledgement is what moves the record onto it, and until
- * then the path takes the slow path on every load, which is the price of a record
- * that means one thing. A path with no record yet is confirmed from this row
- * like any other: the flush observes before it confirms, and the record it creates
- * is this row's.
+ * A confirmation belongs to the row the record's binding names: the blob it
+ * advances is that row's, and an encrypted blob opens under one binding and no
+ * other, so a confirmation taken from another row would leave the record carrying
+ * a blob no reader — this analysis's own base least of all — can place.
+ * state_confirm's statement refuses exactly that at the write (it binds the row's
+ * binding); this asks it of the snapshot first, so a confirmation that cannot
+ * land is never queued, and a load with nothing else to write opens no transaction
+ * for it. A row the binding does not name is a pending handover: apply's
+ * acknowledgement is what moves the record onto it, and until then the path takes
+ * the slow path on every load, which is the price of a record that means one
+ * thing. A path with no record yet is confirmed from this row like any other:
+ * the flush observes before it confirms, and the record it creates is this row's.
  *
  * And a confirmation belongs to a record of the row's kind. A record of another
  * kind is a fact about a node that is gone — Git retyped the name, and what the
@@ -1098,16 +1097,16 @@ static error_t *analyze_file_divergence(
         /* The base: dotta's last content confirmation at this path — the record's,
          * when it carries one; the released fact's, when it does not (a released
          * path re-claimed: the record is gone, or is the window's blob-less
-         * observation). The claim questions — absence, reassignment, the item's
-         * record column — stay the anchor's alone: a released fact is not a claim,
-         * and never fabricates a record, a reassignment, or a DELETED absence.
-         * A base compares under its own recorded binding, whichever of the two
-         * it is: a blob opens under one (profile, storage path) pair and no other,
-         * and each of these facts names the claim its blob was confirmed under
-         * (core/state.h). The row's pair is never a base's — a row that is not
-         * the record's claim is a handover the record has yet to follow, and
-         * reading the base under it authenticates a ciphertext against a tree
-         * path it was never sealed at. */
+         * observation). The record's own questions — absence, reassignment, the
+         * item's record column — stay the anchor's alone: a released fact is no
+         * record, and never fabricates a record, a reassignment, or a DELETED
+         * absence. A base compares under its own recorded binding, whichever of
+         * the two it is: a blob opens under one (profile, storage path) pair
+         * and no other, and each of these facts carries the binding its blob
+         * was confirmed under (core/state.h). The row's pair is never a base's
+         * — a row the record's binding does not name is a handover the record
+         * has yet to follow, and reading the base under it authenticates a
+         * ciphertext against a tree path it was never sealed at. */
         bool anchor_has_blob = anchor && !git_oid_is_zero(&anchor->blob_oid);
         const released_copy_t *released = anchor_has_blob ? NULL
             : hashmap_get(ws->released_index, filesystem_path);
@@ -1696,7 +1695,7 @@ static void authority_cache_free(void *value) {
  * What the profile that deployed an orphan says of the claim its record remembers
  */
 typedef enum {
-    ORPHAN_AUTHORITY_BACKED,      /* The branch holds the record's claim at its name */
+    ORPHAN_AUTHORITY_BACKED,      /* The branch holds the claim the record remembers, at its name */
     ORPHAN_AUTHORITY_LOST,        /* The branch is gone, or holds no such claim there */
     ORPHAN_AUTHORITY_UNVERIFIED   /* A Git lookup failed — cannot tell, must not guess */
 } orphan_authority_t;
@@ -1721,8 +1720,8 @@ typedef enum {
  *     old one is dotta's to prune;
  *   - Git let go: the branch was deleted, rebased or git rm'd behind the record,
  *     an enabled branch is dead, a pulled removal arrived, or the name was retyped
- *     — a removal and an addition, the record's claim the half removed — and
- *     the deployed copy is left alone.
+ *     — a removal and an addition, the claim the record remembers the half removed
+ *     — and the deployed copy is left alone.
  * The enabled set cannot tell the second from the third; only a live look at
  * Git can. Taken here, every reader of orphan items shares one verdict, and
  * cleanup's verdict phase reads nothing but the item.
@@ -2015,10 +2014,10 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
  * this is not.
  *
  * Readers: the orphan analysis's BACKED arm — a stale key of a managed path is
- * released, never pruned, whoever's row; the record's own claim standing on the
- * same entry was the special case of this the compare here used to make — and
- * the untracked scan's leaf probe: a file managed under another spelling of its
- * path is no discovery.
+ * released, never pruned, whoever's row; the row the record's binding names
+ * standing on the same entry was the special case of this the compare here used
+ * to make — and the untracked scan's leaf probe: a file managed under another
+ * spelling of its path is no discovery.
  */
 static const manifest_row_t *standing_row(
     const workspace_t *ws, const char *path, const struct stat *st
@@ -4357,10 +4356,11 @@ bool workspace_item_extract_display_info(
             }
 
             /* The relocation, ridden as a secondary tag beside the divergence
-             * tags (the way [reassigned] rides on DEPLOYED): the record's claim
-             * still has a row, projected elsewhere. Whether there is one at all
-             * is the class against NONE, here as at every screen (workspace.h).
-             * The fate stays cleanup's, and turns on which class it is (a
+             * tags (the way [reassigned] rides on DEPLOYED): the claim the record
+             * remembers still has a row, projected elsewhere. Whether there is
+             * one at all is the class against NONE, here as at every screen
+             * (workspace.h). The fate stays cleanup's, and turns on which class
+             * it is (a
              * re-targeted custom/ copy prunes, a moved home holds behind --force);
              * this only names what the copy is. */
             if (item->relocation != WORKSPACE_RELOCATION_NONE) {
@@ -4427,7 +4427,7 @@ bool workspace_item_extract_display_info(
  * loaded at partition, or created earlier in this run — is left alone without a
  * statement; otherwise state_observe creates the row and the same record is created
  * here, in the arena, and indexed. The record's fields are exactly what the INSERT
- * wrote: the row's identity and metadata, no blob, no stat, observed_at = now,
+ * wrote: the row's binding, kind and claim, no blob, no stat, observed_at = now,
  * never owned.
  *
  * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
@@ -4562,15 +4562,14 @@ error_t *workspace_anchor(
  * snapshot gains the same record the INSERT creates.
  *
  * Confirmation half, second: for the rows analyze_file_divergence found disk
- * equal to, state_confirm rewrites what the comparison established — the kind,
- * the blob and the fast-path stat triple — and nothing of the claim the record
- * carries: profile, storage path, mode, owner, group stay whatever the last
- * ownership event wrote. Persisting the pair lets the next run short-circuit
- * (fast path) or tag STALE directly (fast path with Git-advanced blob_oid). It
- * is a compare-and-swap on the record this load read, under the row's claim,
- * and it advances the snapshot's record on the same columns only when its statement
- * wrote: a record another writer moved since the load stays theirs, and this
- * one as read.
+ * equal to, state_confirm rewrites what the comparison established — the content:
+ * the kind, the blob and the fast-path stat triple — and neither the binding
+ * nor the claim the record carries, which stay whatever the last ownership event
+ * wrote. Persisting the pair lets the next run short-circuit (fast path) or tag
+ * STALE directly (fast path with Git-advanced blob_oid). It is a compare-and-swap
+ * on the record this load read, under the row's binding, and it advances the
+ * snapshot's record on the same columns only when its statement wrote: a record
+ * another writer moved since the load stays theirs, and this one as read.
  *
  * The order is load-bearing: a path in both halves had no record at analysis,
  * and a confirmation is an UPDATE that creates nothing — one cannot confirm what

@@ -2103,14 +2103,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool adopt = !anchor || anchor->deployed_at == 0 ||
             workspace_compare_confirmed(file, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF;
 
-        /* A record dotta owns that names a claim this row is not — another
+        /* A record dotta owns whose binding names another row than this — another
          * profile's, or another name of the same profile, whose path the view
          * gave to this one — is a handover, and this loop is where the record
-         * follows it. The whole claim is the test because the whole claim is
-         * what a record means: the blob it carries is the blob of the claim it
-         * names (core/state.h anchor_t), so a record left on a name no row stands
-         * at is never confirmed again — every load re-hashes the path, and its
-         * base drifts further from what is there. */
+         * follows it. The whole binding is the test because the whole binding
+         * is what a record follows: the blob it carries is the blob of the row
+         * its binding names (core/state.h anchor_t), so a record left on a name
+         * no row stands at is never confirmed again — every load re-hashes the
+         * path, and its base drifts further from what is there. */
         bool acknowledge = !adopt &&
             !manifest_is_claim(file, anchor->profile, anchor->storage_path);
         if (!adopt && !acknowledge) continue;
@@ -2128,7 +2128,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * clean row can arrive by — fast-path hit, slow-path confirmation,
              * record created and confirmed by the flush — save a record the load
              * could not confirm under this row, which keeps the pair it had:
-             * one naming another claim, or one of another kind, adopted above.
+             * one bound to another row, or one of another kind, adopted above.
              * Content and not bytes: a pair whose kind the row has since left
              * describes another node, and passing its triple would record a proof
              * of the wrong one (core/workspace.h workspace_stale). The gate asks

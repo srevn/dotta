@@ -262,9 +262,9 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    filesystem_path TEXT PRIMARY KEY"
         ") STRICT;"
 
-        /* The content-proof half of a record that released (identity + confirmed
-         * pair), claim-free: disk still held dotta's last confirmation when dotta
-         * let go of the path. File kinds only — a directory has no content
+        /* The content-proof half of a record that released (its binding and its
+         * content), claim-free: disk still held dotta's last confirmation when
+         * dotta let go of the path. File kinds only — a directory has no content
          * confirmation to outlive its record (blob IS NOT NULL is the write guard's
          * filter; the CHECKs are the schema's own restatement). A row lives while
          * its path's record is absent or merely observed and disk may still hold
@@ -497,9 +497,9 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Observe: presence only, idempotent. Creates the record with the row's
-     * identity and metadata and observed_at = now; no blob, no stat. Never touches
-     * an existing row — OR IGNORE is what makes the first observer win without
-     * a CASE.
+     * binding, kind and claim and observed_at = now; no blob, no stat. Never
+     * touches an existing row — OR IGNORE is what makes the first observer win
+     * without a CASE.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
@@ -516,19 +516,20 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Confirm: the content confirmation — what CMP_EQUAL established and nothing
-     * of the claim — as a compare-and-swap on the record the caller read. An
-     * UPDATE, never an INSERT: the record exists (the flush observes before it
-     * confirms), and a confirmation of a path dotta has not seen is not a thing.
+     * of the binding or the claim — as a compare-and-swap on the record the caller
+     * read. An UPDATE, never an INSERT: the record exists (the flush observes
+     * before it confirms), and a confirmation of a path dotta has not seen is
+     * not a thing.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path ?2 type — travels with the content: the schema forbids
      *             a blob on a directory row, and CMP_EQUAL confirmed the kind
      *             as well
      *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino
-     *   ?7 profile  ?8 storage_path — the claim the row's blob opens under
+     *   ?7 profile  ?8 storage_path — the binding the row's blob opens under
      *   ?9 type  ?10 blob_oid  ?11 stat_mtime  ?12 stat_size  ?13 stat_ino — the
-     *             pair the confirmation replaces, as the caller read it; ?10 is
-     *             NULL where the record never confirmed a blob, which IS matches
+     *             content the confirmation replaces, as the caller read it; ?10
+     *             is NULL where the record never confirmed a blob, which IS matches
      *             and = would not
      *
      * RETURNING yields a row iff the WHERE matched — the compare-and-swap's
@@ -1542,8 +1543,9 @@ error_t *state_get_all_anchors(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* The one read (13 columns: 3 identity + 4 metadata + 6 record), and the
-     * table's size in a 14th: the first row sizes the allocation */
+    /* The one read (13 columns: the key, the binding, the kind, the claim, the
+     * blob and its stat, the lifecycle), and the table's size in a 14th: the
+     * first row sizes the allocation */
     const char *sql_anchors =
         "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
         "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, "
@@ -1576,10 +1578,13 @@ error_t *state_get_all_anchors(
     size_t i = 0;
     while (rc == SQLITE_ROW && i < anchor_count) {
         /* Column layout matches sql_anchors:
-         *   0-2:  identity (filesystem_path, storage_path, profile)
-         *   3-6:  what dotta set (type, mode, owner, group)
-         *   7-12: what dotta confirmed (blob_oid, stat_mtime, stat_size, stat_ino,
-         *         observed_at, deployed_at) */
+         *   0:     the key (filesystem_path)
+         *   1-2:   the binding (storage_path, profile)
+         *   3:     the content's kind (type)
+         *   4-6:   the claim (mode, owner, group)
+         *   7-10:  the content's blob and stat (blob_oid, stat_mtime, stat_size,
+         *          stat_ino)
+         *   11-12: the lifecycle (observed_at, deployed_at) */
         anchor_t *anchor = &anchors[i];
 
         const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -1651,7 +1656,7 @@ error_t *state_get_all_anchors(
 }
 
 /**
- * Bind a row's identity and metadata as placeholders ?1-?7
+ * Bind a row's key, binding, kind and claim as placeholders ?1-?7
  *
  * The shared prefix of sql_observe and sql_anchor: filesystem_path, storage_path,
  * profile, type, mode, owner, group — the columns a record takes from the row
@@ -1695,8 +1700,9 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
  * Observe a managed path: record its first sighting on disk
  *
  * INSERT OR IGNORE — see the SQL comment on sql_observe and the header contract.
- * Binds the row's identity and metadata plus the stamp; the blob and stat columns
- * take their NULL / zero defaults, and an existing row is left exactly as it was.
+ * Binds the row's key, binding, kind and claim plus the stamp; the blob and stat
+ * columns take their NULL / zero defaults, and an existing row is left exactly
+ * as it was.
  */
 error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
     CHECK_NULL(state);
@@ -1730,9 +1736,9 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
  *
  * A compare-and-swap on the record the caller read — see the SQL comment on
  * sql_confirm and the header contract. Writes the kind, the blob and the stat
- * the comparison established, and only onto that record under the row's claim;
- * the claim columns are not named, a row that does not exist is not created,
- * and *anchor follows only what was written.
+ * the comparison established, and only onto that record under the row's binding;
+ * the binding and claim columns are not named, a row that does not exist is not
+ * created, and *anchor follows only what was written.
  */
 error_t *state_confirm(
     state_t *state,
@@ -1779,15 +1785,15 @@ error_t *state_confirm(
     sqlite3_bind_int64(stmt, 5, stat->size);
     sqlite3_bind_int64(stmt, 6, (sqlite3_int64) stat->ino);
 
-    /* 7-8. the claim the row's blob opens under — the row's, never the record's:
-     * a blob is written only onto a record that names the pair it decrypts under
-     * (anchor_t's binding), so the invariant holds whoever queued this */
+    /* 7-8. the binding the row's blob opens under — the row's, never the record's:
+     * a blob is written only onto a record whose binding it decrypts under
+     * (anchor_t), so the invariant holds whoever queued this */
     sqlite3_bind_text(stmt, 7, row->profile, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 8, row->storage_path, -1, SQLITE_TRANSIENT);
 
-    /* 9-13. the pair the confirmation replaces, as the caller read it — the kind,
-     * the blob (NULL where none was ever confirmed, which IS matches) and the
-     * triple */
+    /* 9-13. the content the confirmation replaces, as the caller read it — the
+     * kind, the blob (NULL where none was ever confirmed, which IS matches) and
+     * the triple */
     sqlite3_bind_text(stmt, 9, path_type_to_sql_text(anchor->type), -1, SQLITE_STATIC);
     if (git_oid_is_zero(&anchor->blob_oid)) {
         sqlite3_bind_null(stmt, 10);
@@ -1802,8 +1808,8 @@ error_t *state_confirm(
     int rc = sqlite3_step(stmt);
 
     /* Matched nothing: another writer moved the record since the caller read it
-     * — another claim, a newer blob, a fresher proof — and the fact is about a
-     * record no longer there. Nothing is written, nothing forgotten, and *anchor
+     * — another binding, a newer blob, a fresher proof — and the fact is about
+     * a record no longer there. Nothing is written, nothing forgotten, and *anchor
      * stays as read. */
     if (rc == SQLITE_DONE) return NULL;
 

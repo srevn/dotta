@@ -218,11 +218,10 @@ static const char *get_status_message_from_item(
 /**
  * Show diff for a single file using workspace data
  *
- * Simplified version of show_file_diff() that uses pre-computed divergence from
- * workspace analysis. Doesn't re-analyze - just formats and displays. The item's
- * row is the path's view row — blob, storage path, profile; non-NULL for every
- * state the direction filter passes (untracked and orphaned items were filtered
- * there).
+ * Formats and displays the divergence the workspace analysis settled; nothing
+ * is re-analyzed. The item's row is the path's view row — blob, storage path,
+ * profile; non-NULL for every state the direction filter passes (untracked and
+ * orphaned items were filtered there).
  *
  * @param item Workspace item with divergence info (must not be NULL)
  * @param cache Content cache (must not be NULL)
@@ -277,6 +276,9 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (workspace_reassigned(item->row, item->anchor) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
+        /* A pure handover. The blob-family ENCRYPTION bit does not demote it:
+         * it is about how Git stores the blob, not a difference between Git and
+         * disk. */
         status_color = OUTPUT_COLOR_CYAN;
     }
 
@@ -301,20 +303,10 @@ static error_t *show_file_diff_from_workspace(
         return NULL;
     }
 
-    /* For mode-only or policy-only changes (content matches), no content diff.
-     * A STALE item's content does differ — disk holds the blob Git moved past. */
-    if ((item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
-        DIVERGENCE_ENCRYPTION)) &&
-        !(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
-        return NULL;
-    }
-
-    /* For profile reassignment only (content matches), no content diff. The
-     * blob-family ENCRYPTION bit does not demote a pure handover: it is about
-     * how Git stores the blob, not a difference between Git and disk, so it neither
-     * costs the handover its colour above nor leaves any bytes to render here. */
-    if (workspace_reassigned(item->row, item->anchor) &&
-        (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
+    /* Only a content difference has bytes to render: the copy's own edit, or
+     * the blob Git moved past, which disk still holds. A claim, a handover and
+     * how Git stores the blob differ in nothing a hunk could show. */
+    if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
     }
 

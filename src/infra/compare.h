@@ -65,10 +65,10 @@
  * have. CMP_MISSING is not among its answers: nothing is read, so no absence
  * can be met.
  *
- * NOTE: Permission checking is explicitly NOT part of this module. The compare
- * module is infrastructure-layer, handling only content and type. Permission
- * validation (git filemode + full metadata) is a core-layer concern handled by
- * workspace.c using metadata from .dotta/metadata.json.
+ * NOTE: The claim — the mode and the ownership — is explicitly NOT part of this
+ * module. The compare module is infrastructure-layer, handling only content and
+ * type. A claim's compare (the git filemode resolved into the mode, the rest
+ * from .dotta/metadata.json) is a core-layer concern handled by workspace.c.
  */
 typedef enum {
     CMP_EQUAL,      /* The copy is the reference — kind and content */

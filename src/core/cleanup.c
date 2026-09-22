@@ -187,9 +187,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_TYPE_CHANGED;
     }
 
-    /* DIVERGENCE_MODE or DIVERGENCE_OWNERSHIP: Permissions changed */
+    /* DIVERGENCE_MODE or DIVERGENCE_OWNERSHIP: the claim — the mode, the ownership,
+     * or both */
     if (divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-        return CLEANUP_SKIP_MODE_CHANGED;
+        return CLEANUP_SKIP_CLAIM_CHANGED;
     }
 
     /* All priority flags handled above. Remaining flags:

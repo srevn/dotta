@@ -1117,7 +1117,7 @@ static void display_workspace_status(
                                      * says only that it did. */
                                     case CLEANUP_SKIP_MODIFIED:
                                     case CLEANUP_SKIP_TYPE_CHANGED:
-                                    case CLEANUP_SKIP_MODE_CHANGED:
+                                    case CLEANUP_SKIP_CLAIM_CHANGED:
                                         hint = "changed since deployment; "
                                             "apply skips it, --force prunes it";
                                         break;

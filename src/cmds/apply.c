@@ -1434,7 +1434,7 @@ static void print_cleanup_skips(
                 glyph = "⚠";
                 label = "home changed";
                 break;
-            case CLEANUP_SKIP_MODE_CHANGED:
+            case CLEANUP_SKIP_CLAIM_CHANGED:
                 /* The reason covers either claim axis, so the label names the
                  * ones that moved, in the tags' words (core/workspace.h
                  * divergence_type_t). */

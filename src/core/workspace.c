@@ -1349,7 +1349,7 @@ static error_t *analyze_file_divergence(
         switch (cmp_result) {
             case CMP_EQUAL:
                 /* Content and type match - no divergence from content comparison.
-                 * Permission checking happens below. */
+                 * The claim is checked below. */
                 break;
 
             case CMP_DIFFERENT:
@@ -1389,7 +1389,7 @@ static error_t *analyze_file_divergence(
                  * record queued one, and it is the queue's last entry, since
                  * nothing queues observations between the lstat and here. The
                  * record follows the run's verdict, never a moment the run itself
-                 * outlived. Skip the permission checks below.
+                 * outlived. The claim below is not checked.
                  *
                  * And the look follows the verdict with it — the one retraction
                  * of a slot in the whole load (look_t): a read that met absence
@@ -1404,7 +1404,7 @@ static error_t *analyze_file_divergence(
                 break;
         }
 
-        /* PERMISSION CHECKING
+        /* CLAIM CHECKING
          *
          * Only when the content phase ruled neither absence nor another kind —
          * the two verdicts under which the stat says nothing about the row, and
@@ -1531,7 +1531,8 @@ static error_t *analyze_file_divergence(
  * - Past it, one read of the record's blob answers its kind and the reference
  *   together, and the plaintext ends with the judgment (infra/content.h
  *   content_compare_blob_to_disk)
- * - Full-bit permission checking against the record's mode, ownership beside it
+ * - The claim checked against the record's: the full-bit mode, the ownership
+ *   beside it
  * - Single-stat-per-file (the caller's look, which nothing below retakes)
  *
  * A measure that can fail says so: the look's error is returned and the caller
@@ -1628,7 +1629,7 @@ static error_t *compute_orphan_divergence(
 
     switch (cmp_result) {
         case CMP_EQUAL:
-            /* Content and type match - continue to permission checking */
+            /* Content and type match - continue to the claim */
             break;
 
         case CMP_DIFFERENT:
@@ -1653,13 +1654,13 @@ static error_t *compute_orphan_divergence(
              *
              * Report as DIVERGENCE_NONE - the orphan was already removed manually.
              * Apply will skip it (nothing to remove; cleanup's execute re-probes
-             * presence), state will be pruned. The permission checks below read
-             * the verdict and skip themselves.
+             * presence), state will be pruned. The claim checks below read the
+             * verdict and skip themselves.
              */
             break;
     }
 
-    /* Step 5: Permission checking (if the path still stands)
+    /* Step 5: Claim checking (if the path still stands)
      *
      * Only when the content phase ruled neither absence nor another kind — a
      * mode question over what is not there, or is not that, answers nothing.
@@ -3341,8 +3342,8 @@ cleanup:
  *
  * and for a tracked row alone — the profile's word about a directory it manages,
  * where an ancestor claim has none to give (the split is at the line itself):
- * - DIVERGENCE_MODE: Directory permissions changed
- * - DIVERGENCE_OWNERSHIP: Directory owner/group changed (requires root)
+ * - DIVERGENCE_MODE: the mode is not the claim's
+ * - DIVERGENCE_OWNERSHIP: the owner or group is not the claim's
  * - A pending handover on a clean row: an item with no divergence, emitted so
  *   the reassignment is visible (the tail analyze_file_divergence has)
  *
@@ -4368,9 +4369,9 @@ bool workspace_item_extract_display_info(
                 *color_out = OUTPUT_COLOR_RED;
 
             } else if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
-                /* Metadata divergence only - warning level File content matches
-                 * but permissions/ownership changed. Apply skips it
-                 * (cleanup_skip_reason: MODE_CHANGED). */
+                /* The claim alone — the mode, the ownership, or both — left the
+                 * one the record reconciled; the content is dotta's. Warning
+                 * level: apply skips it (cleanup_skip_reason: CLAIM_CHANGED). */
                 if (item->divergence & DIVERGENCE_MODE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                         tags_out[tag_count++] = "mode";

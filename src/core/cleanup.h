@@ -171,7 +171,7 @@ typedef enum {
     CLEANUP_SKIP_RELOCATED,      /* The claim's home moved — held behind --force */
     CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
     CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ device (a directory in its place is released) */
-    CLEANUP_SKIP_MODE_CHANGED    /* Mode or ownership differs */
+    CLEANUP_SKIP_CLAIM_CHANGED   /* The claim differs: the mode, the ownership, or both */
 } cleanup_skip_reason_t;
 
 /**
@@ -207,7 +207,7 @@ typedef enum {
  *                                  undo under --force; a directory where the
  *                                  file was is RELEASED by the workspace and
  *                                  never reaches this table
- *   DIVERGENCE_MODE / OWNERSHIP    MODE_CHANGED
+ *   DIVERGENCE_MODE / OWNERSHIP    CLAIM_CHANGED
  *   ENCRYPTION / STALE only        NONE — a policy mismatch is not a user
  *                                  change; STALE is never emitted for an orphan
  *                                  (the orphan compare asks one question, of

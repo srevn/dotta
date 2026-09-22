@@ -254,12 +254,18 @@ static const char *path_basename(const char *path) {
 }
 
 /**
- * Resolve an entry's final mode.
+ * Resolve an entry's final mode, from the claim standing at its name.
  *
  * A claimed mode wins; the fallback is the git filemode for files (the same floor
  * the view resolves absence into) and the canonical default for directories.
  * Kind-checked so a stale item of the wrong kind cannot leak its mode across
  * entry types.
+ *
+ * The claim is the caller's rather than a key looked up here, because every
+ * collector wants more of it than the mode — the directory arms its class, the
+ * file arms its stamp — so the sheet is asked once per entry, where the entry
+ * is made, and this is the rule alone. A NULL claim is the answer where the sheet
+ * holds none, and the floor is what stands.
  *
  * This rule and `manifest_row_t.mode` are one rule with two spellings — the claim
  * of the matching kind, else the floor (core/manifest.h) — which is what lets
@@ -267,13 +273,10 @@ static const char *path_basename(const char *path) {
  * by coincidence: a change to either belongs in both.
  */
 static mode_t export_entry_mode(
-    const metadata_t *metadata,
-    const char *storage_path,
+    const metadata_item_t *item,
     path_kind_t kind,
     git_filemode_t filemode
 ) {
-    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-
     if (item && item->kind == kind && item->mode != MODE_UNCLAIMED) {
         return item->mode;
     }
@@ -425,15 +428,14 @@ static int collect_tree_callback(
         return -1;
     }
 
+    /* The claim standing at this name, read once for whichever arm wants it. */
+    const metadata_item_t *item = metadata_lookup(ctx->metadata, e.storage_path);
+
     switch (git_tree_entry_type(entry)) {
         case GIT_OBJECT_TREE: {
             e.kind = EXPORT_ENTRY_DIRECTORY;
             e.mode = export_entry_mode(
-                ctx->metadata, e.storage_path, PATH_KIND_DIRECTORY,
-                GIT_FILEMODE_TREE
-            );
-            const metadata_item_t *item = metadata_lookup(
-                ctx->metadata, e.storage_path
+                item, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
             );
             e.claimed = item && item->kind == PATH_KIND_DIRECTORY;
             break;
@@ -446,10 +448,7 @@ static int collect_tree_callback(
                 e.kind = EXPORT_ENTRY_SYMLINK;
             } else {
                 e.kind = EXPORT_ENTRY_FILE;
-                e.mode = export_entry_mode(
-                    ctx->metadata, e.storage_path, PATH_KIND_FILE,
-                    filemode
-                );
+                e.mode = export_entry_mode(item, PATH_KIND_FILE, filemode);
             }
             break;
         }
@@ -544,7 +543,9 @@ static error_t *append_claim_dirs(
             return ERROR(ERR_MEMORY, "Failed to allocate export entry");
         }
         e.rel_path = e.storage_path + (rel - key);
-        e.mode = items[i]->mode != MODE_UNCLAIMED ? items[i]->mode : DIR_MODE_DEFAULT;
+        e.mode = export_entry_mode(
+            items[i], PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
+        );
 
         error_t *err = entry_list_append(list, arena, &e);
         if (err) return err;
@@ -674,7 +675,7 @@ static error_t *collect_storage(
              * itself: the directory, at its stored mode. */
             const metadata_item_t *root_item = metadata_lookup(metadata, name);
             mode_t root_mode = export_entry_mode(
-                metadata, name, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
+                root_item, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
             );
             err = append_root(
                 list, arena, name, root_mode,
@@ -719,10 +720,9 @@ static error_t *collect_storage(
             if (held.filemode == GIT_FILEMODE_LINK) {
                 e.kind = EXPORT_ENTRY_SYMLINK;
             } else {
+                const metadata_item_t *item = metadata_lookup(metadata, name);
                 e.kind = EXPORT_ENTRY_FILE;
-                e.mode = export_entry_mode(
-                    metadata, name, PATH_KIND_FILE, held.filemode
-                );
+                e.mode = export_entry_mode(item, PATH_KIND_FILE, held.filemode);
             }
 
             err = entry_list_append(list, arena, &e);

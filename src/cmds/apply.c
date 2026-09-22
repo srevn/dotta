@@ -2126,13 +2126,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's content on every route a
              * clean row can arrive by — fast-path hit, slow-path confirmation,
-             * record created and confirmed by the flush — except a confirmation
-             * dropped under memory pressure, whose anchor still carries an older
-             * pair. Content and not bytes: a pair whose kind the row has since
-             * left describes another node, and passing its triple would record
-             * a proof of the wrong one (core/workspace.h workspace_stale). The
-             * gate asks the snapshot itself; NULL advances the record blob-only,
-             * and the next load's slow path confirms. */
+             * record created and confirmed by the flush — save a record the load
+             * could not confirm under this row, which keeps the pair it had:
+             * one naming another claim, or one of another kind, adopted above.
+             * Content and not bytes: a pair whose kind the row has since left
+             * describes another node, and passing its triple would record a proof
+             * of the wrong one (core/workspace.h workspace_stale). The gate asks
+             * the snapshot itself; NULL advances the record blob-only, and the
+             * next load's slow path confirms. */
             const stat_cache_t *stat =
                 (anchor && !workspace_stale(file, anchor->type, &anchor->blob_oid))
                 ? &anchor->stat : NULL;

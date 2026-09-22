@@ -701,27 +701,19 @@ static error_t *workspace_add_untracked(
  * learns nothing here, and apply, the ownership moment, re-establishes it by
  * adopting the row (cmds/apply.c), as it adopts a row with no record.
  *
- * OOM asymmetry — returns void on realloc failure. Every other path in workspace
- * analysis propagates ERR_MEMORY; this one deliberately does not. The confirmation
- * is a performance optimization — it converts the NEXT slow-path CMP_EQUAL into
- * a fast-path short-circuit — not a correctness invariant of the current analysis
- * (which is already complete by the time this is called). Dropping the record
- * on realloc failure:
- *   - Preserves the caller's already-correct divergence result.
- *   - Self-heals on the next status: the slow-path CMP_EQUAL re-confirms and
- *     re-records the confirmation (assuming memory pressure has cleared).
- *   - Never produces an incorrect classification — worst case is one extra
- *     slow-path verification per dropped record.
- * Failing here to surface OOM would abort a workspace load that had already
- * succeeded in every respect that affects user-visible output — strictly worse
- * UX for zero correctness gain.
+ * Fallible, as every queue the load fills is: a confirmation dropped here would
+ * leave the record short of what the load established. The failure is the
+ * workspace's own allocation and not a fact about the path, so the callers return
+ * it as it is.
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active row disk was found equal to (borrowed; workspace lifetime)
  * @param anchor The record dotta keeps of the path, or NULL when it has none
  * @param st Verified filesystem stat
+ * @return ERR_MEMORY where the queue could not grow, NULL otherwise — a
+ *         confirmation the gate refuses included
  */
-static void workspace_record_confirmation(
+static error_t *workspace_record_confirmation(
     workspace_t *ws,
     const manifest_row_t *row,
     const anchor_t *anchor,
@@ -730,7 +722,7 @@ static void workspace_record_confirmation(
     if (anchor && (!manifest_is_claim(row, anchor->profile, anchor->storage_path) ||
         workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) ==
         CMP_TYPE_DIFF)) {
-        return;
+        return NULL;
     }
 
     if (ws->confirmation_count >= ws->confirmation_capacity) {
@@ -741,7 +733,9 @@ static void workspace_record_confirmation(
             ws->confirmations,
             new_cap * sizeof(confirmation_t)
         );
-        if (!new_arr) return;
+        if (!new_arr) {
+            return ERROR(ERR_MEMORY, "Failed to grow the confirmation queue");
+        }
 
         ws->confirmations = new_arr;
         ws->confirmation_capacity = new_cap;
@@ -751,6 +745,8 @@ static void workspace_record_confirmation(
         .row = row,
         .stat = stat_cache_from_stat(st),
     };
+
+    return NULL;
 }
 
 /**
@@ -760,20 +756,20 @@ static void workspace_record_confirmation(
  * found it on disk, either kind, and dotta has never observed it in scope. Only
  * the row is accumulated — the observation timestamp is the flush's.
  *
- * Same OOM asymmetry as the confirmation recorder, for the same reason: a dropped
- * observation costs no correctness, only a deferral to the next load's flush,
- * which re-derives it from a live lstat.
+ * Fallible, as the confirmation recorder is, and for a reason of its own: an
+ * observation dropped here would leave a path dotta saw on disk with no record,
+ * so its next absence would read UNDEPLOYED where it is DELETED, and update would
+ * never propagate the user's removal. The callers return the failure as it is.
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active row found on disk without a record (borrowed; workspace
  *            lifetime)
+ * @return ERR_MEMORY where the queue could not grow, NULL otherwise
  */
-static void workspace_record_observation(
+static error_t *workspace_record_observation(
     workspace_t *ws,
     const manifest_row_t *row
 ) {
-    if (!ws || !row) return;
-
     if (ws->observation_count >= ws->observation_capacity) {
         size_t new_cap = ws->observation_capacity
                        ? ws->observation_capacity * 2 : 16;
@@ -782,13 +778,17 @@ static void workspace_record_observation(
             ws->observations,
             new_cap * sizeof(*new_arr)
         );
-        if (!new_arr) return;
+        if (!new_arr) {
+            return ERROR(ERR_MEMORY, "Failed to grow the observation queue");
+        }
 
         ws->observations = new_arr;
         ws->observation_capacity = new_cap;
     }
 
     ws->observations[ws->observation_count++] = row;
+
+    return NULL;
 }
 
 /**
@@ -825,12 +825,10 @@ static void workspace_record_observation(
  * runs. A healthy load allocates nothing, and a third producer would have to be
  * over one of those two sets, because that is what the fact is about.
  *
- * Fallible, where the two recorders above are not: a dropped confirmation or
- * observation costs a deferral the next load re-derives, and a dropped displaced
- * directory costs a verdict — every item beneath the squatter would be judged
- * on an observation that resolved through it. The failure is the workspace's
- * own allocation and not a fact about the path, so neither producer wraps it
- * with one.
+ * Fallible, as the two recorders above are: a dropped displaced directory would
+ * cost a verdict — every item beneath the squatter judged on an observation that
+ * resolved through it. The failure is the workspace's own allocation and not a
+ * fact about the path, so neither producer wraps it with one.
  *
  * Readers: displaced_ancestor, asked before every look the load takes
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), by
@@ -1091,7 +1089,8 @@ static error_t *analyze_file_divergence(
          * the "user created the path after scope entry" gap: the next absence
          * reads DELETED, not UNDEPLOYED. */
         if (!anchor) {
-            workspace_record_observation(ws, row);
+            error_t *err = workspace_record_observation(ws, row);
+            if (err) return err;
         }
 
         compare_result_t cmp_result;
@@ -1177,7 +1176,8 @@ static error_t *analyze_file_divergence(
              * would write — the row's kind beside a triple taken of the other
              * one — is never queued from here. */
             if (cmp_result == CMP_EQUAL && released) {
-                workspace_record_confirmation(ws, row, anchor, &look->st);
+                error_t *err = workspace_record_confirmation(ws, row, anchor, &look->st);
+                if (err) return err;
             }
         } else {
             /* SLOW PATH: Full content comparison, ours vs theirs
@@ -1265,7 +1265,8 @@ static error_t *analyze_file_divergence(
              * with the row's blob and the look the verdict was reached from, so
              * the next run can short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                workspace_record_confirmation(ws, row, anchor, &look->st);
+                err = workspace_record_confirmation(ws, row, anchor, &look->st);
+                if (err) return err;
             }
 
             /* Second question — ours vs base — asked once, where it can change
@@ -1369,10 +1370,9 @@ static error_t *analyze_file_divergence(
             case CMP_MISSING:
                 /* The look itself met ENOENT/ENOTDIR: the path vanished between
                  * the lstat above and the content read. The verdict is absence,
-                 * so the sighting that lstat queued is retracted — asked of the
-                 * queue itself: its last entry is this row's iff this row queued
-                 * one (nothing queues observations between the lstat and here;
-                 * an OOM-dropped sighting simply is not there to retract). The
+                 * so the sighting that lstat queued is retracted: a row with no
+                 * record queued one, and it is the queue's last entry, since
+                 * nothing queues observations between the lstat and here. The
                  * record follows the run's verdict, never a moment the run itself
                  * outlived. Skip the permission checks below.
                  *
@@ -1382,8 +1382,7 @@ static error_t *analyze_file_divergence(
                  * about the path, so the phases after the join read absence and
                  * index nothing, where an identity left standing would vouch
                  * for a vanished file and could meet a reused inode. */
-                if (!anchor && ws->observation_count > 0 &&
-                    ws->observations[ws->observation_count - 1] == row) {
+                if (!anchor) {
                     ws->observation_count--;
                 }
                 look->occupant = FS_OCCUPANT_NONE;
@@ -3444,7 +3443,8 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * workspace_flush_updates. Closes the "user created the path after scope
          * entry" gap with the mechanism files already use. */
         if (!anchor) {
-            workspace_record_observation(ws, row);
+            err = workspace_record_observation(ws, row);
+            if (err) return err;
         }
 
         /* Verify it's actually a directory (type may have changed)
@@ -4645,11 +4645,9 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         const confirmation_t *c = &ws->confirmations[i];
 
         /* The record the comparison was made against: the load's, or the one
-         * the observation above created. Absent only where that observation was
-         * dropped under memory pressure (workspace_record_observation) — no row
-         * was written for it either, and there is nothing to confirm. */
+         * the observation above created — a path confirmed with no record queued
+         * its observation too, so there is always one. */
         anchor_t *anchor = hashmap_get(ws->anchor_index, c->row->filesystem_path);
-        if (!anchor) continue;
 
         /* Lands only where the database still holds that record under the row's
          * claim, and only then advances it (state_confirm): a record another

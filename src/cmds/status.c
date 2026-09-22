@@ -1044,7 +1044,12 @@ static void display_workspace_status(
                                 /* The displaced read comes first: such an item
                                  * was never looked at, so neither sibling sentence
                                  * is true of it — the same precedence the verdict's
-                                 * own arms take. */
+                                 * own arms take. The last sentence is the bare
+                                 * [released] key's, which a file and a directory
+                                 * share — the legend keeps the first hint a key
+                                 * meets — so, like the bare [orphaned] key's,
+                                 * it is written to be true of both and names no
+                                 * kind. */
                                 hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
                                     ? "not looked at, beneath a squatted directory; "
                                     "apply releases its entry, the path stays"
@@ -1053,7 +1058,7 @@ static void display_workspace_status(
                                     "path stands in its place; apply releases its "
                                     "entry, the path stays"
                                     : "no longer in Git, dotta never deployed it, or "
-                                    "its record names this file under another "
+                                    "its record names it under another "
                                     "spelling of its path; apply releases its "
                                     "entry, the path stays";
                                 break;

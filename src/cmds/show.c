@@ -110,15 +110,16 @@ static error_t *print_blob_content(
     keymgr *keymgr = ctx->run.keymgr;
     output_t *out = ctx->out;
 
-    /* Get plaintext content (handles encryption transparently — the content layer
-     * classifies by bytes, no caller-supplied flag needed, and by the filemode,
-     * which says a link's bytes are its target: they are read as they stand).
+    /* The claim standing at this name, read once: its stamp for the annotation
+     * below, its mode and ownership for the header further down.
      *
-     * The metadata-derived `encrypted` bool below is read for display only (the
-     * "(encrypted)" annotation): it is byte-truth via the write-time invariant
-     * in `content_capture_file`, but does not influence routing inside the content
-     * layer. */
-    bool encrypted = metadata_file_encrypted(metadata, storage_path);
+     * The stamp is read for display alone. It is byte-truth via the write-time
+     * invariant in `content_capture_file`, but nothing here routes on it: the
+     * content layer classifies by the blob's own bytes, taking no caller-supplied
+     * flag, and by the filemode, which says a link's bytes are its target — they
+     * are read as they stand. */
+    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
+    bool encrypted = item && item->encrypted;
 
     buffer_t content = BUFFER_INIT;
     error_t *err = content_get_from_blob_oid(
@@ -158,7 +159,6 @@ static error_t *print_blob_content(
     /* The entry's claims, by the projection's own rule: mode only where the type
      * can carry one and the entry claims one; ownership for every kind that holds
      * it. */
-    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
     if (item) {
         if (!is_link && item->mode != MODE_UNCLAIMED) {
             output_styled(

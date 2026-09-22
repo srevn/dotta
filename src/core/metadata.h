@@ -176,6 +176,16 @@
  * each, encrypted the cache of a blob's own bytes and tracked the claim that
  * the profile manages a directory, and each is false for the other kind by
  * construction at both boundaries (the factories and the parser).
+ *
+ * Every field is read off the item metadata_lookup hands back; the collection
+ * offers no per-field reader, so a consumer that holds the item reads the field
+ * and one that holds only a key looks the item up first. `encrypted` is
+ * cross-checked nowhere: the content reader classifies the blob's own bytes and
+ * consults no claim (infra/content.h content_get_from_blob_oid), so the stamp
+ * answers "was it sealed when it was written" — a screen's question, or a
+ * schedule's. Readers: cmds/show.c print_blob_content (the annotation) and, through
+ * the projection onto the view's rows (core/manifest.h manifest_row_t.encrypted),
+ * core/workspace.c analyze_file_divergence and cmds/key.c cmd_key_status.
  */
 typedef struct {
     path_kind_t kind;   /* FILE: the tree names the path. DIRECTORY: the item is the claim. */
@@ -435,27 +445,6 @@ error_t *metadata_prune_ancestors(
     metadata_t *metadata,
     git_index *index,
     string_array_t *pruned
-);
-
-/**
- * Encrypted flag for a file entry
- *
- * A key that is absent, held as a directory, or held unstamped answers false.
- *
- * The reader takes no such flag: `content_get_from_blob_oid` classifies the blob's
- * own bytes and never cross-checks an external claim (infra/content.h). This
- * answers "was it stamped encrypted", for a metadata consumer.
- *
- * Note: the view carries the flag on its rows (manifest_row_t.encrypted, projected
- * from this metadata at build); workspace-backed operations read it there.
- *
- * @param metadata Metadata collection (can be NULL)
- * @param storage_path Storage path to lookup (can be NULL)
- * @return Encrypted flag (false if not found or not a file)
- */
-bool metadata_file_encrypted(
-    const metadata_t *metadata,
-    const char *storage_path
 );
 
 /**

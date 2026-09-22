@@ -571,28 +571,6 @@ error_t *metadata_prune_ancestors(
 }
 
 /**
- * Encrypted flag for a file entry
- *
- * A key that is absent, held as a directory, or held unstamped answers false.
- *
- * Used by historical operations (diff, show, revert) to extract the encrypted
- * flag from metadata loaded from Git commits. Workspace-backed operations read
- * the view row's encrypted flag, which manifest_build projects from this metadata.
- *
- * @param metadata Metadata collection (can be NULL)
- * @param storage_path Storage path to lookup (can be NULL)
- * @return Encrypted flag (false if not found or not a stamped file)
- */
-bool metadata_file_encrypted(
-    const metadata_t *metadata,
-    const char *storage_path
-) {
-    const metadata_item_t *item = metadata_lookup(metadata, storage_path);
-
-    return item && item->kind == PATH_KIND_FILE && item->encrypted;
-}
-
-/**
  * Every item the collection holds, in insertion order
  *
  * Returns the spine itself (borrowed reference). Zero-cost operation - no

@@ -676,11 +676,12 @@ error_t *state_get_all_anchors(
  *
  * Presence only, idempotent. INSERT OR IGNORE creates the record with the row's
  * identity and metadata, no blob, no stat, observed_at = now, and never touches
- * an existing row. The workspace calls it (through
- * workspace_observe) for an active row it found on disk with no record;
- * apply calls it for a directory it fixed rather than made. The record's existence
- * is what the absence classifier reads (workspace.c classify_absent): a path
- * once observed that is now missing was deleted, not never deployed.
+ * an existing row. One caller: the workspace's flush, through workspace_observe,
+ * for an active row its load found on disk with no record — the load is where
+ * presence is established, so a directory apply fixes rather than makes was present
+ * there and is observed by that flush. The record's existence is what the absence
+ * classifier reads (workspace.c classify_absent): a path once observed that is
+ * now missing was deleted, not never deployed.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path was observed under (must not be NULL)

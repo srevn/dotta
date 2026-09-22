@@ -1407,12 +1407,13 @@ static error_t *analyze_file_divergence(
      * files. A record is created the first time dotta lstat-confirms the path
      * on disk in scope. Writers:
      *   - state_observe (the flush, for a path analysis found present with no
-     *     record; apply, for a directory it fixed rather than made).
-     *   - state_anchor's INSERT arm (every ownership event or confirmation on a
-     *     path with no record — apply deploy, adoption, add, update, CMP_EQUAL
-     *     flush).
-     * observed_at is written once, by whichever of those creates the row, and
-     * never again.
+     *     record).
+     *   - state_anchor's INSERT arm (every ownership event on a path with no
+     *     record — apply deploy, adoption, add, update).
+     * A confirmation creates none: it is an UPDATE of a record that exists — on
+     * a path that had none at load, the one the flush's observation made a
+     * statement earlier (state_confirm). observed_at is written once, by whichever
+     * of the two creates the row, and never again.
      *
      * Record semantics:
      * - none -> dotta has never lstat-confirmed this path on disk in scope

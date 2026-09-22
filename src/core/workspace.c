@@ -1731,18 +1731,15 @@ typedef enum {
  * @param profile Record's profile (NOT NULL in the schema)
  * @param storage_path Record's storage path (NOT NULL in the schema)
  * @param kind What the record says stood there — decides which claim is asked for
- * @param out Receives the answer (must not be NULL)
+ * @return The answer
  */
-static void compute_orphan_authority(
+static orphan_authority_t compute_orphan_authority(
     git_repository *repo,
     hashmap_t *cache,
     const char *profile,
     const char *storage_path,
-    path_kind_t kind,
-    orphan_authority_t *out
+    path_kind_t kind
 ) {
-    *out = ORPHAN_AUTHORITY_UNVERIFIED;
-
     authority_cache_t *cached = hashmap_get(cache, profile);
     if (!cached) {
         /* First row of this profile: does the branch still exist? A ref lookup,
@@ -1752,12 +1749,12 @@ static void compute_orphan_authority(
         error_t *err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
             error_free(err);
-            return;                         /* UNVERIFIED */
+            return ORPHAN_AUTHORITY_UNVERIFIED;
         }
 
         cached = calloc(1, sizeof(*cached));
         if (!cached) {
-            return;                         /* UNVERIFIED */
+            return ORPHAN_AUTHORITY_UNVERIFIED;
         }
         cached->exists = exists;
 
@@ -1765,13 +1762,12 @@ static void compute_orphan_authority(
         if (err) {
             error_free(err);
             authority_cache_free(cached);
-            return;                         /* UNVERIFIED */
+            return ORPHAN_AUTHORITY_UNVERIFIED;
         }
     }
 
     if (!cached->exists) {
-        *out = ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
-        return;
+        return ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
     }
 
     if (!cached->tree) {
@@ -1782,7 +1778,7 @@ static void compute_orphan_authority(
         error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
             error_free(err);
-            return;                         /* UNVERIFIED */
+            return ORPHAN_AUTHORITY_UNVERIFIED;
         }
         cached->tree = tree;                /* Ownership transfers to the cache */
     }
@@ -1799,7 +1795,7 @@ static void compute_orphan_authority(
             error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
             if (err) {
                 error_free(err);
-                return;                         /* UNVERIFIED */
+                return ORPHAN_AUTHORITY_UNVERIFIED;
             }
             cached->metadata = metadata;        /* Ownership transfers to the cache */
         }
@@ -1808,29 +1804,26 @@ static void compute_orphan_authority(
          * another kind at the key is a path Git turned into a blob: the directory
          * dotta made is no longer claimed as one. */
         const metadata_item_t *item = metadata_lookup(cached->metadata, storage_path);
-        *out = (item && item->kind == PATH_KIND_DIRECTORY) ? ORPHAN_AUTHORITY_BACKED
-                                                           : ORPHAN_AUTHORITY_LOST;
-
-        return;
+        return item && item->kind == PATH_KIND_DIRECTORY ? ORPHAN_AUTHORITY_BACKED
+                                                         : ORPHAN_AUTHORITY_LOST;
     }
 
     /* Check if file exists in tree via path traversal
      *
      * Distinguish between "file not in tree" (GIT_ENOTFOUND) and actual errors
      * (GIT_ERROR, OOM). ENOTFOUND is the normal "removed from Git" case. Actual
-     * errors should propagate so the caller can treat them as CANNOT_VERIFY rather
-     * than RELEASED — preserving the record is more conservative than removing it.
+     * errors are the third answer, UNVERIFIED, rather than LOST — preserving
+     * the record is more conservative than releasing it.
      */
     git_tree_entry *tree_entry = NULL;
     int rc = git_tree_entry_bypath(&tree_entry, cached->tree, storage_path);
 
     if (rc == 0) {
         git_tree_entry_free(tree_entry);
-        *out = ORPHAN_AUTHORITY_BACKED;
-    } else if (rc == GIT_ENOTFOUND) {
-        *out = ORPHAN_AUTHORITY_LOST;
+        return ORPHAN_AUTHORITY_BACKED;
     }
-    /* Anything else: *out stays UNVERIFIED */
+
+    return rc == GIT_ENOTFOUND ? ORPHAN_AUTHORITY_LOST : ORPHAN_AUTHORITY_UNVERIFIED;
 }
 
 /**
@@ -2472,9 +2465,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
         } else {
             /* Owned: ask the profile that deployed it whether it still claims
              * the path. */
-            orphan_authority_t authority = ORPHAN_AUTHORITY_UNVERIFIED;
-            compute_orphan_authority(
-                ws->repo, authority_cache, profile, storage_path, kind, &authority
+            orphan_authority_t authority = compute_orphan_authority(
+                ws->repo, authority_cache, profile, storage_path, kind
             );
 
             if (authority == ORPHAN_AUTHORITY_UNVERIFIED) {

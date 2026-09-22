@@ -19,6 +19,7 @@
 #include "core/manifest.h"
 #include "core/metadata.h"
 #include "core/state.h"
+#include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "infra/path.h"
@@ -619,14 +620,15 @@ error_t *profile_list_files(
  * Tree walk data for the branch statistics
  */
 struct stats_walk_data {
-    git_odb *odb;        /* Held for the walk: one handle, N header reads */
+    git_odb *odb;              /* Held for the walk: one handle, N header reads */
+    const metadata_t *sheet;   /* The branch's claims: what the sizes are read through */
     size_t file_count;
     size_t total_size;
     error_t *error;
 };
 
 /**
- * Tree walk callback: count content blobs and accumulate their bytes
+ * Tree walk callback: count content blobs and accumulate the bytes they stand for
  */
 static int stats_walk_callback(
     const char *root,
@@ -650,6 +652,20 @@ static int stats_walk_callback(
         data->error = err;
         return -1;
     }
+
+    /* The bytes the entry stands for, not the bytes the object database holds:
+     * a sealed blob carries the cipher's framing and its file does not, and the
+     * file is what a screen names (197 R5). The stamp is the branch's own claim,
+     * read as the view projects it — never onto a link, whose bytes are its target
+     * and never a seal (core/manifest.c manifest_apply_claim) — and this is the
+     * fold of exactly the rows the file listing prints one by one, so the two
+     * read the claim the same way or the two screens disagree by the framing
+     * (cmds/list.c list_files). */
+    const metadata_item_t *claim = metadata_lookup(data->sheet, storage_path);
+    bool encrypted = git_tree_entry_filemode(entry) != GIT_FILEMODE_LINK
+        && claim && claim->encrypted;
+
+    size = content_estimated_plaintext_size(size, encrypted);
 
     if (data->total_size > SIZE_MAX - size) {
         data->error = ERROR(
@@ -678,21 +694,36 @@ error_t *profile_get_tree_stats(
     CHECK_NULL(profile);
     CHECK_NULL(out);
 
+    /* The branch's own metadata, the same source the view's claim routine reads,
+     * and read first because both halves below want it: the directories it claims,
+     * and the stamp each blob's size is taken through. A tree without a sheet
+     * loads as an empty one — no claim, so nothing counted and nothing stamped
+     * — and every load error is real and propagates. */
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
+    if (err) {
+        return error_wrap(
+            err, "Failed to load metadata for profile '%s'", profile
+        );
+    }
+
     /* The files: one walk, one ODB handle, sizes read from the object headers. */
     git_odb *odb = NULL;
     int git_err = git_repository_odb(&odb, repo);
     if (git_err < 0) {
-        return error_from_git(git_err);
+        err = error_from_git(git_err);
+        goto cleanup;
     }
 
     struct stats_walk_data data = {
         .odb        = odb,
+        .sheet      = metadata,
         .file_count = 0,
         .total_size = 0,
         .error      = NULL
     };
 
-    error_t *err = gitops_tree_walk(tree, stats_walk_callback, &data);
+    err = gitops_tree_walk(tree, stats_walk_callback, &data);
     git_odb_free(odb);
 
     if (err || data.error) {
@@ -701,21 +732,10 @@ error_t *profile_get_tree_stats(
             error_free(err);
             err = data.error;
         }
-        return error_wrap(
+        err = error_wrap(
             err, "Failed to read statistics for profile '%s'", profile
         );
-    }
-
-    /* The directories: the branch's own metadata, the same source the view's
-     * claim routine reads. A tree without a sheet loads as an empty one — no
-     * claim, so nothing counted below — and every load error is real and
-     * propagates. */
-    metadata_t *metadata = NULL;
-    err = metadata_load_from_tree(repo, tree, profile, &metadata);
-    if (err) {
-        return error_wrap(
-            err, "Failed to load metadata for profile '%s'", profile
-        );
+        goto cleanup;
     }
 
     size_t directory_count = 0;
@@ -750,11 +770,11 @@ error_t *profile_get_tree_stats(
             git_tree_entry_free(entry);
             if (is_blob) continue;
         } else if (rc != GIT_ENOTFOUND) {
-            metadata_free(metadata);
-            return error_wrap(
+            err = error_wrap(
                 error_from_git(rc), "Failed to read '%s' in profile '%s'",
                 items[i]->key, profile
             );
+            goto cleanup;
         }
 
         directory_count++;
@@ -763,8 +783,10 @@ error_t *profile_get_tree_stats(
     metadata_free(metadata);
 
     /* Both sides at once, and only here: a walk that stopped short or a probe
-     * that refused has already returned, so what the caller supplied is either
-     * replaced whole or never touched. */
+     * that refused has jumped to the label below, so what the caller supplied
+     * is either replaced whole or never touched. The success path frees the sheet
+     * itself rather than falling into that label, which is what keeps that true
+     * structurally: nothing reaches this write except the path that earned it. */
     *out = (profile_stats_t){
         .file_count = data.file_count,
         .directory_count = directory_count,
@@ -772,6 +794,10 @@ error_t *profile_get_tree_stats(
     };
 
     return NULL;
+
+cleanup:
+    metadata_free(metadata);
+    return err;
 }
 
 /**

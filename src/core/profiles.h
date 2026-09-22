@@ -227,25 +227,43 @@ error_t *profile_require(git_repository *repo, const char *name);
  * delete_profile_branch). A reader not on this list is a bug, and a screen that
  * counts what a branch holds beside this one is the second producer this count
  * exists to be: list_files kept its own directory fold until it took this one.
- * `status -v` is no such screen — it counts the view's rows a profile wins
- * (cmds/status.c display_enabled_profiles), the other half of the holds/wins
- * split above, and the two are free to disagree (docs/profiles.md).
+ * The verbose file listing's `Total:` is the one that remains, and it is not a
+ * second answer but the same one by the other route — the rows it prints, summed
+ * as it prints them, which is what a total under a table has to be. What makes
+ * the two routes meet is that both take the framing off the same claim; nothing
+ * structural does, and the raw sum here disagreed with those rows by it on every
+ * profile holding a sealed file until 228 C2c. `status -v` is no such screen —
+ * it counts the view's rows a profile wins (cmds/status.c
+ * display_enabled_profiles), the other half of the holds/wins split above, and
+ * the two are free to disagree (docs/profiles.md).
  */
 typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */
     size_t directory_count;  /* Tracked directories the branch metadata claims */
-    size_t total_size;       /* Bytes of those blobs */
+    size_t total_size;       /* Bytes those blobs stand for, the seal's framing off */
 } profile_stats_t;
 
 /**
  * Count what a profile branch holds, in a tree already open
  *
- * One walk of the tree — each content blob counted and its size taken from the
- * object header, nothing inflated — then the branch metadata's DIRECTORY items.
- * A branch with no metadata.json claims no directories; that absence is not a
- * failure. For callers that already hold the tree, so one branch read serves
- * the count and whatever else the caller does with it; the tree is borrowed and
- * never freed here.
+ * The branch's metadata first, then one walk of the tree — each content blob
+ * counted and its size taken from the object header, nothing inflated — then
+ * the metadata's DIRECTORY items. A branch with no metadata.json claims no
+ * directories; that absence is not a failure. For callers that already hold the
+ * tree, so one branch read serves the count and whatever else the caller does
+ * with it; the tree is borrowed and never freed here.
+ *
+ * The sheet is read before the walk because the size half wants it too. What a
+ * screen calls a file's size is the bytes the file stands for, so the cipher's
+ * framing comes off a blob the branch stamps sealed (infra/content.h
+ * content_estimated_plaintext_size) — the same subtraction, off the same claim,
+ * that the file listing makes row by row (cmds/list.c list_files). The two are
+ * a fold and its elements and must agree: a total that names one number while
+ * the rows beneath it sum to another is one screen of `dotta list` contradicting
+ * the next, which is what the raw sum did for every profile holding a sealed
+ * file. Nothing structural holds them together — each reads the claim where it
+ * stands, as every reader of that field does (core/metadata.h metadata_item_t)
+ * — so the agreement is pinned by a scenario instead (tests/test-encrypt.sh).
  *
  * Complete or an error on both sides: an entry whose path no mount can place
  * fails the count rather than being skipped past, and a sheet that will not load

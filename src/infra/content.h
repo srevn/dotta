@@ -139,8 +139,11 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * and `cmds/update.c capture_file` (policy priority 3, where a wrong answer commits
  * a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes, and
  * existence for every filemode), `infra/epoch.c epoch_walk_cb` (which blobs a
- * rotation must not orphan, where a false absence outlives the run), and this
- * module's own reads. A reader not on this list is a bug.
+ * rotation must not orphan, where a false absence outlives the run). Every reader
+ * is outside this module, and that is the shape rather than an accident: content's
+ * own doors judge bytes they already hold (content_classify_bytes on a view,
+ * classify_entry inside a read), so none of them pays a load to ask. A reader
+ * not on this list is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -349,23 +352,45 @@ error_t *content_rebind(
 /**
  * Compare a Git blob against a filesystem path (encryption-aware).
  *
- * The single seam for "is this blob equal to this disk file?". Internally
- * classifies the blob as an entry of `expected_mode` (content_classify) and routes:
- *   - PLAINTEXT           → fast path: hash the disk copy, compare to OID.
- *                           Avoids inflating the stored Git blob. A link always.
- *   - ENCRYPTED           → slow path: decrypt via cache, byte-compare to disk.
- *   - UNSUPPORTED_VERSION → slow path; surfaces ERR_CRYPTO with a clear
- *                           version-skew message via the content reader.
+ * The single seam for "is this blob equal to this disk file?", asked of a blob
+ * no stamp speaks for. One read answers the kind and the reference together:
+ * the blob is read as an entry of `expected_mode` (content_get_from_blob_oid),
+ * which judges its bytes and routes on them — a link's target as it stands, a
+ * plaintext blob's bytes, a sealed blob's decrypt, a version this build cannot
+ * read refused with the version pair — and what that read answers is the reference
+ * the disk copy is judged against (infra/compare.h's pair).
  *
- * Centralizing the routing decision here eliminates the bug class where callers
- * route on a stale or wrong-blob "encrypted" flag. The fact about the blob lives
- * with the blob, not with any external proxy.
+ * Why the bytes, and why no proxy: both callers compare against the *record's*
+ * blob — core/state.h's anchor_t or released_copy_t — and neither carries an
+ * encryption stamp. The view row's flag in scope is another blob's, and routing
+ * the base question on it once miscategorised staleness across an encryption-policy
+ * flip in both directions (the two are recorded at core/workspace.c
+ * analyze_file_divergence). The row's own comparison keeps the id form and opens
+ * nothing, and that asymmetry is principled rather than overlooked: the row's
+ * flag is that blob's own, made byte-true at the write boundary
+ * (content_capture_file), where the record's blob has no boundary at which it
+ * could have been stamped.
  *
- * The seam routes; it does not look. Both routes end in infra/compare.h's pair,
- * whose one look is the caller's own, so the stat is forwarded and required here
- * for the same reason it is required there.
+ * Why nothing is memoised: `cache` is handed in as the run's reader — its
+ * repository and its key manager — and its memo is deliberately neither read
+ * nor written here. An entry is keyed by the whole binding, so the key this read
+ * would write is one nothing can ask for: the second question is put only when
+ * the base differs from the row's blob, and an orphan's path has no row at all.
+ * A base's plaintext therefore has the lifetime of one judgment and is wiped
+ * and released at the end of it, the rule content_rebind keeps for the other
+ * buffer this module owns. The price is one copy standing beside the disk copy
+ * for the length of the comparison, where the id form held only the copy.
  *
- * @param repo Git repository (must not be NULL)
+ * The seam reads; it does not look. What the read answers is judged by
+ * infra/compare.h's pair, whose one look is the caller's own, so the stat is
+ * forwarded and required here for the same reason it is required there.
+ *
+ * Readers: `core/workspace.c analyze_file_divergence` (the second question, ours
+ * against the base) and `core/workspace.c compute_orphan_divergence` (an orphan
+ * against the record dotta keeps of it). A reader not on this list is a bug.
+ *
+ * @param cache The run's reader: its repository and its key manager (must not
+ *          be NULL). The memo is neither read nor written here.
  * @param blob_oid Blob OID to compare against (must not be NULL)
  * @param filesystem_path Filesystem path to compare to (must not be NULL)
  * @param expected_mode Expected git filemode (BLOB, BLOB_EXECUTABLE, or LINK)
@@ -373,21 +398,25 @@ error_t *content_rebind(
  * @param storage_path Storage path; used as AAD when blob is encrypted (must
  *          not be NULL, must match Git tree path)
  * @param profile Profile name for key derivation when encrypted (must not be NULL)
- * @param cache Content cache (must not be NULL; used by the encrypted route so
- *          repeated callers do not redecrypt the same blob)
  * @param out_result Comparison result (must not be NULL)
- * @return Error or NULL on success. Errors propagate from classification,
- *          decryption, or the underlying compare primitives.
+ * @return Error or NULL on success
+ *
+ * Errors — the read's ladder, unwrapped (see content_get_from_blob_oid), or the
+ * compare primitive's:
+ * - ERR_LOCKED / ERR_CRYPTO: no key in reach, a blob a held key refuses, a foreign
+ *   epoch, or a version this build does not read
+ * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
+ * - ERR_IO / ERR_PERMISSION: the disk copy could not be read
+ * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_compare_blob_to_disk(
-    git_repository *repo,
+    content_cache_t *cache,
     const git_oid *blob_oid,
     const char *filesystem_path,
     git_filemode_t expected_mode,
     const struct stat *st,
     const char *storage_path,
     const char *profile,
-    content_cache_t *cache,
     compare_result_t *out_result
 );
 
@@ -409,8 +438,24 @@ content_cache_t *content_cache_create(
 /**
  * Get plaintext content from blob OID (cached)
  *
- * Use for batch operations (e.g., status, workspace analysis). Returns borrowed
- * reference valid until cache is freed.
+ * Returns a borrowed reference, valid until the cache is freed — the run's end
+ * rather than a load's, one cache being made at dispatch and handed to every
+ * reader (include/runtime.h).
+ *
+ * Readers, and every one of them names a view row's blob or a commit entry's,
+ * never a record's: `core/workspace.c analyze_file_divergence` (the sealed arm
+ * of the first question), `core/deploy.c deploy_file`, `cmds/diff.c
+ * show_file_diff_from_workspace` and `cmds/diff.c
+ * compare_tree_files_to_filesystem`. A reader not on this list is a bug.
+ *
+ * What the memo is for, named rather than assumed: one binding asked twice in
+ * one run. A workspace load asks each managed path once, so a load never hits
+ * itself; the hit is a second reader later in the same run — deploy taking back
+ * what apply's load decrypted, the renderer taking back what its own load did.
+ * A command with no second reader (status, update, sync) writes entries it will
+ * not ask for, which is a memo's ordinary cost; it is the cost
+ * content_compare_blob_to_disk declines for a base, whose key this list shows
+ * no reader can name.
  *
  * On first access for a given binding (profile, storage path, blob) and filemode:
  * - Loads and classifies the blob as its entry (PLAINTEXT / ENCRYPTED /

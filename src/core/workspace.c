@@ -1162,12 +1162,19 @@ static error_t *analyze_file_divergence(
              *
              * Both paths receive the load's look to avoid redundant lstat syscalls.
              *
-             * Asymmetry with the second question below: that one routes through
-             * content_compare_blob_to_disk (byte-classify internally) because
-             * anchor.blob_oid can differ from row->blob_oid and there is no
-             * anchor-side cache to trust. Here we route on row->encrypted directly
-             * — the cache IS byte-truth for *this* blob via the Phase 2 write-time
-             * invariant in content_capture_file.
+             * Asymmetry with the second question below, and it is the stamp's:
+             * row->encrypted is *this* blob's own, made byte-true at the write
+             * boundary (infra/content.h content_capture_file), so the plaintext
+             * arm hashes disk against the id and opens nothing. The base has no
+             * such boundary — no record carries a stamp — so its kind is read
+             * off its own bytes, in the one read that also yields them.
+             *
+             * The sealed arm's entry is the one memoised read another reader in
+             * the run asks back for: apply's deploy takes it from the cache for
+             * every row it writes, diff's renderer for every row it draws
+             * (infra/content.h content_cache_get_from_blob_oid). That is why
+             * this arm reads through the memo where the base question, whose
+             * key no reader can name, does not.
              */
             error_t *err = NULL;
 
@@ -1256,9 +1263,10 @@ static error_t *analyze_file_divergence(
              *     expected_encrypted=true on a plaintext blob, the old cross-check
              *     raised ERR_STATE_INVALID, swallowed below.
              *
-             * content_compare_blob_to_disk classifies by bytes, so the routing
-             * decision lives with the blob whose comparison we are doing. A
-             * routing-on-stale-flag bug is structurally impossible.
+             * content_compare_blob_to_disk reads the base once, as the entry
+             * the record's own type names, so the kind and the reference both
+             * come off the blob whose comparison this is. There is no stamp for
+             * a record's blob that could be read instead.
              *
              * A failed look answers nothing and leaves disk_at_base false: the
              * edit is taken as real (CONTENT), the conservative answer — STALE
@@ -1269,14 +1277,13 @@ static error_t *analyze_file_divergence(
                 (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
                 compare_result_t at_base;
                 error_t *verify_err = content_compare_blob_to_disk(
-                    ws->repo,
+                    ws->content_cache,
                     base_blob,
                     filesystem_path,
                     path_type_to_git_filemode(base_type),
                     &look->st,
                     base_storage,
                     base_profile,
-                    ws->content_cache,
                     &at_base
                 );
 
@@ -1459,14 +1466,11 @@ static error_t *analyze_file_divergence(
  * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
  * - Anchor stat triple as the fast path, the same proof the active slice relies
  *   on: a match means the exact node dotta wrote, no hashing
- * - Leverages content cache with transparent encryption handling
+ * - Past it, one read of the record's blob answers its kind and the reference
+ *   together, and the plaintext ends with the judgment (infra/content.h
+ *   content_compare_blob_to_disk)
  * - Full-bit permission checking against the record's mode, ownership beside it
  * - Single-stat-per-file (the caller's look, which nothing below retakes)
- *
- * Performance Safeguards:
- * - 100MB size limit (prevents loading huge files into memory)
- * - Content cache (reuses decrypted content across checks)
- * - The caller's look, forwarded (zero redundant lstat syscalls)
  *
  * A measure that can fail says so: the look's error is returned and the caller
  * decides what a failure to look means, which is the rule the active analyzer
@@ -1475,7 +1479,7 @@ static error_t *analyze_file_divergence(
  * and a break that reached this would rather crash than be read as a silent
  * [orphaned, unverified].
  *
- * @param ws Workspace (provides content_cache, repo)
+ * @param ws Workspace (provides the run's content reader)
  * @param anchor The record dotta keeps of the path (must not be NULL;
  *               non-zero blob_oid)
  * @param st The look the caller took at the record's path (must not be NULL)
@@ -1520,27 +1524,26 @@ static error_t *compute_orphan_divergence(
      * anchor.blob_oid (core/state.h stat_cache_matches), so the exact node dotta
      * wrote is recognised without loading or hashing anything.
      *
-     * Otherwise content_compare_blob_to_disk classifies the blob by magic header
-     * and routes; plaintext takes the fast OID-hash-of-disk path, encrypted
-     * decrypts via the cache and byte-compares. The routing decision lives with
-     * the blob, so the orphan walker cannot route a different blob's state by a
-     * cached flag by accident — the record carries no encrypted flag, and the
-     * blob dotta deployed may sit on the other side of an encryption-policy flip
-     * from what Git holds now. The caller's look is forwarded: the seam routes,
-     * the pair judges, and neither takes a look of its own. */
+     * Otherwise content_compare_blob_to_disk reads the record's blob once, as
+     * the entry the record's own type names, and judges the look against what
+     * it answers. The kind comes off that blob and nothing else, so the orphan
+     * walker cannot route a different blob's state by a cached flag by accident
+     * — the record carries no encrypted flag, and the blob dotta deployed may
+     * sit on the other side of an encryption-policy flip from what Git holds
+     * now. The caller's look is forwarded: the seam reads, the pair judges, and
+     * neither takes a look of its own. */
     if (stat_cache_matches(&anchor->stat, st)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         cmp_result = CMP_EQUAL;
     } else {
         err = content_compare_blob_to_disk(
-            ws->repo,
+            ws->content_cache,
             reference,
             filesystem_path,
             expected_filemode,
             st,
             storage_path,
             profile,
-            ws->content_cache,
             &cmp_result
         );
 

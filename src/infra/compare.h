@@ -101,13 +101,14 @@ typedef enum {
  *
  * The id form is for plaintext blobs only: an encrypted blob's id is the hash
  * of ciphertext, while the filesystem holds plaintext, so the comparison would
- * never match. Two safe paths:
- *   - The kind-routing primitive `content_compare_blob_to_disk` decides internally
- *     and is always safe.
- *   - Direct callers must gate on a byte-truth flag (e.g.,
- *     `manifest_entry->encrypted`, byte-derived via the Phase 2 write-time
- *     invariant in `content_capture_file`); a stale or wrong-blob flag silently
- *     misroutes.
+ * never match. One rule, and one reader keeping it: the caller must hold a stamp
+ * that is *this* blob's own, made byte-true at the write boundary (the Phase 2
+ * invariant in `infra/content.h content_capture_file`) — a stale or wrong-blob
+ * flag silently misroutes. That reader is `core/workspace.c
+ * analyze_file_divergence`'s first question, which reads `row->encrypted` for
+ * the row's own blob. A comparison against a blob no stamp speaks for takes the
+ * buffer form, its kind and its bytes coming off one read (`infra/content.h
+ * content_compare_blob_to_disk`).
  */
 
 /**

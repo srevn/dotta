@@ -489,55 +489,53 @@ error_t *content_cache_get_from_blob_oid(
 }
 
 error_t *content_compare_blob_to_disk(
-    git_repository *repo,
+    content_cache_t *cache,
     const git_oid *blob_oid,
     const char *filesystem_path,
     git_filemode_t expected_mode,
     const struct stat *st,
     const char *storage_path,
     const char *profile,
-    content_cache_t *cache,
     compare_result_t *out_result
 ) {
-    CHECK_NULL(repo);
+    CHECK_NULL(cache);
     CHECK_NULL(blob_oid);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(st);
     CHECK_NULL(storage_path);
     CHECK_NULL(profile);
-    CHECK_NULL(cache);
     CHECK_NULL(out_result);
 
-    /* Bytes are authoritative: classify the blob as an entry of the mode compared
-     * under and route by the answer — a link takes the fast path, its target
-     * hashed as it stands. No proxy field can disagree with this — there is no
-     * proxy. The routing-on-stale-flag bug class is structurally impossible
-     * here. */
-    content_kind_t kind;
-    error_t *err = content_classify(repo, blob_oid, expected_mode, &kind, NULL);
-    if (err) {
-        return err;  /* Already wrapped by content_classify */
-    }
-
-    if (kind == CONTENT_PLAINTEXT) {
-        /* Fast path: hash the disk file, compare to OID. The stored Git blob is
-         * never inflated for the comparison itself. */
-        return compare_oid_to_disk(blob_oid, filesystem_path, expected_mode, st, out_result);
-    }
-
-    /* Encrypted or unsupported-version blob: load via cache. The cache call routes
-     * through get_plaintext_from_blob, which surfaces ERR_CRYPTO with a
-     * version-skew diagnostic for UNSUPPORTED_VERSION — callers receive the
-     * actionable error directly. */
-    const buffer_t *content = NULL;
-    err = content_cache_get_from_blob_oid(
-        cache, blob_oid, expected_mode, storage_path, profile, &content
+    /* One read answers the kind and the bytes together: the blob is read as an
+     * entry of `expected_mode` — a link's target, a plaintext blob's bytes, a
+     * sealed blob's decrypt — and what this build cannot open is refused in that
+     * read's own words. No proxy is consulted and none exists for this blob (the
+     * header). The reader is the cache's, not its memo: a base is judged once,
+     * and an entry for it would be written where nothing can ask for it. */
+    buffer_t plaintext = BUFFER_INIT;
+    error_t *err = content_get_from_blob_oid(
+        cache->repo, blob_oid, expected_mode, storage_path, profile,
+        cache->keymgr, &plaintext
     );
-    if (err) {
-        return err;
+
+    if (!err) {
+        err = compare_buffer_to_disk(
+            &plaintext, filesystem_path, expected_mode, st, out_result
+        );
     }
 
-    return compare_buffer_to_disk(content, filesystem_path, expected_mode, st, out_result);
+    /* The plaintext ends here whichever way the read and the verdict went — one
+     * tail for every exit past the read, because a failure leaves the caller
+     * whatever the callee built, a half-decrypt among them, and this module's
+     * free is the wiping one (base/buffer.h's out-parameter rule; infra/compare
+     * keeps the same tail over the disk copy it reads). The verdict is a value,
+     * and the bytes were only ever the reference it was reached against. */
+    if (plaintext.data) {
+        secure_wipe(plaintext.data, plaintext.size);
+    }
+    buffer_free(&plaintext);
+
+    return err;
 }
 
 void content_cache_free(content_cache_t *cache) {

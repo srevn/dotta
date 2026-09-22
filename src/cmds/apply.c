@@ -2039,6 +2039,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * would bind whatever stands at the path now to a verdict from two phases
      * earlier.
      *
+     * A record of another kind than the row is no record for it either: it is a
+     * fact about a node that is gone — Git retyped the name, and the row's own
+     * kind stands there clean — so the load learned nothing into it
+     * (core/workspace.c workspace_record_confirmation), and its ownership stamp
+     * vouches for a node dotta never wrote. The row is adopted as a row with no
+     * record is, and the anchor rewrites the record whole. The kind is the ladder's
+     * first rung (core/workspace.h workspace_compare_confirmed): a link beside
+     * a file is another kind there, where path_type_kind would call both files.
+     *
      * A clean row whose record dotta owns under another profile is a reassignment:
      * disk holds what A deployed, B owns the path now, and the content is the
      * same. It sits in files.clean by construction (nothing to deploy), so this
@@ -2091,7 +2100,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const manifest_row_t *file = adoptable.entries[i];
 
         const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
-        bool adopt = !anchor || anchor->deployed_at == 0;
+        bool adopt = !anchor || anchor->deployed_at == 0 ||
+            workspace_compare_confirmed(file, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF;
 
         /* A record dotta owns that names a claim this row is not — another
          * profile's, or another name of the same profile, whose path the view

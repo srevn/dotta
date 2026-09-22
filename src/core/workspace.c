@@ -690,6 +690,17 @@ static error_t *workspace_add_untracked(
  * like any other: the flush observes before it confirms, and the record it creates
  * is this row's.
  *
+ * And a confirmation belongs to a record of the row's kind. A record of another
+ * kind is a fact about a node that is gone — Git retyped the name, and what the
+ * look found is the row's own kind — and a confirmation would retype it with
+ * the pair while the ownership stamp dotta earned for the old node stayed, vouching
+ * for one dotta never wrote: a link the user made, a file where dotta's directory
+ * was, which the next scope exit would prune as dotta's own. The kind is the
+ * ladder's first rung (core/workspace.h workspace_compare_confirmed), never
+ * path_type_kind, whose taxonomy files a link beside the files. Such a record
+ * learns nothing here, and apply, the ownership moment, re-establishes it by
+ * adopting the row (cmds/apply.c), as it adopts a row with no record.
+ *
  * OOM asymmetry — returns void on realloc failure. Every other path in workspace
  * analysis propagates ERR_MEMORY; this one deliberately does not. The confirmation
  * is a performance optimization — it converts the NEXT slow-path CMP_EQUAL into
@@ -716,7 +727,9 @@ static void workspace_record_confirmation(
     const anchor_t *anchor,
     const struct stat *st
 ) {
-    if (anchor && !manifest_is_claim(row, anchor->profile, anchor->storage_path)) {
+    if (anchor && (!manifest_is_claim(row, anchor->profile, anchor->storage_path) ||
+        workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) ==
+        CMP_TYPE_DIFF)) {
         return;
     }
 

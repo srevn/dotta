@@ -470,8 +470,11 @@ static inline bool workspace_reassigned(
  * Readers: core/workspace.c analyze_file_divergence's base fast path, which reaches
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's proof means disk IS the pair, so what the row is to the pair is
- * what it is to disk. A reader not on this list is a bug; the boolean reading
- * of it is workspace_stale below.
+ * what it is to disk — and its kind rung alone, asked of the record, by
+ * core/workspace.c workspace_record_confirmation and cmds/apply.c cmd_apply's
+ * adoption: a record of another kind than its row is a fact about a node that
+ * is gone, which the load learns nothing into and apply adopts over. A reader
+ * not on this list is a bug; the boolean reading of it is workspace_stale below.
  *
  * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL

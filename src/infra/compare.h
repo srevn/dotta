@@ -68,7 +68,8 @@
  * NOTE: The claim — the mode and the ownership — is explicitly NOT part of this
  * module. The compare module is infrastructure-layer, handling only content and
  * type. A claim's compare (the git filemode resolved into the mode, the rest
- * from .dotta/metadata.json) is a core-layer concern handled by workspace.c.
+ * from .dotta/metadata.json) is a core-layer concern: core/workspace.c
+ * analyze_claim_divergence for a row, compute_orphan_divergence for a record.
  */
 typedef enum {
     CMP_EQUAL,      /* The copy is the reference — kind and content */

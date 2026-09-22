@@ -552,10 +552,10 @@ static inline bool workspace_stale(
  * claim says what to create the path as and nothing the analysis measures (the
  * clause workspace_reassigned keeps).
  *
- * Readers: core/workspace.c analyze_file_divergence and
- * analyze_directories_divergence (the record's learning, where disk stands on
- * the moved claim), cmds/apply.c cmd_apply's record step (the claims a fix set
- * that the record still lacks). A reader not on this list is a bug.
+ * Readers: core/workspace.c analyze_claim_divergence, which both active judges
+ * call (the record's learning, where disk stands on the moved claim), cmds/apply.c
+ * cmd_apply's record step (the claims a fix set that the record still lacks). A
+ * reader not on this list is a bug.
  */
 static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const anchor_t *anchor

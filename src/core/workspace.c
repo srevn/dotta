@@ -70,8 +70,8 @@
  * beside that blob so the next run can both short-circuit via the fast-path stat
  * and, if Git advances blob_oid in the meantime, classify the file as stale from
  * the fast path instead of re-hashing. And a claim Git moved that disk already
- * stands on, from either judge, so the record follows the agreement (core/state.h
- * anchor_t, the claim).
+ * stands on, from the claim judge for either kind (analyze_claim_divergence),
+ * so the record follows the agreement (core/state.h anchor_t, the claim).
  *
  * The blob is the row's: a confirmation binds the stat to the blob the row expected
  * when disk was found equal to it, and state_confirm reads it from the row it
@@ -338,8 +338,9 @@ static error_t *workspace_create_empty(
 /**
  * Does disk ownership diverge from the claim?
  *
- * The ownership half of every divergence check — one rule for the file, orphan
- * and directory analyzers. What the sheet says here is the sheet's to say
+ * The ownership half of every divergence check — one rule for a row's claim
+ * (analyze_claim_divergence, both kinds) and a record's
+ * (compute_orphan_divergence). What the sheet says here is the sheet's to say
  * (core/metadata.h metadata_ownership) and this function is the comparison alone,
  * one per reading: the names it claimed, and only those, are compared by name
  * (NULL skips that half), and a UID/GID the system cannot resolve to one reads
@@ -678,12 +679,12 @@ static error_t *workspace_add_untracked(
  * named, for workspace_flush_updates to persist through workspace_confirm: the
  * content where a judge found disk equal to the row (DIVERGENCE_CONTENT, with
  * the look it was verified from), and a claim Git moved that disk already stands
- * on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — workspace_claims_moved's, which
- * has asked them of the record's kind already). The content is kept only where
- * the record is this row's content base (the gate below); a claim opens nothing
- * and is kept as it comes. A path with no record yet is confirmed from this row
- * like any other: the flush observes before it confirms, and the record it creates
- * is this row's.
+ * on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP, from analyze_claim_divergence —
+ * workspace_claims_moved's, which has asked them of the record's kind already).
+ * The content is kept only where the record is this row's content base (the gate
+ * below); a claim opens nothing and is kept as it comes. A path with no record
+ * yet is confirmed from this row like any other: the flush observes before it
+ * confirms, and the record it creates is this row's.
  *
  * Fallible, as every queue the load fills is: a confirmation dropped here would
  * leave the record short of what the load established — a claim's lag reads the
@@ -912,6 +913,64 @@ static workspace_state_t classify_absent(
 
     return anchor ? WORKSPACE_STATE_DELETED
                   : WORKSPACE_STATE_UNDEPLOYED;
+}
+
+/**
+ * The claim's half of a row's verdict: the look against the row's claim, and
+ * what the record learns from it
+ *
+ * Axis by axis — DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — where the look stands
+ * off the row's claim, added to *divergence; and each claim Git moved past the
+ * record's (workspace_claims_moved) that the look already stands on, queued for
+ * the record to learn. Asked only of a look standing at the row's kind, the one
+ * whose stat says anything of the row: each judge rules out absence and another
+ * kind before it asks.
+ *
+ * One rule for the two active judges (analyze_file_divergence,
+ * analyze_directories_divergence). The orphan judge asks the same compare of
+ * the record's claim, and learns nothing (compute_orphan_divergence).
+ *
+ * @param ws Workspace (must not be NULL)
+ * @param row Active row, a file or a tracked directory (must not be NULL)
+ * @param anchor The record dotta keeps of the path, or NULL when it has none
+ * @param st The load's look at the path, standing at the row's kind (must not
+ *           be NULL)
+ * @param divergence The row's verdict so far (must not be NULL); the claim's
+ *                   bits are added to it
+ * @return ERR_MEMORY where the learning could not be queued (the load's, as
+ *         workspace_record_confirmation says), NULL otherwise
+ */
+static error_t *analyze_claim_divergence(
+    workspace_t *ws,
+    const manifest_row_t *row,
+    const anchor_t *anchor,
+    const struct stat *st,
+    divergence_type_t *divergence
+) {
+    /* The mode, where the kind carries one. The row's is total — the claim, or
+     * the filemode floor manifest_build resolved absence into — so one full-bit
+     * compare answers, the executable bit riding in it; a link row is never asked
+     * (its 0 is a don't-care, not a value), and a directory row is never a link. */
+    divergence_type_t claims = DIVERGENCE_NONE;
+    if (row->type != PATH_TYPE_SYMLINK && (st->st_mode & 0777) != row->mode) {
+        claims |= DIVERGENCE_MODE;
+    }
+
+    /* The ownership, its own axis, links included: the sheet's word, compared
+     * by the rule the orphan judge asks of the record too (ownership_diverges). */
+    if (ownership_diverges(row->storage_path, row->owner, row->group, st)) {
+        claims |= DIVERGENCE_OWNERSHIP;
+    }
+    *divergence |= claims;
+
+    /* A claim Git moved past the record's that disk already stands on is the
+     * record's to learn, whoever owns the path — a directory dotta never owned
+     * learns it too: the record follows every agreement, so the user's next move
+     * on that axis reads as the user's, and an orphan is measured against the
+     * claim disk stood on. */
+    return workspace_record_confirmation(
+        ws, row, anchor, workspace_claims_moved(row, anchor) & ~claims, NULL
+    );
 }
 
 /**
@@ -1404,7 +1463,7 @@ static error_t *analyze_file_divergence(
                 break;
         }
 
-        /* CLAIM CHECKING
+        /* CLAIM CHECKING (analyze_claim_divergence)
          *
          * Only when the content phase ruled neither absence nor another kind —
          * the two verdicts under which the stat says nothing about the row, and
@@ -1412,33 +1471,12 @@ static error_t *analyze_file_divergence(
          * alone: the enclosing block opened over a present occupant, and the
          * only write to it since is the CMP_MISSING arm's, so a third conjunct
          * naming the occupant would spell that verdict twice.
-         * compute_orphan_divergence keeps the same guard.
-         *
-         * The row's mode is total for every kind that carries one — the claim,
-         * or the filemode floor manifest_build resolved absence into — so one
-         * full-bit compare answers, the executable bit riding in it; a symlink
-         * row is never asked (its 0 is a don't-care, not a value). Ownership is
-         * its own axis, links included. Both read the load's one look — the stat
-         * the content verdict was made from — for no extra syscalls.
+         * compute_orphan_divergence keeps the same guard. The claim reads the
+         * load's one look — the stat the content verdict was made from — for no
+         * extra syscalls.
          */
         if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-            if (row->type != PATH_TYPE_SYMLINK &&
-                (look->st.st_mode & 0777) != row->mode) {
-                divergence |= DIVERGENCE_MODE;
-            }
-            if (ownership_diverges(
-                row->storage_path, row->owner, row->group, &look->st
-                )) {
-                divergence |= DIVERGENCE_OWNERSHIP;
-            }
-
-            /* A claim Git moved past the record's (workspace_claims_moved) that
-             * disk already stands on is the record's to learn: it follows every
-             * agreement, so the user's next move on that axis reads as the user's,
-             * and an orphan is measured against the claim disk stood on. */
-            error_t *err = workspace_record_confirmation(
-                ws, row, anchor, workspace_claims_moved(row, anchor) & ~divergence, NULL
-            );
+            error_t *err = analyze_claim_divergence(ws, row, anchor, &look->st, &divergence);
             if (err) return err;
         }
     }
@@ -1665,11 +1703,12 @@ static error_t *compute_orphan_divergence(
      * Only when the content phase ruled neither absence nor another kind — a
      * mode question over what is not there, or is not that, answers nothing.
      * Read off the verdict alone, the guard analyze_file_divergence keeps: a
-     * bit this function has just set is the verdict spelled twice. The record's
-     * mode is total for every kind that carries one (written from a view row
-     * after the build resolved absence), so one full-bit compare answers; a symlink
-     * record is never asked. Both halves read the caller's look — the one stat
-     * the content verdict was made from — for zero extra syscalls.
+     * bit this function has just set is the verdict spelled twice. The compare
+     * analyze_claim_divergence asks of a row, asked of the record's claim: the
+     * record's mode is total for every kind that carries one (written from a
+     * view row after the build resolved absence), so one full-bit compare answers;
+     * a symlink record is never asked. Both halves read the caller's look — the
+     * one stat the content verdict was made from — for zero extra syscalls.
      */
     if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
         if (anchor->type != PATH_TYPE_SYMLINK
@@ -3542,23 +3581,11 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * dotta actually deployed under, which is what a record is for. */
         if (!row->tracked) continue;
 
-        /* One rule, three analyzers: the row's mode is total (claim or floor)
-         * and a directory row is never a link, so the compare needs no gate. */
+        /* The claim, by the one rule the file judge asks too
+         * (analyze_claim_divergence): the look stands at the row's kind, since
+         * absence and every other kind were ruled on above. */
         divergence_type_t divergence = DIVERGENCE_NONE;
-        if ((look->st.st_mode & 0777) != row->mode) {
-            divergence |= DIVERGENCE_MODE;
-        }
-        if (ownership_diverges(row->storage_path, row->owner, row->group, &look->st)) {
-            divergence |= DIVERGENCE_OWNERSHIP;
-        }
-
-        /* The file judge's learning, over the same two axes: a claim Git moved
-         * that disk already stands on is the record's to learn, and a directory
-         * dotta never owned learns it too — nothing but a record's claim makes
-         * a later chmod read as the user's. */
-        err = workspace_record_confirmation(
-            ws, row, anchor, workspace_claims_moved(row, anchor) & ~divergence, NULL
-        );
+        err = analyze_claim_divergence(ws, row, anchor, &look->st, &divergence);
         if (err) return err;
 
         /* Record divergence if any metadata differs, or a pending handover stands
@@ -4648,13 +4675,13 @@ error_t *workspace_confirm(
  * found disk equal to, state_confirm rewrites the content — the kind, the blob
  * and the fast-path stat triple — under the row's binding; persisting the pair
  * lets the next run short-circuit (fast path) or tag STALE directly (fast path
- * with Git-advanced blob_oid). For a claim Git moved that either judge found
- * disk standing on, state_confirm_claim rewrites the claim, under no binding.
- * Neither writes the binding or the lifecycle, which stay whatever the last
- * ownership event wrote. Each is a compare-and-swap on the record this load read,
- * and advances the snapshot's record on the same columns only when its statement
- * wrote: a record another writer moved since the load stays theirs, and this
- * one as read.
+ * with Git-advanced blob_oid). For a claim Git moved that the claim judge found
+ * disk standing on, either kind (analyze_claim_divergence), state_confirm_claim
+ * rewrites the claim, under no binding. Neither writes the binding or the
+ * lifecycle, which stay whatever the last ownership event wrote. Each is a
+ * compare-and-swap on the record this load read, and advances the snapshot's
+ * record on the same columns only when its statement wrote: a record another
+ * writer moved since the load stays theirs, and this one as read.
  *
  * The order is load-bearing: a path in both halves had no record at analysis,
  * and a confirmation is an UPDATE that creates nothing — one cannot confirm what

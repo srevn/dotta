@@ -2679,14 +2679,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *                             and no stat
          *   converged in place        dotta did not make it, and it was present at
          *   (a fix)                   load, so the flush has already observed any
-         *                             that had no record: nothing to write, with
-         *                             one exception — a pending handover must
+         *                             that had no record and learned each claim
+         *                             disk already stood on: a confirmation of
+         *                             the claims the fix set that the record
+         *                             still lacks, never an ownership event —
+         *                             anchoring it as owned would set deployed_at
+         *                             on a directory the user made and hand it
+         *                             to the prune on the next scope exit — with
+         *                             one exception: a pending handover must
          *                             not outlive the run that converged the
          *                             directory, so a reassigned row takes the
-         *                             one anchor that acknowledges it. Anchoring
-         *                             it as owned would set deployed_at on a
-         *                             directory the user made and hand it to
-         *                             the prune on the next scope exit
+         *                             one anchor that acknowledges it
          *   ancestors                 claimed parents made on the way, either
          *                             class — dotta made them too, an owned anchor
          * Every other active directory present on disk was present at load too,
@@ -2733,14 +2736,38 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             deploy_outcomes_t converged = deploy_result->converged;
             for (size_t i = 0; i < converged.count; i++) {
-                const deploy_outcome_t *o = &converged.entries[i];
-                const manifest_row_t *dir = o->verdict->row;
-                bool made = deploy_convergence(o->verdict->occupant) != DEPLOY_CONVERGE_FIX;
+                const deploy_verdict_t *v = converged.entries[i].verdict;
+                const manifest_row_t *dir = v->row;
 
-                const workspace_item_t *item = o->verdict->item;
-                bool acknowledges = workspace_reassigned(item->row, item->anchor);
+                /* Derived before either write: both rewrite the record the
+                 * reassignment fact is read against. */
+                bool acknowledges = workspace_reassigned(v->item->row, v->item->anchor);
 
-                if (!made && !acknowledges) continue;
+                if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !acknowledges) {
+                    /* A fix: the claims it set, which the record still lacks.
+                     * It sets the mode always, and the ownership only where the
+                     * verdict applies a pair — two -1s leave the owner as the
+                     * load found it, apart from the row's (the flush has learned
+                     * each axis disk already stood on): on a fix, an owner this
+                     * host cannot resolve, which preflight warned of. So the
+                     * record keeps its own there, and the claim stays Git's to
+                     * bring. */
+                    divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
+                        ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
+                        : DIVERGENCE_MODE;
+
+                    error_t *confirm_err = workspace_confirm(
+                        ws, dir, workspace_claims_moved(dir, v->item->anchor) & landed, NULL
+                    );
+                    if (confirm_err) {
+                        output_warning(
+                            out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
+                            dir->filesystem_path, error_message(confirm_err)
+                        );
+                        error_free(confirm_err);
+                    }
+                    continue;
+                }
 
                 error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
                 if (anchor_err) {
@@ -2804,10 +2831,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * answer for the occupant, and a fact is retired on a proof or
                  * not at all (core/workspace.h workspace_displaced_t). A squatter
                  * this run replaced is the one over-conservative case, and keeping
-                 * a fact its path's next ownership event or confirmation, or a
-                 * later sweep, will reap costs nothing — where forgetting one
-                 * wrongly costs the next load its base and turns dotta's own
-                 * deployed bytes into the user's edit.
+                 * a fact its path's next ownership event or content confirmation,
+                 * or a later sweep, will reap costs nothing — where forgetting
+                 * one wrongly costs the next load its base and turns dotta's
+                 * own deployed bytes into the user's edit.
                  *
                  * The view's claims alone, which is the whole of what a sweep
                  * needs: they are the squatters that outlive the run, where a

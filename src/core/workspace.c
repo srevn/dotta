@@ -64,29 +64,32 @@
 /**
  * Pending confirmation (internal type)
  *
- * Accumulated during analyze_file_divergence() when the slow path confirms
- * CMP_EQUAL — disk is row->blob_oid. The verified stat should be persisted beside
- * that blob so the next run can both short-circuit via the fast-path stat and,
- * if Git advances blob_oid in the meantime, classify the file as stale from the
- * fast path instead of re-hashing.
+ * What a look established that the record does not yet hold, on the axes named.
+ * The content — disk is row->blob_oid, found by the slow path's CMP_EQUAL or a
+ * released base's fast-path hit — with the stat it was verified with, persisted
+ * beside that blob so the next run can both short-circuit via the fast-path stat
+ * and, if Git advances blob_oid in the meantime, classify the file as stale from
+ * the fast path instead of re-hashing. And a claim Git moved that disk already
+ * stands on, from either judge, so the record follows the agreement (core/state.h
+ * anchor_t, the claim).
  *
  * The blob is the row's: a confirmation binds the stat to the blob the row expected
  * when disk was found equal to it, and state_confirm reads it from the row it
  * is handed — a stat triple without a blob is meaningless, and the row is the
- * one the stat was verified against.
+ * one the stat was verified against. And wherever the content is named, the row
+ * is the one the record's binding names: the blob a record carries is the blob
+ * of that row (core/state.h anchor_t), which is what makes it readable at all
+ * when it is encrypted — see workspace_record_confirmation.
  *
- * And the row is the one the record's binding names: the blob a record carries
- * is the blob of that row (core/state.h anchor_t), which is what makes it readable
- * at all when it is encrypted. A row the binding does not name records nothing
- * — see workspace_record_confirmation.
- *
- * The row pointer is borrowed from ws->active_files (workspace lifetime). Carrying
+ * The row pointer is borrowed from the active slices (workspace lifetime). Carrying
  * the row directly lets the flush find the record by the row's path and hand
- * both to state_confirm, which advances the record only when its statement wrote.
+ * both to workspace_confirm, which advances the record only where a statement
+ * wrote.
  */
 typedef struct {
     const manifest_row_t *row;       /* Active row this confirmation targets (borrowed) */
-    stat_cache_t stat;               /* Captured stat triple (fast-path proof) */
+    divergence_type_t axes;          /* The axes established: CONTENT, MODE, OWNERSHIP */
+    stat_cache_t stat;               /* The content's proof; UNSET without CONTENT */
 } confirmation_t;
 
 /**
@@ -240,9 +243,9 @@ struct workspace {
      * the base derivation in analyze_file_divergence, through the index and only
      * when the path's record carries no confirmed blob — a released fact is not
      * a claim. Frozen at load: the database forgets a copy with its path's next
-     * ownership event or confirmation (state_anchor, state_confirm), and nothing
-     * here follows, so a reader after the analysis would read copies the database
-     * no longer holds. */
+     * ownership event or content confirmation (state_anchor, state_confirm),
+     * and nothing here follows, so a reader after the analysis would read copies
+     * the database no longer holds. */
     released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
     hashmap_t *released_index;                   /* filesystem_path → released_copy_t * (heap-allocated) */
@@ -671,44 +674,29 @@ static error_t *workspace_add_untracked(
 /**
  * Record a confirmation for later flushing
  *
- * Called from analyze_file_divergence() when the slow path confirms CMP_EQUAL.
- * Accumulates the row and the stat it was verified with so
- * workspace_flush_updates() can persist them via state_confirm(). The blob the
- * stat binds to is the row's — disk was found equal to it.
- *
- * A confirmation belongs to the row the record's binding names: the blob it
- * advances is that row's, and an encrypted blob opens under one binding and no
- * other, so a confirmation taken from another row would leave the record carrying
- * a blob no reader — this analysis's own base least of all — can place.
- * state_confirm's statement refuses exactly that at the write (it binds the row's
- * binding); this asks it of the snapshot first, so a confirmation that cannot
- * land is never queued, and a load with nothing else to write opens no transaction
- * for it. A row the binding does not name is a pending handover: apply's
- * acknowledgement is what moves the record onto it, and until then the path takes
- * the slow path on every load, which is the price of a record that means one
- * thing. A path with no record yet is confirmed from this row like any other:
- * the flush observes before it confirms, and the record it creates is this row's.
- *
- * And a confirmation belongs to a record of the row's kind. A record of another
- * kind is a fact about a node that is gone — Git retyped the name, and what the
- * look found is the row's own kind — and a confirmation would retype it with
- * the pair while the ownership stamp dotta earned for the old node stayed, vouching
- * for one dotta never wrote: a link the user made, a file where dotta's directory
- * was, which the next scope exit would prune as dotta's own. The kind is the
- * ladder's first rung (core/workspace.h workspace_compare_confirmed), never
- * path_type_kind, whose taxonomy files a link beside the files. Such a record
- * learns nothing here, and apply, the ownership moment, re-establishes it by
- * adopting the row (cmds/apply.c), as it adopts a row with no record.
+ * Queues what a look established that the record does not yet hold, on the axes
+ * named, for workspace_flush_updates to persist through workspace_confirm: the
+ * content where a judge found disk equal to the row (DIVERGENCE_CONTENT, with
+ * the look it was verified from), and a claim Git moved that disk already stands
+ * on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — workspace_claims_moved's, which
+ * has asked them of the record's kind already). The content is kept only where
+ * the record is this row's content base (the gate below); a claim opens nothing
+ * and is kept as it comes. A path with no record yet is confirmed from this row
+ * like any other: the flush observes before it confirms, and the record it creates
+ * is this row's.
  *
  * Fallible, as every queue the load fills is: a confirmation dropped here would
- * leave the record short of what the load established. The failure is the
- * workspace's own allocation and not a fact about the path, so the callers return
- * it as it is.
+ * leave the record short of what the load established — a claim's lag reads the
+ * user's next move on it as Git's. The failure is the workspace's own allocation
+ * and not a fact about the path, so the callers return it as it is.
  *
  * @param ws Workspace (must not be NULL)
- * @param row Active row disk was found equal to (borrowed; workspace lifetime)
+ * @param row Active row the axes were established against (borrowed; workspace
+ *            lifetime)
  * @param anchor The record dotta keeps of the path, or NULL when it has none
- * @param st Verified filesystem stat
+ * @param axes The axes the look established (NONE queues nothing)
+ * @param st The look the content was verified from (must not be NULL when axes
+ *           carries DIVERGENCE_CONTENT; unread otherwise)
  * @return ERR_MEMORY where the queue could not grow, NULL otherwise — a
  *         confirmation the gate refuses included
  */
@@ -716,14 +704,35 @@ static error_t *workspace_record_confirmation(
     workspace_t *ws,
     const manifest_row_t *row,
     const anchor_t *anchor,
+    divergence_type_t axes,
     const struct stat *st
 ) {
-    if (anchor && (!manifest_is_claim(row, anchor->profile, anchor->storage_path) ||
+    /* The content, only onto a record that is this row's content base. Bound to
+     * this row: an encrypted blob opens under one binding and no other, and
+     * state_confirm's statement refuses another at the write — asked of the
+     * snapshot first, so a confirmation that cannot land never opens the flush's
+     * transaction; a row the binding does not name is a pending handover, which
+     * takes the slow path on every load until apply's acknowledgement moves the
+     * record onto it. And of this row's kind, the ladder's first rung
+     * (core/workspace.h workspace_compare_confirmed), never path_type_kind, whose
+     * taxonomy files a link beside the files: a record of another kind is a fact
+     * about a node that is gone, and a confirmation would carry the ownership
+     * stamp dotta earned for it onto a node dotta never wrote — a link the user
+     * made, a file where dotta's directory was — which apply adopts instead, as
+     * it adopts a row with no record (cmds/apply.c). */
+    if ((axes & DIVERGENCE_CONTENT) && anchor &&
+        (!manifest_is_claim(row, anchor->profile, anchor->storage_path) ||
         workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) ==
         CMP_TYPE_DIFF)) {
+        axes &= ~DIVERGENCE_CONTENT;
+    }
+
+    /* Nothing left to learn: the common case, a look that found the record whole. */
+    if (axes == DIVERGENCE_NONE) {
         return NULL;
     }
 
+    /* Room for one more, the queue doubling; a failure is the load's (above). */
     if (ws->confirmation_count >= ws->confirmation_capacity) {
         size_t new_cap = ws->confirmation_capacity
                        ? ws->confirmation_capacity * 2 : 16;
@@ -740,9 +749,12 @@ static error_t *workspace_record_confirmation(
         ws->confirmation_capacity = new_cap;
     }
 
+    /* The proof is the content's alone, distilled from the look where the
+     * comparison stood; UNSET beside a claim, where nothing reads it. */
     ws->confirmations[ws->confirmation_count++] = (confirmation_t){
         .row = row,
-        .stat = stat_cache_from_stat(st),
+        .axes = axes,
+        .stat = (axes & DIVERGENCE_CONTENT) ? stat_cache_from_stat(st) : STAT_CACHE_UNSET,
     };
 
     return NULL;
@@ -1175,7 +1187,9 @@ static error_t *analyze_file_divergence(
              * would write — the row's kind beside a triple taken of the other
              * one — is never queued from here. */
             if (cmp_result == CMP_EQUAL && released) {
-                error_t *err = workspace_record_confirmation(ws, row, anchor, &look->st);
+                error_t *err = workspace_record_confirmation(
+                    ws, row, anchor, DIVERGENCE_CONTENT, &look->st
+                );
                 if (err) return err;
             }
         } else {
@@ -1264,7 +1278,9 @@ static error_t *analyze_file_divergence(
              * with the row's blob and the look the verdict was reached from, so
              * the next run can short-circuit via the fast path above. */
             if (cmp_result == CMP_EQUAL) {
-                err = workspace_record_confirmation(ws, row, anchor, &look->st);
+                err = workspace_record_confirmation(
+                    ws, row, anchor, DIVERGENCE_CONTENT, &look->st
+                );
                 if (err) return err;
             }
 
@@ -1305,8 +1321,8 @@ static error_t *analyze_file_divergence(
              * edit is taken as real (CONTENT), the conservative answer — STALE
              * still holds, because git_moved is a fact about two OIDs. A failed
              * look on a released base retires nothing: a row dies only with its
-             * path's next ownership event or confirmation, or at the sweep —
-             * never on a look that could not answer. */
+             * path's next ownership event or content confirmation, or at the
+             * sweep — never on a look that could not answer. */
             if (git_moved &&
                 (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
                 compare_result_t at_base;
@@ -1415,6 +1431,15 @@ static error_t *analyze_file_divergence(
                 )) {
                 divergence |= DIVERGENCE_OWNERSHIP;
             }
+
+            /* A claim Git moved past the record's (workspace_claims_moved) that
+             * disk already stands on is the record's to learn: it follows every
+             * agreement, so the user's next move on that axis reads as the user's,
+             * and an orphan is measured against the claim disk stood on. */
+            error_t *err = workspace_record_confirmation(
+                ws, row, anchor, workspace_claims_moved(row, anchor) & ~divergence, NULL
+            );
+            if (err) return err;
         }
     }
 
@@ -1487,9 +1512,12 @@ static error_t *analyze_file_divergence(
  * safety is measured against the deployment anchor, never against a view blob:
  * Git may have moved on after the deployment and before the path left scope,
  * and that move is not the user's edit. The record is the honest reference on
- * every axis — its blob and stat for content, its type, mode, owner and group
- * for metadata: what dotta set there, not what the row later came to claim.
- * DIVERGENCE_STALE is therefore never emitted here.
+ * every axis — its type, blob and stat for the content, its mode, owner and group
+ * for the claim — the claim dotta last reconciled the path against, which follows
+ * every agreement a load found or a fix made (core/state.h anchor_t), so a claim
+ * Git moved and disk followed while the path was managed is measured as the one
+ * disk stands on, not as an edit. Never what the row later came to claim, after
+ * the path left scope. DIVERGENCE_STALE is therefore never emitted here.
  *
  * Precondition: the record carries a confirmed blob. The caller (analyze_orphans)
  * measures only a record dotta owns or one the user ordered pruned against a
@@ -3515,10 +3543,22 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
 
         /* One rule, three analyzers: the row's mode is total (claim or floor)
          * and a directory row is never a link, so the compare needs no gate. */
-        bool mode_differs = (look->st.st_mode & 0777) != row->mode;
-        bool ownership_differs = ownership_diverges(
-            row->storage_path, row->owner, row->group, &look->st
+        divergence_type_t divergence = DIVERGENCE_NONE;
+        if ((look->st.st_mode & 0777) != row->mode) {
+            divergence |= DIVERGENCE_MODE;
+        }
+        if (ownership_diverges(row->storage_path, row->owner, row->group, &look->st)) {
+            divergence |= DIVERGENCE_OWNERSHIP;
+        }
+
+        /* The file judge's learning, over the same two axes: a claim Git moved
+         * that disk already stands on is the record's to learn, and a directory
+         * dotta never owned learns it too — nothing but a record's claim makes
+         * a later chmod read as the user's. */
+        err = workspace_record_confirmation(
+            ws, row, anchor, workspace_claims_moved(row, anchor) & ~divergence, NULL
         );
+        if (err) return err;
 
         /* Record divergence if any metadata differs, or a pending handover stands
          * — the rule read over the pair this loop has held throughout, and the
@@ -3528,12 +3568,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * the row's class itself, so a derived claim answers false here whatever
          * its record says, and the tracked gate above is about everything else
          * this loop measures. */
-        if (mode_differs || ownership_differs || workspace_reassigned(row, anchor)) {
-            /* Accumulate divergence flags */
-            divergence_type_t divergence = DIVERGENCE_NONE;
-            if (mode_differs) divergence |= DIVERGENCE_MODE;
-            if (ownership_differs) divergence |= DIVERGENCE_OWNERSHIP;
-
+        if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
             err = workspace_add_diverged(
                 ws,
                 row,
@@ -4555,21 +4590,70 @@ error_t *workspace_anchor(
 }
 
 /**
+ * Confirm a managed path with in-memory consistency
+ *
+ * Workspace-scope writer for confirmations: the path's live record is the one
+ * both verbs are handed, so each advances it in place when its statement wrote,
+ * and the item that borrows it reads the same. No record is created here — a
+ * confirmation is an UPDATE of what the load or the flush's observation made.
+ */
+error_t *workspace_confirm(
+    workspace_t *ws,
+    const manifest_row_t *row,
+    divergence_type_t axes,
+    const stat_cache_t *stat
+) {
+    CHECK_NULL(ws);
+    CHECK_NULL(row);
+
+    /* The path's live record: the load's, or the one the flush's observation
+     * made. The map's value is the mutable record workspace_get_anchor narrows. */
+    anchor_t *anchor = hashmap_get(ws->anchor_index, row->filesystem_path);
+
+    /* The content, under the row's binding (state_confirm). Either statement
+     * may run first: each binds the record as the snapshot holds it and advances
+     * the snapshot when it writes, so the type the content writes within its
+     * kind is the type the claim's then binds. */
+    if (axes & DIVERGENCE_CONTENT) {
+        error_t *err = state_confirm(ws->state, row, stat, anchor);
+        if (err) return err;
+    }
+
+    if (!(axes & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP))) {
+        return NULL;
+    }
+
+    /* The claim, under no binding (state_confirm_claim): the row's on each axis
+     * named, the record's own on the other — a value per column, the strings
+     * borrowed from the row as the other two writers borrow them. */
+    return state_confirm_claim(
+        ws->state,
+        (axes & DIVERGENCE_MODE) ? row->mode : anchor->mode,
+        (axes & DIVERGENCE_OWNERSHIP) ? row->owner : anchor->owner,
+        (axes & DIVERGENCE_OWNERSHIP) ? row->group : anchor->group,
+        anchor
+    );
+}
+
+/**
  * Flush accumulated observations and confirmations to the state database
  *
  * Observation half, first: records the first sighting of paths analysis found
  * on disk with no record, either kind. Routes through workspace_observe, so the
  * snapshot gains the same record the INSERT creates.
  *
- * Confirmation half, second: for the rows analyze_file_divergence found disk
- * equal to, state_confirm rewrites what the comparison established — the content:
- * the kind, the blob and the fast-path stat triple — and neither the binding
- * nor the claim the record carries, which stay whatever the last ownership event
- * wrote. Persisting the pair lets the next run short-circuit (fast path) or tag
- * STALE directly (fast path with Git-advanced blob_oid). It is a compare-and-swap
- * on the record this load read, under the row's binding, and it advances the
- * snapshot's record on the same columns only when its statement wrote: a record
- * another writer moved since the load stays theirs, and this one as read.
+ * Confirmation half, second, through workspace_confirm: what the looks established
+ * that the records do not yet hold, by axis. For the rows analyze_file_divergence
+ * found disk equal to, state_confirm rewrites the content — the kind, the blob
+ * and the fast-path stat triple — under the row's binding; persisting the pair
+ * lets the next run short-circuit (fast path) or tag STALE directly (fast path
+ * with Git-advanced blob_oid). For a claim Git moved that either judge found
+ * disk standing on, state_confirm_claim rewrites the claim, under no binding.
+ * Neither writes the binding or the lifecycle, which stay whatever the last
+ * ownership event wrote. Each is a compare-and-swap on the record this load read,
+ * and advances the snapshot's record on the same columns only when its statement
+ * wrote: a record another writer moved since the load stays theirs, and this
+ * one as read.
  *
  * The order is load-bearing: a path in both halves had no record at analysis,
  * and a confirmation is an UPDATE that creates nothing — one cannot confirm what
@@ -4581,12 +4665,13 @@ error_t *workspace_anchor(
  * held no lock — another process can commit between it and this flush — so each
  * is conditional on what the load read: an observation lands only where no record
  * stands (INSERT OR IGNORE), a confirmation only on the record the comparison
- * was made against (state_confirm). The void alone names no predecessor: an order
- * is one column, and one placed again since the load is the row this load read.
+ * was made against (state_confirm, state_confirm_claim). The void alone names
+ * no predecessor: an order is one column, and one placed again since the load
+ * is the row this load read.
  *
  * The join, last — the order's view end, the one lifetime end that needs the
  * view: every prune order the load read whose path the view has is void. A released
- * copy has no end here; its two are its record's next ownership event or
+ * copy has no end here; its two are its record's next ownership event or content
  * confirmation, and apply's sweep (core/state.h).
  *
  * Begins its own transaction only when state isn't already in one (status, diff,
@@ -4643,15 +4728,12 @@ error_t *workspace_flush_updates(workspace_t *ws) {
     for (size_t i = 0; i < ws->confirmation_count; i++) {
         const confirmation_t *c = &ws->confirmations[i];
 
-        /* The record the comparison was made against: the load's, or the one
-         * the observation above created — a path confirmed with no record queued
-         * its observation too, so there is always one. */
-        anchor_t *anchor = hashmap_get(ws->anchor_index, c->row->filesystem_path);
-
-        /* Lands only where the database still holds that record under the row's
-         * claim, and only then advances it (state_confirm): a record another
-         * writer moved since the load stays theirs, and this one as read. */
-        error_t *err = state_confirm(ws->state, c->row, &c->stat, anchor);
+        /* Onto the record the look was made against — the load's, or the one
+         * the observation above created, since a path confirmed with no record
+         * queued its observation too — and only where the database still holds
+         * it (workspace_confirm): a record another writer moved since the load
+         * stays theirs, and this one as read. */
+        error_t *err = workspace_confirm(ws, c->row, c->axes, &c->stat);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);

@@ -2248,14 +2248,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * a file needs an OWNED record, since apply adopts a path it merely
          * observed and says so; a directory needs only a record, since apply
          * never adopts one: an absent row has none, and one already standing is
-         * settled by any load's observation. Mode, owner and group are claims
-         * the record copies, not facts it confirms, and say nothing here: a pulled
-         * metadata change is the block's to report, once. The executable half
-         * of the record's type is one of those copied claims — the compare's
-         * ladder tests S_ISREG for either blob mode and never the bit — so a
-         * FILE ↔ EXECUTABLE move Git made under an untouched copy is not stale
-         * either, and asking the type whole would leave a hint no apply could
-         * ever take away (core/workspace.h workspace_stale).
+         * settled by any load's observation. Mode, owner and group say nothing
+         * here: a pulled claim is the block's to report, once. The executable
+         * half of the record's type is a copy of the row's, never confirmed —
+         * the compare's ladder tests S_ISREG for either blob mode and never the
+         * bit — so a FILE ↔ EXECUTABLE move Git made under an untouched copy is
+         * not stale either, and asking the type whole would leave a hint no apply
+         * could ever take away (core/workspace.h workspace_stale).
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */

@@ -12,13 +12,15 @@
  *     the record's retire deletes it in the same breath (apply executing it is
  *     one), and the flush voids it where the view holds the path again;
  *   - a released copy lives while its path's record is absent or merely observed
- *     and disk may still hold it — the record's next ownership event or
+ *     and disk may still hold it — the record's next ownership event or content
  *     confirmation deletes it in the same breath, and apply's sweep forgets it
  *     where disk provably left it.
  * The two facts die these two ways and no other: with a write to their path's
- * record, and where their own authority is asked — the view at the flush, the
- * disk at the sweep. Everything else — what should stand at a path, from whom —
- * is computed from Git at every load (core/manifest.h) and never stored.
+ * record that ends them — the retire an order, a write that says what stands at
+ * the path a released copy, which a claim's confirmation never says — and where
+ * their own authority is asked — the view at the flush, the disk at the sweep.
+ * Everything else — what should stand at a path, from whom — is computed from
+ * Git at every load (core/manifest.h) and never stored.
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -209,9 +211,12 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *     confirmation — a directory, whose whole confirmed-disk record is that it
  *     was observed (a directory has no content confirmation, schema-enforced),
  *     or a file observed but never confirmed.
- *   - the claim (mode, owner, group): what dotta set there, or first saw — the
- *     row's, at the first sighting and at every ownership event, and nothing
- *     else writes it. The executable half of the type is copied from the row
+ *   - the claim (mode, owner, group): the claim dotta last reconciled the path
+ *     against — the row's at the first sighting and at every ownership event,
+ *     and on each axis a look found disk standing on, or a fix made it stand
+ *     on, the row's since (state_confirm_claim). It is the base a claim Git moved
+ *     is measured from (core/workspace.h workspace_claims_moved), and an orphan's
+ *     reference on disk. The executable half of the type is copied from the row
  *     beside it and no verdict reads it: the kind rung takes FILE and EXECUTABLE
  *     for one kind (core/workspace.h workspace_compare_confirmed), and the mode
  *     carries the bit.
@@ -709,12 +714,13 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
  *
  * The slow path's CMP_EQUAL, persisted: rewrites what the comparison established
  * — the content: the kind (type), the blob (blob_oid) and the stat triple captured
- * with it — and neither the binding nor the claim the record carries, which only
- * an ownership event changes. The record must exist — one cannot confirm what
- * one has not seen, and the flush observes first. File rows only: a directory
- * has no content to confirm, and row->blob_oid must be non-zero (a zero blob
- * would record "never confirmed" for a path this call claims to have confirmed
- * — rejected here, where the schema's CHECK would only refuse the zeroblob).
+ * with it — and neither the binding the record carries, which only an ownership
+ * event changes, nor its claim, which is state_confirm_claim's to confirm beside
+ * it. The record must exist — one cannot confirm what one has not seen, and the
+ * flush observes first. File rows only: a directory has no content to confirm,
+ * and row->blob_oid must be non-zero (a zero blob would record "never confirmed"
+ * for a path this call claims to have confirmed — rejected here, where the schema's
+ * CHECK would only refuse the zeroblob).
  *
  * One UPDATE, a compare-and-swap on the record the caller read: it matches iff
  * the database still holds the binding the row's blob opens under and the content
@@ -750,6 +756,49 @@ error_t *state_confirm(
     state_t *state,
     const manifest_row_t *row,
     const stat_cache_t *stat,
+    anchor_t *anchor
+);
+
+/**
+ * Confirm a managed path's claim: advance its record to the claim disk was found,
+ * or made, to stand on
+ *
+ * The claim's confirmation, beside state_confirm's content: mode, owner and group
+ * are the claim established — the row's on each axis the caller found or made
+ * disk agree with, the record's own on the rest — and `anchor` is the record as
+ * the caller read it. One UPDATE, a compare-and-swap on the record's kind and
+ * claim as read: it rewrites the three claim columns iff the database still holds
+ * exactly those, so a record another writer moved since — an ownership event,
+ * another confirmation — matches nothing and nothing is written. The kind is
+ * bound because the claim was measured against one: a record another writer retyped
+ * takes no claim measured under the other kind. *anchor follows the statement
+ * on the three columns when it wrote, borrowing the caller's strings, and last,
+ * so a failure leaves it as read.
+ *
+ * No binding is bound: a claim opens nothing, so the record learns it whichever
+ * row's it is — the content's confirmation is bound to the row's binding because
+ * an encrypted blob opens under one, and a mode or an owner opens nothing. Nothing
+ * else is written — not the binding, not the content, not the lifecycle — so
+ * this is never an ownership event, and says nothing of what stands at the path:
+ * a released copy there outlives it.
+ *
+ * Both kinds. A link's mode binds NULL on both sides, the rule its row's binds
+ * by (state_observe, state_anchor), whatever `mode` says.
+ *
+ * @param state State (must not be NULL, must have open database)
+ * @param mode The mode established (read for a record that is no link)
+ * @param owner The owner established, or NULL (borrowed by *anchor when written)
+ * @param group The group established, or NULL (borrowed by *anchor when written)
+ * @param anchor The path's record as the caller read it — the claim this
+ *               confirmation replaces (must not be NULL); advanced iff the
+ *               statement wrote
+ * @return Error or NULL on success — a record moved since the read is no error
+ */
+error_t *state_confirm_claim(
+    state_t *state,
+    mode_t mode,
+    const char *owner,
+    const char *group,
     anchor_t *anchor
 );
 
@@ -921,11 +970,11 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
  * read verifies against live disk before trusting it, and the sweep retires what
  * disk provably left. A rekey'd repository leaves old released rows permanently
  * UNVERIFIED at the read; they die by the same sweep, or with the path's next
- * ownership event or confirmation. A copy written at a stale key — a path still
- * standing under another spelling, released because a row of the view stands on
- * its very entry (core/workspace.c) — is true and unread for as long as the file
- * stands: it dies when the file goes through that other spelling, or with the
- * next ownership event or confirmation at this key.
+ * ownership event or content confirmation. A copy written at a stale key — a
+ * path still standing under another spelling, released because a row of the view
+ * stands on its very entry (core/workspace.c) — is true and unread for as long
+ * as the file stands: it dies when the file goes through that other spelling,
+ * or with the next ownership event or content confirmation at this key.
  *
  * A missing record is success: nothing observed, nothing to remember.
  *
@@ -967,7 +1016,8 @@ error_t *state_get_released_copies(
  * and cmds/apply.c cmd_apply's sweep (disk provably left the copy: the path is
  * absent, or its live size differs from the recorded triple's). A failed look
  * retires no fact: a confirmation forgets only when its statement wrote, and
- * the sweep only on a look that answered.
+ * the sweep only on a look that answered. A claim's confirmation is no caller:
+ * it says nothing of what stands at the path (state_confirm_claim).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose released copy is forgotten (must not be NULL)

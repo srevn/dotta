@@ -70,6 +70,7 @@ struct state {
     /* Anchor prepared statements (the record's verbs) */
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
     sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors … RETURNING filesystem_path (content, CAS) */
+    sqlite3_stmt *stmt_confirm_claim;       /* UPDATE path_anchors … RETURNING filesystem_path (claim, CAS) */
     sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
 
@@ -268,10 +269,10 @@ static error_t *initialize_schema(sqlite3 *db) {
          * confirmation to outlive its record (blob IS NOT NULL is the write guard's
          * filter; the CHECKs are the schema's own restatement). A row lives while
          * its path's record is absent or merely observed and disk may still hold
-         * it: the record's next ownership event or confirmation deletes it in
-         * the same breath (state_anchor, state_confirm — explicit siblings, per
-         * the rule above), and apply's sweep forgets it when disk provably left
-         * it. The read verifies it against live disk before trusting it. */
+         * it: the record's next ownership event or content confirmation deletes
+         * it in the same breath (state_anchor, state_confirm — explicit siblings,
+         * per the rule above), and apply's sweep forgets it when disk provably
+         * left it. The read verifies it against live disk before trusting it. */
         "CREATE TABLE released_copies ("
         "    filesystem_path TEXT PRIMARY KEY,"
         "    storage_path TEXT NOT NULL,"
@@ -450,6 +451,7 @@ static void finalize_statements(state_t *state) {
         /* Anchor statements */
         &state->stmt_observe,
         &state->stmt_confirm,
+        &state->stmt_confirm_claim,
         &state->stmt_anchor,
         &state->stmt_retire,
         /* Order statements */
@@ -555,6 +557,38 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare confirm statement");
     }
 
+    /* Confirm claim: the claim's confirmation — the claim a look found or a fix
+     * made disk stand on, and nothing of the binding or the content — as a
+     * compare-and-swap on the record the caller read. An UPDATE, as the content's
+     * is, for the same reason.
+     *
+     * Bind order (numbered placeholders):
+     *   ?1 filesystem_path  ?2 type — the kind the claim was measured under, as
+     *             the caller read it; the statement never writes it
+     *   ?3 mode  ?4 owner  ?5 group — the claim established (bind_claim)
+     *   ?6 mode  ?7 owner  ?8 group — the claim it replaces, as the caller read
+     *             it (bind_claim); IS matches a NULL where = would not — a link's
+     *             mode, an absent owner or group
+     *
+     * No binding in the WHERE: a claim opens nothing, so it lands on the record
+     * whichever row's it is. RETURNING is the outcome, as for the content's. */
+    const char *sql_confirm_claim =
+        "UPDATE path_anchors SET "
+        "  mode          = ?3, "
+        "  owner         = ?4, "
+        "  \"group\"     = ?5 "
+        "WHERE filesystem_path = ?1 AND type = ?2 "
+        "  AND mode IS ?6 AND owner IS ?7 AND \"group\" IS ?8 "
+        "RETURNING filesystem_path;";
+
+    rc = sqlite3_prepare_v2(
+        state->db, sql_confirm_claim, -1, &state->stmt_confirm_claim, NULL
+    );
+    if (rc != SQLITE_OK) {
+        finalize_statements(state);
+        return sqlite_error(state->db, "Failed to prepare confirm-claim statement");
+    }
+
     /* Anchor: the ownership event — the recorded row and the confirmation together,
      * the writer of every record column but observed_at's existing value.
      *
@@ -654,8 +688,8 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Forget released: the fact's two ends — the sibling of its record's next
-     * ownership event or confirmation (the record says what stands there now)
-     * and apply's sweep (disk provably left the copy). */
+     * ownership event or content confirmation (the record says what stands there
+     * now) and apply's sweep (disk provably left the copy). */
     const char *sql_forget_released =
         "DELETE FROM released_copies WHERE filesystem_path = ?1;";
 
@@ -1656,6 +1690,47 @@ error_t *state_get_all_anchors(
 }
 
 /**
+ * Bind a claim as three placeholders from `first`: mode, owner, group
+ *
+ * The one rule a claim binds by, whoever's it is: the row a record is written
+ * from (bind_row), and both sides of the claim's compare-and-swap — the claim
+ * established and the claim as read (state_confirm_claim). A record's mode column
+ * is NULL exactly where the kind carries none, so each side binds by the kind
+ * it describes.
+ */
+static void bind_claim(
+    sqlite3_stmt *stmt,
+    int first,
+    path_type_t type,
+    mode_t mode,
+    const char *owner,
+    const char *group
+) {
+    /* mode — meaningful iff the type carries one: a link's is a don't-care and
+     * binds NULL; every other kind's is total (claim or floor), a 0000 claim
+     * binding 0 and comparing like any other value */
+    if (type != PATH_TYPE_SYMLINK) {
+        sqlite3_bind_int(stmt, first, mode);
+    } else {
+        sqlite3_bind_null(stmt, first);
+    }
+
+    /* owner (optional) */
+    if (owner) {
+        sqlite3_bind_text(stmt, first + 1, owner, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, first + 1);
+    }
+
+    /* group (optional) */
+    if (group) {
+        sqlite3_bind_text(stmt, first + 2, group, -1, SQLITE_TRANSIENT);
+    } else {
+        sqlite3_bind_null(stmt, first + 2);
+    }
+}
+
+/**
  * Bind a row's key, binding, kind and claim as placeholders ?1-?7
  *
  * The shared prefix of sql_observe and sql_anchor: filesystem_path, storage_path,
@@ -1672,28 +1747,8 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
     /* 4. type */
     sqlite3_bind_text(stmt, 4, path_type_to_sql_text(row->type), -1, SQLITE_STATIC);
 
-    /* 5. mode — meaningful iff the type carries one: a link row's 0 is a
-     * don't-care and binds NULL; every other row's mode is total (claim or floor),
-     * a 0000 claim binding 0 and comparing like any other value */
-    if (row->type != PATH_TYPE_SYMLINK) {
-        sqlite3_bind_int(stmt, 5, row->mode);
-    } else {
-        sqlite3_bind_null(stmt, 5);
-    }
-
-    /* 6. owner (optional) */
-    if (row->owner) {
-        sqlite3_bind_text(stmt, 6, row->owner, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(stmt, 6);
-    }
-
-    /* 7. group (optional) */
-    if (row->group) {
-        sqlite3_bind_text(stmt, 7, row->group, -1, SQLITE_TRANSIENT);
-    } else {
-        sqlite3_bind_null(stmt, 7);
-    }
+    /* 5-7. the claim, by the kind's rule */
+    bind_claim(stmt, 5, row->type, row->mode, row->owner, row->group);
 }
 
 /**
@@ -1830,6 +1885,68 @@ error_t *state_confirm(
     anchor->type = row->type;
     anchor->blob_oid = row->blob_oid;
     anchor->stat = *stat;
+
+    return NULL;
+}
+
+/**
+ * Confirm a managed path's claim: advance its record to the claim disk was found,
+ * or made, to stand on
+ *
+ * A compare-and-swap on the record the caller read — see the SQL comment on
+ * sql_confirm_claim and the header contract. Writes the three claim columns and
+ * nothing else, onto that record under the kind it was read as; *anchor follows
+ * only what was written.
+ */
+error_t *state_confirm_claim(
+    state_t *state,
+    mode_t mode,
+    const char *owner,
+    const char *group,
+    anchor_t *anchor
+) {
+    CHECK_NULL(state);
+    CHECK_NULL(anchor);
+    CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_confirm_claim);
+
+    sqlite3_stmt *stmt = state->stmt_confirm_claim;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+
+    /* 1-2. the record's key and the kind the claim was measured under */
+    sqlite3_bind_text(stmt, 1, anchor->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, path_type_to_sql_text(anchor->type), -1, SQLITE_STATIC);
+
+    /* 3-5. the claim established, and 6-8. the claim it replaces as read — both
+     * by the record's kind, so a link's mode is NULL on both sides */
+    bind_claim(stmt, 3, anchor->type, mode, owner, group);
+    bind_claim(stmt, 6, anchor->type, anchor->mode, anchor->owner, anchor->group);
+
+    /* One row back iff the record matched and was written (sql_confirm_claim). */
+    int rc = sqlite3_step(stmt);
+
+    /* Matched nothing: another writer moved the record since the caller read it
+     * — an ownership event, another confirmation, a retype — and the claim was
+     * measured against a record no longer there. Nothing is written, and *anchor
+     * stays as read. */
+    if (rc == SQLITE_DONE) return NULL;
+
+    /* Wrote: the one row back drains to DONE; anything else is the statement's
+     * own failure. */
+    if (rc == SQLITE_ROW) rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to confirm claim");
+    }
+
+    /* The caller's copy follows, on the three columns the statement names, as a
+     * load reads them back — a link's NULL mode as 0 — and the strings borrowed
+     * as state_anchor's resolved_out borrows the row's, the cast discarding a
+     * const the record's fields do not spell. No released copy dies here: the
+     * claim says nothing of what stands at the path. */
+    anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
+    anchor->owner = (char *) owner;
+    anchor->group = (char *) group;
 
     return NULL;
 }

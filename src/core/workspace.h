@@ -20,13 +20,13 @@
  *   accessors (workspace_files, workspace_directories, workspace_lookup,
  *   workspace_get_anchor) rather than building a view or calling
  *   state_get_all_anchors themselves. The view has no writer: it is current by
- *   construction and nothing invalidates it. The record has two writers while a
- *   workspace is live, workspace_observe and workspace_anchor, each of which
- *   patches the snapshot it persists through (the flush's confirmations go through
- *   state_confirm, which advances the record it is handed only when its statement
- *   wrote); retirements (state_retire_anchor, from apply's record step and the
- *   verbs) go to the database directly — no later reader in the run consults a
- *   retired path.
+ *   construction and nothing invalidates it. The record has three writers while
+ *   a workspace is live, workspace_observe, workspace_anchor and workspace_confirm,
+ *   each of which patches the snapshot it persists through (the confirmations
+ *   through state_confirm and state_confirm_claim, which advance the record they
+ *   are handed only when their statement wrote); retirements (state_retire_anchor,
+ *   from apply's record step and the verbs) go to the database directly — no
+ *   later reader in the run consults a retired path.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -70,6 +70,7 @@
 #include <types.h>
 
 #include "base/output.h"
+#include "base/string.h"
 #include "core/manifest.h"
 #include "core/state.h"
 #include "infra/compare.h"
@@ -126,6 +127,12 @@ typedef enum {
  * print_cleanup_skips, cmds/status.c display_workspace_status) — and a sentence
  * that names both says "mode and ownership", never "permissions", which is one
  * word for two axes.
+ *
+ * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
+ * owner and group — so a mask of them can name axes where no difference is meant:
+ * the ones a look or a fix established, which the record learns
+ * (workspace_confirm), and the claims Git moved past the record
+ * (workspace_claims_moved).
  */
 typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
@@ -437,8 +444,8 @@ typedef struct {
  * between two views; this is the record against the view, standing from whenever
  * it began.
  *
- * The record against the view has two words, and this is the binding's;
- * workspace_stale below is the content's.
+ * The record against the view has three words, and this is the binding's;
+ * workspace_stale below is the content's, workspace_claims_moved the claim's.
  */
 static inline bool workspace_reassigned(
     const manifest_row_t *row, const anchor_t *anchor
@@ -473,10 +480,11 @@ static inline bool workspace_reassigned(
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's proof means disk IS the pair, so what the row is to the pair is
  * what it is to disk — and its kind rung alone, asked of the record, by
- * core/workspace.c workspace_record_confirmation and cmds/apply.c cmd_apply's
- * adoption: a record of another kind than its row is a fact about a node that
- * is gone, which the load learns nothing into and apply adopts over. A reader
- * not on this list is a bug; the boolean reading of it is workspace_stale below.
+ * core/workspace.c workspace_record_confirmation, cmds/apply.c cmd_apply's adoption
+ * and workspace_claims_moved below: a record of another kind than its row is a
+ * fact about a node that is gone, which the load learns nothing into, no claim
+ * is measured against, and apply adopts over. A reader not on this list is a
+ * bug; the boolean reading of it is workspace_stale below.
  *
  * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
@@ -515,6 +523,52 @@ static inline bool workspace_stale(
     const manifest_row_t *row, path_type_t type, const git_oid *blob
 ) {
     return workspace_compare_confirmed(row, type, blob) != CMP_EQUAL;
+}
+
+/**
+ * The claims Git moved past the ones dotta last reconciled — the join's claim word
+ *
+ * The row's claim against the record's, axis by axis, in the divergence's words:
+ * DIVERGENCE_MODE where the modes differ, DIVERGENCE_OWNERSHIP where the owner
+ * or the group does. The record's claim is the one dotta last reconciled the
+ * path against (core/state.h anchor_t), so an axis answered here is one Git moved
+ * since; whether disk followed is the look's to say. The words, never their reading
+ * on this host: a claim is what Git holds, and two spellings of one owner are
+ * two claims.
+ *
+ * A link claims no mode, and is never asked for one: a link row's 0 is a
+ * don't-care, and a link record's column should be NULL but is not always — a
+ * record retyped across kinds before the kind rung guarded the write kept the
+ * file's mode, and a mode asked of it would read a move no confirmation can land
+ * (the claim's compare-and-swap binds a link's mode NULL).
+ *
+ * NONE where the record is no base for the row's claim: no record; a record of
+ * another kind (the kind rung of workspace_compare_confirmed above — a node that
+ * is gone, whose claim says nothing of what stands now); a derived row, whose
+ * claim says what to create the path as and nothing the analysis measures (the
+ * clause workspace_reassigned keeps).
+ *
+ * Readers: core/workspace.c analyze_file_divergence and
+ * analyze_directories_divergence (the record's learning, where disk stands on
+ * the moved claim), cmds/apply.c cmd_apply's record step (the claims a fix set
+ * that the record still lacks). A reader not on this list is a bug.
+ */
+static inline divergence_type_t workspace_claims_moved(
+    const manifest_row_t *row, const anchor_t *anchor
+) {
+    if (!anchor || manifest_is_derived(row) ||
+        workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF) {
+        return DIVERGENCE_NONE;
+    }
+
+    divergence_type_t moved = DIVERGENCE_NONE;
+    if (row->type != PATH_TYPE_SYMLINK && anchor->mode != row->mode) {
+        moved |= DIVERGENCE_MODE;
+    }
+    if (!str_equal(anchor->owner, row->owner) || !str_equal(anchor->group, row->group)) {
+        moved |= DIVERGENCE_OWNERSHIP;
+    }
+    return moved;
 }
 
 /**
@@ -1099,9 +1153,8 @@ error_t *workspace_observe(
  *   - apply's record step (ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path)
- * Confirmations are not ownership events and do not come through here: the flush
- * persists them with state_confirm, which advances the record's confirmed columns
- * itself, and only when its statement wrote.
+ * Confirmations are not ownership events and do not come through here: they are
+ * workspace_confirm's — the flush's, and apply's for a directory it fixed.
  *
  * The row pointer is borrowed from the workspace's active partition; the record
  * borrows its strings from that row for the workspace's lifetime.
@@ -1131,6 +1184,45 @@ error_t *workspace_anchor(
 );
 
 /**
+ * Confirm a managed path with in-memory consistency: advance its record on the
+ * axes named
+ *
+ * Workspace-scope side of state_confirm and state_confirm_claim: the content —
+ * the row's pair, with `stat` as its proof (DIVERGENCE_CONTENT) — through the
+ * first; the row's mode (DIVERGENCE_MODE) and its owner and group
+ * (DIVERGENCE_OWNERSHIP) through the second, the record's own on an axis not
+ * named. Each verb advances the path's live record in place when its statement
+ * wrote, so every later reader in the run sees what the database holds. The axes
+ * are the caller's, established where it stood: this writes what it is handed
+ * and asks nothing again.
+ *
+ * Never an ownership event: the binding and the lifecycle are not written, so a
+ * pending handover keeps reading as one, and a directory the user made is never
+ * handed to the prune.
+ *
+ * Two callers: the flush (workspace_flush_updates), for what the load established,
+ * and cmds/apply.c cmd_apply's record step, for the claims a fix set on a tracked
+ * directory it converged in place.
+ *
+ * @param ws Workspace (must not be NULL, state must be open)
+ * @param row Active row the axes were established against (must not be NULL,
+ *            borrowed from the workspace's active partition; the path has a record
+ *            wherever axes is not NONE)
+ * @param axes The axes established, named by their divergence bits (NONE writes
+ *             nothing)
+ * @param stat The proof beside the content (must not be NULL when axes carries
+ *             DIVERGENCE_CONTENT; unread otherwise)
+ * @return Error from either verb, or NULL on success — a record moved since the
+ *         load is no error
+ */
+error_t *workspace_confirm(
+    workspace_t *ws,
+    const manifest_row_t *row,
+    divergence_type_t axes,
+    const stat_cache_t *stat
+);
+
+/**
  * Flush the updates accumulated during workspace_load to the state database
  *
  * Both channels drain here, in one transaction, observations first:
@@ -1139,30 +1231,34 @@ error_t *workspace_anchor(
  *   analysis while it had no record. Through workspace_observe, so the snapshot
  *   gains the record the INSERT creates.
  *
- *   Confirmations — files the analysis found equal to their row (the slow path's
- *   CMP_EQUAL, or a released base's triple vouching for the row's content)
- *   accumulate the stat they were verified with. Persisting it beside the row's
- *   blob (state_confirm) lets subsequent runs short-circuit via the fast-path
- *   stat AND — if Git advances blob_oid in the meantime — classify the file as
- *   stale directly from the fast path instead of re-hashing. A confirmation
- *   rewrites only what it confirmed — the content: type, blob, stat; the record's
- *   binding and claim are an ownership event's to change, so a clean reassignment
- *   keeps reading as one until apply acknowledges it. And only a row the record's
- *   binding names is ever queued (workspace_record_confirmation), where
+ *   Confirmations — what the analysis established that the record does not yet
+ *   hold, by axis, through workspace_confirm. The content of a file found equal
+ *   to its row (the slow path's CMP_EQUAL, or a released base's triple vouching
+ *   for the row's content), with the stat it was verified with: persisting it
+ *   beside the row's blob (state_confirm) lets subsequent runs short-circuit
+ *   via the fast-path stat AND — if Git advances blob_oid in the meantime —
+ *   classify the file as stale directly from the fast path instead of re-hashing.
+ *   And a claim Git moved that a look of either kind found disk already standing
+ *   on (state_confirm_claim): the record follows every agreement, so the user's
+ *   next move on that axis reads as the user's. Neither rewrites the binding,
+ *   an ownership event's to change, so a clean reassignment keeps reading as
+ *   one until apply acknowledges it. Only a row the record's binding names is
+ *   ever queued a content confirmation (workspace_record_confirmation), where
  *   state_confirm would land no other: the blob a record carries is the blob of
  *   the row its binding names, so a path whose record is bound to another row
  *   takes the slow path on every load until an ownership event moves the record
- *   onto the standing one. Each is a compare-and-swap on the record this load
- *   read: written, and the snapshot's record advanced on the same columns, only
- *   where the database still holds that record — one another writer moved since
- *   the load stays theirs, and memory behind it. Nothing is ever queued from
- *   beneath a squatter, because nothing there is looked at (workspace_displaced_t):
- *   a confirmation taken through one would advance the record's blob to the row's
- *   on the strength of the squatter's target, and the three-way frame would then
- *   read the bytes dotta actually deployed as the user's own edit once the squatter
- *   went — apply-side work turned into update-side work by one squat. Through a
- *   symlinked ancestor the view does not claim, the arrangement is the user's
- *   own and so is the proof.
+ *   onto the standing one; a claim opens nothing, and is learned whichever row's
+ *   it is. Each is a compare-and-swap on the record this load read: written,
+ *   and the snapshot's record advanced on the same columns, only where the database
+ *   still holds that record — one another writer moved since the load stays theirs,
+ *   and memory behind it. Nothing is ever queued from beneath a squatter, because
+ *   nothing there is looked at (workspace_displaced_t): a confirmation taken
+ *   through one would advance the record's blob to the row's on the strength of
+ *   the squatter's target, and the three-way frame would then read the bytes
+ *   dotta actually deployed as the user's own edit once the squatter went —
+ *   apply-side work turned into update-side work by one squat. Through a symlinked
+ *   ancestor the view does not claim, the arrangement is the user's own and so
+ *   is the proof.
  *
  * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
  * so a path that had no record at analysis (it is in both lists) must take the
@@ -1177,7 +1273,7 @@ error_t *workspace_anchor(
  * the view is: every prune order the load read whose path the view has is void,
  * selected from the load's own snapshot, since an order placed after it answers
  * a removal this view predates. A released copy has no end here: its two are
- * its record's next ownership event or confirmation, and apply's sweep.
+ * its record's next ownership event or content confirmation, and apply's sweep.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

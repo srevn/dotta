@@ -687,8 +687,9 @@ typedef enum {
  *
  * - analyze_orphans — every record whose path the view lacks, either kind:
  *   presence, ownership, divergence and Git authority, at one ref lookup and a
- *   lazy tree or metadata load per profile with present, owned orphans. Read by
- *   core/cleanup.c cleanup_plan_build (the settle, apply's cleanup) and
+ *   lazy tree load per profile with present, owned orphans, the sheet beside it
+ *   where a directory orphan needs one, and one tree lookup per such orphan.
+ *   Read by core/cleanup.c cleanup_plan_build (the settle, apply's cleanup) and
  *   cmds/status.c display_workspace_status (Issues).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile manages and dotta has no record of, at a readdir

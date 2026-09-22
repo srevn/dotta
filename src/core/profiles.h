@@ -383,8 +383,10 @@ typedef struct {
  * tip at the name it writes (cmds/revert.c cmd_revert, step 11) asks Git's
  * one-entry rule, which the sheet must not answer — a directory claim there is
  * retired by the write, not refused; the orphan probe (core/workspace.c
- * compute_orphan_authority) asks the one document the record's kind lives in
- * and folds every failure to UNVERIFIED; the count's staleness probe
+ * compute_orphan_authority) asks whether the branch holds the claim a record
+ * remembers, which a subtree and a gitlink stand at a name without making — the
+ * tree first, as here, and the sheet only for a directory the tree holds no blob
+ * for — and folds every failure to UNVERIFIED; the count's staleness probe
  * (core/profiles.c profile_get_tree_stats) and export's claim append (cmds/export.c
  * append_claim_dirs) hold the sheet's item and ask whether the tree contradicts
  * it, which is the enumeration's question (core/manifest.c manifest_claim_blob's

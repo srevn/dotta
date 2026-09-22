@@ -1649,11 +1649,10 @@ static error_t *compute_orphan_divergence(
  *           if !exists. Stored only on success, so "tree == NULL" also reads as
  *           "not loaded yet — try again" for the next row.
  * metadata: the tree's metadata.json, loaded lazily on the first directory question
- *           (a directory is backed by a DIRECTORY item, not by a tree entry)
- *           and kept likewise. A tree without metadata.json stores an empty
- *           collection — a profile without metadata backs no directory, and the
- *           lookup says so — so the same rule holds: NULL is "not loaded yet",
- *           never "absent".
+ *           the tree leaves open (a blob at the name answers one alone) and kept
+ *           likewise. A tree without metadata.json stores an empty collection —
+ *           a profile without metadata backs no directory, and the lookup says
+ *           so — so the same rule holds: NULL is "not loaded yet", never "absent".
  */
 typedef struct {
     bool exists;
@@ -1675,62 +1674,58 @@ static void authority_cache_free(void *value) {
 }
 
 /**
- * What the profile that deployed an orphan currently says about it
+ * What the profile that deployed an orphan says of the claim its record remembers
  */
 typedef enum {
-    ORPHAN_AUTHORITY_BACKED,      /* Branch exists and its HEAD tree has the path */
-    ORPHAN_AUTHORITY_LOST,        /* Branch gone, or the path is not in its HEAD tree */
+    ORPHAN_AUTHORITY_BACKED,      /* The branch holds the record's claim at its name */
+    ORPHAN_AUTHORITY_LOST,        /* The branch is gone, or holds no such claim there */
     ORPHAN_AUTHORITY_UNVERIFIED   /* A Git lookup failed — cannot tell, must not guess */
 } orphan_authority_t;
 
 /**
  * Observe Git authority for an orphan
  *
- * "Does the profile that deployed this path still claim it?" — its branch resolves
- * and its HEAD claims storage_path: a tree entry for a file, a DIRECTORY item
- * of its metadata.json for a directory. One kind of row reaches this probe — a
- * record whose path the view lacks — and three reasons it may be there are what
- * the probe tells apart:
- *   - the profile is disabled: its branch still claims the path, and the deployed
+ * "Does the profile that deployed this path still hold the claim its record
+ * remembers?" — at the record's storage name, a claim of the record's kind: a
+ * blob of any filemode for a file, a DIRECTORY item no blob stands at for a
+ * directory. That is the view's contribution rule asked of one name before anything
+ * is placed (core/manifest.h, "Within one profile, at one path"), so the probe
+ * and the view agree on every name — a disabled profile's custom/ name among
+ * them, which has no binding to be placed by.
+ *
+ * One kind of row reaches this probe — a record whose path the view lacks — and
+ * three reasons it may be there are what the probe tells apart:
+ *   - the profile is disabled: its branch still holds the claim, and the deployed
  *     copy is dotta's to prune;
  *   - the profile moved: it is enabled, but its --target changed between a disable
  *     and an enable, so Git still backs the storage path at a new path and the
  *     old one is dotta's to prune;
  *   - Git let go: the branch was deleted, rebased or git rm'd behind the record,
- *     an enabled branch is dead, or a pulled removal arrived — the deployed copy
- *     is left alone.
+ *     an enabled branch is dead, a pulled removal arrived, or the name was retyped
+ *     — a removal and an addition, the record's claim the half removed — and
+ *     the deployed copy is left alone.
  * The enabled set cannot tell the second from the third; only a live look at
- * Git can. Apply's cleanup preflight used to take that look; status read the
- * same items and could not see it, so it predicted a prune where apply then
- * released. Observed here, every reader of orphan items shares one verdict, and
+ * Git can. Taken here, every reader of orphan items shares one verdict, and
  * cleanup's verdict phase reads nothing but the item.
  *
  * Answers:
  *   BACKED      the orphan is dotta's to prune, divergence permitting
- *   LOST        Git cannot back the path: branch deleted externally
- *               (content irrecoverable from any profile), or the path removed
- *               from a branch that still exists (git rm, rebase, fetch; a directory
- *               item dropped from metadata). The caller emits
- *               WORKSPACE_STATE_RELEASED — left on disk, record retires.
- *   UNVERIFIED  the probe could not answer: a ref lookup, a tree or a metadata
- *               load that failed, transient I/O, a locked packfile, a corrupt
- *               ref, or an allocation the cache needed. Authority cannot be
- *               determined and must not be guessed: LOST would retire the record,
- *               BACKED would prune the file. The caller marks the orphan
- *               DIVERGENCE_UNVERIFIED and holds it until Git answers.
+ *   LOST        the claim is gone from Git; the caller emits
+ *               WORKSPACE_STATE_RELEASED — left on disk, record retires
+ *   UNVERIFIED  a lookup, a load or an allocation failed. LOST would retire the
+ *               record and BACKED would prune the copy, so neither is guessed:
+ *               the caller marks the orphan DIVERGENCE_UNVERIFIED and holds it
+ *               until Git answers
  *
- * No failure is raised. Every one of the six ways this probe can fail says the
- * same thing — it could not answer — and UNVERIFIED is the word for it, so an
- * error would carry nothing the answer does not: a probe that cannot answer is
- * the orphan's hold, never the load's, which is the rule every failed look in
- * this file takes. Nothing is cached on a failure, so a transient one stays
- * retryable by the next row.
+ * No failure is raised: each one says only that the probe could not answer, which
+ * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
+ * failed look in this file takes.
  *
  * @param repo Repository (must not be NULL)
  * @param cache profile → authority_cache_t (borrowed keys, owned values)
  * @param profile Record's profile (NOT NULL in the schema)
  * @param storage_path Record's storage path (NOT NULL in the schema)
- * @param kind What the record says stood there — decides which claim is asked for
+ * @param kind The record's kind: the kind of claim to find at the name
  * @return The answer
  */
 static orphan_authority_t compute_orphan_authority(
@@ -1742,9 +1737,9 @@ static orphan_authority_t compute_orphan_authority(
 ) {
     authority_cache_t *cached = hashmap_get(cache, profile);
     if (!cached) {
-        /* First row of this profile: does the branch still exist? A ref lookup,
-         * not a tree load — most profiles answer here. Git errors are not cached:
-         * a transient failure must stay retryable. */
+        /* First row of this profile: does its branch still exist? A ref lookup,
+         * not a tree load — a profile whose branch is gone answers here, and
+         * every later row reads the cached answer. */
         bool exists = false;
         error_t *err = gitops_branch_exists(repo, profile, &exists);
         if (err) {
@@ -1752,6 +1747,8 @@ static orphan_authority_t compute_orphan_authority(
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
 
+        /* Cached only once answered: a failure above caches nothing, so a transient
+         * one is the next row's to retry rather than the profile's verdict. */
         cached = calloc(1, sizeof(*cached));
         if (!cached) {
             return ORPHAN_AUTHORITY_UNVERIFIED;
@@ -1767,13 +1764,15 @@ static orphan_authority_t compute_orphan_authority(
     }
 
     if (!cached->exists) {
-        return ORPHAN_AUTHORITY_LOST;       /* Branch deleted externally */
+        /* The branch was deleted behind the record: nothing in Git can back the
+         * path, and its content may be recoverable from no profile at all. */
+        return ORPHAN_AUTHORITY_LOST;
     }
 
     if (!cached->tree) {
-        /* Lazy-load the HEAD tree on the first in-tree question for this profile;
-         * stored only on success, so a failure is retried by the next row instead
-         * of condemning the whole profile. */
+        /* The branch's HEAD tree, on the first question that needs it and kept
+         * for the pass. Stored on success alone, so a failed load is retried by
+         * the next row instead of condemning the whole profile. */
         git_tree *tree = NULL;
         error_t *err = gitops_load_branch_tree(repo, profile, &tree, NULL);
         if (err) {
@@ -1783,47 +1782,58 @@ static orphan_authority_t compute_orphan_authority(
         cached->tree = tree;                /* Ownership transfers to the cache */
     }
 
-    if (kind == PATH_KIND_DIRECTORY) {
-        /* A directory is claimed by metadata, not by the tree. Lazy-load the
-         * tree's metadata.json on the first directory question for this profile,
-         * under the same stored-only-on-success rule as the tree. A tree without
-         * one loads as an empty collection — "no metadata" is a settled answer
-         * (no directory is backed), not a failure to look — so every error here
-         * is a failure to look. */
-        if (!cached->metadata) {
-            metadata_t *metadata = NULL;
-            error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
-            if (err) {
-                error_free(err);
-                return ORPHAN_AUTHORITY_UNVERIFIED;
-            }
-            cached->metadata = metadata;        /* Ownership transfers to the cache */
+    /* The tree at the name, asked first and for either kind: a blob there is
+     * the file claim itself, and the one thing that unbacks a directory claim —
+     * the tree is the content authority, and the view decides in this order too,
+     * its blob walk contradicting an item before its directory pass reads one
+     * (core/manifest.c manifest_contribute). Three answers, not two: a subtree
+     * that will not load on the way is a failure to look, never an absence. */
+    git_tree_entry *entry = NULL;
+    int rc = git_tree_entry_bypath(&entry, cached->tree, storage_path);
+    if (rc != 0 && rc != GIT_ENOTFOUND) {
+        return ORPHAN_AUTHORITY_UNVERIFIED;
+    }
+
+    /* A blob at the name and only there: one above it reads GIT_ENOTFOUND and
+     * contradicts nothing, as in the view, whose contradiction index is keyed
+     * by the blob's own name. */
+    bool blob_at_name = rc == 0 && git_tree_entry_type(entry) == GIT_OBJECT_BLOB;
+    git_tree_entry_free(entry);             /* NULL-safe, and NULL unless rc == 0 */
+
+    if (kind == PATH_KIND_FILE) {
+        /* A file claim is a blob of any filemode — bytes, an executable, a link's
+         * target — and nothing else at the name is one: a subtree is the way to
+         * what lies beneath it and a gitlink is nothing dotta writes, so neither
+         * holds a byte of the copy on disk. */
+        return blob_at_name ? ORPHAN_AUTHORITY_BACKED : ORPHAN_AUTHORITY_LOST;
+    }
+
+    if (blob_at_name) {
+        /* A DIRECTORY item where the tree holds a blob is stale metadata and
+         * claims nothing (core/manifest.h): the branch holds a file claim here,
+         * not the record's directory, and the sheet need not be read. */
+        return ORPHAN_AUTHORITY_LOST;
+    }
+
+    if (!cached->metadata) {
+        /* The sheet, on the first directory question the tree left open, kept
+         * like the tree. A tree without one loads as an empty sheet — a settled
+         * "no claims", not a failure — so every error here is a failure to look. */
+        metadata_t *metadata = NULL;
+        error_t *err = metadata_load_from_tree(repo, cached->tree, profile, &metadata);
+        if (err) {
+            error_free(err);
+            return ORPHAN_AUTHORITY_UNVERIFIED;
         }
-
-        /* Backed iff metadata still claims the path as a directory. An item of
-         * another kind at the key is a path Git turned into a blob: the directory
-         * dotta made is no longer claimed as one. */
-        const metadata_item_t *item = metadata_lookup(cached->metadata, storage_path);
-        return item && item->kind == PATH_KIND_DIRECTORY ? ORPHAN_AUTHORITY_BACKED
-                                                         : ORPHAN_AUTHORITY_LOST;
+        cached->metadata = metadata;        /* Ownership transfers to the cache */
     }
 
-    /* Check if file exists in tree via path traversal
-     *
-     * Distinguish between "file not in tree" (GIT_ENOTFOUND) and actual errors
-     * (GIT_ERROR, OOM). ENOTFOUND is the normal "removed from Git" case. Actual
-     * errors are the third answer, UNVERIFIED, rather than LOST — preserving
-     * the record is more conservative than releasing it.
-     */
-    git_tree_entry *tree_entry = NULL;
-    int rc = git_tree_entry_bypath(&tree_entry, cached->tree, storage_path);
-
-    if (rc == 0) {
-        git_tree_entry_free(tree_entry);
-        return ORPHAN_AUTHORITY_BACKED;
-    }
-
-    return rc == GIT_ENOTFOUND ? ORPHAN_AUTHORITY_LOST : ORPHAN_AUTHORITY_UNVERIFIED;
+    /* A directory claim lives in the sheet alone — a tree holds no empty directory
+     * — so the item decides, and a subtree or a gitlink at the name vetoes nothing.
+     * A FILE item standing where no blob does claims nothing. */
+    const metadata_item_t *item = metadata_lookup(cached->metadata, storage_path);
+    return item && item->kind == PATH_KIND_DIRECTORY ? ORPHAN_AUTHORITY_BACKED
+                                                     : ORPHAN_AUTHORITY_LOST;
 }
 
 /**
@@ -2296,25 +2306,26 @@ static error_t *index_entries(workspace_t *ws) {
  *     about it;
  *   - Git authority (compute_orphan_authority) for an owned record: a departure
  *     dotta discovers in Git — the branch deleted, rebased or git rm'd, a pulled
- *     removal, a dead enabled branch — is LOST, and the deployed copy is left
- *     alone (RELEASED); BACKED (a disabled profile, a moved target) is dotta's
- *     to prune, divergence permitting — and carries the relocation read: a BACKED
- *     orphan whose claim still has a row elsewhere in the view rides that row
- *     on the item, which carries the class of the namespace the claim lands in
- *     (workspace_relocation_t), and that class picks the fate (cleanup_verdict).
- *     Elsewhere is another entry, never merely another string, and the guard is
- *     asked first: a row standing on the record's very entry under another spelling
- *     of its path — whoever's — makes the record a stale key, RELEASED, so the
- *     one copy is never pruned as the old one (standing_row). A target bound
- *     through a symlink, a HOME spelled two ways, a name the volume folds; apply
- *     adopts the row under its spelling and retires the key; UNVERIFIED holds
- *     the orphan until Git answers — either kind: LOST would retire the record,
- *     BACKED would remove the copy, and neither is a guess to make about an empty
- *     directory any more than about a file. Held and not measured: no reader
- *     shows a bit beside UNVERIFIED, so a compare would only give the item a
- *     second reason for the one fate it already has. The probe raises nothing,
- *     so a lookup it could not make is this orphan's hold and never the load's
- *     — the rule the file analyzer takes for its own looks.
+ *     removal, a dead enabled branch, the name retyped to the other kind — is
+ *     LOST, and the deployed copy is left alone (RELEASED); BACKED (a disabled
+ *     profile, a moved target) is dotta's to prune, divergence permitting — and
+ *     carries the relocation read: a BACKED orphan whose claim still has a row
+ *     elsewhere in the view rides that row on the item, which carries the class
+ *     of the namespace the claim lands in (workspace_relocation_t), and that
+ *     class picks the fate (cleanup_verdict). Elsewhere is another entry, never
+ *     merely another string, and the guard is asked first: a row standing on
+ *     the record's very entry under another spelling of its path — whoever's —
+ *     makes the record a stale key, RELEASED, so the one copy is never pruned
+ *     as the old one (standing_row). A target bound through a symlink, a HOME
+ *     spelled two ways, a name the volume folds; apply adopts the row under its
+ *     spelling and retires the key; UNVERIFIED holds the orphan until Git answers
+ *     — either kind: LOST would retire the record, BACKED would remove the copy,
+ *     and neither is a guess to make about an empty directory any more than about
+ *     a file. Held and not measured: no reader shows a bit beside UNVERIFIED,
+ *     so a compare would only give the item a second reason for the one fate it
+ *     already has. The probe raises nothing, so a lookup it could not make is
+ *     this orphan's hold and never the load's — the rule the file analyzer takes
+ *     for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
@@ -2463,8 +2474,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state = WORKSPACE_STATE_RELEASED;
 
         } else {
-            /* Owned: ask the profile that deployed it whether it still claims
-             * the path. */
+            /* Owned: ask the profile that deployed it whether it still holds
+             * the claim this record remembers. */
             orphan_authority_t authority = compute_orphan_authority(
                 ws->repo, authority_cache, profile, storage_path, kind
             );
@@ -2521,9 +2532,11 @@ static error_t *analyze_orphans(workspace_t *ws) {
                  * by another profile at its new home is not "relocated" — the
                  * copy here is simply no longer active — and the same-profile
                  * rule is what keeps workspace_reassigned false by construction
-                 * on every orphan (the profiles are equal). Asked on this arm
-                 * alone: it is a linear scan of the view, and the three arms
-                 * above read no row. */
+                 * on every orphan (the profiles are equal). And strictly its
+                 * own kind: BACKED said the branch holds a claim of that kind
+                 * at the name, and the view builds no row of the other kind there.
+                 * Asked on this arm alone: it is a linear scan of the view, and
+                 * the three arms above read no row. */
                 prunable = true;
                 row = manifest_lookup_storage(ws->manifest, storage_path, profile);
             }
@@ -4347,9 +4360,10 @@ bool workspace_item_extract_display_info(
             break;
 
         case WORKSPACE_STATE_RELEASED:
-            /* Released from management — Git let the path go, dotta never deployed
-             * it, or another kind of path stands in its place. The path is left
-             * on disk, the record retires. Always present: the orphan analysis
+            /* Released from management — Git let the claim go, dotta never deployed
+             * it, another kind of path stands in its place, or a row stands on
+             * its very entry under another spelling of its path. The path is
+             * left on disk, the record retires. Always present: the orphan analysis
              * decides presence first, so an absent record never reaches this
              * state. */
             if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {

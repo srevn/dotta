@@ -212,8 +212,12 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
  *     matched that blob. Zero means "never confirmed."
  *   - stat matching live stat is fast-path proof that disk still equals blob_oid.
- *   - blob_oid ≠ the manifest row's blob_oid iff the Git-expected value has
- *     advanced past the last disk confirmation — i.e., stale.
+ *   - the confirmed pair (type, blob_oid) is not the manifest row's content iff
+ *     the Git-expected value has advanced past the last disk confirmation — i.e.,
+ *     stale. The pair, not the blob alone: Git hashes a link's target exactly
+ *     as it hashes a file's bytes, so one id stands behind both, and the kind
+ *     is what tells them apart (core/workspace.h workspace_stale, which is also
+ *     where the executable bit is ruled out of it).
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.
@@ -272,9 +276,11 @@ typedef struct anchor {
  * live stat or content check it performs for any base. The storage_path and profile
  * are the blob's own binding — an encrypted blob decrypts under its writer's
  * subkey (profile name → KDF) with its tree path as AAD — so a released base
- * stays verifiable even after the branch that wrote it is gone. The type routes
- * the TYPE arm's second question by the base's own kind, keeping the fast and
- * slow paths in agreement.
+ * stays verifiable even after the branch that wrote it is gone. The type is half
+ * of what the copy says was standing there, and both questions of the three-way
+ * read it: the first asks whether the row's content is this pair's at all
+ * (core/workspace.h workspace_stale), the second routes the base read by the
+ * base's own kind — which is what keeps the fast and slow paths in agreement.
  */
 typedef struct {
     /* Identity — the record's, at release */

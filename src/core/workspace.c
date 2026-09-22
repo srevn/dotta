@@ -1046,6 +1046,14 @@ static error_t *analyze_file_divergence(
      *   user_edited := base unset || ours ≠ base    disk left the blob dotta
      *                                               put there
      *
+     * `base ≠ theirs` is a question about content, not about an id: another blob,
+     * or the same blob under another kind. Git hashes a link's target exactly
+     * as it hashes a file's bytes, so one object stands behind both and means a
+     * different thing under each, and a retype Git made under an untouched copy
+     * keeps the id it had. core/workspace.h workspace_compare_confirmed is where
+     * that rule lives, and the two readings of it below — this bool, and the
+     * fast path's whole verdict — are its.
+     *
      * When ours ≠ theirs: CONTENT iff user_edited, STALE iff git_moved. STALE
      * without CONTENT means "overwrite loses nothing"; CONTENT without STALE
      * means "Git has not moved since this was deployed"; both means both sides
@@ -1067,16 +1075,6 @@ static error_t *analyze_file_divergence(
         if (!anchor) {
             workspace_record_observation(ws, row);
         }
-
-        /* The row's blob_oid is already a 20-byte binary OID — no parse step. */
-        const git_oid *blob_oid_ptr = &row->blob_oid;
-
-        /* Extract expected filemode from the row's type field
-         *
-         * Extracted before comparison strategy selection because both paths need
-         * this value. Uses shared helper for consistent mapping.
-         */
-        git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
 
         compare_result_t cmp_result;
 
@@ -1124,24 +1122,29 @@ static error_t *analyze_file_divergence(
          * and the base alone; the second (disk_at_base — ours == base) is answered
          * by whichever path below settles it, and only when it can change the
          * verdict. */
-        bool git_moved = base_blob && !git_oid_equal(base_blob, blob_oid_ptr);
+        bool git_moved = base_blob && workspace_stale(row, base_type, base_blob);
         bool disk_at_base = false;
 
         /* BASE FAST PATH (safety-grade)
          *
-         * The base binds the blob dotta last confirmed on disk and the stat triple
-         * captured at that confirmation. A live look that still stands behind
-         * that triple is proof that disk equals the base blob — why it is proof
-         * and not a guess is the triple's own to say (core/state.h
-         * stat_cache_matches) — so no blob is loaded and nothing is hashed, and
-         * the second question is answered for free: ours == base. Whether that
-         * is CMP_EQUAL (base == theirs: clean) or CMP_DIFFERENT (Git moved: STALE
-         * alone) is then read straight from git_moved. A path with no base has
-         * no triple to match. */
+         * The base binds the blob dotta last confirmed on disk, the kind it was
+         * read as, and the stat triple captured at that confirmation. A live
+         * look that still stands behind that triple is proof that disk is the
+         * base's pair — why it is proof and not a guess is the triple's own to
+         * say (core/state.h stat_cache_matches) — so no blob is loaded and nothing
+         * is hashed, and the second question is answered for free: ours == base.
+         * The first question is then the whole of the comparison, because disk
+         * IS the base: what the row is to the pair is what it is to disk, in
+         * the comparison's own words (core/workspace.h
+         * workspace_compare_confirmed). A kind Git moved under an untouched copy
+         * therefore answers CMP_TYPE_DIFF here and STALE below, the same as the
+         * slow path reaches by reading — where an answer off git_moved alone
+         * would have called one state clean and its mirror a mode change. A path
+         * with no base has no triple to match. */
         if (base_stat && stat_cache_matches(base_stat, &look->st)) {
-            /* the look stands behind the proof ⟹ disk == base blob */
+            /* the look stands behind the proof ⟹ disk == the base's pair */
             disk_at_base = true;
-            cmp_result = git_moved ? CMP_DIFFERENT : CMP_EQUAL;
+            cmp_result = workspace_compare_confirmed(row, base_type, base_blob);
 
             /* A verification that establishes a pair the record does not hold
              * is queued as the record's own confirmation — which is exactly the
@@ -1149,7 +1152,12 @@ static error_t *analyze_file_divergence(
              * anchored base IS the record's pair and re-writing it would be a
              * no-op (the fast path stays write-free for it). The record gains
              * the blob, and the flush's join then forgets the released row the
-             * fresher confirmation subsumes. */
+             * fresher confirmation subsumes.
+             *
+             * The verdict is the whole gate: a released base the row has since
+             * retyped answers CMP_TYPE_DIFF above, so the pair state_confirm
+             * would write — the row's kind beside a triple taken of the other
+             * one — is never queued from here. */
             if (cmp_result == CMP_EQUAL && released) {
                 workspace_record_confirmation(ws, row, anchor, &look->st);
             }
@@ -1178,9 +1186,16 @@ static error_t *analyze_file_divergence(
              */
             error_t *err = NULL;
 
+            /* The row's own filemode, the kind both arms below are put under:
+             * the ladder's expected kind for the plaintext arm, one part of the
+             * memo's key for the sealed one. The fast path needs none — the pair
+             * it answers from carries its own kind — so the mapping is made here
+             * rather than above the fork. */
+            git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
+
             if (!row->encrypted) {
                 err = compare_oid_to_disk(
-                    blob_oid_ptr,
+                    &row->blob_oid,
                     filesystem_path,
                     expected_filemode,
                     &look->st,
@@ -1190,7 +1205,7 @@ static error_t *analyze_file_divergence(
                 const buffer_t *expected_content = NULL;
                 err = content_cache_get_from_blob_oid(
                     ws->content_cache,
-                    blob_oid_ptr,
+                    &row->blob_oid,
                     expected_filemode,
                     storage_path,
                     profile,
@@ -1314,9 +1329,10 @@ static error_t *analyze_file_divergence(
                  * Git moved the kind out from under an untouched deployment,
                  * the second question above answers it: an occupant that is exactly
                  * what dotta confirmed, kind and content, diverges by Git's move
-                 * alone. STALE, the fast path's answer for the same state when
-                 * the triple vouches for it — the two paths agree because both
-                 * read one question, asked under the base's own kind. */
+                 * alone. STALE — and this is the arm the fast path lands in for
+                 * that same state, having answered the comparison off the base's
+                 * pair instead of a read. One question, asked under the base's
+                 * own kind, whichever path asked it. */
                 if (disk_at_base) {
                     divergence |= DIVERGENCE_STALE;
                     break;

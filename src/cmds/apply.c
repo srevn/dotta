@@ -1961,8 +1961,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the record dotta owns names one profile, the row another — and one of the
      * two reasons a deploy-clean row has an item at all (the other is the
      * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
-     * is the workspace's verdict that Git moved past the blob dotta last deployed
-     * (anchor.blob_oid ≠ row.blob_oid) — a persistent signal that survives
+     * is the workspace's verdict that Git moved past the content dotta last
+     * deployed — another blob, or the same blob under another kind
+     * (core/workspace.h workspace_stale) — a persistent signal that survives
      * status→apply sequences and counts the same however the branch moved; work
      * by definition, so only a pending row carries it, and only a file: a directory
      * has no blob for Git to move, so the kind-blind read below never counts
@@ -2111,14 +2112,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool reassigns = workspace_reassigned(file, anchor);
 
         if (!opts->dry_run) {
-            /* The snapshot pair vouches for this row's blob on every route a
+            /* The snapshot pair vouches for this row's content on every route a
              * clean row can arrive by — fast-path hit, slow-path confirmation,
              * record created and confirmed by the flush — except a confirmation
              * dropped under memory pressure, whose anchor still carries an older
-             * pair. The gate asks the snapshot itself; NULL advances the record
-             * blob-only, and the next load's slow path confirms. */
+             * pair. Content and not bytes: a pair whose kind the row has since
+             * left describes another node, and passing its triple would record
+             * a proof of the wrong one (core/workspace.h workspace_stale). The
+             * gate asks the snapshot itself; NULL advances the record blob-only,
+             * and the next load's slow path confirms. */
             const stat_cache_t *stat =
-                (anchor && git_oid_equal(&anchor->blob_oid, &file->blob_oid))
+                (anchor && !workspace_stale(file, anchor->type, &anchor->blob_oid))
                 ? &anchor->stat : NULL;
 
             error_t *anchor_err = workspace_anchor(ws, file, stat, now);

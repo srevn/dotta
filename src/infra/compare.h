@@ -58,6 +58,13 @@
  * cmds/diff.c show_file_diff_from_workspace and compare_tree_files_to_filesystem
  * fail the run.
  *
+ * One verdict in the tree is reached from no look at all: core/workspace.h
+ * workspace_compare_confirmed judges a row against a pair dotta already found
+ * standing on disk, by this ladder — the kind, then the bytes — and answers in
+ * these same words, so a fast path that skips the look says what the look would
+ * have. CMP_MISSING is not among its answers: nothing is read, so no absence
+ * can be met.
+ *
  * NOTE: Permission checking is explicitly NOT part of this module. The compare
  * module is infrastructure-layer, handling only content and type. Permission
  * validation (git filemode + full metadata) is a core-layer concern handled by

@@ -71,6 +71,7 @@
 #include "base/output.h"
 #include "core/manifest.h"
 #include "core/state.h"
+#include "infra/compare.h"
 #include "infra/content.h"
 #include "sys/filesystem.h"
 
@@ -423,12 +424,82 @@ typedef struct {
  * is the half the screens name and the receipts count. Not manifest_diff_stats_t's
  * `reassigned`, which counts one transition's own delta between two views; this
  * is the record against the view, standing from whenever it began.
+ *
+ * The record against the view has two words, and this is the claim's;
+ * workspace_stale below is the content's.
  */
 static inline bool workspace_reassigned(
     const manifest_row_t *row, const anchor_t *anchor
 ) {
     return row && anchor && anchor->deployed_at > 0 && !manifest_is_derived(row) &&
            strcmp(anchor->profile, row->profile) != 0;
+}
+
+/**
+ * The row's content against a pair dotta confirmed — a verdict from no look
+ *
+ * infra/compare.h's ladder asked of a confirmation instead of a disk copy: the
+ * kind, then the bytes. It answers in that module's words, minus the one only a
+ * read can reach — nothing is opened here, so no absence can be met.
+ *
+ * The kind rung is what keeps one object from standing for two contents: Git
+ * hashes a link's target exactly as it hashes a file's bytes, so a single id
+ * sits behind both and means a different thing under each. How finely it divides
+ * is the ladder's own — compare.c tests S_ISLNK for a link and S_ISREG for either
+ * blob mode, and never the executable bit — so FILE and EXECUTABLE are one kind
+ * here, their difference the mode axis's, and a record's type carries the
+ * executable half as a copy of the claim rather than as something confirmed
+ * (core/state.h anchor_t). A directory is the third kind: it claims no content
+ * at all, so a blob row and a directory row are never one another's, whatever
+ * their (zero) blobs say.
+ *
+ * The pair travels as values because it is one of two facts — the record's
+ * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
+ * holds one of them.
+ *
+ * Readers: core/workspace.c analyze_file_divergence's base fast path, which reaches
+ * its row-against-disk verdict through this one — a live look standing behind
+ * the pair's proof means disk IS the pair, so what the row is to the pair is
+ * what it is to disk. A reader not on this list is a bug; the boolean reading
+ * of it is workspace_stale below.
+ *
+ * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
+ * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
+ * by identity and no comparison is owed.
+ */
+static inline compare_result_t workspace_compare_confirmed(
+    const manifest_row_t *row, path_type_t type, const git_oid *blob
+) {
+    if (path_type_kind(type) != path_type_kind(row->type) ||
+        (type == PATH_TYPE_SYMLINK) != (row->type == PATH_TYPE_SYMLINK)) {
+        return CMP_TYPE_DIFF;
+    }
+
+    return git_oid_equal(blob, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
+}
+
+/**
+ * Stale: Git advanced past what dotta confirmed — the join's content word
+ *
+ * The row's content is not the confirmed pair's: another blob, or the same blob
+ * under another kind. The rule is workspace_compare_confirmed's above; this is
+ * the word the screens and the record's own contract keep for it, beside
+ * workspace_reassigned over the same two subjects.
+ *
+ * A zero blob is stale against any file row: nothing was confirmed, so nothing
+ * vouches. Two zero blobs under one kind are not — a directory record under a
+ * directory row has nothing to confirm and nothing has moved.
+ *
+ * Readers: core/workspace.c analyze_file_divergence (git_moved — the three-way
+ * frame's first question, and the gate on its second), cmds/apply.c cmd_apply's
+ * adoption gate (the record's triple is passed as proof only when the pair is
+ * the row's content), cmds/sync.c cmd_sync's apply hint (the record still disagrees
+ * with the view). A reader not on this list is a bug.
+ */
+static inline bool workspace_stale(
+    const manifest_row_t *row, path_type_t type, const git_oid *blob
+) {
+    return workspace_compare_confirmed(row, type, blob) != CMP_EQUAL;
 }
 
 /**

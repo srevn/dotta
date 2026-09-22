@@ -148,13 +148,14 @@ typedef struct anchor anchor_t;
  *
  * Totality: after build, mode is THE mode for every non-link row — floor or claim,
  * never a hole; consumers compare and apply it without a fallback. A link row's
- * mode and encrypted are both don't-cares, 0 and false: no claim is projected
- * onto a link row at all (manifest_apply_claim), the discriminator being type,
- * the tree's own truth — symlink(2) takes no mode, and a link's bytes are its
- * target rather than content anything could seal. MODE_UNCLAIMED never leaves
- * the claim sheet. Authority, stated once: the filemode is authoritative for
- * type, the metadata claim for permission bits — a hand-edit that contradicts
- * the x-bit across the two is resolved by that contract, not detected per-read.
+ * mode and encrypted are both don't-cares, 0 and false: neither is projected
+ * onto a link row (manifest_apply_claim), the discriminator being type, the tree's
+ * own truth — symlink(2) takes no mode, and a link's bytes are its target rather
+ * than content anything could seal. Its owner and group are projected, a link
+ * being owned like any path. MODE_UNCLAIMED never leaves the claim sheet.
+ * Authority, stated once: the filemode is authoritative for type, the metadata
+ * claim for permission bits — a hand-edit that contradicts the x-bit across the
+ * two is resolved by that contract, not detected per-read.
  *
  * Winner or not: `profile` is the profile whose claim the row is, and a row is
  * never rewritten when a higher profile takes its path. A row read through the
@@ -172,7 +173,7 @@ typedef struct manifest_row {
     char *storage_path;         /* Path in profile (home/.bashrc) */
     char *profile;              /* The profile whose claim the row is */
 
-    /* What stands there */
+    /* What stands there: manifest_diff's updated compares each field but encrypted */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
     mode_t mode;                /* Total for every kind that carries one (claim or floor); 0 on a link row, a don't-care */
@@ -1055,7 +1056,7 @@ typedef struct {
 
     /* Gain-side, subsets of claimed (the remainder was unchanged) */
     size_t added;                /* … whose path `before` did not have */
-    size_t updated;              /* … whose path `before` had, with blob, type, mode or class moved */
+    size_t updated;              /* … whose path `before` had, with type, blob, mode, owner, group or class moved */
 
     /* Loss-side */
     size_t reassigned;           /* Paths `before` had under this profile that `after` gives another */
@@ -1077,9 +1078,8 @@ typedef struct {
  *
  * Attribution (for a profile P in `profiles`):
  *   - every row of `after` under P: claimed; added if `before` has no row at
- *     the path; updated if it has one whose blob, type, mode or `tracked` class
- *     differs (owner/group travel with a metadata commit rare enough to ride on
- *     the workspace's verdict instead)
+ *     the path; updated if it has one whose type, blob, mode, owner, group or
+ *     `tracked` class differs
  *   - every row of `before` under P whose path `after` gives another profile:
  *     reassigned
  *   - every row of `before` under P whose path `after` lacks, with a record at

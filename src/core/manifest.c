@@ -1971,17 +1971,20 @@ error_t *manifest_diff(
 
         slot->claimed++;
 
-        /* `tracked` sits beside the mode for the same reason the mode is here:
-         * a directory that stops being a scan root and a convergence target —
-         * or becomes one — is a different promise at the path, and a class flip
-         * usually carries the same mode across, so without this term the receipt
-         * would call it unchanged. */
+        /* Every field of what stands there, in the row's own order, but the
+         * encrypted stamp: the blob's own, it moves with the blob. `tracked`
+         * sits beside the mode for the same reason the mode is here: a directory
+         * that stops being a scan root and a convergence target — or becomes
+         * one — is a different promise at the path, and a class flip usually
+         * carries the same mode across, so without this term the receipt would
+         * call it unchanged. */
         const manifest_row_t *old = manifest_lookup(before, row->filesystem_path);
         if (!old) {
             slot->added++;
-        } else if (!git_oid_equal(&old->blob_oid, &row->blob_oid) ||
-            old->type != row->type || old->mode != row->mode ||
-            old->tracked != row->tracked) {
+        } else if (old->type != row->type ||
+            !git_oid_equal(&old->blob_oid, &row->blob_oid) ||
+            old->mode != row->mode || !str_equal(old->owner, row->owner) ||
+            !str_equal(old->group, row->group) || old->tracked != row->tracked) {
             slot->updated++;
         }
     }

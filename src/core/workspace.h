@@ -117,11 +117,20 @@ typedef enum {
  * so it is the one bit a row in any state can carry, absence included; and because
  * no write to the path can change how a blob is stored, it is never deploy's
  * work — update re-stores the blob, status reports it.
+ *
+ * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
+ * screen names a claim axis that differs — the tags
+ * (workspace_item_extract_display_info), which apply's fixed directories print
+ * too (cmds/apply.c print_deploy_results), diff's status line (cmds/diff.c
+ * get_status_message_from_item), and a held orphan's label and legend (cmds/apply.c
+ * print_cleanup_skips, cmds/status.c display_workspace_status) — and a sentence
+ * that names both says "mode and ownership", never "permissions", which is one
+ * word for two axes.
  */
 typedef enum {
     DIVERGENCE_NONE       = 0,       /* No divergence detected */
     DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
-    DIVERGENCE_MODE       = 1 << 1,  /* Permissions/mode changed */
+    DIVERGENCE_MODE       = 1 << 1,  /* The mode is not the claim's */
     DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
     DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
     DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */

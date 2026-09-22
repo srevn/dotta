@@ -763,20 +763,15 @@ static void print_deploy_results(
             }
             output_print(out, OUTPUT_VERBOSE, ")");
 
-            /* What was fixed: the divergence the planner saw — and a row beneath
-             * a squatter carries none, so the annotation can no longer name a
-             * bit read off the squatter's target (core/workspace.h
-             * workspace_displaced_t). */
-            const workspace_item_t *item = v->item;
-            bool mode_differs = item->divergence & DIVERGENCE_MODE;
-            bool ownership_differs = item->divergence & DIVERGENCE_OWNERSHIP;
-
-            if (mode_differs || ownership_differs) {
-                output_print(
-                    out, OUTPUT_VERBOSE, " [%s%s%s]", mode_differs ? "mode" : "",
-                    (mode_differs && ownership_differs) ? ", " : "",
-                    ownership_differs ? "ownership" : ""
-                );
+            /* What was fixed: the divergence the planner saw, as the tags status
+             * prints for it — and a row beneath a squatter carries none, so the
+             * annotation can no longer name a bit read off the squatter's target
+             * (core/workspace.h workspace_displaced_t). */
+            if (v->item->divergence & DIVERGENCE_MODE) {
+                output_print(out, OUTPUT_VERBOSE, " [mode]");
+            }
+            if (v->item->divergence & DIVERGENCE_OWNERSHIP) {
+                output_print(out, OUTPUT_VERBOSE, " [ownership]");
             }
             output_endline(out, OUTPUT_VERBOSE);
         }
@@ -1440,8 +1435,15 @@ static void print_cleanup_skips(
                 label = "home changed";
                 break;
             case CLEANUP_SKIP_MODE_CHANGED:
+                /* The reason covers either claim axis, so the label names the
+                 * ones that moved, in the tags' words (core/workspace.h
+                 * divergence_type_t). */
                 glyph = "⚠";
-                label = "permissions changed";
+                label = (item->divergence & DIVERGENCE_MODE) &&
+                    (item->divergence & DIVERGENCE_OWNERSHIP)
+                      ? "mode and ownership changed"
+                      : (item->divergence & DIVERGENCE_MODE) ? "mode changed"
+                      : "ownership changed";
                 break;
             case CLEANUP_SKIP_UNVERIFIED:
                 /* The failed look's word, by the item's fault (workspace_fault_t)

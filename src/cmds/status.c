@@ -1111,13 +1111,13 @@ static void display_workspace_status(
                                     case CLEANUP_SKIP_RELOCATED:
                                         hint = relocated_hint;
                                         break;
+                                    /* The key names what changed — [modified],
+                                     * [type], [mode], [ownership] — so the hint
+                                     * says only that it did. */
                                     case CLEANUP_SKIP_MODIFIED:
                                     case CLEANUP_SKIP_TYPE_CHANGED:
-                                        hint = "changed since deployment; "
-                                            "apply skips it, --force prunes it";
-                                        break;
                                     case CLEANUP_SKIP_MODE_CHANGED:
-                                        hint = "permissions changed; "
+                                        hint = "changed since deployment; "
                                             "apply skips it, --force prunes it";
                                         break;
                                     case CLEANUP_SKIP_NONE:

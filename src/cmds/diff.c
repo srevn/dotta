@@ -105,8 +105,7 @@ static bool should_show_item_for_direction(
  * Get status message from workspace item and direction
  *
  * Determines the appropriate status message based on item's state, divergence
- * flags, and diff direction. This replaces the comparison-based
- * get_status_message() for workspace-aware diffs.
+ * flags, and diff direction.
  *
  * @param item Workspace item (must not be NULL)
  * @param direction Diff direction
@@ -191,10 +190,26 @@ static const char *get_status_message_from_item(
                 : "modified locally (would be committed by update)";
     }
 
-    if (item->divergence & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP)) {
+    /* A claim alone, named by the axes it differs on in the words status tags
+     * the same row with (core/workspace.h divergence_type_t) — both, where both
+     * differ. */
+    if ((item->divergence & DIVERGENCE_MODE) &&
+        (item->divergence & DIVERGENCE_OWNERSHIP)) {
+        return direction == DIFF_UPSTREAM
+                ? "mode and ownership would change on apply"
+                : "mode and ownership changed locally";
+    }
+
+    if (item->divergence & DIVERGENCE_MODE) {
         return direction == DIFF_UPSTREAM
                 ? "mode would change on apply"
                 : "mode changed locally";
+    }
+
+    if (item->divergence & DIVERGENCE_OWNERSHIP) {
+        return direction == DIFF_UPSTREAM
+                ? "ownership would change on apply"
+                : "ownership changed locally";
     }
 
     /* A policy-violating blob: how Git stores the content, not a difference between

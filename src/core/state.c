@@ -69,7 +69,7 @@ struct state {
 
     /* Anchor prepared statements (the record's verbs) */
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
-    sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content) */
+    sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors SET type, blob_oid, stat_* (content, CAS) */
     sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
 
@@ -515,15 +515,20 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Confirm: the content confirmation — what CMP_EQUAL established and nothing
-     * of the claim. An UPDATE, never an INSERT: the record exists (the flush
-     * observes before it confirms), and a confirmation of a path dotta has not
-     * seen is not a thing.
+     * of the claim — as a compare-and-swap on the record the caller read. An
+     * UPDATE, never an INSERT: the record exists (the flush observes before it
+     * confirms), and a confirmation of a path dotta has not seen is not a thing.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path ?2 type — travels with the content: the schema forbids
      *             a blob on a directory row, and CMP_EQUAL confirmed the kind
      *             as well
-     *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino */
+     *   ?3 blob_oid  ?4 stat_mtime  ?5 stat_size  ?6 stat_ino
+     *   ?7 profile  ?8 storage_path — the claim the row's blob opens under
+     *   ?9 type  ?10 blob_oid  ?11 stat_mtime  ?12 stat_size  ?13 stat_ino — the
+     *             pair the confirmation replaces, as the caller read it; ?10 is
+     *             NULL where the record never confirmed a blob, which IS matches
+     *             and = would not */
     const char *sql_confirm =
         "UPDATE path_anchors SET "
         "  type          = ?2, "
@@ -531,7 +536,10 @@ static error_t *prepare_statements(state_t *state) {
         "  stat_mtime    = ?4, "
         "  stat_size     = ?5, "
         "  stat_ino      = ?6 "
-        "WHERE filesystem_path = ?1;";
+        "WHERE filesystem_path = ?1 "
+        "  AND profile = ?7 AND storage_path = ?8 "
+        "  AND type = ?9 AND blob_oid IS ?10 "
+        "  AND stat_mtime = ?11 AND stat_size = ?12 AND stat_ino = ?13;";
 
     rc = sqlite3_prepare_v2(state->db, sql_confirm, -1, &state->stmt_confirm, NULL);
     if (rc != SQLITE_OK) {
@@ -1711,20 +1719,24 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
 }
 
 /**
- * Confirm a managed path: record that disk content equals the row's blob
+ * Confirm a managed path: advance its record to what the comparison established
  *
- * UPDATE by filesystem_path — see the SQL comment on sql_confirm and the header
- * contract. Writes the kind, the blob and the stat the comparison established;
- * the claim columns are not named and a row that does not exist is not created.
+ * A compare-and-swap on the record the caller read — see the SQL comment on
+ * sql_confirm and the header contract. Writes the kind, the blob and the stat
+ * the comparison established, and only onto that record under the row's claim;
+ * the claim columns are not named, a row that does not exist is not created,
+ * and *anchor follows only what was written.
  */
 error_t *state_confirm(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat
+    const stat_cache_t *stat,
+    anchor_t *anchor
 ) {
     CHECK_NULL(state);
     CHECK_NULL(row);
     CHECK_NULL(stat);
+    CHECK_NULL(anchor);
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_confirm);
 
@@ -1751,7 +1763,8 @@ error_t *state_confirm(
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
-    /* 1. filesystem_path  2. type  3. blob_oid  4-6. stat triple */
+    /* 1. filesystem_path  2. type  3. blob_oid  4-6. stat triple — the row's key
+     * and what the comparison established there */
     sqlite3_bind_text(stmt, 1, row->filesystem_path, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, path_type_to_sql_text(row->type), -1, SQLITE_STATIC);
     sqlite3_bind_blob(stmt, 3, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
@@ -1759,10 +1772,40 @@ error_t *state_confirm(
     sqlite3_bind_int64(stmt, 5, stat->size);
     sqlite3_bind_int64(stmt, 6, (sqlite3_int64) stat->ino);
 
+    /* 7-8. the claim the row's blob opens under — the row's, never the record's:
+     * a blob is written only onto a record that names the pair it decrypts under
+     * (anchor_t's binding), so the invariant holds whoever queued this */
+    sqlite3_bind_text(stmt, 7, row->profile, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 8, row->storage_path, -1, SQLITE_TRANSIENT);
+
+    /* 9-13. the pair the confirmation replaces, as the caller read it — the kind,
+     * the blob (NULL where none was ever confirmed, which IS matches) and the
+     * triple */
+    sqlite3_bind_text(stmt, 9, path_type_to_sql_text(anchor->type), -1, SQLITE_STATIC);
+    if (git_oid_is_zero(&anchor->blob_oid)) {
+        sqlite3_bind_null(stmt, 10);
+    } else {
+        sqlite3_bind_blob(stmt, 10, anchor->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+    }
+    sqlite3_bind_int64(stmt, 11, anchor->stat.mtime);
+    sqlite3_bind_int64(stmt, 12, anchor->stat.size);
+    sqlite3_bind_int64(stmt, 13, (sqlite3_int64) anchor->stat.ino);
+
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to confirm path");
     }
+
+    /* Matched nothing: another writer moved the record since the caller read it
+     * — another claim, a newer blob, a fresher proof — and the fact is about a
+     * record no longer there. Nothing is written, and *anchor stays as read. */
+    if (sqlite3_changes(state->db) == 0) return NULL;
+
+    /* Wrote: the caller's copy follows, on the three columns the statement names
+     * and no other — last, so a failure above leaves it as read. */
+    anchor->type = row->type;
+    anchor->blob_oid = row->blob_oid;
+    anchor->stat = *stat;
 
     return NULL;
 }

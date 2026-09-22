@@ -226,9 +226,9 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *     and an encrypted blob is readable under no other (infra/content) — so the
  *     record's own pair, not the row's, is what a later load decrypts its base
  *     with (core/workspace.c analyze_file_divergence, compute_orphan_divergence).
- *     Kept by the two writers between them: state_anchor writes the claim beside
- *     the blob, and state_confirm advances the blob only for the claim the record
- *     already names (its precondition below).
+ *     Kept by each writer on its own: state_anchor writes the claim beside the
+ *     blob from one row, and state_confirm's statement matches only a record
+ *     that names the claim its row's blob opens under.
  *
  * The identity and metadata fields (storage_path, profile, type, mode, owner,
  * group) are those of the row the record was written from — who deployed what,
@@ -691,54 +691,52 @@ error_t *state_get_all_anchors(
 error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
 
 /**
- * Confirm a managed path: record that disk content equals the row's blob
+ * Confirm a managed path: advance its record to what the comparison established
  *
  * The slow path's CMP_EQUAL, persisted: rewrites what the comparison established
  * — the kind (type), the content (blob_oid) and the stat triple captured with
  * it — and nothing of the claim the record carries (profile, storage_path, mode,
- * owner, group), which only an ownership event changes. One UPDATE by
- * filesystem_path; the record must exist — one cannot confirm what one has not
- * seen, and the flush observes first. File rows only: a directory has no content
- * to confirm, and row->blob_oid must be non-zero (a zero blob would record "never
- * confirmed" for a path this call claims to have confirmed — rejected here, where
- * the schema's CHECK would only refuse the zeroblob).
+ * owner, group): what dotta set there, which only an ownership event changes.
+ * The record must exist — one cannot confirm what one has not seen, and the flush
+ * observes first. File rows only: a directory has no content to confirm, and
+ * row->blob_oid must be non-zero (a zero blob would record "never confirmed"
+ * for a path this call claims to have confirmed — rejected here, where the schema's
+ * CHECK would only refuse the zeroblob).
  *
- * Why a confirmation leaves the claim alone: the claim says who deployed the
- * content on disk and under which row. A confirmation against a different profile's
- * row does not change that — the file still holds what profile A put there, it
- * merely also satisfies B's row — and the workspace reads A ≠ B as a reassignment
- * apply has yet to acknowledge (workspace.c analyze_file_divergence). Were the
- * confirmation to rewrite the profile, the slow path would acknowledge
- * reassignments silently while the fast path, which writes nothing, showed them.
+ * One UPDATE, a compare-and-swap on the record the caller read: it matches iff
+ * the database still names the claim the row's blob opens under and still carries
+ * the confirmed pair *anchor holds — its kind, blob and triple. What the fact
+ * depends on and what it overwrites are bound, and nothing else, so an ownership
+ * event that moved neither (an adoption's stamp) lets it land, while a record
+ * another writer moved — another claim, a newer blob, a fresher proof — matches
+ * nothing, and nothing is written. *anchor follows the statement: advanced on
+ * the three columns it names when it wrote, and last, so a failure leaves it as
+ * read; left as read when it did not — memory behind the database, the direction
+ * the next load corrects.
  *
- * And why a confirmation of another claim is not written at all — the precondition:
- * `row` must be the claim the record names (manifest_is_claim on the record's
- * profile and storage path). Advancing the blob from any other row would leave
- * the record naming one claim and carrying another's bytes, which is not merely
- * untidy: an encrypted blob opens under one (profile, storage path) pair and no
- * other, so the pair the record does name would no longer decrypt what it holds,
- * and the base every later load measures disk against would be unreadable. Enforced
- * by the one place confirmations are queued from — core/workspace.c's
- * workspace_record_confirmation, which holds the record and asks before it queues
- * — so this statement trusts what it is handed and the flush is its only caller.
- * A row that is not the record's claim is a pending handover: apply's
+ * The claim bound is the row's, never the record's: a blob is written only onto
+ * a record that names the pair it opens under, so anchor_t's binding holds at
+ * the write, whoever queued the confirmation. The one place confirmations are
+ * queued from asks the same of its snapshot first (core/workspace.c
+ * workspace_record_confirmation), so one that cannot land never opens the flush's
+ * transaction. A row that is not the record's claim is a pending handover: apply's
  * acknowledgement moves the record onto it (cmds/apply.c), and until it does
  * the path takes the slow path on every load.
  *
- * No snapshot mirror is taken here: the caller that keeps one (the workspace's
- * flush) patches exactly the columns this statement names on the record it already
- * holds.
- *
  * @param state State (must not be NULL, must have open database)
- * @param row Active row whose blob disk was found equal to, and the claim the
- *            record names (must not be NULL; a file row with a non-zero blob)
+ * @param row Active row whose blob disk was found equal to (must not be NULL; a
+ *            file row with a non-zero blob)
  * @param stat Stat triple captured by the comparison (must not be NULL)
- * @return Error or NULL on success
+ * @param anchor The path's record as the caller read it — the pair this
+ *               confirmation replaces (must not be NULL; its claim is not read,
+ *               the row's is the one bound); advanced iff the statement wrote
+ * @return Error or NULL on success — a record moved since the read is no error
  */
 error_t *state_confirm(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat
+    const stat_cache_t *stat,
+    anchor_t *anchor
 );
 
 /**

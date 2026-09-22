@@ -81,8 +81,8 @@
  * — see workspace_record_confirmation.
  *
  * The row pointer is borrowed from ws->active_files (workspace lifetime). Carrying
- * the row directly lets the flush call state_confirm with the row itself and
- * patch the record by the row's path.
+ * the row directly lets the flush find the record by the row's path and hand
+ * both to state_confirm, which advances the record only when its statement wrote.
  */
 typedef struct {
     const manifest_row_t *row;       /* Active row this confirmation targets (borrowed) */
@@ -674,16 +674,19 @@ static error_t *workspace_add_untracked(
  * workspace_flush_updates() can persist them via state_confirm(). The blob the
  * stat binds to is the row's — disk was found equal to it.
  *
- * A confirmation belongs to the claim the record names, and this is where that
- * is enforced (core/state.h state_confirm's precondition): the blob it advances
- * is that claim's, and an encrypted blob opens under one (profile, storage path)
+ * A confirmation belongs to the claim the record names: the blob it advances is
+ * that claim's, and an encrypted blob opens under one (profile, storage path)
  * pair and no other, so a confirmation taken from another row would leave the
  * record carrying a blob no reader — this analysis's own base least of all —
- * can place. A row that is not the record's claim is a pending handover: apply's
- * acknowledgement is what moves the record onto it, and until then the path takes
- * the slow path on every load, which is the price of a record that means one
- * thing. A path with no record yet is confirmed from this row like any other:
- * the flush observes before it confirms, and the record it creates is this row's.
+ * can place. state_confirm's statement refuses exactly that at the write (it
+ * binds the row's claim); this asks it of the snapshot first, so a confirmation
+ * that cannot land is never queued, and a load with nothing else to write opens
+ * no transaction for it. A row that is not the record's claim is a pending
+ * handover: apply's acknowledgement is what moves the record onto it, and until
+ * then the path takes the slow path on every load, which is the price of a record
+ * that means one thing. A path with no record yet is confirmed from this row
+ * like any other: the flush observes before it confirms, and the record it creates
+ * is this row's.
  *
  * OOM asymmetry — returns void on realloc failure. Every other path in workspace
  * analysis propagates ERR_MEMORY; this one deliberately does not. The confirmation
@@ -4410,8 +4413,18 @@ bool workspace_item_extract_display_info(
  * never owned.
  *
  * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
- * an existing record untouched, so the snapshot and the database agree whichever
- * of them answered.
+ * an existing record untouched, so the snapshot and the database agree wherever
+ * the database still holds what the load read. Where another writer made the
+ * row since the load, the INSERT is ignored and the record made here is one the
+ * database does not hold — still the INSERT's own values, never that row, and
+ * never read back: a confirmation of this path binds this record as the pair it
+ * replaces (state_confirm), so, blob-less and proof-less, it matches nothing
+ * but an identical observation, where landing is right. Read back, it would lend
+ * the confirmation another writer's newer pair to overwrite. What reads a record
+ * after a read command's flush asks it about ownership alone — status's header,
+ * diff's reassignment, a preview's adoption test — and a record never owned answers
+ * as none does; a run of apply cannot meet an ignored INSERT at all, its load
+ * and its flush sharing one transaction.
  *
  * A record created here backfills the path's item, if analysis produced one:
  * item->anchor is the live record, always — the invariant every derivation reads
@@ -4530,17 +4543,16 @@ error_t *workspace_anchor(
  * on disk with no record, either kind. Routes through workspace_observe, so the
  * snapshot gains the same record the INSERT creates.
  *
- * Confirmation half, second: for entries that hit CMP_EQUAL on the slow path
- * during analyze_file_divergence, state_confirm rewrites what the comparison
- * established — the kind, the blob and the fast-path stat triple — and nothing
- * of the claim the record carries: profile, storage path, mode, owner, group
- * stay whatever the last ownership event wrote, so a confirmation against another
- * profile's row keeps reading as the reassignment it is (the fast path, which
- * writes nothing, would otherwise disagree with the slow path). Persisting the
- * pair lets the next run short-circuit (fast path) or tag STALE directly (fast
- * path with Git-advanced blob_oid). The in-memory record is patched on exactly
- * the columns the UPDATE names — inline, because the flush is the one confirmer
- * and state_confirm takes no mirror.
+ * Confirmation half, second: for the rows analyze_file_divergence found disk
+ * equal to, state_confirm rewrites what the comparison established — the kind,
+ * the blob and the fast-path stat triple — and nothing of the claim the record
+ * carries: profile, storage path, mode, owner, group stay whatever the last
+ * ownership event wrote. Persisting the pair lets the next run short-circuit
+ * (fast path) or tag STALE directly (fast path with Git-advanced blob_oid). It
+ * is a compare-and-swap on the record this load read, under the row's claim,
+ * and it advances the snapshot's record on the same columns only when its statement
+ * wrote: a record another writer moved since the load stays theirs, and this
+ * one as read.
  *
  * The order is load-bearing: a path in both halves had no record at analysis,
  * and a confirmation is an UPDATE that creates nothing — one cannot confirm what
@@ -4552,8 +4564,9 @@ error_t *workspace_anchor(
  * void, and every released copy whose path's record again carries a confirmed
  * blob (post-patch) is forgotten.
  *
- * Begins its own transaction only when state isn't already in one
- * (status/diff/sync). Apply always passes state already-in-transaction.
+ * Begins its own transaction only when state isn't already in one (status, diff,
+ * sync, update, a preview of apply); a run of apply passes its dispatch
+ * transaction.
  */
 error_t *workspace_flush_updates(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -4613,7 +4626,17 @@ error_t *workspace_flush_updates(workspace_t *ws) {
     for (size_t i = 0; i < ws->confirmation_count; i++) {
         const confirmation_t *c = &ws->confirmations[i];
 
-        error_t *err = state_confirm(ws->state, c->row, &c->stat);
+        /* The record the comparison was made against: the load's, or the one
+         * the observation above created. Absent only where that observation was
+         * dropped under memory pressure (workspace_record_observation) — no row
+         * was written for it either, and there is nothing to confirm. */
+        anchor_t *anchor = hashmap_get(ws->anchor_index, c->row->filesystem_path);
+        if (!anchor) continue;
+
+        /* Lands only where the database still holds that record under the row's
+         * claim, and only then advances it (state_confirm): a record another
+         * writer moved since the load stays theirs, and this one as read. */
+        error_t *err = state_confirm(ws->state, c->row, &c->stat, anchor);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
@@ -4622,17 +4645,6 @@ error_t *workspace_flush_updates(workspace_t *ws) {
                 err, "Failed to flush confirmation for '%s'",
                 c->row->filesystem_path
             );
-        }
-
-        /* Mirror the UPDATE on the record — present by now, unless the observation
-         * that would have created it was dropped under memory pressure
-         * (workspace_record_observation); then the UPDATE matched no row either,
-         * and both sides agree there is none. */
-        anchor_t *anchor = hashmap_get(ws->anchor_index, c->row->filesystem_path);
-        if (anchor) {
-            anchor->type = c->row->type;
-            anchor->blob_oid = c->row->blob_oid;
-            anchor->stat = c->stat;
         }
     }
 

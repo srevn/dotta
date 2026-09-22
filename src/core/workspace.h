@@ -22,10 +22,11 @@
  *   state_get_all_anchors themselves. The view has no writer: it is current by
  *   construction and nothing invalidates it. The record has two writers while a
  *   workspace is live, workspace_observe and workspace_anchor, each of which
- *   patches the snapshot it persists through (the flush's confirmations patch
- *   inline, in this file); retirements (state_retire_anchor, from apply's record
- *   step and the verbs) go to the database directly — no later reader in the
- *   run consults a retired path.
+ *   patches the snapshot it persists through (the flush's confirmations go through
+ *   state_confirm, which advances the record it is handed only when its statement
+ *   wrote); retirements (state_retire_anchor, from apply's record step and the
+ *   verbs) go to the database directly — no later reader in the run consults a
+ *   retired path.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -1085,8 +1086,8 @@ error_t *workspace_observe(
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path)
  * Confirmations are not ownership events and do not come through here: the flush
- * persists them with state_confirm and patches the record's confirmed columns
- * itself.
+ * persists them with state_confirm, which advances the record's confirmed columns
+ * itself, and only when its statement wrote.
  *
  * The row pointer is borrowed from the workspace's active partition; the record
  * borrows its strings from that row for the workspace's lifetime.
@@ -1124,20 +1125,24 @@ error_t *workspace_anchor(
  *   analysis while it had no record. Through workspace_observe, so the snapshot
  *   gains the record the INSERT creates.
  *
- *   Confirmations — files verified CMP_EQUAL via the slow path (content hash
- *   comparison) accumulate the stat they were verified with. Persisting it beside
- *   the row's blob (state_confirm) lets subsequent runs short-circuit via the
- *   fast-path stat AND — if Git advances blob_oid in the meantime — classify
- *   the file as stale directly from the fast path instead of re-hashing. A
- *   confirmation rewrites only what it confirmed (type, blob, stat); the record's
- *   claim — profile, storage path, mode, owner, group — is an ownership event's
- *   to change, so a clean reassignment keeps reading as one until apply
- *   acknowledges it. And only a row that IS the record's claim is ever queued
- *   (workspace_record_confirmation): the blob a record carries is the blob of
- *   the claim it names, so a path whose record names another claim takes the
- *   slow path on every load until an ownership event moves the record onto the
- *   standing one. The snapshot's record is patched on the same columns. Nothing
- *   is ever queued from beneath a squatter, because nothing there is looked at
+ *   Confirmations — files the analysis found equal to their row (the slow path's
+ *   CMP_EQUAL, or a released base's triple vouching for the row's content)
+ *   accumulate the stat they were verified with. Persisting it beside the row's
+ *   blob (state_confirm) lets subsequent runs short-circuit via the fast-path
+ *   stat AND — if Git advances blob_oid in the meantime — classify the file as
+ *   stale directly from the fast path instead of re-hashing. A confirmation
+ *   rewrites only what it confirmed (type, blob, stat); the record's claim —
+ *   profile, storage path, mode, owner, group — is an ownership event's to change,
+ *   so a clean reassignment keeps reading as one until apply acknowledges it.
+ *   And only a row that IS the record's claim is ever queued
+ *   (workspace_record_confirmation), where state_confirm would land no other:
+ *   the blob a record carries is the blob of the claim it names, so a path whose
+ *   record names another claim takes the slow path on every load until an ownership
+ *   event moves the record onto the standing one. Each is a compare-and-swap on
+ *   the record this load read: written, and the snapshot's record advanced on
+ *   the same columns, only where the database still holds that record — one another
+ *   writer moved since the load stays theirs, and memory behind it. Nothing is
+ *   ever queued from beneath a squatter, because nothing there is looked at
  *   (workspace_displaced_t): a confirmation taken through one would advance the
  *   record's blob to the row's on the strength of the squatter's target, and
  *   the three-way frame would then read the bytes dotta actually deployed as

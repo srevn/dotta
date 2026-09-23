@@ -568,12 +568,17 @@ static bool directory_is_deployable(
  *                 path is empty at write time. *out_absent; the row is asked
  *                 nothing else
  *   skipped       the squatter stays: nothing beneath it can land, and no
- *                 probe of the path can be trusted about it. The row inherits
- *                 the ancestor's own reason, ancestor named — the fate is the
- *                 ancestor's, so the class (--force or not) and the exit code
- *                 must be the ancestor's too: TYPE keeps the consent class and
- *                 --force lifts parent and child together, PERMISSION keeps the
- *                 incapacity no flag lifts
+ *                 probe of the path can be trusted about it. The row takes the
+ *                 squatter's class, the squatter named — the fate is the
+ *                 squatter's, so the class (--force or not) and the exit code
+ *                 must be too — in the one sentence true of any squatter: TYPE
+ *                 ("wrong type at" it) where --force lifts both, ANCESTOR ("is
+ *                 not a directory") where no flag does. Never the squatter's
+ *                 own reason: a reason is a sentence about the row that carries
+ *                 it (deploy_skip_reason_t), and the squatter's — a parent refusing
+ *                 it, a pair its own claim names — is false of the row beneath.
+ *                 The squatter's own skip, listed above the row, says why it
+ *                 stays and names the remedy for both
  *   no fate       this run never reaches the ancestor (out of scope, -p'd
  *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
  *                 — the same fate a squatter no row names earns at check_landing,
@@ -582,20 +587,20 @@ static bool directory_is_deployable(
  *                 remedies part ways there: a wider scope plans a tracked row,
  *                 the named re-derivation drops an ancestor claim
  *
- * The claimant is written in the no-fate arm alone — an inherited reason is the
- * ancestor's own story, and the class stays NONE. Called before check_landing
- * in both ladders and once more per ancestor candidate; directories are decided
- * parents-first, so a squatted ancestor's own fate is always already taken when
- * a row beneath it is reached. The skip and *out_absent are written only when
- * an ancestor decides — the caller's zero skip and false stand otherwise, and
- * the row judges itself.
+ * The claimant is written in the no-fate arm alone — a row a skipped squatter
+ * holds leaves the class NONE, its remedy being that squatter's own line's
+ * (deploy_ancestor_class_t). Called before check_landing in both ladders and
+ * once more per ancestor candidate; directories are decided parents-first, so a
+ * squatted ancestor's own fate is always already taken when a row beneath it is
+ * reached. The skip and *out_absent are written only when an ancestor decides —
+ * the caller's zero skip and false stand otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
- * @param skip The row's skip in the making (must not be NULL): the reason —
- *        ANCESTOR, or the ancestor's own — the named ancestor's prefix length,
- *        and on an ANCESTOR fate the claim at it
+ * @param skip The row's skip in the making (must not be NULL): the reason — TYPE
+ *        or ANCESTOR — the named squatter's prefix length, and where the run
+ *        gave the squatter no fate the claim at it
  * @param out_absent Whether the run empties the path before writing it (must
  *        not be NULL)
  */
@@ -618,12 +623,14 @@ static void check_ancestry(
     /* The two fates left both hold the row, and both name the squatter */
     skip->ancestor = above->len;
 
-    /* Skipped: the ancestor's own reason */
+    /* Skipped: the squatter's class, never its sentence — consent stays TYPE,
+     * and an incapacity reads what every squatter is, not a directory */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
         if (strcmp(s->row->filesystem_path, above->filesystem_path) == 0) {
-            skip->reason = s->reason;
+            skip->reason = deploy_skip_needs_force(s->reason)
+                ? DEPLOY_SKIP_TYPE : DEPLOY_SKIP_ANCESTOR;
             return;
         }
     }
@@ -923,9 +930,10 @@ static bool above_deployable_row(
  * equation — so the verdict arrays hold deployable rows alone and the executors
  * read them without a gate. A row planned beneath a squatter this run replaces
  * gets its verdict too — absent, nothing asked — so the executors read one shape
- * for every row; beneath a squatter this run skips, it inherits that skip instead,
- * and beneath one the run never reaches it is skipped ANCESTOR — the ancestry
- * rung (check_ancestry), asked before any probe of the row's own.
+ * for every row; beneath a squatter this run skips, it takes that skip's class
+ * instead, TYPE or ANCESTOR, and beneath one the run never reaches it is skipped
+ * ANCESTOR — the ancestry rung (check_ancestry), asked before any probe of the
+ * row's own.
  */
 error_t *deploy_preflight(
     const workspace_t *ws,

@@ -231,16 +231,16 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * ENOTEMPTY) is a failed row, cleanup's a skipped directory, and both headers
  * say why.
  *
- * Precedence. ANCESTOR ranks first: an observation taken through a displaced
- * claimed ancestor is void, so no judgment made through it can outrank the fact
- * — the ancestry rung (check_ancestry) asks it before any probe of the row's
- * own, the landing check included, whose access(2) resolves through a squatting
- * symlink and answers for the target's tree. The reason spans both producers: a
- * squatter at a path no row claims is the landing check's find, one at a directory
- * row's is the rung's — and, since the rung's reach is the view's directory rows
- * rather than the walk's, whether it is the rung that answers no longer depends
- * on how the user spelled the add. The two producers stay one reason and one
- * exit contribution; what a consumer may tell apart is the claim that holds the
+ * Precedence. ANCESTOR ranks first: an observation taken through a squatted claimed
+ * ancestor is void, so no judgment made through it can outrank the fact — the
+ * ancestry rung (check_ancestry) asks it before any probe of the row's own, the
+ * landing check included, whose access(2) resolves through a squatting symlink
+ * and answers for the target's tree. The reason spans both producers: a squatter
+ * at a path no row claims is the landing check's find, one at a directory row's
+ * is the rung's — and, since the rung's reach is the view's directory rows rather
+ * than the walk's, whether it is the rung that answers no longer depends on how
+ * the user spelled the add. The two producers stay one reason and one exit
+ * contribution; what a consumer may tell apart is the claim that holds the
  * squatter, which the skip carries (deploy_ancestor_class_t) — the remedy differs
  * by claimant where the refusal does not. And why UNREADABLE ranks after every
  * path rung where its siblings (cleanup_skip_reason, workspace_item_route) rank
@@ -252,6 +252,13 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * passed (a skipped row can neither warn nor fail strict_ownership —
  * deploy_preflight's invariant), so the question is never asked of a row another
  * reason already holds, and its place in the order is the place the decision takes.
+ *
+ * Each reason is a sentence about the row that carries it, read off that skip's
+ * own fields (cmds/apply.c print_deploy_skips): the ancestor it names (PERMISSION,
+ * ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED), its own
+ * item (CONTENT, UNREADABLE), its own claim (OWNERSHIP). So a row a skipped
+ * squatter holds takes the squatter's class and never its reason (check_ancestry):
+ * the squatter's sentence is about the squatter, whatever reason a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (file_row_occupant), a retargeted link is CONTENT (the target compare),
@@ -304,11 +311,16 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * check (check_landing), the one class it can find. Read by cmds/apply.c
  * print_deploy_skips, whose remedies part on it.
  *
- * NONE on every skip whose reason names no squatted ancestor — the class answers
- * for ANCESTOR alone, where the reason is one and the cure is not.
+ * The class answers for ANCESTOR, where the reason is one and the cure is not —
+ * and only where the skip is the squatter's only report: a squatter this run
+ * never reached, or one nothing claims. NONE everywhere else: on every skip whose
+ * reason is another, and on a row a squatter this run planned and skipped holds,
+ * which reads ANCESTOR and names it but whose remedy is that squatter's own skip,
+ * listed above the row — TRACKED's line, a wider scope, is false of a squatter
+ * already in it.
  */
 typedef enum {
-    DEPLOY_ANCESTOR_NONE = 0,  /* The reason names no squatted ancestor */
+    DEPLOY_ANCESTOR_NONE = 0,  /* Another reason, or a squatter with a skip of its own */
     DEPLOY_ANCESTOR_TRACKED,   /* A tracked row holds the squatted path */
     DEPLOY_ANCESTOR_DERIVED,   /* An ancestor claim holds it */
     DEPLOY_ANCESTOR_UNCLAIMED  /* Nothing claims it — the landing check's find */
@@ -320,14 +332,16 @@ typedef enum {
  * The shape deploy_verdict_t gives a row the run does deploy: the row, its
  * analysis, and the facts decided about it. `ancestor` is the path the reason
  * names — the ancestor that refused, the non-directory in the way, the squatted
- * directory row above an inheriting row. Every such path is an ancestor of the
- * row's own, and so a prefix of filesystem_path by construction (check_landing
- * truncates the planned path; an inheriting row's squatter stands strictly above
- * it) — carried as the byte length of that prefix, not a copy. 0 where the reason
- * has no ancestor to name: it is about the planned path itself (OWNERSHIP always
- * is), or (PERMISSION alone) the ancestry could not even be reached to name its
- * refusing node. `ancestor_class` says which claim holds the named path —
- * ANCESTOR's alone (deploy_ancestor_class_t), NONE wherever the reason is another.
+ * directory above a row it holds. Every such path is an ancestor of the row's
+ * own, and so a prefix of filesystem_path by construction (check_landing truncates
+ * the planned path; a held row's squatter stands strictly above it, and the load
+ * lends its length with it — core/workspace.h workspace_squatted_dir_t) — carried
+ * as the byte length of that prefix, not a copy. 0 where the reason has no ancestor
+ * to name: it is about the planned path itself (OWNERSHIP always is), or
+ * (PERMISSION alone) the ancestry could not even be reached to name its refusing
+ * node. `ancestor_class` says which claim holds the named path where the skip
+ * is the squatter's only report — ANCESTOR's alone, and NONE on a row a skipped
+ * squatter holds (deploy_ancestor_class_t).
  *
  * The item is the verdict's with the one inversion a skip forces: a self-judged
  * skip carries its analysis object (a CONTENT skip carries one by construction
@@ -335,9 +349,9 @@ typedef enum {
  * planned absent beneath an ancestor this run converges, carries NULL. Its own
  * item says nothing about the path — nothing there was looked at, so the occupant
  * on it is UNKNOWN and every bit unset (core/workspace.h workspace_displaced_t)
- * — and a walker must not read that as presence, nor mistake an inheriting row
- * for the squatter itself; a skip has no occupant field to express either refusal,
- * so here NULL is the override.
+ * — and a walker must not read that as presence, nor mistake a held row for the
+ * squatter itself; a skip has no occupant field to express either refusal, so
+ * here NULL is the override.
  *
  * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
  * in this module is.
@@ -347,7 +361,7 @@ typedef struct {
     const workspace_item_t *item;           /* The analysis object; NULL for a row judged by its ancestry */
     deploy_skip_reason_t reason;
     size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
-    deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at the named path */
+    deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at a squatter with no skip of its own */
 } deploy_skip_t;
 
 /**
@@ -554,11 +568,11 @@ typedef struct {
  * and not occupied for --skip-existing's purpose; -e still holds it back. What
  * becomes of it is preflight's alone, asked of this run's own fates rather than
  * guessed from scope: the directory pass converges the ancestor and the row is
- * written fresh beneath it, or the pass does not and the row inherits the
- * ancestor's refusal (check_ancestry, deploy_preflight). Scope still bounds the
- * plan in the ordinary way — a row scope rejects (-p, a path filter) is not planned
- * on its ancestor's account, Coherent Scope, and converges on the next apply
- * that covers it.
+ * written fresh beneath it, or the pass does not and the ancestor's refusal holds
+ * the row, in its class (check_ancestry, deploy_preflight). Scope still bounds
+ * the plan in the ordinary way — a row scope rejects (-p, a path filter) is not
+ * planned on its ancestor's account, Coherent Scope, and converges on the next
+ * apply that covers it.
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL; read at plan time alone —
@@ -636,9 +650,9 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   arrives with nothing measured — so this rung runs first and answers from
  *   the run's own fates (check_ancestry): an ancestor the directory pass converges
  *   first means the row is planned absent and asked nothing else; one the pass
- *   skips means the row inherits that skip, ancestor named; one the run never
- *   acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and
- *   the remedy is a run that reaches it, or, for a claim the run cannot reach
+ *   skips means the row takes that skip's class, ancestor named; one the run
+ *   never acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity,
+ *   and the remedy is a run that reaches it, or, for a claim the run cannot reach
  *   at all because nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file renamed over the target, a symlink unlinked
@@ -692,11 +706,11 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *
  * The deployable gate rests on an invariant the ladders establish rather than
  * check: beneath a squatter this run does not converge, every planned row is
- * skipped. Where the squatter stands at a skipped pending row, by inheritance,
- * whatever the reason — the rung reads the ancestor's own fate; where it stands
- * at an ancestor outside the run's reach, by ANCESTOR; where a skipped chain is
- * absent instead, by the row's own landing check — presence is monotone up a
- * path, so every planned row beneath meets the same refusing ancestor (an
+ * skipped. Where the squatter stands at a skipped pending row, in that skip's
+ * class, whatever its reason — the rung reads the ancestor's own fate; where it
+ * stands at an ancestor outside the run's reach, by ANCESTOR; where a skipped
+ * chain is absent instead, by the row's own landing check — presence is monotone
+ * up a path, so every planned row beneath meets the same refusing ancestor (an
  * unreadable one leaves its descendants' probes to fail the same way). So the
  * ancestors loop can never plan a parent for a subtree the run holds.
  *
@@ -707,8 +721,9 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * is empty once the directory pass has replaced the squatter, and its landing
  * is that ancestor's — whose own row carries the conflict --force resolves, and
  * the landing question. Its verdict carries that absence; when the ancestor's
- * row is skipped instead, the row inherits that skip, ancestor named (the plan's
- * premise — "the squatter is gone first" — holds row by row, never on average).
+ * row is skipped instead, the row takes that skip's class, ancestor named (the
+ * plan's premise — "the squatter is gone first" — holds row by row, never on
+ * average).
  *
  * Runs as the invoker, the identity every write is made as (sys/identity), and
  * asks for no other: a landing the invoker cannot write is PERMISSION, a pair

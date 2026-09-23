@@ -2308,3 +2308,24 @@ error_t *state_get_released_copies(
 
     return NULL;
 }
+
+/* bsearch's: a key against a released copy's (strcmp — the read's own order) */
+static int compare_path_to_released_copy(const void *key, const void *elem) {
+    return strcmp(key, ((const released_copy_t *) elem)->filesystem_path);
+}
+
+/**
+ * The released copy at a path, in a snapshot state_get_released_copies read —
+ * or NULL
+ */
+const released_copy_t *state_lookup_released_copy(
+    const released_copy_t *copies,
+    size_t count,
+    const char *filesystem_path
+) {
+    /* No search of nothing: bsearch's base must be valid even for zero elements
+     * (C11 7.22.5), and the empty snapshot's is NULL. */
+    if (count == 0 || !filesystem_path) return NULL;
+
+    return bsearch(filesystem_path, copies, count, sizeof(*copies), compare_path_to_released_copy);
+}

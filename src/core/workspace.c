@@ -235,16 +235,15 @@ struct workspace {
     size_t orphan_count;                         /* Number of orphans, and of looks */
 
     /* The released copies, snapshot at load beside the record, unconditionally
-     * (workspace_partition). One reader, by design: the base derivation in
-     * analyze_file_divergence, through the index and only when the path's record
-     * carries no confirmed blob — a released fact is not a claim. Frozen at load:
-     * the database forgets a copy with its path's next ownership event or content
-     * confirmation (state_anchor, state_confirm), and nothing here follows, so
-     * a reader after the analysis would read copies the database no longer
-     * holds. */
+     * (workspace_partition), in the getter's strcmp order. One reader, by design:
+     * the base derivation in analyze_file_divergence, which searches it by path
+     * (state_lookup_released_copy), and only when the path's record carries no
+     * confirmed blob — a released copy is not a claim. Frozen at load: the database
+     * forgets a copy with its path's next ownership event or content confirmation
+     * (state_anchor, state_confirm), and nothing here follows, so a reader after
+     * the analysis would read copies the database no longer holds. */
     released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
-    hashmap_t *released_index;                   /* filesystem_path → released_copy_t * (heap-allocated) */
 
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition for the two snapshots above,
@@ -1157,10 +1156,10 @@ static error_t *analyze_file_divergence(
      * theirs is the user's.
      *
      * Source of truth for the base: the record (the path_anchors row's blob)
-     * when it carries one; the released fact when it does not — a released path
-     * re-claimed, whose record is gone or is the window's blob-less observation.
-     * A path with neither has no base. Cross-process correct by construction —
-     * every invocation sees the same answer.
+     * when it carries one; the released copy when it does not — a path re-claimed
+     * after its record retired, whose record is gone or is the window's blob-less
+     * observation. A path with neither has no base. Cross-process correct by
+     * construction — every invocation sees the same answer.
      */
     if (look->occupant != FS_OCCUPANT_NONE) {
         /* The look just observed the path in scope (any type counts). A path
@@ -1176,23 +1175,21 @@ static error_t *analyze_file_divergence(
         compare_result_t cmp_result;
 
         /* The base: dotta's last content confirmation at this path — the record's,
-         * when it carries one; the released fact's, when it does not (a released
-         * path re-claimed: the record is gone, or is the window's blob-less
-         * observation). The record's own questions — absence, reassignment, the
-         * item's record column — stay the anchor's alone: a released fact is no
-         * record, and never fabricates a record, a reassignment, or a DELETED
-         * absence. A base compares under its own recorded binding, whichever of
-         * the two it is: a blob opens under one (profile, storage path) pair
-         * and no other, and each of these facts carries the binding its blob
-         * was confirmed under (core/state.h). The row's pair is never a base's
-         * — a row the record's binding does not name is a handover the record
-         * has yet to follow, and reading the base under it authenticates a
-         * ciphertext against a tree path it was never sealed at. */
-        bool anchor_has_blob = anchor && !git_oid_is_zero(&anchor->blob_oid);
-        const released_copy_t *released = anchor_has_blob ? NULL
-            : hashmap_get(ws->released_index, filesystem_path);
-
-        /* No base by default — the NULL blob is the no-base state; the row-derived
+         * when it carries one; the released copy's, when it does not (a path
+         * re-claimed after its record retired: the record is gone, or is the
+         * window's blob-less observation). The record's own questions — absence,
+         * reassignment, the item's record column — stay the anchor's alone: a
+         * released copy is no record, and never fabricates a record, a
+         * reassignment, or a DELETED absence. A base compares under its own
+         * recorded binding, whichever of the two it is: a blob opens under one
+         * (profile, storage path) pair and no other, and each of these facts
+         * carries the binding its blob was confirmed under (core/state.h). The
+         * row's pair is never a base's — a row the record's binding does not
+         * name is a handover the record has yet to follow, and reading the base
+         * under it authenticates a ciphertext against a tree path it was never
+         * sealed at.
+         *
+         * No base by default — the NULL blob is the no-base state; the row-derived
          * type and pair beside it are never read as a base's (every base question
          * below is gated on git_moved, which needs a base blob). */
         const git_oid *base_blob = NULL;
@@ -1201,13 +1198,20 @@ static error_t *analyze_file_divergence(
         const char *base_storage = storage_path;
         const char *base_profile = profile;
 
-        if (anchor_has_blob) {
+        /* The record's, when it carries a confirmed blob */
+        if (anchor && !git_oid_is_zero(&anchor->blob_oid)) {
             base_blob = &anchor->blob_oid;
             base_stat = &anchor->stat;
             base_type = anchor->type;
             base_storage = anchor->storage_path;
             base_profile = anchor->profile;
-        } else if (released) {
+        }
+
+        /* Where it carries none, the base the path's last retired record left,
+         * if the snapshot holds one */
+        const released_copy_t *released = base_blob ? NULL
+            : state_lookup_released_copy(ws->released, ws->released_count, filesystem_path);
+        if (released) {
             base_blob = &released->blob_oid;
             base_stat = &released->stat;
             base_type = released->type;
@@ -3660,8 +3664,8 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * analyses pair each row with its record through workspace_get_anchor, and the
  * writers advance the index's values — and every record whose path the view lacks
  * is collected into ws->orphans, in the snapshot's path order. The released copies
- * load beside the record, unconditionally: the base derivation asks for a released
- * copy at every file row whose record carries no blob.
+ * load beside the record, unconditionally, in the getter's strcmp order: the
+ * base derivation searches them at every file row whose record carries no blob.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -3669,10 +3673,10 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * set walk the active slices. No defensive cleanup on error: workspace_free is
  * the single cleanup authority.
  *
- * Lifetime: every pointer (the slices and their looks, the snapshot, the orphans
- * array) lives in ws->arena, beside the view's rows. The anchors index is
- * heap-allocated, freed in workspace_free through hashmap_free; the view's index
- * is the dispatcher's.
+ * Lifetime: every pointer (the slices and their looks, the two snapshots, the
+ * orphans array) lives in ws->arena, beside the view's rows. The anchors index
+ * is heap-allocated, freed in workspace_free through hashmap_free; the view's
+ * index is the dispatcher's.
  *
  * Performance: O(M log M + A) — two sorts and one pass over the record; no Git,
  * no probes.
@@ -3775,29 +3779,14 @@ static error_t *workspace_partition(workspace_t *ws) {
         }
     }
 
-    /* The released copies, beside the record. Almost always empty; when not,
-     * the index serves the base derivation the way the anchors index serves the
-     * row pairing. */
+    /* The released copies, beside the record: almost always empty, and searched
+     * as read — the getter's strcmp order is the whole of what the base
+     * derivation's search needs (state_lookup_released_copy). */
     err = state_get_released_copies(
         ws->state, ws->arena, &ws->released, &ws->released_count
     );
     if (err) {
         return error_wrap(err, "Failed to read released copies from state");
-    }
-
-    if (ws->released_count > 0) {
-        ws->released_index = hashmap_borrow(ws->released_count);
-        if (!ws->released_index) {
-            return ERROR(ERR_MEMORY, "Failed to create released index");
-        }
-        for (size_t i = 0; i < ws->released_count; i++) {
-            err = hashmap_set(
-                ws->released_index, ws->released[i].filesystem_path, &ws->released[i]
-            );
-            if (err) {
-                return error_wrap(err, "Failed to populate released index");
-            }
-        }
     }
 
     return NULL;
@@ -4819,11 +4808,9 @@ void workspace_free(workspace_t *ws) {
     free(ws->confirmations);
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
-     * anchor_index values are records in ws->arena — also borrowed, as are the
-     * released index's rows. */
+     * anchor_index values are records in ws->arena — also borrowed. */
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
-    hashmap_free(ws->released_index, NULL);
 
     /* The view is borrowed (the dispatcher's); the slices, the snapshot and the
      * orphans array are arena-allocated and the caller's arena releases them

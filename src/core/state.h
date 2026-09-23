@@ -1009,7 +1009,8 @@ error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
  *
  * In strcmp order (the principle above). Reader: core/workspace.c
  * workspace_partition, loaded once per run, unconditionally, beside the record,
- * and indexed by path for the file judge's base (analyze_file_divergence).
+ * for the file judge's base (analyze_file_divergence), which finds a path's copy
+ * through state_lookup_released_copy and so rests on strcmp order.
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *
@@ -1024,6 +1025,29 @@ error_t *state_get_released_copies(
     arena_t *arena,
     released_copy_t **out,
     size_t *count
+);
+
+/**
+ * The released copy at a path, in a snapshot state_get_released_copies read —
+ * or NULL
+ *
+ * state_lookup_anchor's twin over the other path-keyed table: a binary search
+ * by strcmp, which is the read's own order (the principle above), so the array
+ * must be the getter's, in the order it came back, and a hand-built one in another
+ * order misses what it holds. The empty snapshot — NULL, count 0 — holds nothing.
+ *
+ * Reader: core/workspace.c analyze_file_divergence, for the base of a path whose
+ * record carries no confirmed blob.
+ *
+ * @param copies The snapshot (NULL when count is 0)
+ * @param count Copies in it
+ * @param filesystem_path The key (NULL returns NULL)
+ * @return Borrowed copy, or NULL where the snapshot holds none at the key
+ */
+const released_copy_t *state_lookup_released_copy(
+    const released_copy_t *copies,
+    size_t count,
+    const char *filesystem_path
 );
 
 #endif /* DOTTA_STATE_H */

@@ -334,7 +334,7 @@ static bool occupant_conflicts(fs_occupant_t occ, fs_occupant_t want) {
  * May deploy remove what occupies a planned path?
  */
 typedef enum {
-    CLEARANCE_OK,           /* --force is set, and the occupant is one node */
+    CLEARANCE_OK,           /* consented, and the occupant is one node */
     CLEARANCE_NEEDS_FORCE,  /* one node, but nothing said to replace it */
     CLEARANCE_REFUSED       /* a directory holding paths the plan does not name */
 } clearance_t;
@@ -347,18 +347,21 @@ typedef enum {
  * prompt may have sat between the verdict and the syscall; what the verdict no
  * longer describes, the mechanism refuses (clear_occupant).
  *
- * --force is the first half. Clearing an occupant is the destructive reading of
- * "overwrite modified files", and preflight already gates a type divergence on
- * that flag.
+ * Consent is the first half. Clearing an occupant is the destructive reading of
+ * "overwrite modified files", so it is --force's to give — unless nothing of
+ * the user's stands there: a file row's occupant the workspace proved is the
+ * very copy dotta confirmed, Git having moved the kind beneath it, is replaced
+ * unasked, as a STALE row's bytes are overwritten (the file ladder's type rung,
+ * which hands the proof in).
  *
- * The second half is a limit --force does not lift. What deploy replaces is the
- * tracked path the user named: one node, whose disappearance is exactly what
- * the preview and the prompt describe. A directory holding anything else holds
- * *other* paths — untracked, unnamed, uncounted, and not restorable from Git —
- * so nothing on the apply command line authorizes removing them. core/cleanup
- * never removes an orphaned directory holding anything of the user's, --force
- * included (cleanup_preflight's directory verdicts release it); this is the same
- * posture on deploy's side of the house.
+ * The second half is a limit no consent lifts. What deploy replaces is the tracked
+ * path the user named: one node, whose disappearance is exactly what the preview
+ * and the prompt describe. A directory holding anything else holds *other* paths
+ * — untracked, unnamed, uncounted, and not restorable from Git — so nothing on
+ * the apply command line authorizes removing them. core/cleanup never removes
+ * an orphaned directory holding anything of the user's, --force included
+ * (cleanup_preflight's directory verdicts release it); this is the same posture
+ * on deploy's side of the house.
  *
  * "Holds something" is fs_is_directory_empty's negation, so a directory carrying
  * nothing but OS metadata is clearable and fs_remove_empty_dir removes exactly
@@ -372,14 +375,15 @@ typedef enum {
  *
  * @param path Planned path (must not be NULL)
  * @param occ Its occupant, as the workspace observed it
- * @param force Whether --force was given
+ * @param consent Whether replacing it is consented: --force, or on a file row
+ *        the workspace's proof that the occupant is dotta's own copy
  */
-static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool force) {
+static clearance_t path_clearance(const char *path, fs_occupant_t occ, bool consent) {
     if (occ == FS_OCCUPANT_DIRECTORY && !fs_is_directory_empty(path)) {
         return CLEARANCE_REFUSED;
     }
 
-    return force ? CLEARANCE_OK : CLEARANCE_NEEDS_FORCE;
+    return consent ? CLEARANCE_OK : CLEARANCE_NEEDS_FORCE;
 }
 
 /**
@@ -1116,8 +1120,21 @@ error_t *deploy_preflight(
 
             if (skip.reason == DEPLOY_SKIP_NONE) {
                 if (occupant_conflicts(occupant, file_row_occupant(row))) {
-                    /* Type: what stands at the path decides the remedy. */
-                    switch (path_clearance(path, occupant, opts->force)) {
+                    /* Type: what stands at the path decides the remedy, and whose
+                     * it is decides the consent. STALE on a kind the row does
+                     * not have is the workspace's proof that the occupant is
+                     * exactly the copy dotta confirmed, Git having retyped the
+                     * path beneath it (the file judge's second question, asked
+                     * under the base's kind): replacing it loses nothing, so it
+                     * needs no --force, as a STALE row's bytes never do
+                     * (deploy_content_conflicts). The proof is the bit and never
+                     * an absence of conflict: a sealed row read with no key fails
+                     * before its kind is compared, carrying neither TYPE nor
+                     * CONTENT and proving nothing, so its kind mismatch still
+                     * asks for --force. */
+                    switch (path_clearance(
+                        path, occupant, opts->force || (item->divergence & DIVERGENCE_STALE)
+                        )) {
                         case CLEARANCE_OK:
                             break;
 

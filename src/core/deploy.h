@@ -673,13 +673,16 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   the run rather than modelling it.
  * - Type — the occupant the workspace observed at the planned path, both kinds
  *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces
- *   is absent, and asked nothing). A non-directory where a directory belongs
- *   (or the reverse) is skipped unless --force (TYPE); a directory holding
- *   untracked paths is skipped either way (OCCUPIED), because deploy removes
- *   single nodes and never a tree. A row the workspace could not settle
- *   (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its content
- *   that failed) is skipped as UNREADABLE when the landing had nothing to say:
- *   no verdict can say what the run will find there.
+ *   is absent, and asked nothing). A different kind at the path — a non-directory
+ *   where a directory belongs, the reverse, or a file row's other kind — is skipped
+ *   unless --force (TYPE), save a file row's occupant the workspace proved is
+ *   dotta's own copy with only its kind moved by Git (STALE): that one is replaced
+ *   unasked, as a STALE row's bytes are overwritten. A directory holding untracked
+ *   paths is skipped either way (OCCUPIED), because deploy removes single nodes
+ *   and never a tree. A row the workspace could not settle (DIVERGENCE_UNVERIFIED
+ *   — an unexaminable occupant, or a look at its content that failed) is skipped
+ *   as UNREADABLE when the landing had nothing to say: no verdict can say what
+ *   the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses

@@ -809,11 +809,14 @@ static error_t *compare_tree_files_to_filesystem(
  * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
  * by whether it matches at any rung, either polarity — against the view's rows,
  * each by both its names (the entry reads the one in its own vocabulary) and by
- * its own kind, read off its type. Outputs a warning for each entry that matches
- * nothing — which likely indicates a typo — plus the list hint as the warnings'
- * remedy. An entry that reaches only directory rows is answered for what it is
- * instead: managed, just with no content to diff — a tracked directory or a derived
- * one alike, since neither kind has any (core/manifest.h).
+ * its own kind, read off its type. An entry that reaches a file row has content
+ * to diff and is not answered. One that reaches only directory rows is answered
+ * for what it is: a path with no content to diff — a tracked directory or a derived
+ * one alike, since neither kind has any (core/manifest.h). One that reaches nothing
+ * — which likely indicates a typo — is warned in the words of what the view's
+ * paths are: the enabled view's are managed paths, a commit's are the commit's,
+ * and a miss in one says nothing of the other. The list hint follows the warnings
+ * as their remedy.
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
@@ -827,13 +830,17 @@ static error_t *compare_tree_files_to_filesystem(
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
  * @param view The view the arm compares against (must not be NULL)
- * @param out Output context for warnings
+ * @param what What the view's paths are on the screen: "managed path" for the
+ *             enabled view, "path of the commit" for one commit's (must not be
+ *             NULL)
+ * @param out Output context for the answers
  * @return Number of filter entries under which nothing will diff (0 = every entry
  *         covers at least one file)
  */
 static size_t validate_filter_paths(
     const pathspec_t *file_filter,
     const manifest_t *view,
+    const char *what,
     output_t *out
 ) {
     if (!file_filter) return 0;
@@ -862,6 +869,7 @@ static size_t validate_filter_paths(
         /* Content to diff, and nothing to say */
         if (reached && reached->type != PATH_TYPE_DIRECTORY) continue;
 
+        /* A directory row alone has nothing to diff; no row at all is warned */
         pathspec_entry_t entry = pathspec_entry_at(file_filter, e);
         if (reached && entry.glob) {
             output_info(
@@ -876,13 +884,12 @@ static size_t validate_filter_paths(
             );
         } else if (entry.glob) {
             output_warning(
-                out, OUTPUT_NORMAL,
-                "No managed path matches pattern '%s'", entry.text
+                out, OUTPUT_NORMAL, "No %s matches pattern '%s'", what, entry.text
             );
             hint = true;
         } else {
             output_warning(
-                out, OUTPUT_NORMAL, "No managed path matches '%s'", entry.text
+                out, OUTPUT_NORMAL, "No %s matches '%s'", what, entry.text
             );
             hint = true;
         }
@@ -1014,7 +1021,9 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(file_filter, historical, out);
+        size_t unmatched = validate_filter_paths(
+            file_filter, historical, "path of the commit", out
+        );
 
         if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
             output_info(
@@ -1339,7 +1348,9 @@ static error_t *diff_workspace(
     /* Step 3: Validate file filter paths against the view the workspace joined */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
+        size_t unmatched = validate_filter_paths(
+            file_filter, manifest, "managed path", out
+        );
         if (unmatched == pathspec_count(file_filter)) {
             /* Nothing diffs under any filter entry — unmatched or content-less */
             goto cleanup;

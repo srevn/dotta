@@ -380,15 +380,16 @@ static bool managed_beneath(const workspace_t *ws, const char *dir) {
  * is present, so its parent is. Not asked, and met by the removal with its cause
  * instead: a sticky parent's owner rule, an immutable flag, a read-only mount,
  * and the OS-metadata entries fs_remove_empty_dir clears inside a directory whose
- * own write bit the invoker lacks. A path this cannot take apart — not absolute,
- * or longer than any path the kernel takes — cannot happen, and reads as admitted:
- * the removal reports it.
+ * own write bit the invoker lacks. The one bound is the buffer's, and no boundary
+ * makes it idle — the store refuses a key's shape, never its length — so a parent
+ * that would not fit in PATH_MAX, the kernel's own bound on a path, reads as
+ * admitted: the removal reports it.
  */
 static bool parent_accepts_removal(const char *path) {
     size_t len = str_path_parent_len(path);
     char parent[PATH_MAX];
 
-    if (len == 0 || len >= sizeof(parent)) {
+    if (len >= sizeof(parent)) {
         return true;
     }
 

@@ -1996,11 +1996,12 @@ static const entry_t *find_entries(
  *
  * stat(2) of the parent, through a link standing at any rung — the chain two
  * spellings of one entry differ in (cleanup's parent_accepts_removal takes the
- * parent the same way). A path this cannot take apart — not absolute, or longer
- * than any the kernel takes — cannot happen to a key that was just lstat'ed,
- * and answers as a look that did not happen, which is its one caller's rule for it.
+ * parent the same way). The one bound is the buffer's: a key that was just lstat'ed
+ * fits in PATH_MAX, the kernel's own bound on a path, and so does its parent —
+ * one that would not answers as a look that did not happen, which is its one
+ * caller's rule for it.
  *
- * @param path Canonical absolute path (must not be NULL)
+ * @param path A key (must not be NULL)
  * @param st Receives the parent's stat (must not be NULL)
  * @return true when the parent was stat'd
  */
@@ -2008,7 +2009,7 @@ static bool stat_parent(const char *path, struct stat *st) {
     size_t len = str_path_parent_len(path);
     char parent[PATH_MAX];
 
-    if (len == 0 || len >= sizeof(parent)) {
+    if (len >= sizeof(parent)) {
         return false;
     }
 
@@ -2053,16 +2054,14 @@ static bool same_entry(const char *path, const char *other, const struct stat *s
         return true;
     }
 
-    const char *name = strrchr(path, '/');
-    const char *other_name = strrchr(other, '/');
-    if (!name || !other_name || strcmp(name + 1, other_name + 1) != 0) {
-        return false;
-    }
-
     struct stat parent;
     struct stat other_parent;
 
-    return stat_parent(path, &parent) && stat_parent(other, &other_parent) &&
+    /* The names by bytes, each read from its key's last separator on — a key is
+     * absolute (sys/filesystem.h fs_is_folded), so it holds one — then the
+     * directories by identity */
+    return strcmp(strrchr(path, '/'), strrchr(other, '/')) == 0 &&
+           stat_parent(path, &parent) && stat_parent(other, &other_parent) &&
            parent.st_dev == other_parent.st_dev && parent.st_ino == other_parent.st_ino;
 }
 

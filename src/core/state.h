@@ -53,6 +53,11 @@
  * - Binary format (fast, compact)
  * - WAL mode (concurrent access, atomic commits)
  * - Prepared statements (100x faster for bulk operations)
+ * - A path-keyed table holds keys alone — absolute and folded, the shape
+ *   mount_resolve spells every key in (sys/filesystem.h fs_is_folded), and whole
+ *   — and refuses any other where a hand makes the edit (key_spelling). The shape
+ *   and never the length: a key longer than PATH_MAX is the kernel's to refuse,
+ *   at the call that meets it
  * - A path-keyed table is stored sorted by its key and read in key order: the
  *   key is TEXT under BINARY — memcmp over UTF-8 — and holds no NUL (key_spelling),
  *   which is where BINARY and strcmp meet, so a read comes back in strcmp order:

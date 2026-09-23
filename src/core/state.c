@@ -271,16 +271,16 @@ static error_t *initialize_schema(sqlite3 *db) {
         ") STRICT, WITHOUT ROWID;"
 
         /* The content-proof half of a record that released (its binding and its
-         * content), claim-free: disk still held dotta's last confirmation when
-         * dotta let go of the path. File kinds only — a directory has no content
+         * content), claim-free: what dotta had last confirmed at the path when
+         * it let the path go. File kinds only — a directory has no content
          * confirmation to outlive its record (blob IS NOT NULL is the write guard's
-         * filter; the CHECKs are the schema's own restatement). A row lives while
-         * its path's record is absent or merely observed and disk may still hold
-         * it: the record's next ownership event or content confirmation deletes
-         * it in the same breath (state_anchor, state_confirm — explicit siblings,
-         * per the rule above), and apply's sweep forgets it when disk provably
-         * left it. The read verifies it against live disk before trusting it.
-         * The key's constraint and the table's storage are the record's (above). */
+         * filter; the CHECKs are the schema's own restatement). A row lives until
+         * its path's next ownership event or content confirmation deletes it in
+         * the same breath (state_anchor, state_confirm — explicit siblings, per
+         * the rule above): the write that gives the path a newer base. Disk never
+         * ends it — the read measures disk against it, and trusts it for nothing
+         * more. The key's constraint and the table's storage are the record's
+         * (above). */
         "CREATE TABLE released_copies ("
         "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
         "        " FOLDED_SPELLING("filesystem_path") ","
@@ -681,9 +681,9 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare release statement");
     }
 
-    /* Forget released: the fact's two ends — the sibling of its record's next
-     * ownership event or content confirmation (the record says what stands there
-     * now) and apply's sweep (disk provably left the copy). */
+    /* Forget released: the fact's one end — the sibling of its path's next
+     * ownership event or content confirmation, which gives the path a newer base
+     * (forget_released). */
     const char *sql_forget_released =
         "DELETE FROM released_copies WHERE filesystem_path = ?1;";
 
@@ -1762,6 +1762,28 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
 }
 
 /**
+ * Forget the released copy at a path, in the breath of the write that ends it
+ *
+ * The copy's one end (state.h): a newer base at its path — the ownership event
+ * (state_anchor) or the content confirmation (state_confirm) that gives the path
+ * one, each calling this only where its own statement wrote. DELETE by
+ * filesystem_path; a path with no copy is success.
+ */
+static error_t *forget_released(state_t *state, const char *filesystem_path) {
+    sqlite3_stmt *stmt = state->stmt_forget_released;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to forget released copy");
+    }
+
+    return NULL;
+}
+
+/**
  * Observe a managed path: record its first sighting on disk
  *
  * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on sql_observe and the
@@ -1893,9 +1915,9 @@ error_t *state_confirm(
         return sqlite_error(state->db, "Failed to confirm path");
     }
 
-    /* The record says what stands at the path now, so the released copy there
-     * is subsumed — it dies in the same breath. */
-    RETURN_IF_ERROR(state_forget_released(state, row->filesystem_path));
+    /* The record carries the path's base now, a newer one than the released copy
+     * there — which dies in the same breath. */
+    RETURN_IF_ERROR(forget_released(state, row->filesystem_path));
 
     /* The caller's copy follows, on the three columns the statement names and
      * no other — last, so a failure above leaves it as read. */
@@ -1959,8 +1981,8 @@ error_t *state_confirm_claim(
     /* The caller's copy follows, on the three columns the statement names, as a
      * load reads them back — a link's NULL mode as 0 — and the strings borrowed
      * as state_observe and state_anchor borrow the row's, the cast discarding a
-     * const the record's fields do not spell. No released copy dies here: the
-     * claim says nothing of what stands at the path. */
+     * const the record's fields do not spell. No released copy dies here: a claim
+     * gives the path no newer base. */
     anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
     anchor->owner = (char *) owner;
     anchor->group = (char *) group;
@@ -1998,13 +2020,11 @@ error_t *state_anchor(
         return ERROR(ERR_INVALID_ARG, "Anchor timestamp must be > 0");
     }
 
-    bool directory = (row->type == PATH_TYPE_DIRECTORY);
-
     /* A zero blob_oid on a file row would record "never confirmed" for a path
      * this call claims to have confirmed, and strand it in the stale path. Reject
      * rather than silently poison — and name the bug, where the schema's CHECK
      * would only refuse the zeroblob. */
-    if (!directory && git_oid_is_zero(&row->blob_oid)) {
+    if (row->type != PATH_TYPE_DIRECTORY && git_oid_is_zero(&row->blob_oid)) {
         return ERROR(
             ERR_STATE_INVALID,
             "state_anchor called with zero blob_oid for '%s'",
@@ -2022,7 +2042,7 @@ error_t *state_anchor(
 
     /* 8. blob_oid — 20 bytes for a file, NULL for a directory (no content
      * confirmation; the schema forbids a blob on a directory row). */
-    if (directory) {
+    if (row->type == PATH_TYPE_DIRECTORY) {
         sqlite3_bind_null(stmt, 8);
     } else {
         sqlite3_bind_blob(stmt, 8, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
@@ -2045,9 +2065,9 @@ error_t *state_anchor(
     }
 
     /* An ownership event says what stands at the path — the row's blob, or a
-     * directory — so a released copy there is redundant or false either way: it
+     * directory — so the path has a newer base than a released copy there, which
      * dies in the same breath. */
-    RETURN_IF_ERROR(state_forget_released(state, row->filesystem_path));
+    RETURN_IF_ERROR(forget_released(state, row->filesystem_path));
 
     /* The caller's record follows, whole — last, so a failure above leaves it
      * as read: the columns the statement names, the strings borrowed from the
@@ -2220,9 +2240,12 @@ error_t *state_get_released_copies(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* Column layout: 0-2 identity, 3-7 the confirmed pair, 8 the table's size
-     * (the first row sizes the allocation). Every column is NOT NULL by schema;
-     * the blob is 20 bytes by CHECK. */
+    /* Column layout, released_copy_t's groups:
+     *   0:    the key (filesystem_path)
+     *   1-2:  the binding (storage_path, profile)
+     *   3-7:  the content (type, blob_oid, stat_mtime, stat_size, stat_ino)
+     *   8:    the table's size (the first row sizes the allocation)
+     * Every column is NOT NULL by schema; the blob is 20 bytes by CHECK. */
     const char *sql_released =
         "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
         "stat_mtime, stat_size, stat_ino, (SELECT count(*) FROM released_copies) "
@@ -2290,30 +2313,6 @@ error_t *state_get_released_copies(
 
     *out = rows;
     *count = i;
-
-    return NULL;
-}
-
-/**
- * Forget one released copy
- *
- * DELETE by filesystem_path; a missing row is success (see the header contract).
- */
-error_t *state_forget_released(state_t *state, const char *filesystem_path) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_forget_released);
-
-    sqlite3_stmt *stmt = state->stmt_forget_released;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to forget released copy");
-    }
 
     return NULL;
 }

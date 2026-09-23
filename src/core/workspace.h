@@ -1036,10 +1036,9 @@ const manifest_row_t *workspace_lookup(
  * displaces the record's own family alone (the reach rule, workspace_displaced_t),
  * and every item of that family carries the fact on itself. This probe is for a
  * caller holding a path and no item: the fate of a planned row (core/deploy.c
- * check_ancestry) and the released-copies sweep (cmds/apply.c cmd_apply). A view
- * row beneath a record-remembered squatter is the through-capture the rule leaves
- * to its own occupant. So the answer is the view's claims alone, and on an item
- * it is exactly that item's displaced field.
+ * check_ancestry). A view row beneath a record-remembered squatter is the
+ * through-capture the rule leaves to its own occupant. So the answer is the view's
+ * claims alone, and on an item it is exactly that item's displaced field.
  *
  * The answer is noted by the phase that looked at each squatter (note_displaced),
  * and the directory analysis runs before any file row or orphan record is looked
@@ -1310,8 +1309,8 @@ error_t *workspace_confirm(
  * The join runs last — the order's view end (state.h's lifetime rule), here because
  * the view is: every order a record the load read carries, where the view has
  * the path, is void — on the order it read, since an order placed after it answers
- * a removal this view predates. A released copy has no end here: its two are
- * its record's next ownership event or content confirmation, and apply's sweep.
+ * a removal this view predates. A released copy has no end here: its one is its
+ * path's next ownership event or content confirmation.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

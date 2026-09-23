@@ -12,15 +12,15 @@
  *     it goes with the row (a retire; apply executing it is one), an ownership
  *     event writes it away, and the flush voids it where the view holds the path
  *     again;
- *   - a released copy lives while its path's record is absent or merely observed
- *     and disk may still hold it — the record's next ownership event or content
- *     confirmation deletes it in the same breath, and apply's sweep forgets it
- *     where disk provably left it.
- * The released copy dies these two ways and no other: with a write to its path's
- * record that says what stands at the path — an ownership event or a content
- * confirmation, never a claim's — and where its own authority is asked, the disk
- * at the sweep. Everything else — what should stand at a path, from whom — is
- * computed from Git at every load (core/manifest.h) and never stored.
+ *   - a released copy lives from the release that wrote it until its path's next
+ *     ownership event or content confirmation deletes it in the same breath —
+ *     the write that gives the path a newer base.
+ * The released copy dies that one way and no other: never with a claim's
+ * confirmation or a sighting, which say nothing of the content, and never with
+ * disk — it is what dotta last confirmed at the path, the base a later read
+ * measures disk against, and an edit or an absence since does not make it any
+ * less that. Everything else — what should stand at a path, from whom — is computed
+ * from Git at every load (core/manifest.h) and never stored.
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -46,8 +46,8 @@
  *   - path_anchors: The record — what dotta last reconciled each managed path
  *     against, and what it confirmed there (both kinds, one row per path), the
  *     prune order among its columns
- *   - released_copies: The content-proof half of a record that released — disk
- *     still held dotta's last confirmation when dotta let go of the path
+ *   - released_copies: The content-proof half of a record that released — what
+ *     dotta had last confirmed at the path when it let the path go
  *
  * Design principles:
  * - Binary format (fast, compact)
@@ -179,11 +179,6 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  * Readers: core/workspace.c analyze_file_divergence, which asks it of the base's
  * proof, and compute_orphan_divergence, which asks it of the record's — the two
  * fast paths, which must not disagree about what a proof proves.
- *
- * Not this: cmds/apply.c's released-copies sweep tests `size != proof.size` on
- * a set triple. That is a one-sided *disproof* — a size that differs proves the
- * bytes are not the blob's — deliberately not the triple, because a match there
- * would have to be trusted to retire a fact rather than to skip a read.
  */
 static inline bool stat_cache_matches(const stat_cache_t *proof, const struct stat *st) {
     return proof->mtime != 0
@@ -287,25 +282,27 @@ typedef struct anchor {
 /**
  * Released copy — a fact that outlives its record (released_copies row)
  *
- * One row says: at this filesystem path, dotta's last content confirmation —
- * this blob, this kind, under this binding — was still standing when dotta let
- * go of the path. Exactly the content-proof half of the record it descends from
- * (its binding and its content, verbatim), claim-free: the claim and the lifecycle
- * died with the record, so a released fact never fabricates a record, a
- * reassignment, or a DELETED absence. File kinds only — a directory has no content
- * confirmation to outlive its record.
+ * One row says: at this filesystem path, dotta's last content confirmation, when
+ * dotta let go of the path, was this blob, of this kind, under this binding.
+ * Exactly the content-proof half of the record it descends from (its binding
+ * and its content, verbatim), claim-free: the claim and the lifecycle died with
+ * the record, so a released fact never fabricates a record, a reassignment, or
+ * a DELETED absence. File kinds only — a directory has no content confirmation
+ * to outlive its record.
  *
- * The row is a statement about the past, verified against the present at every
- * use: the analyzer reads it as the base of the three-way content question only
- * when the path's record carries no confirmed blob, and never trusts it without
- * the live stat or content check it performs for any base. The storage_path and
- * profile are the blob's own binding — an encrypted blob decrypts under its
- * writer's subkey (profile name → KDF) with its tree path as AAD — so a released
- * base stays verifiable even after the branch that wrote it is gone. The type
- * is half of what the copy says was standing there, and both questions of the
- * three-way read it: the first asks whether the row's content is this pair's at
- * all (core/workspace.h workspace_stale), the second routes the base read by
- * the base's own kind — which is what keeps the fast and slow paths in agreement.
+ * The row is a statement about the past, which the present is measured against
+ * at every use and never retires: an edit or an absence since is what a base is
+ * there to judge, not a reason to drop it. The analyzer reads it as the base of
+ * the three-way content question only when the path's record carries no confirmed
+ * blob, and never trusts it without the live stat or content check it performs
+ * for any base. The storage_path and profile are the blob's own binding — an
+ * encrypted blob decrypts under its writer's subkey (profile name → KDF) with
+ * its tree path as AAD — so a released base stays verifiable even after the branch
+ * that wrote it is gone. The type is half of what the copy says was standing
+ * there, and both questions of the three-way read it: the first asks whether
+ * the row's content is this pair's at all (core/workspace.h workspace_stale),
+ * the second routes the base read by the base's own kind — which is what keeps
+ * the fast and slow paths in agreement.
  */
 typedef struct {
     char *filesystem_path;    /* Released path (PRIMARY KEY) */
@@ -778,11 +775,11 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  * it overwrites are bound, and nothing else, so an ownership event that moved
  * neither (an adoption's stamp) lets it land, while a record another writer moved
  * — another binding, a newer blob, a fresher proof — matches nothing, and nothing
- * is written. Where it wrote, the path's released copy dies in the same breath
- * (state_forget_released): the record says what stands there now. *anchor follows
- * the statement: advanced on the three columns it names when it wrote, and last,
- * so a failure leaves it as read; left as read when it did not — memory behind
- * the database, the direction the next load corrects.
+ * is written. Where it wrote, the path's released copy dies in the same breath:
+ * the record carries the path's base now, a newer one. *anchor follows the
+ * statement: advanced on the three columns it names when it wrote, and last, so
+ * a failure leaves it as read; left as read when it did not — memory behind the
+ * database, the direction the next load corrects.
  *
  * The binding bound is the row's, never the record's: a blob is written only
  * onto a record whose binding it opens under, so anchor_t's rule holds at the
@@ -829,8 +826,8 @@ error_t *state_confirm(
  * row's it is — the content's confirmation is bound to the row's binding because
  * an encrypted blob opens under one, and a mode or an owner opens nothing. Nothing
  * else is written — not the binding, not the content, not the lifecycle — so
- * this is never an ownership event, and says nothing of what stands at the path:
- * a released copy there outlives it.
+ * this is never an ownership event, and gives the path no newer base: a released
+ * copy there outlives it.
  *
  * Both kinds. A link's mode binds NULL on both sides, the rule its row's binds
  * by (state_observe, state_anchor), whatever `mode` says.
@@ -886,10 +883,9 @@ error_t *state_confirm_claim(
  *     it; or a caller whose establishment did not reach a triple): the triple
  *     is written as zeros and the next read takes the slow path. A deployed file's
  *     is the write's own (stat_cache_from_write).
- *   - the path's released copy dies with the write, either kind
- *     (state_forget_released): an ownership event says what stands there — the
- *     row's blob, or a directory — so a copy of what stood before is redundant
- *     or false.
+ *   - the path's released copy dies with the write, either kind: an ownership
+ *     event says what stands there — the row's blob, or a directory — so the
+ *     path has a newer base than the copy.
  *   - the path's order ends: an ownership event takes the path into the view,
  *     where no order stands (the column's default).
  *
@@ -993,21 +989,24 @@ error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
  * content-proof half (the binding and the content) into released_copies; it inserts
  * nothing for a directory or a never-confirmed record (blob IS NULL) — for those
  * this IS state_retire_anchor, so callers never branch on kind. OR REPLACE: a
- * path can release more than once across its life, and the latest fact is what
- * disk holds — while a proof-less re-release leaves an older, still-true row
- * standing. Then the retire, composed: the same call state_retire_anchor's callers
- * make, which takes the order with the row.
+ * path can release more than once across its life, and the latest release carries
+ * dotta's latest confirmation — while a proof-less re-release leaves the older
+ * row standing, still the last dotta confirmed there. Then the retire, composed:
+ * the same call state_retire_anchor's callers make, which takes the order with
+ * the row.
  *
- * The write is blind — remove and apply's release sites never lstat first. A
- * row false at birth (the user edited before releasing) degrades safely: the
- * read verifies against live disk before trusting it, and the sweep retires what
- * disk provably left. A rekey'd repository leaves old released rows permanently
- * UNVERIFIED at the read; they die by the same sweep, or with the path's next
- * ownership event or content confirmation. A copy written at a stale key — a
- * path still standing under another spelling, released because a row of the view
- * stands on its very entry (core/workspace.c) — is true and unread for as long
- * as the file stands: it dies when the file goes through that other spelling,
- * or with the next ownership event or content confirmation at this key.
+ * The write is blind — remove and apply's release sites never lstat first, and
+ * need not: the copy says what dotta last confirmed, which an edit before the
+ * release does not make false. The read measures disk against it, and such an
+ * edit reads as the user's, beside Git's move where Git moved. A copy whose blob
+ * no key in hand opens (a repository rekeyed since, a session never unlocked)
+ * still vouches by its triple, which opens nothing; where the triple misses,
+ * the base cannot be read and disk is taken as the user's — the conflict pair
+ * where Git moved: a base no key opens withholds no verdict. A copy written at
+ * a stale key — a path still standing under another spelling, released because
+ * a row of the view stands on its very entry (core/workspace.c) — is unread while
+ * no row stands at this key. Each is a base like any other, and ends as any other
+ * does.
  *
  * A missing record is success: nothing observed, nothing to remember.
  *
@@ -1023,12 +1022,9 @@ error_t *state_release(state_t *state, const char *filesystem_path);
  * The released_copies read, the shape of state_get_all_anchors: the array and
  * its strings are the caller's arena's.
  *
- * In strcmp order (the principle above). Readers:
- *   - core/workspace.c workspace_partition: loaded once per run, unconditionally,
- *     beside the record, and indexed by path for the file judge's base
- *     (analyze_file_divergence)
- *   - cmds/apply.c cmd_apply's sweep: a fresh read inside its own transaction,
- *     so the run's release writes are included; walked, key order unread
+ * In strcmp order (the principle above). Reader: core/workspace.c
+ * workspace_partition, loaded once per run, unconditionally, beside the record,
+ * and indexed by path for the file judge's base (analyze_file_divergence).
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *
@@ -1044,23 +1040,5 @@ error_t *state_get_released_copies(
     released_copy_t **out,
     size_t *count
 );
-
-/**
- * Forget one released copy
- *
- * DELETE by filesystem_path; a missing row is success. Three callers, the fact's
- * two ends: state_anchor and state_confirm, each in the same breath as its write
- * (the record says what stands at the path now, so the copy is redundant or false),
- * and cmds/apply.c cmd_apply's sweep (disk provably left the copy: the path is
- * absent, or its live size differs from the recorded triple's). A failed look
- * retires no fact: a confirmation forgets only when its statement wrote, and
- * the sweep only on a look that answered. A claim's confirmation is no caller:
- * it says nothing of what stands at the path (state_confirm_claim).
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path Path whose released copy is forgotten (must not be NULL)
- * @return Error or NULL on success (not found is OK)
- */
-error_t *state_forget_released(state_t *state, const char *filesystem_path);
 
 #endif /* DOTTA_STATE_H */

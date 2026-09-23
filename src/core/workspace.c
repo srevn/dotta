@@ -843,7 +843,7 @@ static error_t *workspace_record_observation(
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), by
  * the orphan judge for the item it emits (analyze_orphans) and by the one producer
  * of items (workspace_add_diverged); and through workspace_displaced_ancestor
- * by core/deploy.c check_ancestry and cmds/apply.c's released-copies sweep.
+ * by core/deploy.c check_ancestry.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The squatted path, the row's or the record's (borrowed; workspace
@@ -1389,9 +1389,9 @@ static error_t *analyze_file_divergence(
              * A failed look answers nothing and leaves disk_at_base false: the
              * edit is taken as real (CONTENT), the conservative answer — STALE
              * still holds, because git_moved is a fact about two OIDs. A failed
-             * look on a released base retires nothing: a row dies only with its
-             * path's next ownership event or content confirmation, or at the
-             * sweep — never on a look that could not answer. */
+             * look on a released base retires nothing — no look does: a copy
+             * dies only with its path's next ownership event or content
+             * confirmation (core/state.h). */
             if (git_moved &&
                 (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
                 compare_result_t at_base;
@@ -4676,8 +4676,8 @@ error_t *workspace_confirm(
  *
  * The join, last — the order's view end, the one lifetime end that needs the
  * view: every order a record the load read carries, where the view has the path,
- * is void. A released copy has no end here; its two are its record's next ownership
- * event or content confirmation, and apply's sweep (core/state.h).
+ * is void. A released copy has no end here; its one is its path's next ownership
+ * event or content confirmation (core/state.h).
  *
  * Begins its own transaction only when state isn't already in one (status, diff,
  * sync, update, a preview of apply); a run of apply passes its dispatch

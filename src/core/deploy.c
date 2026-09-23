@@ -577,9 +577,9 @@ static bool directory_is_deployable(
  *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
  *                 — the same fate a squatter no row names earns at check_landing,
  *                 an incapacity. The skip carries which claim holds the squatter
- *                 (*out_class), because the remedies part ways there: a wider
- *                 scope plans a tracked row, the named re-derivation drops an
- *                 ancestor claim
+ *                 (its ancestor_class), because the remedies part ways there: a
+ *                 wider scope plans a tracked row, the named re-derivation drops
+ *                 an ancestor claim
  *
  * Written default-then-override: ANCESTOR is what an unreached ancestor earns,
  * and the skip scan replaces it with the ancestor's own reason when this run
@@ -587,24 +587,22 @@ static bool directory_is_deployable(
  * inherited reason is the ancestor's own story, and the class stays NONE. Called
  * before check_landing in both ladders and once more per ancestor candidate;
  * directories are decided parents-first, so a squatted ancestor's own fate is
- * always already taken when a row beneath it is reached. The outs are written
- * only when an ancestor decides — the caller's initialization (NONE, 0, NONE,
- * false) stands otherwise, and the row judges itself.
+ * always already taken when a row beneath it is reached. The skip and *out_absent
+ * are written only when an ancestor decides — the caller's zero skip and false
+ * stand otherwise, and the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
- * @param out_reason NONE / ANCESTOR / the ancestor's own (must not be NULL)
- * @param out_ancestor Prefix length of the named ancestor, or 0 (must not be NULL)
- * @param out_class The claim at the named ancestor, ANCESTOR fates only (must
- *        not be NULL)
+ * @param skip The row's skip in the making (must not be NULL): the reason —
+ *        ANCESTOR, or the ancestor's own — the named ancestor's prefix length,
+ *        and on an ANCESTOR fate the claim at it
  * @param out_absent Whether the run empties the path before writing it (must
  *        not be NULL)
  */
 static void check_ancestry(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts, const char *path,
-    deploy_skip_reason_t *out_reason, size_t *out_ancestor,
-    deploy_ancestor_class_t *out_class, bool *out_absent
+    deploy_skip_t *skip, bool *out_absent
 ) {
     const char *dir = workspace_squatted_ancestor(ws, path);
 
@@ -617,14 +615,14 @@ static void check_ancestry(
         return;
     }
 
-    *out_reason = DEPLOY_SKIP_ANCESTOR;
-    *out_ancestor = strlen(dir);
+    skip->reason = DEPLOY_SKIP_ANCESTOR;
+    skip->ancestor = strlen(dir);
 
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
         if (strcmp(s->row->filesystem_path, dir) == 0) {
-            *out_reason = s->reason;
+            skip->reason = s->reason;
             break;
         }
     }
@@ -633,10 +631,10 @@ static void check_ancestry(
      * alone. And it cannot miss a row: the probe answers view-side (the reach
      * rule, workspace.h), so a record that alone remembers a directory never
      * names the ancestor here. */
-    if (*out_reason == DEPLOY_SKIP_ANCESTOR) {
+    if (skip->reason == DEPLOY_SKIP_ANCESTOR) {
         const manifest_row_t *row = workspace_lookup(ws, dir);
 
-        *out_class = row->tracked
+        skip->ancestor_class = row->tracked
             ? DEPLOY_ANCESTOR_TRACKED : DEPLOY_ANCESTOR_DERIVED;
     }
 }
@@ -676,8 +674,8 @@ static void check_ancestry(
  *                             ancestry, and this run will not replace it (Coherent
  *                             Scope) — skipped (ANCESTOR), by hand. The rung
  *                             ran first, so nothing the load saw claims the
- *                             squatter: *out_class is UNCLAIMED, the one class
- *                             this producer can find
+ *                             squatter: the skip's class is UNCLAIMED, the one
+ *                             class this producer can find
  *   unreachable               EACCES is a refusal too (PERMISSION, with no
  *                             ancestor to name); any other errno is left for
  *                             the write to report
@@ -685,27 +683,25 @@ static void check_ancestry(
  * The mechanism asks the very same questions of the very same ancestor
  * (ensure_parents), so this is a prediction of the run, not a model of it.
  *
- * The outs are written only on a refusal — the caller's initialization (NONE,
- * 0, NONE) stands when the landing is clear — and the class only on the ANCESTOR
- * one. The named ancestor is a prefix of the planned path itself, so it travels
- * as a byte length (deploy_skip_t). A PERMISSION with an ancestor reads "<ancestor>
- * is not writable"; without one, "ancestry cannot be reached" — the zero length
- * is itself the honest fact (the offender could not be named).
+ * The skip is written only on a refusal — the caller's zero skip stands when
+ * the landing is clear — and its class only on the ANCESTOR one. The named ancestor
+ * is a prefix of the planned path itself, so it travels as a byte length
+ * (deploy_skip_t). A PERMISSION with an ancestor reads "<ancestor> is not
+ * writable"; without one, "ancestry cannot be reached" — the zero length is itself
+ * the honest fact (the offender could not be named).
  *
  * @param ws Workspace, for the claimed-ancestor lookup (must not be NULL)
  * @param verdicts The fates decided so far, for the deployable-directory test
  *        (must not be NULL)
  * @param path Planned path (must not be NULL)
- * @param out_reason NONE / PERMISSION / ANCESTOR (must not be NULL)
- * @param out_ancestor Prefix length of the refusing ancestor, or 0 (must not be
- *        NULL)
- * @param out_class UNCLAIMED on the ANCESTOR refusal alone (must not be NULL)
+ * @param skip The row's skip in the making (must not be NULL): PERMISSION or
+ *        ANCESTOR, the refusing ancestor's prefix length (0 where none could be
+ *        named), and UNCLAIMED on the ANCESTOR refusal alone
  * @return Error or NULL on success (a skip is not an error)
  */
 static error_t *check_landing(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts,
-    const char *path, deploy_skip_reason_t *out_reason, size_t *out_ancestor,
-    deploy_ancestor_class_t *out_class
+    const char *path, deploy_skip_t *skip
 ) {
     char *scratch = strdup(path);
     if (!scratch) {
@@ -719,7 +715,7 @@ static error_t *check_landing(
 
     if (!nearest_ancestor(scratch, &slash, &occ, &is_dir, &st)) {
         if (errno == EACCES) {
-            *out_reason = DEPLOY_SKIP_PERMISSION; /* no ancestor to name */
+            skip->reason = DEPLOY_SKIP_PERMISSION; /* no ancestor to name */
         }
         goto cleanup;                             /* anything else: the write reports it */
     }
@@ -736,10 +732,10 @@ static error_t *check_landing(
         goto cleanup;
     }
 
-    *out_reason = is_dir ? DEPLOY_SKIP_PERMISSION : DEPLOY_SKIP_ANCESTOR;
-    *out_ancestor = ancestor_len(slash);
+    skip->reason = is_dir ? DEPLOY_SKIP_PERMISSION : DEPLOY_SKIP_ANCESTOR;
+    skip->ancestor = ancestor_len(slash);
     if (!is_dir) {
-        *out_class = DEPLOY_ANCESTOR_UNCLAIMED;
+        skip->ancestor_class = DEPLOY_ANCESTOR_UNCLAIMED;
     }
 
 cleanup:
@@ -1002,13 +998,13 @@ error_t *deploy_preflight(
         /* Its ancestry first, before any probe: a squatted directory row above
          * this path invalidates every look taken beneath it, the landing check's
          * included. Directories decide parents-first, so such an ancestor's own
-         * fate is already taken. */
-        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        size_t ancestor = 0;
-        deploy_ancestor_class_t ancestor_class = DEPLOY_ANCESTOR_NONE;
+         * fate is already taken. The row is decided into its skip: each rung
+         * that refuses writes it — the reason, and the ancestor it names with
+         * the claim there — and the row is skipped iff one did. */
+        deploy_skip_t skip = { .row = row };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
+        check_ancestry(ws, result, path, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered. A row planned as absent
          * is asked none of them: the path is empty once the directory pass has
@@ -1020,7 +1016,7 @@ error_t *deploy_preflight(
         const workspace_item_t *item = NULL;
         fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
-        if (reason == DEPLOY_SKIP_NONE && !absent) {
+        if (skip.reason == DEPLOY_SKIP_NONE && !absent) {
             item = workspace_get_item(ws, path);
             occupant = item->occupant;
 
@@ -1031,7 +1027,7 @@ error_t *deploy_preflight(
              * too, and skipped on its own account only when the landing had nothing
              * to say — as for a file. */
             if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
-                err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
+                err = check_landing(ws, result, path, &skip);
                 if (err) goto cleanup;
             }
 
@@ -1041,10 +1037,10 @@ error_t *deploy_preflight(
              * is the row converging in place — so path_clearance cannot refuse
              * here, TYPE is the only reachable arm, and "use --force" is always
              * the true remedy. */
-            if (reason == DEPLOY_SKIP_NONE &&
+            if (skip.reason == DEPLOY_SKIP_NONE &&
                 occupant_conflicts(occupant, FS_OCCUPANT_DIRECTORY) &&
                 path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
-                reason = DEPLOY_SKIP_TYPE;
+                skip.reason = DEPLOY_SKIP_TYPE;
             }
 
             /* The leftover, as for a file (the file ladder carries the rationale):
@@ -1052,8 +1048,8 @@ error_t *deploy_preflight(
              * one producer today is the unstattable path (occupant UNKNOWN),
              * but the rung reads the fact, not its one current encoding, so the
              * two ladders keep one rule. */
-            if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
-                reason = DEPLOY_SKIP_UNREADABLE;
+            if (skip.reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
+                skip.reason = DEPLOY_SKIP_UNREADABLE;
             }
         }
 
@@ -1062,19 +1058,14 @@ error_t *deploy_preflight(
         uid_t uid = (uid_t) -1;
         gid_t gid = (gid_t) -1;
 
-        if (reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, row, &uid, &gid, &reason);
+        if (skip.reason == DEPLOY_SKIP_NONE) {
+            err = check_ownership(opts, result->warnings, row, &uid, &gid, &skip.reason);
             if (err) goto cleanup;
         }
 
-        if (reason != DEPLOY_SKIP_NONE) {
-            deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
-
-            s->row = row;
-            s->item = item;
-            s->reason = reason;
-            s->ancestor = ancestor;
-            s->ancestor_class = ancestor_class;
+        if (skip.reason != DEPLOY_SKIP_NONE) {
+            skip.item = item;
+            result->skipped.entries[result->skipped.count++] = skip;
             continue;
         }
 
@@ -1094,12 +1085,10 @@ error_t *deploy_preflight(
         /* Its ancestry first (see the directory loop): the directory pass is
          * decided in full, so a squatted ancestor is converged, skipped, or out
          * of this run's reach by now. */
-        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        size_t ancestor = 0;
-        deploy_ancestor_class_t ancestor_class = DEPLOY_ANCESTOR_NONE;
+        deploy_skip_t skip = { .row = row };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
+        check_ancestry(ws, result, path, &skip, &absent);
 
         /* The path's rungs, unless its ancestry answered (see the directory loop):
          * a row planned as absent is written beneath a directory this run converges
@@ -1107,7 +1096,7 @@ error_t *deploy_preflight(
         const workspace_item_t *item = NULL;
         fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
-        if (reason == DEPLOY_SKIP_NONE && !absent) {
+        if (skip.reason == DEPLOY_SKIP_NONE && !absent) {
             /* Self-judged: no squatted ancestor stands above the path, so the
              * row is pending only because deploy_needs_work said so — and
              * deploy_needs_work(NULL) is false, so the item is there. */
@@ -1118,10 +1107,10 @@ error_t *deploy_preflight(
              * row lands through its parent, whichever arm writes it and whether
              * or not something is already at the path — so one question covers
              * both, and it is never about the path itself. */
-            err = check_landing(ws, result, path, &reason, &ancestor, &ancestor_class);
+            err = check_landing(ws, result, path, &skip);
             if (err) goto cleanup;
 
-            if (reason == DEPLOY_SKIP_NONE) {
+            if (skip.reason == DEPLOY_SKIP_NONE) {
                 if (occupant_conflicts(occupant, file_row_occupant(row))) {
                     /* Type: what stands at the path decides the remedy. */
                     switch (path_clearance(path, occupant, opts->force)) {
@@ -1129,11 +1118,11 @@ error_t *deploy_preflight(
                             break;
 
                         case CLEARANCE_NEEDS_FORCE:
-                            reason = DEPLOY_SKIP_TYPE;
+                            skip.reason = DEPLOY_SKIP_TYPE;
                             break;
 
                         case CLEARANCE_REFUSED:
-                            reason = DEPLOY_SKIP_OCCUPIED;
+                            skip.reason = DEPLOY_SKIP_OCCUPIED;
                             break;
                     }
                 } else if (!opts->force && deploy_content_conflicts(item)) {
@@ -1142,7 +1131,7 @@ error_t *deploy_preflight(
                      * — the mask's TYPE arm cannot fire here, a conflicting
                      * occupant took the TYPE rung above; it is load-bearing at
                      * the preview's other read. */
-                    reason = DEPLOY_SKIP_CONTENT;
+                    skip.reason = DEPLOY_SKIP_CONTENT;
                 }
             }
 
@@ -1162,8 +1151,8 @@ error_t *deploy_preflight(
              * its own account only when the landing had nothing to say — a failure
              * the run would otherwise have met mid-run, after siblings already
              * wrote. */
-            if (reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
-                reason = DEPLOY_SKIP_UNREADABLE;
+            if (skip.reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
+                skip.reason = DEPLOY_SKIP_UNREADABLE;
             }
         }
 
@@ -1171,19 +1160,14 @@ error_t *deploy_preflight(
         uid_t uid = (uid_t) -1;
         gid_t gid = (gid_t) -1;
 
-        if (reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, row, &uid, &gid, &reason);
+        if (skip.reason == DEPLOY_SKIP_NONE) {
+            err = check_ownership(opts, result->warnings, row, &uid, &gid, &skip.reason);
             if (err) goto cleanup;
         }
 
-        if (reason != DEPLOY_SKIP_NONE) {
-            deploy_skip_t *s = &result->skipped.entries[result->skipped.count++];
-
-            s->row = row;
-            s->item = item;
-            s->reason = reason;
-            s->ancestor = ancestor;
-            s->ancestor_class = ancestor_class;
+        if (skip.reason != DEPLOY_SKIP_NONE) {
+            skip.item = item;
+            result->skipped.entries[result->skipped.count++] = skip;
             continue;
         }
 
@@ -1220,13 +1204,11 @@ error_t *deploy_preflight(
             continue;
         }
 
-        deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
-        size_t ancestor = 0;
-        deploy_ancestor_class_t ancestor_class = DEPLOY_ANCESTOR_NONE;
+        deploy_skip_t skip = { .row = row };
         bool absent = false;
 
-        check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
-        if (reason != DEPLOY_SKIP_NONE) {
+        check_ancestry(ws, result, path, &skip, &absent);
+        if (skip.reason != DEPLOY_SKIP_NONE) {
             continue;   /* held beneath a squatted ancestor that stays */
         }
 

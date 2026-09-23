@@ -294,8 +294,8 @@ struct workspace {
     /* Observations accumulated during analysis.
      *
      * Rows of either kind found on disk with no record. An observation needs
-     * only the row — the timestamp is the flush's; a confirmation also carries
-     * the stat it confirmed, hence the richer element type above. */
+     * only the row; a confirmation also carries the stat it confirmed, hence
+     * the richer element type above. */
     const manifest_row_t **observations;         /* Rows borrowed from the active slices (array owned) */
     size_t observation_count;                    /* Number of pending observations */
     size_t observation_capacity;                 /* Allocated capacity of observations array */
@@ -766,7 +766,7 @@ static error_t *workspace_record_confirmation(
  *
  * Sibling of workspace_record_confirmation for the path with no record: analysis
  * found it on disk, either kind, and dotta has never observed it in scope. Only
- * the row is accumulated — the observation timestamp is the flush's.
+ * the row is accumulated: an observation needs nothing else.
  *
  * Fallible, as the confirmation recorder is, and for a reason of its own: an
  * observation dropped here would leave a path dotta saw on disk with no record,
@@ -895,9 +895,8 @@ static error_t *note_displaced(
  * this would answer over the top of.
  *
  * And dotta has to have seen the path there. A record exists iff dotta has
- * lstat-confirmed the path on disk in scope (observed_at is never zero on one),
- * so no record means there was no filesystem obligation to break: absence is
- * UNDEPLOYED, apply's to create.
+ * lstat-confirmed the path on disk in scope, so no record means there was no
+ * filesystem obligation to break: absence is UNDEPLOYED, apply's to create.
  *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
@@ -1502,12 +1501,11 @@ static error_t *analyze_file_divergence(
      * on disk in scope. Writers:
      *   - state_observe (the flush, for a path analysis found present with no
      *     record).
-     *   - state_anchor's INSERT arm (every ownership event on a path with no
-     *     record — apply deploy, adoption, add, update).
+     *   - state_anchor (every ownership event on a path with no record — apply
+     *     deploy, adoption, add, update).
      * A confirmation creates none: it is an UPDATE of a record that exists — on
      * a path that had none at load, the one the flush's observation made a
-     * statement earlier (state_confirm). observed_at is written once, by whichever
-     * of the two creates the row, and never again.
+     * statement earlier (state_confirm).
      *
      * Record semantics:
      * - none -> dotta has never lstat-confirmed this path on disk in scope
@@ -4515,8 +4513,7 @@ bool workspace_item_extract_display_info(
  * loaded at partition, or created earlier in this run — is left alone without a
  * statement; otherwise state_observe creates the row and the same record is created
  * here, in the arena, and indexed. The record's fields are exactly what the INSERT
- * wrote: the row's binding, kind and claim, no blob, no stat, observed_at = now,
- * never owned.
+ * wrote: the row's binding, kind and claim, no blob, no stat, never owned.
  *
  * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
  * an existing record untouched, so the snapshot and the database agree wherever
@@ -4538,8 +4535,7 @@ bool workspace_item_extract_display_info(
  */
 error_t *workspace_observe(
     workspace_t *ws,
-    const manifest_row_t *row,
-    time_t now
+    const manifest_row_t *row
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(row);
@@ -4548,7 +4544,7 @@ error_t *workspace_observe(
         return NULL;
     }
 
-    error_t *err = state_observe(ws->state, row, now);
+    error_t *err = state_observe(ws->state, row);
     if (err) return err;
 
     anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
@@ -4566,7 +4562,6 @@ error_t *workspace_observe(
         .group = row->group,
         .blob_oid = { { 0 } },
         .stat = STAT_CACHE_UNSET,
-        .observed_at = now,
         .deployed_at = 0,
     };
 
@@ -4589,11 +4584,10 @@ error_t *workspace_observe(
  * Anchor a managed path with in-memory consistency
  *
  * Single workspace-scope writer for ownership events: persists via state_anchor
- * and assigns the canonical post-write record (the inputs plus the one column
- * SQL RETURNING decided) into the snapshot — in place when the path has a record,
- * into a fresh arena record that is then indexed when it has none. The SQL UPSERT
- * is the single specification of the observed_at INSERT-arm rule; this function
- * holds none of that logic.
+ * and assigns the post-write record (the record the statement wrote, whole) into
+ * the snapshot — in place when the path has a record, into a fresh arena record
+ * that is then indexed when it has none. The statement is the one specification
+ * of what an ownership event writes; this function holds none of it.
  *
  * The map's value is the mutable record pointer; workspace_get_anchor narrows
  * it to const for every reader.
@@ -4763,11 +4757,10 @@ error_t *workspace_flush_updates(workspace_t *ws) {
         }
     }
 
-    time_t now = time(NULL);
     for (size_t i = 0; i < ws->observation_count; i++) {
         const manifest_row_t *row = ws->observations[i];
 
-        error_t *err = workspace_observe(ws, row, now);
+        error_t *err = workspace_observe(ws, row);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);

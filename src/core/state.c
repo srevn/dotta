@@ -30,7 +30,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "19"
+#define STATE_SCHEMA_VERSION "20"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -71,7 +71,7 @@ struct state {
     sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
     sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors … RETURNING filesystem_path (content, CAS) */
     sqlite3_stmt *stmt_confirm_claim;       /* UPDATE path_anchors … RETURNING filesystem_path (claim, CAS) */
-    sqlite3_stmt *stmt_anchor;              /* UPSERT path_anchors … RETURNING observed_at (ownership) */
+    sqlite3_stmt *stmt_anchor;              /* INSERT OR REPLACE path_anchors (the ownership event: the record, whole) */
     sqlite3_stmt *stmt_retire;              /* DELETE FROM path_anchors */
 
     /* Order prepared statements */
@@ -157,8 +157,8 @@ static path_type_t path_type_from_sql_text(const char *s) {
  * create_db discards the file whole.
  *
  * - schema_meta: Schema versioning
- * - enabled_profiles: User's profile management (with indexes)
- * - path_anchors: The record dotta keeps of every managed path (with index)
+ * - enabled_profiles: User's profile management (position, name, target)
+ * - path_anchors: The record dotta keeps of every managed path
  * - prune_orders, released_copies: The two facts keyed beside it
  *
  * @param db Connection to the private file (must not be NULL)
@@ -202,7 +202,6 @@ static error_t *initialize_schema(sqlite3 *db) {
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
-        "    enabled_at INTEGER NOT NULL,"
         "    target TEXT CONSTRAINT target_spelling CHECK ("
         "        target IS NULL OR target = '/' OR ("
         "        target GLOB '/?*' AND target NOT GLOB '*//*' AND target NOT GLOB '*/'"
@@ -210,18 +209,14 @@ static error_t *initialize_schema(sqlite3 *db) {
         "        AND target NOT GLOB '*/..' AND target NOT GLOB '*/../*'))"
         ") STRICT;"
 
-        /* Index for existence checks */
-        "CREATE INDEX idx_enabled_name "
-        "ON enabled_profiles(name);"
-
         /* The record: what dotta last reconciled each managed path against, and
          * what it confirmed there. A row exists iff dotta has observed the path
-         * on disk while it was managed. One path, one kind, one record — the
-         * PRIMARY KEY; the kind is `type`. No foreign key in either direction:
-         * nothing is a parent, nothing cascades.
+         * on disk while it was managed, and its existence is the whole of that
+         * fact: no column restates it. One path, one kind, one record — the PRIMARY
+         * KEY; the kind is `type`. No foreign key in either direction: nothing
+         * is a parent, nothing cascades.
          *
          * Held by the schema:
-         *   - observed_at > 0 always (observed ⇔ row exists; no zero sentinel)
          *   - a directory has no content confirmation (blob_oid IS NULL)
          *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
          *     set); a row with a blob and deployed_at = 0 is a confirmation,
@@ -242,15 +237,11 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    stat_size  INTEGER NOT NULL DEFAULT 0,"
         "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
         "    "
-        "    observed_at INTEGER NOT NULL CHECK(observed_at > 0),"
         "    deployed_at INTEGER NOT NULL DEFAULT 0,"
         "    "
         "    CHECK (type != 'directory' OR blob_oid IS NULL),"
         "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
         ") STRICT;"
-
-        "CREATE INDEX idx_anchors_profile "
-        "ON path_anchors(profile);"
 
         /* The one deferred intent: remove --delete-files ordered the deployed
          * copy at this path pruned at the next apply. One column — the row's
@@ -489,8 +480,8 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Insert profile (used in state_reorder_profiles) */
     const char *sql_insert_profile =
-        "INSERT INTO enabled_profiles (position, name, enabled_at, target) "
-        "VALUES (?, ?, ?, ?);";
+        "INSERT INTO enabled_profiles (position, name, target) "
+        "VALUES (?, ?, ?);";
 
     rc = sqlite3_prepare_v2(state->db, sql_insert_profile, -1, &state->stmt_insert_profile, NULL);
     if (rc != SQLITE_OK) {
@@ -499,17 +490,16 @@ static error_t *prepare_statements(state_t *state) {
     }
 
     /* Observe: presence only, idempotent. Creates the record with the row's
-     * binding, kind and claim and observed_at = now; no blob, no stat. Never
-     * touches an existing row — OR IGNORE is what makes the first observer win
-     * without a CASE.
+     * binding, kind and claim — no blob, no stat, never owned. Never touches an
+     * existing row: OR IGNORE is what keeps the row an earlier writer made.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
-     *   ?5 mode  ?6 owner  ?7 group  ?8 observed_at */
+     *   ?5 mode  ?6 owner  ?7 group */
     const char *sql_observe =
         "INSERT OR IGNORE INTO path_anchors "
-        "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", observed_at) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);";
+        "(filesystem_path, storage_path, profile, type, mode, owner, \"group\") "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
 
     rc = sqlite3_prepare_v2(state->db, sql_observe, -1, &state->stmt_observe, NULL);
     if (rc != SQLITE_OK) {
@@ -589,42 +579,23 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare confirm-claim statement");
     }
 
-    /* Anchor: the ownership event — the recorded row and the confirmation together,
-     * the writer of every record column but observed_at's existing value.
+    /* Anchor: the ownership event — the record, whole. Every column is the row's,
+     * the confirmation's or the event's own stamp, and OR REPLACE writes them
+     * over whatever stood at the path: a column this statement does not name
+     * takes its default, so nothing of the record before the event survives it.
+     * A column that must survive an ownership event cannot live beside these.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
      *   ?5 mode  ?6 owner  ?7 group
      *   ?8 blob_oid — NULL for a directory
      *   ?9 stat_mtime  ?10 stat_size  ?11 stat_ino
-     *   ?12 now — observed_at on the INSERT arm alone (the UPDATE arm does not
-     *             name the column, so an existing stamp is never rewritten and
-     *             the first writer wins) and deployed_at on both arms: one
-     *             placeholder, one moment
-     *
-     * RETURNING projects the one column the two arms decide differently —
-     * observed_at (INSERT arm: now; UPDATE arm: the existing stamp) — so a caller
-     * mirroring an in-memory snapshot (workspace_anchor) can assign the canonical
-     * record without re-deriving the rule in C. Every other column is what the
-     * caller bound. */
+     *   ?12 deployed_at — now */
     const char *sql_anchor =
-        "INSERT INTO path_anchors "
+        "INSERT OR REPLACE INTO path_anchors "
         "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
-        " blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at) "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12) "
-        "ON CONFLICT(filesystem_path) DO UPDATE SET "
-        "  storage_path  = excluded.storage_path, "
-        "  profile       = excluded.profile, "
-        "  type          = excluded.type, "
-        "  mode          = excluded.mode, "
-        "  owner         = excluded.owner, "
-        "  \"group\"     = excluded.\"group\", "
-        "  blob_oid      = excluded.blob_oid, "
-        "  stat_mtime    = excluded.stat_mtime, "
-        "  stat_size     = excluded.stat_size, "
-        "  stat_ino      = excluded.stat_ino, "
-        "  deployed_at   = excluded.deployed_at "
-        "RETURNING observed_at;";
+        " blob_oid, stat_mtime, stat_size, stat_ino, deployed_at) "
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
 
     rc = sqlite3_prepare_v2(state->db, sql_anchor, -1, &state->stmt_anchor, NULL);
     if (rc != SQLITE_OK) {
@@ -932,16 +903,16 @@ error_t *state_enable_profile(
      * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table MAX returns
      * NULL and the COALESCE drops to 0, matching the 0-based position assignment
      * used by state_reorder_profiles. On UPSERT conflict (profile already enabled)
-     * the position is kept and the timestamp moves; the target moves only when
-     * one is given — `COALESCE(?2, target)` keeps the row's own for a NULL, so
-     * no enable can unbind, and the one way a row loses its target is the DELETE
-     * in state_disable_profile. */
+     * the position is kept, and the target moves only when one is given —
+     * `COALESCE(?2, target)` keeps the row's own for a NULL, so no enable can
+     * unbind, and the one way a row loses its target is the DELETE in
+     * state_disable_profile. */
     const char *sql =
-        "INSERT INTO enabled_profiles (name, target, enabled_at, position) "
-        "VALUES (?1, ?2, ?3, "
+        "INSERT INTO enabled_profiles (name, target, position) "
+        "VALUES (?1, ?2, "
         "  (SELECT COALESCE(MAX(position) + 1, 0) FROM enabled_profiles)) "
         "ON CONFLICT(name) DO UPDATE SET "
-        "  target = COALESCE(?2, target), enabled_at = ?3";
+        "  target = COALESCE(?2, target)";
 
     sqlite3_stmt *stmt = NULL;
     int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
@@ -956,7 +927,6 @@ error_t *state_enable_profile(
     } else {
         sqlite3_bind_null(stmt, 2);
     }
-    sqlite3_bind_int64(stmt, 3, time(NULL));
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -1011,8 +981,7 @@ error_t *state_disable_profile(
  *
  * Per-row state (the target) is read from the row cache and preserved across
  * the DELETE + re-INSERT rewrite. Only the position changes: the name and the
- * target are re-inserted as the cache holds them, and enabled_at is the current
- * time (state.h).
+ * target are re-inserted as the cache holds them.
  *
  * Hot path - must be fast even with 10,000 deployed files. Only modifies
  * enabled_profiles (the record untouched).
@@ -1085,7 +1054,6 @@ error_t *state_reorder_profiles(
      * outlive sqlite3_step — future refactors that mutate the cache mid-loop
      * stay safe. Cost is <100 bytes of memcpy per row; the table tops out around
      * ten rows in practice. */
-    time_t now = time(NULL);
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
         const state_profile_entry_t *preserved = find_profile_entry(state, name);
@@ -1099,20 +1067,19 @@ error_t *state_reorder_profiles(
         sqlite3_reset(state->stmt_insert_profile);
         sqlite3_clear_bindings(state->stmt_insert_profile);
 
-        /* Bind parameters: position, name, enabled_at, target.
+        /* Bind parameters: position, name, target.
          * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are
          * ours. */
         sqlite3_bind_int64(state->stmt_insert_profile, 1, (sqlite3_int64) i);
         sqlite3_bind_text(
             state->stmt_insert_profile, 2, name, -1, SQLITE_TRANSIENT
         );
-        sqlite3_bind_int64(state->stmt_insert_profile, 3, (sqlite3_int64) now);
         if (preserved->target) {
             sqlite3_bind_text(
-                state->stmt_insert_profile, 4, preserved->target, -1, SQLITE_TRANSIENT
+                state->stmt_insert_profile, 3, preserved->target, -1, SQLITE_TRANSIENT
             );
         } else {
-            sqlite3_bind_null(state->stmt_insert_profile, 4);
+            sqlite3_bind_null(state->stmt_insert_profile, 3);
         }
 
         rc = sqlite3_step(state->stmt_insert_profile);
@@ -1577,12 +1544,12 @@ error_t *state_get_all_anchors(
     /* Empty state (no DB file) — return empty results */
     if (!state->db) return NULL;
 
-    /* The one read (13 columns: the key, the binding, the kind, the claim, the
-     * blob and its stat, the lifecycle), and the table's size in a 14th: the
+    /* The one read (12 columns: the key, the binding, the kind, the claim, the
+     * blob and its stat, the lifecycle), and the table's size in a 13th: the
      * first row sizes the allocation */
     const char *sql_anchors =
         "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
-        "blob_oid, stat_mtime, stat_size, stat_ino, observed_at, deployed_at, "
+        "blob_oid, stat_mtime, stat_size, stat_ino, deployed_at, "
         "(SELECT count(*) FROM path_anchors) "
         "FROM path_anchors ORDER BY filesystem_path;";
 
@@ -1593,7 +1560,7 @@ error_t *state_get_all_anchors(
     }
 
     rc = sqlite3_step(stmt);
-    size_t anchor_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 13) : 0;
+    size_t anchor_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 12) : 0;
 
     /* Allocate array */
     anchor_t *anchors = NULL;
@@ -1618,7 +1585,7 @@ error_t *state_get_all_anchors(
          *   4-6:   the claim (mode, owner, group)
          *   7-10:  the content's blob and stat (blob_oid, stat_mtime, stat_size,
          *          stat_ino)
-         *   11-12: the lifecycle (observed_at, deployed_at) */
+         *   11:    the lifecycle (deployed_at) */
         anchor_t *anchor = &anchors[i];
 
         const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
@@ -1661,8 +1628,7 @@ error_t *state_get_all_anchors(
             .size = sqlite3_column_int64(stmt, 9),
             .ino = (uint64_t) sqlite3_column_int64(stmt, 10),
         };
-        anchor->observed_at = (time_t) sqlite3_column_int64(stmt, 11);
-        anchor->deployed_at = (time_t) sqlite3_column_int64(stmt, 12);
+        anchor->deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
 
         /* Check allocation success */
         if (!anchor->filesystem_path || !anchor->storage_path || !anchor->profile) {
@@ -1755,28 +1721,21 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
  * Observe a managed path: record its first sighting on disk
  *
  * INSERT OR IGNORE — see the SQL comment on sql_observe and the header contract.
- * Binds the row's key, binding, kind and claim plus the stamp; the blob and stat
+ * Binds the row's key, binding, kind and claim; the blob, stat and lifecycle
  * columns take their NULL / zero defaults, and an existing row is left exactly
  * as it was.
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now) {
+error_t *state_observe(state_t *state, const manifest_row_t *row) {
     CHECK_NULL(state);
     CHECK_NULL(row);
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_observe);
-
-    if (now <= 0) {
-        return ERROR(ERR_INVALID_ARG, "Observation timestamp must be > 0");
-    }
 
     sqlite3_stmt *stmt = state->stmt_observe;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
 
     bind_row(stmt, row);
-
-    /* 8. observed_at */
-    sqlite3_bind_int64(stmt, 8, (sqlite3_int64) now);
 
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
@@ -1956,15 +1915,12 @@ error_t *state_confirm_claim(
  *
  * The ownership event. See state.h for the full contract. In brief:
  *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.
- *   - deployed_at = now, both arms.
- *   - observed_at is the INSERT arm's alone.
+ *   - deployed_at = now.
  *   - stat is always written (zeros when NULL).
  *   - the path's released copy dies with it, either kind (a second statement).
  *
- * The SQL UPSERT encodes those rules and RETURNING projects the one column the
- * arms decide differently. Callers that mirror an in-memory snapshot pass a
- * non-NULL resolved_out and assign it directly — the SQL is the single
- * specification, no C-side mirror of the rule exists.
+ * The statement names every column the record carries, so the post-write record
+ * is what the caller handed in: the mirror is the inputs, with nothing read back.
  */
 error_t *state_anchor(
     state_t *state,
@@ -2019,37 +1975,29 @@ error_t *state_anchor(
     sqlite3_bind_int64(stmt, 10, triple.size);
     sqlite3_bind_int64(stmt, 11, (sqlite3_int64) triple.ino);
 
-    /* 12. now — observed_at for a new row, deployed_at for every row. */
+    /* 12. deployed_at — now */
     sqlite3_bind_int64(stmt, 12, (sqlite3_int64) now);
 
-    /* RETURNING yields exactly one row — an UPSERT always writes one — and a
-     * single follow-up step drains to SQLITE_DONE. */
     int rc = sqlite3_step(stmt);
-
-    if (rc == SQLITE_ROW) {
-        if (resolved_out) {
-            /* Every field the caller supplied, borrowed, plus the one column
-             * the SQL decided. Column layout matches the RETURNING list:
-             * observed_at. */
-            *resolved_out = (anchor_t){
-                .filesystem_path = row->filesystem_path,
-                .storage_path = row->storage_path,
-                .profile = row->profile,
-                .type = row->type,
-                .mode = row->mode,
-                .owner = row->owner,
-                .group = row->group,
-                .blob_oid = row->blob_oid,
-                .stat = triple,
-                .observed_at = (time_t) sqlite3_column_int64(stmt, 0),
-                .deployed_at = now,
-            };
-        }
-        rc = sqlite3_step(stmt);
-    }
-
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to anchor path");
+    }
+
+    if (resolved_out) {
+        /* The record the statement wrote, whole: every field the caller supplied,
+         * borrowed — no column is the statement's to decide. */
+        *resolved_out = (anchor_t){
+            .filesystem_path = row->filesystem_path,
+            .storage_path = row->storage_path,
+            .profile = row->profile,
+            .type = row->type,
+            .mode = row->mode,
+            .owner = row->owner,
+            .group = row->group,
+            .blob_oid = row->blob_oid,
+            .stat = triple,
+            .deployed_at = now,
+        };
     }
 
     /* An ownership event says what stands at the path — the row's blob, or a

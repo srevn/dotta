@@ -55,8 +55,8 @@
  * - WAL mode (concurrent access, atomic commits)
  * - Prepared statements (100x faster for bulk operations)
  * - Persistent indexes (O(1) lookups without rebuilding)
- * - Nothing derivable is stored: the record is dotta's own and never derivable;
- *   the expected side is Git's and lives in Git
+ * - Nothing derivable is stored, and nothing no read asks for: the record is
+ *   dotta's own and never derivable; the expected side is Git's and lives in Git
  */
 
 #ifndef DOTTA_STATE_H
@@ -195,7 +195,8 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * deployed_at is 0, what it was looking at when it first observed the path —
  * and what it confirmed there. One row per filesystem path, both kinds. A row
  * exists iff dotta has observed the path on disk while it was managed: there is
- * no "never observed" row, and observed_at is never zero.
+ * no "never observed" row — the row's existence is the observation
+ * (core/workspace.c classify_absent reads it), and no column restates it.
  *
  * Four groups of columns, one write rule each (the verbs below):
  *   - the binding (profile, storage_path): the row the record follows — who
@@ -220,11 +221,8 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *     beside it and no verdict reads it: the kind rung takes FILE and EXECUTABLE
  *     for one kind (core/workspace.h workspace_compare_confirmed), and the mode
  *     carries the bit.
- *   - the lifecycle (observed_at, deployed_at): observed_at is written once, by
- *     whichever write creates the row (state_observe, or state_anchor's INSERT
- *     arm), and never again — the first caller wins because no later write names
- *     the column; deployed_at advances to now on every ownership event and is
- *     untouched by a confirmation, 0 = dotta never put this here.
+ *   - the lifecycle (deployed_at): advances to now on every ownership event and
+ *     is untouched by a confirmation, 0 = dotta never put this here.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
@@ -273,7 +271,6 @@ typedef struct anchor {
     char *group;              /* The claimed group, or NULL */
 
     /* The lifecycle */
-    time_t observed_at;       /* First sighting on disk in scope (> 0 always: a row exists iff observed) */
     time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
 } anchor_t;
 
@@ -500,7 +497,6 @@ void state_free(state_t *state);
  * Postconditions:
  *   - Profile added to enabled_profiles or existing entry updated
  *   - target column set when one is given; otherwise unchanged (NULL on a new row)
- *   - enabled_at timestamp updated to current time
  *   - Transaction remains open (caller commits)
  *
  * @param state State handle (must not be NULL, must have active transaction)
@@ -567,7 +563,6 @@ error_t *state_disable_profile(
  * Postconditions:
  *   - enabled_profiles rows hold positions 0..N-1 in the order given.
  *   - target preserved on every row.
- *   - enabled_at timestamp refreshed for every row.
  *   - Row cache re-read from the rewritten table.
  *   - Transaction remains open (caller commits).
  *
@@ -694,7 +689,7 @@ error_t *state_get_all_anchors(
  * Observe a managed path: record its first sighting on disk
  *
  * Presence only, idempotent. INSERT OR IGNORE creates the record with the row's
- * binding, kind and claim, no blob, no stat, observed_at = now, and never touches
+ * binding, kind and claim — no blob, no stat, never owned — and never touches
  * an existing row. One caller: the workspace's flush, through workspace_observe,
  * for an active row its load found on disk with no record — the load is where
  * presence is established, so a directory apply fixes rather than makes was present
@@ -704,10 +699,9 @@ error_t *state_get_all_anchors(
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path was observed under (must not be NULL)
- * @param now Observation timestamp (must be > 0)
  * @return Error or NULL on success
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row, time_t now);
+error_t *state_observe(state_t *state, const manifest_row_t *row);
 
 /**
  * Confirm a managed path: advance its record to what the comparison established
@@ -807,19 +801,19 @@ error_t *state_confirm_claim(
  *
  * The ownership event — apply deploy, adoption, acknowledgement, add, update.
  * Call after confirming disk content matches row->blob_oid (or, for a DIRECTORY
- * row, after creating or confirming the directory). One statement, an UPSERT on
- * path_anchors: the INSERT arm creates the row with observed_at = now; the UPDATE
- * arm rewrites everything the row and the confirmation supply and leaves
- * observed_at alone. deployed_at = now on both arms.
+ * row, after creating or confirming the directory). One statement, INSERT OR
+ * REPLACE on path_anchors: the event writes the record whole — the row's binding,
+ * kind and claim, the blob and the stat of the confirmation, deployed_at = now
+ * — and a column it does not name takes its default, so nothing of the record
+ * before the event survives it.
  *
  * ROUTING INVARIANT — this is load-bearing:
  *   - If a workspace is live for this transaction, anchor writes MUST route through
  *     workspace_anchor (workspace.h). That wrapper calls this function with
  *     resolved_out pointing at a record it then patches into its snapshot — or
  *     creates there, when the path had no record at load — so every later reader
- *     in the run sees the canonical post-write value the SQL produced. Calling
- *     state_anchor directly while a workspace is live silently desyncs the
- *     snapshot.
+ *     in the run sees the record the statement wrote. Calling state_anchor directly
+ *     while a workspace is live silently desyncs the snapshot.
  *   - If no workspace is live (add's and update's capture loops), this function
  *     is the legitimate direct caller. There is no snapshot to patch, so callers
  *     pass resolved_out=NULL and the next workspace_load reads SQL fresh.
@@ -831,8 +825,6 @@ error_t *state_confirm_claim(
  *     NULL — a directory has no content confirmation.
  *   - deployed_at = now: an ownership event, always. A confirmation is
  *     state_confirm's.
- *   - observed_at is the INSERT arm's alone: now for a new row, untouched for
- *     an existing one.
  *   - stat may be NULL or UNSET, which say the same thing here (a directory; a
  *     symlink deploy made by path, with no descriptor whose fstat could describe
  *     it; or a caller whose establishment did not reach a triple): the triple
@@ -844,12 +836,9 @@ error_t *state_confirm_claim(
  *     or false.
  *
  * resolved_out semantics:
- *   - If non-NULL, populated with the post-write record: every field the caller
- *     supplied — the row's binding, kind and claim (borrowed: the string pointers
- *     are the row's, not copies), the blob, the stat, deployed_at = now — plus
- *     the one column the SQL decided, observed_at, read back through RETURNING.
- *     Snapshot mirrors assign it directly; no C-side rule logic is needed because
- *     the DB already applied the rule.
+ *   - If non-NULL, populated with the record the statement wrote, whole — every
+ *     field the caller supplied, borrowed (the string pointers are the row's,
+ *     not copies): no column is the SQL's to decide, so the mirror is the inputs.
  *   - May be NULL when the caller does not maintain an in-memory snapshot.
  *
  * @param state State (must not be NULL, must have open database)

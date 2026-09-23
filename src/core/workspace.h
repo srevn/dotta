@@ -1160,26 +1160,23 @@ bool workspace_item_extract_display_info(
  * @param ws Workspace (must not be NULL, state must be open)
  * @param row Active row whose path was seen on disk (must not be NULL, borrowed
  *            from workspace's active partition)
- * @param now Observation timestamp (must be > 0)
  * @return Error from state_observe, or NULL on success
  */
 error_t *workspace_observe(
     workspace_t *ws,
-    const manifest_row_t *row,
-    time_t now
+    const manifest_row_t *row
 );
 
 /**
  * Anchor a managed path with in-memory consistency
  *
  * Workspace-scope side of the routing invariant defined on state_anchor (see
- * state.h): persists via state_anchor and assigns the canonical post-write record
- * (the inputs plus the one column SQL RETURNING decided) into the workspace's
- * anchors snapshot — patching the path's record in place, or creating it when
- * the path had none at load and backfilling the path's item, so item->anchor
- * reads the post-write record either way. The SQL UPSERT is the single
- * specification of the observed_at INSERT-arm rule; this function holds none of
- * that logic.
+ * state.h): persists via state_anchor and assigns the post-write record (the
+ * record the statement wrote, whole) into the workspace's anchors snapshot —
+ * patching the path's record in place, or creating it when the path had none at
+ * load and backfilling the path's item, so item->anchor reads the post-write
+ * record either way. The statement is the one specification of what an ownership
+ * event writes; this function holds none of it.
  *
  * Single entry point for every workspace-scope ownership event:
  *   - apply's adoption loop (ownership event on first claim, and the

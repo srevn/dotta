@@ -646,7 +646,7 @@ cleanup:
  *      --target-single-profile rule above).
  *   2. Commit scope to state — state_enable_profile per target. The one call
  *      serves both kinds: a fresh enable inserts the row, a retarget runs the
- *      UPSERT arm state.h documents (target and timestamp move, position stays).
+ *      UPSERT arm state.h documents (the target moves, the position stays).
  *      enabled_profiles membership and order are now authoritative. Nothing else
  *      is written: the view is computed, never stored. `before` borrows nothing
  *      from the row cache the mutation invalidates.

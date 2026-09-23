@@ -97,7 +97,7 @@ typedef struct {
  */
 typedef enum {
     PATH_KIND_FILE,       /* Regular file, symlink, or executable — content + metadata */
-    PATH_KIND_DIRECTORY   /* Tracked directory — metadata only (mode/ownership) */
+    PATH_KIND_DIRECTORY   /* Directory — metadata only (mode/ownership) */
 } path_kind_t;
 
 /**

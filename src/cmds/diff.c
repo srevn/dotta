@@ -811,8 +811,9 @@ static error_t *compare_tree_files_to_filesystem(
  * each by both its names (the entry reads the one in its own vocabulary) and by
  * its own kind, read off its type. Outputs a warning for each entry that matches
  * nothing — which likely indicates a typo — plus the list hint as the warnings'
- * remedy. An entry that covers only tracked directories is answered for what it
- * is instead: managed, just with no content to diff.
+ * remedy. An entry that reaches only directory rows is answered for what it is
+ * instead: managed, just with no content to diff — a tracked directory or a derived
+ * one alike, since neither kind has any (core/manifest.h).
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
@@ -865,14 +866,13 @@ static size_t validate_filter_paths(
         if (reached && entry.glob) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "Pattern '%s' matches only tracked directories "
-                "(no content to diff)", entry.text
+                "Pattern '%s' matches only directories (no content to diff)",
+                entry.text
             );
         } else if (reached) {
             output_info(
                 out, OUTPUT_NORMAL,
-                "'%s' matches only tracked directories (no content to diff)",
-                entry.text
+                "'%s' matches only directories (no content to diff)", entry.text
             );
         } else if (entry.glob) {
             output_warning(

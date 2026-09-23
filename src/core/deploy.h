@@ -82,21 +82,21 @@ typedef struct {
  * (deploy_convergence).
  *
  * The item is the index's answer, looked up once where the fate is decided and
- * filled verbatim on every arm — the planned-absent arms included. An item's
- * join facts (row, anchor, profile) are sound on every verdict; a row beneath a
- * squatter carries no observation at all (core/workspace.h workspace_displaced_t),
- * which is why the fate's own occupant says what the run will find. What a fate
- * declines to consult it declines at the reader, never by blanking the pointer.
+ * filled verbatim on every arm — the planned-absent arms and the skip's included
+ * (deploy_skip_t). An item's join facts (row, anchor, profile) are sound on every
+ * fate; a row beneath a squatter carries no observation at all (core/workspace.h
+ * workspace_displaced_t), which is why the fate's own occupant says what the
+ * run will find. What a fate declines to consult it declines at the reader, never
+ * by blanking the pointer.
  *
- * Never NULL, so a reader dereferences it without a test. A verdict is taken
- * for a pending row or for an ancestor, and each holds an item by construction:
- * a pending row because that is what put it in the bucket (deploy_needs_work(NULL)
- * is false), an ancestor because the pass admits one only where the item itself
- * read absent or where the ancestry rung did; and a row the rung planned absent
- * holds one because the load emits an item for every path it declined to look
- * at, asked with the same probe this pass asks (check_ancestry, core/workspace.h
- * workspace_displaced_t). The skip array is where the pointer can be NULL, and
- * for its own reason (deploy_skip_t).
+ * Never NULL, so a reader dereferences it without a test. A fate is taken for a
+ * pending row, a verdict or a skip, or for an ancestor, a verdict alone, and
+ * each holds an item by construction: a pending row because its item is what
+ * put it in the bucket (deploy_needs_work(NULL) is false); an ancestor because
+ * the pass admits one only where its item read absent, or where the ancestry
+ * rung planned it absent — a row beneath a squatter, and the load gives an item
+ * to every path it declined to look at, asked with the same probe the rung asks
+ * (check_ancestry, core/workspace.h workspace_displaced_t).
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
@@ -129,7 +129,9 @@ typedef struct {
  * skipped as unreadable rather than judged on a guess (the ladders' leftover
  * rung). The workspace's own presence rule (occupant != FS_OCCUPANT_NONE,
  * workspace.h) assumes an unstattable path present; this is deploy's stricter
- * reading, for judgments — one producer, read by the ladders and the preview.
+ * reading, for judgments — one producer, read by occupant_conflicts (both ladders'
+ * type rung) and deploy_file (the symlink arm's clear) in deploy.c, and by
+ * cmds/apply.c print_deploy_preview (the overwrite count).
  */
 static inline bool deploy_occupant_present(fs_occupant_t occ) {
     return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
@@ -188,16 +190,16 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
  * whose STALE arm rests on this).
  *
- * Two readers, two files: the file ladder's consent rung, and the forced preview's
- * counterweight — a verdict overwrites local content iff something stands at
- * its path AND this answers yes, so the preview reads it beside
- * deploy_occupant_present.
+ * Two readers, two files: the file ladder's consent rung (deploy_preflight),
+ * and the forced preview's counterweight (cmds/apply.c print_deploy_preview) —
+ * a verdict overwrites local content iff something stands at its path AND this
+ * answers yes, so the preview reads it beside deploy_occupant_present. Each hands
+ * it the row's item, which every fate carries (deploy_verdict_t).
  *
- * @param item Workspace verdict for the row (NULL = not in the index)
+ * @param item The row's workspace verdict (must not be NULL)
  */
 static inline bool deploy_content_conflicts(const workspace_item_t *item) {
-    return item != NULL &&
-           (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE));
+    return item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_TYPE);
 }
 
 /**
@@ -343,22 +345,24 @@ typedef enum {
  * is the squatter's only report — ANCESTOR's alone, and NONE on a row a skipped
  * squatter holds (deploy_ancestor_class_t).
  *
- * The item is the verdict's with the one inversion a skip forces: a self-judged
- * skip carries its analysis object (a CONTENT skip carries one by construction
- * — content_conflicts(NULL) is false), while a row judged by its ancestry, or
- * planned absent beneath an ancestor this run converges, carries NULL. Its own
- * item says nothing about the path — nothing there was looked at, so the occupant
- * on it is UNKNOWN and every bit unset (core/workspace.h workspace_displaced_t)
- * — and a walker must not read that as presence, nor mistake a held row for the
- * squatter itself; a skip has no occupant field to express either refusal, so
- * here NULL is the override.
+ * The item is the verdict's: the row's, looked up once where the fate is decided
+ * and never NULL (deploy_verdict_t). Whether it holds a look is the row's
+ * ancestry's to say, and the item says so itself: a row its ancestry answered
+ * for — beneath a squatter that stays, or planned absent and then refused by
+ * the row's rung — carries an item nothing looked at, occupant UNKNOWN and no
+ * path bit (the displaced class every reader of an item reads, core/workspace.h
+ * workspace_displaced_t), never a blanked pointer. So a reader consults the look
+ * only where the reason is a sentence about it — a CONTENT skip's route, an
+ * UNREADABLE skip's fault: path rungs, asked only where the ancestry did not
+ * answer. OWNERSHIP, the row's rung, reads its claim off the row and never the
+ * item's look, which a row planned absent does not have.
  *
  * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
  * in this module is.
  */
 typedef struct {
     const manifest_row_t *row;              /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;           /* The analysis object; NULL for a row judged by its ancestry */
+    const workspace_item_t *item;           /* The analysis object, as the verdict's — never NULL */
     deploy_skip_reason_t reason;
     size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
     deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at a squatter with no skip of its own */
@@ -563,16 +567,16 @@ typedef struct {
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
  * workspace looked at nothing there, so the row has an item carrying the displaced
- * class and no bits at all (core/workspace.h workspace_displaced_t), and the
- * work predicate reads that class first (deploy_needs_work). Such a row is work,
- * and not occupied for --skip-existing's purpose; -e still holds it back. What
- * becomes of it is preflight's alone, asked of this run's own fates rather than
- * guessed from scope: the directory pass converges the ancestor and the row is
- * written fresh beneath it, or the pass does not and the ancestor's refusal holds
- * the row, in its class (check_ancestry, deploy_preflight). Scope still bounds
- * the plan in the ordinary way — a row scope rejects (-p, a path filter) is not
- * planned on its ancestor's account, Coherent Scope, and converges on the next
- * apply that covers it.
+ * class and no path bit (core/workspace.h workspace_displaced_t), and the work
+ * predicate reads that class first (deploy_needs_work). Such a row is work, and
+ * not occupied for --skip-existing's purpose; -e still holds it back. What becomes
+ * of it is preflight's alone, asked of this run's own fates rather than guessed
+ * from scope: the directory pass converges the ancestor and the row is written
+ * fresh beneath it, or the pass does not and the ancestor's refusal holds the
+ * row, in its class (check_ancestry, deploy_preflight). Scope still bounds the
+ * plan in the ordinary way — a row scope rejects (-p, a path filter) is not planned
+ * on its ancestor's account, Coherent Scope, and converges on the next apply
+ * that covers it.
  *
  * @param ws Workspace with divergence analysis (must not be NULL)
  * @param scope Operation scope (must not be NULL; read at plan time alone —

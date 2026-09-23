@@ -90,7 +90,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * the arm's default: any divergence of the path is work.
              *
              * A row beneath a squatter is work whatever its bits, because it
-             * has none: nothing there was looked at (core/workspace.h
+             * has no path bit: nothing there was looked at (core/workspace.h
              * workspace_displaced_t). Planned, it is written fresh beneath a
              * squatter this run replaces, or refused by its ancestry — and either
              * fate is preflight's to name (check_ancestry). Left out of the plan
@@ -999,13 +999,19 @@ error_t *deploy_preflight(
         const manifest_row_t *row = dirs.entries[i];
         const char *path = row->filesystem_path;
 
+        /* The row's item, carried verbatim by whichever fate the row takes. Every
+         * pending row has one: the item is what put it in the bucket
+         * (deploy_needs_work(NULL) is false), a row beneath a squatter included,
+         * whose item says nothing there was looked at. */
+        const workspace_item_t *item = workspace_get_item(ws, path);
+
         /* Its ancestry first, before any probe: a squatted directory row above
          * this path invalidates every look taken beneath it, the landing check's
          * included. Directories decide parents-first, so such an ancestor's own
          * fate is already taken. The row is decided into its skip: each rung
          * that refuses writes it — the reason, and the ancestor it names with
          * the claim there — and the row is skipped iff one did. */
-        deploy_skip_t skip = { .row = row };
+        deploy_skip_t skip = { .row = row, .item = item };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1013,15 +1019,11 @@ error_t *deploy_preflight(
         /* The path's rungs, unless its ancestry answered. A row planned as absent
          * is asked none of them: the path is empty once the directory pass has
          * converged the ancestor — no type, no content, nothing in the way, and
-         * the landing is that ancestor's. Its item is read for the verdict alone,
-         * verbatim, and the occupant beside it overrides what the item read through
-         * the squatter; a skip carries NULL for it, as for a row judged by its
-         * ancestry. */
-        const workspace_item_t *item = NULL;
+         * the landing is that ancestor's. So its verdict's occupant is that
+         * absence, where its item says only that nothing was looked at. */
         fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
         if (skip.reason == DEPLOY_SKIP_NONE && !absent) {
-            item = workspace_get_item(ws, path);
             occupant = item->occupant;
 
             /* The rungs, first match wins — the enum's own order. A directory
@@ -1068,7 +1070,6 @@ error_t *deploy_preflight(
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            skip.item = item;
             result->skipped.entries[result->skipped.count++] = skip;
             continue;
         }
@@ -1076,7 +1077,7 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
         v->row = row;
-        v->item = absent ? workspace_get_item(ws, path) : item;
+        v->item = item;
         v->occupant = occupant;
         v->uid = uid;
         v->gid = gid;
@@ -1086,10 +1087,14 @@ error_t *deploy_preflight(
         const manifest_row_t *row = files.entries[i];
         const char *path = row->filesystem_path;
 
+        /* The row's item, carried by whichever fate it takes (see the directory
+         * loop). */
+        const workspace_item_t *item = workspace_get_item(ws, path);
+
         /* Its ancestry first (see the directory loop): the directory pass is
          * decided in full, so a squatted ancestor is converged, skipped, or out
          * of this run's reach by now. */
-        deploy_skip_t skip = { .row = row };
+        deploy_skip_t skip = { .row = row, .item = item };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1097,14 +1102,9 @@ error_t *deploy_preflight(
         /* The path's rungs, unless its ancestry answered (see the directory loop):
          * a row planned as absent is written beneath a directory this run converges
          * first, so neither a conflict nor a landing question is its own. */
-        const workspace_item_t *item = NULL;
         fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
         if (skip.reason == DEPLOY_SKIP_NONE && !absent) {
-            /* Self-judged: no squatted ancestor stands above the path, so the
-             * row is pending only because deploy_needs_work said so — and
-             * deploy_needs_work(NULL) is false, so the item is there. */
-            item = workspace_get_item(ws, path);
             occupant = item->occupant;
 
             /* The rungs, first match wins — the enum's own order. Every file
@@ -1170,7 +1170,6 @@ error_t *deploy_preflight(
         }
 
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            skip.item = item;
             result->skipped.entries[result->skipped.count++] = skip;
             continue;
         }
@@ -1178,7 +1177,7 @@ error_t *deploy_preflight(
         deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
         v->row = row;
-        v->item = absent ? workspace_get_item(ws, path) : item;
+        v->item = item;
         v->occupant = occupant;
         v->uid = uid;
         v->gid = gid;
@@ -1208,6 +1207,9 @@ error_t *deploy_preflight(
             continue;
         }
 
+        /* Its ancestry, as the ladders ask it. An ancestor takes no skip (below),
+         * so this one is the rung's answer alone: its reason is read and it is
+         * never pushed, which is why it carries no item. */
         deploy_skip_t skip = { .row = row };
         bool absent = false;
 

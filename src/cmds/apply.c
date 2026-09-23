@@ -51,12 +51,13 @@
  * away from the row, yellow where dotta cannot vouch for what stands there. A
  * CONTENT label reads the row's route (workspace_item_route — one producer for
  * the characterization; deploy keeps its decision): modified locally where only
- * disk moved, changed in Git and on disk where both sides did. A CONTENT skip
- * carries its item by construction — content_conflicts(NULL) is false — and it
- * is DEPLOYED (no path bit survives absence), so the route read is total here.
- * An UNREADABLE label reads the item's fault the same way (workspace_fault_t —
- * locked, unreadable, or the plain "cannot verify"); it is a self-judged skip,
- * so it always carries one.
+ * disk moved, changed in Git and on disk where both sides did. An UNREADABLE
+ * label reads the item's fault the same way (workspace_fault_t — locked,
+ * unreadable, or the plain "cannot verify"). Every skip carries its row's item
+ * (deploy_skip_t), and both reasons are path rungs, asked only where the ancestry
+ * did not answer, so each reads a look at the row's own path — a CONTENT one
+ * DEPLOYED, since no path bit survives absence, which makes the route read total
+ * here.
  *
  * The remedies close the block, indented under the rows the way every block closes,
  * each gated by what is actually present — the reasons, and for a named squatter
@@ -161,7 +162,7 @@ static void print_deploy_skips(
 
             case DEPLOY_SKIP_UNREADABLE: {
                 /* The failed look's word, by the item's fault (workspace_fault_t)
-                 * — a self-judged skip, so the item is always there. apply's
+                 * — a path rung's, so the look was at this very path. apply's
                  * own vocabulary: "cannot verify" beside "modified locally",
                  * not the status tag. */
                 const char *label = NULL;
@@ -311,16 +312,16 @@ static void print_deploy_skips(
  * and coloured the way cleanup colours a removal. The files' destructive half
  * is counted the same way: a file verdict overwrites local content iff something
  * stands at its path (deploy_occupant_present — a row planned absent beneath a
- * replaced squatter is a write into an empty tree, whatever its item read through
- * the link) and its item carries the conflict bits (deploy_content_conflicts,
- * CONTENT | TYPE) — reachable in a verdict only under --force, so the yellow
- * line is the forced run's counterweight to the confirmation prompt --force skips.
- * At verbose the paths are listed under their count, capped the way every preview
- * list is — one list, the glyph carrying the overwrite split: a yellow bullet
- * on exactly the rows the yellow line counted, cyan on the rest (print_path_list's
- * idiom — the glyph says which count the path belongs to). The ancestors the
- * run may make on the way are not here: they are the mechanics of landing a planned
- * path, and the receipt names the ones it made.
+ * replaced squatter is a write into an empty tree, its item a look nobody took)
+ * and its item carries the conflict bits (deploy_content_conflicts, CONTENT |
+ * TYPE) — reachable in a verdict only under --force, so the yellow line is the
+ * forced run's counterweight to the confirmation prompt --force skips. At verbose
+ * the paths are listed under their count, capped the way every preview list is
+ * — one list, the glyph carrying the overwrite split: a yellow bullet on exactly
+ * the rows the yellow line counted, cyan on the rest (print_path_list's idiom —
+ * the glyph says which count the path belongs to). The ancestors the run may
+ * make on the way are not here: they are the mechanics of landing a planned path,
+ * and the receipt names the ones it made.
  *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
@@ -638,11 +639,8 @@ static void print_withheld(
  * The verb is the verdict's; the tags are plan truth. A fixed row is tagged [mode]
  * / [ownership] from its fate's item — why the planner chose it — never from a
  * fresh stat: the run has just converged the directory, so disk would say nothing.
- * A pending row the planner chose on its own verdict has an indexed item
- * (deploy_needs_work(NULL) is false); one planned as absent beneath a squatted
- * directory may have none, and is created rather than fixed. A fixed row whose
- * item carries neither bit, or no item, prints no tag, and the other sections
- * never carry one, since the verb already says what the path held.
+ * The other sections never carry one, since the verb already says what the path
+ * held.
  *
  * Mode and ownership print as the row carries them — total by build, a 0000 claim
  * included: the receipt reports the row, and (mode: 0000) is the claim honoured,
@@ -765,9 +763,11 @@ static void print_deploy_results(
 
             /* What was fixed: the claim axes the planner saw differ, in the words
              * status tags them with — whoever moved them, since the fix sets
-             * either way — and a row beneath a squatter carries none, so the
-             * annotation can no longer name a bit read off the squatter's target
-             * (core/workspace.h workspace_displaced_t). */
+             * either way — and one of the two always prints, a claim being the
+             * only work a standing tracked directory can carry. The item is a
+             * look at this very directory: a row beneath a squatter is planned
+             * absent and created, never fixed (core/workspace.h
+             * workspace_displaced_t). */
             if (v->item->divergence & DIVERGENCE_MODE) {
                 output_print(out, OUTPUT_VERBOSE, " [mode]");
             }

@@ -1033,10 +1033,16 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
+    /* Under a filter the comparison passed over every row outside it, so an empty
+     * one claims the scope, in the workspace arm's words; else the whole */
     if (diff_count == 0 && !opts->name_only) {
-        output_info(
-            out, OUTPUT_NORMAL, "No differences between commit and workspace"
-        );
+        if (file_filter) {
+            output_info(out, OUTPUT_NORMAL, "No differences in scope");
+        } else {
+            output_info(
+                out, OUTPUT_NORMAL, "No differences between commit and workspace"
+            );
+        }
     }
 
 cleanup:
@@ -1421,12 +1427,21 @@ static error_t *diff_workspace(
         );
         if (err) goto cleanup;
 
+        /* An empty screen says what the verb it previews says of its own empty
+         * run. Upstream, apply's: under a filter the scope the screen showed
+         * and nothing past it — every path was loaded and judged, only those in
+         * scope presented — else the repository (cmd_apply). Downstream, update's,
+         * which names no whole to qualify. */
         if (total_diff_count == 0 && !opts->name_only) {
             if (opts->direction == DIFF_UPSTREAM) {
-                output_info(
-                    out, OUTPUT_NORMAL,
-                    "No differences (repository and filesystem in sync)"
-                );
+                if (scope_has_filter(scope) || scope_has_paths(scope)) {
+                    output_info(out, OUTPUT_NORMAL, "No differences in scope");
+                } else {
+                    output_info(
+                        out, OUTPUT_NORMAL,
+                        "No differences (repository and filesystem in sync)"
+                    );
+                }
             } else {
                 output_info(out, OUTPUT_NORMAL, "No local changes to commit");
             }
@@ -1466,7 +1481,8 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
      *                    selection, the commit arm's comparison, and the coverage
      *                    answers both arms with a view give).
      *   the predicates — the workspace arm's presentation (scope_accepts_path,
-     *                    scope_accepts_profile).
+     *                    scope_accepts_profile) and what its empty line claims
+     *                    (scope_has_filter, scope_has_paths).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,

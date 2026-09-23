@@ -826,31 +826,33 @@ static error_t *compare_tree_files_to_filesystem(
  * One implementation serves both arms that compare against a view: the commit
  * arm's is the one manifest_build_tree computes from the commit's tree, the
  * workspace arm's the one the dispatcher built and the workspace joins. Coverage
- * is a question about the view alone — nothing here takes a look.
+ * is a question about the view alone — nothing here takes a look — so each arm
+ * asks it before anything is compared: an entry is answered beside a diff as
+ * well as in place of one, and the answer is the same under --name-only.
  *
- * @param file_filter File filter to validate (NULL = no validation, returns 0)
+ * @param file_filter File filter to validate (NULL = no filter, nothing to answer)
  * @param view The view the arm compares against (must not be NULL)
  * @param what What the view's paths are on the screen: "managed path" for the
  *             enabled view, "path of the commit" for one commit's (must not be
  *             NULL)
  * @param out Output context for the answers
- * @return Number of filter entries under which nothing will diff (0 = every entry
- *         covers at least one file)
+ * @return false where no entry reaches a file row — nothing under the filter
+ *         can diff, and the answers are the whole report; true otherwise, and
+ *         always under no filter
  */
-static size_t validate_filter_paths(
+static bool validate_filter_paths(
     const pathspec_t *file_filter,
     const manifest_t *view,
     const char *what,
     output_t *out
 ) {
-    if (!file_filter) return 0;
+    if (!file_filter) return true;
 
     manifest_rows_t rows = manifest_rows(view);
-    size_t unmatched = 0;
-    bool hint = false;
+    size_t covered = 0;     /* Entries reaching a file row */
+    size_t unmatched = 0;   /* Entries reaching nothing, each warned */
 
-    size_t count = pathspec_count(file_filter);
-    for (size_t e = 0; e < count; e++) {
+    for (size_t e = 0; e < pathspec_count(file_filter); e++) {
         /* The row the entry reaches: a file row ends the search, content being
          * what a diff shows, and a directory row stands until one does */
         const manifest_row_t *reached = NULL;
@@ -867,7 +869,10 @@ static size_t validate_filter_paths(
         }
 
         /* Content to diff, and nothing to say */
-        if (reached && reached->type != PATH_TYPE_DIRECTORY) continue;
+        if (reached && reached->type != PATH_TYPE_DIRECTORY) {
+            covered++;
+            continue;
+        }
 
         /* A directory row alone has nothing to diff; no row at all is warned */
         pathspec_entry_t entry = pathspec_entry_at(file_filter, e);
@@ -886,24 +891,24 @@ static size_t validate_filter_paths(
             output_warning(
                 out, OUTPUT_NORMAL, "No %s matches pattern '%s'", what, entry.text
             );
-            hint = true;
+            unmatched++;
         } else {
             output_warning(
                 out, OUTPUT_NORMAL, "No %s matches '%s'", what, entry.text
             );
-            hint = true;
+            unmatched++;
         }
-        unmatched++;
     }
 
-    if (hint) {
+    /* The warnings' one remedy, said once under them all */
+    if (unmatched > 0) {
         output_hint(
             out, OUTPUT_NORMAL,
             "Use 'dotta list <profile>' to see managed files"
         );
     }
 
-    return unmatched;
+    return covered > 0;
 }
 
 /**
@@ -1011,7 +1016,15 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 5: Compare the commit's view against the current filesystem */
+    /* Step 5: The filter's coverage over the commit's view, answered before
+     * anything is compared, as the workspace arm answers it over its own. Where
+     * no entry reaches content, nothing can diff, and the answers are the whole
+     * report. */
+    if (!validate_filter_paths(file_filter, historical, "path of the commit", out)) {
+        goto cleanup;
+    }
+
+    /* Step 6: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
     err = compare_tree_files_to_filesystem(
         historical, file_filter, opts, cache, out, &diff_count
@@ -1021,15 +1034,9 @@ static error_t *diff_commit_to_workspace(
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched = validate_filter_paths(
-            file_filter, historical, "path of the commit", out
+        output_info(
+            out, OUTPUT_NORMAL, "No differences between commit and workspace"
         );
-
-        if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
-            output_info(
-                out, OUTPUT_NORMAL, "No differences between commit and workspace"
-            );
-        }
     }
 
 cleanup:
@@ -1289,10 +1296,11 @@ cleanup:
 /**
  * Workspace diff - Compare current profiles with filesystem using workspace module
  *
- * Optimized implementation using workspace_load() for efficient, pre-analyzed
- * divergence detection. Eliminates N+1 metadata loading and redundant comparisons.
- *
- * Performance: O(P) metadata loads + O(F) file analysis (where P=profiles, F=files)
+ * The filter's coverage is answered over the view first, and a filter under which
+ * nothing can diff ends the diff at its answers, no workspace loaded
+ * (validate_filter_paths). Otherwise the workspace is loaded over the same view,
+ * its learning flushed, and the diverged items presented per direction under
+ * the scope — the analysis settled every verdict, and nothing here re-reads one.
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the borrowed
  *            state handle, the shared blob-content cache, and the view over the
@@ -1321,7 +1329,14 @@ static error_t *diff_workspace(
     error_t *err = NULL;
     workspace_t *ws = NULL;
 
-    /* Step 1: Load the workspace. Orphans have no reader here, and the untracked
+    /* Step 1: The filter's coverage over the view — the one the workspace joins,
+     * and all the question needs. Where no entry reaches content, nothing can
+     * diff, the answers are the whole report, and no workspace is loaded. */
+    if (!validate_filter_paths(scope_paths(scope), manifest, "managed path", out)) {
+        return NULL;
+    }
+
+    /* Step 2: Load the workspace. Orphans have no reader here, and the untracked
      * scan is update's. */
     workspace_options_t ws_opts = {
         .analyze_orphans   = false,
@@ -1342,20 +1357,8 @@ static error_t *diff_workspace(
         error_free(flush_err);
     }
 
-    /* Step 2: Get pre-analyzed divergence from workspace */
+    /* Step 3: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_get_all_diverged(ws);
-
-    /* Step 3: Validate file filter paths against the view the workspace joined */
-    const pathspec_t *file_filter = scope_paths(scope);
-    if (file_filter) {
-        size_t unmatched = validate_filter_paths(
-            file_filter, manifest, "managed path", out
-        );
-        if (unmatched == pathspec_count(file_filter)) {
-            /* Nothing diffs under any filter entry — unmatched or content-less */
-            goto cleanup;
-        }
-    }
 
     /* Step 4: Filter and present diffs based on direction. A row the analysis
      * could not look at is shown by its status line and counted: it is never

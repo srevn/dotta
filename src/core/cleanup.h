@@ -241,7 +241,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *
  *   occupant NONE                         ABSENT     record retires, no effect
  *   state RELEASED                        RELEASED   left alone, record retires
- *   a displaced ancestor above            RELEASED   both kinds. No look was
+ *   a squatted ancestor above             RELEASED   both kinds. No look was
  *   (the item's displaced class)                     taken: a squatter stands
  *                                                    above the path and whatever
  *                                                    is there is not dotta's to
@@ -249,7 +249,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    order included. Terminal
  *                                                    on purpose: a skip would
  *                                                    prune on the NEXT run, once
- *                                                    the displaced directory's
+ *                                                    the squatted directory's
  *                                                    own released record has
  *                                                    retired and no witness of
  *                                                    the squat remains

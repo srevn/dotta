@@ -246,10 +246,10 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
          * directory, and nothing at the path was looked at — not dotta's to remove,
          * --force included, and a prune order on the path does not outrank it
          * (deferred intent never destroys what dotta cannot vouch is its copy).
-         * The path stays, the record retires: the same letting-go as a
-         * kind-displaced path, one level up. Terminal on purpose — a skip would
-         * prune on the NEXT run, once the displaced directory's own released
-         * record has retired and no witness of the squat remains. */
+         * The path stays, the record retires: the same letting-go as a retyped
+         * path, one level up. Terminal on purpose — a skip would prune on the
+         * NEXT run, once the squatted directory's own released record has retired
+         * and no witness of the squat remains. */
         return CLEANUP_RELEASED;
     }
 

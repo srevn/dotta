@@ -550,14 +550,14 @@ static bool directory_is_deployable(
 }
 
 /**
- * The fate a displaced ancestor imposes on a planned row
+ * The fate a squatted ancestor imposes on a planned row
  *
  * The one question the ladders ask before any probe of their own, because a
- * displaced directory row above the path invalidates every probe beneath it —
+ * squatted directory row above the path invalidates every probe beneath it —
  * the landing check's included: a symlink squatting a claimed directory points
  * somewhere real and writable, so the landing probe would wave the write through
  * and the run would deploy INTO the link's target, over whatever the user keeps
- * there. The workspace names the offender (workspace_displaced_ancestor — the
+ * there. The workspace names the offender (workspace_squatted_ancestor — the
  * outermost, fate-blind); this splits the answer by what the run itself decided
  * about that ancestor, the premise the plan carried by scope now asked of the
  * verdicts, so it is exactly true. In decision order:
@@ -586,12 +586,12 @@ static bool directory_is_deployable(
  * took one. The claimant is written only where the fate stays ANCESTOR — an
  * inherited reason is the ancestor's own story, and the class stays NONE. Called
  * before check_landing in both ladders and once more per ancestor candidate;
- * directories are decided parents-first, so a displaced ancestor's own fate is
+ * directories are decided parents-first, so a squatted ancestor's own fate is
  * always already taken when a row beneath it is reached. The outs are written
  * only when an ancestor decides — the caller's initialization (NONE, 0, NONE,
  * false) stands otherwise, and the row judges itself.
  *
- * @param ws Workspace, for the displaced-ancestor answer (must not be NULL)
+ * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
  * @param path Planned path (must not be NULL)
  * @param out_reason NONE / ANCESTOR / the ancestor's own (must not be NULL)
@@ -606,7 +606,7 @@ static void check_ancestry(
     deploy_skip_reason_t *out_reason, size_t *out_ancestor,
     deploy_ancestor_class_t *out_class, bool *out_absent
 ) {
-    const char *dir = workspace_displaced_ancestor(ws, path);
+    const char *dir = workspace_squatted_ancestor(ws, path);
 
     if (!dir) {
         return;
@@ -629,7 +629,7 @@ static void check_ancestry(
         }
     }
 
-    /* The lookup cannot meet a file row: the displaced set holds directory claims
+    /* The lookup cannot meet a file row: the squatted set holds directory claims
      * alone. And it cannot miss a row: the probe answers view-side (the reach
      * rule, workspace.h), so a record that alone remembers a directory never
      * names the ancestor here. */
@@ -999,7 +999,7 @@ error_t *deploy_preflight(
         const manifest_row_t *row = dirs.entries[i];
         const char *path = row->filesystem_path;
 
-        /* Its ancestry first, before any probe: a displaced directory row above
+        /* Its ancestry first, before any probe: a squatted directory row above
          * this path invalidates every look taken beneath it, the landing check's
          * included. Directories decide parents-first, so such an ancestor's own
          * fate is already taken. */
@@ -1092,8 +1092,8 @@ error_t *deploy_preflight(
         const char *path = row->filesystem_path;
 
         /* Its ancestry first (see the directory loop): the directory pass is
-         * decided in full, so a displaced ancestor is converged, skipped, or
-         * out of this run's reach by now. */
+         * decided in full, so a squatted ancestor is converged, skipped, or out
+         * of this run's reach by now. */
         deploy_skip_reason_t reason = DEPLOY_SKIP_NONE;
         size_t ancestor = 0;
         deploy_ancestor_class_t ancestor_class = DEPLOY_ANCESTOR_NONE;
@@ -1108,7 +1108,7 @@ error_t *deploy_preflight(
         fs_occupant_t occupant = FS_OCCUPANT_NONE;
 
         if (reason == DEPLOY_SKIP_NONE && !absent) {
-            /* Self-judged: no displaced ancestor stands above the path, so the
+            /* Self-judged: no squatted ancestor stands above the path, so the
              * row is pending only because deploy_needs_work said so — and
              * deploy_needs_work(NULL) is false, so the item is there. */
             item = workspace_get_item(ws, path);
@@ -1198,7 +1198,7 @@ error_t *deploy_preflight(
 
     /* The ancestors: every directory row the run does not act on, absent as the
      * run will find it, that stands above a deployable row. Absent has two
-     * readings, both fate-aware now: the rung's — beneath a displaced ancestor
+     * readings, both fate-aware now: the rung's — beneath a squatted ancestor
      * the run converges first — or the workspace's own occupant (a row without
      * an item is present and converged). ensure_parents creates exactly these
      * on the way down to a deployed path, with the metadata decided here; a
@@ -1208,7 +1208,7 @@ error_t *deploy_preflight(
      *
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
-     * one held beneath a displaced ancestor that stays is not a parent this run
+     * one held beneath a squatted ancestor that stays is not a parent this run
      * can make (the rung's reason), a TYPE- or UNREADABLE-skipped row is not
      * absent (present, as its item read), and a landing-skipped one has no
      * deployable row beneath it (the invariant, deploy_preflight's doc). */
@@ -1227,7 +1227,7 @@ error_t *deploy_preflight(
 
         check_ancestry(ws, result, path, &reason, &ancestor, &ancestor_class, &absent);
         if (reason != DEPLOY_SKIP_NONE) {
-            continue;   /* held beneath a displaced ancestor that stays */
+            continue;   /* held beneath a squatted ancestor that stays */
         }
 
         const workspace_item_t *item = workspace_get_item(ws, path);

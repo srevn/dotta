@@ -184,7 +184,7 @@ typedef enum {
  * and a link to nothing ENOENT, so a child would read absence caused by the
  * squatter as the user's own deletion to propagate. No such answer is the path's,
  * and one act would be read as an intent per path beneath it. So the ask comes
- * before every look the load takes (displaced_ancestor): beneath a squatter the
+ * before every look the load takes (squatted_ancestor): beneath a squatter the
  * row or the record is an item at birth, DEPLOYED- or ORPHANED-shaped, occupant
  * UNKNOWN, with no divergence bit of the path family and nothing queued for the
  * record. Every displaced item of the view family is therefore DEPLOYED with no
@@ -214,10 +214,10 @@ typedef enum {
  * its own TYPE verdict instead.
  *
  * Noted by the phase that looked at the squatted path, where it looked
- * (note_displaced), and assigned at birth by the one producer of items
+ * (note_squatted), and assigned at birth by the one producer of items
  * (workspace_add_diverged), from the same scan the analyzers ask before every
- * look (workspace.c displaced_ancestor) — so the class is total, and the two
- * halves meet: an item that carries one is an item with nothing measured.
+ * look (workspace.c squatted_ancestor) — so the class is total, and the two halves
+ * meet: an item that carries one is an item with nothing measured.
  *
  * The words on screen, so the sentences cannot drift apart again: the directory
  * another kind stands at is *squatted*, the path beneath it is *displaced* —
@@ -236,7 +236,7 @@ typedef enum {
  * display_workspace_status's Issues hint, and cmds/diff.c
  * get_status_message_from_item and show_file_diff_from_workspace (the colour
  * ladder and the content gate), should_show_item_for_direction beside them. A
- * caller holding a path rather than an item asks workspace_displaced_ancestor.
+ * caller holding a path rather than an item asks workspace_squatted_ancestor.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -829,7 +829,7 @@ typedef struct {
  * do at every one of them — which for apply is adoption, taking ownership of
  * paths it never looked at (core/deploy.c deploy_plan_build, where a row with
  * no item is clean by definition). Directories first, because that walk is the
- * only producer of the view's squatters (note_displaced) and every look the load
+ * only producer of the view's squatters (note_squatted) and every look the load
  * takes after it asks that fact before taking one: run the file rows without it
  * and a row beneath a squatter is looked at *through* the squatter —
  * workspace_displaced_t names what such a look answers — carrying no displaced
@@ -1013,9 +1013,9 @@ const manifest_row_t *workspace_lookup(
 );
 
 /**
- * The displaced managed directory above `path`, or NULL — the view's claims
+ * The squatted managed directory above `path`, or NULL — the view's claims
  *
- * A directory is *displaced* when a claim says a directory belongs at the path
+ * A directory is *squatted* when a claim says a directory belongs at the path
  * and something else stands there. A look taken beneath such a path would resolve
  * through the occupant — a symlink to a directory answers for the link's target
  * — so nothing it said would be that path's, and the load takes none
@@ -1039,7 +1039,7 @@ const manifest_row_t *workspace_lookup(
  * through-capture the rule leaves to its own occupant. So the answer is the view's
  * claims alone, and on an item it is exactly that item's displaced field.
  *
- * The answer is noted by the phase that looked at each squatter (note_displaced),
+ * The answer is noted by the phase that looked at each squatter (note_squatted),
  * and the directory analysis runs before any file row or orphan record is looked
  * at (workspace_load), so it is complete before anything asks — a scan root is
  * chosen off the look that analysis took, later still. The outermost such ancestor
@@ -1049,10 +1049,10 @@ const manifest_row_t *workspace_lookup(
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a
- *        displaced directory is never its own answer
+ *        squatted directory is never its own answer
  * @return Borrowed path (workspace lifetime), or NULL
  */
-const char *workspace_displaced_ancestor(const workspace_t *ws, const char *path);
+const char *workspace_squatted_ancestor(const workspace_t *ws, const char *path);
 
 /**
  * Look up the record dotta keeps of a path

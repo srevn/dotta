@@ -539,7 +539,7 @@ typedef struct {
  * Requires a workspace loaded with file AND directory analysis: the plan is derived
  * from the divergence index, and a kind whose analysis did not run plans as clean.
  *
- * A path beneath a displaced directory needs no rule of the plan's own: the
+ * A path beneath a squatted directory needs no rule of the plan's own: the
  * workspace looked at nothing there, so the row has an item carrying the displaced
  * class and no bits at all (core/workspace.h workspace_displaced_t), and the
  * work predicate reads that class first (deploy_needs_work). Such a row is work,
@@ -622,8 +622,8 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * One fate per pending row (the totality equation, deploy_preflight_result_t),
  * each question asked of its one authority, the first skip reason that applies
  * winning (deploy_skip_reason_t):
- * - Ancestry — the observation must bind. A displaced directory row above the
- *   path (workspace_displaced_ancestor) voids every probe taken beneath it, the
+ * - Ancestry — the observation must bind. A squatted directory row above the
+ *   path (workspace_squatted_ancestor) voids every probe taken beneath it, the
  *   landing check's included — the workspace took none there at all, so the row
  *   arrives with nothing measured — so this rung runs first and answers from
  *   the run's own fates (check_ancestry): an ancestor the directory pass converges
@@ -694,7 +694,7 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *
  * Only rows the run will touch are consulted — the deployable ones, and the
  * ancestors it will make; a directory the run leaves alone cannot skip anything.
- * A planned row beneath a displaced ancestor this run converges (deploy_plan_build
+ * A planned row beneath a squatted ancestor this run converges (deploy_plan_build
  * routed it; the rung confirms it against the fates) is asked nothing: the path
  * is empty once the directory pass has replaced the squatter, and its landing
  * is that ancestor's — whose own row carries the conflict --force resolves, and

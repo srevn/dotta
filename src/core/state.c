@@ -1722,12 +1722,13 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
  *
  * INSERT OR IGNORE — see the SQL comment on sql_observe and the header contract.
  * Binds the row's key, binding, kind and claim; the blob, stat and lifecycle
- * columns take their NULL / zero defaults, and an existing row is left exactly
- * as it was.
+ * columns take their NULL / zero defaults, an existing row is left exactly as
+ * it was, and *anchor is the sighting's record either way.
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row) {
+error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor) {
     CHECK_NULL(state);
     CHECK_NULL(row);
+    CHECK_NULL(anchor);
     CHECK_NULL(state->db);
     CHECK_NULL(state->stmt_observe);
 
@@ -1741,6 +1742,20 @@ error_t *state_observe(state_t *state, const manifest_row_t *row) {
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to record observation");
     }
+
+    /* The caller's record is the sighting's, whole — last, so a failure above
+     * leaves it as it was, and whether the INSERT landed or not (state.h): the
+     * columns the statement names, the strings borrowed from the row, and every
+     * other field the zero its column defaults to. */
+    *anchor = (anchor_t){
+        .filesystem_path = row->filesystem_path,
+        .storage_path = row->storage_path,
+        .profile = row->profile,
+        .type = row->type,
+        .mode = row->mode,
+        .owner = row->owner,
+        .group = row->group,
+    };
 
     return NULL;
 }
@@ -1900,7 +1915,7 @@ error_t *state_confirm_claim(
 
     /* The caller's copy follows, on the three columns the statement names, as a
      * load reads them back — a link's NULL mode as 0 — and the strings borrowed
-     * as state_anchor's resolved_out borrows the row's, the cast discarding a
+     * as state_observe and state_anchor borrow the row's, the cast discarding a
      * const the record's fields do not spell. No released copy dies here: the
      * claim says nothing of what stands at the path. */
     anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
@@ -1916,8 +1931,10 @@ error_t *state_confirm_claim(
  * The ownership event. See state.h for the full contract. In brief:
  *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.
  *   - deployed_at = now.
- *   - stat is always written (zeros when NULL).
+ *   - stat is always written (zeros when NULL), and read before anything is: it
+ *     may be the caller's record's own triple.
  *   - the path's released copy dies with it, either kind (a second statement).
+ *   - *anchor follows both, last.
  *
  * The statement names every column the record carries, so the post-write record
  * is what the caller handed in: the mirror is the inputs, with nothing read back.
@@ -1927,7 +1944,7 @@ error_t *state_anchor(
     const manifest_row_t *row,
     const stat_cache_t *stat,
     time_t now,
-    anchor_t *resolved_out
+    anchor_t *anchor
 ) {
     CHECK_NULL(state);
     CHECK_NULL(row);
@@ -1969,7 +1986,8 @@ error_t *state_anchor(
     }
 
     /* 9-11. stat triple (fast-path proof, bound to blob_oid; zeros when the caller
-     * had none — the next read takes the slow path). */
+     * had none — the next read takes the slow path). Copied before anything is
+     * written: it may be the caller's record's own (state.h). */
     stat_cache_t triple = stat ? *stat : STAT_CACHE_UNSET;
     sqlite3_bind_int64(stmt, 9, triple.mtime);
     sqlite3_bind_int64(stmt, 10, triple.size);
@@ -1983,10 +2001,16 @@ error_t *state_anchor(
         return sqlite_error(state->db, "Failed to anchor path");
     }
 
-    if (resolved_out) {
-        /* The record the statement wrote, whole: every field the caller supplied,
-         * borrowed — no column is the statement's to decide. */
-        *resolved_out = (anchor_t){
+    /* An ownership event says what stands at the path — the row's blob, or a
+     * directory — so a released copy there is redundant or false either way: it
+     * dies in the same breath, the way an order dies with its record. */
+    RETURN_IF_ERROR(state_forget_released(state, row->filesystem_path));
+
+    /* The caller's record follows, whole — last, so a failure above leaves it
+     * as read: the columns the statement names, the strings borrowed from the
+     * row, and every other field the zero its column defaults to. */
+    if (anchor) {
+        *anchor = (anchor_t){
             .filesystem_path = row->filesystem_path,
             .storage_path = row->storage_path,
             .profile = row->profile,
@@ -2000,10 +2024,7 @@ error_t *state_anchor(
         };
     }
 
-    /* An ownership event says what stands at the path — the row's blob, or a
-     * directory — so a released copy there is redundant or false either way: it
-     * dies in the same breath, the way an order dies with its record. */
-    return state_forget_released(state, row->filesystem_path);
+    return NULL;
 }
 
 /**

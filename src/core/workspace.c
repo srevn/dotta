@@ -4511,23 +4511,20 @@ bool workspace_item_extract_display_info(
  *
  * Workspace-scope writer for observations: a path that already has a record —
  * loaded at partition, or created earlier in this run — is left alone without a
- * statement; otherwise state_observe creates the row and the same record is created
- * here, in the arena, and indexed. The record's fields are exactly what the INSERT
- * wrote: the row's binding, kind and claim, no blob, no stat, never owned.
+ * statement; otherwise its record is allocated here, in the arena, before the
+ * statement, so a write that landed is never followed by a failure to hold it —
+ * state_observe writes the sighting into it — and then indexed.
  *
  * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
  * an existing record untouched, so the snapshot and the database agree wherever
  * the database still holds what the load read. Where another writer made the
  * row since the load, the INSERT is ignored and the record made here is one the
- * database does not hold — still the INSERT's own values, never that row, and
- * never read back: a confirmation of this path binds this record as the pair it
- * replaces (state_confirm), so, blob-less and proof-less, it matches nothing
- * but an identical observation, where landing is right. Read back, it would lend
- * the confirmation another writer's newer pair to overwrite. What reads a record
- * after a read command's flush asks it about ownership alone — status's header,
- * diff's reassignment, a preview's adoption test — and a record never owned answers
- * as none does; a run of apply cannot meet an ignored INSERT at all, its load
- * and its flush sharing one transaction.
+ * database does not hold — the sighting's own values, never that row, which is
+ * state_observe's rule and its reason. What reads a record after a read command's
+ * flush asks it about ownership alone — status's header, diff's reassignment, a
+ * preview's adoption test — and a record never owned answers as none does; a
+ * run of apply cannot meet an ignored INSERT at all, its load and its flush sharing
+ * one transaction.
  *
  * A record created here backfills the path's item, if analysis produced one:
  * item->anchor is the live record, always — the invariant every derivation reads
@@ -4544,26 +4541,13 @@ error_t *workspace_observe(
         return NULL;
     }
 
-    error_t *err = state_observe(ws->state, row);
-    if (err) return err;
-
     anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
     if (!anchor) {
         return ERROR(ERR_MEMORY, "Failed to allocate observation record");
     }
 
-    *anchor = (anchor_t){
-        .filesystem_path = row->filesystem_path,
-        .storage_path = row->storage_path,
-        .profile = row->profile,
-        .type = row->type,
-        .mode = row->mode,
-        .owner = row->owner,
-        .group = row->group,
-        .blob_oid = { { 0 } },
-        .stat = STAT_CACHE_UNSET,
-        .deployed_at = 0,
-    };
+    error_t *err = state_observe(ws->state, row, anchor);
+    if (err) return err;
 
     err = hashmap_set(ws->anchor_index, anchor->filesystem_path, anchor);
     if (err) {
@@ -4583,16 +4567,16 @@ error_t *workspace_observe(
 /**
  * Anchor a managed path with in-memory consistency
  *
- * Single workspace-scope writer for ownership events: persists via state_anchor
- * and assigns the post-write record (the record the statement wrote, whole) into
- * the snapshot — in place when the path has a record, into a fresh arena record
- * that is then indexed when it has none. The statement is the one specification
- * of what an ownership event writes; this function holds none of it.
+ * The workspace-scope writer for ownership events: hands state_anchor the path's
+ * live record, which the verb advances in place — or, for a path with none, a
+ * record allocated before the statement, so a write that landed is never followed
+ * by a failure to hold it, and indexed after it. The statement is the one
+ * specification of what an ownership event writes; this function holds none of it.
  *
  * The map's value is the mutable record pointer; workspace_get_anchor narrows
  * it to const for every reader.
  *
- * Either arm keeps item->anchor the live record: patching in place rewrites the
+ * Either arm keeps item->anchor the live record: the verb rewrites in place the
  * object the path's item already borrows, and a record created here backfills
  * the item, if analysis produced one.
  */
@@ -4605,21 +4589,22 @@ error_t *workspace_anchor(
     CHECK_NULL(ws);
     CHECK_NULL(row);
 
-    anchor_t resolved;
-    error_t *err = state_anchor(ws->state, row, stat, now, &resolved);
-    if (err) return err;
-
-    anchor_t *existing = hashmap_get(ws->anchor_index, row->filesystem_path);
-    if (existing) {
-        *existing = resolved;
-        return NULL;
+    /* The path's live record, advanced in place: its item reads the post-write
+     * record through the pointer it already holds. */
+    anchor_t *anchor = hashmap_get(ws->anchor_index, row->filesystem_path);
+    if (anchor) {
+        return state_anchor(ws->state, row, stat, now, anchor);
     }
 
-    anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
+    /* A path with none: its record allocated before the statement, then indexed,
+     * and the path's item, if analysis produced one, borrows it. */
+    anchor = arena_alloc(ws->arena, sizeof(*anchor));
     if (!anchor) {
         return ERROR(ERR_MEMORY, "Failed to allocate anchor record");
     }
-    *anchor = resolved;
+
+    error_t *err = state_anchor(ws->state, row, stat, now, anchor);
+    if (err) return err;
 
     err = hashmap_set(ws->anchor_index, anchor->filesystem_path, anchor);
     if (err) {

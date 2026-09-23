@@ -697,11 +697,21 @@ error_t *state_get_all_anchors(
  * classifier reads (workspace.c classify_absent): a path once observed that is
  * now missing was deleted, not never deployed.
  *
+ * *anchor is the sighting's record, written last, so a failure leaves it as it
+ * was: the row's binding, kind and claim (borrowed — the string pointers are
+ * the row's), and nothing else. Written whether the INSERT landed or met a row
+ * another writer made since the caller's read — still the INSERT's own values,
+ * never that row, and never read back: a confirmation of the path binds this
+ * record as the pair it replaces (state_confirm), so, blob-less and proof-less,
+ * it matches nothing but an identical observation, where landing is right. Read
+ * back, it would lend the confirmation another writer's newer pair to overwrite.
+ *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path was observed under (must not be NULL)
+ * @param anchor The record the sighting is written into (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row);
+error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor);
 
 /**
  * Confirm a managed path: advance its record to what the comparison established
@@ -809,14 +819,14 @@ error_t *state_confirm_claim(
  *
  * ROUTING INVARIANT — this is load-bearing:
  *   - If a workspace is live for this transaction, anchor writes MUST route through
- *     workspace_anchor (workspace.h). That wrapper calls this function with
- *     resolved_out pointing at a record it then patches into its snapshot — or
- *     creates there, when the path had no record at load — so every later reader
- *     in the run sees the record the statement wrote. Calling state_anchor directly
- *     while a workspace is live silently desyncs the snapshot.
+ *     workspace_anchor (workspace.h). That wrapper hands this function the path's
+ *     live record — or one it allocated for a path with none — which the
+ *     statement's success advances, so every later reader in the run sees the
+ *     record the statement wrote. Calling state_anchor directly while a workspace
+ *     is live silently desyncs the snapshot.
  *   - If no workspace is live (add's and update's capture loops), this function
  *     is the legitimate direct caller. There is no snapshot to patch, so callers
- *     pass resolved_out=NULL and the next workspace_load reads SQL fresh.
+ *     pass NULL and the next workspace_load reads SQL fresh.
  *
  * Semantics (encoded in the SQL — single source of truth):
  *   - row->blob_oid must be non-zero for a file row: a zero blob would record
@@ -835,11 +845,13 @@ error_t *state_confirm_claim(
  *     row's blob, or a directory — so a copy of what stood before is redundant
  *     or false.
  *
- * resolved_out semantics:
- *   - If non-NULL, populated with the record the statement wrote, whole — every
- *     field the caller supplied, borrowed (the string pointers are the row's,
- *     not copies): no column is the SQL's to decide, so the mirror is the inputs.
- *   - May be NULL when the caller does not maintain an in-memory snapshot.
+ * *anchor follows the statement, last — so a failure leaves it as read, the rule
+ * state_confirm and state_confirm_claim keep: the record the statement wrote,
+ * whole — the row's binding, kind and claim (borrowed: the string pointers are
+ * the row's, not copies), the blob, the triple, deployed_at = now — with no column
+ * the SQL's to decide, so the mirror is the inputs. `stat` may be the record's
+ * own triple — apply's adoption hands &anchor->stat — and is read before anything
+ * is written.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path is anchored to (must not be NULL; non-zero blob for a
@@ -847,8 +859,9 @@ error_t *state_confirm_claim(
  * @param stat Stat triple of the caller's establishing look (may be NULL; see
  *             semantics above)
  * @param now Timestamp of the write (must be > 0)
- * @param resolved_out Optional out-param for the post-write record (may be NULL;
- *                     see semantics above)
+ * @param anchor The path's record to advance, or NULL where the caller keeps
+ *               none (add's and update's capture loops); for a path with no record,
+ *               one the caller allocated before the call
  * @return Error or NULL on success
  */
 error_t *state_anchor(
@@ -856,7 +869,7 @@ error_t *state_anchor(
     const manifest_row_t *row,
     const stat_cache_t *stat,
     time_t now,
-    anchor_t *resolved_out
+    anchor_t *anchor
 );
 
 /**

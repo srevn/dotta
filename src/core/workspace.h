@@ -1139,13 +1139,14 @@ bool workspace_item_extract_display_info(
  * Observe a managed path with in-memory consistency
  *
  * Workspace-scope side of state_observe (see state.h): records the path's first
- * sighting on disk — presence only, no blob, no stat — and creates the matching
- * record in the workspace's anchors snapshot so every later reader in the run
- * (workspace_get_anchor, the adoption loop's ownership test) sees it, backfilling
- * the path's item, if analysis produced one, so item->anchor is the live record
- * from the record's creation on. A path that already has a record, in the snapshot
- * or created earlier in this run, is left exactly as it is and no statement runs:
- * observation is idempotent on both sides.
+ * sighting on disk — presence only, no blob, no stat — into a record it allocates
+ * in the workspace's anchors snapshot before the statement, which the verb writes,
+ * so every later reader in the run (workspace_get_anchor, the adoption loop's
+ * ownership test) sees it, backfilling the path's item, if analysis produced
+ * one, so item->anchor is the live record from the record's creation on. A path
+ * that already has a record, in the snapshot or created earlier in this run, is
+ * left exactly as it is and no statement runs: observation is idempotent on both
+ * sides.
  *
  * Single entry point for every workspace-scope observation: the flush
  * (workspace_flush_updates — rows found on disk with no record during analysis,
@@ -1171,14 +1172,14 @@ error_t *workspace_observe(
  * Anchor a managed path with in-memory consistency
  *
  * Workspace-scope side of the routing invariant defined on state_anchor (see
- * state.h): persists via state_anchor and assigns the post-write record (the
- * record the statement wrote, whole) into the workspace's anchors snapshot —
- * patching the path's record in place, or creating it when the path had none at
- * load and backfilling the path's item, so item->anchor reads the post-write
- * record either way. The statement is the one specification of what an ownership
- * event writes; this function holds none of it.
+ * state.h): hands state_anchor the path's live record, which the verb advances
+ * in place — or, for a path with none at load, a record allocated before the
+ * statement and indexed after it, backfilling the path's item — so item->anchor
+ * reads the post-write record either way. The statement is the one specification
+ * of what an ownership event writes; this function holds none of it.
  *
- * Single entry point for every workspace-scope ownership event:
+ * The workspace-scope writer for ownership events — add and update write through
+ * state_anchor directly, with no workspace live (the header's exception):
  *   - apply's adoption loop (ownership event on first claim, and the
  *     acknowledgement of a clean handover — the record's binding becomes the
  *     row's, whichever half of it moved: another profile's row, or another name

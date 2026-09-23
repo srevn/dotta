@@ -916,15 +916,16 @@ static workspace_state_t classify_absent(
 }
 
 /**
- * The claim's half of a row's verdict: the look against the row's claim, and
- * what the record learns from it
+ * The claim's half of a row's verdict: what differs, who moved it, and what the
+ * record learns
  *
  * Axis by axis — DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — where the look stands
- * off the row's claim, added to *divergence; and each claim Git moved past the
- * record's (workspace_claims_moved) that the look already stands on, queued for
- * the record to learn. Asked only of a look standing at the row's kind, the one
- * whose stat says anything of the row: each judge rules out absence and another
- * kind before it asks.
+ * off the row's claim, with DIVERGENCE_CLAIM_MOVED beside them where Git moved one
+ * of those past the record's (workspace_claims_moved), all added to *divergence;
+ * and each claim Git moved that the look already stands on, queued for the record
+ * to learn. Asked only of a look standing at the row's kind, the one whose stat
+ * says anything of the row: each judge rules out absence and another kind before
+ * it asks.
  *
  * One rule for the two active judges (analyze_file_divergence,
  * analyze_directories_divergence). The orphan judge asks the same compare of
@@ -961,16 +962,22 @@ static error_t *analyze_claim_divergence(
     if (ownership_diverges(row->storage_path, row->owner, row->group, st)) {
         claims |= DIVERGENCE_OWNERSHIP;
     }
+
+    /* Who moved it. An axis Git moved past the claim the record last reconciled
+     * and disk has not followed is Git's to bring — whoever else moved it, since
+     * apply converges every claim, and update's capture would commit disk's over
+     * Git's move. The bit rides beside the axis it attributes, never alone. */
+    divergence_type_t moved = workspace_claims_moved(row, anchor);
+    if (claims & moved) {
+        claims |= DIVERGENCE_CLAIM_MOVED;
+    }
     *divergence |= claims;
 
-    /* A claim Git moved past the record's that disk already stands on is the
-     * record's to learn, whoever owns the path — a directory dotta never owned
-     * learns it too: the record follows every agreement, so the user's next move
-     * on that axis reads as the user's, and an orphan is measured against the
-     * claim disk stood on. */
-    return workspace_record_confirmation(
-        ws, row, anchor, workspace_claims_moved(row, anchor) & ~claims, NULL
-    );
+    /* An axis Git moved that disk already stands on is the record's to learn,
+     * whoever owns the path — a directory dotta never owned learns it too: the
+     * record follows every agreement, so the user's next move on that axis reads
+     * as the user's, and an orphan is measured against the claim disk stood on. */
+    return workspace_record_confirmation(ws, row, anchor, moved & ~claims, NULL);
 }
 
 /**
@@ -982,11 +989,18 @@ static error_t *analyze_claim_divergence(
  *
  * Content is judged three-way, with dotta's last content confirmation as base
  * (see Phase 1 — the record's blob, or a released fact's when the record carries
- * none): DIVERGENCE_STALE says Git moved past the blob dotta last deployed,
+ * none): DIVERGENCE_STALE says Git moved past the pair dotta last confirmed,
  * DIVERGENCE_CONTENT says disk left it. Each is a verdict in its own right —
  * STALE without CONTENT is apply-side work that overwrites nothing of the user's;
  * CONTENT without STALE is a local edit Git has not raced; both together is a
  * conflict.
+ *
+ * The claim is judged by one question per axis (analyze_claim_divergence): did
+ * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
+ * says so, beside the axis that differs, and is STALE's twin for the routes — a
+ * move of Git's that disk has not followed, a conflict beside CONTENT. The
+ * content's second question has no claim twin: apply converges every claim whoever
+ * moved it, so whether disk also left the record's claim would change no verb.
  *
  * Reassignment is the same pairing read on the profile axis: the record says
  * who deployed the disk content, the row says who owns the path now, and the
@@ -1128,9 +1142,9 @@ static error_t *analyze_file_divergence(
      *   ours   = disk
      *
      *   git_moved   := base set  && base ≠ theirs   Git advanced since dotta
-     *                                               last deployed this path
+     *                                               last confirmed this path
      *   user_edited := base unset || ours ≠ base    disk left the blob dotta
-     *                                               put there
+     *                                               confirmed there
      *
      * `base ≠ theirs` is a question about content, not about an id: another blob,
      * or the same blob under another kind. Git hashes a link's target exactly
@@ -1347,7 +1361,7 @@ static error_t *analyze_file_divergence(
              * the verdict: Git moved, and the first question found a difference
              * (of bytes or of kind) although the stat triple did not vouch for
              * disk (touch(1), an editor's rename-write, a fresh checkout) and
-             * disk may still be the copy dotta last deployed. git_moved carries
+             * disk may still be the copy dotta last confirmed. git_moved carries
              * both halves of the gate: without a base there is no second question,
              * and a base equal to theirs deduces the answer from the first.
              *
@@ -1555,7 +1569,11 @@ static error_t *analyze_file_divergence(
  * every agreement a load found or a fix made (core/state.h anchor_t), so a claim
  * Git moved and disk followed while the path was managed is measured as the one
  * disk stands on, not as an edit. Never what the row later came to claim, after
- * the path left scope. DIVERGENCE_STALE is therefore never emitted here.
+ * the path left scope. DIVERGENCE_STALE is therefore never emitted here, nor
+ * DIVERGENCE_CLAIM_MOVED: the active judges ask whether Git moved a claim since
+ * the record reconciled it, and need no second question, since apply converges
+ * every claim; this judge has no row to ask that of, and asks whether disk left
+ * the claim the record reconciled — the question prune safety turns on.
  *
  * Precondition: the record carries a confirmed blob. The caller (analyze_orphans)
  * measures only a record dotta owns or one the user ordered pruned against a
@@ -3383,6 +3401,8 @@ cleanup:
  * where an ancestor claim has none to give (the split is at the line itself):
  * - DIVERGENCE_MODE: the mode is not the claim's
  * - DIVERGENCE_OWNERSHIP: the owner or group is not the claim's
+ * - DIVERGENCE_CLAIM_MOVED: beside either, where Git moved it past the claim
+ *   the record reconciled (analyze_claim_divergence)
  * - A pending handover on a clean row: an item with no divergence, emitted so
  *   the reassignment is visible (the tail analyze_file_divergence has)
  *
@@ -4077,9 +4097,11 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_UNVERIFIABLE;
     }
 
-    /* Git moved past the deployed blob: a real edit beside it means both sides
-     * moved; alone — mode riders included — the bytes are apply's */
-    if (divergence & DIVERGENCE_STALE) {
+    /* Git moved past what dotta last reconciled — the bytes (STALE) or a claim
+     * (CLAIM_MOVED) — and disk did not follow: a real edit beside it means both
+     * sides moved; alone — the user's own claims riding included, since a claim
+     * is never an edit — it is apply's to bring */
+    if (divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
         return (divergence & DIVERGENCE_CONTENT) ? WORKSPACE_ROUTE_CONFLICT
                                                  : WORKSPACE_ROUTE_STALE;
     }
@@ -4205,7 +4227,7 @@ bool workspace_item_extract_display_info(
                 /* Primary tag based on most severe divergence
                  *
                  * Priority order (by severity):
-                 *   TYPE > CONTENT > STALE > MODE/OWNERSHIP/ENCRYPTION
+                 *   TYPE > CONTENT > STALE/CLAIM_MOVED > MODE/OWNERSHIP/ENCRYPTION
                  */
                 if (item->divergence & DIVERGENCE_TYPE) {
                     if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
@@ -4219,11 +4241,14 @@ bool workspace_item_extract_display_info(
                     /* Keep default YELLOW color */
                 }
 
-                if (item->divergence & DIVERGENCE_STALE) {
-                    /* Git moved past the deployed blob. Alone it is apply-side
-                     * work — the same CYAN as [undeployed], nothing of the user's
-                     * is overwritten; next to [modified] it names a conflict
-                     * and the primary tag's colour stands. */
+                if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+                    /* Git moved past what dotta last reconciled — the bytes or
+                     * a claim, one tag for either: the axis tags beside it say
+                     * what differs, not who moved each, since apply converges
+                     * them alike. Alone it is apply-side work — the same CYAN
+                     * as [undeployed], none of the user's bytes is overwritten;
+                     * next to [modified] it names a conflict and the primary
+                     * tag's colour stands. */
                     if (tag_count == 0) {
                         *color_out = OUTPUT_COLOR_CYAN;
                     }

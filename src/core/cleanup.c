@@ -197,12 +197,14 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
      * - ENCRYPTION: never emitted for an orphan (the blob-family bit is computed
      *   over the view's rows, and an orphan is exactly a record the view lacks)
      *   — listed so it cannot block
-     * - STALE: never emitted for an orphan (compute_orphan_divergence asks one
-     *   question, of disk alone) — listed so it cannot block
+     * - STALE, CLAIM_MOVED: never emitted for an orphan (compute_orphan_divergence
+     *   asks one question, of disk alone; who moved a claim is asked of a row,
+     *   and an orphan has none) — listed so they cannot block
      * Unknown flags: block removal until explicitly handled above. */
     static const divergence_type_t known_flags = DIVERGENCE_CONTENT |
         DIVERGENCE_TYPE | DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP |
-        DIVERGENCE_UNVERIFIED | DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE;
+        DIVERGENCE_UNVERIFIED | DIVERGENCE_ENCRYPTION | DIVERGENCE_STALE |
+        DIVERGENCE_CLAIM_MOVED;
 
     return (divergence & ~known_flags) ? CLEANUP_SKIP_UNVERIFIED
                                        : CLEANUP_SKIP_NONE;

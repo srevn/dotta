@@ -560,7 +560,7 @@ static void display_workspace_status(
                                 break;
 
                             case WORKSPACE_ROUTE_STALE:
-                                /* Apply's work, the same bucket as a file never
+                                /* Apply's work, the same bucket as a path never
                                  * deployed; the [stale] tag says which */
                                 undeployed[undeployed_count++] = item;
                                 break;
@@ -911,11 +911,14 @@ static void display_workspace_status(
                 }
             }
 
-            /* Section 7: Undeployed Files */
+            /* Section 7: Undeployed changes — apply's work, both kinds: what
+             * Git has and disk does not, a path never deployed or a move of Git's
+             * disk has not followed ([stale]). Named as its twin, Uncommitted
+             * changes, is. */
             if (undeployed_count > 0) {
                 output_list_t *list = output_list_create(
-                    out, "Undeployed files",
-                    "use \"dotta apply\" to deploy these files"
+                    out, "Undeployed changes",
+                    "use \"dotta apply\" to deploy these changes"
                 );
 
                 if (list) {

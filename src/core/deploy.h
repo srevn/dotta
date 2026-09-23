@@ -182,9 +182,11 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  *
  * A TYPE verdict counts, because it means the compare never produced a content
  * verdict at all: whatever stood at the path was never measured against the row.
- * DIVERGENCE_STALE without CONTENT never conflicts: the bytes on disk are the
- * ones dotta itself deployed, so the overwrite loses nothing. Mode, ownership
- * and encryption divergence never conflict.
+ * A Git move without CONTENT — STALE, the bytes, or CLAIM_MOVED, a claim — never
+ * conflicts: the bytes on disk are the ones dotta confirmed, so the overwrite
+ * loses nothing. Mode, ownership and encryption divergence never conflict, whoever
+ * moved them: a claim is never an edit (core/workspace.h workspace_item_route,
+ * whose STALE arm rests on this).
  *
  * Two readers, two files: the file ladder's consent rung, and the forced preview's
  * counterweight — a verdict overwrites local content iff something stands at

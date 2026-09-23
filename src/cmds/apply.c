@@ -763,8 +763,9 @@ static void print_deploy_results(
             }
             output_print(out, OUTPUT_VERBOSE, ")");
 
-            /* What was fixed: the divergence the planner saw, as the tags status
-             * prints for it — and a row beneath a squatter carries none, so the
+            /* What was fixed: the claim axes the planner saw differ, in the words
+             * status tags them with — whoever moved them, since the fix sets
+             * either way — and a row beneath a squatter carries none, so the
              * annotation can no longer name a bit read off the squatter's target
              * (core/workspace.h workspace_displaced_t). */
             if (v->item->divergence & DIVERGENCE_MODE) {
@@ -1935,7 +1936,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Collect the pending profile reassignments and count the stale files, off
+    /* Collect the pending profile reassignments and count the stale paths, off
      * the plan.
      *
      * Both are facts the planner read from the item and did not carry — the plan
@@ -1963,14 +1964,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the record dotta owns names one profile, the row another — and one of the
      * two reasons a deploy-clean row has an item at all (the other is the
      * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
-     * is the workspace's verdict that Git moved past the content dotta last
-     * deployed — another blob, or the same blob under another kind
-     * (core/workspace.h workspace_stale) — a persistent signal that survives
-     * status→apply sequences and counts the same however the branch moved; work
-     * by definition, so only a pending row carries it, and only a file: a directory
-     * has no blob for Git to move, so the kind-blind read below never counts
-     * one. */
-    size_t stale_count = 0;
+     * and DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
+     * what dotta last reconciled — the content, another blob or the same blob
+     * under another kind (core/workspace.h workspace_stale), or a claim
+     * (workspace_claims_moved) — a persistent signal that survives status→apply
+     * sequences and counts the same however the branch moved; work by definition,
+     * so only a pending row carries either. A file's bytes or claim, a directory's
+     * claim: counted by kind for the sentence below. */
+    size_t stale_files = 0;
+    size_t stale_dirs = 0;
     size_t reassigned_count = 0;
     reassignment_t *reassigned = NULL;
     const struct { manifest_rows_t rows; bool clean; } claimed[] = {
@@ -1999,12 +2001,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             );
             if (!item) continue;   /* no item: nothing stale, no reassignment */
 
-            if (item->divergence & DIVERGENCE_STALE) stale_count++;
+            if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+                if (item->item_kind == PATH_KIND_DIRECTORY) stale_dirs++;
+                else stale_files++;
+            }
 
             /* The pending half reads the verdicts, after preflight. The stale
              * count above stands for every planned row, a row preflight will
-             * skip included — STALE is the record against Git, no observation
-             * involved, and preflight's answer does not change it. */
+             * skip included — a Git move is the record against the view, and
+             * preflight's answer does not change it. */
             if (!claimed[b].clean) continue;
 
             if (workspace_reassigned(item->row, item->anchor)) {
@@ -2213,16 +2218,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         if (reassigns) acknowledged_count++;
     }
 
-    /* How many in-scope files Git has moved since dotta deployed them. [stale]
-     * alone the plan deploys like any other divergence; beside [modified] it is
-     * a conflict preflight reports. Released files are covered by the orphan-prune
-     * summary below. */
-    if (stale_count > 0) {
-        output_info(
-            out, OUTPUT_NORMAL,
-            "Found %zu stale file%s (changed in Git since deployment)",
-            stale_count, stale_count == 1 ? "" : "s"
-        );
+    /* How many planned paths Git moved past what dotta last reconciled — a file's
+     * bytes or claim, a directory's claim. [stale] alone the plan brings like
+     * any other divergence; beside [modified] it is a conflict preflight reports.
+     * Released files are covered by the orphan-prune summary below. */
+    if (stale_files + stale_dirs > 0) {
+        char stale[64];
+        output_format_counts(stale_files, stale_dirs, stale, sizeof(stale));
+        output_info(out, OUTPUT_NORMAL, "Found %s changed in Git", stale);
     }
 
     /* Everything the plans withheld, said once — above the exit below, so a run

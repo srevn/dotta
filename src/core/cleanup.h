@@ -208,10 +208,11 @@ typedef enum {
  *                                  file was is RELEASED by the workspace and
  *                                  never reaches this table
  *   DIVERGENCE_MODE / OWNERSHIP    CLAIM_CHANGED
- *   ENCRYPTION / STALE only        NONE — a policy mismatch is not a user
- *                                  change; STALE is never emitted for an orphan
- *                                  (the orphan compare asks one question, of
- *                                  disk alone) and is listed so it cannot block
+ *   ENCRYPTION / STALE /           NONE — a policy mismatch is not a user
+ *     CLAIM_MOVED only             change; STALE and CLAIM_MOVED are never
+ *                                  emitted for an orphan (the orphan compare
+ *                                  asks one question, of disk alone) and are
+ *                                  listed so they cannot block
  *   DIVERGENCE_NONE                NONE — safe to prune
  *   an unnamed divergence bit      UNVERIFIED — blocks until this table
  *                                  names it (defensive default)

@@ -111,17 +111,34 @@ typedef enum {
  *
  * Two families, by what the operands are:
  *
- * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, UNVERIFIED — measures
- * the managed path against the view: what stands on disk versus the row (STALE
- * through the record: the blob dotta last deployed versus the row's), UNVERIFIED
- * when the measurement itself could not run. No path bit survives absence —
- * properties of what is not there cannot be compared.
+ * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, CLAIM_MOVED, UNVERIFIED
+ * — measures the managed path against the view: what stands on disk versus the
+ * row (STALE and CLAIM_MOVED through the record: the pair and the claim dotta
+ * last reconciled, versus the row's), UNVERIFIED when the measurement itself
+ * could not run. No path bit survives absence — properties of what is not there
+ * cannot be compared.
  *
  * The blob family — ENCRYPTION alone — measures the blob Git holds against the
  * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
  * so it is the one bit a row in any state can carry, absence included; and because
  * no write to the path can change how a blob is stored, it is never deploy's
  * work — update re-stores the blob, status reports it.
+ *
+ * Who moved. On the content axis two bits split a difference by its mover: CONTENT
+ * that disk left what dotta last confirmed there (any difference, where nothing
+ * was), STALE that Git moved past it — both, a conflict. On a claim axis the
+ * axis bit says what differs, and CLAIM_MOVED beside it that Git moved a claim
+ * past the one the record last reconciled (workspace_claims_moved); without it
+ * the difference is the user's. Only Git's side is asked of a claim: apply
+ * converges every claim whoever moved it (core/deploy.h deploy_content_conflicts),
+ * so the user's side would name a state no verb treats apart. One bit for both
+ * claim axes, since no reader tells them apart, and set only beside an axis bit
+ * it attributes (analyze_claim_divergence), so no screen shows it alone. Its
+ * readers: workspace_item_route (the CONFLICT and STALE arms),
+ * workspace_item_extract_display_info ([stale]), cmds/apply.c cmd_apply (the
+ * count of what Git moved) and core/cleanup.c cleanup_skip_reason (a known flag
+ * no orphan carries); every other surface reads the route. A reader not on this
+ * list is a bug.
  *
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
  * screen names a claim axis that differs — the tags
@@ -130,7 +147,10 @@ typedef enum {
  * get_status_message_from_item), and a held orphan's label and legend (cmds/apply.c
  * print_cleanup_skips, cmds/status.c display_workspace_status) — and a sentence
  * that names both says "mode and ownership", never "permissions", which is one
- * word for two axes.
+ * word for two axes. STALE and CLAIM_MOVED are one word: [stale] on a tag, and
+ * "changed in Git" in a sentence — update's census, apply's count, diff's status
+ * line — "changed in Git and on disk" where CONTENT stands beside them (the route's
+ * CONFLICT).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -139,14 +159,15 @@ typedef enum {
  * (workspace_claims_moved).
  */
 typedef enum {
-    DIVERGENCE_NONE       = 0,       /* No divergence detected */
-    DIVERGENCE_CONTENT    = 1 << 0,  /* Disk content is not the blob it was measured */
-    DIVERGENCE_MODE       = 1 << 1,  /* The mode is not the claim's */
-    DIVERGENCE_OWNERSHIP  = 1 << 2,  /* Owner or group is not the claim's */
-    DIVERGENCE_ENCRYPTION = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
-    DIVERGENCE_TYPE       = 1 << 4,  /* Type changed (file/symlink/dir) */
-    DIVERGENCE_UNVERIFIED = 1 << 5,  /* The look failed; (workspace_fault_t) */
-    DIVERGENCE_STALE      = 1 << 6   /* Git advanced past the blob dotta last deployed */
+    DIVERGENCE_NONE        = 0,       /* No divergence detected */
+    DIVERGENCE_CONTENT     = 1 << 0,  /* Disk left what dotta last confirmed (the row, where nothing was) */
+    DIVERGENCE_MODE        = 1 << 1,  /* The mode is not the claim's */
+    DIVERGENCE_OWNERSHIP   = 1 << 2,  /* Owner or group is not the claim's */
+    DIVERGENCE_ENCRYPTION  = 1 << 3,  /* Blob stored plaintext where the auto-encrypt policy claims the path */
+    DIVERGENCE_TYPE        = 1 << 4,  /* Type changed (file/symlink/dir) */
+    DIVERGENCE_UNVERIFIED  = 1 << 5,  /* The look failed; (workspace_fault_t) */
+    DIVERGENCE_STALE       = 1 << 6,  /* Git moved past the pair dotta last confirmed */
+    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* Git moved a claim past the record's (beside its axis) */
 } divergence_type_t;
 
 /**
@@ -553,9 +574,11 @@ static inline bool workspace_stale(
  * clause workspace_reassigned keeps).
  *
  * Readers: core/workspace.c analyze_claim_divergence, which both active judges
- * call (the record's learning, where disk stands on the moved claim), cmds/apply.c
- * cmd_apply's record step (the claims a fix set that the record still lacks). A
- * reader not on this list is a bug.
+ * call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved claim, the
+ * record's learning where it has), cmds/apply.c cmd_apply's record step (the
+ * claims a fix set that the record still lacks), cmds/sync.c cmd_sync's apply
+ * hint (the record still disagrees with the view). A reader not on this list is
+ * a bug.
  */
 static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const anchor_t *anchor
@@ -612,7 +635,7 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and five readers, each named with the arm it reads; a reader not on this list
+ * and six readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
  *   status's section partition     every arm, one bucket each
@@ -627,6 +650,7 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  *                                  UNVERIFIABLE, DISPLACED_* and KIND_DERIVED
  *                                  are advisory
  *   apply's CONTENT skip label     CONFLICT
+ *   diff's status line             CONFLICT
  *   diff's downstream direction    CAPTURE
  *
  * Values are listed in precedence order: the route is the first that applies,
@@ -647,8 +671,8 @@ typedef enum {
     WORKSPACE_ROUTE_DISPLACED_TRACKED, /* Through a squatter a tracked row claims (apply --force) */
     WORKSPACE_ROUTE_DISPLACED_DERIVED, /* … an ancestor claim holds ('dotta update <dir>') */
     WORKSPACE_ROUTE_UNVERIFIABLE,      /* DIVERGENCE_UNVERIFIED — dotta could not look */
-    WORKSPACE_ROUTE_CONFLICT,          /* STALE ∧ CONTENT — both sides moved  */
-    WORKSPACE_ROUTE_STALE,             /* STALE alone — Git moved, disk did not */
+    WORKSPACE_ROUTE_CONFLICT,          /* (STALE ∨ CLAIM_MOVED) ∧ CONTENT — both sides moved */
+    WORKSPACE_ROUTE_STALE,             /* STALE ∨ CLAIM_MOVED alone — Git moved, disk did not */
     WORKSPACE_ROUTE_KIND,              /* TYPE the copy cannot commit, on a row a plan can hold */
     WORKSPACE_ROUTE_KIND_DERIVED,      /* … on a rung dotta only passes through — never planned */
     WORKSPACE_ROUTE_CAPTURE,           /* Any other divergence — update's to commit */
@@ -694,16 +718,18 @@ typedef enum {
  *                            Which of the three refusals it was, and what settles
  *                            it, is the item's fault (workspace_fault_t); the
  *                            route does not read it — one verb, three words.
- *   STALE ∧ CONTENT          CONFLICT — both sides moved since dotta last
- *                            deployed: the edit is real, but update will not
- *                            commit bytes Git has moved past, and apply skips
+ *   (STALE ∨ CLAIM_MOVED)    CONFLICT — both sides moved since dotta last
+ *     ∧ CONTENT              reconciled: the edit is real, but update will not
+ *                            commit over a move Git made — its capture takes
+ *                            the item whole, bytes and claims — and apply skips
  *                            the row rather than overwrite the edit without
  *                            --force. Neither verb's by default; the user decides.
- *   STALE alone              STALE — Git advanced past the deployed blob and
- *                            disk did not move: overwriting loses nothing, so
- *                            the bytes are apply's to bring whether or not a
- *                            mode bit rides along (update stores bytes; the bytes
- *                            on disk are old either way).
+ *   STALE ∨ CLAIM_MOVED      STALE — Git moved past what dotta last reconciled,
+ *     alone                  the bytes or a claim, and disk did not follow:
+ *                            overwriting loses nothing, so it is apply's to bring,
+ *                            whatever claims of the user's ride beside it — a
+ *                            claim is never an edit (deploy_content_conflicts),
+ *                            and apply converges every claim whoever moved it.
  *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit, on
  *                            a row a plan can hold: a tracked directory row's
  *                            type change (the walk's race guard refuses it — a
@@ -723,9 +749,10 @@ typedef enum {
  *                            and manifest_is_derived is the whole test — the
  *                            kind gating the read inside it, a file row's tracked
  *                            field being a don't-care.
- *   any other divergence     CAPTURE — update's work. file ↔ symlink on a
- *                            file row stays here: the copy commits it as the
- *                            new kind.
+ *   any other divergence     CAPTURE — the user's own, bytes or a claim Git did
+ *                            not move: update's to commit. A file row's file ↔
+ *                            symlink stays here: the copy commits it as the new
+ *                            kind.
  *   none, record disagrees   REASSIGNED — a pending handover apply
  *                            acknowledges.
  *   none                     CLEAN.
@@ -1060,11 +1087,12 @@ const anchor_t *workspace_get_anchor(
  *      before the bits — because a displaced orphan carries no bits either and
  *      the bare arm would colour it as a prune
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
- *   2. "modified" (YELLOW) - Disk content moved away from what dotta deployed
+ *   2. "modified" (YELLOW) - Disk content moved away from what dotta confirmed
  *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git moved
- *      past the deployed blob; next to "modified" it names a conflict and the
- *      primary tag's colour stands
- *   4. Secondary: "mode", "ownership", "unencrypted" - Metadata divergence
+ *      past what dotta last reconciled, the bytes or a claim; next to "modified"
+ *      it names a conflict and the primary tag's colour stands
+ *   4. Secondary: "mode", "ownership" - the claim axes that differ, whoever moved
+ *      them; "unencrypted" - the blob against the policy
  *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
  *      The look that failed, worded by the item's fault (workspace_fault_t)
  *      so one path reads the same word wherever it is listed. What settles it

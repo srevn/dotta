@@ -1744,10 +1744,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                         case WORKSPACE_ROUTE_STALE:
                         case WORKSPACE_ROUTE_REASSIGNED:
                         case WORKSPACE_ROUTE_CLEAN:
-                            /* Apply's side or nothing: Git moved past the deployed
-                             * blob and disk did not — a mode rider included —
-                             * or a pending handover. No local work a pull puts
-                             * at risk. */
+                            /* Apply's side or nothing: Git moved past what dotta
+                             * last reconciled — the bytes or a claim — and disk
+                             * did not, the user's claims riding included, or a
+                             * pending handover. No local work a pull puts at
+                             * risk. */
                             break;
                     }
                     break;
@@ -2235,26 +2236,32 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
         /* The hint's standing half: what the record already disagreed with the
          * view about, whichever sync or scope change left it there. Read off
-         * the view the Git phase produced and the two facts anchor_t's doc states
-         * — no disk and no second workspace load, so the answer does not move
-         * with --force. Each arm claims apply has work, so each names the apply
-         * that takes the claim away: a record whose path the view lacks is an
-         * orphan apply prunes, releases or reclaims; one whose confirmed kind
-         * and content are not the row's is stale, and apply deploys the row; an
-         * owned record naming a profile the row does not is a handover apply
-         * acknowledges (core/workspace.h's rule, which is also what keeps a derived
-         * claim out of it); and a row the record cannot vouch for is work apply
-         * has not done. Vouching differs by kind because apply's answer does —
-         * a file needs an OWNED record, since apply adopts a path it merely
-         * observed and says so; a directory needs only a record, since apply
-         * never adopts one: an absent row has none, and one already standing is
-         * settled by any load's observation. Mode, owner and group say nothing
-         * here: a pulled claim is the block's to report, once. The executable
-         * half of the record's type is a copy of the row's, never confirmed —
-         * the compare's ladder tests S_ISREG for either blob mode and never the
-         * bit — so a FILE ↔ EXECUTABLE move Git made under an untouched copy is
-         * not stale either, and asking the type whole would leave a hint no apply
-         * could ever take away (core/workspace.h workspace_stale).
+         * the view the Git phase produced and the record's own columns
+         * (core/state.h anchor_t) — no disk and no second workspace load, so
+         * the answer does not move with --force. Each arm claims apply has work,
+         * so each names the apply that takes the claim away: a record whose path
+         * the view lacks is an orphan apply prunes, releases or reclaims; one
+         * whose confirmed kind and content are not the row's is stale, and apply
+         * deploys the row; one whose claim Git moved past the one it reconciled
+         * is stale on that axis, and apply brings it (core/workspace.h
+         * workspace_claims_moved, whose rule keeps out a derived claim, which
+         * apply never converges) — a claim disk already stands on included, since
+         * no load runs after the pull: it hints until one learns it, the apply
+         * it names or the next sync's own; an owned record naming a profile the
+         * row does not is a handover apply acknowledges (core/workspace.h's rule,
+         * which is also what keeps a derived claim out of it); and a row the
+         * record cannot vouch for is work apply has not done. Vouching differs
+         * by kind because apply's answer does — a file needs an OWNED record,
+         * since apply adopts a path it merely observed and says so; a directory
+         * needs only a record, since apply never adopts one: an absent row has
+         * none, and one already standing is settled by any load's observation.
+         * The executable half of the record's type is a copy of the row's, never
+         * confirmed — the compare's ladder tests S_ISREG for either blob mode
+         * and never the bit — so a FILE ↔ EXECUTABLE move Git made under an
+         * untouched copy is not stale either, and asking the type whole would
+         * leave a hint no apply could ever take away (core/workspace.h
+         * workspace_stale); and where a sheet claim stands, such a flip moves
+         * no claim either — the row's mode is the claim's, not the filemode's.
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */
@@ -2271,6 +2278,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             if (row->type == PATH_TYPE_DIRECTORY || anchor->deployed_at > 0) vouched++;
 
             if (workspace_stale(row, anchor->type, &anchor->blob_oid) ||
+                workspace_claims_moved(row, anchor) != DIVERGENCE_NONE ||
                 workspace_reassigned(row, anchor)) {
                 apply_pending = true;
             }

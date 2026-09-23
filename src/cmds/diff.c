@@ -55,19 +55,20 @@ static bool should_show_item_for_direction(
         /* Upstream: What differs that apply could act on? A comparison question,
          * not a verb route, so the bits are read directly. Show: undeployed,
          * deleted (apply would restore), content/mode/type differs, stale (Git
-         * moved past the deployed blob; apply would deploy), or profile
-         * reassignment (apply acknowledges reassignment). TYPE rides along —
-         * replacing the occupant is apply's (--force for the kinds the copy cannot
-         * commit), and status's Conflicts remedy sends the user here to compare,
-         * so hiding it answered that remedy with silence. UNVERIFIED is shown
-         * too: a look that failed is a difference nobody has ruled out, and hiding
-         * it reported the tree in sync over a file the user had just edited. A
-         * row beneath a squatter is shown on the same ground and carries no bit
-         * to be shown by: nothing there was looked at (core/workspace.h
-         * workspace_displaced_t), apply writes it fresh once the squatter is
-         * replaced, and the status line says so. ENCRYPTION alone stays out:
-         * how Git stores the blob is no difference between Git and disk, and
-         * apply deploying it changes nothing. */
+         * moved past what dotta last reconciled — the bytes, or a claim, which
+         * rides its axis bit; apply would bring it), or profile reassignment
+         * (apply acknowledges reassignment). TYPE rides along — replacing the
+         * occupant is apply's (--force for the kinds the copy cannot commit),
+         * and status's Conflicts remedy sends the user here to compare, so hiding
+         * it answered that remedy with silence. UNVERIFIED is shown too: a look
+         * that failed is a difference nobody has ruled out, and hiding it reported
+         * the tree in sync over a file the user had just edited. A row beneath
+         * a squatter is shown on the same ground and carries no bit to be shown
+         * by: nothing there was looked at (core/workspace.h workspace_displaced_t),
+         * apply writes it fresh once the squatter is replaced, and the status
+         * line says so. ENCRYPTION alone stays out: how Git stores the blob is
+         * no difference between Git and disk, and apply deploying it changes
+         * nothing. */
         return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
                (item->state == WORKSPACE_STATE_DELETED) ||
                (item->state == WORKSPACE_STATE_DEPLOYED &&
@@ -176,12 +177,20 @@ static const char *get_status_message_from_item(
                 : "type changed locally";
     }
 
-    /* Git moved past the deployed blob. Only reachable via UPSTREAM (DOWNSTREAM
-     * filters every STALE item out). */
+    /* Both sides moved — the route's CONFLICT: the user's bytes beside a move
+     * Git made, to the bytes or to a claim. The one spelling of the fact, read
+     * where apply's skip label, update's census and status's section read it.
+     * Upstream only in practice: the downstream filter admits neither this nor
+     * the arm below. */
+    if (workspace_item_route(item) == WORKSPACE_ROUTE_CONFLICT) {
+        return "changed in Git and on disk (apply --force <path> keeps Git's)";
+    }
+
+    /* Git moved past the bytes dotta last confirmed, and disk did not follow. A
+     * claim Git moved alone keeps its axis sentence below: upstream, that sentence
+     * is what apply does, and there are no bytes to name. */
     if (item->divergence & DIVERGENCE_STALE) {
-        return (item->divergence & DIVERGENCE_CONTENT)
-                ? "changed in Git and on disk (apply --force <path> keeps Git's)"
-                : "updated in Git (would be deployed by apply)";
+        return "changed in Git (would be deployed by apply)";
     }
 
     if (item->divergence & DIVERGENCE_CONTENT) {
@@ -319,8 +328,10 @@ static error_t *show_file_diff_from_workspace(
     }
 
     /* Only a content difference has bytes to render: the copy's own edit, or
-     * the blob Git moved past, which disk still holds. A claim, a handover and
-     * how Git stores the blob differ in nothing a hunk could show. */
+     * the blob Git moved past, which disk still holds. A claim, whoever moved
+     * it (CLAIM_MOVED is no byte), a handover and how Git stores the blob differ
+     * in nothing a hunk could show, and a sealed blob is opened for none of
+     * them. */
     if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
     }

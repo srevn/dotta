@@ -1728,7 +1728,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     if (refused[WORKSPACE_ROUTE_STALE] > 0) {
         output_info(
             out, OUTPUT_NORMAL,
-            "%zu file%s skipped: changed in Git since deployment — run 'dotta apply' first",
+            "%zu path%s skipped: changed in Git — run 'dotta apply' first",
             refused[WORKSPACE_ROUTE_STALE],
             refused[WORKSPACE_ROUTE_STALE] == 1 ? "" : "s"
         );

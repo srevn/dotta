@@ -557,10 +557,11 @@ static bool directory_is_deployable(
  * the landing check's included: a symlink squatting a claimed directory points
  * somewhere real and writable, so the landing probe would wave the write through
  * and the run would deploy INTO the link's target, over whatever the user keeps
- * there. The workspace names the offender (workspace_squatted_ancestor — the
- * outermost, fate-blind); this splits the answer by what the run itself decided
- * about that ancestor, the premise the plan carried by scope now asked of the
- * verdicts, so it is exactly true. In decision order:
+ * there. The workspace lends the offender whole (workspace_squatted_ancestor —
+ * the outermost, fate-blind, with the claim the load noted beside it); this splits
+ * the answer by what the run itself decided about that ancestor, the premise
+ * the plan carried by scope now asked of the verdicts, so it is exactly true.
+ * One arm per fate, in decision order, each writing what it decides:
  *
  *   deployable    the directory pass converges the ancestor before this row is
  *                 reached — created, fixed or replaced — so from here down the
@@ -577,19 +578,17 @@ static bool directory_is_deployable(
  *                 away, -e'd, or an ancestor claim the plan never holds): ANCESTOR
  *                 — the same fate a squatter no row names earns at check_landing,
  *                 an incapacity. The skip carries which claim holds the squatter
- *                 (its ancestor_class), because the remedies part ways there: a
- *                 wider scope plans a tracked row, the named re-derivation drops
- *                 an ancestor claim
+ *                 — the load's own note of it, lent with the path — because the
+ *                 remedies part ways there: a wider scope plans a tracked row,
+ *                 the named re-derivation drops an ancestor claim
  *
- * Written default-then-override: ANCESTOR is what an unreached ancestor earns,
- * and the skip scan replaces it with the ancestor's own reason when this run
- * took one. The claimant is written only where the fate stays ANCESTOR — an
- * inherited reason is the ancestor's own story, and the class stays NONE. Called
- * before check_landing in both ladders and once more per ancestor candidate;
- * directories are decided parents-first, so a squatted ancestor's own fate is
- * always already taken when a row beneath it is reached. The skip and *out_absent
- * are written only when an ancestor decides — the caller's zero skip and false
- * stand otherwise, and the row judges itself.
+ * The claimant is written in the no-fate arm alone — an inherited reason is the
+ * ancestor's own story, and the class stays NONE. Called before check_landing
+ * in both ladders and once more per ancestor candidate; directories are decided
+ * parents-first, so a squatted ancestor's own fate is always already taken when
+ * a row beneath it is reached. The skip and *out_absent are written only when
+ * an ancestor decides — the caller's zero skip and false stand otherwise, and
+ * the row judges itself.
  *
  * @param ws Workspace, for the squatted-ancestor answer (must not be NULL)
  * @param verdicts The fates decided so far (must not be NULL)
@@ -604,39 +603,36 @@ static void check_ancestry(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts, const char *path,
     deploy_skip_t *skip, bool *out_absent
 ) {
-    const char *dir = workspace_squatted_ancestor(ws, path);
+    const workspace_squatted_dir_t *above = workspace_squatted_ancestor(ws, path);
 
-    if (!dir) {
+    if (!above) {
         return;
     }
 
-    if (directory_is_deployable(verdicts, dir)) {
+    /* Deployable: the directory pass converges the ancestor first */
+    if (directory_is_deployable(verdicts, above->filesystem_path)) {
         *out_absent = true;
         return;
     }
 
-    skip->reason = DEPLOY_SKIP_ANCESTOR;
-    skip->ancestor = strlen(dir);
+    /* The two fates left both hold the row, and both name the squatter */
+    skip->ancestor = above->len;
 
+    /* Skipped: the ancestor's own reason */
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (strcmp(s->row->filesystem_path, dir) == 0) {
+        if (strcmp(s->row->filesystem_path, above->filesystem_path) == 0) {
             skip->reason = s->reason;
-            break;
+            return;
         }
     }
 
-    /* The lookup cannot meet a file row: the squatted set holds directory claims
-     * alone. And it cannot miss a row: the probe answers view-side (the reach
-     * rule, workspace.h), so a record that alone remembers a directory never
-     * names the ancestor here. */
-    if (skip->reason == DEPLOY_SKIP_ANCESTOR) {
-        const manifest_row_t *row = workspace_lookup(ws, dir);
-
-        skip->ancestor_class = row->tracked
-            ? DEPLOY_ANCESTOR_TRACKED : DEPLOY_ANCESTOR_DERIVED;
-    }
+    /* No fate: ANCESTOR, and the claim the load noted beside the squatter — the
+     * view's face lends a view claim alone, TRACKED or DERIVED */
+    skip->reason = DEPLOY_SKIP_ANCESTOR;
+    skip->ancestor_class = above->claim == WORKSPACE_DISPLACED_TRACKED
+        ? DEPLOY_ANCESTOR_TRACKED : DEPLOY_ANCESTOR_DERIVED;
 }
 
 /**

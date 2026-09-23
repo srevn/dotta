@@ -95,24 +95,6 @@ typedef struct {
 } confirmation_t;
 
 /**
- * A squatted directory, and whose claim holds it
- *
- * A claim says a directory belongs at the path and the load observed something
- * else standing there. The two producers are the two authorities of the reach
- * rule (workspace_displaced_t): the directory analyzer's type arm, over a view
- * row whose class names the claim, and the record family's looker (look_orphans),
- * over a directory record another kind of node stands at. Each notes its own
- * where it observed it (note_squatted), so the claim is the producer's and is
- * never read back off an item. The path is the row's or the record's (borrowed),
- * its length hoisted for the one outermost-match scan (squatted_ancestor).
- */
-typedef struct {
-    const char *path;             /* The row's or the record's filesystem_path (borrowed) */
-    size_t len;                   /* strlen(path), hoisted for str_path_beneath */
-    workspace_displaced_t claim;  /* TRACKED / DERIVED (a view row's), RECORD (a record's) */
-} squatted_dir_t;
-
-/**
  * The look the load took at one path
  *
  * One lstat per row of the view and per record the view lacks, taken by the phase
@@ -268,9 +250,10 @@ struct workspace {
      * the load observed occupied by anything else, with the claim. Noted by each
      * analysis where it observed one (note_squatted), asked before every look
      * the load takes after it and by the one producer of items (squatted_ancestor,
-     * workspace_item_t.displaced); arena-backed, paths borrowed from the rows
+     * workspace_item_t.displaced), and lent whole to a caller holding a path
+     * (workspace_squatted_ancestor); arena-backed, paths borrowed from the rows
      * and the records. Almost always empty, which is what makes every ask free. */
-    squatted_dir_t *squatted;                  /* One per squatted directory; NULL until the first */
+    workspace_squatted_dir_t *squatted;          /* One per squatted directory; NULL until the first */
     size_t squatted_count;
 
     /* The entries: every winning row observed at its own key and every orphan
@@ -453,24 +436,25 @@ static workspace_fault_t fault_of(error_t *err) {
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), the
  * orphan judge for the item it emits (analyze_orphans), workspace_add_diverged,
  * which classes the fact onto every item, and workspace_squatted_ancestor, the
- * view-only face for a path with no item in hand.
+ * view-only face that lends the answer whole to a caller with no item in hand
+ * (core/deploy.c check_ancestry).
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
  * @param record_family Whether the asker is a record of the orphan family
  */
-static const squatted_dir_t *squatted_ancestor(
+static const workspace_squatted_dir_t *squatted_ancestor(
     const workspace_t *ws,
     const char *path,
     bool record_family
 ) {
-    const squatted_dir_t *outermost = NULL;
+    const workspace_squatted_dir_t *outermost = NULL;
 
     for (size_t i = 0; i < ws->squatted_count; i++) {
-        const squatted_dir_t *dir = &ws->squatted[i];
+        const workspace_squatted_dir_t *dir = &ws->squatted[i];
 
         if (dir->claim == WORKSPACE_DISPLACED_RECORD && !record_family) continue;
-        if (str_path_beneath(path, dir->path, dir->len) &&
+        if (str_path_beneath(path, dir->filesystem_path, dir->len) &&
             (!outermost || dir->len < outermost->len)) {
             outermost = dir;
         }
@@ -579,7 +563,7 @@ static error_t *workspace_add_diverged(
 
     /* Whose squatter stands above the path, or NONE (see the doc above). Read
      * after identity, because the path is the question's subject. */
-    const squatted_dir_t *above = squatted_ancestor(
+    const workspace_squatted_dir_t *above = squatted_ancestor(
         ws, item->filesystem_path, record_family
     );
     item->displaced = above ? above->claim : WORKSPACE_DISPLACED_NONE;
@@ -841,8 +825,8 @@ static error_t *workspace_record_observation(
  * Readers: squatted_ancestor, asked before every look the load takes
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), by
  * the orphan judge for the item it emits (analyze_orphans) and by the one producer
- * of items (workspace_add_diverged); and through workspace_squatted_ancestor by
- * core/deploy.c check_ancestry.
+ * of items (workspace_add_diverged); and, lent whole through
+ * workspace_squatted_ancestor, by core/deploy.c check_ancestry.
  *
  * @param ws Workspace (must not be NULL)
  * @param path The squatted path, the row's or the record's (borrowed; workspace
@@ -863,8 +847,8 @@ static error_t *note_squatted(
         }
     }
 
-    ws->squatted[ws->squatted_count++] = (squatted_dir_t){
-        .path = path,
+    ws->squatted[ws->squatted_count++] = (workspace_squatted_dir_t){
+        .filesystem_path = path,
         .len = strlen(path),
         .claim = claim,
     };
@@ -3995,20 +3979,21 @@ const manifest_row_t *workspace_lookup(
 }
 
 /**
- * The squatted managed directory above `path`, or NULL — the view's claims
+ * The squatted directory above `path`, or NULL — the view's claims
  */
-const char *workspace_squatted_ancestor(const workspace_t *ws, const char *path) {
+const workspace_squatted_dir_t *workspace_squatted_ancestor(
+    const workspace_t *ws,
+    const char *path
+) {
     if (!ws || !path) {
         return NULL;
     }
 
-    /* The view-only face of the one scan (squatted_ancestor): a record's memory
-     * reaches the record family alone, whose items carry the fact themselves
-     * (the reach rule, workspace_displaced_t), and this probe's askers hold no
-     * item. */
-    const squatted_dir_t *dir = squatted_ancestor(ws, path, false);
-
-    return dir ? dir->path : NULL;
+    /* The view-only face of the one scan (squatted_ancestor), lent whole: a
+     * record's memory reaches the record family alone, whose items carry the
+     * fact themselves (the reach rule, workspace_displaced_t), and this probe's
+     * askers hold no item. */
+    return squatted_ancestor(ws, path, false);
 }
 
 /**

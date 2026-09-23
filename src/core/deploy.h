@@ -296,6 +296,14 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * stands there on its own terms, and apply's own cleanup releases the record in
  * the same run — so there is no fourth class.
  *
+ * Written where the reason is decided. TRACKED and DERIVED by the ancestry rung
+ * (check_ancestry), off the claim the load noted beside the squatter
+ * (core/workspace.h workspace_squatted_dir_t) — the claim every path beneath it
+ * carries as its displaced class, so the remedy here and status's Displaced paths
+ * section cannot name two claimants for one squatter; UNCLAIMED by the landing
+ * check (check_landing), the one class it can find. Read by cmds/apply.c
+ * print_deploy_skips, whose remedies part on it.
+ *
  * NONE on every skip whose reason names no squatted ancestor — the class answers
  * for ANCESTOR alone, where the reason is one and the cure is not.
  */

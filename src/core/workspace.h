@@ -235,8 +235,11 @@ typedef enum {
  * arm's one tag and the ORPHANED arm's rider), cmds/status.c
  * display_workspace_status's Issues hint, and cmds/diff.c
  * get_status_message_from_item and show_file_diff_from_workspace (the colour
- * ladder and the content gate), should_show_item_for_direction beside them. A
- * caller holding a path rather than an item asks workspace_squatted_ancestor.
+ * ladder and the content gate), should_show_item_for_direction beside them; and
+ * core/deploy.c check_ancestry, off the squatted directory itself — a caller
+ * holding a path rather than an item is lent it whole, the claim this class is
+ * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
+ * cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -1013,7 +1016,34 @@ const manifest_row_t *workspace_lookup(
 );
 
 /**
- * The squatted managed directory above `path`, or NULL — the view's claims
+ * A squatted directory, and whose claim holds it
+ *
+ * A claim says a directory belongs at the path and the load observed another
+ * kind standing there (workspace_displaced_t: the words, and the reach the claim's
+ * class decides). The two producers are the two authorities of the reach rule:
+ * the directory analysis's type arm, over a view row whose class names the claim,
+ * and the record family's looker (look_orphans), over a directory record another
+ * kind of node stands at. Each notes its own where it observed it (workspace.c
+ * note_squatted), so the claim is the producer's and is never re-derived: an
+ * item the squatted directory reaches carries it as its displaced class — the
+ * outermost's, where two reach the item — and a caller holding a path is lent
+ * the element itself (workspace_squatted_ancestor).
+ *
+ * The workspace's own list element, lent: the list is one arena block, sized at
+ * the first note for every claim that could name a directory and never grown,
+ * so a pointer to an element is valid for the workspace's lifetime. The path is
+ * the row's or the record's (borrowed); `len` is its strlen, hoisted for the
+ * scan — and, the squatted directory being a proper ancestor of every path it
+ * reaches, the byte length of the prefix each of those paths opens with.
+ */
+typedef struct {
+    const char *filesystem_path;  /* The row's or the record's (borrowed) */
+    size_t len;                   /* strlen(filesystem_path): the prefix of every path beneath it */
+    workspace_displaced_t claim;  /* TRACKED / DERIVED (a view row's), RECORD (a record's) */
+} workspace_squatted_dir_t;
+
+/**
+ * The squatted directory above `path`, or NULL — the view's claims
  *
  * A directory is *squatted* when a claim says a directory belongs at the path
  * and something else stands there. A look taken beneath such a path would resolve
@@ -1037,22 +1067,35 @@ const manifest_row_t *workspace_lookup(
  * caller holding a path and no item: the fate of a planned row (core/deploy.c
  * check_ancestry). A view row beneath a record-remembered squatter is the
  * through-capture the rule leaves to its own occupant. So the answer is the view's
- * claims alone, and on an item it is exactly that item's displaced field.
+ * claims alone, and its claim is exactly the displaced class a view row's item
+ * beneath it carries.
  *
  * The answer is noted by the phase that looked at each squatter (note_squatted),
  * and the directory analysis runs before any file row or orphan record is looked
  * at (workspace_load), so it is complete before anything asks — a scan root is
  * chosen off the look that analysis took, later still. The outermost such ancestor
  * is returned: the true offender, whose presence voids every path beneath it.
- * Fate-blind by construction — whether *this run* converges the displacement is
- * deploy's question, asked of its own fates against this answer (check_ancestry).
+ * Fate-blind by construction — whether *this run* converges the squatted directory
+ * is deploy's question, asked of its own fates against this answer
+ * (check_ancestry).
+ *
+ * Lent whole, as the load noted it (workspace_squatted_dir_t): the one search,
+ * handed out, with nothing re-derived from it. Reader: core/deploy.c
+ * check_ancestry, which reads all three — the path, to find the fate this run
+ * gave the squatted directory's row; the length, to name it on the skip of a
+ * row it holds (core/deploy.h deploy_skip_t); the claim, for the remedy where
+ * the run gave that row no fate (deploy_ancestor_class_t).
  *
  * @param ws Workspace (NULL returns NULL)
  * @param path Path to test (NULL returns NULL); proper ancestors only, so a
- *        squatted directory is never its own answer
- * @return Borrowed path (workspace lifetime), or NULL
+ *        squatted directory is never its own answer — its own path is its item's
+ *        to answer, whose TYPE says so
+ * @return The squatted directory, lent (workspace lifetime), or NULL
  */
-const char *workspace_squatted_ancestor(const workspace_t *ws, const char *path);
+const workspace_squatted_dir_t *workspace_squatted_ancestor(
+    const workspace_t *ws,
+    const char *path
+);
 
 /**
  * Look up the record dotta keeps of a path

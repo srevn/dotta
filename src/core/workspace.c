@@ -12,10 +12,12 @@
  * none. The record dotta keeps of each path (the path_anchors table: what it
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
- * the analyses read it as the base of every three-way question, and the two writers
- * here (workspace_observe, workspace_anchor) advance it only after a live look
- * at disk. A record whose path the view lacks is an orphan, and the orphan analysis
- * asks Git — the only authority that knows — why it is one.
+ * the analyses read it as the base of every three-way question, and its writers
+ * here (workspace_observe, workspace_anchor, workspace_confirm) advance it only
+ * after a live look at disk — all but the flush's void, which clears an order
+ * on the view's word: the path is back in the view. A record whose path the view
+ * lacks is an orphan, and the orphan analysis asks Git — the only authority that
+ * knows — why it is one.
  *
  * The filesystem side is looked at once. Three families, three phases: the
  * directory rows, the file rows, and the records the view lacks, each looked at
@@ -215,8 +217,10 @@ struct workspace {
 
     /* The record: every anchor, snapshot at load in filesystem_path order and
      * indexed by path. Values are mutable — workspace_observe and workspace_anchor
-     * patch a record in place (or create one in the arena and index it) so every
-     * later reader in the run sees the post-write value. */
+     * patch a record in place (or create one in the arena and index it),
+     * workspace_confirm advances one through the confirmations, and the flush's
+     * void (state_void_prune_order) clears an order on one — so every later reader
+     * in the run sees the post-write value. */
     anchor_t *anchors;                           /* Arena snapshot from state_get_all_anchors */
     size_t anchor_count;                         /* Number of anchors in the snapshot */
     hashmap_t *anchor_index;                     /* filesystem_path → anchor_t * (heap-allocated) */
@@ -230,30 +234,23 @@ struct workspace {
     look_t *orphan_looks;                        /* The load's look at each, by the same index; NULL until look_orphans */
     size_t orphan_count;                         /* Number of orphans, and of looks */
 
-    /* The prune orders, snapshot at load beside the record — unconditionally:
-     * the honour arm reads membership, and the flush's join must see the orders
-     * even when no orphan stands for them (the path back in the view is exactly
-     * the case with no orphan). The map's keys borrow the arena paths; NULL when
-     * the table is empty (the probes are NULL-safe). */
-    char **orders;                               /* Arena snapshot from state_get_prune_orders */
-    size_t order_count;                          /* Number of orders */
-    hashmap_t *order_index;                      /* filesystem_path → the order (membership; heap-allocated) */
-
-    /* The released copies, snapshot at load the same way. One reader, by design:
-     * the base derivation in analyze_file_divergence, through the index and only
-     * when the path's record carries no confirmed blob — a released fact is not
-     * a claim. Frozen at load: the database forgets a copy with its path's next
-     * ownership event or content confirmation (state_anchor, state_confirm),
-     * and nothing here follows, so a reader after the analysis would read copies
-     * the database no longer holds. */
+    /* The released copies, snapshot at load beside the record, unconditionally
+     * (workspace_partition). One reader, by design: the base derivation in
+     * analyze_file_divergence, through the index and only when the path's record
+     * carries no confirmed blob — a released fact is not a claim. Frozen at load:
+     * the database forgets a copy with its path's next ownership event or content
+     * confirmation (state_anchor, state_confirm), and nothing here follows, so
+     * a reader after the analysis would read copies the database no longer
+     * holds. */
     released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
     size_t released_count;                       /* Number of released copies */
     hashmap_t *released_index;                   /* filesystem_path → released_copy_t * (heap-allocated) */
 
     /* The record's handle: the store's database, borrowed from the caller
-     * (workspace_load). Read once at the partition for the three snapshots above,
-     * then written through by the two live writers (workspace_observe,
-     * workspace_anchor) and the flush, each patching the snapshot it persists. */
+     * (workspace_load). Read once at the partition for the two snapshots above,
+     * then written through by the three writers (workspace_observe,
+     * workspace_anchor, workspace_confirm) and the flush's void, each advancing
+     * the record it persists. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -2559,7 +2556,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
             item_state = WORKSPACE_STATE_RELEASED;
             divergence = DIVERGENCE_TYPE;
 
-        } else if (hashmap_has(ws->order_index, filesystem_path) && measurable) {
+        } else if (anchor->ordered_at > 0 && measurable) {
             /* The user ordered the copy pruned — remove --delete-files over a
              * path the removal named or a copy dotta deployed, the only births
              * an order has (state_order_prune); Git is not asked. Read ahead of
@@ -3662,12 +3659,10 @@ static int compare_rows_by_path(const void *a, const void *b) {
  * look_orphans' own, allocated where they are written (look_t). Then the anchors
  * snapshot (state_get_all_anchors) is indexed by path as ws->anchor_index — the
  * analyses pair each row with its record through workspace_get_anchor, and the
- * two writers patch the index's values — and every record whose path the view
- * lacks is collected into ws->orphans, in the snapshot's path order. The prune
- * orders and the released copies load beside the record, unconditionally: the
- * flush's join needs the orders even when no orphan stands for them, and the
- * base derivation asks for a released copy at every file row whose record carries
- * no blob.
+ * writers advance the index's values — and every record whose path the view lacks
+ * is collected into ws->orphans, in the snapshot's path order. The released copies
+ * load beside the record, unconditionally: the base derivation asks for a released
+ * copy at every file row whose record carries no blob.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is managed iff the view has a row for it, and a record is an orphan iff
@@ -3781,30 +3776,9 @@ static error_t *workspace_partition(workspace_t *ws) {
         }
     }
 
-    /* The prune orders, beside the record. Almost always empty; when not, the
-     * membership index serves the honour arm the way the anchors index serves
-     * the row pairing. */
-    err = state_get_prune_orders(
-        ws->state, ws->arena, &ws->orders, &ws->order_count
-    );
-    if (err) {
-        return error_wrap(err, "Failed to read prune orders from state");
-    }
-
-    if (ws->order_count > 0) {
-        ws->order_index = hashmap_borrow(ws->order_count);
-        if (!ws->order_index) {
-            return ERROR(ERR_MEMORY, "Failed to create order index");
-        }
-        for (size_t i = 0; i < ws->order_count; i++) {
-            err = hashmap_set(ws->order_index, ws->orders[i], ws->orders[i]);
-            if (err) {
-                return error_wrap(err, "Failed to populate order index");
-            }
-        }
-    }
-
-    /* The released copies, the same way. */
+    /* The released copies, beside the record. Almost always empty; when not,
+     * the index serves the base derivation the way the anchors index serves the
+     * row pairing. */
     err = state_get_released_copies(
         ws->state, ws->arena, &ws->released, &ws->released_count
     );
@@ -4697,14 +4671,14 @@ error_t *workspace_confirm(
  * held no lock — another process can commit between it and this flush — so each
  * is conditional on what the load read: an observation lands only where no record
  * stands (INSERT OR IGNORE), a confirmation only on the record the comparison
- * was made against (state_confirm, state_confirm_claim). The void alone names
- * no predecessor: an order is one column, and one placed again since the load
- * is the row this load read.
+ * was made against (state_confirm, state_confirm_claim). The void too names what
+ * it replaces — the order the load read, by its stamp — so an order placed again
+ * since the load stands.
  *
  * The join, last — the order's view end, the one lifetime end that needs the
- * view: every prune order the load read whose path the view has is void. A released
- * copy has no end here; its two are its record's next ownership event or content
- * confirmation, and apply's sweep (core/state.h).
+ * view: every order a record the load read carries, where the view has the path,
+ * is void. A released copy has no end here; its two are its record's next ownership
+ * event or content confirmation, and apply's sweep (core/state.h).
  *
  * Begins its own transaction only when state isn't already in one (status, diff,
  * sync, update, a preview of apply); a run of apply passes its dispatch
@@ -4716,10 +4690,15 @@ error_t *workspace_flush_updates(workspace_t *ws) {
     /* The join's pending work, counted up front so the gate below is exact: a
      * pure-join flush (nothing observed, nothing confirmed, one stale order)
      * still takes its scoped transaction, and the common all-empty flush still
-     * costs nothing. One loop over an almost-always-empty set. */
+     * costs nothing. A walk of the record the load read, not of its orphans:
+     * the path back in the view is exactly the case with no orphan. */
     size_t pending_voids = 0;
-    for (size_t i = 0; i < ws->order_count; i++) {
-        if (manifest_lookup(ws->manifest, ws->orders[i])) pending_voids++;
+    for (size_t i = 0; i < ws->anchor_count; i++) {
+        const anchor_t *anchor = &ws->anchors[i];
+        if (anchor->ordered_at > 0 &&
+            manifest_lookup(ws->manifest, anchor->filesystem_path)) {
+            pending_voids++;
+        }
     }
 
     if (ws->observation_count == 0 && ws->confirmation_count == 0 &&
@@ -4785,19 +4764,23 @@ error_t *workspace_flush_updates(workspace_t *ws) {
      * voided here, a later discovered departure executes as a release, which is
      * the stated policy for every discovered departure.
      *
-     * Selected from the load's own snapshot of orders, never the transaction's:
-     * an order placed since the load answers a removal this load's view predates,
-     * and voiding it would undo the removal's intent. */
-    for (size_t i = 0; i < ws->order_count; i++) {
-        if (!manifest_lookup(ws->manifest, ws->orders[i])) continue;
+     * Selected from the record the load read, and voided on the order it read
+     * (state_void_prune_order): an order placed since the load answers a removal
+     * this load's view predates, and voiding it would undo the removal's intent
+     * — the compare-and-swap leaves it standing. */
+    for (size_t i = 0; i < ws->anchor_count; i++) {
+        anchor_t *anchor = &ws->anchors[i];
+        if (anchor->ordered_at == 0 || !manifest_lookup(ws->manifest, anchor->filesystem_path)) {
+            continue;
+        }
 
-        error_t *err = state_void_prune_order(ws->state, ws->orders[i]);
+        error_t *err = state_void_prune_order(ws->state, anchor);
         if (err) {
             if (needs_transaction) {
                 state_rollback(ws->state);
             }
             return error_wrap(
-                err, "Failed to void prune order for '%s'", ws->orders[i]
+                err, "Failed to void prune order for '%s'", anchor->filesystem_path
             );
         }
     }
@@ -4838,10 +4821,9 @@ void workspace_free(workspace_t *ws) {
 
     /* Free indices (values are borrowed, so pass NULL for value free function).
      * anchor_index values are records in ws->arena — also borrowed, as are the
-     * order index's arena paths and the released index's rows. */
+     * released index's rows. */
     hashmap_free(ws->diverged_index, NULL);
     hashmap_free(ws->anchor_index, NULL);
-    hashmap_free(ws->order_index, NULL);
     hashmap_free(ws->released_index, NULL);
 
     /* The view is borrowed (the dispatcher's); the slices, the snapshot and the

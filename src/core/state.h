@@ -1,26 +1,26 @@
 /**
- * state.h - The enabled profiles, the record, and the path-keyed facts (SQLite)
+ * state.h - The enabled profiles, the record, and the released copy (SQLite)
  *
  * Persists what dotta cannot recompute: which profiles the user enabled here
  * (and in what order, with what targets), the record of what dotta did to each
- * managed path, and the two facts keyed beside it — the prune order (a deferred
- * intent) and the released copy (a fact that outlives its record). Each carrier
- * has a one-sentence lifetime rule:
+ * managed path — the one deferred intent, the prune order the user gave for it,
+ * a column of it — and the one fact keyed beside it, the released copy (a fact
+ * that outlives its record). Each carrier has a one-sentence lifetime rule:
  *   - the enabled set lives until the user changes it;
  *   - a record lives from first observation to explicit retire;
- *   - an order lives while its path is out of the view and its record stands —
- *     the record's retire deletes it in the same breath (apply executing it is
- *     one), and the flush voids it where the view holds the path again;
+ *   - an order lives while its path is out of the view: a column of its record,
+ *     it goes with the row (a retire; apply executing it is one), an ownership
+ *     event writes it away, and the flush voids it where the view holds the path
+ *     again;
  *   - a released copy lives while its path's record is absent or merely observed
  *     and disk may still hold it — the record's next ownership event or content
  *     confirmation deletes it in the same breath, and apply's sweep forgets it
  *     where disk provably left it.
- * The two facts die these two ways and no other: with a write to their path's
- * record that ends them — the retire an order, a write that says what stands at
- * the path a released copy, which a claim's confirmation never says — and where
- * their own authority is asked — the view at the flush, the disk at the sweep.
- * Everything else — what should stand at a path, from whom — is computed from
- * Git at every load (core/manifest.h) and never stored.
+ * The released copy dies these two ways and no other: with a write to its path's
+ * record that says what stands at the path — an ownership event or a content
+ * confirmation, never a claim's — and where its own authority is asked, the disk
+ * at the sweep. Everything else — what should stand at a path, from whom — is
+ * computed from Git at every load (core/manifest.h) and never stored.
  *
  * The enabled set is this machine's mount table, one line of fstab per row: the
  * name is what is mounted (the branch — the repository is the device, and knows
@@ -44,9 +44,8 @@
  *   - schema_meta: Schema versioning
  *   - enabled_profiles: User's profile management
  *   - path_anchors: The record — what dotta last reconciled each managed path
- *     against, and what it confirmed there (both kinds, one row per path)
- *   - prune_orders: The one deferred intent — remove --delete-files ordered the
- *     deployed copy pruned at the next apply (row existence is the fact)
+ *     against, and what it confirmed there (both kinds, one row per path), the
+ *     prune order among its columns
  *   - released_copies: The content-proof half of a record that released — disk
  *     still held dotta's last confirmation when dotta let go of the path
  *
@@ -221,8 +220,13 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  *     beside it and no verdict reads it: the kind rung takes FILE and EXECUTABLE
  *     for one kind (core/workspace.h workspace_compare_confirmed), and the mode
  *     carries the bit.
- *   - the lifecycle (deployed_at): advances to now on every ownership event and
- *     is untouched by a confirmation, 0 = dotta never put this here.
+ *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers.
+ *     deployed_at advances to now on every ownership event and is untouched by
+ *     a confirmation, 0 = dotta never put this here. ordered_at is when remove
+ *     --delete-files ordered the copy pruned (state_order_prune, which re-stamps),
+ *     0 = no order standing: an ownership event writes it away with the rest of
+ *     the record, the flush voids it where the view holds the path again
+ *     (state_void_prune_order), and it goes with the row.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
@@ -272,6 +276,7 @@ typedef struct anchor {
 
     /* The lifecycle */
     time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
+    time_t ordered_at;        /* When remove --delete-files ordered the copy pruned (0 = no order standing) */
 } anchor_t;
 
 /**
@@ -844,14 +849,16 @@ error_t *state_confirm_claim(
  *     (state_forget_released): an ownership event says what stands there — the
  *     row's blob, or a directory — so a copy of what stood before is redundant
  *     or false.
+ *   - the path's order ends: an ownership event takes the path into the view,
+ *     where no order stands (the column's default).
  *
  * *anchor follows the statement, last — so a failure leaves it as read, the rule
  * state_confirm and state_confirm_claim keep: the record the statement wrote,
  * whole — the row's binding, kind and claim (borrowed: the string pointers are
- * the row's, not copies), the blob, the triple, deployed_at = now — with no column
- * the SQL's to decide, so the mirror is the inputs. `stat` may be the record's
- * own triple — apply's adoption hands &anchor->stat — and is read before anything
- * is written.
+ * the row's, not copies), the blob, the triple, deployed_at = now, no order —
+ * with no column the SQL's to decide, so the mirror is the inputs. `stat` may
+ * be the record's own triple — apply's adoption hands &anchor->stat — and is
+ * read before anything is written.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path is anchored to (must not be NULL; non-zero blob for a
@@ -875,14 +882,17 @@ error_t *state_anchor(
 /**
  * Retire a managed path's record
  *
- * DELETE by filesystem_path — the record and, in the same breath, its order: an
- * order cannot outlive its record, and the rule is kept by this explicit sibling
- * delete, never a constraint (nothing is a parent, nothing cascades). A missing
- * row is success: the callers name paths that may have no record — never seen
- * here, nothing to retire. Called by apply's record step for every pruned or
- * reclaimed orphan (the copy is gone — there is no fact), by update's purge of
- * a deleted path, by add's settle of the ancestor claims its own commit dropped,
- * and — composed inside state_release — for every release.
+ * DELETE by filesystem_path — the record, and with it the order it carries: a
+ * column of the row, so it cannot outlive it. A missing row is success: the callers
+ * name paths that may have no record — never seen here, nothing to retire. Called
+ * by apply's record step for every pruned or reclaimed orphan (the copy is gone
+ * — there is no fact), by update's purge of what its commit let go — a deleted
+ * path, whose copy is gone, and the directory entries it pruned or dropped — by
+ * add's settle of the ancestor claims its own commit dropped, and — composed
+ * inside state_release — for every release. For a directory this very call is
+ * the release: state_release keeps nothing for one, a directory having no content
+ * to prove, which is what lets add and update retire the directories their commits
+ * let go without asking whether any still stands.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)
@@ -893,67 +903,47 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path);
 /**
  * Order a managed path's deployed copy pruned
  *
- * Inserts the path into prune_orders: remove --delete-files chose the fate of a
- * copy nothing backs any more — one the removal named, or one dotta deployed;
- * never a copy dotta merely found under an unnamed path (the gate the one settle
- * loop enforces, cmds/remove settle_let_go) — and apply is to prune it — a clean
- * copy; cleanup's skip reasons still protect a modified one. The insert is guarded
- * by the record's existence (an order cannot exist without a record), so a missing
- * record is a no-op success: nothing was ever observed at the path, so there is
- * nothing to prune. At birth an ordered path is out of the view by construction
+ * Stamps the record's order (ordered_at = now): remove --delete-files chose the
+ * fate of a copy nothing backs any more — one the removal named, or one dotta
+ * deployed; never a copy dotta merely found under an unnamed path (the gate the
+ * one settle loop enforces, cmds/remove settle_let_go) — and apply is to prune
+ * it — a clean copy; cleanup's skip reasons still protect a modified one. A missing
+ * record is a no-op success: the UPDATE matches no row, since nothing was ever
+ * observed at the path. At birth an ordered path is out of the view by construction
  * — the settle loop runs only over paths the post-commit view lacks, whichever
- * remove route called it.
+ * remove route called it. A repeated order re-stamps: the order standing is the
+ * latest, which is what lets the void tell it from one it read.
  *
  * An order lives only while its path is out of the view. Read in exactly one
- * place — the workspace's orphan analysis — and voided by the flush's join when
- * the path re-enters the view, by the retire's sibling delete when the record
- * goes, or by apply executing the prune (the retire of the pruned record takes
- * the order with it).
+ * place — the workspace's orphan analysis — voided by the flush's join when the
+ * path re-enters the view (state_void_prune_order), written away by an ownership
+ * event (state_anchor), and gone with its record (a retire; apply executing the
+ * prune is one).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose deployed copy is to be pruned (must not be
  *                        NULL)
+ * @param now The order's moment (must be > 0)
  * @return Error or NULL on success (no record is OK)
  */
-error_t *state_order_prune(state_t *state, const char *filesystem_path);
+error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t now);
 
 /**
- * Get every ordered path, in filesystem_path order
+ * Void a record's prune order, as read
  *
- * The one read of the prune_orders table, the shape of state_get_all_anchors:
- * the array and its strings are the caller's arena's. The workspace loads it
- * once per run, unconditionally — the honour arm reads membership, and the flush's
- * join must see the orders even when no orphan stands for them (the path back
- * in the view is exactly the case with no orphan).
- *
- * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
- *
- * @param state State (must not be NULL)
- * @param arena Arena for allocations (must not be NULL)
- * @param out Output array of paths (must not be NULL)
- * @param count Output count (must not be NULL)
- * @return Error or NULL on success
- */
-error_t *state_get_prune_orders(
-    const state_t *state,
-    arena_t *arena,
-    char ***out,
-    size_t *count
-);
-
-/**
- * Void one prune order
- *
- * DELETE by filesystem_path; a missing row is success. Two callers, each an end
- * of the order's lifetime rule: the flush's join (the path re-entered the view
- * — the removal the order answered was reverted) and state_retire_anchor's sibling
- * delete (the record died; executed orders retire this way too).
+ * The order's view end: the flush's join, for a record the load read whose path
+ * the view holds again — the removal the order answered was reverted. One UPDATE,
+ * a compare-and-swap on the stamp *anchor holds: it clears the order iff the
+ * database still holds that one, so an order placed again since the read — a
+ * second removal, answering what the reader's view predates — stands. *anchor
+ * follows the statement, last: ordered_at 0 when it wrote, as read when it did not.
  *
  * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path Path whose order is void (must not be NULL)
- * @return Error or NULL on success (not found is OK)
+ * @param anchor The record as the caller read it (must not be NULL); advanced
+ *               iff the statement wrote
+ * @return Error or NULL on success — an order moved since the read is no error
  */
-error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
+error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
 
 /**
  * Release a managed path: keep the record's content-proof, retire the record
@@ -965,7 +955,7 @@ error_t *state_void_prune_order(state_t *state, const char *filesystem_path);
  * path can release more than once across its life, and the latest fact is what
  * disk holds — while a proof-less re-release leaves an older, still-true row
  * standing. Then the retire, composed: the same call state_retire_anchor's callers
- * make, both its deletes included.
+ * make, which takes the order with the row.
  *
  * The write is blind — remove and apply's release sites never lstat first. A
  * row false at birth (the user edited before releasing) degrades safely: the

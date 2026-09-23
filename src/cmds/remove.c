@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "base/arena.h"
@@ -169,6 +170,9 @@ static error_t *settle_let_go(
     bool delete_files,
     removal_settlement_t *settlement
 ) {
+    /* The settle's one moment: every order it places carries it (state_order_prune) */
+    time_t now = time(NULL);
+
     for (size_t i = 0; i < count; i++) {
         const removal_candidate_t *candidate = &candidates[i];
 
@@ -180,7 +184,7 @@ static error_t *settle_let_go(
         bool prune = delete_files &&
             (candidate->named || candidate->anchor->deployed_at > 0);
 
-        error_t *err = prune ? state_order_prune(state, candidate->path)
+        error_t *err = prune ? state_order_prune(state, candidate->path, now)
                              : state_release(state, candidate->path);
         if (err) {
             return err;

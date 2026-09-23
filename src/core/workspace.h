@@ -24,9 +24,11 @@
  *   a workspace is live, workspace_observe, workspace_anchor and workspace_confirm,
  *   each of which patches the snapshot it persists through (the confirmations
  *   through state_confirm and state_confirm_claim, which advance the record they
- *   are handed only when their statement wrote); retirements (state_retire_anchor,
- *   from apply's record step and the verbs) go to the database directly — no
- *   later reader in the run consults a retired path.
+ *   are handed only when their statement wrote); the flush voids an order through
+ *   the record it read (state_void_prune_order), which that call advances;
+ *   retirements (state_retire_anchor, from apply's record step and the verbs)
+ *   go to the database directly — no later reader in the run consults a retired
+ *   path.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -1301,11 +1303,13 @@ error_t *workspace_confirm(
  * here is conditional on that reading — an observation lands only where no record
  * stands, a confirmation only on the record it was made against — so a record
  * another writer moved since the load is left theirs, and memory behind it, the
- * direction the next load corrects. The void alone names no predecessor.
+ * direction the next load corrects. The void too names what it replaces — the
+ * order the load read, by its stamp — so an order placed again since the load
+ * stands.
  *
  * The join runs last — the order's view end (state.h's lifetime rule), here because
- * the view is: every prune order the load read whose path the view has is void,
- * selected from the load's own snapshot, since an order placed after it answers
+ * the view is: every order a record the load read carries, where the view has
+ * the path, is void — on the order it read, since an order placed after it answers
  * a removal this view predates. A released copy has no end here: its two are
  * its record's next ownership event or content confirmation, and apply's sweep.
  *

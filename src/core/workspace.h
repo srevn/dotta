@@ -80,10 +80,11 @@
 #include "sys/filesystem.h"
 
 /* The most tags one item's line carries — six, on a deployed item: [modified],
- * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that changed
- * and a look that failed end the measure, so [type] and the fault's tag ride
- * beside the last two alone (workspace_item_extract_display_info, whose Tag
- * Priority this counts; a tag added there is counted here). */
+ * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
+ * changed, a look that failed and a look not taken end the measure, so [type],
+ * the fault's tag and [displaced] ride beside the last two alone
+ * (workspace_item_extract_display_info, whose Tag Priority this counts; a tag
+ * added there is counted here). */
 #define WORKSPACE_ITEM_MAX_DISPLAY_TAGS 6
 
 /**
@@ -188,9 +189,10 @@ typedef enum {
  * row or the record is an item at birth, DEPLOYED- or ORPHANED-shaped, occupant
  * UNKNOWN, with no divergence bit of the path family and nothing queued for the
  * record. Every displaced item of the view family is therefore DEPLOYED with no
- * bits, which is what lets a consumer that forgets this field do nothing rather
- * than something wrong: the absence arms are never reached beneath a squatter,
- * so none of them needs a clause.
+ * path bit — a file row's blob-family verdict rides, Git's and no look's — which
+ * is what lets a consumer that forgets this field do nothing rather than something
+ * wrong: the absence arms are never reached beneath a squatter, so none of them
+ * needs a clause.
  *
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
@@ -232,14 +234,14 @@ typedef enum {
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test), workspace.c
  * compute_workspace_status, workspace_item_extract_display_info (the DEPLOYED
- * arm's one tag and the ORPHANED arm's rider), cmds/status.c
- * display_workspace_status's Issues hint, and cmds/diff.c
- * get_status_message_from_item and show_file_diff_from_workspace (the colour
- * ladder and the content gate), should_show_item_for_direction beside them; and
- * core/deploy.c check_ancestry, off the squatted directory itself — a caller
- * holding a path rather than an item is lent it whole, the claim this class is
- * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
- * cannot name two claimants for one squatter.
+ * arm's [displaced], beside which only what no look decides rides, and the ORPHANED
+ * arm's rider), cmds/status.c display_workspace_status's Issues hint, and
+ * cmds/diff.c get_status_message_from_item and show_file_diff_from_workspace
+ * (the colour ladder and the content gate), should_show_item_for_direction beside
+ * them; and core/deploy.c check_ancestry, off the squatted directory itself — a
+ * caller holding a path rather than an item is lent it whole, the claim this
+ * class is copied from (workspace_squatted_ancestor), so apply's remedy and
+ * status's section cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -1122,20 +1124,21 @@ const anchor_t *workspace_get_anchor(
  * consistent item visualization across all commands.
  *
  * Tag Priority (for DEPLOYED state with divergence):
- *   0. "displaced" (YELLOW) - The one tag when a squatter stands above the path
- *      (workspace_displaced_t): nothing there was looked at, so the item carries
- *      none of the bits the tags below name. The reassignment tag still rides:
- *      it is the record against the row, no look involved. The ORPHANED arm has
- *      the same rider, ranked where cleanup_verdict ranks it — after [absent],
- *      before the bits — because a displaced orphan carries no bits either and
- *      the bare arm would colour it as a prune
+ *   0. "displaced" (YELLOW) - The path's one tag when a squatter stands above
+ *      it (workspace_displaced_t): nothing there was looked at, so the item carries
+ *      no path bit, and no tag read off a look — 1 to 3, the claim axes, 5 —
+ *      can be its. What no look decides still rides: "unencrypted", the blob
+ *      against the policy, and "reassigned", the record against the row. The
+ *      ORPHANED arm carries "displaced" as a rider, ranked where cleanup_verdict
+ *      ranks it — after [absent], before the bits — because a displaced orphan
+ *      carries no bits at all and the bare arm would colour it as a prune
  *   1. "type" (RED) - File type changed (symlink ↔ regular), most severe
  *   2. "modified" (YELLOW) - Disk content moved away from what dotta confirmed
  *   3. "stale" (CYAN when alone: apply-side work, like "undeployed") - Git moved
  *      past what dotta last reconciled, the bytes or a claim; next to "modified"
  *      it names a conflict and the primary tag's colour stands
  *   4. Secondary: "mode", "ownership" - the claim axes that differ, whoever moved
- *      them; "unencrypted" - the blob against the policy
+ *      them; "unencrypted" - the blob against the policy, beside "displaced" too
  *   5. "locked" / "unreadable" / "unverified" (MAGENTA when still the default) -
  *      The look that failed, worded by the item's fault (workspace_fault_t)
  *      so one path reads the same word wherever it is listed. What settles it
@@ -1147,9 +1150,11 @@ const anchor_t *workspace_get_anchor(
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
  *   - ENCRYPTION divergence upgrades color to MAGENTA if still the default
- *   - ENCRYPTION is the one divergence an UNDEPLOYED row also carries: the copy
- *     is not on disk to have diverged from, but the blob apply is about to write
- *     violates the policy, and that is worth saying before it lands
+ *   - ENCRYPTION is the one divergence a row carries where nothing was measured
+ *     at its path: an UNDEPLOYED row — the copy is not on disk to have diverged
+ *     from, but the blob apply is about to write violates the policy, and that
+ *     is worth saying before it lands — and a displaced one, whose path no look
+ *     reached and whose blob is Git's all the same
  *
  * Metadata Format:
  *   - "from {profile}" - Standard source profile

@@ -2739,11 +2739,11 @@ static workspace_status_t compute_workspace_status(const workspace_t *ws) {
 
             case WORKSPACE_STATE_DEPLOYED:
                 /* The displaced read comes first and stands on its own: a row
-                 * beneath a squatter has no bits because nothing there was looked
-                 * at, and reading only the bits would call it clean — true only
-                 * so long as the squatter's own TYPE item happens to be in this
-                 * same fold. A fold over items answers from each item's own
-                 * facts. */
+                 * beneath a squatter has no path bit because nothing there was
+                 * looked at, and reading only the bits would call it clean —
+                 * true only so long as the squatter's own TYPE item happens to
+                 * be in this same fold. A fold over items answers from each item's
+                 * own facts. */
                 if (item->displaced != WORKSPACE_DISPLACED_NONE ||
                     item->divergence != DIVERGENCE_NONE ||
                     workspace_reassigned(item->row, item->anchor)) {
@@ -4160,11 +4160,12 @@ bool workspace_item_extract_display_info(
         case WORKSPACE_STATE_DEPLOYED: {
             if (item->displaced != WORKSPACE_DISPLACED_NONE) {
                 /* Beneath a squatter (workspace_displaced_t): nothing here was
-                 * looked at, so the item carries none of the bits the tags below
-                 * name — and a tag read off a look nobody took would name work
-                 * no verb takes. The one tag, at the default colour: the squatter's
-                 * own row carries the severity, and the route lists this item
-                 * under it. */
+                 * looked at, so the item carries no path bit — and a tag read
+                 * off a look nobody took would name work no verb takes. The path's
+                 * one tag, at the default colour: the squatter's own row carries
+                 * the path's severity, and the route lists this item under it.
+                 * What no look decides still rides below, the blob's verdict
+                 * and the handover. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "displaced";
                 }
@@ -4202,15 +4203,13 @@ bool workspace_item_extract_display_info(
                     }
                 }
 
-                /* Secondary tags for other divergence
+                /* Secondary tags: the claim axes that differ
                  *
                  * MODE: Skip if TYPE divergence present (type change makes mode
                  *       irrelevant) The condition !((item->divergence &
                  *       DIVERGENCE_TYPE) && tag_count > 0) prevents MODE from
                  *       showing when TYPE is the primary tag
                  * OWNERSHIP: Always show if present
-                 * ENCRYPTION: Always show if present
-                 * UNVERIFIED: Always show if present (file too large to verify)
                  */
                 if ((item->divergence & DIVERGENCE_MODE) &&
                     !((item->divergence & DIVERGENCE_TYPE) && tag_count > 0)) {
@@ -4224,44 +4223,48 @@ bool workspace_item_extract_display_info(
                         tags_out[tag_count++] = "ownership";
                     }
                 }
+            }
 
-                if (item->divergence & DIVERGENCE_ENCRYPTION) {
-                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                        tags_out[tag_count++] = "unencrypted";
-                    }
-                    /* Upgrade color to MAGENTA if still default (not TYPE
-                     * divergence) This gives encryption issues special visual
-                     * treatment */
-                    if (*color_out == OUTPUT_COLOR_YELLOW) {
-                        *color_out = OUTPUT_COLOR_MAGENTA;
+            /* The blob's verdict, on either arm: Git's alone, so no look decides
+             * it and it rides beside [displaced] too — the row is written fresh
+             * once the squatter goes, so this may be the last screen before it
+             * lands, as on an UNDEPLOYED row. Upgrade color to MAGENTA if still
+             * the default (not TYPE divergence): encryption issues get their
+             * own treatment, the displaced line's included. */
+            if (item->divergence & DIVERGENCE_ENCRYPTION) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    tags_out[tag_count++] = "unencrypted";
+                }
+                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                    *color_out = OUTPUT_COLOR_MAGENTA;
+                }
+            }
+
+            /* The failed look, worded by whose remedy it is (workspace_fault_t)
+             * — the same word the orphaned arm below prints, so one path has
+             * one name wherever it is listed. A displaced item took no look, so
+             * it never carries one. Conservative handling downstream (update
+             * refuses it, apply skips it at preflight, cleanup skips the
+             * orphan). */
+            if (item->divergence & DIVERGENCE_UNVERIFIED) {
+                if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
+                    switch (item->fault) {
+                        case WORKSPACE_FAULT_LOCKED:
+                            tags_out[tag_count++] = "locked";
+                            break;
+                        case WORKSPACE_FAULT_UNREADABLE:
+                            tags_out[tag_count++] = "unreadable";
+                            break;
+                        case WORKSPACE_FAULT_NONE:
+                        case WORKSPACE_FAULT_UNVERIFIED:
+                            tags_out[tag_count++] = "unverified";
+                            break;
                     }
                 }
-
-                if (item->divergence & DIVERGENCE_UNVERIFIED) {
-                    /* The failed look, worded by whose remedy it is
-                     * (workspace_fault_t) — the same word the orphaned arm below
-                     * prints, so one path has one name wherever it is listed.
-                     * Conservative handling downstream (update refuses it, apply
-                     * skips it at preflight, cleanup skips the orphan). */
-                    if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
-                        switch (item->fault) {
-                            case WORKSPACE_FAULT_LOCKED:
-                                tags_out[tag_count++] = "locked";
-                                break;
-                            case WORKSPACE_FAULT_UNREADABLE:
-                                tags_out[tag_count++] = "unreadable";
-                                break;
-                            case WORKSPACE_FAULT_NONE:
-                            case WORKSPACE_FAULT_UNVERIFIED:
-                                tags_out[tag_count++] = "unverified";
-                                break;
-                        }
-                    }
-                    /* Upgrade color to MAGENTA (special visual treatment for
-                     * unverifiable state) */
-                    if (*color_out == OUTPUT_COLOR_YELLOW) {
-                        *color_out = OUTPUT_COLOR_MAGENTA;
-                    }
+                /* Upgrade color to MAGENTA (special visual treatment for
+                 * unverifiable state) */
+                if (*color_out == OUTPUT_COLOR_YELLOW) {
+                    *color_out = OUTPUT_COLOR_MAGENTA;
                 }
             }
 

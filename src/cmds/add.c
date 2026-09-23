@@ -1230,7 +1230,8 @@ static error_t *create_commit(
  *   file it adopts and never for a directory, whose ownership is the capture's
  *   alone (cmds/apply.c, the adoption loop).
  *
- * Performance: one view build + O(N) point lookups, N = paths captured
+ * Performance: one view build and one read of the record, then each captured
+ * path looked up in both — O(N log A), N = paths captured, A = records
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, the state
  *            and the command arena)
@@ -1276,7 +1277,6 @@ static error_t *write_record(
 
     error_t *err = NULL;
     manifest_t *manifest = NULL;
-    hashmap_t *anchor_index = NULL;    /* Built with the anchor pass it serves */
 
     *receipt = (record_receipt_t){ 0 };
 
@@ -1325,25 +1325,13 @@ static error_t *write_record(
     if (err) goto cleanup;
 
     if (enabled) {
-        /* The record as it stands first, indexed by path, so a takeover is known
-         * before the write that rewrites it. */
+        /* The record as it stands first, read before the write that rewrites
+         * it, so a takeover is known — looked up by path in the read
+         * (state_lookup_anchor). */
         anchor_t *anchors = NULL;
         size_t anchor_count = 0;
         err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
         if (err) goto cleanup;
-
-        anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
-        if (!anchor_index) {
-            err = ERROR(ERR_MEMORY, "Failed to create anchors index");
-            goto cleanup;
-        }
-        for (size_t i = 0; i < anchor_count; i++) {
-            err = hashmap_set(anchor_index, anchors[i].filesystem_path, &anchors[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to index anchors");
-                goto cleanup;
-            }
-        }
 
         time_t now = time(NULL);
 
@@ -1430,7 +1418,9 @@ static error_t *write_record(
                 if (err) goto cleanup;
                 receipt->anchored++;
 
-                const anchor_t *was = hashmap_get(anchor_index, row->filesystem_path);
+                const anchor_t *was = state_lookup_anchor(
+                    anchors, anchor_count, row->filesystem_path
+                );
                 if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
                     receipt->taken_over++;
                 }
@@ -1486,7 +1476,6 @@ cleanup:
     state_rollback(state);
     receipt->enabled = err ? held : enabled;
 
-    hashmap_free(anchor_index, NULL);
     manifest_free(manifest);
 
     return err;

@@ -686,7 +686,7 @@ const char *state_peek_profile_target(
  *     remove_files_from_profile (the settle's candidates), and core/manifest.c
  *     manifest_diff (a departed row's orphan split, handed the array by
  *     cmds/profile.c profile_enable, profile_disable and cmds/sync.c cmd_sync):
- *     by path, each through a map of its own
+ *     by path, through state_lookup_anchor, which rests on strcmp order
  *   - cmds/remove.c delete_profile_branch (every record naming the profile) and
  *     cmds/sync.c cmd_sync's apply hint (every record against the view the Git
  *     phase produced, with no workspace and no disk): walks, key order unread
@@ -704,6 +704,29 @@ error_t *state_get_all_anchors(
     arena_t *arena,
     anchor_t **out,
     size_t *count
+);
+
+/**
+ * The record at a path, in a snapshot state_get_all_anchors read — or NULL
+ *
+ * A binary search by strcmp, which is the read's own order (the principle above):
+ * the array must be the getter's, in the order it came back, and a hand-built
+ * one in another order misses what it holds. The empty snapshot — NULL, count 0
+ * — holds nothing.
+ *
+ * Readers: cmds/add.c write_record (the takeover note), cmds/remove.c
+ * remove_files_from_profile (the settle's candidates), core/manifest.c
+ * manifest_diff (a departed row's orphan split).
+ *
+ * @param anchors The snapshot (NULL when count is 0)
+ * @param count Records in it
+ * @param filesystem_path The key (NULL returns NULL)
+ * @return Borrowed record, or NULL where the snapshot holds none at the key
+ */
+const anchor_t *state_lookup_anchor(
+    const anchor_t *anchors,
+    size_t count,
+    const char *filesystem_path
 );
 
 /**

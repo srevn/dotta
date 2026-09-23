@@ -800,7 +800,6 @@ static error_t *remove_files_from_profile(
     string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
     manifest_t *after = NULL;
-    hashmap_t *anchor_index = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1089,22 +1088,17 @@ static error_t *remove_files_from_profile(
             ctx->arena,
             (claim_count + pruned_dirs.count) * sizeof(*candidates)
         );
-        anchor_index = hashmap_borrow(anchor_count);
-        if (!candidates || !anchor_index) {
-            record_err = ERROR(ERR_MEMORY, "Failed to index the record");
-        }
-        for (size_t i = 0; !record_err && i < anchor_count; i++) {
-            record_err = hashmap_set(
-                anchor_index, anchors[i].filesystem_path, &anchors[i]
-            );
+        if (!candidates) {
+            record_err = ERROR(ERR_MEMORY, "Failed to allocate the candidates");
         }
 
         /* The claims the arguments took: the user's word reaches all of them
-         * (settle_let_go). */
+         * (settle_let_go). Each joined to its record by a lookup in the read
+         * (state_lookup_anchor). */
         for (size_t i = 0; !record_err && i < claim_count; i++) {
             const char *filesystem_path = claims[i].filesystem_path;
             if (!filesystem_path) continue;
-            const anchor_t *anchor = hashmap_get(anchor_index, filesystem_path);
+            const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, filesystem_path);
             if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
                 .path = filesystem_path, .anchor = anchor, .named = true
@@ -1125,7 +1119,7 @@ static error_t *remove_files_from_profile(
                 continue;
             }
             if (!filesystem_path) continue;
-            const anchor_t *anchor = hashmap_get(anchor_index, filesystem_path);
+            const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, filesystem_path);
             if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
                 .path = filesystem_path, .anchor = anchor, .named = false
@@ -1233,7 +1227,6 @@ cleanup:
      * is active, so it safely closes any partially-begun record-update transaction
      * on error paths. */
     state_rollback(state);
-    if (anchor_index) hashmap_free(anchor_index, NULL);
     manifest_free(after);
     free(message);
     string_array_deinit(&pruned_dirs);

@@ -1888,10 +1888,11 @@ void manifest_free(manifest_t *manifest) {
  * Attribute the transition between two views to profiles
  *
  * Two passes — every row of `after` for the gain side, every row of `before`
- * for the loss side — over two indexes: profile → stats slot, and the record by
- * path for the departure split. Nothing is written; the rule for what a departure
- * means for apply is the record's presence and ownership at the path, the same
- * fact the workspace reads when it meets the orphan.
+ * for the loss side — over an index of profile → stats slot, and a search of
+ * the record by path for the departure split (state_lookup_anchor). Nothing is
+ * written; the rule for what a departure means for apply is the record's presence
+ * and ownership at the path, the same fact the workspace reads when it meets
+ * the orphan.
  */
 error_t *manifest_diff(
     const manifest_t *before,
@@ -1907,7 +1908,6 @@ error_t *manifest_diff(
 
     error_t *err = NULL;
     hashmap_t *stats_map = NULL;
-    hashmap_t *anchor_index = NULL;
 
     /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
      * array, sized before the map is built — the pointers are stable). Keys are
@@ -1938,24 +1938,6 @@ error_t *manifest_diff(
         err = hashmap_set(stats_map, name, &out_stats[i]);
         if (err) {
             err = error_wrap(err, "Failed to populate stats attribution map");
-            goto cleanup;
-        }
-    }
-
-    /* The record, indexed by path, for the orphan split: a departed row with a
-     * record dotta owns leaves an orphan apply prunes (or releases, if Git let
-     * go), one with a record dotta never owned leaves one the ownership gate
-     * releases, one without leaves nothing for apply to do. Keys borrow the
-     * records' arena-backed paths. */
-    anchor_index = hashmap_borrow(anchor_count > 0 ? anchor_count : 16);
-    if (!anchor_index) {
-        err = ERROR(ERR_MEMORY, "Failed to create anchors index");
-        goto cleanup;
-    }
-    for (size_t i = 0; i < anchor_count; i++) {
-        err = hashmap_set(anchor_index, anchors[i].filesystem_path, (void *) &anchors[i]);
-        if (err) {
-            err = error_wrap(err, "Failed to index anchors");
             goto cleanup;
         }
     }
@@ -2006,7 +1988,12 @@ error_t *manifest_diff(
             continue;
         }
 
-        const anchor_t *anchor = hashmap_get(anchor_index, old->filesystem_path);
+        /* The record, searched by path for the orphan split (state_lookup_anchor):
+         * a departed row with a record dotta owns leaves an orphan apply prunes
+         * (or releases, if Git let go), one with a record dotta never owned leaves
+         * one the ownership gate releases, one without leaves nothing for apply
+         * to do. */
+        const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, old->filesystem_path);
         if (!anchor) continue;
         if (anchor->deployed_at > 0) {
             slot->orphans.owned++;
@@ -2017,6 +2004,5 @@ error_t *manifest_diff(
 
 cleanup:
     if (stats_map) hashmap_free(stats_map, NULL);
-    if (anchor_index) hashmap_free(anchor_index, NULL);
     return err;
 }

@@ -1679,6 +1679,26 @@ error_t *state_get_all_anchors(
     return NULL;
 }
 
+/* bsearch's: a key against a record's (strcmp — the read's own order) */
+static int compare_path_to_anchor(const void *key, const void *elem) {
+    return strcmp(key, ((const anchor_t *) elem)->filesystem_path);
+}
+
+/**
+ * The record at a path, in a snapshot state_get_all_anchors read — or NULL
+ */
+const anchor_t *state_lookup_anchor(
+    const anchor_t *anchors,
+    size_t count,
+    const char *filesystem_path
+) {
+    /* No search of nothing: bsearch's base must be valid even for zero elements
+     * (C11 7.22.5), and the empty snapshot's is NULL. */
+    if (count == 0 || !filesystem_path) return NULL;
+
+    return bsearch(filesystem_path, anchors, count, sizeof(*anchors), compare_path_to_anchor);
+}
+
 /**
  * Bind a claim as three placeholders from `first`: mode, owner, group
  *

@@ -1102,13 +1102,13 @@ typedef struct {
  *     asking whether anything changed: all-zero means "nothing for apply to do
  *     came out of this transition"
  *
- * Performance: O(A + B + R) — one pass over each view and one index over the
- * record; no Git, no disk, no database.
+ * Performance: O(A + B log R) — one pass over each view and a search of the record
+ * per departed row; no Git, no disk, no database.
  *
  * @param before View before the transition (may be NULL = empty)
  * @param after View after the transition (must not be NULL)
- * @param anchors The record, as state_get_all_anchors returns it (may be NULL
- *                when anchor_count is 0)
+ * @param anchors The record, as state_get_all_anchors returns it — in its order,
+ *                which the search rests on (may be NULL when anchor_count is 0)
  * @param anchor_count Number of records
  * @param profiles Profiles to attribute to (must not be NULL)
  * @param out_stats Parallel array (length profiles->count; must not be NULL)

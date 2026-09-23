@@ -26,12 +26,13 @@
  *             asked for, not the underlying world."
  *   paths   — the CLI-derived path filter (NULL when no positional args), one
  *             matcher over the two keys a managed path has: its filesystem path
- *             and its storage path (infra/pathspec). Exposed for diff's historical
- *             arms, which select a commit range delta by delta and answer the
- *             filter's coverage themselves (pathspec_entry_at,
- *             pathspec_entry_matches_at), and for apply's count line
- *             (pathspec_count); neither has a profile or exclude semantics to
- *             honor. In-workspace sites should prefer scope_accepts_path.
+ *             and its storage path (infra/pathspec). Exposed for diff, which
+ *             selects a commit range delta by delta, compares a commit's view
+ *             under it, and answers the filter's coverage over the view each
+ *             arm compares (pathspec_entry_at, pathspec_entry_matches_at), and
+ *             for apply's count line (pathspec_count); none of them has a profile
+ *             or exclude semantics to honor. In-workspace sites should prefer
+ *             scope_accepts_path.
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
  * sync.c ("use enabled, not active, for workspace_load") is enforced by
@@ -174,11 +175,13 @@ const string_array_t *scope_active(const scope_t *s);
 /**
  * Raw path filter (NULL when no positional file args were given).
  *
- * Consumers that read the filter itself — diff's historical arms (a commit range
- * selected delta by delta, the coverage answers over the compiled entries) and
- * apply's count line — use this with the pathspec accessors (pathspec_count /
- * pathspec_entry_at / pathspec_entry_matches_at). Per-iteration path-vs-filter
- * checks should use scope_accepts_path instead.
+ * Consumers that read the filter itself — diff (a commit range selected delta
+ * by delta, a commit's view compared under it, the coverage answers over the
+ * compiled entries: cmds/diff.c select_delta, compare_tree_files_to_filesystem,
+ * validate_filter_paths) and apply's count line (cmds/apply.c cmd_apply) — use
+ * this with the pathspec accessors (pathspec_count / pathspec_entry_at /
+ * pathspec_entry_matches_at). Per-iteration path-vs-filter checks should use
+ * scope_accepts_path instead.
  *
  * Borrowed; valid until scope_free.
  */

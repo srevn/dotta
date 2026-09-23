@@ -23,8 +23,8 @@
  * NULL semantics: a NULL pathspec matches all paths (no filtering).
  *
  * The pathspec is opaque. The compiled entries are read in insertion order by
- * the coverage answers (diff), which ask each entry alone whether it matches a
- * subject (pathspec_entry_matches_at).
+ * the coverage answers (cmds/diff.c validate_filter_paths), which ask each entry
+ * alone whether it matches a subject (pathspec_entry_matches_at).
  */
 
 #ifndef DOTTA_PATHSPEC_H
@@ -161,12 +161,12 @@ size_t pathspec_count(const pathspec_t *spec);
 pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
 
 /**
- * The entry alone, for coverage attribution (diff): an exact entry by equality
- * or ancestry in its vocabulary; a rule by whether it matches the subject of
- * its vocabulary at any rung — either polarity, so a negation that excluded
- * something is not reported as matching nothing. `kind` as for pathspec_matches;
- * a subject the caller has no name for is NULL, and an entry of that vocabulary
- * answers false.
+ * The entry alone, for coverage attribution (cmds/diff.c validate_filter_paths):
+ * an exact entry by equality or ancestry in its vocabulary; a rule by whether
+ * it matches the subject of its vocabulary at any rung — either polarity, so a
+ * negation that excluded something is not reported as matching nothing. `kind`
+ * as for pathspec_matches; a subject the caller has no name for is NULL, and an
+ * entry of that vocabulary answers false.
  *
  * Returns false for a NULL pathspec. `i` MUST be < pathspec_count(spec);
  * out-of-bounds is undefined behaviour (asserted in debug builds).

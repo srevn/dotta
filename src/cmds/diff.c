@@ -11,7 +11,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
 #include "base/hashmap.h"
@@ -630,16 +629,17 @@ static int print_diff_line_cb(
 }
 
 /**
- * Compare a tree-built file slice against the current filesystem
+ * Compare a commit's view against the current filesystem
  *
- * Generic comparison function for commit-to-workspace diffs. Takes a
- * manifest_rows_t slice of a historical tree's file rows (the view
- * manifest_build_tree computes, directories set aside) and compares each file
- * against the current filesystem state.
+ * The commit-to-workspace comparison: every file row of the view
+ * manifest_build_tree computed from the commit's tree, compared against what
+ * stands at its path now. A directory row — a claim of the tree's own metadata.json
+ * — has no content to diff and is passed over by its type, the test core/manifest.h
+ * leaves to a reader that wants files. Each row carries the profile whose claim
+ * it is, the commit's, and its blob opens under the row's own binding.
  *
- * @param files Tree-built file slice (passed by value; rows borrowed from the
- *              caller's arena and live until command end)
- * @param profile Profile name (must not be NULL)
+ * @param view The commit's view (must not be NULL; its rows are the command arena's
+ *             and live until command end)
  * @param file_filter File filter for CLI (can be NULL for no filter)
  * @param opts Command options (must not be NULL)
  * @param cache Shared content cache (the run's, must not be NULL)
@@ -648,15 +648,14 @@ static int print_diff_line_cb(
  * @return Error or NULL on success
  */
 static error_t *compare_tree_files_to_filesystem(
-    manifest_rows_t files,
-    const char *profile,
+    const manifest_t *view,
     const pathspec_t *file_filter,
     const cmd_diff_options_t *opts,
     content_cache_t *cache,
     output_t *out,
     size_t *diff_count
 ) {
-    CHECK_NULL(profile);
+    CHECK_NULL(view);
     CHECK_NULL(opts);
     CHECK_NULL(cache);
     CHECK_NULL(out);
@@ -664,11 +663,17 @@ static error_t *compare_tree_files_to_filesystem(
 
     *diff_count = 0;
 
-    /* Iterate through all files in the historical slice */
-    for (size_t i = 0; i < files.count; i++) {
-        const manifest_row_t *entry = files.entries[i];
+    manifest_rows_t rows = manifest_rows(view);
+    for (size_t i = 0; i < rows.count; i++) {
+        const manifest_row_t *entry = rows.entries[i];
         const char *filesystem_path = entry->filesystem_path;
         const char *storage_path = entry->storage_path;
+        const char *profile = entry->profile;
+
+        /* A directory row: no content to diff */
+        if (entry->type == PATH_TYPE_DIRECTORY) {
+            continue;
+        }
 
         /* Check file filter */
         if (!pathspec_matches(file_filter, filesystem_path, storage_path, PATH_KIND_FILE)) {
@@ -799,74 +804,71 @@ static error_t *compare_tree_files_to_filesystem(
 }
 
 /**
- * Validate file filter entries against the managed slices
+ * Validate file filter entries against a view
  *
  * Asks each filter entry alone — an exact path by equality or ancestry, a pattern
- * by whether it matches at any rung, either polarity — against the file slice's
- * rows, each by both its names (the entry reads the one in its own vocabulary).
- * Outputs a warning for each entry that matches nothing — which likely indicates
- * a typo — plus the list hint as the warnings' remedy. An entry that covers only
- * tracked directories is answered for what it is instead: managed, just with no
- * content to diff.
+ * by whether it matches at any rung, either polarity — against the view's rows,
+ * each by both its names (the entry reads the one in its own vocabulary) and by
+ * its own kind, read off its type. Outputs a warning for each entry that matches
+ * nothing — which likely indicates a typo — plus the list hint as the warnings'
+ * remedy. An entry that covers only tracked directories is answered for what it
+ * is instead: managed, just with no content to diff.
  *
  * Per-entry attribution matters here: the combined program folds one pattern's
  * negation into another's verdict and would under-count coverage on overlap;
  * and a negation that excluded something has done its work, so it is not called
  * "matches nothing" (pathspec_entry_matches_at).
  *
- * One implementation serves both diff paths — the historical-diff path
- * (commit-to-workspace) feeds the file and directory rows of a tree-built view
- * (manifest_build_tree); the workspace-diff path feeds the workspace's active
- * slices via workspace_files / workspace_directories. All flow through the same
- * manifest_rows_t carrier.
+ * One implementation serves both arms that compare against a view: the commit
+ * arm's is the one manifest_build_tree computes from the commit's tree, the
+ * workspace arm's the one the dispatcher built and the workspace joins. Coverage
+ * is a question about the view alone — nothing here takes a look.
  *
  * @param file_filter File filter to validate (NULL = no validation, returns 0)
- * @param files File slice to check against (passed by value)
- * @param directories Directory slice for the tracked-directory answer
+ * @param view The view the arm compares against (must not be NULL)
  * @param out Output context for warnings
  * @return Number of filter entries under which nothing will diff (0 = every entry
  *         covers at least one file)
  */
 static size_t validate_filter_paths(
     const pathspec_t *file_filter,
-    manifest_rows_t files,
-    manifest_rows_t directories,
+    const manifest_t *view,
     output_t *out
 ) {
     if (!file_filter) return 0;
 
+    manifest_rows_t rows = manifest_rows(view);
     size_t unmatched = 0;
     bool hint = false;
 
     size_t count = pathspec_count(file_filter);
     for (size_t e = 0; e < count; e++) {
-        bool found = false;
-        for (size_t i = 0; i < files.count && !found; i++) {
-            const manifest_row_t *row = files.entries[i];
-            found = pathspec_entry_matches_at(
+        /* The row the entry reaches: a file row ends the search, content being
+         * what a diff shows, and a directory row stands until one does */
+        const manifest_row_t *reached = NULL;
+        for (size_t i = 0; i < rows.count; i++) {
+            const manifest_row_t *row = rows.entries[i];
+            if (!pathspec_entry_matches_at(
                 file_filter, e, row->filesystem_path, row->storage_path,
-                PATH_KIND_FILE
-            );
+                path_type_kind(row->type)
+                )) {
+                continue;
+            }
+            reached = row;
+            if (row->type != PATH_TYPE_DIRECTORY) break;
         }
-        if (found) continue;
 
-        bool tracked_dir = false;
-        for (size_t i = 0; i < directories.count && !tracked_dir; i++) {
-            const manifest_row_t *row = directories.entries[i];
-            tracked_dir = pathspec_entry_matches_at(
-                file_filter, e, row->filesystem_path, row->storage_path,
-                PATH_KIND_DIRECTORY
-            );
-        }
+        /* Content to diff, and nothing to say */
+        if (reached && reached->type != PATH_TYPE_DIRECTORY) continue;
 
         pathspec_entry_t entry = pathspec_entry_at(file_filter, e);
-        if (tracked_dir && entry.glob) {
+        if (reached && entry.glob) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Pattern '%s' matches only tracked directories "
                 "(no content to diff)", entry.text
             );
-        } else if (tracked_dir) {
+        } else if (reached) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "'%s' matches only tracked directories (no content to diff)",
@@ -911,7 +913,7 @@ static size_t validate_filter_paths(
  *
  * @param ctx Dispatch context (must not be NULL; reads the repository, this
  *            machine's mount table, and the borrowed command arena that backs
- *            the tree-built file slice)
+ *            the commit's view)
  * @param commit_ref Commit reference to compare (must not be NULL)
  * @param scope Operation scope (must not be NULL)
  * @param opts Command options (must not be NULL)
@@ -942,8 +944,6 @@ static error_t *diff_commit_to_workspace(
     const char *profile = NULL;  /* borrowed from the enabled set */
     git_tree *tree = NULL;
     manifest_t *historical = NULL;
-    manifest_rows_t tree_files = { 0 };
-    manifest_rows_t tree_dirs = { 0 };
 
     /* Step 1: Resolve commit to find which profile contains it. The search is
      * the enabled set's and answers for every profile ahead of the holder, so a
@@ -986,20 +986,16 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
-    /* Step 4: Build the historical tree's view and split its rows by kind.
+    /* Step 4: Build the historical tree's view.
      *
      * The tree's own claim sheet is the builder's to read (core/manifest.h), so
      * the historical rows carry the modes and stamps that commit claimed, and a
      * sheet that will not load refuses the diff instead of showing Git's defaults
      * as though nothing had been claimed.
      *
-     * Rows, per-row strings, and the pointer arrays are allocated into the borrowed
-     * command arena; they outlive both this call and the subsequent
-     * compare_tree_files_to_filesystem call, then live until command end. Only
-     * the view's index is released, at cleanup. A DIRECTORY row (a claim of the
-     * tree's own metadata.json) has no content to diff; the compare takes the
-     * file slice, the filter validation takes both, so the kind is settled here,
-     * once. */
+     * Rows and their strings are allocated into the borrowed command arena; they
+     * outlive every reader below, then live until command end. Only the view's
+     * index is released, at cleanup. */
     err = manifest_build_tree(
         repo, tree, profile, mounts, arena, &historical
     );
@@ -1008,39 +1004,17 @@ static error_t *diff_commit_to_workspace(
         goto cleanup;
     }
 
-    manifest_rows_t rows = manifest_rows(historical);
-    if (rows.count > 0) {
-        const manifest_row_t **files = arena_calloc(arena, rows.count, sizeof(*files));
-        const manifest_row_t **dirs = arena_calloc(arena, rows.count, sizeof(*dirs));
-        if (!files || !dirs) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate row slices");
-            goto cleanup;
-        }
-        size_t file_count = 0;
-        size_t dir_count = 0;
-        for (size_t i = 0; i < rows.count; i++) {
-            if (rows.entries[i]->type == PATH_TYPE_DIRECTORY) {
-                dirs[dir_count++] = rows.entries[i];
-            } else {
-                files[file_count++] = rows.entries[i];
-            }
-        }
-        tree_files = (manifest_rows_t){ .entries = files, .count = file_count };
-        tree_dirs = (manifest_rows_t){ .entries = dirs, .count = dir_count };
-    }
-
-    /* Step 5: Compare historical slice against current filesystem */
+    /* Step 5: Compare the commit's view against the current filesystem */
     size_t diff_count = 0;
     err = compare_tree_files_to_filesystem(
-        tree_files, profile, file_filter, opts, cache, out, &diff_count
+        historical, file_filter, opts, cache, out, &diff_count
     );
     if (err) {
         goto cleanup;
     }
 
     if (diff_count == 0 && !opts->name_only) {
-        size_t unmatched =
-            validate_filter_paths(file_filter, tree_files, tree_dirs, out);
+        size_t unmatched = validate_filter_paths(file_filter, historical, out);
 
         if (unmatched == 0 || unmatched < pathspec_count(file_filter)) {
             output_info(
@@ -1050,9 +1024,8 @@ static error_t *diff_commit_to_workspace(
     }
 
 cleanup:
-    /* tree_files is arena-backed (borrowed from `arena`); the caller owns the
-     * arena's lifetime and reclaims every row, string, and the pointer array at
-     * command end. Only the view's index is freed here. */
+    /* The view's rows and strings are the borrowed command arena's, reclaimed
+     * at command end; only its index is freed here. */
     manifest_free(historical);
     git_tree_free(tree);
     git_commit_free(commit);
@@ -1363,21 +1336,17 @@ static error_t *diff_workspace(
     /* Step 2: Get pre-analyzed divergence from workspace */
     workspace_items_t diverged = workspace_get_all_diverged(ws);
 
-    /* Step 3: Borrow the active slices for filter validation */
-    manifest_rows_t active = workspace_files(ws);
-    manifest_rows_t active_dirs = workspace_directories(ws);
-
-    /* Step 4: Validate file filter paths against the active slices */
+    /* Step 3: Validate file filter paths against the view the workspace joined */
     const pathspec_t *file_filter = scope_paths(scope);
     if (file_filter) {
-        size_t unmatched = validate_filter_paths(file_filter, active, active_dirs, out);
+        size_t unmatched = validate_filter_paths(file_filter, manifest, out);
         if (unmatched == pathspec_count(file_filter)) {
             /* Nothing diffs under any filter entry — unmatched or content-less */
             goto cleanup;
         }
     }
 
-    /* Step 5: Filter and present diffs based on direction. A row the analysis
+    /* Step 4: Filter and present diffs based on direction. A row the analysis
      * could not look at is shown by its status line and counted: it is never
      * "in sync", and each section says how many it could not settle. */
     size_t total_diff_count = 0;
@@ -1477,11 +1446,13 @@ error_t *cmd_diff(const dotta_ctx_t *ctx, const cmd_diff_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set (the CLI filter's bound,
-     *                   historical-mode branch resolution search).
-     *   scope_active  — diff display face.
-     *   scope_paths   — CLI positional file filter (the range arm's delta
-     *                   selection, the coverage answers, diff_workspace).
+     *   scope_enabled  — the persistent enabled set (the CLI filter's bound,
+     *                    historical-mode branch resolution search).
+     *   scope_paths    — CLI positional file filter (the range arm's delta
+     *                    selection, the commit arm's comparison, and the coverage
+     *                    answers both arms with a view give).
+     *   the predicates — the workspace arm's presentation (scope_accepts_path,
+     *                    scope_accepts_profile).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,

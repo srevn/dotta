@@ -58,20 +58,20 @@
  *
  *   - Builders: manifest_build walks every enabled profile in precedence order
  *     (later profiles override earlier); manifest_build_tree walks one Git tree
- *     — the historical diff (cmd_diff), export's filesystem arm, and the claim
- *     search over whatever tree a verb selected — and is the same per-profile
- *     step applied once, manifest_build_branch being it over a branch's tip.
- *     Each step loads the claim sheet of the tree it reads: a tree without one
- *     holds an empty sheet, and a sheet that will not load fails the build rather
- *     than read as "no claims", so no caller of a builder chooses a policy for
- *     a fact the builder is the authority on. That is the view's rule and only
- *     the view's — a command reading a sheet for its own screen decides for itself
- *     (core/metadata.h). All three produce manifest_row_t rows directly, the
- *     one row shape every consumer reads, so there is no bridge between the build
- *     step and its readers. The dispatcher builds the view once per command for
- *     the commands that declare it (ctx->run.manifest, include/runtime.h); a
- *     command that moves Git or the enabled set builds the post-mutation view
- *     itself.
+ *     — the historical diff (cmds/diff.c diff_commit_to_workspace), export's
+ *     filesystem arm, and the claim search over whatever tree a verb selected —
+ *     and is the same per-profile step applied once, manifest_build_branch being
+ *     it over a branch's tip. Each step loads the claim sheet of the tree it
+ *     reads: a tree without one holds an empty sheet, and a sheet that will not
+ *     load fails the build rather than read as "no claims", so no caller of a
+ *     builder chooses a policy for a fact the builder is the authority on. That
+ *     is the view's rule and only the view's — a command reading a sheet for
+ *     its own screen decides for itself (core/metadata.h). All three produce
+ *     manifest_row_t rows directly, the one row shape every consumer reads, so
+ *     there is no bridge between the build step and its readers. The dispatcher
+ *     builds the view once per command for the commands that declare it
+ *     (ctx->run.manifest, include/runtime.h); a command that moves Git or the
+ *     enabled set builds the post-mutation view itself.
  *
  *   - Readers: manifest_rows (every winning row, both kinds, unordered),
  *     manifest_profiles (the profiles the rows came from, in precedence order),
@@ -416,14 +416,17 @@ error_t *manifest_build(
  * manifest_lookup_claim and manifest_name for `profile` exactly as an enabled
  * view answers them for one of its own.
  *
- * Readers: the historical diff (cmds/diff.c); export's filesystem arm
- * (cmds/export.c collect_filesystem), which selects the rows one profile places
- * at and beneath a path — the rows, not the Git subtree of whatever name stands
- * there, which is what manifest_lookup_claim's own note is about; the claim search
- * over whatever tree a verb selected (core/profiles.c profile_claim_name); revert's
- * second-name admission (cmds/revert.c); and add, which builds one over the tree
- * its stage opened at and asks it every naming question for the length of the
- * command (cmds/add.c). A caller that has a branch name and no tree reads
+ * Readers: the historical diff (cmds/diff.c diff_commit_to_workspace, whose
+ * comparison and coverage answer each read the whole view); export's filesystem
+ * arm (cmds/export.c collect_filesystem), which selects the rows one profile
+ * places at and beneath a path — the rows, not the Git subtree of whatever name
+ * stands there, which is what manifest_lookup_claim's own note is about; the
+ * claim search over whatever tree a verb selected (core/profiles.c
+ * profile_claim_name); revert's two questions of a tree, the claim standing at
+ * a path and the second-name admission (cmds/revert.c claim_standing,
+ * refuse_second_name); and add, which builds one over the tree its stage opened
+ * at and asks it every naming question for the length of the command (cmds/add.c
+ * cmd_add). A caller that has a branch name and no tree reads
  * manifest_build_branch, which loads one and calls this.
  *
  * Memory: same contract as manifest_build — every allocation produced by the
@@ -455,14 +458,15 @@ error_t *manifest_build_tree(
  * manifest_build_tree over the branch's HEAD: the tree is loaded here, walked,
  * and freed before this returns — the view's rows borrow nothing from it. The
  * one shape for a caller that has a branch name and no tree; a caller that holds
- * a tree — a historical commit's (cmds/diff.c, cmds/export.c), the one a verb
- * selected, a tip or a commit's (core/profiles.c profile_claim_name), or a stage's,
- * the tree the verb is about to edit (cmds/revert.c claim_standing, cmds/add.c)
- * — reads manifest_build_tree. No policy enters here: no raw argument, no fallback,
- * no enabled-set question, and the branch need not be enabled.
+ * a tree — a historical commit's (cmds/diff.c diff_commit_to_workspace,
+ * cmds/export.c collect_filesystem), the one a verb selected, a tip or a commit's
+ * (core/profiles.c profile_claim_name), or a stage's, the tree the verb is about
+ * to edit (cmds/revert.c claim_standing, cmds/add.c cmd_add) — reads
+ * manifest_build_tree. No policy enters here: no raw argument, no fallback, no
+ * enabled-set question, and the branch need not be enabled.
  *
- * Readers: `ignore --test`'s named arm (cmds/ignore.c); the two cross-branch
- * searches (core/profiles.c profile_discover_claims,
+ * Readers: `ignore --test`'s named arm (cmds/ignore.c test_path_ignore); the
+ * two cross-branch searches (core/profiles.c profile_discover_claims,
  * profile_build_filesystem_index), which build one per local branch; and the
  * target producer (core/profiles.c profile_needs_target), which builds one under
  * a table that binds nothing and reads the health slice alone.

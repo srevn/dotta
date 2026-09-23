@@ -3637,10 +3637,9 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
 /**
  * Order two rows by filesystem path (qsort callback)
  *
- * strcmp order is SQLite's BINARY order, which the slices carried when they were
- * read from a table: a parent sorts before every path beneath it, which deploy's
- * parent-before-child walk relies on, and the untracked scan's registration reads
- * for the tie among one profile's rows standing at one directory.
+ * A parent sorts before every path beneath it, which deploy's parent-before-child
+ * walk relies on, and the untracked scan's registration reads for the tie among
+ * one profile's rows standing at one directory.
  */
 static int compare_rows_by_path(const void *a, const void *b) {
     const manifest_row_t *const *ra = a;
@@ -4489,8 +4488,8 @@ bool workspace_item_extract_display_info(
  * statement, so a write that landed is never followed by a failure to hold it —
  * state_observe writes the sighting into it — and then indexed.
  *
- * The in-memory test mirrors the statement's INSERT OR IGNORE: both sides leave
- * an existing record untouched, so the snapshot and the database agree wherever
+ * The in-memory test mirrors the statement's DO NOTHING: both sides leave an
+ * existing record untouched, so the snapshot and the database agree wherever
  * the database still holds what the load read. Where another writer made the
  * row since the load, the INSERT is ignored and the record made here is one the
  * database does not hold — the sighting's own values, never that row, which is
@@ -4670,7 +4669,7 @@ error_t *workspace_confirm(
  * Every write here is derived from the load, and outside a run of apply the load
  * held no lock — another process can commit between it and this flush — so each
  * is conditional on what the load read: an observation lands only where no record
- * stands (INSERT OR IGNORE), a confirmation only on the record the comparison
+ * stands (ON CONFLICT DO NOTHING), a confirmation only on the record the comparison
  * was made against (state_confirm, state_confirm_claim). The void too names what
  * it replaces — the order the load read, by its stamp — so an order placed again
  * since the load stands.

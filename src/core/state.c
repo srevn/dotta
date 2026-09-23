@@ -8,7 +8,8 @@
  * - WAL mode for concurrent access
  * - Enabled-profile rows cached in memory (tiny, read frequently)
  * - The record read in one pass per run (state_get_all_anchors)
- * - Persistent B-tree indexes (no hashmap rebuilding)
+ * - Each path-keyed table stored sorted by its key: a read in key order walks
+ *   the table (core/state.h)
  */
 
 #include "core/state.h"
@@ -30,7 +31,7 @@
 #include "sys/filesystem.h"
 
 /* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "21"
+#define STATE_SCHEMA_VERSION "22"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -68,7 +69,7 @@ struct state {
     sqlite3_stmt *stmt_insert_profile;      /* INSERT INTO enabled_profiles */
 
     /* Anchor prepared statements (the record's verbs) */
-    sqlite3_stmt *stmt_observe;             /* INSERT OR IGNORE path_anchors (presence only) */
+    sqlite3_stmt *stmt_observe;             /* INSERT path_anchors … DO NOTHING on the key (presence only) */
     sqlite3_stmt *stmt_confirm;             /* UPDATE path_anchors … RETURNING filesystem_path (content, CAS) */
     sqlite3_stmt *stmt_confirm_claim;       /* UPDATE path_anchors … RETURNING filesystem_path (claim, CAS) */
     sqlite3_stmt *stmt_anchor;              /* INSERT OR REPLACE path_anchors (the ownership event: the record, whole) */
@@ -146,6 +147,21 @@ static path_type_t path_type_from_sql_text(const char *s) {
 }
 
 /**
+ * The spelling every path the store keeps is held to: absolute and folded, "/"
+ * included — the rule sys/filesystem.h fs_is_folded holds in C, which the binders
+ * validate a target by (infra/mount.h mount_validate_target) and mount_resolve
+ * spells every key in — and whole: no NUL, so the string C reads is the one SQLite
+ * stores, and every clause judges all of it. Two constraints compose it,
+ * target_spelling and key_spelling, and tests/test-state.c drives one list of
+ * shapes through both.
+ */
+#define FOLDED_SPELLING(column) \
+    "(instr(" column ", char(0)) = 0 AND (" column " = '/' OR (" \
+    column " GLOB '/?*' AND " column " NOT GLOB '*/[/]*' AND " column " NOT GLOB '*/' AND " \
+    column " NOT GLOB '*/.' AND " column " NOT GLOB '*/.[/]*' AND " \
+    column " NOT GLOB '*/..' AND " column " NOT GLOB '*/..[/]*')))"
+
+/**
  * Write the schema into a new database, whole
  *
  * The database is create_db's private file, which no other process can open until
@@ -184,27 +200,21 @@ static error_t *initialize_schema(sqlite3 *db) {
         /* Enabled profiles table (authority: profile commands).
          *
          * Held by the schema:
-         *   - a target is NULL — bound nowhere — or absolute and folded, "/"
-         *     included (sys/filesystem.h fs_is_folded: the rule the binders
-         *     validate before they write, infra/mount.h mount_validate_target,
-         *     and the mount table takes as its precondition, mount_table_build),
-         *     spelled once more in the store's own language so a hand edit is
-         *     refused where it is made: no reader meets a spelling no binder
-         *     wrote, and the row cache is the table with no rule of its own.
-         *     The seven clauses are exactly that predicate over the strings C
-         *     reads — both walks stop at a NUL — and tests/test-state.c drives
-         *     one list of shapes through both. Named, so the refusal a hand meets
-         *     reads "CHECK constraint failed: target_spelling"; the record's
+         *   - a target is NULL — bound nowhere — or a spelling FOLDED_SPELLING
+         *     admits: the rule the binders validate before they write
+         *     (infra/mount.h mount_validate_target) and the mount table takes
+         *     as its precondition (mount_table_build), spelled once more in the
+         *     store's own language so a hand edit is refused where it is made:
+         *     no reader meets a spelling no binder wrote, and the row cache is
+         *     the table with no rule of its own. Named, so the refusal a hand
+         *     meets reads "CHECK constraint failed: target_spelling"; the record's
          *     `type IN (…)` below is unnamed because its expression is its own
          *     sentence. */
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
         "    name TEXT NOT NULL UNIQUE,"
         "    target TEXT CONSTRAINT target_spelling CHECK ("
-        "        target IS NULL OR target = '/' OR ("
-        "        target GLOB '/?*' AND target NOT GLOB '*//*' AND target NOT GLOB '*/'"
-        "        AND target NOT GLOB '*/.' AND target NOT GLOB '*/./*'"
-        "        AND target NOT GLOB '*/..' AND target NOT GLOB '*/../*'))"
+        "        target IS NULL OR " FOLDED_SPELLING("target") ")"
         ") STRICT;"
 
         /* The record: what dotta last reconciled each managed path against, and
@@ -228,9 +238,18 @@ static error_t *initialize_schema(sqlite3 *db) {
          *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
          *     set); a row with a blob and deployed_at = 0 is a confirmation,
          *     not a deployment
-         *   - a stored blob is a real OID (20 bytes, never zeroblob) */
+         *   - a stored blob is a real OID (20 bytes, never zeroblob)
+         *   - the key is one a writer spells and C reads whole (key_spelling:
+         *     FOLDED_SPELLING above — absolute and folded, the shape mount_resolve
+         *     spells every key in, and free of NUL). C reads a string to its
+         *     first NUL, so a key holding one would be another key's string to
+         *     C: two rows, one key. With BINARY's memcmp over UTF-8, this is
+         *     what makes a read in key order strcmp order (core/state.h)
+         *   - the table is stored sorted by its key (WITHOUT ROWID): a read in
+         *     key order walks the table, with no sort step and no index between */
         "CREATE TABLE path_anchors ("
-        "    filesystem_path TEXT PRIMARY KEY,"
+        "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
+        "        " FOLDED_SPELLING("filesystem_path") ","
         "    storage_path TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
         "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable', 'directory')),"
@@ -249,7 +268,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    "
         "    CHECK (type != 'directory' OR blob_oid IS NULL),"
         "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
-        ") STRICT;"
+        ") STRICT, WITHOUT ROWID;"
 
         /* The content-proof half of a record that released (its binding and its
          * content), claim-free: disk still held dotta's last confirmation when
@@ -260,9 +279,11 @@ static error_t *initialize_schema(sqlite3 *db) {
          * it: the record's next ownership event or content confirmation deletes
          * it in the same breath (state_anchor, state_confirm — explicit siblings,
          * per the rule above), and apply's sweep forgets it when disk provably
-         * left it. The read verifies it against live disk before trusting it. */
+         * left it. The read verifies it against live disk before trusting it.
+         * The key's constraint and the table's storage are the record's (above). */
         "CREATE TABLE released_copies ("
-        "    filesystem_path TEXT PRIMARY KEY,"
+        "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
+        "        " FOLDED_SPELLING("filesystem_path") ","
         "    storage_path TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
         "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
@@ -270,7 +291,7 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    stat_mtime INTEGER NOT NULL,"
         "    stat_size  INTEGER NOT NULL,"
         "    stat_ino   INTEGER NOT NULL"
-        ") STRICT;"
+        ") STRICT, WITHOUT ROWID;"
 
         "COMMIT;";
 
@@ -487,15 +508,19 @@ static error_t *prepare_statements(state_t *state) {
 
     /* Observe: presence only, idempotent. Creates the record with the row's
      * binding, kind and claim — no blob, no stat, never owned. Never touches an
-     * existing row: OR IGNORE is what keeps the row an earlier writer made.
+     * existing row: DO NOTHING keeps the row an earlier writer made, and absorbs
+     * that one conflict, the key's, and no other — every constraint on what the
+     * statement writes still refuses, key_spelling among them, where OR IGNORE
+     * would skip the row in silence.
      *
      * Bind order (numbered placeholders):
      *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
      *   ?5 mode  ?6 owner  ?7 group */
     const char *sql_observe =
-        "INSERT OR IGNORE INTO path_anchors "
+        "INSERT INTO path_anchors "
         "(filesystem_path, storage_path, profile, type, mode, owner, \"group\") "
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) "
+        "ON CONFLICT (filesystem_path) DO NOTHING;";
 
     rc = sqlite3_prepare_v2(state->db, sql_observe, -1, &state->stmt_observe, NULL);
     if (rc != SQLITE_OK) {
@@ -1719,10 +1744,10 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
 /**
  * Observe a managed path: record its first sighting on disk
  *
- * INSERT OR IGNORE — see the SQL comment on sql_observe and the header contract.
- * Binds the row's key, binding, kind and claim; the blob, stat and lifecycle
- * columns take their NULL / zero defaults, an existing row is left exactly as
- * it was, and *anchor is the sighting's record either way.
+ * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on sql_observe and the
+ * header contract. Binds the row's key, binding, kind and claim; the blob, stat
+ * and lifecycle columns take their NULL / zero defaults, an existing row is left
+ * exactly as it was, and *anchor is the sighting's record either way.
  */
 error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor) {
     CHECK_NULL(state);

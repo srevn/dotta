@@ -53,7 +53,12 @@
  * - Binary format (fast, compact)
  * - WAL mode (concurrent access, atomic commits)
  * - Prepared statements (100x faster for bulk operations)
- * - Persistent indexes (O(1) lookups without rebuilding)
+ * - A path-keyed table is stored sorted by its key and read in key order: the
+ *   key is TEXT under BINARY — memcmp over UTF-8 — and holds no NUL (key_spelling),
+ *   which is where BINARY and strcmp meet, so a read comes back in strcmp order:
+ *   a parent before everything beneath it, and every key found by a binary search
+ *   by strcmp. The getters' ORDER BY is the promise; the storage makes the read
+ *   a walk of the table.
  * - Nothing derivable is stored, and nothing no read asks for: the record is
  *   dotta's own and never derivable; the expected side is Git's and lives in Git
  */
@@ -668,12 +673,23 @@ const char *state_peek_profile_target(
  *
  * The one read of the path_anchors table. Allocates the array and every string
  * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
- * hydrates to a zero OID, a NULL mode to 0. The workspace loads it once per run
- * and indexes it by path; the verbs that need one record by path (remove) load
- * it the same way and index it themselves rather than growing a point read for
- * one caller; manifest_diff reads it to tell a departed row with a record from
- * one without; and sync's apply hint walks it against the view the Git phase
- * produced, with no workspace and no disk (cmds/sync.c).
+ * hydrates to a zero OID, a NULL mode to 0.
+ *
+ * In strcmp order (the principle above). Readers, and what each takes from it:
+ *   - core/workspace.c workspace_partition: pairs the view's rows through an
+ *     index of its own; the orphans keep strcmp order, which look_orphans'
+ *     parents-first walk and the report's orphan listing (analyze_orphans, which
+ *     the screens print) rest on
+ *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
+ *     so the report is reproducible
+ *   - cmds/add.c write_record (the takeover note), cmds/remove.c
+ *     remove_files_from_profile (the settle's candidates), and core/manifest.c
+ *     manifest_diff (a departed row's orphan split, handed the array by
+ *     cmds/profile.c profile_enable, profile_disable and cmds/sync.c cmd_sync):
+ *     by path, each through a map of its own
+ *   - cmds/remove.c delete_profile_branch (every record naming the profile) and
+ *     cmds/sync.c cmd_sync's apply hint (every record against the view the Git
+ *     phase produced, with no workspace and no disk): walks, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *
@@ -693,14 +709,16 @@ error_t *state_get_all_anchors(
 /**
  * Observe a managed path: record its first sighting on disk
  *
- * Presence only, idempotent. INSERT OR IGNORE creates the record with the row's
- * binding, kind and claim — no blob, no stat, never owned — and never touches
- * an existing row. One caller: the workspace's flush, through workspace_observe,
- * for an active row its load found on disk with no record — the load is where
- * presence is established, so a directory apply fixes rather than makes was present
- * there and is observed by that flush. The record's existence is what the absence
- * classifier reads (workspace.c classify_absent): a path once observed that is
- * now missing was deleted, not never deployed.
+ * Presence only, idempotent. One INSERT creates the record with the row's binding,
+ * kind and claim — no blob, no stat, never owned — and never touches an existing
+ * row: ON CONFLICT DO NOTHING absorbs the key's conflict and no other, so every
+ * constraint on what it writes still refuses (key_spelling among them). One caller:
+ * the workspace's flush, through workspace_observe, for an active row its load
+ * found on disk with no record — the load is where presence is established, so
+ * a directory apply fixes rather than makes was present there and is observed
+ * by that flush. The record's existence is what the absence classifier reads
+ * (workspace.c classify_absent): a path once observed that is now missing was
+ * deleted, not never deployed.
  *
  * *anchor is the sighting's record, written last, so a failure leaves it as it
  * was: the row's binding, kind and claim (borrowed — the string pointers are
@@ -980,9 +998,14 @@ error_t *state_release(state_t *state, const char *filesystem_path);
  * Get every released copy, in filesystem_path order
  *
  * The released_copies read, the shape of state_get_all_anchors: the array and
- * its strings are the caller's arena's. The workspace loads it once per run,
- * unconditionally, beside the record; apply's sweep takes a fresh read inside
- * its own transaction so the run's release writes are included.
+ * its strings are the caller's arena's.
+ *
+ * In strcmp order (the principle above). Readers:
+ *   - core/workspace.c workspace_partition: loaded once per run, unconditionally,
+ *     beside the record, and indexed by path for the file judge's base
+ *     (analyze_file_divergence)
+ *   - cmds/apply.c cmd_apply's sweep: a fresh read inside its own transaction,
+ *     so the run's release writes are included; walked, key order unread
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *

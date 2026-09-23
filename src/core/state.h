@@ -12,7 +12,7 @@
  *     it goes with the row (a retire; apply executing it is one), an ownership
  *     event writes it away, and the flush voids it where the view holds the path
  *     again;
- *   - a released copy lives from the release that wrote it until its path's next
+ *   - a released copy lives from the retire that wrote it until its path's next
  *     ownership event or content confirmation deletes it in the same breath —
  *     the write that gives the path a newer base.
  * The released copy dies that one way and no other: never with a claim's
@@ -46,8 +46,8 @@
  *   - path_anchors: The record — what dotta last reconciled each managed path
  *     against, and what it confirmed there (both kinds, one row per path), the
  *     prune order among its columns
- *   - released_copies: The content-proof half of a record that released — what
- *     dotta had last confirmed at the path when it let the path go
+ *   - released_copies: The content-proof half of a retired record — what dotta
+ *     had last confirmed at the path when its record retired
  *
  * Design principles:
  * - Binary format (fast, compact)
@@ -283,7 +283,7 @@ typedef struct anchor {
  * Released copy — a fact that outlives its record (released_copies row)
  *
  * One row says: at this filesystem path, dotta's last content confirmation, when
- * dotta let go of the path, was this blob, of this kind, under this binding.
+ * the path's record retired, was this blob, of this kind, under this binding.
  * Exactly the content-proof half of the record it descends from (its binding
  * and its content, verbatim), claim-free: the claim and the lifecycle died with
  * the record, so a released fact never fabricates a record, a reassignment, or
@@ -917,19 +917,38 @@ error_t *state_anchor(
 );
 
 /**
- * Retire a managed path's record
+ * Retire a managed path's record, keeping its base
  *
- * DELETE by filesystem_path — the record, and with it the order it carries: a
- * column of the row, so it cannot outlive it. A missing row is success: the callers
- * name paths that may have no record — never seen here, nothing to retire. Called
- * by apply's record step for every pruned or reclaimed orphan (the copy is gone
- * — there is no fact), by update's purge of what its commit let go — a deleted
- * path, whose copy is gone, and the directory entries it pruned or dropped — by
- * add's settle of the ancestor claims its own commit dropped, and — composed
- * inside state_release — for every release. For a directory this very call is
- * the release: state_release keeps nothing for one, a directory having no content
- * to prove, which is what lets add and update retire the directories their commits
- * let go without asking whether any still stands.
+ * The record goes — DELETE by filesystem_path, and with it the order it carries,
+ * a column of the row that cannot outlive it — and its content-proof half, the
+ * binding and the content, stays behind as the path's released copy: the base a
+ * later claim is measured against. Whatever ended the record — a prune, a reclaim,
+ * an absence, a let-go, a deletion committed — and whatever stands at the path,
+ * that copy is what dotta last confirmed there. OR REPLACE: a path can retire
+ * more than once across its life, and the latest retire carries dotta's latest
+ * confirmation. A directory or a never-confirmed record has no base (blob IS
+ * NULL) and keeps nothing, so an older copy at the path stands, still the last
+ * dotta confirmed there; for a directory this is the DELETE alone, which is what
+ * lets add and update retire the directories their commits let go without asking
+ * whether any still stands.
+ *
+ * The write is blind — no caller looks at disk first, and none need: nothing
+ * done to the bytes since makes the copy less what dotta last confirmed. The
+ * read measures disk against it: an edit reads as the user's, beside Git's move
+ * where Git moved, and dotta's own bytes back at the path read as dotta's. A
+ * copy whose blob no key in hand opens (a repository rekeyed since, a session
+ * never unlocked) still vouches by its triple, which opens nothing; where the
+ * triple misses, the base cannot be read and disk is taken as the user's — the
+ * conflict pair where Git moved: a base no key opens withholds no verdict. A
+ * copy written at a stale key — a path still standing under another spelling,
+ * let go because a row of the view stands on its very entry (core/workspace.c)
+ * — is unread while no row stands at this key. Each is a base like any other,
+ * and ends as any other does.
+ *
+ * A missing record is success: the callers name paths that may have no record —
+ * never seen here, nothing to retire. Callers: apply's record step, for every
+ * orphan it settles; remove's settle and update's purge, for what their commits
+ * let go; add's settle, for the ancestor claims its own commit dropped.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)
@@ -981,40 +1000,6 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t n
  * @return Error or NULL on success — an order moved since the read is no error
  */
 error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
-
-/**
- * Release a managed path: keep the record's content-proof, retire the record
- *
- * The record's death when the copy stays on disk. The INSERT arm moves the
- * content-proof half (the binding and the content) into released_copies; it inserts
- * nothing for a directory or a never-confirmed record (blob IS NULL) — for those
- * this IS state_retire_anchor, so callers never branch on kind. OR REPLACE: a
- * path can release more than once across its life, and the latest release carries
- * dotta's latest confirmation — while a proof-less re-release leaves the older
- * row standing, still the last dotta confirmed there. Then the retire, composed:
- * the same call state_retire_anchor's callers make, which takes the order with
- * the row.
- *
- * The write is blind — remove and apply's release sites never lstat first, and
- * need not: the copy says what dotta last confirmed, which an edit before the
- * release does not make false. The read measures disk against it, and such an
- * edit reads as the user's, beside Git's move where Git moved. A copy whose blob
- * no key in hand opens (a repository rekeyed since, a session never unlocked)
- * still vouches by its triple, which opens nothing; where the triple misses,
- * the base cannot be read and disk is taken as the user's — the conflict pair
- * where Git moved: a base no key opens withholds no verdict. A copy written at
- * a stale key — a path still standing under another spelling, released because
- * a row of the view stands on its very entry (core/workspace.c) — is unread while
- * no row stands at this key. Each is a base like any other, and ends as any other
- * does.
- *
- * A missing record is success: nothing observed, nothing to remember.
- *
- * @param state State (must not be NULL, must have active transaction)
- * @param filesystem_path Path being released (must not be NULL)
- * @return Error or NULL on success (no record is OK)
- */
-error_t *state_release(state_t *state, const char *filesystem_path);
 
 /**
  * Get every released copy, in filesystem_path order

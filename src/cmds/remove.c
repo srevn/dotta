@@ -137,8 +137,8 @@ typedef struct {
  * still provides is a fallback — kept, it reads [reassigned] until apply hands
  * it over; one the view no longer provides takes the fate the user chose —
  * --delete-files orders the copy pruned at the next apply, the default releases
- * (the record retires, its content-proof kept as the released copy — the write
- * is blind, the read self-verifies).
+ * (the record retires, its base kept past it as the released copy — core/state.h
+ * state_retire_anchor).
  *
  * The flag is the user's word about the paths the removal NAMED, and only those
  * — named by the resolver's reach, not the typed line: an argument takes the
@@ -181,17 +181,13 @@ static error_t *settle_let_go(
             continue;
         }
 
-        bool prune = delete_files &&
-            (candidate->named || candidate->anchor->deployed_at > 0);
-
-        error_t *err = prune ? state_order_prune(state, candidate->path, now)
-                             : state_release(state, candidate->path);
-        if (err) {
-            return err;
-        }
-        if (prune) {
+        if (delete_files && (candidate->named || candidate->anchor->deployed_at > 0)) {
+            error_t *err = state_order_prune(state, candidate->path, now);
+            if (err) return err;
             settlement->ordered++;
         } else {
+            error_t *err = state_retire_anchor(state, candidate->path);
+            if (err) return err;
             settlement->released++;
         }
     }

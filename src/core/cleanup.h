@@ -512,8 +512,9 @@ typedef struct {
  * receipt holds exactly what happened, by construction. Nothing here can be
  * truncated by the run.
  *
- * Records that retire: pruned_* and reclaimed_* (here), absent_* (the verdicts).
- * Records that release: released_* (the verdicts). Records that stay: skipped_dirs
+ * Records that retire: pruned_* and reclaimed_* (here), absent_* and released_*
+ * (the verdicts) — each keeping its base as the path's released copy, whatever
+ * the fate (core/state.h state_retire_anchor). Records that stay: skipped_dirs
  * and failed (here), skipped_* and refused_* (the verdicts).
  *
  * Exit contract: `failed` alone reaches the exit code. Three columns, and the

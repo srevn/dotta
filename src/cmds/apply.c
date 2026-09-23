@@ -2560,19 +2560,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* Which outcomes settle is cleanup's rule, read off its receipt and its
-         * verdicts (cleanup.h); the act is apply's. Kind decides nothing here —
-         * reason decides the verb: a gone copy (pruned, reclaimed, absent) plainly
-         * retires, there is no fact to keep; a let-go copy (released) still stands
-         * on disk, so its record's content-proof is kept through state_release
-         * — except where the copy provably is not, or may not be, dotta's: a
-         * TYPE-displaced item's path holds another kind of node, and a path beneath
-         * a displaced managed directory was never looked at, so nothing vouches
-         * that what stands there is dotta's copy. Either way the released fact
-         * would be false at birth, and the item takes the plain retire (a released
-         * directory needs no carve-out — the release verb's blob guard makes it
-         * a plain retire on its own). Non-fatal per row: the filesystem effect,
-         * if any, already happened, and a record that fails to settle is reported
-         * and read as an orphan again by the next apply. */
+         * verdicts (cleanup.h); the act is apply's, and it is one verb for every
+         * outcome: the record retires, and its base outlives it as the path's
+         * released copy (core/state.h state_retire_anchor). Neither kind, nor
+         * the reason the record ended, nor what stands at the path decides anything
+         * here: the copy is what dotta last confirmed there, and a later claim
+         * is measured against it whatever disk has done since. Non-fatal per
+         * row: the filesystem effect, if any, already happened, and a record
+         * that fails to settle is reported and read as an orphan again by the
+         * next apply. */
         if (cleanup_result) {
             print_cleanup_results(out, cleanup_verdicts, cleanup_result);
 
@@ -2600,16 +2596,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         /* The verdicts' own, settled whether or not the prune engine could start:
-         * neither needed an effect. The receipt's printer told them above when
-         * it did; on the one run whose warning said nothing ran, they settle
-         * unreported. First what was gone before the run began. */
-        const workspace_items_t absent[] = {
+         * neither needed an effect — what was gone before the run began, and
+         * what the run let go. The receipt's printer told them above when it
+         * did; on the one run whose warning said nothing ran, they settle
+         * unreported. */
+        const workspace_items_t decided[] = {
             workspace_items_view(&cleanup_verdicts->absent_files),
             workspace_items_view(&cleanup_verdicts->absent_dirs),
+            workspace_items_view(&cleanup_verdicts->released_files),
+            workspace_items_view(&cleanup_verdicts->released_dirs),
         };
-        for (size_t b = 0; b < sizeof(absent) / sizeof(absent[0]); b++) {
-            for (size_t i = 0; i < absent[b].count; i++) {
-                const workspace_item_t *item = absent[b].entries[i];
+        for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
+            for (size_t i = 0; i < decided[b].count; i++) {
+                const workspace_item_t *item = decided[b].entries[i];
 
                 error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
                 if (retire_err) {
@@ -2618,29 +2617,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         item->filesystem_path, error_message(retire_err)
                     );
                     error_free(retire_err);
-                }
-            }
-        }
-
-        /* Then what the run let go. */
-        const workspace_items_t let_go[] = {
-            workspace_items_view(&cleanup_verdicts->released_files),
-            workspace_items_view(&cleanup_verdicts->released_dirs),
-        };
-        for (size_t b = 0; b < sizeof(let_go) / sizeof(let_go[0]); b++) {
-            for (size_t i = 0; i < let_go[b].count; i++) {
-                const workspace_item_t *item = let_go[b].entries[i];
-
-                error_t *settle_err = ((item->divergence & DIVERGENCE_TYPE) ||
-                    item->displaced != WORKSPACE_DISPLACED_NONE)
-                    ? state_retire_anchor(state, item->filesystem_path)
-                    : state_release(state, item->filesystem_path);
-                if (settle_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to settle state entry for %s: %s",
-                        item->filesystem_path, error_message(settle_err)
-                    );
-                    error_free(settle_err);
                 }
             }
         }

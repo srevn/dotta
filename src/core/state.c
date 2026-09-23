@@ -270,17 +270,17 @@ static error_t *initialize_schema(sqlite3 *db) {
         "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
         ") STRICT, WITHOUT ROWID;"
 
-        /* The content-proof half of a record that released (its binding and its
-         * content), claim-free: what dotta had last confirmed at the path when
-         * it let the path go. File kinds only — a directory has no content
-         * confirmation to outlive its record (blob IS NOT NULL is the write guard's
-         * filter; the CHECKs are the schema's own restatement). A row lives until
-         * its path's next ownership event or content confirmation deletes it in
-         * the same breath (state_anchor, state_confirm — explicit siblings, per
-         * the rule above): the write that gives the path a newer base. Disk never
-         * ends it — the read measures disk against it, and trusts it for nothing
-         * more. The key's constraint and the table's storage are the record's
-         * (above). */
+        /* The content-proof half of a retired record (its binding and its content),
+         * claim-free: what dotta had last confirmed at the path when its record
+         * retired. File kinds only — a directory has no content confirmation to
+         * outlive its record (blob IS NOT NULL is the write guard's filter; the
+         * CHECKs are the schema's own restatement). A row lives from the retire
+         * that wrote it until its path's next ownership event or content
+         * confirmation deletes it in the same breath (state_retire_anchor,
+         * state_anchor, state_confirm — explicit siblings, per the rule above):
+         * the write that gives the path a newer base. Disk never ends it — the
+         * read measures disk against it, and trusts it for nothing more. The
+         * key's constraint and the table's storage are the record's (above). */
         "CREATE TABLE released_copies ("
         "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
         "        " FOLDED_SPELLING("filesystem_path") ","
@@ -387,8 +387,9 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * foreign_keys is deliberately absent: the schema declares no FK constraints
  * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
  * cascades — records leave only through explicit retires. released_copies keeps
- * the rule: its coupling to the record is two sibling statements (the forget in
- * state_anchor and state_confirm), never a constraint.
+ * the rule: its coupling to the record is sibling statements — the release in
+ * state_retire_anchor, the forget in state_anchor and state_confirm — never a
+ * constraint.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -662,11 +663,12 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare void-order statement");
     }
 
-    /* Release, the INSERT arm: the record's content-proof half, copied verbatim.
-     * The blob filter is the guard — a directory or never-confirmed record has
-     * no content proof to keep, so nothing is inserted and the composed retire
-     * is the whole of the release. OR REPLACE keeps the latest fact where a
-     * proof-bearing release lands on a path released before. */
+    /* Release, the INSERT arm of every retire: the record's content-proof half
+     * — the path's base — copied verbatim before the record goes. The blob filter
+     * is the guard — a directory or never-confirmed record has no base to keep,
+     * so nothing is inserted and an older copy at the path stands. OR REPLACE
+     * keeps the latest base where a proof-bearing retire lands on a path retired
+     * before. */
     const char *sql_release =
         "INSERT OR REPLACE INTO released_copies "
         "(filesystem_path, storage_path, profile, type, blob_oid, "
@@ -2092,23 +2094,39 @@ error_t *state_anchor(
 }
 
 /**
- * Retire a managed path's record
+ * Retire a managed path's record, keeping its base
  *
- * DELETE by filesystem_path; a missing row is success (see the header contract).
- * The order goes with the row: it is a column of it.
+ * Two statements, and their order is the function: the INSERT arm reads the record
+ * the DELETE takes (see the header contract).
  */
 error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
+    CHECK_NULL(state->stmt_release);
     CHECK_NULL(state->stmt_retire);
 
-    sqlite3_stmt *stmt = state->stmt_retire;
+    /* The base first, while the record is there to copy it from: its binding
+     * and its content, where it carries a blob — the statement's own filter, so
+     * a directory or a record never confirmed keeps nothing, and an older copy
+     * at the path stands. */
+    sqlite3_stmt *stmt = state->stmt_release;
     sqlite3_reset(stmt);
     sqlite3_clear_bindings(stmt);
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
 
     int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        return sqlite_error(state->db, "Failed to keep the record's base");
+    }
+
+    /* Then the record, and the order it carries: a column of the row. */
+    stmt = state->stmt_retire;
+    sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to retire anchor");
     }
@@ -2188,32 +2206,6 @@ error_t *state_void_prune_order(state_t *state, anchor_t *anchor) {
     anchor->ordered_at = 0;
 
     return NULL;
-}
-
-/**
- * Release a managed path: keep the record's content-proof, retire the record
- *
- * The INSERT arm reads the record before the retire deletes it — the order of
- * the two is the function. The retire is composed, not duplicated: the same call
- * every retire site makes, which takes the order with the row.
- */
-error_t *state_release(state_t *state, const char *filesystem_path) {
-    CHECK_NULL(state);
-    CHECK_NULL(filesystem_path);
-    CHECK_NULL(state->db);
-    CHECK_NULL(state->stmt_release);
-
-    sqlite3_stmt *stmt = state->stmt_release;
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to release path");
-    }
-
-    return state_retire_anchor(state, filesystem_path);
 }
 
 /**

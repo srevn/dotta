@@ -233,11 +233,10 @@ typedef enum {
  * deploy_needs_work and deploy_plan_build (the --skip-existing test), workspace.c
  * compute_workspace_status, workspace_item_extract_display_info (the DEPLOYED
  * arm's one tag and the ORPHANED arm's rider), cmds/status.c
- * display_workspace_status's Issues hint, cmds/diff.c get_status_message_from_item
- * and show_file_diff_from_workspace (the colour ladder and the content gate),
- * should_show_item_for_direction beside them, and cmds/apply.c cmd_apply's settle
- * loop. A caller holding a path rather than an item asks
- * workspace_displaced_ancestor.
+ * display_workspace_status's Issues hint, and cmds/diff.c
+ * get_status_message_from_item and show_file_diff_from_workspace (the colour
+ * ladder and the content gate), should_show_item_for_direction beside them. A
+ * caller holding a path rather than an item asks workspace_displaced_ancestor.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */

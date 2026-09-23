@@ -587,8 +587,8 @@ static bool directory_is_deployable(
  *                 remedies part ways there: a wider scope plans a tracked row,
  *                 the named re-derivation drops an ancestor claim
  *
- * The claimant is written in the no-fate arm alone — a row a skipped squatter
- * holds leaves the class NONE, its remedy being that squatter's own line's
+ * The claimant is written in the no-fate arm alone — a row beneath a skipped
+ * squatter leaves the class NONE, its remedy being that squatter's own line's
  * (deploy_ancestor_class_t). Called before check_landing in both ladders and
  * once more per ancestor candidate; directories are decided parents-first, so a
  * squatted ancestor's own fate is always already taken when a row beneath it is
@@ -620,7 +620,7 @@ static void check_ancestry(
         return;
     }
 
-    /* The two fates left both hold the row, and both name the squatter */
+    /* The two fates left both skip the row, and both name the squatter */
     skip->ancestor = above->len;
 
     /* Skipped: the squatter's class, never its sentence — consent stays TYPE,
@@ -1195,9 +1195,9 @@ error_t *deploy_preflight(
      *
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
-     * one held beneath a squatted ancestor that stays is not a parent this run
-     * can make (the rung's reason), a TYPE- or UNREADABLE-skipped row is not
-     * absent (present, as its item read), and a landing-skipped one has no
+     * one skipped beneath a squatted ancestor that stays is not a parent this
+     * run can make (the rung's reason), a TYPE- or UNREADABLE-skipped row is
+     * not absent (present, as its item read), and a landing-skipped one has no
      * deployable row beneath it (the invariant, deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const manifest_row_t *row = all_dirs.entries[i];
@@ -1215,7 +1215,7 @@ error_t *deploy_preflight(
 
         check_ancestry(ws, result, path, &skip, &absent);
         if (skip.reason != DEPLOY_SKIP_NONE) {
-            continue;   /* held beneath a squatted ancestor that stays */
+            continue;   /* skipped beneath a squatted ancestor that stays */
         }
 
         const workspace_item_t *item = workspace_get_item(ws, path);

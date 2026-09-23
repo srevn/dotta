@@ -36,13 +36,13 @@
  *
  * The skips are reported and the run goes on: the verdicts already exclude them,
  * so nothing downstream re-checks. One section for every skip, both kinds, in
- * decision order — a skipped squatter precedes the rows it holds back, which is
- * the reading order — capped like every preview list (one squatter can hold a
- * subtree, so this one has a multiplier cleanup's uncapped block does not). The
- * header is the block's only prose, as it is in every block on both sides: no
- * one sentence covers both families here — the consent holds --force lifts and
- * the hard blocks it does not — and "not deployed" would say the header again.
- * Each row names its own reason, and the remedies close.
+ * decision order — a skipped squatter precedes the rows beneath it, which is
+ * the reading order — capped like every preview list (one skipped squatter takes
+ * its whole subtree with it, so this one has a multiplier cleanup's uncapped
+ * block does not). The header is the block's only prose, as it is in every block
+ * on both sides: no one sentence covers both families here — the consent skips
+ * --force lifts and the hard blocks it does not — and "not deployed" would say
+ * the header again. Each row names its own reason, and the remedies close.
  *
  * Two line families. The landing and occupancy reasons keep their exact
  * parentheticals — facts about the path's surroundings, no profile. The row-fact
@@ -325,7 +325,7 @@ static void print_deploy_skips(
  *
  * The warnings close the preview. A warning is an anomaly preflight met while
  * deciding — an ownership it could not resolve — on a row the run will deploy:
- * a caveat on the promise, not a hold, so it prints under the promise and ahead
+ * a caveat on the promise, not a skip, so it prints under the promise and ahead
  * of the skips. Only a row the run touches contributes one (deploy.h's warnings),
  * and an ancestor is decided only above a deployable row, so the loop sits past
  * the early return and an empty preview never has a warning to lose.
@@ -894,10 +894,10 @@ static void print_deploy_results(
  * what was already gone — and close on the failures: one section at every
  * verbosity, both kinds in act order, each row with its cause, the shape of
  * deploy's "Failed deployments". Where a section has more than one source — the
- * skipped files and directories (held or refused at preflight, and a directory
- * refused at removal), the reclaimed paths (gone at load, gone by the time the
- * run looked) — the verdicts' rows print first, so a run that had both names
- * each once.
+ * skipped files and directories (skipped for a reason or refused at preflight,
+ * and a directory refused at removal), the reclaimed paths (gone at load, gone
+ * by the time the run looked) — the verdicts' rows print first, so a run that
+ * had both names each once.
  */
 static void print_cleanup_results(
     output_t *out,
@@ -1083,9 +1083,9 @@ static void print_cleanup_results(
             );
         }
 
-        /* Nor here: a directory is skipped because something the run holds back
-         * is still in it, because the workspace could not verify it, because
-         * its parent refuses the run, or because the removal refused — the verbose
+        /* Nor here: a directory is skipped because something the run skips is
+         * still in it, because the workspace could not verify it, because its
+         * parent refuses the run, or because the removal refused — the verbose
          * listing names which. */
         size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
             result->skipped_dirs.count;
@@ -1187,10 +1187,11 @@ static void print_path_list(
  * is a promise of an effect — the record retires — and nothing is asked about
  * it, so the block is the preview's to make. The skipped ones are two buckets
  * under one count — the skip is the fate, and the record stays either way — named
- * apart by what holds them: the item's own reason and the one lever that overrides
- * it (print_cleanup_skips), or the parent that refuses the run and the command
- * that holds root (print_cleanup_refused). Cleanup took that split when it bucketed
- * each file; this is display, so it counts nothing and only routes per item.
+ * apart by what stands in their way: the item's own reason and the one lever
+ * that overrides it (print_cleanup_skips), or the parent that refuses the run
+ * and the command that holds root (print_cleanup_refused). Cleanup took that
+ * split when it bucketed each file; this is display, so it counts nothing and
+ * only routes per item.
  */
 static void print_cleanup_preview(
     output_t *out,
@@ -1310,8 +1311,8 @@ static void print_cleanup_preview(
          * left behind is not the event a file left behind is — whether the
          * workspace released it or it holds something this run will never remove
          * (cleanup.h's classes). A skipped directory holds something the run
-         * holds back, could not be verified (status tags it [unverified]), sits
-         * under a moved home ([relocated] — the hold --force lifts), or sits
+         * skips, could not be verified (status tags it [unverified]), sits under
+         * a moved home ([relocated] — the skip --force lifts), or sits
          * under a parent that refuses the run (the needing-root block names it);
          * the slash says "left alone this run" for each. */
         if (verdicts->released_dirs.count > 0) {
@@ -1380,14 +1381,14 @@ static void print_cleanup_preview(
  * Print the cleanup skips: the orphaned files the run will not prune, and why
  *
  * Each is named with its reason, then the one line the deploy-side conflict block
- * also ends with — --force overrides the hold. The header names the fate in the
+ * also ends with — --force overrides the skip. The header names the fate in the
  * receipt's own words for this bucket — the two blocks that map one-to-one onto
  * a receipt section, this and "Released files", name it identically there and
  * here — which also keeps it clear of the deploy block's "Skipped paths" above,
  * whose rows carry the same shape. The labels name the reasons, because no one
- * reason covers the block — a held relocation is byte-clean and an unverifiable
+ * reason covers the block — a skipped relocation is byte-clean and an unverifiable
  * copy may be — and the closing line names the cost the same way: what stands
- * there, whatever its state. The ways to keep a held file are the inverse of
+ * there, whatever its state. The ways to keep a skipped file are the inverse of
  * the command that orphaned it (profile enable, add) or a move aside, and every
  * line names the profile; they are not spelled out.
  *
@@ -1412,7 +1413,7 @@ static void print_cleanup_skips(
         /* How the reason reads on screen. The reason itself is cleanup's
          * (cleanup_skip_reason); this only names it — red where the file's own
          * content or type has moved away from what dotta deployed, yellow where
-         * dotta simply cannot vouch for it or deliberately holds it. */
+         * dotta simply cannot vouch for it or deliberately skips it. */
         const char *glyph = "•";
         const char *label = "skipped";
         output_color_t color = OUTPUT_COLOR_YELLOW;
@@ -1492,10 +1493,10 @@ static void print_cleanup_skips(
  * so, and the parent the probe asked is then not the rung that refused), and
  * the one closer: sudo, named for a run that holds none the way print_deploy_skips
  * names it — asked of the identity, never handed in. Capped like deploy's block
- * — one root-owned parent can hold a subtree — where cleanup's skipped-files
- * block is not (every row there carries a reason of its own). Neither a --force
- * line nor a by-hand one: root is not a flag, and the row already names the
- * directory a hand would have to open.
+ * — one root-owned parent can refuse a whole subtree — where cleanup's
+ * skipped-files block is not (every row there carries a reason of its own). Neither
+ * a --force line nor a by-hand one: root is not a flag, and the row already names
+ * the directory a hand would have to open.
  *
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
@@ -2811,8 +2812,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The receipt is printed; what remains is the return value. The plan is the
      * run's promise: a row the user's own flags withheld (-e, --skip-existing)
-     * or that dotta held for want of consent (--force) was never promised, and
-     * the receipt is the whole of its report; a row the run planned and could
+     * or that dotta skipped for want of consent (--force) was never promised,
+     * and the receipt is the whole of its report; a row the run planned and could
      * not deliver was promised, and the exit code says so — the incapacity skips,
      * and the rows the run could not land (the receipt's failed bucket) — as
      * does an orphan the run tried to prune and could not (failed_prunes, off

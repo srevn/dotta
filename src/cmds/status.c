@@ -1007,10 +1007,10 @@ static void display_workspace_status(
                     size_t legend_width = 0;
 
                     /* One sentence for every [relocated] key, wherever the verdict
-                     * put the item — a pruned custom/ re-target and a held home
-                     * move share the tag string across kinds and fates, so the
-                     * sentence is written to be true of all of them, the way
-                     * the bare [orphaned] key's is. */
+                     * put the item — a pruned custom/ re-target and a skipped
+                     * home move share the tag string across kinds and fates, so
+                     * the sentence is written to be true of all of them, the
+                     * way the bare [orphaned] key's is. */
                     static const char relocated_hint[] =
                         "the claim deploys elsewhere now (target or home moved); "
                         "apply prunes the old copy — a moved home holds it "
@@ -1072,17 +1072,18 @@ static void display_workspace_status(
                                 if (is_dir) {
                                     /* The two ways a directory reaches SKIPPED
                                      * here (force=false): the workspace could
-                                     * not verify it, or the relocation hold —
-                                     * so the tail is the hold, no third way
-                                     * existing. Unverified is read first, which
-                                     * is the file table's order and the inverse
-                                     * of cleanup_verdict's arms, deliberately:
-                                     * --force lifts the hold and never the
-                                     * unverified bit, so on a directory carrying
-                                     * both the failed look's wording is the one
-                                     * that stays true. Worded by whose remedy
-                                     * it is; a directory seals no content, so
-                                     * its failed look is never the key's. */
+                                     * not verify it, or the relocation skip —
+                                     * so the tail is the relocation, no third
+                                     * way existing. Unverified is read first,
+                                     * which is the file table's order and the
+                                     * inverse of cleanup_verdict's arms,
+                                     * deliberately: --force lifts the relocation
+                                     * skip and never the unverified bit, so on
+                                     * a directory carrying both the failed look's
+                                     * wording is the one that stays true. Worded
+                                     * by whose remedy it is; a directory seals
+                                     * no content, so its failed look is never
+                                     * the key's. */
                                     hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
                                         ? (orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
                                            ? "cannot be read; apply skips it"

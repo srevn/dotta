@@ -39,7 +39,7 @@
  *   workspace could not verify ⇒ skipped, --force included; else prunable, a
  *   directory's remainder permitting
  * - what is left in a directory after this run: fs_directory_emptiness,
- *   vouching for what this run prunes and for what it merely holds (preflight;
+ *   vouching for what this run prunes and for what it merely skips (preflight;
  *   cleanup_preflight_result_t has the classes), and fs_remove_empty_dir, which
  *   removes exactly what that walk looks past as gone and refuses anything else
  *   before touching it (execute)
@@ -168,7 +168,7 @@ static inline size_t cleanup_plan_item_count(const cleanup_plan_t *plan) {
 typedef enum {
     CLEANUP_SKIP_NONE = 0,       /* Not skipped — nothing stands in the way of the prune */
     CLEANUP_SKIP_UNVERIFIED,     /* The workspace could not settle it — see cleanup_skip_reason */
-    CLEANUP_SKIP_RELOCATED,      /* The claim's home moved — held behind --force */
+    CLEANUP_SKIP_RELOCATED,      /* The claim's home moved — skipped unless --force */
     CLEANUP_SKIP_MODIFIED,       /* Content differs from what dotta deployed */
     CLEANUP_SKIP_TYPE_CHANGED,   /* File ↔ symlink ↔ device (a directory in its place is released) */
     CLEANUP_SKIP_CLAIM_CHANGED   /* The claim differs: the mode, the ownership, or both */
@@ -190,16 +190,16 @@ typedef enum {
  *                                  it, and status ranks its tag — [locked],
  *                                  [unreadable] or [unverified] — the same way,
  *                                  so one item has one name in both places.
- *   a held relocation              RELOCATED    — the item's claim stands at
+ *   a shared relocation            RELOCATED    — the item's claim stands at
  *                                  another path now, in a namespace whose
  *                                  projection is not the user's to move
  *                                  (WORKSPACE_RELOCATION_SHARED — home/): the
- *                                  copy here is the claim's old home, held even
- *                                  when byte-clean, so the hold outranks the
- *                                  user-change reasons below it. The class is
- *                                  the whole test, so a re-targeted custom/ copy
- *                                  — the BOUND class — never trips it and keeps
- *                                  the prune (or its own divergence reason)
+ *                                  copy here is the claim's old home, skipped
+ *                                  even when byte-clean, so the skip outranks
+ *                                  the user-change reasons below it. The class
+ *                                  is the whole test, so a re-targeted custom/
+ *                                  copy — the BOUND class — never trips it and
+ *                                  keeps the prune (or its own divergence reason)
  *   DIVERGENCE_CONTENT             MODIFIED     — disk differs from what dotta
  *                                  deployed (the record), not from the blob Git
  *                                  may have moved on to
@@ -271,7 +271,7 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    and the copy here is real
  *                                                    dotfiles under the real
  *                                                    home. --force lifts the
- *                                                    hold — the designed escape
+ *                                                    skip — the designed escape
  *                                                    for a deliberate home
  *                                                    migration, which is why
  *                                                    the preview can call this
@@ -296,9 +296,9 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item);
  *                                                    once nothing but gone entries
  *                                                    is left in it and the parent
  *                                                    admits the run, skipped
- *                                                    while a held one is, released
- *                                                    once a permanent one is
- *                                                    (the classes are on
+ *                                                    while a skipped one is,
+ *                                                    released once a permanent
+ *                                                    one is (the classes are on
  *                                                    cleanup_preflight_result_t)
  *
  * PRUNABLE is the one verdict status cannot finish — the remainder and the reach
@@ -315,7 +315,7 @@ typedef enum {
  * Decide a planned orphan's verdict from the item alone
  *
  * @param item Orphaned or released item, either kind (must not be NULL)
- * @param force --force: lifts a file's skip reasons and the relocation hold (either
+ * @param force --force: lifts a file's skip reasons and the relocation skip (either
  *        kind), never a release and never a directory's UNVERIFIED
  * @return The verdict (see cleanup_verdict_t)
  */
@@ -343,16 +343,16 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  * unlink and rmdir ask nothing of the path, only write and search on its parent,
  * and the parent refuses this run (fs_eaccess, with the reach — a run that holds
  * root fills neither bucket, and the sudo'd re-run the preview names meets no
- * refusal). Held exactly as a skip is — left alone, record stays, the directory
+ * refusal). Treated exactly as a skip is — left alone, record stays, the directory
  * above waits with it, the screen counts it as skipped — and kept apart from
  * one because the reason is the run's, not the item's: --force lifts a skip reason
  * and never this, and the remedy is root, not consent. The last rung, as OWNERSHIP
- * is deploy's: an item a skip reason holds is never asked, so a modified orphan
- * under a root-owned parent reads modified unforced and refused under --force,
- * each honest about the one thing in the way. Two under-approximations the removal
- * meets with its cause instead (cleanup_result_t's failed): a sticky parent's
- * owner rule, and the OS-metadata entries fs_remove_empty_dir clears inside a
- * directory whose own write bit the invoker lacks.
+ * is deploy's: an item already skipped for a reason is never asked, so a modified
+ * orphan under a root-owned parent reads modified unforced and refused under
+ * --force, each honest about the one thing in the way. Two under-approximations
+ * the removal meets with its cause instead (cleanup_result_t's failed): a sticky
+ * parent's owner rule, and the OS-metadata entries fs_remove_empty_dir clears
+ * inside a directory whose own write bit the invoker lacks.
  *
  * A directory is predicted against this same run's own effects — what is left
  * in it once the run has acted. What the readdir meets falls into three classes,
@@ -360,7 +360,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *
  *   gone        OS metadata; an entry this run prunes (prunable_files, and
  *               prunable_dirs beneath it)
- *   held        an entry this run skips (skipped_files, skipped_dirs beneath);
+ *   skipped     an entry this run skips (skipped_files, skipped_dirs beneath);
  *               an orphan the plan does not reach (-e spared, outside -p or the
  *               path filter) whose state is ORPHANED — transient by the same
  *               rule: scope decides reach, never verdict, so an unfiltered run
@@ -374,7 +374,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               else — the user's
  *
  *   nothing but gone left      prunable
- *   a held entry left          skipped   — transient: update, --force, or the
+ *   a skipped entry left       skipped   — transient: update, --force, or the
  *                                          run that reaches it
  *   a permanent entry left     released  — nothing dotta will ever do empties it
  *
@@ -407,7 +407,7 @@ typedef struct {
     /* Directories */
     ptr_array_t prunable_dirs;     /* Present; nothing but gone entries left → removed */
     ptr_array_t refused_dirs;      /* Present; nothing but gone entries left, the parent refuses this run → left alone, record stays */
-    ptr_array_t skipped_dirs;      /* Present; a held entry left, could not be verified, or its home moved → left alone, record stays */
+    ptr_array_t skipped_dirs;      /* Present; a skipped entry left, could not be verified, or its home moved → left alone, record stays */
     ptr_array_t released_dirs;     /* Released by the workspace, or a permanent entry left → left alone, record retires */
     ptr_array_t absent_dirs;       /* Not there → record retires */
 } cleanup_preflight_result_t;

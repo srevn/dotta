@@ -1653,9 +1653,9 @@ static error_t *compute_orphan_divergence(
             /* Cannot classify, load, decrypt, or compare — no key in reach, a
              * blob a held key refuses, an unsupported cipher version, an I/O
              * error, a blob missing from the repository. Handed back whole: the
-             * caller folds its class onto the item and holds the orphan, which
-             * is what the active analyzer does with the same causes at the same
-             * step (analyze_file_divergence). */
+             * caller folds its class onto the item and the orphan reads unverified,
+             * which is what the active analyzer does with the same causes at
+             * the same step (analyze_file_divergence). */
             return err;
         }
     }
@@ -2109,9 +2109,9 @@ static const manifest_row_t *standing_row(
  * standing_row's twin over the record: a path dotta remembers is no discovery
  * (workspace_get_anchor at the leaf probe), and this is that rule read by identity
  * — a record at another spelling of the child's entry is an orphan cleanup is
- * about to prune, release or hold, and it holds the child back until it is retired
- * exactly as the same record at the child's own spelling does. Without it one
- * screen promised a commit and a deletion of one file.
+ * about to prune, release or skip, and it keeps the child undiscovered until it
+ * is retired, exactly as the same record at the child's own spelling does. Without
+ * it one screen promised a commit and a deletion of one file.
  *
  * Its own loop rather than a flag on the one above: each is a question with its
  * own reader, and the leaf probe wants probes that read alike in one chain. Neither
@@ -2405,14 +2405,14 @@ static error_t *index_entries(workspace_t *ws) {
  *     makes the record a stale key, RELEASED, so the one copy is never pruned
  *     as the old one (standing_row). A target bound through a symlink, a HOME
  *     spelled two ways, a name the volume folds; apply adopts the row under its
- *     spelling and retires the key; UNVERIFIED holds the orphan until Git answers
- *     — either kind: LOST would retire the record, BACKED would remove the copy,
- *     and neither is a guess to make about an empty directory any more than about
- *     a file. Held and not measured: no reader shows a bit beside UNVERIFIED,
- *     so a compare would only give the item a second reason for the one fate it
- *     already has. The probe raises nothing, so a lookup it could not make is
- *     this orphan's hold and never the load's — the rule the file analyzer takes
- *     for its own looks.
+ *     spelling and retires the key; UNVERIFIED keeps the orphan skipped until
+ *     Git answers — either kind: LOST would retire the record, BACKED would remove
+ *     the copy, and neither is a guess to make about an empty directory any more
+ *     than about a file. Skipped and not measured: no reader shows a bit beside
+ *     UNVERIFIED, so a compare would only give the item a second reason for the
+ *     one fate it already has. The probe raises nothing, so a lookup it could
+ *     not make is this orphan's skip and never the load's — the rule the file
+ *     analyzer takes for its own looks.
  *
  * Divergence for a prunable file is disk against what dotta last deployed — the
  * record (compute_orphan_divergence). A prunable directory's verdict is cleanup's
@@ -2531,8 +2531,8 @@ static error_t *analyze_orphans(workspace_t *ws) {
             !claim_stands(look->occupant, anchor->type);
 
         /* Set by the arms that find the copy dotta's to prune — a candidacy,
-         * not cleanup's verdict, which still holds the copy back on a divergence
-         * or a hold of its own; measured once, below. */
+         * not cleanup's verdict, which still skips the copy for a divergence or
+         * a reason of its own; measured once, below. */
         bool prunable = false;
 
         if (look->occupant == FS_OCCUPANT_NONE) {
@@ -2632,7 +2632,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
         if (prunable) {
             /* A file: disk against what dotta last deployed. A directory: nothing
              * to measure — cleanup's emptiness rule decides — only whether it
-             * can be: one dotta cannot stat or cannot read is held, as an
+             * can be: one dotta cannot stat or cannot read is skipped, as an
              * unstattable file is, until the user can say what is in it.
              *
              * Each arm answers one question and only that one — whose refusal,

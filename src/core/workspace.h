@@ -147,13 +147,13 @@ typedef enum {
  * screen names a claim axis that differs — the tags
  * (workspace_item_extract_display_info), which apply's fixed directories print
  * too (cmds/apply.c print_deploy_results), diff's status line (cmds/diff.c
- * get_status_message_from_item), and a held orphan's label and legend (cmds/apply.c
- * print_cleanup_skips, cmds/status.c display_workspace_status) — and a sentence
- * that names both says "mode and ownership", never "permissions", which is one
- * word for two axes. STALE and CLAIM_MOVED are one word: [stale] on a tag, and
- * "changed in Git" in a sentence — update's census, apply's count, diff's status
- * line — "changed in Git and on disk" where CONTENT stands beside them (the route's
- * CONFLICT).
+ * get_status_message_from_item), and a skipped orphan's label and legend
+ * (cmds/apply.c print_cleanup_skips, cmds/status.c display_workspace_status) —
+ * and a sentence that names both says "mode and ownership", never "permissions",
+ * which is one word for two axes. STALE and CLAIM_MOVED are one word: [stale]
+ * on a tag, and "changed in Git" in a sentence — update's census, apply's count,
+ * diff's status line — "changed in Git and on disk" where CONTENT stands beside
+ * them (the route's CONFLICT).
  *
  * A path bit names its axis — CONTENT the bytes, MODE the mode, OWNERSHIP the
  * owner and group — so a mask of them can name axes where no difference is meant:
@@ -276,7 +276,7 @@ typedef enum {
  *
  * Assigned once by the one producer of every item (workspace_add_diverged) and
  * trusted downstream, as the displaced class is. Readers: cleanup's two verdicts,
- * which hold a SHARED relocation behind --force and prune a BOUND one — the reason
+ * which skip a SHARED relocation unless --force and prune a BOUND one — the reason
  * is cleanup's and lives there (core/cleanup.h) — and the three screens that
  * ask only whether there is a relocation at all: the [relocated] tag
  * (workspace_item_extract_display_info), apply's prune split, status's prunable
@@ -293,7 +293,7 @@ typedef enum {
  * Why a look failed — the class of DIVERGENCE_UNVERIFIED, by whose remedy it is
  *
  * The bit answers the verb question: no verb resolves this item — apply skips
- * it, update refuses it, cleanup holds the orphan — and every engine reads it.
+ * it, update refuses it, cleanup skips the orphan — and every engine reads it.
  * It does not answer the user's question, what do I do, and the things that can
  * make it have three different answers to that: a missing key, a permission,
  * and a list of one-offs no key or privilege settles. One remedy over all three

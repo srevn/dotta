@@ -169,10 +169,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
         return CLEANUP_SKIP_UNVERIFIED;
     }
 
-    /* A held relocation: the claim now lands in a namespace nobody re-targets,
+    /* A shared relocation: the claim now lands in a namespace nobody re-targets,
      * so the copy here is the claim's old home. The same test as cleanup_verdict's
-     * hold arm, its one input in hand; a re-targeted custom/ copy is the other
-     * class and never trips it. */
+     * relocation arm, its one input in hand; a re-targeted custom/ copy is the
+     * other class and never trips it. */
     if (item->relocation == WORKSPACE_RELOCATION_SHARED) {
         return CLEANUP_SKIP_RELOCATED;
     }
@@ -253,7 +253,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
         return CLEANUP_RELEASED;
     }
 
-    /* The relocation hold, both kinds (the table in cleanup.h): the claim moved
+    /* The relocation skip, both kinds (the table in cleanup.h): the claim moved
      * under a namespace nobody re-targets (SHARED — home/; root/'s projection
      * is fixed and never gets here), which means $HOME itself differs, so the
      * copy is real dotfiles under the claim's real home. --force lifts it — the
@@ -263,8 +263,8 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
     }
 
     if (item->item_kind == PATH_KIND_DIRECTORY) {
-        /* A directory the workspace could not stat or read is held whatever --force
-         * says; otherwise the readdir finishes the verdict. */
+        /* A directory the workspace could not stat or read is skipped whatever
+         * --force says; otherwise the readdir finishes the verdict. */
         return (item->divergence & DIVERGENCE_UNVERIFIED) ? CLEANUP_SKIPPED
                                                           : CLEANUP_PRUNABLE;
     }
@@ -278,39 +278,40 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force) {
  * own verdict
  *
  * A directory's fate is the strongest class left in it once this run has acted:
- * nothing but gone entries and it is prunable; a held one and it is skipped,
- * the same transient the held entry is; a permanent one and it is released, because
- * nothing dotta will ever do empties it. Every present planned item records its
- * class as its verdict is taken, so a directory's walk reads its children's fates
- * off the set; FATE_UNPLANNED is hashmap_get's NULL — the entry is outside the
- * plan — and the workspace item says which of the other two it is (vouch_entry).
+ * nothing but gone entries and it is prunable; a skipped one and it is skipped
+ * too, the same transient as that entry; a permanent one and it is released,
+ * because nothing dotta will ever do empties it. Every present planned item records
+ * its class as its verdict is taken, so a directory's walk reads its children's
+ * fates off the set; FATE_UNPLANNED is hashmap_get's NULL — the entry is outside
+ * the plan — and the workspace item says which of the other two it is
+ * (vouch_entry).
  */
 typedef enum {
     FATE_UNPLANNED = 0,
     FATE_GONE,        /* This run prunes it — the hole the walk looks through */
-    FATE_HELD,        /* This run skips it — transient: update, --force, root, or the run that reaches it */
+    FATE_SKIPPED,     /* This run skips it — transient: update, --force, root, or the run that reaches it */
     FATE_PERMANENT    /* This run releases it, or never touches it — nothing of dotta's comes back for it */
 } fate_t;
 
 /**
  * The emptiness walk's context: the fate set, the workspace for an entry outside
- * the plan, and whether a held entry was met on the way
+ * the plan, and whether a skipped entry was met on the way
  */
 typedef struct {
     const hashmap_t *fates;     /* filesystem path → fate_t, every present planned item */
     const workspace_t *ws;
-    bool held;
+    bool skipped;
 } walk_t;
 
 /**
  * Look past this directory entry?
  *
- * The vouch predicate of the verdict phase's emptiness walk. Gone and held entries
- * are looked past — a held one noted, because the directory then waits with it
- * — and a permanent one stops the walk: the directory is occupied by something
- * this run will not remove and no later run will either.
+ * The vouch predicate of the verdict phase's emptiness walk. Gone and skipped
+ * entries are looked past — a skipped one noted, because the directory then waits
+ * with it — and a permanent one stops the walk: the directory is occupied by
+ * something this run will not remove and no later run will either.
  *
- * An entry outside the plan is read off its workspace item. ORPHANED is held:
+ * An entry outside the plan is read off its workspace item. ORPHANED is skipped:
  * the scope did not reach it this run (-e, -p, a path filter), an unfiltered
  * run would decide it, and scope decides reach, never verdict — so a filtered
  * run must not change its parent's fate. Everything else is permanent: a RELEASED
@@ -328,12 +329,12 @@ static bool vouch_entry(const char *child, void *ctx) {
     if (fate == FATE_UNPLANNED) {
         const workspace_item_t *item = workspace_get_item(walk->ws, child);
 
-        fate = (item && item->state == WORKSPACE_STATE_ORPHANED) ? FATE_HELD
+        fate = (item && item->state == WORKSPACE_STATE_ORPHANED) ? FATE_SKIPPED
                                                                  : FATE_PERMANENT;
     }
 
-    if (fate == FATE_HELD) {
-        walk->held = true;
+    if (fate == FATE_SKIPPED) {
+        walk->skipped = true;
     }
 
     return fate != FATE_PERMANENT;
@@ -450,18 +451,18 @@ error_t *cleanup_preflight(
 
             case CLEANUP_SKIPPED:
                 err = ptr_array_push(&verdicts->skipped_files, item);
-                fate = FATE_HELD;
+                fate = FATE_SKIPPED;
                 break;
 
             case CLEANUP_PRUNABLE:
                 /* Nothing of its own in the way; the run's reach is the last
-                 * rung, and a refusal holds the file exactly as a skip does. */
+                 * rung, and a refusal leaves the file exactly as a skip does. */
                 if (parent_accepts_removal(item->filesystem_path)) {
                     err = ptr_array_push(&verdicts->prunable_files, item);
                     fate = FATE_GONE;
                 } else {
                     err = ptr_array_push(&verdicts->refused_files, item);
-                    fate = FATE_HELD;
+                    fate = FATE_SKIPPED;
                 }
                 break;
         }
@@ -473,12 +474,12 @@ error_t *cleanup_preflight(
 
     /* A directory's verdict is the strongest class left in it once this run has
      * acted (fate_t): prunable when everything in it is OS metadata or gone;
-     * skipped while something held is left; released once something permanent
+     * skipped while something skipped is left; released once something permanent
      * is. That is what the prune arrives at by acting, read off the plan here
      * in one pass because the plan orders every child before its parent — a
      * directory's own fate enters the set as it is decided, which is what lets
-     * a parent read its pruned children as gone, its skipped ones as held and
-     * its released ones as permanent.
+     * a parent read each child's class off the set: its pruned children gone,
+     * its skipped ones skipped, its released ones permanent.
      *
      * The buckets fill in walk order, which is prune order: deepest first. */
     workspace_items_t dirs = workspace_items_view(&plan->directories);
@@ -506,7 +507,7 @@ error_t *cleanup_preflight(
                 /* The workspace could not verify it; the directory above it waits
                  * with it. */
                 err = ptr_array_push(&verdicts->skipped_dirs, item);
-                fate = FATE_HELD;
+                fate = FATE_SKIPPED;
                 break;
 
             case CLEANUP_PRUNABLE:
@@ -515,33 +516,34 @@ error_t *cleanup_preflight(
                  * What is left in it after this run, and then the run's reach,
                  * finish the verdict. A managed path beneath it is known from
                  * the view before any look at the disk; otherwise one readdir,
-                 * which stops at the first permanent entry and notes any held
+                 * which stops at the first permanent entry and notes any skipped
                  * one it passed. UNREADABLE is a directory that was readable at
-                 * load and is not now — the world moved, and it is held like a
-                 * refusal on removal, not released. */
+                 * load and is not now — the world moved, and it is skipped like
+                 * a refusal on removal, not released. */
                 if (managed_beneath(ws, path)) {
                     fate = FATE_PERMANENT;
                 } else {
-                    walk_t walk = { .fates = fates, .ws = ws, .held = false };
+                    walk_t walk = { .fates = fates, .ws = ws, .skipped = false };
 
                     switch (fs_directory_emptiness(path, vouch_entry, &walk)) {
                         case FS_DIR_OCCUPIED:   fate = FATE_PERMANENT; break;
-                        case FS_DIR_UNREADABLE: fate = FATE_HELD; break;
-                        case FS_DIR_EMPTY:      fate = walk.held ? FATE_HELD : FATE_GONE; break;
+                        case FS_DIR_UNREADABLE: fate = FATE_SKIPPED; break;
+                        case FS_DIR_EMPTY:      fate = walk.skipped ? FATE_SKIPPED : FATE_GONE;
+                            break;
                     }
                 }
 
                 if (fate == FATE_GONE && !parent_accepts_removal(path)) {
                     /* Nothing but gone entries left, and not this run's to remove:
-                     * held, as a refused file is, for the run that holds root.
+                     * skipped, as a refused file is, for the run that holds root.
                      * Asked last, of what the run would otherwise remove, so a
                      * directory a permanent entry keeps is released whoever owns
                      * its parent. */
                     err = ptr_array_push(&verdicts->refused_dirs, item);
-                    fate = FATE_HELD;
+                    fate = FATE_SKIPPED;
                 } else {
                     ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
-                                        : (fate == FATE_HELD) ? &verdicts->skipped_dirs
+                                        : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
                                                               : &verdicts->released_dirs;
                     err = ptr_array_push(bucket, item);
                 }

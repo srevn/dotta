@@ -96,7 +96,7 @@ static void print_deploy_skips(
 
     for (size_t i = 0; i < verdicts->skipped.count && i < LIST_LIMIT; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
-        const char *path = s->row->filesystem_path;
+        const char *path = s->item->filesystem_path;
 
         switch (s->reason) {
             case DEPLOY_SKIP_PERMISSION: {
@@ -141,7 +141,7 @@ static void print_deploy_skips(
                 } else {
                     output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(wrong type from ");
                 }
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
@@ -155,7 +155,7 @@ static void print_deploy_skips(
                     out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, "(%s from ",
                     conflict ? "changed in Git and on disk" : "modified locally"
                 );
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_RED, ")\n");
                 break;
             }
@@ -182,15 +182,15 @@ static void print_deploy_skips(
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "  ?");
                 output_print(out, OUTPUT_NORMAL, " %s ", path);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, "(%s from ", label);
-                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->row->profile);
+                output_styled(out, OUTPUT_NORMAL, "{cyan}%s{reset}", s->item->profile);
                 output_colored(out, OUTPUT_NORMAL, OUTPUT_COLOR_YELLOW, ")\n");
                 break;
             }
 
             case DEPLOY_SKIP_OWNERSHIP: {
                 /* The claim as chown(1) spells it: owner, owner:group, or :group */
-                const char *owner = s->row->owner ? s->row->owner : "";
-                const char *group = s->row->group ? s->row->group : "";
+                const char *owner = s->item->row->owner ? s->item->row->owner : "";
+                const char *group = s->item->row->group ? s->item->row->group : "";
 
                 output_styled(
                     out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s%s%s needs root to set)\n",
@@ -386,7 +386,7 @@ static void print_deploy_preview(
             output_styled(
                 out, OUTPUT_VERBOSE,
                 overwrite ? "    {yellow}•{reset} %s\n" : "    {cyan}•{reset} %s\n",
-                files->entries[i].row->filesystem_path
+                files->entries[i].item->filesystem_path
             );
         }
         if (files->count > LIST_LIMIT) {
@@ -412,7 +412,7 @@ static void print_deploy_preview(
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                dirs->entries[i].row->filesystem_path
+                dirs->entries[i].item->filesystem_path
             );
         }
         if (created > LIST_LIMIT) {
@@ -436,7 +436,7 @@ static void print_deploy_preview(
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {cyan}•{reset} %s\n",
-                dirs->entries[i].row->filesystem_path
+                dirs->entries[i].item->filesystem_path
             );
         }
         if (fixed > LIST_LIMIT) {
@@ -460,7 +460,7 @@ static void print_deploy_preview(
             shown++;
             output_styled(
                 out, OUTPUT_VERBOSE, "    {yellow}•{reset} %s\n",
-                dirs->entries[i].row->filesystem_path
+                dirs->entries[i].item->filesystem_path
             );
         }
         if (replaced > LIST_LIMIT) {
@@ -688,7 +688,7 @@ static void print_deploy_results(
     if (deployed.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Deployed files");
         for (size_t i = 0; i < deployed.count; i++) {
-            const manifest_row_t *file = deployed.entries[i].verdict->row;
+            const manifest_row_t *file = deployed.entries[i].verdict->item->row;
 
             if (file->type == PATH_TYPE_SYMLINK) {
                 output_styled(
@@ -725,7 +725,7 @@ static void print_deploy_results(
             const deploy_verdict_t *v = converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_CREATE) continue;
-            const manifest_row_t *dir = v->row;
+            const manifest_row_t *dir = v->item->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -747,7 +747,7 @@ static void print_deploy_results(
             const deploy_verdict_t *v = converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_FIX) continue;
-            const manifest_row_t *dir = v->row;
+            const manifest_row_t *dir = v->item->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -784,7 +784,7 @@ static void print_deploy_results(
             const deploy_verdict_t *v = converged.entries[i].verdict;
 
             if (deploy_convergence(v->occupant) != DEPLOY_CONVERGE_REPLACE) continue;
-            const manifest_row_t *dir = v->row;
+            const manifest_row_t *dir = v->item->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -803,7 +803,7 @@ static void print_deploy_results(
     if (ancestors.count > 0) {
         output_section(out, OUTPUT_VERBOSE, "Created ancestors (outside the plan)");
         for (size_t i = 0; i < ancestors.count; i++) {
-            const manifest_row_t *dir = ancestors.entries[i].verdict->row;
+            const manifest_row_t *dir = ancestors.entries[i].verdict->item->row;
 
             output_styled(
                 out, OUTPUT_VERBOSE, "  {green}✓{reset} %s (mode: %04o",
@@ -862,7 +862,7 @@ static void print_deploy_results(
 
             output_styled(
                 out, OUTPUT_NORMAL, "  {red}✗{reset} %s (%s)\n",
-                o->verdict->row->filesystem_path,
+                o->verdict->item->filesystem_path,
                 error_message(error_root(o->error))
             );
         }
@@ -1569,7 +1569,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     workspace_t *ws = NULL;
     deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
-    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow rows from ws; free after deploy_result */
+    deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow items from ws; free after deploy_result */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
     char *profiles_str = NULL;
     deploy_result_t *deploy_result = NULL;   /* Outcomes borrow the fates; free first */
@@ -2690,14 +2690,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             for (size_t i = 0; i < deployed.count; i++) {
                 const deploy_outcome_t *o = &deployed.entries[i];
-                const manifest_row_t *file = o->verdict->row;
+                const workspace_item_t *item = o->verdict->item;
 
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
-                const workspace_item_t *item = o->verdict->item;
                 bool acknowledges = workspace_reassigned(item->row, item->anchor);
 
-                error_t *anchor_err = workspace_anchor(ws, file, &o->stat, now);
+                error_t *anchor_err = workspace_anchor(ws, item->row, &o->stat, now);
                 if (anchor_err) {
                     /* Non-fatal warning - the write landed, just anchor update
                      * failed. The file is already on the filesystem with correct
@@ -2705,7 +2704,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                      * operation. */
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        file->filesystem_path, error_message(anchor_err)
+                        item->filesystem_path, error_message(anchor_err)
                     );
                     error_free(anchor_err);
                     continue;
@@ -2717,11 +2716,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             deploy_outcomes_t converged = deploy_result->converged;
             for (size_t i = 0; i < converged.count; i++) {
                 const deploy_verdict_t *v = converged.entries[i].verdict;
-                const manifest_row_t *dir = v->row;
+                const workspace_item_t *item = v->item;
 
                 /* Derived before either write: both rewrite the record the
                  * reassignment fact is read against. */
-                bool acknowledges = workspace_reassigned(v->item->row, v->item->anchor);
+                bool acknowledges = workspace_reassigned(item->row, item->anchor);
 
                 if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !acknowledges) {
                     /* A fix: the claims it set, which the record still lacks.
@@ -2737,23 +2736,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         : DIVERGENCE_MODE;
 
                     error_t *confirm_err = workspace_confirm(
-                        ws, dir, workspace_claims_moved(dir, v->item->anchor) & landed, NULL
+                        ws, item->row,
+                        workspace_claims_moved(item->row, item->anchor) & landed, NULL
                     );
                     if (confirm_err) {
                         output_warning(
                             out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                            dir->filesystem_path, error_message(confirm_err)
+                            item->filesystem_path, error_message(confirm_err)
                         );
                         error_free(confirm_err);
                     }
                     continue;
                 }
 
-                error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+                error_t *anchor_err = workspace_anchor(ws, item->row, NULL, now);
                 if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        dir->filesystem_path, error_message(anchor_err)
+                        item->filesystem_path, error_message(anchor_err)
                     );
                     error_free(anchor_err);
                     continue;
@@ -2764,13 +2764,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
             deploy_outcomes_t ancestors = deploy_result->ancestors;
             for (size_t i = 0; i < ancestors.count; i++) {
-                const manifest_row_t *dir = ancestors.entries[i].verdict->row;
+                const workspace_item_t *item = ancestors.entries[i].verdict->item;
 
-                error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+                error_t *anchor_err = workspace_anchor(ws, item->row, NULL, now);
                 if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        dir->filesystem_path, error_message(anchor_err)
+                        item->filesystem_path, error_message(anchor_err)
                     );
                     error_free(anchor_err);
                 }

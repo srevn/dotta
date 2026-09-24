@@ -545,7 +545,7 @@ static bool directory_is_deployable(
     const deploy_preflight_result_t *verdicts, const char *path
 ) {
     for (size_t i = 0; i < verdicts->directories.count; i++) {
-        if (strcmp(verdicts->directories.entries[i].row->filesystem_path, path) == 0) {
+        if (strcmp(verdicts->directories.entries[i].item->filesystem_path, path) == 0) {
             return true;
         }
     }
@@ -632,7 +632,7 @@ static void check_ancestry(
     for (size_t i = 0; i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (strcmp(s->row->filesystem_path, above->filesystem_path) == 0) {
+        if (strcmp(s->item->filesystem_path, above->filesystem_path) == 0) {
             skip->reason = deploy_skip_needs_force(s->reason)
                 ? DEPLOY_SKIP_TYPE : DEPLOY_SKIP_ANCESTOR;
             return;
@@ -913,7 +913,7 @@ static bool above_deployable_row(
 
     for (size_t k = 0; k < sizeof(kinds) / sizeof(kinds[0]); k++) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
-            if (str_path_beneath(kinds[k]->entries[i].row->filesystem_path, dir, len)) {
+            if (str_path_beneath(kinds[k]->entries[i].item->filesystem_path, dir, len)) {
                 return true;
             }
         }
@@ -1015,7 +1015,7 @@ error_t *deploy_preflight(
          * fate is already taken. The row is decided into its skip: each rung
          * that refuses writes it — the reason, and the ancestor it names with
          * the claim there — and the row is skipped iff one did. */
-        deploy_skip_t skip = { .row = row, .item = item };
+        deploy_skip_t skip = { .item = item };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1080,7 +1080,6 @@ error_t *deploy_preflight(
 
         deploy_verdict_t *v = &result->directories.entries[result->directories.count++];
 
-        v->row = row;
         v->item = item;
         v->occupant = occupant;
         v->uid = uid;
@@ -1098,7 +1097,7 @@ error_t *deploy_preflight(
         /* Its ancestry first (see the directory loop): the directory pass is
          * decided in full, so a squatted ancestor is converged, skipped, or out
          * of this run's reach by now. */
-        deploy_skip_t skip = { .row = row, .item = item };
+        deploy_skip_t skip = { .item = item };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1193,7 +1192,6 @@ error_t *deploy_preflight(
 
         deploy_verdict_t *v = &result->files.entries[result->files.count++];
 
-        v->row = row;
         v->item = item;
         v->occupant = occupant;
         v->uid = uid;
@@ -1227,7 +1225,7 @@ error_t *deploy_preflight(
         /* Its ancestry, as the ladders ask it. An ancestor takes no skip (below),
          * so this one is the rung's answer alone: its reason is read and it is
          * never pushed, which is why it carries no item. */
-        deploy_skip_t skip = { .row = row };
+        deploy_skip_t skip = { 0 };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1244,7 +1242,6 @@ error_t *deploy_preflight(
 
         deploy_verdict_t *v = &result->ancestors.entries[result->ancestors.count++];
 
-        v->row = row;
         v->item = item;
         v->occupant = FS_OCCUPANT_NONE;
 
@@ -1401,7 +1398,7 @@ static error_t *release_directories(deploy_run_t *run) {
 static error_t *materialize_directory(
     deploy_run_t *run, const deploy_verdict_t *v
 ) {
-    const manifest_row_t *dir = v->row;
+    const manifest_row_t *dir = v->item->row;
 
     error_t *err = fs_create_dir_with_ownership(
         dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
@@ -1447,11 +1444,11 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
     for (size_t i = 0; i < ancestors->count; i++) {
         const deploy_verdict_t *v = &ancestors->entries[i];
 
-        if (strcmp(v->row->filesystem_path, path) != 0) {
+        if (strcmp(v->item->filesystem_path, path) != 0) {
             continue;
         }
 
-        const manifest_row_t *dir = v->row;
+        const manifest_row_t *dir = v->item->row;
 
         error_t *err = fs_create_dir_exclusive(
             dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
@@ -1632,7 +1629,7 @@ static error_t *deploy_file(
      * whole re-verification. */
     *out_stat = STAT_CACHE_UNSET;
 
-    const manifest_row_t *file = v->row;
+    const manifest_row_t *file = v->item->row;
 
     error_t *err = NULL;
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache */
@@ -1764,7 +1761,7 @@ cleanup:
  * @return Error or NULL on success
  */
 static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
-    const char *path = v->row->filesystem_path;
+    const char *path = v->item->filesystem_path;
 
     switch (v->occupant) {
         case FS_OCCUPANT_DIRECTORY:
@@ -1822,9 +1819,9 @@ static error_t *deploy_directory(deploy_run_t *run, const deploy_verdict_t *v) {
 static const char *poisoned_above(const deploy_result_t *result, const char *path) {
     for (size_t i = 0; i < result->failed.count; i++) {
         const deploy_verdict_t *v = result->failed.entries[i].verdict;
-        const char *dir = v->row->filesystem_path;
+        const char *dir = v->item->filesystem_path;
 
-        if (v->row->type != PATH_TYPE_DIRECTORY ||
+        if (v->item->item_kind != PATH_KIND_DIRECTORY ||
             deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX) {
             continue;
         }
@@ -1909,7 +1906,7 @@ error_t *deploy_execute(
      * the replace has made that true. */
     for (size_t i = 0; i < verdicts->directories.count; i++) {
         const deploy_verdict_t *v = &verdicts->directories.entries[i];
-        const char *above = poisoned_above(result, v->row->filesystem_path);
+        const char *above = poisoned_above(result, v->item->filesystem_path);
 
         err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
                     : deploy_directory(&run, v);
@@ -1935,7 +1932,7 @@ error_t *deploy_execute(
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];
         deploy_outcome_t *o = &result->deployed.entries[result->deployed.count];
-        const char *above = poisoned_above(result, v->row->filesystem_path);
+        const char *above = poisoned_above(result, v->item->filesystem_path);
 
         err = above ? ERROR(ERR_FS, "'%s' was not converged", above)
                     : deploy_file(&run, v, &o->stat);
@@ -1971,7 +1968,7 @@ error_t *deploy_execute(
 
 /**
  * Free preflight result — the warnings, the skip array and the verdict arrays.
- * The rows they all point at belong to the workspace.
+ * The items they all point at belong to the workspace.
  */
 void deploy_preflight_result_free(deploy_preflight_result_t *verdicts) {
     if (!verdicts) {

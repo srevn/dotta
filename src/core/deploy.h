@@ -72,22 +72,24 @@ typedef struct {
 /**
  * How one planned row is materialized — decided once, at preflight
  *
- * Everything a consumer needs and nothing it has to go and get: the row, its
- * analysis, what stands at its path, and the metadata the write applies. The
- * occupant is the workspace's lstat, never a fresh one — or FS_OCCUPANT_NONE
- * for a row preflight planned absent beneath a squatter this run replaces first
- * (check_ancestry), whose own path the workspace never looked at and which the
- * run empties before anything lands there. The occupant is also the receipt's
- * verb for a directory: NONE → created, DIRECTORY → fixed, anything else → replaced
- * (deploy_convergence).
+ * Everything a consumer needs and nothing it has to go and get: the row's item
+ * — the row, with its analysis — what stands at its path, and the metadata the
+ * write applies. The occupant is the workspace's lstat, never a fresh one — or
+ * FS_OCCUPANT_NONE for a row preflight planned absent beneath a squatter this
+ * run replaces first (check_ancestry), whose own path the workspace never looked
+ * at and which the run empties before anything lands there. The occupant is also
+ * the receipt's verb for a directory: NONE → created, DIRECTORY → fixed, anything
+ * else → replaced (deploy_convergence).
  *
  * The item is the index's answer, looked up once where the fate is decided and
  * filled verbatim on every arm — the planned-absent arms and the skip's included
- * (deploy_skip_t). An item's join facts (row, anchor, profile) are sound on every
- * fate; a row beneath a squatter carries no observation at all (core/workspace.h
- * workspace_displaced_t), which is why the fate's own occupant says what the
- * run will find. What a fate declines to consult it declines at the reader, never
- * by blanking the pointer.
+ * (deploy_skip_t). Its row is the fate's: the view holds one row per path, and
+ * a managed path's item is that row's own, so the row is read off the item
+ * (item->row) and never carried beside it. An item's join facts (row, anchor,
+ * profile) are sound on every fate; a row beneath a squatter carries no observation
+ * at all (core/workspace.h workspace_displaced_t), which is why the fate's own
+ * occupant says what the run will find. What a fate declines to consult it declines
+ * at the reader, never by blanking the pointer.
  *
  * Never NULL, so a reader dereferences it without a test. A fate is taken for a
  * pending row, a verdict or a skip, or for an ancestor, a verdict alone, and
@@ -106,8 +108,7 @@ typedef struct {
  * the rationale).
  */
 typedef struct {
-    const manifest_row_t *row;       /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;    /* The analysis object — looked up once, never NULL */
+    const workspace_item_t *item;    /* Borrowed (workspace lifetime), never NULL; the row is item->row */
     fs_occupant_t occupant;          /* What the run will find at the path */
     uid_t uid;                       /* Ownership the write applies; -1 = no change */
     gid_t gid;
@@ -331,11 +332,11 @@ typedef enum {
 /**
  * One planned row the run does not deploy
  *
- * The shape deploy_verdict_t gives a row the run does deploy: the row, its
- * analysis, and the facts decided about it. `ancestor` is the path the reason
- * names — the ancestor that refused, the non-directory in the way, the squatted
- * directory above the row. Every such path is an ancestor of the row's own, and
- * so a prefix of filesystem_path by construction (check_landing truncates the
+ * The shape deploy_verdict_t gives a row the run does deploy: the row's item,
+ * and the facts decided about it. `ancestor` is the path the reason names — the
+ * ancestor that refused, the non-directory in the way, the squatted directory
+ * above the row. Every such path is an ancestor of the row's own, and so a prefix
+ * of the item's filesystem_path by construction (check_landing truncates the
  * planned path; a squatted directory stands strictly above every row that names
  * it, and the load lends its length with it — core/workspace.h
  * workspace_squatted_dir_t) — carried as the byte length of that prefix, not a
@@ -357,12 +358,11 @@ typedef enum {
  * answer. OWNERSHIP, the row's rung, reads its claim off the row and never the
  * item's look, which a row planned absent does not have.
  *
- * Nothing here is owned: the row is borrowed (workspace lifetime), as every row
- * in this module is.
+ * Nothing here is owned: the item is borrowed (workspace lifetime), as every
+ * item and row in this module is.
  */
 typedef struct {
-    const manifest_row_t *row;              /* Borrowed (workspace lifetime) */
-    const workspace_item_t *item;           /* The analysis object, as the verdict's — never NULL */
+    const workspace_item_t *item;           /* Borrowed (workspace lifetime), as the verdict's — never NULL */
     deploy_skip_reason_t reason;
     size_t ancestor;                        /* Prefix length of the named ancestor; 0 = none */
     deploy_ancestor_class_t ancestor_class; /* ANCESTOR only: the claim at a squatter with no skip of its own */
@@ -544,7 +544,7 @@ typedef struct {
  * has no receipt and no record.
  *
  * Free with deploy_result_free, before deploy_preflight_result_free and before
- * workspace_free — the outcomes borrow the verdicts, the verdicts the rows.
+ * workspace_free — the outcomes borrow the verdicts, the verdicts the items.
  */
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's proof */

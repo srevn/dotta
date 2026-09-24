@@ -233,15 +233,15 @@ typedef enum {
  *
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test), workspace.c
- * compute_workspace_status, workspace_item_extract_display_info (the DEPLOYED
- * arm's [displaced], beside which only what no look decides rides, and the ORPHANED
- * arm's rider), cmds/status.c display_workspace_status's Issues hint, and
- * cmds/diff.c get_status_message_from_item and show_file_diff_from_workspace
- * (the colour ladder and the content gate), should_show_item_for_direction beside
- * them; and core/deploy.c check_ancestry, off the squatted directory itself — a
- * caller holding a path rather than an item is lent it whole, the claim this
- * class is copied from (workspace_squatted_ancestor), so apply's remedy and
- * status's section cannot name two claimants for one squatter.
+ * workspace_item_extract_display_info (the DEPLOYED arm's [displaced], beside
+ * which only what no look decides rides, and the ORPHANED arm's rider),
+ * cmds/status.c display_workspace_status's Issues hint, and cmds/diff.c
+ * get_status_message_from_item and show_file_diff_from_workspace (the colour
+ * ladder and the content gate), should_show_item_for_direction beside them; and
+ * core/deploy.c check_ancestry, off the squatted directory itself — a caller
+ * holding a path rather than an item is lent it whole, the claim this class is
+ * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
+ * cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -776,15 +776,6 @@ workspace_route_t workspace_item_route(const workspace_item_t *item);
 typedef struct workspace workspace_t;
 
 /**
- * Workspace cleanliness status
- */
-typedef enum {
-    WORKSPACE_CLEAN,        /* No divergence */
-    WORKSPACE_DIRTY,        /* Has divergence (warnings) */
-    WORKSPACE_INVALID       /* Serious issues (errors) */
-} workspace_status_t;
-
-/**
  * Workspace load options — the two analyses a caller may decline
  *
  * What every load does is workspace_load's own contract, stated there. These
@@ -901,27 +892,20 @@ error_t *workspace_load(
 );
 
 /**
- * Get workspace status
- *
- * Returns overall cleanliness assessment:
- * - WORKSPACE_CLEAN: No divergence detected
- * - WORKSPACE_DIRTY: Has work for a verb (undeployed, modified, deleted, stale,
- *   reassigned, orphaned, released, untracked or policy-violating items)
- * - WORKSPACE_INVALID: Has an item the analysis could not verify
- *   (DIVERGENCE_UNVERIFIED) — no verb resolves it; the user must look
- *
- * @param ws Workspace (must not be NULL)
- * @return Status enum
- */
-workspace_status_t workspace_get_status(const workspace_t *ws);
-
-/**
  * Get all diverged items
  *
  * Returns the workspace's diverged spine — every item (file and directory) the
  * analysis produced — as a borrowed slice. Pure value return — no allocation,
  * no error path. Items are arena-allocated, so the slice and the item addresses
  * it carries are valid for the workspace's lifetime.
+ *
+ * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
+ * item the route does not call clean (workspace_item_route) — a squatter above
+ * it, a divergence bit, or a pending handover, which a clean row's sources derive
+ * where its owned record names another profile (workspace_reassigned). A managed
+ * path with none of these has no item. So a load is clean iff this is empty,
+ * and clean over a scope iff it holds none of the scope's items: cmds/status.c
+ * display_workspace_status reads its status line that way, filtered or not.
  *
  * Iterate via:
  *   workspace_items_t items = workspace_get_all_diverged(ws);
@@ -939,12 +923,10 @@ workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
  * Get workspace item by filesystem path
  *
  * Returns the divergence information for a specific file or directory via O(1)
- * hashmap lookup. Every item the analysis produced is indexed — a row with a
- * state other than DEPLOYED, a divergence bit, or a reassignment (a clean row
- * whose owned record names another profile has an item whose sources derive it
- * — workspace_reassigned); a row with none of the three has no item, and this
- * returns NULL. A row beneath a squatter always has one: nothing there was looked
- * at, so there is no reading that could have come back clean
+ * hashmap lookup. Every diverged item is indexed (workspace_get_all_diverged
+ * says which those are); a managed path with nothing to say has no item, and
+ * this returns NULL. A row beneath a squatter always has one: nothing there was
+ * looked at, so there is no reading that could have come back clean
  * (workspace_displaced_t).
  *
  * This function enables preflight to efficiently query workspace data instead

@@ -145,7 +145,7 @@ In commands like `dotta status`, `dotta update`, and `dotta apply`, files that c
 ```
 $ dotta status
 Workspace status
-  Invalid - workspace has paths dotta could not verify
+  Invalid - 1 item dotta could not verify
 
 Unverifiable paths (1 item) (dotta could not verify these paths)
 

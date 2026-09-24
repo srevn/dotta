@@ -278,9 +278,6 @@ struct workspace {
     const manifest_row_t **observations;         /* Rows borrowed from the active slices (array owned) */
     size_t observation_count;                    /* Number of pending observations */
     size_t observation_capacity;                 /* Allocated capacity of observations array */
-
-    /* Status cache */
-    workspace_status_t status;                   /* Cached cleanliness assessment */
 };
 
 /**
@@ -307,8 +304,6 @@ static error_t *workspace_create_empty(
     }
 
     ptr_array_init(&ws->diverged);
-
-    ws->status = WORKSPACE_CLEAN;
 
     *out = ws;
     return NULL;
@@ -482,6 +477,11 @@ static const workspace_squatted_dir_t *squatted_ancestor(
  * displaced item was also spared its look is the analyzers' half, asked before
  * every look they take, and the two halves meet here: an item that carries a
  * class is an item with nothing measured.
+ *
+ * Its callers add by the spine's rule (workspace_get_all_diverged), each at the
+ * arm that decides it: a look withheld carries its class, a look failed or another
+ * kind carries its bit, and each judge's tail tests a state, a bit or a pending
+ * handover — so no DEPLOYED item the route calls clean is ever added.
  *
  * @param ws Workspace context (must not be NULL)
  * @param row The view's claim (NULL for orphans — except a relocated one, whose
@@ -2703,65 +2703,6 @@ static error_t *analyze_files_divergence(workspace_t *ws, const config_t *config
 }
 
 /**
- * Compute workspace status
- *
- * INVALID is reserved for what the analysis could not establish: an item carrying
- * DIVERGENCE_UNVERIFIED (an unreadable path, a comparison that could not run, a
- * Git probe that did not answer) is one apply cannot resolve — it skips the item
- * and the user must look. Everything else that is not clean is DIRTY: apply
- * deploys, adopts, prunes, reclaims or releases it. An orphan is pending work,
- * not an invalid workspace.
- */
-static workspace_status_t compute_workspace_status(const workspace_t *ws) {
-    if (!ws) {
-        return WORKSPACE_INVALID;
-    }
-
-    bool has_unverified = false;
-    bool has_warnings = false;
-
-    for (size_t i = 0; i < ws->diverged.count; i++) {
-        const workspace_item_t *item = ws->diverged.items[i];
-
-        if (item->divergence & DIVERGENCE_UNVERIFIED) {
-            has_unverified = true;
-        }
-
-        switch (item->state) {
-            case WORKSPACE_STATE_ORPHANED:
-            case WORKSPACE_STATE_RELEASED:
-            case WORKSPACE_STATE_UNDEPLOYED:
-            case WORKSPACE_STATE_DELETED:
-            case WORKSPACE_STATE_UNTRACKED:
-                has_warnings = true;
-                break;
-
-            case WORKSPACE_STATE_DEPLOYED:
-                /* The displaced read comes first and stands on its own: a row
-                 * beneath a squatter has no path bit because nothing there was
-                 * looked at, and reading only the bits would call it clean —
-                 * true only so long as the squatter's own TYPE item happens to
-                 * be in this same fold. A fold over items answers from each item's
-                 * own facts. */
-                if (item->displaced != WORKSPACE_DISPLACED_NONE ||
-                    item->divergence != DIVERGENCE_NONE ||
-                    workspace_reassigned(item->row, item->anchor)) {
-                    has_warnings = true;
-                }
-                break;
-        }
-    }
-
-    if (has_unverified) {
-        return WORKSPACE_INVALID;
-    } else if (has_warnings) {
-        return WORKSPACE_DIRTY;
-    } else {
-        return WORKSPACE_CLEAN;
-    }
-}
-
-/**
  * The blob the view holds over a directory — at it, or at a rung above it
  *
  * A directory standing where the view holds a blob is the [type] the file analysis
@@ -3894,21 +3835,8 @@ error_t *workspace_load(
         }
     }
 
-    /* Compute status */
-    ws->status = compute_workspace_status(ws);
-
     *out = ws;
     return NULL;
-}
-
-/**
- * Get workspace status
- */
-workspace_status_t workspace_get_status(const workspace_t *ws) {
-    if (!ws) {
-        return WORKSPACE_INVALID;
-    }
-    return ws->status;
 }
 
 /**

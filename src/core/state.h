@@ -191,9 +191,9 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  * proof was taken of, and taken for it, a link the user made reads as dotta's
  * file — clean, or pruned as an orphan. Git's ce_match_stat asks the entry's
  * mode before its stat data for the same reason. Asked in the ladder's division,
- * a link for a link and a regular file for either blob mode (infra/compare.c
- * mode_stands, the same division over a git filemode); never of a directory,
- * which confirms no content and so carries no proof.
+ * a link for a link and a regular file for either blob mode (core/workspace.h
+ * workspace_type_occupant); never of a directory, which confirms no content and
+ * so carries no proof.
  *
  * Whether there is a proof to ask about is the asker's question, not this one's.
  *

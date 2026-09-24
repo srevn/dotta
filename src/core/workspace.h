@@ -435,6 +435,43 @@ typedef struct {
 } workspace_item_t;
 
 /**
+ * The node a type stands as — the kind, in the ladder's division
+ *
+ * A regular file for either blob mode, a link, a directory: as finely as
+ * infra/compare.h's ladder tells one from another — compare.c tests S_ISLNK for
+ * a link and S_ISREG for either blob mode, and never the executable bit — so
+ * FILE and EXECUTABLE are one kind, their difference the mode axis's, and a
+ * record's type carries the executable half as a copy of the row's rather than
+ * as something confirmed (core/state.h anchor_t). A directory is the third kind.
+ * Named in the look's words because a kind is what a look can tell apart: two
+ * types are one kind iff they stand as one occupant, and a look finds a type's
+ * node iff it found this occupant. No type stands as an absence, as a look failed
+ * or not taken, or as a FIFO, a socket or a device (FS_OCCUPANT_NONE,
+ * FS_OCCUPANT_UNKNOWN, FS_OCCUPANT_OTHER).
+ *
+ * The same division one layer down, over a stat: infra/compare.c mode_stands,
+ * under a git filemode, and core/state.h stat_cache_matches, under the proof's
+ * type. core/workspace.c claim_stands asks a coarser question of its own: a
+ * directory or not.
+ *
+ * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
+ * record's own node, standing), core/deploy.c occupant_conflicts (what stands
+ * at a planned path, against the node its row lands). A reader not on this list
+ * is a bug.
+ */
+static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
+    switch (type) {
+        case PATH_TYPE_FILE:
+        case PATH_TYPE_EXECUTABLE: return FS_OCCUPANT_REGULAR;
+        case PATH_TYPE_SYMLINK:    return FS_OCCUPANT_SYMLINK;
+        case PATH_TYPE_DIRECTORY:  return FS_OCCUPANT_DIRECTORY;
+    }
+
+    /* Unreachable once every enum value is handled */
+    return FS_OCCUPANT_OTHER;
+}
+
+/**
  * The row's content against a pair dotta confirmed — a verdict from no look
  *
  * infra/compare.h's ladder asked of a confirmation instead of a disk copy: the
@@ -443,14 +480,10 @@ typedef struct {
  *
  * The kind rung is what keeps one object from standing for two contents: Git
  * hashes a link's target exactly as it hashes a file's bytes, so a single id
- * sits behind both and means a different thing under each. How finely it divides
- * is the ladder's own — compare.c tests S_ISLNK for a link and S_ISREG for either
- * blob mode, and never the executable bit — so FILE and EXECUTABLE are one kind
- * here, their difference the mode axis's, and a record's type carries the
- * executable half as a copy of the row's rather than as something confirmed
- * (core/state.h anchor_t). A directory is the third kind: it claims no content
- * at all, so a blob row and a directory row are never one another's, whatever
- * their (zero) blobs say.
+ * sits behind both and means a different thing under each. Two types are one
+ * kind iff they stand as one node (workspace_type_occupant above); a directory
+ * claims no content at all, so a blob row and a directory row are never one
+ * another's, whatever their (zero) blobs say.
  *
  * The pair travels as values because it is one of two facts — the record's
  * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
@@ -479,8 +512,7 @@ typedef struct {
 static inline compare_result_t workspace_compare_confirmed(
     const manifest_row_t *row, path_type_t type, const git_oid *blob
 ) {
-    if (path_type_kind(type) != path_type_kind(row->type) ||
-        (type == PATH_TYPE_SYMLINK) != (row->type == PATH_TYPE_SYMLINK)) {
+    if (workspace_type_occupant(type) != workspace_type_occupant(row->type)) {
         return CMP_TYPE_DIFF;
     }
 
@@ -571,21 +603,8 @@ static inline bool workspace_reassigned(
 
     /* Of another kind: its own node's, while a look finds it standing — and no
      * look disproves nothing */
-    if (occupant == FS_OCCUPANT_UNKNOWN) {
-        return true;
-    }
-
-    /* What the record's node stands as, in the ladder's division: a regular file
-     * for either blob mode, a link, a directory */
-    switch (anchor->type) {
-        case PATH_TYPE_FILE:
-        case PATH_TYPE_EXECUTABLE: return occupant == FS_OCCUPANT_REGULAR;
-        case PATH_TYPE_SYMLINK:    return occupant == FS_OCCUPANT_SYMLINK;
-        case PATH_TYPE_DIRECTORY:  return occupant == FS_OCCUPANT_DIRECTORY;
-    }
-
-    /* Unreachable once every enum value is handled */
-    return false;
+    return occupant == FS_OCCUPANT_UNKNOWN ||
+           occupant == workspace_type_occupant(anchor->type);
 }
 
 /**

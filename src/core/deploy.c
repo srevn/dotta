@@ -312,22 +312,15 @@ void deploy_plan_free(deploy_plan_t *plan) {
  * ══════════════════════════════════════════════════════════════════ */
 
 /**
- * What a file row materializes at its path
- *
- * The occupant vocabulary is sys/filesystem's (fs_occupant_t): the link itself,
- * never its target. Deploy unlinks the link and never follows it, so the target's
- * type and permissions are none of its business.
- */
-static fs_occupant_t file_row_occupant(const manifest_row_t *file) {
-    return file->type == PATH_TYPE_SYMLINK ? FS_OCCUPANT_SYMLINK
-                                           : FS_OCCUPANT_REGULAR;
-}
-
-/**
  * Does what stands at the path disagree with what the row materializes?
+ *
+ * Something known to stand there that is not the node the row's type stands as
+ * (core/workspace.h workspace_type_occupant) — the link itself, never its target:
+ * deploy unlinks the link and never follows it, so the target's type and
+ * permissions are none of its business.
  */
-static bool occupant_conflicts(fs_occupant_t occ, fs_occupant_t want) {
-    return deploy_occupant_present(occ) && occ != want;
+static bool occupant_conflicts(fs_occupant_t occ, path_type_t type) {
+    return deploy_occupant_present(occ) && occ != workspace_type_occupant(type);
 }
 
 /**
@@ -1047,8 +1040,7 @@ error_t *deploy_preflight(
              * is the row converging in place — so path_clearance cannot refuse
              * here, TYPE is the only reachable arm, and "use --force" is always
              * the true remedy. */
-            if (skip.reason == DEPLOY_SKIP_NONE &&
-                occupant_conflicts(occupant, FS_OCCUPANT_DIRECTORY) &&
+            if (skip.reason == DEPLOY_SKIP_NONE && occupant_conflicts(occupant, row->type) &&
                 path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
                 skip.reason = DEPLOY_SKIP_TYPE;
             }
@@ -1118,7 +1110,7 @@ error_t *deploy_preflight(
             if (err) goto cleanup;
 
             if (skip.reason == DEPLOY_SKIP_NONE) {
-                if (occupant_conflicts(occupant, file_row_occupant(row))) {
+                if (occupant_conflicts(occupant, row->type)) {
                     /* Type: what stands at the path decides the remedy, and whose
                      * it is decides the consent. STALE on a kind the row does
                      * not have is the workspace's proof that the occupant is
@@ -1635,15 +1627,6 @@ static error_t *deploy_file(
     const buffer_t *content_buffer = NULL;  /* Borrowed from cache */
     char *target_str = NULL;
 
-    /* Whether the occupant must go before the write, which is mechanism rather
-     * than policy: rename(2) replaces any non-directory in place, so the regular
-     * arm clears only a directory; symlink(2) is EEXIST-strict, so the symlink
-     * arm clears whatever is there — including an occupant of its own type, which
-     * is no conflict and needed no --force. */
-    fs_occupant_t want = file_row_occupant(file);
-    bool must_clear = (want == FS_OCCUPANT_SYMLINK) ? deploy_occupant_present(v->occupant)
-                                                    : (v->occupant == FS_OCCUPANT_DIRECTORY);
-
     /* Land the path: parents first, whichever arm writes it */
     err = ensure_parents(run, file->filesystem_path);
     if (err) {
@@ -1660,10 +1643,11 @@ static error_t *deploy_file(
         );
         if (err) goto cleanup;
 
-        /* symlink(2) refuses an occupied path outright, so the link's own
-         * predecessor goes too — the one the verdict named, never one found by
-         * a fresh look from down here. */
-        if (must_clear) {
+        /* symlink(2) refuses an occupied path outright, so whatever stands there
+         * goes first — mechanism, not policy: an occupant of the link's own kind
+         * too, which is no conflict and needed no --force. The one the verdict
+         * named, never one found by a fresh look from down here. */
+        if (deploy_occupant_present(v->occupant)) {
             err = clear_occupant(file->filesystem_path, v->occupant);
             if (err) goto cleanup;
         }
@@ -1709,7 +1693,7 @@ static error_t *deploy_file(
      * target, which replaces a regular file, a symlink (the link itself, not
      * what it points to) or a device in place — but never a directory (EISDIR).
      * Only that one case needs clearing first. */
-    if (must_clear) {
+    if (v->occupant == FS_OCCUPANT_DIRECTORY) {
         err = clear_occupant(file->filesystem_path, v->occupant);
         if (err) goto cleanup;
     }

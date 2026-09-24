@@ -264,9 +264,9 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * the squatter's sentence is about the squatter, whatever reason a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
- * TYPE (file_row_occupant), a retargeted link is CONTENT (the target compare),
- * and the undecryptable arm of UNREADABLE cannot fire for one (a link's blob is
- * read raw, never through the content layer).
+ * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
+ * compare), and the undecryptable arm of UNREADABLE cannot fire for one (a link's
+ * blob is read raw, never through the content layer).
  */
 typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */

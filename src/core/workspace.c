@@ -2123,11 +2123,12 @@ static const anchor_t *standing_record(
  * not whether the key may vouch but whether what dotta put there is gone
  * (analyze_orphans). The scan's roots ask a narrower question of their own rows
  * directly: over a slice of directory rows the type is a constant, and what they
- * want is a directory to enumerate. infra/compare.c mode_stands is this one layer
- * down, over a stat and a git_filemode_t — the vocabulary each layer speaks.
- * Not core/deploy.c occupant_conflicts, which tells REGULAR from SYMLINK because
- * deploy must replace one with the other: a different question that happens to
- * look alike.
+ * want is a directory to enumerate. Coarser than the kind (core/workspace.h
+ * workspace_type_occupant), and on purpose: a link at a file key names the entry
+ * it stands on, and a retyped record is released only where a directory and a
+ * non-directory swapped. core/deploy.c occupant_conflicts reads the kind because
+ * deploy must replace a link with a file and back — a different question that
+ * happens to look alike.
  *
  * @param occupant What the look found (look_t)
  * @param type The kind the claim names — a row's or a record's

@@ -433,6 +433,53 @@ typedef struct {
 } workspace_item_t;
 
 /**
+ * The row's content against a pair dotta confirmed — a verdict from no look
+ *
+ * infra/compare.h's ladder asked of a confirmation instead of a disk copy: the
+ * kind, then the bytes. It answers in that module's words, minus the one only a
+ * read can reach — nothing is opened here, so no absence can be met.
+ *
+ * The kind rung is what keeps one object from standing for two contents: Git
+ * hashes a link's target exactly as it hashes a file's bytes, so a single id
+ * sits behind both and means a different thing under each. How finely it divides
+ * is the ladder's own — compare.c tests S_ISLNK for a link and S_ISREG for either
+ * blob mode, and never the executable bit — so FILE and EXECUTABLE are one kind
+ * here, their difference the mode axis's, and a record's type carries the
+ * executable half as a copy of the row's rather than as something confirmed
+ * (core/state.h anchor_t). A directory is the third kind: it claims no content
+ * at all, so a blob row and a directory row are never one another's, whatever
+ * their (zero) blobs say.
+ *
+ * The pair travels as values because it is one of two facts — the record's
+ * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
+ * holds one of them.
+ *
+ * Readers: core/workspace.c analyze_file_divergence's base fast path, which reaches
+ * its row-against-disk verdict through this one — a live look standing behind
+ * the pair's proof means disk IS the pair, so what the row is to the pair is
+ * what it is to disk — and its kind rung alone, asked of the record, by
+ * core/workspace.c workspace_record_confirmation, cmds/apply.c cmd_apply's adoption
+ * and workspace_claims_moved below: a record of another kind than its row is a
+ * fact about a node that is gone, which the load learns nothing into, no claim
+ * is measured against, and apply adopts over. A reader not on this list is a
+ * bug; the boolean reading of it is workspace_stale below.
+ *
+ * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
+ * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
+ * by identity and no comparison is owed.
+ */
+static inline compare_result_t workspace_compare_confirmed(
+    const manifest_row_t *row, path_type_t type, const git_oid *blob
+) {
+    if (path_type_kind(type) != path_type_kind(row->type) ||
+        (type == PATH_TYPE_SYMLINK) != (row->type == PATH_TYPE_SYMLINK)) {
+        return CMP_TYPE_DIFF;
+    }
+
+    return git_oid_equal(blob, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
+}
+
+/**
  * A pending handover: the record dotta owns names a profile the row does not
  *
  * The join over its two subjects — a view row and the record at its path — since
@@ -483,53 +530,6 @@ static inline bool workspace_reassigned(
 ) {
     return row && anchor && anchor->deployed_at > 0 && !manifest_is_derived(row) &&
            strcmp(anchor->profile, row->profile) != 0;
-}
-
-/**
- * The row's content against a pair dotta confirmed — a verdict from no look
- *
- * infra/compare.h's ladder asked of a confirmation instead of a disk copy: the
- * kind, then the bytes. It answers in that module's words, minus the one only a
- * read can reach — nothing is opened here, so no absence can be met.
- *
- * The kind rung is what keeps one object from standing for two contents: Git
- * hashes a link's target exactly as it hashes a file's bytes, so a single id
- * sits behind both and means a different thing under each. How finely it divides
- * is the ladder's own — compare.c tests S_ISLNK for a link and S_ISREG for either
- * blob mode, and never the executable bit — so FILE and EXECUTABLE are one kind
- * here, their difference the mode axis's, and a record's type carries the
- * executable half as a copy of the row's rather than as something confirmed
- * (core/state.h anchor_t). A directory is the third kind: it claims no content
- * at all, so a blob row and a directory row are never one another's, whatever
- * their (zero) blobs say.
- *
- * The pair travels as values because it is one of two facts — the record's
- * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
- * holds one of them.
- *
- * Readers: core/workspace.c analyze_file_divergence's base fast path, which reaches
- * its row-against-disk verdict through this one — a live look standing behind
- * the pair's proof means disk IS the pair, so what the row is to the pair is
- * what it is to disk — and its kind rung alone, asked of the record, by
- * core/workspace.c workspace_record_confirmation, cmds/apply.c cmd_apply's adoption
- * and workspace_claims_moved below: a record of another kind than its row is a
- * fact about a node that is gone, which the load learns nothing into, no claim
- * is measured against, and apply adopts over. A reader not on this list is a
- * bug; the boolean reading of it is workspace_stale below.
- *
- * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
- * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
- * by identity and no comparison is owed.
- */
-static inline compare_result_t workspace_compare_confirmed(
-    const manifest_row_t *row, path_type_t type, const git_oid *blob
-) {
-    if (path_type_kind(type) != path_type_kind(row->type) ||
-        (type == PATH_TYPE_SYMLINK) != (row->type == PATH_TYPE_SYMLINK)) {
-        return CMP_TYPE_DIFF;
-    }
-
-    return git_oid_equal(blob, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
 }
 
 /**

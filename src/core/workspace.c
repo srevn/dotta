@@ -1279,6 +1279,13 @@ static error_t *workspace_analyze_file(
          * it, because two askers of one fact can disagree, and the kind is where
          * these two did.
          *
+         * And the base's kind is asked of the look before anything is read, as
+         * the first question asks the row's (the ladder's first rung,
+         * core/workspace.h workspace_type_occupant): a node of neither kind is
+         * not the pair dotta confirmed whatever its bytes, so reading the base
+         * — a decrypt, for a sealed one — would only say what the look already
+         * says, and disk_at_base keeps the answer it holds.
+         *
          * The latent bug class the bytes avoid: routing on row->encrypted silently
          * miscategorised the staleness check across encryption-policy transitions.
          * Both directions failed:
@@ -1300,7 +1307,8 @@ static error_t *workspace_analyze_file(
          * base retires nothing — no look does: a copy dies only with its path's
          * next ownership event or content confirmation (core/state.h). */
         if (git_moved &&
-            (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
+            (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF) &&
+            item->occupant == workspace_type_occupant(base_type)) {
             compare_result_t at_base;
             error_t *verify_err = content_compare_blob_to_disk(
                 ws->content_cache,

@@ -463,7 +463,8 @@ typedef struct {
  * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
  * record's own node, standing), core/workspace.c workspace_analyze_file (its
  * sighting, taken only where the row's kind stands, and the ladder's first rung,
- * off the look before any read) and workspace_compare_orphan (the same rung),
+ * off the look before any read — of the row's kind for the first question, of
+ * the base's for the second) and workspace_compare_orphan (the same rung),
  * core/deploy.c occupant_conflicts (what stands at a planned path, against the
  * node its row lands). A reader not on this list is a bug.
  */

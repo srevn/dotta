@@ -407,8 +407,8 @@ typedef struct {
      *           (workspace_anchor) or create it and backfill this field
      *           (workspace_observe, workspace_anchor), so a read here is never
      *           stale. NULL only while the path truly has no record (UNTRACKED,
-     *           and active rows dotta has never observed, until the flush observes
-     *           them). */
+     *           and active rows dotta has never observed — until the flush observes
+     *           those whose own kind stood). */
     const manifest_row_t *row;
     const anchor_t *anchor;
 
@@ -455,10 +455,11 @@ typedef struct {
  * directory or not.
  *
  * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
- * record's own node, standing), core/workspace.c analyze_file_divergence and
- * compute_orphan_divergence (the ladder's first rung, off the look before any
- * read), core/deploy.c occupant_conflicts (what stands at a planned path, against
- * the node its row lands). A reader not on this list is a bug.
+ * record's own node, standing), core/workspace.c analyze_file_divergence (its
+ * sighting, taken only where the row's kind stands, and the ladder's first rung,
+ * off the look before any read) and compute_orphan_divergence (the same rung),
+ * core/deploy.c occupant_conflicts (what stands at a planned path, against the
+ * node its row lands). A reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {
@@ -1249,30 +1250,31 @@ bool workspace_item_extract_display_info(
  * Observe a managed path with in-memory consistency
  *
  * Workspace-scope side of state_observe (see state.h): records the path's first
- * sighting on disk — presence only, no blob, no stat — into a record it allocates
- * in the workspace's anchors snapshot before the statement, which the verb writes,
- * so every later reader in the run (workspace_get_anchor, the adoption loop's
- * ownership test) sees it, backfilling the path's item, if analysis produced
- * one, so item->anchor is the live record from the record's creation on. A path
- * that already has a record, in the snapshot or created earlier in this run, is
- * left exactly as it is and no statement runs: observation is idempotent on both
- * sides.
+ * sighting, its row's own kind found standing — presence only, no blob, no stat
+ * — into a record it allocates in the workspace's anchors snapshot before the
+ * statement, which the verb writes, so every later reader in the run
+ * (workspace_get_anchor, the adoption loop's ownership test) sees it, backfilling
+ * the path's item, if analysis produced one, so item->anchor is the live record
+ * from the record's creation on. A path that already has a record, in the snapshot
+ * or created earlier in this run, is left exactly as it is and no statement runs:
+ * observation is idempotent on both sides.
  *
  * Single entry point for the observation of a path with no record: the flush
- * (workspace_flush_updates — rows found on disk with no record during analysis,
- * either kind). The observations have two producers, both the load's, because
- * the analysis is where presence is established: this one, and
- * workspace_observe_retyped for a directory standing where its record describes
- * another kind of node. Every active path present at load has a record once the
- * flush has run, and a path the run makes afterwards is an ownership event
- * (workspace_anchor), not an observation.
+ * (workspace_flush_updates — file and directory rows whose look found their own
+ * kind standing with no record during analysis). The observations have two
+ * producers, both the load's, because the analysis is where presence is
+ * established: this one, and workspace_observe_retyped for a directory standing
+ * where its record describes another kind of node. Every active path where the
+ * load found its row's own kind standing has a record once the flush has run,
+ * and a path the run makes afterwards is an ownership event (workspace_anchor),
+ * not an observation.
  *
  * The row pointer is borrowed from the workspace's active partition; the record
  * created here borrows its strings from that row for the workspace's lifetime.
  *
  * @param ws Workspace (must not be NULL, state must be open)
- * @param row Active row whose path was seen on disk (must not be NULL, borrowed
- *            from workspace's active partition)
+ * @param row Active row whose own kind was found standing at its path (must not
+ *            be NULL, borrowed from workspace's active partition)
  * @return Error from state_observe, or NULL on success
  */
 error_t *workspace_observe(
@@ -1405,9 +1407,11 @@ error_t *workspace_confirm(
  *
  * Both channels drain here, in one transaction, observations first:
  *
- *   Observations — rows of either kind whose path was lstat-observed during
- *   analysis while it had no record. Through workspace_observe, so the snapshot
- *   gains the record the INSERT creates.
+ *   Observations — file and directory rows whose look found the row's own kind
+ *   standing while the path had no record: a node of another kind is no sighting,
+ *   since the record names the row's kind and the absence rung reads that as
+ *   the node dotta saw. Through workspace_observe, so the snapshot gains the
+ *   record the INSERT creates.
  *
  *   Confirmations — what the analysis established that the record does not yet
  *   hold, by axis, through workspace_confirm. The content of a file found equal

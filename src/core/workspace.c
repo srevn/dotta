@@ -273,9 +273,9 @@ struct workspace {
 
     /* Observations accumulated during analysis.
      *
-     * Rows of either kind found on disk with no record. An observation needs
-     * only the row; a confirmation also carries the stat it confirmed, hence
-     * the richer element type above. */
+     * File and directory rows whose look found the row's own kind standing, with
+     * no record. An observation needs only the row; a confirmation also carries
+     * the stat it confirmed, hence the richer element type above. */
     const manifest_row_t **observations;         /* Rows borrowed from the active slices (array owned) */
     size_t observation_count;                    /* Number of pending observations */
     size_t observation_capacity;                 /* Allocated capacity of observations array */
@@ -747,8 +747,9 @@ static error_t *workspace_record_confirmation(
  * Record an observation for later flushing
  *
  * Sibling of workspace_record_confirmation for the path with no record: analysis
- * found it on disk, either kind, and dotta has never observed it in scope. Only
- * the row is accumulated: an observation needs nothing else.
+ * found the row's own kind standing there, a file row's or a directory row's,
+ * and dotta has never observed it in scope. Only the row is accumulated: an
+ * observation needs nothing else.
  *
  * Fallible, as the confirmation recorder is, and for a reason of its own: an
  * observation dropped here would leave a path dotta saw on disk with no record,
@@ -756,8 +757,8 @@ static error_t *workspace_record_confirmation(
  * never propagate the user's removal. The callers return the failure as it is.
  *
  * @param ws Workspace (must not be NULL)
- * @param row Active row found on disk without a record (borrowed; workspace
- *            lifetime)
+ * @param row Active row whose own kind was found standing, without a record
+ *            (borrowed; workspace lifetime)
  * @return ERR_MEMORY where the queue could not grow, NULL otherwise
  */
 static error_t *workspace_record_observation(
@@ -876,14 +877,16 @@ static error_t *note_squatted(
  * (metadata.h's residue rule: when the last managed path beneath it goes), which
  * this would answer over the top of.
  *
- * And dotta has to have seen the path there. A record exists iff dotta has
- * lstat-confirmed the path on disk in scope, so no record means there was no
- * filesystem obligation to break: absence is UNDEPLOYED, apply's to create. And
- * the record has to have seen the claim's kind of node: one of another kind (the
- * kind rung, core/workspace.h workspace_compare_confirmed) saw a node that is
- * gone — a file where the claim is now a directory, a link where it is now a
- * file — and the node the claim asserts was never here to be removed, so its
- * absence deletes nothing and update must not commit it as a removal.
+ * And dotta has to have seen the path there. A record exists iff dotta has seen
+ * at the path in scope the node its kind names, or put it there — a sighting is
+ * taken only where the row's own kind stands, so a node of another kind the user
+ * removes leaves no witness — so no record means there was no filesystem obligation
+ * to break: absence is UNDEPLOYED, apply's to create. And the record has to have
+ * seen the claim's kind of node: one of another kind (the kind rung,
+ * core/workspace.h workspace_compare_confirmed) saw a node that is gone — a file
+ * where the claim is now a directory, a link where it is now a file — and the
+ * node the claim asserts was never here to be removed, so its absence deletes
+ * nothing and update must not commit it as a removal.
  *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
@@ -1034,8 +1037,9 @@ static error_t *analyze_file_divergence(
     const char *profile = row->profile;
 
     /* The record dotta keeps of this path, if any. NULL means dotta has never
-     * observed the path on disk in scope: no base for the content question, no
-     * fast path, and absence reads UNDEPLOYED. */
+     * seen the row's kind standing here in scope, or its record retired since:
+     * absence reads UNDEPLOYED, and a released copy is the only base there can
+     * be (below). */
     const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
     /* The row's verdict, opened with the blob family's (see the doc above): is
@@ -1113,8 +1117,9 @@ static error_t *analyze_file_divergence(
     }
 
     /* The path stands — the arms above returned for a look withheld, absence
-     * and a failed look — and two things follow from that one fact: the sighting
-     * the record does not yet hold, and the verdict over what stands there.
+     * and a failed look — and two things follow: the sighting the record does
+     * not yet hold, where what stands is the row's own kind, and the verdict
+     * over what stands there.
      *
      * CONTENT AND TYPE ANALYSIS: Buffer-based comparison for accurate divergence
      * detection.
@@ -1163,12 +1168,16 @@ static error_t *analyze_file_divergence(
      * observation. A path with neither has no base. Cross-process correct by
      * construction — every invocation sees the same answer.
      */
-    /* The look just observed the path in scope (any type counts). A path with
-     * no record gets one — presence only; a CMP_EQUAL below supersedes it with
-     * a confirmation, and the flush writes each path once. Closes the "user created
+    /* Where the look just found the row's own kind standing in scope
+     * (core/workspace.h workspace_type_occupant), a path with no record gets
+     * one — presence only, of that kind; a CMP_EQUAL below supersedes it with a
+     * confirmation, and the flush writes each path once. Closes the "user created
      * the path after scope entry" gap: the next absence reads DELETED, not
-     * UNDEPLOYED. */
-    if (!anchor) {
+     * UNDEPLOYED. A node of another kind is no sighting: the record would name
+     * the row's kind, which classify_absent reads as the node dotta saw here,
+     * and the user removing what they put in its place would read as the claim's
+     * deletion. */
+    if (!anchor && look->occupant == workspace_type_occupant(row->type)) {
         error_t *err = workspace_record_observation(ws, row);
         if (err) return err;
     }
@@ -1464,9 +1473,11 @@ static error_t *analyze_file_divergence(
             /* The look itself met ENOENT/ENOTDIR: the path vanished between the
              * lstat above and the content read. The verdict is absence, so the
              * sighting that lstat queued is retracted: a row with no record queued
-             * one, and it is the queue's last entry, since nothing queues
-             * observations between the lstat and here. The record follows the
-             * run's verdict, never a moment the run itself outlived.
+             * one — a read is made only where the row's kind stands (the rung
+             * above), which is where the sighting is taken — and it is the queue's
+             * last entry, since nothing queues observations between the lstat
+             * and here. The record follows the run's verdict, never a moment
+             * the run itself outlived.
              *
              * And the look follows the verdict with it — the one retraction of
              * a slot in the whole load (look_t): a read that met absence against
@@ -3432,16 +3443,6 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
             continue;  /* Successfully recorded, check next directory */
         }
 
-        /* Presence flush accumulator — the same rule as the file side. The
-         * lstat above just observed the path in scope (any type counts);
-         * if the path has no record yet, queue it for the batched write in
-         * workspace_flush_updates. Closes the "user created the path after scope
-         * entry" gap with the mechanism files already use. */
-        if (!anchor) {
-            err = workspace_record_observation(ws, row);
-            if (err) return err;
-        }
-
         /* Verify it's actually a directory (type may have changed)
          *
          * Type changes (dir -> file, dir -> symlink) are detected here because
@@ -3481,6 +3482,19 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
                 );
             }
             continue;  /* Recorded, move to next directory */
+        }
+
+        /* Presence flush accumulator — the same rule as the file side, taken
+         * past the kind: the lstat above just found a directory standing in scope,
+         * the arms above having ruled on absence, a failed look and every other
+         * kind, so if the path has no record yet, queue it for the batched write
+         * in workspace_flush_updates. Closes the "user created the path after
+         * scope entry" gap with the mechanism files already use. Both classes:
+         * the record answers whether dotta has seen the path for an ancestor
+         * claim too (classify_absent). */
+        if (!anchor) {
+            err = workspace_record_observation(ws, row);
+            if (err) return err;
         }
 
         /* An ancestor claim is a creation template, not a convergence target,
@@ -4582,9 +4596,10 @@ error_t *workspace_confirm(
 /**
  * Flush accumulated observations and confirmations to the state database
  *
- * Observation half, first: records the first sighting of paths analysis found
- * on disk with no record, either kind. Routes through workspace_observe, so the
- * snapshot gains the same record the INSERT creates.
+ * Observation half, first: records the first sighting of paths, file and directory
+ * rows alike, whose look found the row's own kind standing with no record. Routes
+ * through workspace_observe, so the snapshot gains the same record the INSERT
+ * creates.
  *
  * Confirmation half, second, through workspace_confirm: what the looks established
  * that the records do not yet hold, by axis. For the rows analyze_file_divergence

@@ -218,10 +218,10 @@ static inline bool stat_cache_matches(
  * The row dotta last reconciled this path against — what it deployed, or, when
  * deployed_at is 0, what it was looking at when it first observed the path —
  * and what it confirmed there. One row per filesystem path, both kinds. A row
- * exists iff dotta has observed the path on disk while it was managed: there is
- * no "never observed" row — the row's existence is the observation
- * (core/workspace.c classify_absent reads it, of the kind the record names),
- * and no column restates it.
+ * exists iff dotta has observed the node its kind names at the path while it
+ * was managed — seen standing there, or put there: there is no "never observed"
+ * row — the row's existence is the observation (core/workspace.c classify_absent
+ * reads it, of the kind the record names), and no column restates it.
  *
  * Four groups of columns, one write rule each (the verbs below):
  *   - the binding (profile, storage_path): the row the record follows — who
@@ -764,12 +764,13 @@ const anchor_t *state_lookup_anchor(
  * constraint on what it writes still refuses (key_spelling among them). Two
  * callers, both the load's, since the load is where presence is established:
  * the workspace's flush, through workspace_observe, for an active row its load
- * found on disk with no record — so a directory apply fixes rather than makes
- * was present there and is observed by that flush — and workspace_observe_retyped,
- * for a directory its load found standing where the record describes another
- * kind of node, a record that call retires first so the INSERT lands. The record's
- * existence is what the absence classifier reads (workspace.c classify_absent):
- * a path once observed that is now missing was deleted, not never deployed.
+ * found standing as its own kind with no record — so a directory apply fixes
+ * rather than makes was present there and is observed by that flush — and
+ * workspace_observe_retyped, for a directory its load found standing where the
+ * record describes another kind of node, a record that call retires first so
+ * the INSERT lands. The record's existence is what the absence classifier reads
+ * (workspace.c classify_absent): a path once observed that is now missing was
+ * deleted, not never deployed.
  *
  * *anchor is the sighting's record, written last, so a failure leaves it as it
  * was: the row's binding, kind and claim (borrowed — the string pointers are

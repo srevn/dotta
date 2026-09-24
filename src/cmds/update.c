@@ -146,18 +146,17 @@ static error_t *capture_file(
  * the preview's sections: the modified fate splits by kind (a directory's
  * modification is a claim recapture, not a content commit), deleted deliberately
  * does not (a deleted directory is a deletion), and the deployed files split by
- * divergence family (core/workspace.h divergence_type_t): a path-family bit is
- * a modification, the blob-family ENCRYPTION bit is a policy violation. A file
- * with both diverged families counts in both; a violator with nothing changed
- * on disk counts only as a violation — it is committed for the re-store, not
- * for a modification.
+ * what diverged (core/workspace.h divergence_type_t): a path bit is a modification,
+ * the blob bit, ENCRYPTION, is a policy violation. A file with both kinds of
+ * bit counts in both; a violator with nothing changed on disk counts only as a
+ * violation — it is committed for the re-store, not for a modification.
  */
 typedef struct {
-    size_t modified_files;  /* DEPLOYED files with a path-family bit: divergent content or metadata */
+    size_t modified_files;  /* DEPLOYED files with a path bit: divergent content or metadata */
     size_t new_files;       /* UNTRACKED files from tracked directories */
     size_t deleted;         /* DELETED paths, both kinds */
     size_t modified_dirs;   /* DEPLOYED directories: claim capture */
-    size_t encryption;      /* DEPLOYED policy violators (either family beside it or alone) */
+    size_t encryption;      /* DEPLOYED policy violators (a path bit beside it or alone) */
 } update_counts_t;
 
 /**
@@ -1284,7 +1283,7 @@ static error_t *update_display_preview(
             for (size_t i = 0; i < item_count; i++) {
                 const workspace_item_t *item = items[i];
 
-                /* The counted set: a DEPLOYED file with a path-family bit. An
+                /* The counted set: a DEPLOYED file with a path bit. An
                  * ENCRYPTION-only violator lists in the policy section below. */
                 if (item->item_kind != PATH_KIND_FILE ||
                     item->state != WORKSPACE_STATE_DEPLOYED ||
@@ -1651,12 +1650,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One
      * line per refusing arm, read off the partition's counts in the table's order
-     * (workspace_item_route), each naming its route's way out. Two families arrive
+     * (workspace_item_route), each naming its route's way out. Two pairs arrive
      * split from the route by the claim that holds the offender — the same split
-     * apply prints from the fate-borne ancestor_class: the displaced family
+     * apply prints from the fate-borne ancestor_class: the displaced pair
      * (DISPLACED_TRACKED beneath a planned squatter --force replaces,
      * DISPLACED_DERIVED beneath a rung the named re-derivation drops) and the
-     * retyped family (KIND on a row a plan can hold, KIND_DERIVED on a rung dotta
+     * retyped pair (KIND on a row a plan can hold, KIND_DERIVED on a rung dotta
      * only passes through). */
     const size_t *refused = partition.refused;
 
@@ -1813,10 +1812,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         } else if (item->state == WORKSPACE_STATE_UNTRACKED) {
             counts.new_files++;
         } else {
-            /* A DEPLOYED file on the capture route, counted by divergence family:
-             * a path-family bit is a modification, the ENCRYPTION bit a violation,
-             * and a violator with nothing changed on disk is not a modified file
-             * — the policy section alone names it. */
+            /* A DEPLOYED file on the capture route, counted by what diverged: a
+             * path bit is a modification, the ENCRYPTION bit a violation, and a
+             * violator with nothing changed on disk is not a modified file —
+             * the policy section alone names it. */
             if ((item->divergence & ~DIVERGENCE_ENCRYPTION) != DIVERGENCE_NONE) {
                 counts.modified_files++;
             }

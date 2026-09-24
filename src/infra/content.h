@@ -365,7 +365,7 @@ error_t *content_rebind(
  * encryption stamp. The view row's flag in scope is another blob's, and routing
  * the base question on it once miscategorised staleness across an encryption-policy
  * flip in both directions (the two are recorded at core/workspace.c
- * analyze_file_divergence). The row's own comparison keeps the id form and opens
+ * workspace_analyze_file). The row's own comparison keeps the id form and opens
  * nothing, and that asymmetry is principled rather than overlooked: the row's
  * flag is that blob's own, made byte-true at the write boundary
  * (content_capture_file), where the record's blob has no boundary at which it
@@ -385,8 +385,8 @@ error_t *content_rebind(
  * infra/compare.h's pair, whose one look is the caller's own, so the stat is
  * forwarded and required here for the same reason it is required there.
  *
- * Readers: `core/workspace.c analyze_file_divergence` (the second question, ours
- * against the base) and `core/workspace.c compute_orphan_divergence` (an orphan
+ * Readers: `core/workspace.c workspace_analyze_file` (the second question, ours
+ * against the base) and `core/workspace.c workspace_compare_orphan` (an orphan
  * against the record dotta keeps of it). A reader not on this list is a bug.
  *
  * @param cache The run's reader: its repository and its key manager (must not
@@ -443,7 +443,7 @@ content_cache_t *content_cache_create(
  * reader (include/runtime.h).
  *
  * Readers, and every one of them names a view row's blob or a commit entry's,
- * never a record's: `core/workspace.c analyze_file_divergence` (the sealed arm
+ * never a record's: `core/workspace.c workspace_analyze_file` (the sealed arm
  * of the first question), `core/deploy.c deploy_file`, `cmds/diff.c
  * show_file_diff_from_workspace` and `cmds/diff.c
  * compare_tree_files_to_filesystem`. A reader not on this list is a bug.

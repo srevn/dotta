@@ -1980,8 +1980,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and the look — the record dotta owns names one profile, the row another,
      * and describes the row's node, or a node of its own still standing
      * (core/workspace.h workspace_reassigned) — and one of the two reasons a
-     * deploy-clean row is in the report at all (the other is the blob-family
-     * ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE and
+     * deploy-clean row is in the report at all (the other is the blob bit,
+     * ENCRYPTION, which neither loop here reads). DIVERGENCE_STALE and
      * DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
      * what dotta last reconciled — the content, another blob or the same blob
      * under another kind (core/workspace.h workspace_stale), or a claim
@@ -2051,9 +2051,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * A clean in-scope row whose record has deployed_at == 0 — or no record at
      * all — represents a file the user declared scope over (via profile enable
-     * or add/update) AND that analyze_file_divergence just classified as clean
-     * for deploy's purposes: no item, or one carrying only the blob-family
-     * ENCRYPTION bit deploy_needs_work masks out. Apply is the ownership moment:
+     * or add/update) AND that workspace_analyze_file just classified as clean
+     * for deploy's purposes: no item, or one carrying only the blob bit,
+     * ENCRYPTION, which deploy_needs_work masks out. Apply is the ownership moment:
      * running it is how the user claims the in-scope set. Stamping here collapses
      * the "enable → apply on a pre-existing matching file" flow to a coherent
      * (blob, now, stat), so a later `rm file` is classified as [deleted] and
@@ -2080,7 +2080,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the record step below.
      *
      * Division of labor with the earlier flush: the proof of this run's match
-     * comes from analyze_file_divergence leaving the entry out of ws->diverged,
+     * comes from workspace_analyze_file leaving the entry out of ws->diverged,
      * and workspace_flush_updates above put the pair that proof rests on where
      * this loop can read it — a slow-path CMP_EQUAL patched onto the snapshot
      * record, a recordless clean row's record created by the observation and

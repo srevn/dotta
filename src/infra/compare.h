@@ -51,12 +51,12 @@
  * kind does. A look that could not be made is none of them — it is the error
  * the function returns, and what a failure means is the caller's. This module
  * cannot know whether an unreadable path annotates a row or sinks the command,
- * and the tree answers it three ways: core/workspace.c analyze_file_divergence
- * and analyze_orphans hold the path (DIVERGENCE_UNVERIFIED and a fault class,
- * never fatal to the load); the second question the first of them asks — ours
- * against the base — reads a failure as "not at base", the conservative answer;
- * cmds/diff.c show_file_diff_from_workspace and compare_tree_files_to_filesystem
- * fail the run.
+ * and the tree answers it three ways: core/workspace.c workspace_analyze_file
+ * and workspace_analyze_orphans hold the path (DIVERGENCE_UNVERIFIED and a fault
+ * class, never fatal to the load); the second question the first of them asks —
+ * ours against the base — reads a failure as "not at base", the conservative
+ * answer; cmds/diff.c show_file_diff_from_workspace and
+ * compare_tree_files_to_filesystem fail the run.
  *
  * One verdict in the tree is reached from no look at all: core/workspace.h
  * workspace_compare_confirmed judges a row against a pair dotta already found
@@ -69,7 +69,7 @@
  * module. The compare module is infrastructure-layer, handling only content and
  * type. A claim's compare (the git filemode resolved into the mode, the rest
  * from .dotta/metadata.json) is a core-layer concern: core/workspace.c
- * analyze_claim_divergence for a row, compute_orphan_divergence for a record.
+ * workspace_analyze_claim for a row, workspace_compare_orphan for a record.
  */
 typedef enum {
     CMP_EQUAL,      /* The copy is the reference — kind and content */
@@ -113,7 +113,7 @@ typedef enum {
  * that is *this* blob's own, made byte-true at the write boundary (the Phase 2
  * invariant in `infra/content.h content_capture_file`) — a stale or wrong-blob
  * flag silently misroutes. That reader is `core/workspace.c
- * analyze_file_divergence`'s first question, which reads `row->encrypted` for
+ * workspace_analyze_file`'s first question, which reads `row->encrypted` for
  * the row's own blob. A comparison against a blob no stamp speaks for takes the
  * buffer form, its kind and its bytes coming off one read (`infra/content.h
  * content_compare_blob_to_disk`).

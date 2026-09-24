@@ -197,8 +197,8 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  *
  * Whether there is a proof to ask about is the asker's question, not this one's.
  *
- * Readers: core/workspace.c analyze_file_divergence, which asks it of the base's
- * proof under the base's type, and compute_orphan_divergence, of the record's
+ * Readers: core/workspace.c workspace_analyze_file, which asks it of the base's
+ * proof under the base's type, and workspace_compare_orphan, of the record's
  * under the record's — the two fast paths, which must not disagree about what a
  * proof proves.
  */
@@ -271,8 +271,8 @@ static inline bool stat_cache_matches(
  *   - the blob a record carries is the blob of the row its binding names. An
  *     encrypted blob is readable under no other binding (infra/content) — so
  *     the record's own binding, not the row's, is what a later load decrypts
- *     its base with (core/workspace.c analyze_file_divergence,
- *     compute_orphan_divergence). Kept by each writer on its own: state_anchor
+ *     its base with (core/workspace.c workspace_analyze_file,
+ *     workspace_compare_orphan). Kept by each writer on its own: state_anchor
  *     writes the binding beside the blob from one row, and state_confirm's
  *     statement matches only a record whose binding is the one its row's blob
  *     opens under.
@@ -321,17 +321,17 @@ typedef struct anchor {
  *
  * The row is a statement about the past, which the present is measured against
  * at every use and never retires: an edit or an absence since is what a base is
- * there to judge, not a reason to drop it. The analyzer reads it as the base of
- * the three-way content question only when the path's record carries no confirmed
- * blob, and never trusts it without the live stat or content check it performs
- * for any base. The storage_path and profile are the blob's own binding — an
- * encrypted blob decrypts under its writer's subkey (profile name → KDF) with
- * its tree path as AAD — so a released base stays verifiable even after the branch
- * that wrote it is gone. The type is half of what the copy says was standing
- * there, and both questions of the three-way read it: the first asks whether
- * the row's content is this pair's at all (core/workspace.h workspace_stale),
- * the second routes the base read by the base's own kind — which is what keeps
- * the fast and slow paths in agreement.
+ * there to judge, not a reason to drop it. The file analysis reads it as the
+ * base of the three-way content question only when the path's record carries no
+ * confirmed blob, and never trusts it without the live stat or content check it
+ * performs for any base. The storage_path and profile are the blob's own binding
+ * — an encrypted blob decrypts under its writer's subkey (profile name → KDF)
+ * with its tree path as AAD — so a released base stays verifiable even after
+ * the branch that wrote it is gone. The type is half of what the copy says was
+ * standing there, and both questions of the three-way read it: the first asks
+ * whether the row's content is this pair's at all (core/workspace.h
+ * workspace_stale), the second routes the base read by the base's own kind —
+ * which is what keeps the fast and slow paths in agreement.
  */
 typedef struct {
     const char *filesystem_path; /* Released path (PRIMARY KEY) */
@@ -704,9 +704,9 @@ const char *state_peek_profile_target(
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the managed
  *     item at its path by the items' own search (find_managed); the orphans keep
- *     strcmp order, which look_orphans' parents-first walk, their family's search
- *     (find_item) and the report's orphan listing (analyze_orphans, which the
- *     screens print) rest on
+ *     strcmp order, which look_orphans' parents-first walk, their search
+ *     (find_item) and the report's orphan listing (workspace_analyze_orphans,
+ *     which the screens print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
  *   - cmds/add.c write_record (the takeover note), cmds/remove.c
@@ -1044,8 +1044,8 @@ error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
  *
  * In strcmp order (the principle above). Reader: core/workspace.c
  * workspace_partition, loaded once per run, unconditionally, beside the record,
- * for the file judge's base (analyze_file_divergence), which finds a path's copy
- * through state_lookup_released_copy and so rests on strcmp order.
+ * for the file analysis's base (workspace_analyze_file), which finds a path's
+ * copy through state_lookup_released_copy and so rests on strcmp order.
  *
  * On empty state (no DB), returns *out = NULL, *count = 0 with no error.
  *
@@ -1071,7 +1071,7 @@ error_t *state_get_released_copies(
  * must be the getter's, in the order it came back, and a hand-built one in another
  * order misses what it holds. The empty snapshot — NULL, count 0 — holds nothing.
  *
- * Reader: core/workspace.c analyze_file_divergence, for the base of a path whose
+ * Reader: core/workspace.c workspace_analyze_file, for the base of a path whose
  * record carries no confirmed blob.
  *
  * @param copies The snapshot (NULL when count is 0)

@@ -60,7 +60,7 @@
  *   two ways (infra/mount.h).
  *
  *   The scan's roots read identity for a third reason of their own — one walk
- *   per directory (analyze_untracked_files) — and read it off that same look.
+ *   per directory (workspace_analyze_untracked) — and read it off that same look.
  *   Only the untracked walk asks the disk which entry a string names, at a child
  *   no claim settles; a filter, a namer or a join that wanted to is asking a
  *   question the model does not answer.
@@ -114,16 +114,16 @@ typedef enum {
  * changed). This enum captures WHAT is wrong, separate from WHERE the item exists
  * (see workspace_state_t).
  *
- * Two families, by what the operands are:
+ * The bits divide in two, by what their operands are:
  *
- * The path family — CONTENT, MODE, OWNERSHIP, TYPE, STALE, CLAIM_MOVED, UNVERIFIED
- * — measures the managed path against the view: what stands on disk versus the
+ * The path bits — CONTENT, MODE, OWNERSHIP, TYPE, STALE, CLAIM_MOVED, UNVERIFIED
+ * — measure the managed path against the view: what stands on disk versus the
  * row (STALE and CLAIM_MOVED through the record: the pair and the claim dotta
  * last reconciled, versus the row's), UNVERIFIED when the measurement itself
  * could not run. No path bit survives absence — properties of what is not there
  * cannot be compared.
  *
- * The blob family — ENCRYPTION alone — measures the blob Git holds against the
+ * The blob bit — ENCRYPTION, alone — measures the blob Git holds against the
  * config's auto-encrypt policy (core/policy.h). The filesystem is not a party,
  * so it is the one bit a row in any state can carry, absence included; and because
  * no write to the path can change how a blob is stored, it is never deploy's
@@ -138,7 +138,7 @@ typedef enum {
  * converges every claim whoever moved it (core/deploy.h deploy_content_conflicts),
  * so the user's side would name a state no verb treats apart. One bit for both
  * claim axes, since no reader tells them apart, and set only beside an axis bit
- * it attributes (analyze_claim_divergence), so no screen shows it alone. Its
+ * it attributes (workspace_analyze_claim), so no screen shows it alone. Its
  * readers: workspace_item_route (the CONFLICT and STALE arms),
  * workspace_item_extract_display_info ([stale]), cmds/apply.c cmd_apply (the
  * count of what Git moved) and core/cleanup.c cleanup_skip_reason (a known flag
@@ -189,29 +189,29 @@ typedef enum {
  * and one act would be read as an intent per path beneath it. So the ask comes
  * before every look the load takes (squatted_ancestor): beneath a squatter the
  * row or the record is an item as the partition made it, DEPLOYED- or
- * ORPHANED-shaped, occupant UNKNOWN, with no divergence bit of the path family
- * and nothing queued for the record. Every displaced item of the view family is
- * therefore DEPLOYED with no path bit — a file row's blob-family verdict rides,
- * Git's and no look's — which is what lets a consumer that forgets this field
- * do nothing rather than something wrong: the absence arms are never reached
- * beneath a squatter, so none of them needs a clause.
+ * ORPHANED-shaped, occupant UNKNOWN, with no path bit and nothing queued for
+ * the record. Every displaced managed item is therefore DEPLOYED with no path
+ * bit — a file row's blob bit rides, Git's and no look's — which is what lets a
+ * consumer that forgets this field do nothing rather than something wrong: the
+ * absence arms are never reached beneath a squatter, so none of them needs a
+ * clause.
  *
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
  *   TRACKED / DERIVED   the view claims the path — a directory row of either
  *                       class (core/manifest.h): nothing beneath it is looked
- *                       at, whatever its family. A view claim displaces everything
- *                       beneath it.
+ *                       at, a row's or a record's. A view claim displaces
+ *                       everything beneath it.
  *   RECORD              only a record remembers a directory there — the view
- *                       lacks the path: the record's own family beneath it, the
- *                       ORPHANED and RELEASED items, is not looked at, and nothing
- *                       else is. A view row beneath such a path is a deliberate
+ *                       lacks the path: the orphans beneath it, the ORPHANED
+ *                       and RELEASED items, are not looked at, and nothing else
+ *                       is. A view row beneath such a path is a deliberate
  *                       through-capture: its profile's derivation met the
  *                       non-directory and claimed no rung there (core/metadata.h),
  *                       so the arrangement predates the row and the look is the
- *                       row's own. A record's memory displaces only what the
- *                       record family remembers beneath it — never a view row,
- *                       so RECORD stands on no DEPLOYED item.
+ *                       row's own. A record's memory displaces only the orphans
+ *                       beneath it — never a view row, so RECORD stands on no
+ *                       DEPLOYED item.
  *
  * NONE on every item looked at at its own path, the squatter's own included:
  * the ask is of proper ancestors, so a squatter is never its own answer and carries
@@ -256,10 +256,10 @@ typedef enum {
  *
  * A relocation is an orphan whose own claim is still in the view, standing at
  * another path: the record's (profile, storage path) pair found a row that projects
- * elsewhere (analyze_orphans). What becomes of the copy left behind turns on
- * one question — did the user move the claim, or did the ground move under it —
- * and the answer is the mounting rule of the namespace the claim is named in
- * (infra/label.h), not the place either side stands at:
+ * elsewhere (workspace_analyze_orphans). What becomes of the copy left behind
+ * turns on one question — did the user move the claim, or did the ground move
+ * under it — and the answer is the mounting rule of the namespace the claim is
+ * named in (infra/label.h), not the place either side stands at:
  *
  *   SHARED    home/ and root/ mount where the machine says — the invoker's HOME
  *             and `/`. Neither is anyone's to re-target, so a claim that moved
@@ -275,15 +275,15 @@ typedef enum {
  * a relocation — any item with no row, and every state but ORPHANED (a RELEASED
  * record carries no row, and on a DEPLOYED item the row is the ordinary claim).
  *
- * Assigned once, by the orphan judge where it reads the relocation (workspace.c
- * analyze_orphans), off the label; the row it finds there is not kept, so an
- * orphan item carries no row. Trusted downstream, as the displaced class is.
- * Readers: cleanup's two verdicts, which skip a SHARED relocation unless --force
- * and prune a BOUND one — the reason is cleanup's and lives there (core/cleanup.h)
- * — and the three screens that ask only whether there is a relocation at all:
- * the [relocated] tag (workspace_item_extract_display_info), apply's prune split,
- * status's prunable hint. The presence question is this field against NONE at
- * every one of them.
+ * Assigned once, by the orphan analysis where it reads the relocation (workspace.c
+ * workspace_analyze_orphans), off the label; the row it finds there is not kept,
+ * so an orphan item carries no row. Trusted downstream, as the displaced class
+ * is. Readers: cleanup's two verdicts, which skip a SHARED relocation unless
+ * --force and prune a BOUND one — the reason is cleanup's and lives there
+ * (core/cleanup.h) — and the three screens that ask only whether there is a
+ * relocation at all: the [relocated] tag (workspace_item_extract_display_info),
+ * apply's prune split, status's prunable hint. The presence question is this
+ * field against NONE at every one of them.
  */
 typedef enum {
     WORKSPACE_RELOCATION_NONE = 0,  /* Not a relocation */
@@ -302,7 +302,7 @@ typedef enum {
  * is how a locked path came to be told to fix its permissions.
  *
  * The fault is that partition, read off the root error's code at the one moment
- * an analyzer holds it — crypto/keymgr.h's "The codes" is the producer's half
+ * an analysis holds it — crypto/keymgr.h's "The codes" is the producer's half
  * of the contract, and sys/filesystem's errno the other:
  *
  *   LOCKED       ERR_LOCKED: the run holds no usable master — none in reach,
@@ -318,7 +318,7 @@ typedef enum {
  *                path points at the verb.
  *
  * The class is the whole of what the item carries. The mechanism's own sentence
- * stays in the error the analyzer freed, where the verb that raises it prints
+ * stays in the error the analysis freed, where the verb that raises it prints
  * it ("dotta show", "dotta export", add's and update's wraps): a report is a
  * list of paths and their state, and every block in cmds/ closes by naming a
  * remedy in its own fixed words, never by quoting a line another layer wrote.
@@ -368,11 +368,11 @@ typedef enum {
  *                               at a record a path gains (workspace_observe,
  *                               workspace_anchor)
  *   the look                    workspace.c look, once per item a looker
- *                               reaches — and one retraction: the file judge
+ *                               reaches — and one retraction: the file analysis
  *                               sets the occupant to absence when its read met
  *                               ENOENT against a look that said a file stood
  *                               there, so the item and the index say one thing
- *   the verdict                 the family's judge, at the arm that decides it
+ *   the verdict                 its kind's analysis, at the arm that decides it
  *
  * The occupant is the load's one observation of the disk, carried as the sys
  * layer names it rather than folded to a presence bit: what the lstat found at
@@ -385,7 +385,7 @@ typedef enum {
  * taken, and on a released record neither — letting a copy go needs no measurement.
  * An orphan on a load that took no look at the orphans keeps UNKNOWN, and is
  * lent by no reader: the report and the door hold an orphan only where the load
- * judged them. Presence is
+ * analyzed them. Presence is
  * therefore `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
  * present, since deploy judges nothing it could not see), and a new consumer
@@ -399,15 +399,15 @@ typedef enum {
  * `st` is the look's stat, meaningful for a present occupant alone, and
  * `lstat_errno` lstat's errno on an UNKNOWN from a look that failed. The whole
  * struct stat, because stat_cache_matches, content_compare_blob_to_disk and
- * ownership_diverges, which the judges hand it to, each take one, and the entries
+ * ownership_diverges, which the analyses hand it to, each take one, and the entries
  * index and the scan's roots read its identity — where a narrowed look would
  * have to synthesize one back for all three. A discovery's is the scan's own lstat.
  *
  * The identity is the source's strings, lent read-only: the row's for a managed
  * item, the record's for an orphan, a discovery's own copies (profile: the view's
  * profile list's). A discovery's kind is FILE: the scan offers regular files
- * and symlinks alone (workspace.c analyze_untracked_files), which status's New
- * files label reads.
+ * and symlinks alone (workspace.c workspace_analyze_untracked), which status's
+ * New files label reads.
  *
  * `anchor` is const so a reader holding the item cannot write the record. The
  * workspace's writers cast where they advance one in place (workspace_anchor,
@@ -433,7 +433,7 @@ typedef struct {
     int lstat_errno;                     /* lstat's, on an UNKNOWN from a look that failed */
     struct stat st;                      /* The look's stat, meaningful for a present occupant alone */
 
-    /* The verdict — the family's judge's */
+    /* The verdict — its kind's analysis's */
     workspace_state_t state;             /* Where the item exists (deployed/undeployed/etc.) */
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE unless UNVERIFIED */
@@ -461,9 +461,9 @@ typedef struct {
  * directory or not.
  *
  * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
- * record's own node, standing), core/workspace.c analyze_file_divergence (its
+ * record's own node, standing), core/workspace.c workspace_analyze_file (its
  * sighting, taken only where the row's kind stands, and the ladder's first rung,
- * off the look before any read) and compute_orphan_divergence (the same rung),
+ * off the look before any read) and workspace_compare_orphan (the same rung),
  * core/deploy.c occupant_conflicts (what stands at a planned path, against the
  * node its row lands). A reader not on this list is a bug.
  */
@@ -497,7 +497,7 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
  * holds one of them.
  *
- * Readers: core/workspace.c analyze_file_divergence's base fast path, which reaches
+ * Readers: core/workspace.c workspace_analyze_file's base fast path, which reaches
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's proof means disk IS the pair, so what the row is to the pair is
  * what it is to disk — and its kind rung alone, asked of the record. A record
@@ -513,7 +513,7 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * place (workspace_observe_retyped). A reader not on this list is a bug; the
  * boolean reading of it is workspace_stale below.
  *
- * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
+ * Not this: workspace_compare_orphan's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
  * by identity and no comparison is owed.
  */
@@ -565,7 +565,7 @@ static inline compare_result_t workspace_compare_confirmed(
  * Both kinds — and of a directory's two classes, the tracked one alone. A handover
  * is a question about managing the path, which core/manifest.h asks of tracked
  * claims alone: a derived ancestor claim carries no intent to acknowledge, deploy's
- * plan drops such a row before scope and the directory analyzer stops at the
+ * plan drops such a row before scope and the directory analysis stops at the
  * same line, so nothing would ever discharge one. The clause lives in the rule
  * and not at the callers because most callers stand inside a loop that has already
  * settled the row's kind and class, and the ones that do not cannot see that
@@ -575,9 +575,9 @@ static inline compare_result_t workspace_compare_confirmed(
  * Orphans: false by construction — an orphan item carries no row, so no reader
  * needs an orphan guard.
  *
- * Readers: both divergence analyzers, with the look each holds, which emit an
- * item for a clean row that carries this; the display tags and the route table,
- * with the item's; diff's filter, its "acknowledged by apply" line and its status
+ * Readers: both managed analyses, with the look each holds, which emit an item
+ * for a clean row that carries this; the display tags and the route table, with
+ * the item's; diff's filter, its "acknowledged by apply" line and its status
  * colour (cmds/diff.c), with the item's; apply's collection and its record step,
  * with the item's, and its two acknowledgement loops, the writers that move the
  * record onto the row's profile, with none — only a record of the row's kind
@@ -626,7 +626,7 @@ static inline bool workspace_reassigned(
  * vouches. Two zero blobs under one kind are not — a directory record under a
  * directory row has nothing to confirm and nothing has moved.
  *
- * Readers: core/workspace.c analyze_file_divergence (git_moved — the three-way
+ * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
  * frame's first question, and the gate on its second), cmds/apply.c cmd_apply's
  * adoption gate (the record's triple is passed as proof only when the pair is
  * the row's content), cmds/sync.c cmd_sync's apply hint (the record still disagrees
@@ -661,7 +661,7 @@ static inline bool workspace_stale(
  * stands); a derived row, whose claim says what to create the path as and nothing
  * the analysis measures (the clause workspace_reassigned keeps).
  *
- * Readers: core/workspace.c analyze_claim_divergence, which both active judges
+ * Readers: core/workspace.c workspace_analyze_claim, which both managed analyses
  * call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved claim, the
  * record's learning where it has), cmds/apply.c cmd_apply's record step (the
  * claims a fix set that the record still lacks), cmds/sync.c cmd_sync's apply
@@ -904,7 +904,7 @@ typedef struct {
  *   the asker (workspace_displaced_t)
  *
  * The join is every load's and no caller's to decline: the view's directory rows,
- * then its file rows. Both kinds, because a kind nobody judged keeps the verdict
+ * then its file rows. Both kinds, because a kind nobody analyzed keeps the verdict
  * the partition made its items with — DEPLOYED, nothing wrong — and is in no
  * report, so a consumer that asks the door per row finds nothing to do at every
  * one of them — which for apply is adoption, taking ownership of paths it never
@@ -925,7 +925,7 @@ typedef struct {
  * what its ignore layers exclude — and nothing beneath a path the view holds a
  * blob at, where no apply could ever place it. A best-effort look that says what
  * it could not list or look at — never a path the view settles, which the join
- * has already named — and goes on with the siblings (analyze_untracked_files).
+ * has already named — and goes on with the siblings (workspace_analyze_untracked).
  * The record's half is a load fact, not an analysis's: a path dotta remembers
  * is no discovery on any surface, whichever of the two the caller asked for —
  * and so is the entry each row and each record stands on, so a path dotta manages
@@ -1132,13 +1132,13 @@ typedef struct {
  * already symlinked never becomes a claim in the first place.
  *
  * A record's memory does not qualify here: a directory only a record remembers
- * displaces the record's own family alone (the reach rule, workspace_displaced_t),
- * and every item of that family carries the fact on itself. This probe is for a
- * caller that needs the squatter itself, which no item carries: the fate of a
- * planned row (core/deploy.c check_ancestry). A view row beneath a
- * record-remembered squatter is the through-capture the rule leaves to its own
- * occupant. So the answer is the view's claims alone, and its claim is exactly
- * the displaced class a view row's item beneath it carries.
+ * displaces the orphans beneath it alone (the reach rule, workspace_displaced_t),
+ * and every orphan carries the fact on itself. This probe is for a caller that
+ * needs the squatter itself, which no item carries: the fate of a planned row
+ * (core/deploy.c check_ancestry). A view row beneath a record-remembered squatter
+ * is the through-capture the rule leaves to its own occupant. So the answer is
+ * the view's claims alone, and its claim is exactly the displaced class a view
+ * row's item beneath it carries.
  *
  * The answer is noted by the look that found each squatter (workspace.c look),
  * and every directory row is looked at before any file row or orphan record
@@ -1171,7 +1171,7 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  * Look up the record dotta keeps of a path
  *
  * The record the item at the path holds, managed and orphan paths alike, each
- * found by its family's search. Returns NULL when dotta has never observed the
+ * found by its array's search. Returns NULL when dotta has never observed the
  * path on disk while it was managed. Within a run the answer follows the writers:
  * a record workspace_observe or workspace_anchor created or patched reads back
  * here with its post-write value.

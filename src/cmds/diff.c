@@ -304,9 +304,8 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (workspace_reassigned(item->row, item->anchor, item->occupant) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
-        /* A pure handover. The blob-family ENCRYPTION bit does not demote it:
-         * it is about how Git stores the blob, not a difference between Git and
-         * disk. */
+        /* A pure handover. The blob bit, ENCRYPTION, does not demote it: it is
+         * about how Git stores the blob, not a difference between Git and disk. */
         status_color = OUTPUT_COLOR_CYAN;
     }
 
@@ -1434,9 +1433,9 @@ static error_t *diff_workspace(
 
         /* An empty screen says what the verb it previews says of its own empty
          * run. Upstream, apply's: under a filter the scope the screen showed
-         * and nothing past it — every path was loaded and judged, only those in
-         * scope presented — else the repository (cmd_apply). Downstream, update's,
-         * which names no whole to qualify. */
+         * and nothing past it — every path was loaded and analyzed, only those
+         * in scope presented — else the repository (cmd_apply). Downstream,
+         * update's, which names no whole to qualify. */
         if (total_diff_count == 0 && !opts->name_only) {
             if (opts->direction == DIFF_UPSTREAM) {
                 if (scope_has_filter(scope) || scope_has_paths(scope)) {

@@ -1734,7 +1734,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                             break;
 
                         case WORKSPACE_ROUTE_CAPTURE:
-                            /* update's work — every capturable divergence family,
+                            /* update's work — every capturable divergence,
                              * ownership and encryption included: a policy-violating
                              * blob is uncommitted work exactly here, where a
                              * push would publish it. */

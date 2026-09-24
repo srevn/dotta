@@ -190,7 +190,7 @@
  * total must agree with), cmds/export.c collect_tree_callback and collect_storage
  * (which blobs phase 1 reads) and, through the projection onto the view's rows
  * (core/manifest.h manifest_row_t.encrypted), cmds/export.c entry_from_row,
- * core/workspace.c analyze_file_divergence and cmds/key.c cmd_key_status.
+ * core/workspace.c workspace_analyze_file and cmds/key.c cmd_key_status.
  *
  * Each reads it where it stands, off the item: there is no per-field reader to
  * hold the link rule for them, so each spells that rule in its own shape — an

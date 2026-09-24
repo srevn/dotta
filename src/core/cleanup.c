@@ -194,10 +194,10 @@ cleanup_skip_reason_t cleanup_skip_reason(const workspace_item_t *item) {
     }
 
     /* All priority flags handled above. Remaining flags:
-     * - ENCRYPTION: never emitted for an orphan (the blob-family bit is computed
-     *   over the view's rows, and an orphan is exactly a record the view lacks)
-     *   — listed so it cannot block
-     * - STALE, CLAIM_MOVED: never emitted for an orphan (compute_orphan_divergence
+     * - ENCRYPTION: never emitted for an orphan (the blob bit is computed over
+     *   the view's rows, and an orphan is exactly a record the view lacks) —
+     *   listed so it cannot block
+     * - STALE, CLAIM_MOVED: never emitted for an orphan (workspace_compare_orphan
      *   asks one question, of disk alone; who moved a claim is asked of a row,
      *   and an orphan has none) — listed so they cannot block
      * Unknown flags: block removal until explicitly handled above. */

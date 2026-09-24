@@ -31,9 +31,9 @@
  *
  * Two dimensions, in order: state (where does the path exist — Git, state database,
  * filesystem?) sets the baseline, divergence (what is wrong with it?) refines
- * it. A missing path is always work, and the only bit it can carry is the
- * blob-family ENCRYPTION verdict (core/workspace.h divergence_type_t) — no path
- * bit survives absence, so the two missing states answer from state alone.
+ * it. A missing path is always work, and the only bit it can carry is the blob
+ * bit, ENCRYPTION (core/workspace.h divergence_type_t) — no path bit survives
+ * absence, so the two missing states answer from state alone.
  *
  * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE / UNVERIFIED,
  * so the DEPLOYED arm's test already covers every directory verdict — no
@@ -60,16 +60,16 @@ static bool deploy_needs_work(const workspace_item_t *item) {
              * initial deployment.
              *
              * No path bit survives absence (properties of non-existent files
-             * cannot be compared); the blob-family ENCRYPTION bit can ride on a
-             * missing row — [undeployed] [unencrypted] — and changes nothing
-             * here: the row is work by state alone. */
+             * cannot be compared); the blob bit, ENCRYPTION, can ride on a missing
+             * row — [undeployed] [unencrypted] — and changes nothing here: the
+             * row is work by state alone. */
             return true;
 
         case WORKSPACE_STATE_DELETED:
             /* File exists in Git and was previously deployed (deployed_at > 0),
              * but has been removed from filesystem. Needs restoration. Absence
-             * and the blob-family bit read as in the UNDEPLOYED arm: work by
-             * state alone. */
+             * and the blob bit read as in the UNDEPLOYED arm: work by state
+             * alone. */
             return true;
 
         case WORKSPACE_STATE_DEPLOYED:
@@ -1115,14 +1115,15 @@ error_t *deploy_preflight(
                      * it is decides the consent. STALE on a kind the row does
                      * not have is the workspace's proof that the occupant is
                      * exactly the copy dotta confirmed, Git having retyped the
-                     * path beneath it (the file judge's second question, asked
+                     * path beneath it (the file analysis's second question, asked
                      * under the base's kind): replacing it loses nothing, so it
                      * needs no --force, as a STALE row's bytes never do
                      * (deploy_content_conflicts). The proof is the bit and never
-                     * an absence of conflict: the workspace judges every kind
-                     * mismatch it can see off the look, before any read and
-                     * whatever the key (core/workspace.c analyze_file_divergence),
-                     * so one without STALE carries TYPE and asks for --force. */
+                     * an absence of conflict: the workspace's analyses read every
+                     * kind mismatch it can see off the look, before any read
+                     * and whatever the key (core/workspace.c
+                     * workspace_analyze_file), so one without STALE carries TYPE
+                     * and asks for --force. */
                     switch (path_clearance(
                         path, occupant, opts->force || (item->divergence & DIVERGENCE_STALE)
                         )) {

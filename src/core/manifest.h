@@ -510,8 +510,9 @@ manifest_rows_t manifest_rows(const manifest_t *manifest);
  * — the set the rows came from, as the enabled set reads once the branches that
  * are gone (and contributed nothing) are left out; for a tree view, the one
  * profile. The untracked scan's registration reads it (core/workspace.c
- * analyze_untracked_files): a later profile's tracked directory takes a directory
- * an earlier one stands at, the index's own rule read from the same order.
+ * workspace_analyze_untracked): a later profile's tracked directory takes a
+ * directory an earlier one stands at, the index's own rule read from the same
+ * order.
  *
  * Pure value return — no allocation, no error path. The names are the arena's,
  * the same pointers the rows carry, valid for the arena's lifetime.
@@ -732,7 +733,7 @@ const manifest_row_t *manifest_lookup(
  * somewhere, and a claim precedence overrode — or a name the profile did not
  * keep — wins nowhere and answers NULL. That is exactly what the workspace's
  * relocation read wants: a claim standing under another profile is not "relocated",
- * the copy at the old path is simply no longer active.
+ * the copy at the old path is simply no longer managed.
  *
  * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
  * read, each of which already cost a Git tree probe; a lazy per-profile storage

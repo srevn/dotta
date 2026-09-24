@@ -189,8 +189,8 @@ bool label_prefixes(const char *s);
  * Readers: the two that derive a consequence from the namespace, each an exhaustive
  * switch — what the sheet reads into an absent ownership claim (core/metadata.c
  * metadata_ownership) and which rule placed the root a relocated claim lands
- * under (core/workspace.c workspace_add_diverged) — and one that only indexes
- * by it, add's receipt counting names by their label (cmds/add.c report_labels).
+ * under (core/workspace.c analyze_orphans) — and one that only indexes by it,
+ * add's receipt counting names by their label (cmds/add.c report_labels).
  */
 label_t label_of(const char *storage_path);
 

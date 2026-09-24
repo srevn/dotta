@@ -291,16 +291,16 @@ static void display_manifest(
         output_color_t color;
         char metadata[256];
 
-        /* Only diverged paths have an item, and what a row without one reads
-         * depends on what was asked of it. A tracked row was compared and agreed:
-         * clean. An ancestor claim was compared with nothing — its mode and
-         * ownership say what to create the path as, never what to make of the
-         * one this machine has, so the analyzer stops at the type question —
-         * and [clean], which promises that nothing diverged, would be a promise
+        /* The door lends a diverged path's item alone, and what a row it lends
+         * none reads depends on what was asked of it. A tracked row was compared
+         * and agreed: clean. An ancestor claim was compared with nothing — its
+         * mode and ownership say what to create the path as, never what to make
+         * of the one this machine has, so the analyzer stops at the type question
+         * — and [clean], which promises that nothing diverged, would be a promise
          * dotta never checked. One that DID diverge keeps its own tags: absence
          * and a squatter are read of both classes, and they already say the
          * actionable thing. A row beneath a squatter never reaches this arm at
-         * all: nothing there was looked at, so it always has an item
+         * all: nothing there was looked at, so the door always lends its item
          * (core/workspace.h workspace_displaced_t) and neither word could be
          * honest of it. */
         const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);

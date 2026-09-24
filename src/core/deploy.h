@@ -308,10 +308,10 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  *
  * Written where the reason is decided. TRACKED and DERIVED by the ancestry rung
  * (check_ancestry), off the claim the load noted beside the squatter
- * (core/workspace.h workspace_squatted_dir_t) — the claim every path beneath it
- * carries as its displaced class, so the remedy here and status's Displaced paths
- * section cannot name two claimants for one squatter; UNCLAIMED by the landing
- * check (check_landing), the one class it can find. Read by cmds/apply.c
+ * (core/workspace.h workspace_squatted_t) — the claim every path beneath it carries
+ * as its displaced class, so the remedy here and status's Displaced paths section
+ * cannot name two claimants for one squatter; UNCLAIMED by the landing check
+ * (check_landing), the one class it can find. Read by cmds/apply.c
  * print_deploy_skips, whose remedies part on it.
  *
  * The class answers for ANCESTOR, where the reason is one and the cure is not —
@@ -339,12 +339,12 @@ typedef enum {
  * of the item's filesystem_path by construction (check_landing truncates the
  * planned path; a squatted directory stands strictly above every row that names
  * it, and the load lends its length with it — core/workspace.h
- * workspace_squatted_dir_t) — carried as the byte length of that prefix, not a
- * copy. 0 where the reason has no ancestor to name: it is about the planned path
- * itself (OWNERSHIP always is), or (PERMISSION alone) the ancestry could not
- * even be reached to name its refusing node. `ancestor_class` says which claim
- * holds the named path where the skip is the squatter's only report — ANCESTOR's
- * alone, and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
+ * workspace_squatted_t) — carried as the byte length of that prefix, not a copy.
+ * 0 where the reason has no ancestor to name: it is about the planned path itself
+ * (OWNERSHIP always is), or (PERMISSION alone) the ancestry could not even be
+ * reached to name its refusing node. `ancestor_class` says which claim holds
+ * the named path where the skip is the squatter's only report — ANCESTOR's alone,
+ * and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
  *
  * The item is the verdict's: the row's, looked up once where the fate is decided
  * and never NULL (deploy_verdict_t). Whether it holds a look is the row's
@@ -566,7 +566,7 @@ typedef struct {
  * from the divergence index, and a kind whose analysis did not run plans as clean.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
- * workspace looked at nothing there, so the row has an item carrying the displaced
+ * workspace looked at nothing there, so the row's item carries the displaced
  * class and no path bit (core/workspace.h workspace_displaced_t), and the work
  * predicate reads that class first (deploy_needs_work). Such a row is work, and
  * not occupied for --skip-existing's purpose; -e still excludes it. What becomes

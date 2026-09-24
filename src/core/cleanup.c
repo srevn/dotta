@@ -316,8 +316,9 @@ typedef struct {
  * run would decide it, and scope decides reach, never verdict — so a filtered
  * run must not change its parent's fate. Everything else is permanent: a RELEASED
  * orphan stays where it is; a managed path (the view has a row, and a row's item
- * is never an orphan's) stands in an enabled profile's name; an entry with no
- * item at all is the user's.
+ * is never an orphan's) stands in an enabled profile's name, the door lending
+ * its item or, where it is clean, none; an entry the load holds no item for is
+ * the user's.
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.
@@ -346,11 +347,11 @@ static bool vouch_entry(const char *child, void *ctx) {
  * A managed path beneath an orphaned directory makes the directory the ancestor
  * of an enabled row — one ensure_parents would make anyway — and nothing dotta
  * does empties it: permanent, whether the row is on disk yet or not. The readdir
- * meets the rows already deployed (an entry with no item is permanent); this
- * answers for the ones deployment will put there — this run, or a later one that
- * reaches them — which is exactly why the disk cannot answer it. Read from the
- * view, not from the deployment plan, so the answer does not move with -p, -e
- * or a path filter: scope decides reach, never verdict.
+ * meets the rows already deployed (a managed path's entry is permanent,
+ * vouch_entry); this answers for the ones deployment will put there — this run,
+ * or a later one that reaches them — which is exactly why the disk cannot answer
+ * it. Read from the view, not from the deployment plan, so the answer does not
+ * move with -p, -e or a path filter: scope decides reach, never verdict.
  *
  * Every directory above a managed path is its ancestor, not just the immediate
  * parent: the ones deployment creates on the way count too.

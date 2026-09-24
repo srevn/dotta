@@ -702,10 +702,11 @@ const char *state_peek_profile_target(
  * hydrates to a zero OID, a NULL mode to 0.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
- *   - core/workspace.c workspace_partition: pairs the view's rows through an
- *     index of its own; the orphans keep strcmp order, which look_orphans'
- *     parents-first walk and the report's orphan listing (analyze_orphans, which
- *     the screens print) rest on
+ *   - core/workspace.c workspace_partition: pairs each record with the managed
+ *     item at its path by the items' own search (find_managed); the orphans keep
+ *     strcmp order, which look_orphans' parents-first walk, their family's search
+ *     (find_item) and the report's orphan listing (analyze_orphans, which the
+ *     screens print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
  *   - cmds/add.c write_record (the takeover note), cmds/remove.c

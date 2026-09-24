@@ -42,7 +42,7 @@
  * entry it is, and two claims through and around it are two claims. A filesystem
  * that folds case or normalization can stand one entry at two strings; the two
  * readers that act on an entry read the entry and not the string (core/workspace.c
- * standing_row, for cleanup and discovery alone).
+ * standing_row for cleanup, standing_item for discovery, and nothing else).
  *
  * Identity is read at two kinds of place, neither of them this table. Where a
  * spelling is made from a source that did not spell it under a root: the binders

@@ -257,11 +257,11 @@ error_t *deploy_plan_build(
         const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
 
         /* Occupancy is the workspace's own lstat, not a fresh probe: a row with
-         * work always has an item (deploy_needs_work(NULL) is false), and lstat
-         * truth counts a broken symlink as occupying the path — which is what
-         * the flag says, and what a stat that follows links could not tell us.
-         * A row beneath a squatter is the one exception: no lstat was taken there
-         * (core/workspace.h workspace_displaced_t), so nothing is "existing"
+         * work is always lent its item (deploy_needs_work(NULL) is false), and
+         * lstat truth counts a broken symlink as occupying the path — which is
+         * what the flag says, and what a stat that follows links could not tell
+         * us. A row beneath a squatter is the one exception: no lstat was taken
+         * there (core/workspace.h workspace_displaced_t), so nothing is "existing"
          * for the flag to keep — the path is empty once the squatter this run
          * replaces is gone, and one it leaves standing is refused by the ancestry
          * rung either way. Both fates are preflight's (check_ancestry). -e still
@@ -605,7 +605,7 @@ static void check_ancestry(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts, const char *path,
     deploy_skip_t *skip, bool *out_absent
 ) {
-    const workspace_squatted_dir_t *above = workspace_squatted_ancestor(ws, path);
+    const workspace_squatted_t *above = workspace_squatted_ancestor(ws, path);
 
     if (!above) {
         return;

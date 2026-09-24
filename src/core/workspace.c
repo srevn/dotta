@@ -431,8 +431,8 @@ static workspace_fault_t fault_of(error_t *err) {
  * (analyze_directories_divergence, analyze_file_divergence, look_orphans), the
  * orphan judge for the item it emits (analyze_orphans), workspace_add_diverged,
  * which classes the fact onto every item, and workspace_squatted_ancestor, the
- * view-only face that lends the answer whole to a caller with no item in hand
- * (core/deploy.c check_ancestry).
+ * view-only face that lends the answer whole to a caller that needs the squatter
+ * itself (core/deploy.c check_ancestry).
  *
  * @param ws Workspace (must not be NULL)
  * @param path The asker's path (must not be NULL)
@@ -3866,7 +3866,7 @@ const workspace_squatted_dir_t *workspace_squatted_ancestor(
     /* The view-only face of the one scan (squatted_ancestor), lent whole: a
      * record's memory reaches the record family alone, whose items carry the
      * fact themselves (the reach rule, workspace_displaced_t), and this probe's
-     * askers hold no item. */
+     * askers need the squatter itself, which no item carries. */
     return squatted_ancestor(ws, path, false);
 }
 

@@ -239,9 +239,9 @@ typedef enum {
  * get_status_message_from_item and show_file_diff_from_workspace (the colour
  * ladder and the content gate), should_show_item_for_direction beside them; and
  * core/deploy.c check_ancestry, off the squatted directory itself — a caller
- * holding a path rather than an item is lent it whole, the claim this class is
- * copied from (workspace_squatted_ancestor), so apply's remedy and status's section
- * cannot name two claimants for one squatter.
+ * that needs the squatter, which no item carries, is lent it whole, the claim
+ * this class is copied from (workspace_squatted_ancestor), so apply's remedy
+ * and status's section cannot name two claimants for one squatter.
  */
 typedef enum {
     WORKSPACE_DISPLACED_NONE = 0,  /* Looked at, at its own path */
@@ -1048,11 +1048,11 @@ typedef struct {
  * A record's memory does not qualify here: a directory only a record remembers
  * displaces the record's own family alone (the reach rule, workspace_displaced_t),
  * and every item of that family carries the fact on itself. This probe is for a
- * caller holding a path and no item: the fate of a planned row (core/deploy.c
- * check_ancestry). A view row beneath a record-remembered squatter is the
- * through-capture the rule leaves to its own occupant. So the answer is the view's
- * claims alone, and its claim is exactly the displaced class a view row's item
- * beneath it carries.
+ * caller that needs the squatter itself, which no item carries: the fate of a
+ * planned row (core/deploy.c check_ancestry). A view row beneath a
+ * record-remembered squatter is the through-capture the rule leaves to its own
+ * occupant. So the answer is the view's claims alone, and its claim is exactly
+ * the displaced class a view row's item beneath it carries.
  *
  * The answer is noted by the phase that looked at each squatter (note_squatted),
  * and the directory analysis runs before any file row or orphan record is looked

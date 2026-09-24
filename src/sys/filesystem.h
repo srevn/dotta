@@ -828,15 +828,16 @@ bool fs_lexists(const char *path);
  * Two failures are absence: ENOENT, and ENOTDIR — a component above the path is
  * not a directory, so nothing can be at the path either. Any other failure (EACCES,
  * ELOOP, EIO, …) is UNKNOWN: something may well be there, and a reader must never
- * infer absence from a failure to look.
+ * infer absence from a failure to look. So UNKNOWN is the zero too: an occupant
+ * no look wrote reads as a look nobody took, never as absence.
  */
 typedef enum {
+    FS_OCCUPANT_UNKNOWN = 0, /* unstattable for a reason other than absence, or not looked at */
     FS_OCCUPANT_NONE,        /* absent, or beneath a non-directory */
     FS_OCCUPANT_REGULAR,
     FS_OCCUPANT_SYMLINK,     /* the link itself, never its target */
     FS_OCCUPANT_DIRECTORY,
-    FS_OCCUPANT_OTHER,       /* fifo, socket, device */
-    FS_OCCUPANT_UNKNOWN      /* unstattable for a reason other than absence */
+    FS_OCCUPANT_OTHER        /* fifo, socket, device */
 } fs_occupant_t;
 
 /**

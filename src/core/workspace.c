@@ -107,11 +107,10 @@ typedef struct {
  * to decline (workspace_load), so both row slices are filled on every load and
  * are sized where the partition builds the slice. A record's looker is a phase
  * of its own (look_orphans), which runs only where one of its two readers will
- * — so that table is allocated where it is written and NULL where it was not.
- * For this family the allocator's zero is not the withholding NONE it is for a
- * row: the orphan judge reads NONE as its absence arm, so an unwritten slot would
- * retire a record while the copy sits on disk, where a NULL table is a crash at
- * the first reader outside the gate.
+ * — so that table is allocated where it is written and NULL where it was not,
+ * and a reader outside the gate is a crash at its first slot, never a verdict.
+ * In either family the allocator's zero is UNKNOWN (sys/filesystem.h
+ * fs_occupant_t): a look nobody took, which no judge reads as absence.
  *
  * Two writers and no third: the looker, and the file judge alone, which retracts
  * the occupant to FS_OCCUPANT_NONE when the read meets absence against a look
@@ -1061,8 +1060,7 @@ static error_t *analyze_file_divergence(
      * filesystem is not a party to it — and the record pairs as on every item,
      * so a pending handover still shows. Nothing is queued: a record is what
      * dotta saw, and dotta saw nothing here. The slot says the same to the phases
-     * after: UNKNOWN with nothing behind it, written rather than left to the
-     * allocator's zero, which spells FS_OCCUPANT_NONE. */
+     * after: UNKNOWN with nothing behind it. */
     if (squatted_ancestor(ws, filesystem_path, false)) {
         *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
 
@@ -2227,8 +2225,7 @@ static error_t *look_orphans(workspace_t *ws) {
 
         /* Beneath a squatter that reaches this family, no look — the file
          * analyzer's rule over the other authority. The slot says the same to
-         * the phases after: UNKNOWN with nothing behind it, written rather than
-         * left to the allocator's zero, which spells FS_OCCUPANT_NONE. */
+         * the phases after: UNKNOWN with nothing behind it. */
         if (squatted_ancestor(ws, anchor->filesystem_path, true)) {
             *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
             continue;
@@ -3360,8 +3357,7 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
          * squatter beneath a squatter is therefore never noted, and the outer
          * one carries the whole answer. Both classes: an ancestor claim beneath
          * a squatter is as unlooked-at as a tracked one. The slot says the same
-         * to the phases after: UNKNOWN with nothing behind it, written rather
-         * than left to the allocator's zero, which spells FS_OCCUPANT_NONE. */
+         * to the phases after: UNKNOWN with nothing behind it. */
         if (squatted_ancestor(ws, filesystem_path, false)) {
             *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
 

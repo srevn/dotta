@@ -2701,10 +2701,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *                             anchoring it as owned would set deployed_at
          *                             on a directory the user made and hand it
          *                             to the prune on the next scope exit — with
-         *                             one exception: a pending handover must
-         *                             not outlive the run that converged the
-         *                             directory, so a reassigned row takes the
-         *                             one anchor that acknowledges it
+         *                             one exception: a record dotta owns whose
+         *                             binding names another row — another
+         *                             profile's, a pending handover, or another
+         *                             name of this one's — must not outlive the
+         *                             run that converged the directory, so it
+         *                             takes the one anchor that moves it onto
+         *                             the row, by the acknowledgement loop's
+         *                             own test
          *   ancestors                 claimed parents made on the way, either
          *                             class — dotta made them too, an owned anchor
          * Every other active directory present on disk was present at load too,
@@ -2757,7 +2761,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * reassignment fact is read against. */
                 bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
 
-                if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !acknowledges) {
+                /* Whether the record follows the row: the acknowledgement loop's
+                 * own test, asked of the whole binding — a record dotta owns,
+                 * bound to another row, another profile's or another name of
+                 * this one's. The loop's kind rung is a preview's: in a run,
+                 * the pass after the flush has already observed away every record
+                 * of another kind under a standing directory
+                 * (workspace_observe_retyped). The count above is the binding's
+                 * profile half, the one the screens name. */
+                const anchor_t *anchor = item->anchor;
+                bool follows = anchor && anchor->deployed_at > 0 &&
+                    !manifest_is_claim(item->row, anchor->profile, anchor->storage_path);
+
+                if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
                     /* A fix: the claims it set, which the record still lacks.
                      * It sets the mode always, and the ownership only where the
                      * verdict applies a pair — two -1s leave the owner as the
@@ -2771,8 +2787,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         : DIVERGENCE_MODE;
 
                     error_t *confirm_err = workspace_confirm(
-                        ws, item->row,
-                        workspace_claims_moved(item->row, item->anchor) & landed, NULL
+                        ws, item->row, workspace_claims_moved(item->row, anchor) & landed, NULL
                     );
                     if (confirm_err) {
                         output_warning(

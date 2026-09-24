@@ -263,11 +263,11 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * on a derived ancestor claim nobody made (core/workspace.h workspace_reassigned).
  */
 typedef struct anchor {
-    char *filesystem_path;    /* Deployed path (PRIMARY KEY), as spelled */
+    const char *filesystem_path; /* Deployed path (PRIMARY KEY), as spelled */
 
     /* The binding */
-    char *storage_path;       /* Path in profile (home/.bashrc) */
-    char *profile;            /* Profile whose row the record follows */
+    const char *storage_path; /* Path in profile (home/.bashrc) */
+    const char *profile;      /* Profile whose row the record follows */
 
     /* The content */
     path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
@@ -276,8 +276,8 @@ typedef struct anchor {
 
     /* The claim */
     mode_t mode;              /* Meaningful iff type != SYMLINK */
-    char *owner;              /* The claimed owner, or NULL */
-    char *group;              /* The claimed group, or NULL */
+    const char *owner;        /* The claimed owner, or NULL */
+    const char *group;        /* The claimed group, or NULL */
 
     /* The lifecycle */
     time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
@@ -310,11 +310,11 @@ typedef struct anchor {
  * the fast and slow paths in agreement.
  */
 typedef struct {
-    char *filesystem_path;    /* Released path (PRIMARY KEY) */
+    const char *filesystem_path; /* Released path (PRIMARY KEY) */
 
     /* The binding, copied verbatim from the record */
-    char *storage_path;       /* Path in profile — AAD of an encrypted blob */
-    char *profile;            /* Subkey of an encrypted blob */
+    const char *storage_path; /* Path in profile — AAD of an encrypted blob */
+    const char *profile;      /* Subkey of an encrypted blob */
 
     /* The content, copied verbatim from the record */
     path_type_t type;         /* FILE, SYMLINK or EXECUTABLE — never DIRECTORY */

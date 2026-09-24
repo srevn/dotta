@@ -273,7 +273,7 @@ static error_t *manifest_place(
     if (!row) {
         return ERROR(ERR_MEMORY, "Failed to allocate manifest row");
     }
-    row->filesystem_path = (char *) filesystem_path;
+    row->filesystem_path = filesystem_path;
 
     error_t *err = ptr_array_push(placed, row);
     if (err) {
@@ -976,10 +976,9 @@ static int manifest_claim_blob(
         return -1;
     }
 
-    /* ctx->profile is the arena-backed name the step duplicated; the cast discards
-     * its const decoration to fit the row's `char *profile` slot. */
+    /* The row borrows ctx->profile, the arena-backed name the step duplicated. */
     row->storage_path = storage_path;
-    row->profile = (char *) ctx->profile;
+    row->profile = ctx->profile;
 
     /* Extract identity from the borrowed tree entry (blob_oid, type, mode). */
     git_oid_cpy(&row->blob_oid, git_tree_entry_id(entry));
@@ -1238,7 +1237,7 @@ static error_t *manifest_contribute(
          * and encrypted false; owner, group and the class are the item's, and
          * the mode is the claim or the floor — the row leaves the build total. */
         row->storage_path = arena_strdup(arena, item->key);
-        row->profile = (char *) c->profile;
+        row->profile = c->profile;
         row->type = PATH_TYPE_DIRECTORY;
         row->tracked = item->tracked;
         row->mode = item->mode != MODE_UNCLAIMED ? item->mode : DIR_MODE_DEFAULT;

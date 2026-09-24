@@ -630,7 +630,7 @@ static error_t *workspace_add_untracked(
 
     item->filesystem_path = arena_strdup(ws->arena, filesystem_path);
     item->storage_path = arena_strdup(ws->arena, storage_path);
-    item->profile = (char *) profile;   /* the cast discards the view's const */
+    item->profile = profile;
     if (!item->filesystem_path || !item->storage_path) {
         return ERROR(ERR_MEMORY, "Failed to copy untracked paths");
     }

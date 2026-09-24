@@ -169,16 +169,16 @@ typedef struct anchor anchor_t;
  */
 typedef struct manifest_row {
     /* Identity */
-    char *filesystem_path;      /* Deployed path (/home/user/.bashrc), as spelled */
-    char *storage_path;         /* Path in profile (home/.bashrc) */
-    char *profile;              /* The profile whose claim the row is */
+    const char *filesystem_path; /* Deployed path (/home/user/.bashrc), as spelled */
+    const char *storage_path;   /* Path in profile (home/.bashrc) */
+    const char *profile;        /* The profile whose claim the row is */
 
     /* What stands there: manifest_diff's updated compares each field but encrypted */
     path_type_t type;           /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;           /* Blob the composed profile layer expects on disk (zero for DIRECTORY) */
     mode_t mode;                /* Total for every kind that carries one (claim or floor); 0 on a link row, a don't-care */
-    char *owner;                /* The claimed owner, or NULL; what absence says is the sheet's (metadata.h) */
-    char *group;                /* The claimed group, or NULL */
+    const char *owner;          /* The claimed owner, or NULL; what absence says is the sheet's (metadata.h) */
+    const char *group;          /* The claimed group, or NULL */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */
     bool tracked;               /* DIRECTORY rows: the profile manages the directory itself */
 } manifest_row_t;

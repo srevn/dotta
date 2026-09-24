@@ -1982,12 +1982,11 @@ error_t *state_confirm_claim(
 
     /* The caller's copy follows, on the three columns the statement names, as a
      * load reads them back — a link's NULL mode as 0 — and the strings borrowed
-     * as state_observe and state_anchor borrow the row's, the cast discarding a
-     * const the record's fields do not spell. No released copy dies here: a claim
-     * gives the path no newer base. */
+     * as state_observe and state_anchor borrow the row's. No released copy dies
+     * here: a claim gives the path no newer base. */
     anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
-    anchor->owner = (char *) owner;
-    anchor->group = (char *) group;
+    anchor->owner = owner;
+    anchor->group = group;
 
     return NULL;
 }

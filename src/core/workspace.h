@@ -416,9 +416,9 @@ typedef struct {
      * ORPHANED/RELEASED are record-defined), the scan's arena copies for untracked
      * (profile: the view's profile list's) — assigned once by the producer, never
      * a second copy. */
-    char *filesystem_path;      /* Target path on filesystem */
-    char *storage_path;         /* Path in profile, e.g., home/.bashrc */
-    char *profile;              /* Winning profile name */
+    const char *filesystem_path;      /* Target path on filesystem */
+    const char *storage_path;         /* Path in profile, e.g., home/.bashrc */
+    const char *profile;              /* The profile it is from (a discovery: the one it is in) */
 
     /* The analysis's verdicts */
     workspace_state_t state;           /* Where the item exists (deployed/undeployed/etc.) */

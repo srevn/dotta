@@ -737,13 +737,15 @@ const anchor_t *state_lookup_anchor(
  * Presence only, idempotent. One INSERT creates the record with the row's binding,
  * kind and claim — no blob, no stat, never owned — and never touches an existing
  * row: ON CONFLICT DO NOTHING absorbs the key's conflict and no other, so every
- * constraint on what it writes still refuses (key_spelling among them). One caller:
+ * constraint on what it writes still refuses (key_spelling among them). Two
+ * callers, both the load's, since the load is where presence is established:
  * the workspace's flush, through workspace_observe, for an active row its load
- * found on disk with no record — the load is where presence is established, so
- * a directory apply fixes rather than makes was present there and is observed
- * by that flush. The record's existence is what the absence classifier reads
- * (workspace.c classify_absent): a path once observed that is now missing was
- * deleted, not never deployed.
+ * found on disk with no record — so a directory apply fixes rather than makes
+ * was present there and is observed by that flush — and workspace_observe_retyped,
+ * for a directory its load found standing where the record describes another
+ * kind of node, a record that call retires first so the INSERT lands. The record's
+ * existence is what the absence classifier reads (workspace.c classify_absent):
+ * a path once observed that is now missing was deleted, not never deployed.
  *
  * *anchor is the sighting's record, written last, so a failure leaves it as it
  * was: the row's binding, kind and claim (borrowed — the string pointers are
@@ -953,7 +955,9 @@ error_t *state_anchor(
  * A missing record is success: the callers name paths that may have no record —
  * never seen here, nothing to retire. Callers: apply's record step, for every
  * orphan it settles; remove's settle and update's purge, for what their commits
- * let go; add's settle, for the ancestor claims its own commit dropped.
+ * let go; add's settle, for the ancestor claims its own commit dropped; and apply's
+ * load, through core/workspace.c workspace_observe_retyped, for a directory's
+ * record of another kind of node, which the directory's sighting replaces.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)

@@ -1689,6 +1689,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
+    /* The one sighting the flush cannot make: a directory standing where its
+     * record describes another kind of node — a file, a link — whose record holds
+     * the place the sighting would take. A run holds its load's lock, which a
+     * retire needs, so the record retires here and the directory is observed in
+     * its place, never owned (workspace_observe_retyped); a preview writes nothing,
+     * and the next run makes it. Ahead of the plan, so no loop below meets such
+     * a record in a run: the acknowledgement owns no directory the user made
+     * where dotta's file was, and a fix confirms onto the sighting. */
+    if (!opts->dry_run) {
+        err = workspace_observe_retyped(ws);
+        if (err) {
+            goto cleanup;
+        }
+    }
+
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
      * empty one. */
     char loaded[64];
@@ -2188,7 +2203,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * every pre-existing clean parent would own it and prune it at scope exit.
      * A recordless clean directory stays the flush's observation, exactly as
      * before — and a directory record the workspace's guard released comes back
-     * observed for the same reason, where an owned one was pruned. */
+     * observed for the same reason, where an owned one was pruned. A record of
+     * another kind of node reaches this loop in no run: the directory standing
+     * in its place was observed there after the flush (workspace_observe_retyped),
+     * so an owned file record never re-stamps a directory the user made. */
     manifest_rows_t ackable = manifest_rows_view(&deploy_plan->directories.clean);
 
     for (size_t i = 0; i < ackable.count; i++) {
@@ -2244,17 +2262,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Checkpoint: the run's reading of the present is complete, and recorded
      *
      * Everything written so far is a fact about the load — the flush's observations
-     * and confirmations, and the ownership events above, which claim rows the
-     * analysis found clean — and it stays a fact whatever the rest of the run
-     * does. What follows can end without writing anything else: the nothing-to-do
-     * exit below, a strict_ownership error, a hook that refuses, a declined prompt.
-     * The dispatch transaction is committed here so that none of those exits
-     * rolls the present back — "Adopted N files" has already been said, and the
-     * record must say it too, or the next run adopts them again and the next
-     * status reads a path the load observed as never seen. A preview has no
-     * dispatch transaction to commit — its flush took and committed its own,
-     * and this save closes nothing — but the reading is as true as a run's and
-     * is persisted the same way, which is what status does with it too.
+     * and confirmations, the directories observed where a record of another kind
+     * of node stood, and the ownership events above, which claim rows the analysis
+     * found clean — and it stays a fact whatever the rest of the run does. What
+     * follows can end without writing anything else: the nothing-to-do exit below,
+     * a strict_ownership error, a hook that refuses, a declined prompt. The
+     * dispatch transaction is committed here so that none of those exits rolls
+     * the present back — "Adopted N files" has already been said, and the record
+     * must say it too, or the next run adopts them again and the next status
+     * reads a path the load observed as never seen. A preview has no dispatch
+     * transaction to commit — its flush took and committed its own, and this
+     * save closes nothing — but the reading is as true as a run's and is persisted
+     * the same way, which is what status does with it too.
      *
      * The record of the run's own effects — the anchors the deployment writes,
      * the records cleanup retires — is the run's second transaction, begun past
@@ -2660,8 +2679,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *   converged in place        dotta did not make it, and it was present at
          *   (a fix)                   load, so the flush has already observed any
          *                             that had no record and learned each claim
-         *                             disk already stood on: a confirmation of
-         *                             the claims the fix set that the record
+         *                             disk already stood on, and the pass after
+         *                             it observed any whose record described
+         *                             another kind of node in that record's place
+         *                             (workspace_observe_retyped): a confirmation
+         *                             of the claims the fix set that the record
          *                             still lacks, never an ownership event —
          *                             anchoring it as owned would set deployed_at
          *                             on a directory the user made and hand it

@@ -4389,6 +4389,52 @@ error_t *workspace_observe(
 }
 
 /**
+ * Observe the directories standing where their records describe another kind of
+ * node
+ *
+ * The rule is the header's. Here: the directory rows are read with their own
+ * looks, by the same index, and each record found wanting retires before its
+ * sighting is written, so the INSERT lands — the run's transaction was taken
+ * before the load read the record, and nothing else writes inside it. The sighting
+ * is written into the snapshot's own record, the one the index and any item of
+ * the path already hold: one object rewritten in place, as workspace_anchor
+ * advances one.
+ */
+error_t *workspace_observe_retyped(workspace_t *ws) {
+    CHECK_NULL(ws);
+
+    for (size_t i = 0; i < ws->active_dir_count; i++) {
+        const manifest_row_t *row = ws->active_dirs[i];
+
+        /* A directory standing: the row's own kind, found by the load's look at
+         * the path. A look withheld or failed saw nothing stand, and absence or
+         * another kind of node is not the row's. */
+        if (ws->dir_looks[i].occupant != FS_OCCUPANT_DIRECTORY) continue;
+
+        /* Over a record of another kind: that record's node is gone */
+        anchor_t *anchor = hashmap_get(ws->anchor_index, row->filesystem_path);
+        if (!anchor ||
+            workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF) {
+            continue;
+        }
+
+        /* The record retires, its base kept, and the directory is observed in
+         * its place */
+        error_t *err = state_retire_anchor(ws->state, row->filesystem_path);
+        if (!err) {
+            err = state_observe(ws->state, row, anchor);
+        }
+        if (err) {
+            return error_wrap(
+                err, "Failed to observe '%s' in its record's place", row->filesystem_path
+            );
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Anchor a managed path with in-memory consistency
  *
  * The workspace-scope writer for ownership events: hands state_anchor the path's

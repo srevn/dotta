@@ -2242,8 +2242,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * so each names the apply that takes the claim away: a record whose path
          * the view lacks is an orphan apply prunes, releases or reclaims; one
          * whose confirmed kind and content are not the row's is stale, and apply
-         * deploys the row; one whose claim Git moved past the one it reconciled
-         * is stale on that axis, and apply brings it (core/workspace.h
+         * deploys the row — or, where the row's own kind already stands in place
+         * of the node the record describes, lets the record go: a directory is
+         * observed there (core/workspace.h workspace_observe_retyped), a file
+         * adopted; one whose claim Git moved past the one it reconciled is stale
+         * on that axis, and apply brings it (core/workspace.h
          * workspace_claims_moved, whose rule keeps out a derived claim, which
          * apply never converges) — a claim disk already stands on included, since
          * no load runs after the pull: it hints until one learns it, the apply

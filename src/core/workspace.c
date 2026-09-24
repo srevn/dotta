@@ -131,9 +131,10 @@ typedef struct {
  * The identity (st_dev, st_ino) is what index_entries projects; st_nlink and
  * st_mode are read off the asker's own fresh stat (same_entry), so no reader
  * judges a link count this table froze. The whole struct stat, because
- * compute_orphan_divergence, content_compare_blob_to_disk and ownership_diverges
- * each take one — 152 bytes a slot, 316 KB on a 2081-path load against a 7.8 MB
- * peak, where a narrowed row would have to synthesize one back for all three.
+ * stat_cache_matches, content_compare_blob_to_disk and ownership_diverges, which
+ * the judges hand it to, each take one — 152 bytes a slot, 316 KB on a 2081-path
+ * load against a 7.8 MB peak, where a narrowed row would have to synthesize one
+ * back for all three.
  */
 typedef struct {
     fs_occupant_t occupant;   /* What the look found: a present kind, or NONE / UNKNOWN */
@@ -1289,14 +1290,24 @@ static error_t *analyze_file_divergence(
          */
         error_t *err = NULL;
 
-        /* The row's own filemode, the kind both arms below are put under: the
-         * ladder's expected kind for the plaintext arm, one part of the memo's
+        /* The row's own filemode, the kind both reads below are put under: the
+         * ladder's expected kind for the plaintext read, one part of the memo's
          * key for the sealed one. The fast path needs none — the pair it answers
          * from carries its own kind — so the mapping is made here rather than
          * above the fork. */
         git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
 
-        if (!row->encrypted) {
+        /* The ladder's first rung, asked of the look before anything is read:
+         * another kind than the row's stands (core/workspace.h
+         * workspace_type_occupant), and no byte can change that, so none is read
+         * and no key is asked. The ladder asks the same rung first itself
+         * (infra/compare.c compare_reference_to_disk), but only once it holds
+         * the reference, and a sealed row's reference is a decrypt: asked there,
+         * one node would read [locked] without the key and [type] with it. The
+         * second question below still reads the base, under the base's own kind. */
+        if (look->occupant != workspace_type_occupant(row->type)) {
+            cmp_result = CMP_TYPE_DIFF;
+        } else if (!row->encrypted) {
             err = compare_oid_to_disk(
                 &row->blob_oid,
                 filesystem_path,
@@ -1530,7 +1541,9 @@ static error_t *analyze_file_divergence(
  * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
  * - Anchor stat triple as the fast path, the same proof the active slice relies
  *   on: a match means the exact node dotta wrote, no hashing
- * - Past it, one read of the record's blob answers its kind and the reference
+ * - Past it, the node's kind off the look, which needs no read (the ladder's
+ *   first rung, as the active judge asks it)
+ * - Past that, one read of the record's blob answers its kind and the reference
  *   together, and the plaintext ends with the judgment (infra/content.h
  *   content_compare_blob_to_disk)
  * - The claim checked against the record's: the full-bit mode, the ownership
@@ -1547,7 +1560,8 @@ static error_t *analyze_file_divergence(
  * @param ws Workspace (provides the run's content reader)
  * @param anchor The record dotta keeps of the path (must not be NULL;
  *               non-zero blob_oid)
- * @param st The look the caller took at the record's path (must not be NULL)
+ * @param look The look the caller took at the record's path, a present kind (must
+ *             not be NULL)
  * @param out Receives the divergence flags (must not be NULL); DIVERGENCE_NONE
  *            when the look failed and the error is returned
  * @return The look's error when the compare could not be made; NULL otherwise
@@ -1555,7 +1569,7 @@ static error_t *analyze_file_divergence(
 static error_t *compute_orphan_divergence(
     workspace_t *ws,
     const anchor_t *anchor,
-    const struct stat *st,
+    const look_t *look,
     divergence_type_t *out
 ) {
     *out = DIVERGENCE_NONE;
@@ -1590,6 +1604,11 @@ static error_t *compute_orphan_divergence(
      * exact node dotta wrote is recognised without loading or hashing anything
      * — and the claim below is asked of that node, never of another kind's.
      *
+     * Then the ladder's first rung, off the look before any read, as the active
+     * judge asks it (analyze_file_divergence): another kind than the record's
+     * stands, which no byte can change — so no blob is opened and no key asked
+     * to learn what the look already tells.
+     *
      * Otherwise content_compare_blob_to_disk reads the record's blob once, as
      * the entry the record's own type names, and judges the look against what
      * it answers. The kind comes off that blob and nothing else, so the orphan
@@ -1598,16 +1617,18 @@ static error_t *compute_orphan_divergence(
      * sit on the other side of an encryption-policy flip from what Git holds
      * now. The caller's look is forwarded: the seam reads, the pair judges, and
      * neither takes a look of its own. */
-    if (stat_cache_matches(&anchor->stat, anchor->type, st)) {
+    if (stat_cache_matches(&anchor->stat, anchor->type, &look->st)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         cmp_result = CMP_EQUAL;
+    } else if (look->occupant != workspace_type_occupant(anchor->type)) {
+        cmp_result = CMP_TYPE_DIFF;
     } else {
         err = content_compare_blob_to_disk(
             ws->content_cache,
             reference,
             filesystem_path,
             expected_filemode,
-            st,
+            &look->st,
             storage_path,
             profile,
             &cmp_result
@@ -1675,11 +1696,11 @@ static error_t *compute_orphan_divergence(
      */
     if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
         if (anchor->type != PATH_TYPE_SYMLINK
-            && (st->st_mode & 0777) != anchor->mode) {
+            && (look->st.st_mode & 0777) != anchor->mode) {
             divergence |= DIVERGENCE_MODE;
         }
         if (ownership_diverges(
-            anchor->storage_path, anchor->owner, anchor->group, st
+            anchor->storage_path, anchor->owner, anchor->group, &look->st
             )) {
             divergence |= DIVERGENCE_OWNERSHIP;
         }
@@ -2607,7 +2628,7 @@ static error_t *analyze_orphans(workspace_t *ws) {
              * and never prunable. */
             if (kind == PATH_KIND_FILE && look->occupant != FS_OCCUPANT_UNKNOWN) {
                 fault = fault_of(
-                    compute_orphan_divergence(ws, anchor, &look->st, &divergence)
+                    compute_orphan_divergence(ws, anchor, look, &divergence)
                 );
             } else if (look->occupant == FS_OCCUPANT_UNKNOWN) {
                 /* Present but unstattable, either kind: nothing to measure the

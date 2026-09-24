@@ -1119,10 +1119,10 @@ error_t *deploy_preflight(
                      * under the base's kind): replacing it loses nothing, so it
                      * needs no --force, as a STALE row's bytes never do
                      * (deploy_content_conflicts). The proof is the bit and never
-                     * an absence of conflict: a sealed row read with no key fails
-                     * before its kind is compared, carrying neither TYPE nor
-                     * CONTENT and proving nothing, so its kind mismatch still
-                     * asks for --force. */
+                     * an absence of conflict: the workspace judges every kind
+                     * mismatch it can see off the look, before any read and
+                     * whatever the key (core/workspace.c analyze_file_divergence),
+                     * so one without STALE carries TYPE and asks for --force. */
                     switch (path_clearance(
                         path, occupant, opts->force || (item->divergence & DIVERGENCE_STALE)
                         )) {
@@ -1151,18 +1151,18 @@ error_t *deploy_preflight(
              * bit, not its unstattable symptom. The bit has two producers: the
              * path could not be lstat'd (occupant UNKNOWN, which no rung above
              * judges — UNKNOWN is not present), or the look at its content failed
-             * with the occupant known — a blob that could not be loaded, decrypted
-             * or compared, an open the file refused — which the content rung
-             * cannot catch either: a failed look accumulates no content verdict.
-             * (A kind mismatch lstat did settle still skips TYPE first, rightly
-             * — that fact depends on no failed look.) Nothing can say what the
-             * run will find there, or that the write's own read will fare better,
-             * and nothing is written on a guess. The ancestry that refused an
-             * lstat is what refuses the write, and the landing has just named
-             * it when it could (EACCES on the way up); the row is skipped on
-             * its own account only when the landing had nothing to say — a failure
-             * the run would otherwise have met mid-run, after siblings already
-             * wrote. */
+             * with the row's own kind standing — a blob that could not be loaded,
+             * decrypted or compared, an open the file refused — which the content
+             * rung cannot catch either: a failed look accumulates no content
+             * verdict. (A kind mismatch makes no content look to fail: it is
+             * judged off the lstat before any read, and TYPE takes it above.)
+             * Nothing can say what the run will find there, or that the write's
+             * own read will fare better, and nothing is written on a guess. The
+             * ancestry that refused an lstat is what refuses the write, and the
+             * landing has just named it when it could (EACCES on the way up);
+             * the row is skipped on its own account only when the landing had
+             * nothing to say — a failure the run would otherwise have met mid-run,
+             * after siblings already wrote. */
             if (skip.reason == DEPLOY_SKIP_NONE && (item->divergence & DIVERGENCE_UNVERIFIED)) {
                 skip.reason = DEPLOY_SKIP_UNREADABLE;
             }

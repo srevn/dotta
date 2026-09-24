@@ -455,9 +455,10 @@ typedef struct {
  * directory or not.
  *
  * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
- * record's own node, standing), core/deploy.c occupant_conflicts (what stands
- * at a planned path, against the node its row lands). A reader not on this list
- * is a bug.
+ * record's own node, standing), core/workspace.c analyze_file_divergence and
+ * compute_orphan_divergence (the ladder's first rung, off the look before any
+ * read), core/deploy.c occupant_conflicts (what stands at a planned path, against
+ * the node its row lands). A reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {

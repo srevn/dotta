@@ -13,11 +13,11 @@
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
- * here (workspace_observe, workspace_anchor, workspace_confirm) advance it only
- * after a live look at disk — all but the flush's void, which clears an order
- * on the view's word: the path is back in the view. A record whose path the view
- * lacks is an orphan, and the orphan analysis asks Git — the only authority that
- * knows — why it is one.
+ * here (workspace_observe, workspace_observe_retyped, workspace_anchor,
+ * workspace_confirm) advance it only after a live look at disk — all but the
+ * flush's void, which clears an order on the view's word: the path is back in
+ * the view. A record whose path the view lacks is an orphan, and the orphan
+ * analysis asks Git — the only authority that knows — why it is one.
  *
  * The filesystem side is looked at once. Three families, three phases: the
  * directory rows, the file rows, and the records the view lacks, each looked at
@@ -198,11 +198,12 @@ struct workspace {
     size_t active_dir_count;                     /* Number of active directory rows, and of looks */
 
     /* The record: every anchor, snapshot at load in filesystem_path order and
-     * indexed by path. Values are mutable — workspace_observe and workspace_anchor
-     * patch a record in place (or create one in the arena and index it),
-     * workspace_confirm advances one through the confirmations, and the flush's
-     * void (state_void_prune_order) clears an order on one — so every later reader
-     * in the run sees the post-write value. */
+     * indexed by path. Values are mutable — workspace_anchor advances a record
+     * in place, or creates one in the arena and indexes it, as workspace_observe
+     * does for a path with none; workspace_observe_retyped writes a sighting
+     * into the record it retires; workspace_confirm advances one through the
+     * confirmations; and the flush's void (state_void_prune_order) clears an
+     * order on one — so every later reader in the run sees the post-write value. */
     anchor_t *anchors;                           /* Arena snapshot from state_get_all_anchors */
     size_t anchor_count;                         /* Number of anchors in the snapshot */
     hashmap_t *anchor_index;                     /* filesystem_path → anchor_t * (heap-allocated) */
@@ -229,9 +230,9 @@ struct workspace {
 
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition for the two snapshots above,
-     * then written through by the three writers (workspace_observe,
-     * workspace_anchor, workspace_confirm) and the flush's void, each advancing
-     * the record it persists. */
+     * then written through by the four writers (workspace_observe,
+     * workspace_observe_retyped, workspace_anchor, workspace_confirm) and the
+     * flush's void, each advancing the record it persists. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */

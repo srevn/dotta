@@ -462,14 +462,15 @@ typedef struct {
  * what it is to disk — and its kind rung alone, asked of the record. A record
  * of another kind than its row describes another node, so it is none of the row's:
  * no base for its claim (workspace_claims_moved below), no target for what the
- * load learns (core/workspace.c workspace_record_confirmation), no directory's
- * handover to acknowledge (cmds/apply.c cmd_apply's acknowledgement). Whether
- * that node still stands is a look's to say. While it does, the row's deployment
- * replaces dotta's own node there, which is a handover (workspace_reassigned
- * below); where the look found the row's own kind in its place, that node is
- * gone, and apply adopts a file over the record (cmd_apply's adoption) and observes
- * a directory in the record's place (workspace_observe_retyped). A reader not
- * on this list is a bug; the boolean reading of it is workspace_stale below.
+ * load learns (core/workspace.c workspace_record_confirmation), no witness to
+ * its deletion (classify_absent), no directory's handover to acknowledge
+ * (cmds/apply.c cmd_apply's acknowledgement). Whether that node still stands is
+ * a look's to say. While it does, the row's deployment replaces dotta's own node
+ * there, which is a handover (workspace_reassigned below); where the look found
+ * the row's own kind in its place, that node is gone, and apply adopts a file
+ * over the record (cmd_apply's adoption) and observes a directory in the record's
+ * place (workspace_observe_retyped). A reader not on this list is a bug; the
+ * boolean reading of it is workspace_stale below.
  *
  * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
@@ -720,12 +721,14 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  * Deployed items only. Every other state routes trivially by the state itself
  * (DELETED → update's, UNDEPLOYED → apply's, UNTRACKED → update --include-new's,
  * ORPHANED / RELEASED → cleanup_verdict's) and is not drift-prone. DELETED earns
- * that triviality upstream, twice: classify_absent reads absence as a deletion
- * only for a claim that asserts its path, so an ancestor claim never arrives
- * here; and only where a look was taken, so a path whose absence the squatter
- * above it caused is a displaced DEPLOYED item instead (workspace_displaced_t).
- * Every DELETED item can therefore bear update's verb. Callers keep their state
- * switch and read this table for the DEPLOYED arm alone.
+ * that triviality upstream, three times: classify_absent reads absence as a
+ * deletion only for a claim that asserts its path, so an ancestor claim never
+ * arrives here; only over a record of the claim's own kind, so a path where dotta
+ * only ever saw another kind of node never does either; and only where a look
+ * was taken, so a path whose absence the squatter above it caused is a displaced
+ * DEPLOYED item instead (workspace_displaced_t). Every DELETED item can therefore
+ * bear update's verb. Callers keep their state switch and read this table for
+ * the DEPLOYED arm alone.
  */
 typedef enum {
     WORKSPACE_ROUTE_CLEAN,             /* No divergence, no reassignment */

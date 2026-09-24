@@ -877,7 +877,12 @@ static error_t *note_squatted(
  *
  * And dotta has to have seen the path there. A record exists iff dotta has
  * lstat-confirmed the path on disk in scope, so no record means there was no
- * filesystem obligation to break: absence is UNDEPLOYED, apply's to create.
+ * filesystem obligation to break: absence is UNDEPLOYED, apply's to create. And
+ * the record has to have seen the claim's kind of node: one of another kind (the
+ * kind rung, core/workspace.h workspace_compare_confirmed) saw a node that is
+ * gone — a file where the claim is now a directory, a link where it is now a
+ * file — and the node the claim asserts was never here to be removed, so its
+ * absence deletes nothing and update must not commit it as a removal.
  *
  * The record still answers "has dotta seen this path" for an ancestor claim —
  * the ownership gate reads it. Only a claim that asserts the path may read that
@@ -891,8 +896,10 @@ static workspace_state_t classify_absent(
         return WORKSPACE_STATE_UNDEPLOYED;
     }
 
-    return anchor ? WORKSPACE_STATE_DELETED
-                  : WORKSPACE_STATE_UNDEPLOYED;
+    return anchor &&
+           workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF
+           ? WORKSPACE_STATE_DELETED
+           : WORKSPACE_STATE_UNDEPLOYED;
 }
 
 /**
@@ -3350,11 +3357,12 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
             /* Absent path: classify_absent decides, and this is where its claim
              * gate earns its keep. An observed tracked directory was deleted by
              * the user (update propagates the removal); a never-observed one
-             * was never there, and an ancestor claim asserts nothing to have
-             * been deleted whatever its record says — apply's job is to create
-             * it, never to commit a phantom deletion. The item is emitted either
-             * way: deploy's ancestors pass reads absence off its occupant, not
-             * its state. */
+             * was never there, nor was one observed only as another kind of node
+             * (a file where the claim is now a directory); and an ancestor claim
+             * asserts nothing to have been deleted whatever its record says —
+             * apply's job is to create it, never to commit a phantom deletion.
+             * The item is emitted either way: deploy's ancestors pass reads absence
+             * off its occupant, not its state. */
             err = workspace_add_diverged(
                 ws,
                 row,

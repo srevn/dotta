@@ -200,7 +200,8 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * and what it confirmed there. One row per filesystem path, both kinds. A row
  * exists iff dotta has observed the path on disk while it was managed: there is
  * no "never observed" row — the row's existence is the observation
- * (core/workspace.c classify_absent reads it), and no column restates it.
+ * (core/workspace.c classify_absent reads it, of the kind the record names),
+ * and no column restates it.
  *
  * Four groups of columns, one write rule each (the verbs below):
  *   - the binding (profile, storage_path): the row the record follows — who

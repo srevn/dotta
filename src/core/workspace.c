@@ -478,10 +478,11 @@ static const workspace_squatted_dir_t *squatted_ancestor(
  * every look they take, and the two halves meet here: an item that carries a
  * class is an item with nothing measured.
  *
- * Its callers add by the spine's rule (workspace_get_all_diverged), each at the
- * arm that decides it: a look withheld carries its class, a look failed or another
- * kind carries its bit, and each judge's tail tests a state, a bit or a pending
- * handover — so no DEPLOYED item the route calls clean is ever added.
+ * Its callers add by the spine's rule (workspace_get_all_diverged). Each managed
+ * judge adds at the arm that decides it — absence carries its state, a look
+ * withheld its class, a look failed or another kind its bit — and its tail tests
+ * a bit or a pending handover; the orphan judge adds every orphan it judged. So
+ * no DEPLOYED item the route calls clean is ever added.
  *
  * @param ws Workspace context (must not be NULL)
  * @param row The view's claim (NULL for orphans — except a relocated one, whose
@@ -967,12 +968,12 @@ static error_t *analyze_claim_divergence(
  * the anchors snapshot.
  *
  * Content is judged three-way, with dotta's last content confirmation as base
- * (see Phase 1 — the record's blob, or a released fact's when the record carries
- * none): DIVERGENCE_STALE says Git moved past the pair dotta last confirmed,
- * DIVERGENCE_CONTENT says disk left it. Each is a verdict in its own right —
- * STALE without CONTENT is apply-side work that overwrites nothing of the user's;
- * CONTENT without STALE is a local edit Git has not raced; both together is a
- * conflict.
+ * (see the content and type analysis below — the record's blob, or a released
+ * fact's when the record carries none): DIVERGENCE_STALE says Git moved past
+ * the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it. Each is
+ * a verdict in its own right — STALE without CONTENT is apply-side work that
+ * overwrites nothing of the user's; CONTENT without STALE is a local edit Git
+ * has not raced; both together is a conflict.
  *
  * The claim is judged by one question per axis (analyze_claim_divergence): did
  * Git move it past the claim the record last reconciled? DIVERGENCE_CLAIM_MOVED
@@ -1027,10 +1028,12 @@ static error_t *analyze_file_divergence(
      * fast path, and absence reads UNDEPLOYED. */
     const anchor_t *anchor = workspace_get_anchor(ws, filesystem_path);
 
-    /* The blob-family verdict (see the doc above): is the blob Git holds for
-     * this row stored plaintext where the auto-encrypt policy claims the path?
-     * DIVERGENCE_NONE or DIVERGENCE_ENCRYPTION, carried by every return below. */
-    divergence_type_t policy =
+    /* The row's verdict, opened with the blob family's (see the doc above): is
+     * the blob Git holds for this row stored plaintext where the auto-encrypt
+     * policy claims the path? Git's alone, so every arm below carries it. The
+     * path family is written from the content's switch on, so an arm that returns
+     * before the switch carries the blob family alone. */
+    divergence_type_t divergence =
         encryption_policy_violation(config, storage_path, row->type, row->encrypted)
         ? DIVERGENCE_ENCRYPTION : DIVERGENCE_NONE;
 
@@ -1050,7 +1053,7 @@ static error_t *analyze_file_divergence(
         *look = (look_t){ .occupant = FS_OCCUPANT_UNKNOWN };
 
         return workspace_add_diverged(
-            ws, row, anchor, WORKSPACE_STATE_DEPLOYED, policy,
+            ws, row, anchor, WORKSPACE_STATE_DEPLOYED, divergence,
             FS_OCCUPANT_UNKNOWN, WORKSPACE_FAULT_NONE
         );
     }
@@ -1062,6 +1065,18 @@ static error_t *analyze_file_divergence(
      * join does either (look_t). */
     look->occupant = fs_lstat_occupant(filesystem_path, &look->st);
     look->lstat_errno = errno;   /* Valid on UNKNOWN (fs_lstat_occupant's contract) */
+
+    if (look->occupant == FS_OCCUPANT_NONE) {
+        /* Absent: classify_absent decides (its claim gate is inert here — a file
+         * row asserts its path by holding a blob for it). No path bit: properties
+         * of what is not there cannot be compared, and none has been written.
+         * The blob family rides — the blob and the policy are both still here
+         * to disagree ([undeployed] [unencrypted] is exactly this row). */
+        return workspace_add_diverged(
+            ws, row, anchor, classify_absent(row, anchor), divergence,
+            look->occupant, WORKSPACE_FAULT_NONE
+        );
+    }
 
     if (look->occupant == FS_OCCUPANT_UNKNOWN) {
         /* Inaccessible, not absent (EACCES, ELOOP, EIO; ENOTDIR is absence —
@@ -1081,25 +1096,18 @@ static error_t *analyze_file_divergence(
          * Returns here because every phase below needs a valid stat. */
         return workspace_add_diverged(
             ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-            DIVERGENCE_UNVERIFIED | policy,
+            divergence | DIVERGENCE_UNVERIFIED,
             look->occupant,              /* assumed present */
             fault_class(error_code_from_errno(look->lstat_errno))
         );
     }
 
-    /* Divergence accumulator (bit flags, can combine), opened with the blob-family
-     * verdict; the path-family bits accumulate below. */
-    divergence_type_t divergence = policy;
-
-    /* State will be determined in PHASE 2 based on deployment status */
-    workspace_state_t state = WORKSPACE_STATE_DEPLOYED;
-
-    /* The look found the path standing, and two things follow from that one fact:
-     * the sighting the record does not yet hold, and the verdict over what stands
-     * there. One read of the look, where two stood.
+    /* The path stands — the arms above returned for a look withheld, absence
+     * and a failed look — and two things follow from that one fact: the sighting
+     * the record does not yet hold, and the verdict over what stands there.
      *
-     * PHASE 1: Content and type analysis (if file exists) Buffer-based comparison
-     * for accurate divergence detection.
+     * CONTENT AND TYPE ANALYSIS: Buffer-based comparison for accurate divergence
+     * detection.
      *
      * Architecture:
      * - Use the row's blob_oid for content loading
@@ -1145,391 +1153,332 @@ static error_t *analyze_file_divergence(
      * observation. A path with neither has no base. Cross-process correct by
      * construction — every invocation sees the same answer.
      */
-    if (look->occupant != FS_OCCUPANT_NONE) {
-        /* The look just observed the path in scope (any type counts). A path
-         * with no record gets one — presence only; a CMP_EQUAL below supersedes
-         * it with a confirmation, and the flush writes each path once. Closes
-         * the "user created the path after scope entry" gap: the next absence
-         * reads DELETED, not UNDEPLOYED. */
-        if (!anchor) {
-            error_t *err = workspace_record_observation(ws, row);
+    /* The look just observed the path in scope (any type counts). A path with
+     * no record gets one — presence only; a CMP_EQUAL below supersedes it with
+     * a confirmation, and the flush writes each path once. Closes the "user created
+     * the path after scope entry" gap: the next absence reads DELETED, not
+     * UNDEPLOYED. */
+    if (!anchor) {
+        error_t *err = workspace_record_observation(ws, row);
+        if (err) return err;
+    }
+
+    compare_result_t cmp_result;
+
+    /* The base: dotta's last content confirmation at this path — the record's,
+     * when it carries one; the released copy's, when it does not (a path re-claimed
+     * after its record retired: the record is gone, or is the window's blob-less
+     * observation). The record's own questions — absence, reassignment, the item's
+     * record column — stay the anchor's alone: a released copy is no record,
+     * and never fabricates a record, a reassignment, or a DELETED absence. A
+     * base compares under its own recorded binding, whichever of the two it is:
+     * a blob opens under one (profile, storage path) pair and no other, and each
+     * of these facts carries the binding its blob was confirmed under
+     * (core/state.h). The row's pair is never a base's — a row the record's binding
+     * does not name is a handover the record has yet to follow, and reading the
+     * base under it authenticates a ciphertext against a tree path it was never
+     * sealed at.
+     *
+     * No base by default — the NULL blob is the no-base state; the row-derived
+     * type and pair beside it are never read as a base's (every base question
+     * below is gated on git_moved, which needs a base blob). */
+    const git_oid *base_blob = NULL;
+    const stat_cache_t *base_stat = NULL;
+    path_type_t base_type = row->type;
+    const char *base_storage = storage_path;
+    const char *base_profile = profile;
+
+    /* The record's, when it carries a confirmed blob */
+    if (anchor && !git_oid_is_zero(&anchor->blob_oid)) {
+        base_blob = &anchor->blob_oid;
+        base_stat = &anchor->stat;
+        base_type = anchor->type;
+        base_storage = anchor->storage_path;
+        base_profile = anchor->profile;
+    }
+
+    /* Where it carries none, the base the path's last retired record left, if
+     * the snapshot holds one */
+    const released_copy_t *released = base_blob ? NULL
+        : state_lookup_released_copy(ws->released, ws->released_count, filesystem_path);
+    if (released) {
+        base_blob = &released->blob_oid;
+        base_stat = &released->stat;
+        base_type = released->type;
+        base_storage = released->storage_path;
+        base_profile = released->profile;
+    }
+
+    /* The first question of the three-way frame is answered from the row and
+     * the base alone; the second (disk_at_base — ours == base) is answered by
+     * whichever path below settles it, and only when it can change the verdict. */
+    bool git_moved = base_blob && workspace_stale(row, base_type, base_blob);
+    bool disk_at_base = false;
+
+    /* BASE FAST PATH (safety-grade)
+     *
+     * The base binds the blob dotta last confirmed on disk, the kind it was read
+     * as, and the stat triple captured at that confirmation. A live look that
+     * still stands behind that triple is proof that disk is the base's pair —
+     * why it is proof and not a guess is the triple's own to say (core/state.h
+     * stat_cache_matches) — so no blob is loaded and nothing is hashed, and the
+     * second question is answered for free: ours == base. The first question is
+     * then the whole of the comparison, because disk IS the base: what the row
+     * is to the pair is what it is to disk, in the comparison's own words
+     * (core/workspace.h workspace_compare_confirmed). A kind Git moved under an
+     * untouched copy therefore answers CMP_TYPE_DIFF here and STALE below, the
+     * same as the slow path reaches by reading — where an answer off git_moved
+     * alone would have called one state clean and its mirror a mode change. A
+     * path with no base has no triple to match. */
+    if (base_stat && stat_cache_matches(base_stat, &look->st)) {
+        /* the look stands behind the proof ⟹ disk == the base's pair */
+        disk_at_base = true;
+        cmp_result = workspace_compare_confirmed(row, base_type, base_blob);
+
+        /* A verification that establishes a pair the record does not hold is
+         * queued as the record's own confirmation — which is exactly the
+         * released-base hit: the record is blob-less or absent, while an anchored
+         * base IS the record's pair and re-writing it would be a no-op (the fast
+         * path stays write-free for it). The record gains the blob, and the
+         * confirmation that gives it one forgets the released row it subsumes
+         * in the same breath (state_confirm).
+         *
+         * The verdict is the whole gate: a released base the row has since retyped
+         * answers CMP_TYPE_DIFF above, so the pair state_confirm would write —
+         * the row's kind beside a triple taken of the other one — is never queued
+         * from here. */
+        if (cmp_result == CMP_EQUAL && released) {
+            error_t *err = workspace_record_confirmation(
+                ws, row, anchor, DIVERGENCE_CONTENT, &look->st
+            );
             if (err) return err;
         }
-
-        compare_result_t cmp_result;
-
-        /* The base: dotta's last content confirmation at this path — the record's,
-         * when it carries one; the released copy's, when it does not (a path
-         * re-claimed after its record retired: the record is gone, or is the
-         * window's blob-less observation). The record's own questions — absence,
-         * reassignment, the item's record column — stay the anchor's alone: a
-         * released copy is no record, and never fabricates a record, a
-         * reassignment, or a DELETED absence. A base compares under its own
-         * recorded binding, whichever of the two it is: a blob opens under one
-         * (profile, storage path) pair and no other, and each of these facts
-         * carries the binding its blob was confirmed under (core/state.h). The
-         * row's pair is never a base's — a row the record's binding does not
-         * name is a handover the record has yet to follow, and reading the base
-         * under it authenticates a ciphertext against a tree path it was never
-         * sealed at.
+    } else {
+        /* SLOW PATH: Full content comparison, ours vs theirs
          *
-         * No base by default — the NULL blob is the no-base state; the row-derived
-         * type and pair beside it are never read as a base's (every base question
-         * below is gated on git_moved, which needs a base blob). */
-        const git_oid *base_blob = NULL;
-        const stat_cache_t *base_stat = NULL;
-        path_type_t base_type = row->type;
-        const char *base_storage = storage_path;
-        const char *base_profile = profile;
-
-        /* The record's, when it carries a confirmed blob */
-        if (anchor && !git_oid_is_zero(&anchor->blob_oid)) {
-            base_blob = &anchor->blob_oid;
-            base_stat = &anchor->stat;
-            base_type = anchor->type;
-            base_storage = anchor->storage_path;
-            base_profile = anchor->profile;
-        }
-
-        /* Where it carries none, the base the path's last retired record left,
-         * if the snapshot holds one */
-        const released_copy_t *released = base_blob ? NULL
-            : state_lookup_released_copy(ws->released, ws->released_count, filesystem_path);
-        if (released) {
-            base_blob = &released->blob_oid;
-            base_stat = &released->stat;
-            base_type = released->type;
-            base_storage = released->storage_path;
-            base_profile = released->profile;
-        }
-
-        /* The first question of the three-way frame is answered from the row
-         * and the base alone; the second (disk_at_base — ours == base) is answered
-         * by whichever path below settles it, and only when it can change the
-         * verdict. */
-        bool git_moved = base_blob && workspace_stale(row, base_type, base_blob);
-        bool disk_at_base = false;
-
-        /* BASE FAST PATH (safety-grade)
+         * Strategy selection based on encryption status:
+         * - Non-encrypted: Hash filesystem file and compare OID directly
+         * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
          *
-         * The base binds the blob dotta last confirmed on disk, the kind it was
-         * read as, and the stat triple captured at that confirmation. A live
-         * look that still stands behind that triple is proof that disk is the
-         * base's pair — why it is proof and not a guess is the triple's own to
-         * say (core/state.h stat_cache_matches) — so no blob is loaded and nothing
-         * is hashed, and the second question is answered for free: ours == base.
-         * The first question is then the whole of the comparison, because disk
-         * IS the base: what the row is to the pair is what it is to disk, in
-         * the comparison's own words (core/workspace.h
-         * workspace_compare_confirmed). A kind Git moved under an untouched copy
-         * therefore answers CMP_TYPE_DIFF here and STALE below, the same as the
-         * slow path reaches by reading — where an answer off git_moved alone
-         * would have called one state clean and its mirror a mode change. A path
-         * with no base has no triple to match. */
-        if (base_stat && stat_cache_matches(base_stat, &look->st)) {
-            /* the look stands behind the proof ⟹ disk == the base's pair */
-            disk_at_base = true;
-            cmp_result = workspace_compare_confirmed(row, base_type, base_blob);
+         * Both paths receive the load's look to avoid redundant lstat syscalls.
+         *
+         * Asymmetry with the second question below, and it is the stamp's:
+         * row->encrypted is *this* blob's own, made byte-true at the write boundary
+         * (infra/content.h content_capture_file), so the plaintext arm hashes
+         * disk against the id and opens nothing. The base has no such boundary
+         * — no record carries a stamp — so its kind is read off its own bytes,
+         * in the one read that also yields them.
+         *
+         * The sealed arm's entry is the one memoised read another reader in the
+         * run asks back for: apply's deploy takes it from the cache for every
+         * row it writes, diff's renderer for every row it draws (infra/content.h
+         * content_cache_get_from_blob_oid). That is why this arm reads through
+         * the memo where the base question, whose key no reader can name, does not.
+         */
+        error_t *err = NULL;
 
-            /* A verification that establishes a pair the record does not hold
-             * is queued as the record's own confirmation — which is exactly the
-             * released-base hit: the record is blob-less or absent, while an
-             * anchored base IS the record's pair and re-writing it would be a
-             * no-op (the fast path stays write-free for it). The record gains
-             * the blob, and the confirmation that gives it one forgets the released
-             * row it subsumes in the same breath (state_confirm).
-             *
-             * The verdict is the whole gate: a released base the row has since
-             * retyped answers CMP_TYPE_DIFF above, so the pair state_confirm
-             * would write — the row's kind beside a triple taken of the other
-             * one — is never queued from here. */
-            if (cmp_result == CMP_EQUAL && released) {
-                error_t *err = workspace_record_confirmation(
-                    ws, row, anchor, DIVERGENCE_CONTENT, &look->st
-                );
-                if (err) return err;
-            }
+        /* The row's own filemode, the kind both arms below are put under: the
+         * ladder's expected kind for the plaintext arm, one part of the memo's
+         * key for the sealed one. The fast path needs none — the pair it answers
+         * from carries its own kind — so the mapping is made here rather than
+         * above the fork. */
+        git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
+
+        if (!row->encrypted) {
+            err = compare_oid_to_disk(
+                &row->blob_oid,
+                filesystem_path,
+                expected_filemode,
+                &look->st,
+                &cmp_result
+            );
         } else {
-            /* SLOW PATH: Full content comparison, ours vs theirs
-             *
-             * Strategy selection based on encryption status:
-             * - Non-encrypted: Hash filesystem file and compare OID directly
-             * - Encrypted: blob_oid is ciphertext hash; must load, decrypt, compare
-             *
-             * Both paths receive the load's look to avoid redundant lstat syscalls.
-             *
-             * Asymmetry with the second question below, and it is the stamp's:
-             * row->encrypted is *this* blob's own, made byte-true at the write
-             * boundary (infra/content.h content_capture_file), so the plaintext
-             * arm hashes disk against the id and opens nothing. The base has no
-             * such boundary — no record carries a stamp — so its kind is read
-             * off its own bytes, in the one read that also yields them.
-             *
-             * The sealed arm's entry is the one memoised read another reader in
-             * the run asks back for: apply's deploy takes it from the cache for
-             * every row it writes, diff's renderer for every row it draws
-             * (infra/content.h content_cache_get_from_blob_oid). That is why
-             * this arm reads through the memo where the base question, whose
-             * key no reader can name, does not.
-             */
-            error_t *err = NULL;
+            const buffer_t *expected_content = NULL;
+            err = content_cache_get_from_blob_oid(
+                ws->content_cache,
+                &row->blob_oid,
+                expected_filemode,
+                storage_path,
+                profile,
+                &expected_content
+            );
 
-            /* The row's own filemode, the kind both arms below are put under:
-             * the ladder's expected kind for the plaintext arm, one part of the
-             * memo's key for the sealed one. The fast path needs none — the pair
-             * it answers from carries its own kind — so the mapping is made here
-             * rather than above the fork. */
-            git_filemode_t expected_filemode = path_type_to_git_filemode(row->type);
-
-            if (!row->encrypted) {
-                err = compare_oid_to_disk(
-                    &row->blob_oid,
+            if (!err) {
+                err = compare_buffer_to_disk(
+                    expected_content,
                     filesystem_path,
                     expected_filemode,
                     &look->st,
                     &cmp_result
                 );
-            } else {
-                const buffer_t *expected_content = NULL;
-                err = content_cache_get_from_blob_oid(
-                    ws->content_cache,
-                    &row->blob_oid,
-                    expected_filemode,
-                    storage_path,
-                    profile,
-                    &expected_content
-                );
-
-                if (!err) {
-                    err = compare_buffer_to_disk(
-                        expected_content,
-                        filesystem_path,
-                        expected_filemode,
-                        &look->st,
-                        &cmp_result
-                    );
-                }
-                /* Note: Don't free expected_content - cache owns it! */
             }
-
-            if (err) {
-                /* A failed look, not a verdict — the orphan analyzer's cause
-                 * list (missing key, wrong passphrase, cipher-version skew, I/O
-                 * error, missing blob) and the same word. The path is there (the
-                 * lstat said so); only the look at its content failed, and a
-                 * failed look is never fatal to the load. Returned as the item
-                 * here, the unstattable arm's shape: UNVERIFIED beside the blob
-                 * bit, the stat valid so the mode checks below could run, but
-                 * every consumer reads UNVERIFIED first and accumulated path
-                 * bits would change nothing; the orphan slice answers a failed
-                 * look this way, and one policy beats two. The two gates below
-                 * read EQUAL and DIFFERENT, so returning here skips only what
-                 * they would have skipped themselves. */
-                return workspace_add_diverged(
-                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_UNVERIFIED | policy, look->occupant, fault_of(err)
-                );
-            }
-
-            /* Slow path confirmed disk == expected blob — confirm the record
-             * with the row's blob and the look the verdict was reached from, so
-             * the next run can short-circuit via the fast path above. */
-            if (cmp_result == CMP_EQUAL) {
-                err = workspace_record_confirmation(
-                    ws, row, anchor, DIVERGENCE_CONTENT, &look->st
-                );
-                if (err) return err;
-            }
-
-            /* Second question — ours vs base — asked once, where it can change
-             * the verdict: Git moved, and the first question found a difference
-             * (of bytes or of kind) although the stat triple did not vouch for
-             * disk (touch(1), an editor's rename-write, a fresh checkout) and
-             * disk may still be the copy dotta last confirmed. git_moved carries
-             * both halves of the gate: without a base there is no second question,
-             * and a base equal to theirs deduces the answer from the first.
-             *
-             * Route the base comparison by the base blob's own kind and its own
-             * bytes — each question is put to the side it compares against, where
-             * the first is put under the row's. The kind is what makes the two
-             * verdicts one: a base the row has since retyped is a link where a
-             * file now stands, and reading disk as the row's kind hashes a regular
-             * file the user wrote against the link's target — Git hashes a target
-             * exactly as it hashes content — and calls it exactly what dotta
-             * deployed. One place asks it, because two askers of one fact can
-             * disagree, and the kind is where these two did.
-             *
-             * The latent bug class the bytes avoid: routing on row->encrypted
-             * silently miscategorised the staleness check across encryption-policy
-             * transitions. Both directions failed:
-             *   - encrypted base / plaintext current → compare_oid_to_disk hashed
-             *     plaintext disk against an encrypted-blob OID, never equal,
-             *     STALE never set.
-             *   - plaintext base / encrypted current → content_cache called with
-             *     expected_encrypted=true on a plaintext blob, the old cross-check
-             *     raised ERR_STATE_INVALID, swallowed below.
-             *
-             * content_compare_blob_to_disk reads the base once, as the entry
-             * the record's own type names, so the kind and the reference both
-             * come off the blob whose comparison this is. There is no stamp for
-             * a record's blob that could be read instead.
-             *
-             * A failed look answers nothing and leaves disk_at_base false: the
-             * edit is taken as real (CONTENT), the conservative answer — STALE
-             * still holds, because git_moved is a fact about two OIDs. A failed
-             * look on a released base retires nothing — no look does: a copy
-             * dies only with its path's next ownership event or content
-             * confirmation (core/state.h). */
-            if (git_moved &&
-                (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
-                compare_result_t at_base;
-                error_t *verify_err = content_compare_blob_to_disk(
-                    ws->content_cache,
-                    base_blob,
-                    filesystem_path,
-                    path_type_to_git_filemode(base_type),
-                    &look->st,
-                    base_storage,
-                    base_profile,
-                    &at_base
-                );
-
-                if (verify_err) {
-                    error_free(verify_err);
-                } else {
-                    disk_at_base = (at_base == CMP_EQUAL);
-                }
-            }
+            /* Note: Don't free expected_content - cache owns it! */
         }
 
-        /* Set divergence flags based on comparison result */
-        switch (cmp_result) {
-            case CMP_EQUAL:
-                /* Content and type match - no divergence from content comparison.
-                 * The claim is checked below. */
-                break;
-
-            case CMP_DIFFERENT:
-                /* ours ≠ theirs — name which side moved; both can have */
-                if (!disk_at_base) divergence |= DIVERGENCE_CONTENT;
-                if (git_moved) divergence |= DIVERGENCE_STALE;
-                break;
-
-            case CMP_TYPE_DIFF:
-                /* The occupant is not the row's kind (file ↔ symlink, or a
-                 * directory, FIFO, socket or device standing on the row). When
-                 * Git moved the kind out from under an untouched deployment,
-                 * the second question above answers it: an occupant that is exactly
-                 * what dotta confirmed, kind and content, diverges by Git's move
-                 * alone. STALE — and this is the arm the fast path lands in for
-                 * that same state, having answered the comparison off the base's
-                 * pair instead of a read. One question, asked under the base's
-                 * own kind, whichever path asked it. */
-                if (disk_at_base) {
-                    divergence |= DIVERGENCE_STALE;
-                    break;
-                }
-
-                /* Anything else is a blocking condition: return immediately with
-                 * TYPE divergence. The sources ride along, the same shape as
-                 * every early return, so a pending handover does not vanish behind
-                 * a type change. */
-                return workspace_add_diverged(
-                    ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
-                    DIVERGENCE_TYPE | policy, look->occupant, WORKSPACE_FAULT_NONE
-                );
-
-            case CMP_MISSING:
-                /* The look itself met ENOENT/ENOTDIR: the path vanished between
-                 * the lstat above and the content read. The verdict is absence,
-                 * so the sighting that lstat queued is retracted: a row with no
-                 * record queued one, and it is the queue's last entry, since
-                 * nothing queues observations between the lstat and here. The
-                 * record follows the run's verdict, never a moment the run itself
-                 * outlived. The claim below is not checked.
-                 *
-                 * And the look follows the verdict with it — the one retraction
-                 * of a slot in the whole load (look_t): a read that met absence
-                 * against a look that said a file stood there is the truer answer
-                 * about the path, so the phases after the join read absence and
-                 * index nothing, where an identity left standing would vouch
-                 * for a vanished file and could meet a reused inode. */
-                if (!anchor) {
-                    ws->observation_count--;
-                }
-                look->occupant = FS_OCCUPANT_NONE;
-                break;
+        if (err) {
+            /* A failed look, not a verdict — the orphan analyzer's cause list
+             * (missing key, wrong passphrase, cipher-version skew, I/O error,
+             * missing blob) and the same word. The path is there (the lstat said
+             * so); only the look at its content failed, and a failed look is
+             * never fatal to the load. Returned as the item here, the unstattable
+             * arm's shape: UNVERIFIED beside the blob bit, the stat valid so
+             * the mode checks below could run, but every consumer reads UNVERIFIED
+             * first and accumulated path bits would change nothing; the orphan
+             * slice answers a failed look this way, and one policy beats two.
+             * The two gates below read EQUAL and DIFFERENT, so returning here
+             * skips only what they would have skipped themselves. */
+            return workspace_add_diverged(
+                ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+                divergence | DIVERGENCE_UNVERIFIED, look->occupant, fault_of(err)
+            );
         }
 
-        /* CLAIM CHECKING (analyze_claim_divergence)
-         *
-         * Only when the content phase ruled neither absence nor another kind —
-         * the two verdicts under which the stat says nothing about the row, and
-         * CMP_MISSING is the one that retracts the look above. Read off the verdict
-         * alone: the enclosing block opened over a present occupant, and the
-         * only write to it since is the CMP_MISSING arm's, so a third conjunct
-         * naming the occupant would spell that verdict twice.
-         * compute_orphan_divergence keeps the same guard. The claim reads the
-         * load's one look — the stat the content verdict was made from — for no
-         * extra syscalls.
-         */
-        if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-            error_t *err = analyze_claim_divergence(ws, row, anchor, &look->st, &divergence);
+        /* Slow path confirmed disk == expected blob — confirm the record with
+         * the row's blob and the look the verdict was reached from, so the next
+         * run can short-circuit via the fast path above. */
+        if (cmp_result == CMP_EQUAL) {
+            err = workspace_record_confirmation(
+                ws, row, anchor, DIVERGENCE_CONTENT, &look->st
+            );
             if (err) return err;
         }
+
+        /* Second question — ours vs base — asked once, where it can change the
+         * verdict: Git moved, and the first question found a difference (of bytes
+         * or of kind) although the stat triple did not vouch for disk (touch(1),
+         * an editor's rename-write, a fresh checkout) and disk may still be the
+         * copy dotta last confirmed. git_moved carries both halves of the gate:
+         * without a base there is no second question, and a base equal to theirs
+         * deduces the answer from the first.
+         *
+         * Route the base comparison by the base blob's own kind and its own bytes
+         * — each question is put to the side it compares against, where the first
+         * is put under the row's. The kind is what makes the two verdicts one:
+         * a base the row has since retyped is a link where a file now stands,
+         * and reading disk as the row's kind hashes a regular file the user wrote
+         * against the link's target — Git hashes a target exactly as it hashes
+         * content — and calls it exactly what dotta deployed. One place asks
+         * it, because two askers of one fact can disagree, and the kind is where
+         * these two did.
+         *
+         * The latent bug class the bytes avoid: routing on row->encrypted silently
+         * miscategorised the staleness check across encryption-policy transitions.
+         * Both directions failed:
+         *   - encrypted base / plaintext current → compare_oid_to_disk hashed
+         *     plaintext disk against an encrypted-blob OID, never equal, STALE
+         *     never set.
+         *   - plaintext base / encrypted current → content_cache called with
+         *     expected_encrypted=true on a plaintext blob, the old cross-check
+         *     raised ERR_STATE_INVALID, swallowed below.
+         *
+         * content_compare_blob_to_disk reads the base once, as the entry the
+         * record's own type names, so the kind and the reference both come off
+         * the blob whose comparison this is. There is no stamp for a record's
+         * blob that could be read instead.
+         *
+         * A failed look answers nothing and leaves disk_at_base false: the edit
+         * is taken as real (CONTENT), the conservative answer — STALE still holds,
+         * because git_moved is a fact about two OIDs. A failed look on a released
+         * base retires nothing — no look does: a copy dies only with its path's
+         * next ownership event or content confirmation (core/state.h). */
+        if (git_moved &&
+            (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
+            compare_result_t at_base;
+            error_t *verify_err = content_compare_blob_to_disk(
+                ws->content_cache,
+                base_blob,
+                filesystem_path,
+                path_type_to_git_filemode(base_type),
+                &look->st,
+                base_storage,
+                base_profile,
+                &at_base
+            );
+
+            if (verify_err) {
+                error_free(verify_err);
+            } else {
+                disk_at_base = (at_base == CMP_EQUAL);
+            }
+        }
     }
 
-    /* PHASE 2: Reality-based classification
+    /* Set divergence flags based on comparison result */
+    switch (cmp_result) {
+        case CMP_EQUAL:
+            /* Content and type match - no divergence from content comparison.
+             * The claim is checked below. */
+            break;
+
+        case CMP_DIFFERENT:
+            /* ours ≠ theirs — name which side moved; both can have */
+            if (!disk_at_base) divergence |= DIVERGENCE_CONTENT;
+            if (git_moved) divergence |= DIVERGENCE_STALE;
+            break;
+
+        case CMP_TYPE_DIFF:
+            /* The occupant is not the row's kind (file ↔ symlink, or a directory,
+             * FIFO, socket or device standing on the row). When Git moved the
+             * kind out from under an untouched deployment, the second question
+             * above answers it: an occupant that is exactly what dotta confirmed,
+             * kind and content, diverges by Git's move alone. STALE — and this
+             * is the arm the fast path lands in for that same state, having
+             * answered the comparison off the base's pair instead of a read.
+             * One question, asked under the base's own kind, whichever path asked
+             * it.
+             *
+             * Anything else is a blocking condition: TYPE. Either way the look
+             * stands at another kind than the row's, so the claim is not asked
+             * of it; the sources ride along, the same shape as every early return,
+             * so a pending handover does not vanish behind a type change. */
+            return workspace_add_diverged(
+                ws, row, anchor, WORKSPACE_STATE_DEPLOYED,
+                divergence | (disk_at_base ? DIVERGENCE_STALE : DIVERGENCE_TYPE),
+                look->occupant, WORKSPACE_FAULT_NONE
+            );
+
+        case CMP_MISSING:
+            /* The look itself met ENOENT/ENOTDIR: the path vanished between the
+             * lstat above and the content read. The verdict is absence, so the
+             * sighting that lstat queued is retracted: a row with no record queued
+             * one, and it is the queue's last entry, since nothing queues
+             * observations between the lstat and here. The record follows the
+             * run's verdict, never a moment the run itself outlived.
+             *
+             * And the look follows the verdict with it — the one retraction of
+             * a slot in the whole load (look_t): a read that met absence against
+             * a look that said a file stood there is the truer answer about the
+             * path, so the phases after the join read absence and index nothing,
+             * where an identity left standing would vouch for a vanished file
+             * and could meet a reused inode. Absence is then classified as the
+             * lstat's is, above, and the claim is not asked. */
+            if (!anchor) {
+                ws->observation_count--;
+            }
+            look->occupant = FS_OCCUPANT_NONE;
+
+            return workspace_add_diverged(
+                ws, row, anchor, classify_absent(row, anchor), divergence,
+                look->occupant, WORKSPACE_FAULT_NONE
+            );
+    }
+
+    /* CLAIM CHECKING (analyze_claim_divergence)
      *
-     * Use the record's existence to distinguish the workspace states of missing
-     * files. A record is created the first time dotta lstat-confirms the path
-     * on disk in scope. Writers:
-     *   - state_observe (the flush, for a path analysis found present with no
-     *     record).
-     *   - state_anchor (every ownership event on a path with no record — apply
-     *     deploy, adoption, add, update).
-     * A confirmation creates none: it is an UPDATE of a record that exists — on
-     * a path that had none at load, the one the flush's observation made a
-     * statement earlier (state_confirm).
-     *
-     * Record semantics:
-     * - none -> dotta has never lstat-confirmed this path on disk in scope
-     *           (profile enabled but the file was never there).
-     * - some -> dotta has seen this file on disk in scope at least once
-     *           (during any status, or after a content-verification event).
-     *
-     * Classification:
-     * 1. File missing + no record -> UNDEPLOYED (never there, no-op)
-     * 2. File missing + record    -> DELETED (user removed it)
-     * 3. File present             -> DEPLOYED (may diverge)
-     *
-     * The ownership signal (anchor->deployed_at) is still the authority for
-     * "(deployed X ago)" display and the adoption-loop gate; it just no longer
-     * controls classification.
+     * The look stands at the row's kind: the switch returned on absence and on
+     * another kind, the two verdicts under which the stat says nothing about
+     * the row. The claim reads the load's one look — the stat the content verdict
+     * was made from — for no extra syscalls.
      */
-    if (look->occupant == FS_OCCUPANT_NONE) {
-        /* Row claims this path but the filesystem doesn't have it. classify_absent
-         * decides (see the classification table above; its claim gate is inert
-         * here — a file row asserts its path by holding a blob for it). */
-        state = classify_absent(row, anchor);
+    error_t *err = analyze_claim_divergence(ws, row, anchor, &look->st, &divergence);
+    if (err) return err;
 
-        /* Absence clears the path-family bits — properties of what is not there
-         * cannot be compared. The blob-family verdict stands: the blob and the
-         * policy are both still here to disagree ([undeployed] [unencrypted] is
-         * exactly this row). */
-        divergence = policy;
-    } else {
-        /* File in manifest and on filesystem */
-        state = WORKSPACE_STATE_DEPLOYED;
-        /* Keep accumulated divergence flags from Phase 1 */
-    }
-
-    /* Add to workspace if there's any state change, divergence, or a pending
-     * handover — the rule read over the pair this analysis has held throughout. */
-    if (state != WORKSPACE_STATE_DEPLOYED ||
-        divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
-        error_t *err = workspace_add_diverged(
-            ws, row, anchor, state, divergence, look->occupant, WORKSPACE_FAULT_NONE
+    /* Add to workspace if anything diverged or a handover is pending — the rule
+     * read over the pair this analysis has held throughout. */
+    if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
+        err = workspace_add_diverged(
+            ws, row, anchor, WORKSPACE_STATE_DEPLOYED, divergence, look->occupant,
+            WORKSPACE_FAULT_NONE
         );
         if (err) return err;
     }
@@ -1677,12 +1626,9 @@ static error_t *compute_orphan_divergence(
             break;
 
         case CMP_TYPE_DIFF:
-            /* Type differs (file vs symlink vs directory)
-             *
-             * Note: analyze_file_divergence returns early here, but for orphans
-             * we accumulate divergence and check metadata too. This provides
-             * more information to the user (e.g., "type + mode divergence").
-             */
+            /* Type differs (file vs symlink vs directory). The claim below skips
+             * itself on this verdict, as analyze_file_divergence returns on it:
+             * TYPE stands alone. */
             divergence |= DIVERGENCE_TYPE;
             break;
 
@@ -1703,10 +1649,11 @@ static error_t *compute_orphan_divergence(
      *
      * Only when the content phase ruled neither absence nor another kind — a
      * mode question over what is not there, or is not that, answers nothing.
-     * Read off the verdict alone, the guard analyze_file_divergence keeps: a
-     * bit this function has just set is the verdict spelled twice. The compare
-     * analyze_claim_divergence asks of a row, asked of the record's claim: the
-     * record's mode is total for every kind that carries one (written from a
+     * Read off the verdict alone, as analyze_file_divergence's switch returns
+     * on the same two: a bit this function has just set is the verdict spelled
+     * twice. The compare analyze_claim_divergence asks of a row, asked of the
+     * record's claim: the record's mode is total for every kind that carries
+     * one (written from a
      * view row after the build resolved absence), so one full-bit compare answers;
      * a symlink record is never asked. Both halves read the caller's look — the
      * one stat the content verdict was made from — for zero extra syscalls.

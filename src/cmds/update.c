@@ -146,10 +146,11 @@ static error_t *capture_file(
  * the preview's sections: the modified fate splits by kind (a directory's
  * modification is a claim recapture, not a content commit), deleted deliberately
  * does not (a deleted directory is a deletion), and the deployed files split by
- * divergence family (types.h): a path-family bit is a modification, the blob-family
- * ENCRYPTION bit is a policy violation. A file with both diverged families counts
- * in both; a violator with nothing changed on disk counts only as a violation —
- * it is committed for the re-store, not for a modification.
+ * divergence family (core/workspace.h divergence_type_t): a path-family bit is
+ * a modification, the blob-family ENCRYPTION bit is a policy violation. A file
+ * with both diverged families counts in both; a violator with nothing changed
+ * on disk counts only as a violation — it is committed for the re-store, not
+ * for a modification.
  */
 typedef struct {
     size_t modified_files;  /* DEPLOYED files with a path-family bit: divergent content or metadata */

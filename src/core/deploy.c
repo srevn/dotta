@@ -32,8 +32,8 @@
  * Two dimensions, in order: state (where does the path exist — Git, state database,
  * filesystem?) sets the baseline, divergence (what is wrong with it?) refines
  * it. A missing path is always work, and the only bit it can carry is the
- * blob-family ENCRYPTION verdict (types.h) — no path bit survives absence, so
- * the two missing states answer from state alone.
+ * blob-family ENCRYPTION verdict (core/workspace.h divergence_type_t) — no path
+ * bit survives absence, so the two missing states answer from state alone.
  *
  * Kind-agnostic: directory analysis tags only MODE / OWNERSHIP / TYPE / UNVERIFIED,
  * so the DEPLOYED arm's test already covers every directory verdict — no

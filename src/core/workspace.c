@@ -990,16 +990,16 @@ static error_t *analyze_claim_divergence(
  * the row the path was first seen under, not a deployer, and apply adopts such
  * a path rather than acknowledging it.
  *
- * The blob-family ENCRYPTION verdict (types.h) is settled here too, once per
- * row, from the row and the config alone: row->encrypted is byte truth by the
- * write-boundary invariant (stamped from the blob's bytes at every committing
- * boundary — policy.h names them — projected onto the row at build), so the audit
- * costs one pattern match and inflates nothing. The filesystem is not one of
- * its operands, so every arm carries it — it survives absence and rides beside
- * TYPE and UNVERIFIED alike. A symlink row can never carry it: the predicate
- * answers only for content-bearing kinds (policy.h owns the rationale), so a
- * link whose path matches a pattern is not a violation the capture could never
- * resolve.
+ * The blob-family ENCRYPTION verdict (workspace.h, divergence_type_t) is settled
+ * here too, once per row, from the row and the config alone: row->encrypted is
+ * byte truth by the write-boundary invariant (stamped from the blob's bytes at
+ * every committing boundary — policy.h names them — projected onto the row at
+ * build), so the audit costs one pattern match and inflates nothing. The filesystem
+ * is not one of its operands, so every arm carries it — it survives absence and
+ * rides beside TYPE and UNVERIFIED alike. A symlink row can never carry it: the
+ * predicate answers only for content-bearing kinds (policy.h owns the rationale),
+ * so a link whose path matches a pattern is not a violation the capture could
+ * never resolve.
  *
  * @param ws Workspace (must not be NULL)
  * @param row Active view row (must not be NULL)

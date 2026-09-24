@@ -1368,7 +1368,7 @@ static error_t *diff_workspace(
     }
 
     /* Step 3: Get pre-analyzed divergence from workspace */
-    workspace_items_t diverged = workspace_get_all_diverged(ws);
+    workspace_items_t diverged = workspace_diverged(ws);
 
     /* Step 4: Filter and present diffs based on direction. A row the analysis
      * could not look at is shown by its status line and counted: it is never

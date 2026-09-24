@@ -360,8 +360,8 @@ typedef enum {
  * (PATH_KIND_DIRECTORY: metadata only, claimed by a profile's metadata.json,
  * planned and converged by core/deploy on apply's behalf). Arena-allocated and
  * never moved, so an item's address is stable for the workspace's lifetime —
- * the report, deploy's and cleanup's buckets, the fates and apply's collections
- * hold items across phases by construction.
+ * the diverged items, deploy's and cleanup's buckets, the fates and apply's
+ * collections hold items across phases by construction.
  *
  * The fields are grouped by their writer:
  *   the sources, the identity   the partition, once; the writers point `anchor`
@@ -383,9 +383,10 @@ typedef enum {
  * to look, and never from a look not taken). What it means is said beside it:
  * DIVERGENCE_UNVERIFIED where a look failed, a displaced class where none was
  * taken, and on a released record neither — letting a copy go needs no measurement.
- * An orphan on a load that took no look at the orphans keeps UNKNOWN, and is
- * lent by no reader: the report and the door hold an orphan only where the load
- * analyzed them. Presence is
+ * An orphan on a load that took no look at the orphans keeps UNKNOWN, and no
+ * reader is lent it — nor, whatever its look, one the load did not analyze: the
+ * diverged items (workspace_diverged) and workspace_get_item hold an orphan only
+ * where the load analyzed the orphans. Presence is
  * therefore `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
  * present, since deploy judges nothing it could not see), and a new consumer
@@ -576,20 +577,20 @@ static inline compare_result_t workspace_compare_confirmed(
  * Orphans: false by construction — an orphan item carries no row, so no reader
  * needs an orphan guard.
  *
- * Readers: both managed analyses, with the look each holds, which emit an item
- * for a clean row that carries this; the display tags and the route table, with
- * the item's; diff's filter, its "acknowledged by apply" line and its status
- * colour (cmds/diff.c), with the item's; apply's collection and its record step,
- * with the item's, and its two acknowledgement loops, the writers that move the
- * record onto the row's profile, with none — only a record of the row's kind
- * reaches either, the adoption and the kind rung having taken every other
- * (cmds/apply.c); and sync's apply hint, with none, which asks it of the record
- * against the view with no workspace at all, workspace_stale answering first
- * across kinds (cmds/sync.c). A record's WRITER asks the whole binding — profile
- * and storage path both — which is manifest_is_claim; this is the half the screens
- * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
- * counts one transition's own delta between two views; this is the record against
- * the view, standing from whenever it began.
+ * Readers: the route table, with the item's — the diverged items list a clean
+ * row that carries this through it (core/workspace.c workspace_list) — and the
+ * display tags, with the item's; diff's filter, its "acknowledged by apply" line
+ * and its status colour (cmds/diff.c), with the item's; apply's collection and
+ * its record step, with the item's, and its two acknowledgement loops, the writers
+ * that move the record onto the row's profile, with none — only a record of the
+ * row's kind reaches either, the adoption and the kind rung having taken every
+ * other (cmds/apply.c); and sync's apply hint, with none, which asks it of the
+ * record against the view with no workspace at all, workspace_stale answering
+ * first across kinds (cmds/sync.c). A record's WRITER asks the whole binding —
+ * profile and storage path both — which is manifest_is_claim; this is the half
+ * the screens name and the receipts count. Not manifest_diff_stats_t's
+ * `reassigned`, which counts one transition's own delta between two views; this
+ * is the record against the view, standing from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -695,7 +696,7 @@ static inline divergence_type_t workspace_claims_moved(
  *
  * Pass by value. Lifetime is the producer's: cleanup's plan / verdict / result
  * buckets project through workspace_items_view and borrow for the bucket's life;
- * the workspace's own spine returns through workspace_get_all_diverged and borrows
+ * the workspace's diverged items return through workspace_diverged and borrow
  * for the workspace's life; update's filters hand over heap buffers the caller
  * frees.
  */
@@ -724,9 +725,11 @@ static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) 
  * The partition of WORKSPACE_STATE_DEPLOYED items that every surface routing a
  * deployed item reads, so no two surfaces can route one item two ways — the shape
  * cleanup_verdict gives the orphan side. One producer (workspace_item_route)
- * and six readers, each named with the arm it reads; a reader not on this list
+ * and seven readers, each named with the arm it reads; a reader not on this list
  * is a bug:
  *
+ *   the diverged items' derivation CLEAN, the one arm a DEPLOYED item is left
+ *                                  out on (workspace.c workspace_list)
  *   status's section partition     every arm, one bucket each
  *   update's filter                CAPTURE accepted; every other arm refused
  *                                  and counted under its route, one slot per
@@ -906,17 +909,17 @@ typedef struct {
  *
  * The join is every load's and no caller's to decline: the view's directory rows,
  * then its file rows. Both kinds, because a kind nobody analyzed keeps the verdict
- * the partition made its items with — DEPLOYED, nothing wrong — and is in no
- * report, so a consumer that asks the door per row finds nothing to do at every
- * one of them — which for apply is adoption, taking ownership of paths it never
- * looked at (core/deploy.c deploy_plan_build, where a row the door lends no item
- * is clean by definition). Directories first, because their looks are the only
- * producer of the view's squatters (workspace.c look) and every look the load
- * takes after them asks that fact before taking one: run the file rows without
- * it and a row beneath a squatter is looked at *through* the squatter —
- * workspace_displaced_t names what such a look answers — carrying no displaced
- * field to say so, so its bits come back as the user's own work
- * (workspace_item_route).
+ * the partition made its items with — DEPLOYED, nothing wrong — and is among no
+ * diverged items, so a consumer that asks workspace_get_item per row finds nothing
+ * to do at every one of them — which for apply is adoption, taking ownership of
+ * paths it never looked at (core/deploy.c deploy_plan_build, where a row
+ * workspace_get_item lends no item for is clean by definition). Directories first,
+ * because their looks are the only producer of the view's squatters (workspace.c
+ * look) and every look the load takes after them asks that fact before taking
+ * one: run the file rows without it and a row beneath a squatter is looked at
+ * *through* the squatter — workspace_displaced_t names what such a look answers
+ * — carrying no displaced field to say so, so its bits come back as the user's
+ * own work (workspace_item_route).
  *
  * Additionally, where `analyze_untracked` asks for it: every regular file and
  * symlink beneath a tracked directory that no enabled profile manages and dotta
@@ -978,43 +981,38 @@ error_t *workspace_load(
 );
 
 /**
- * Get all diverged items
+ * The diverged items
  *
- * Returns the workspace's diverged spine — every item (file and directory) the
- * analysis produced — as a borrowed slice. Pure value return — no allocation,
- * no error path. Items are arena-allocated, so the slice and the item addresses
- * it carries are valid for the workspace's lifetime.
+ * Every item the load's analyses left with something to say, derived once every
+ * verdict is in (workspace.c workspace_list), then the scan's discoveries — as
+ * a borrowed slice. Pure value return — no allocation, no error path. Items are
+ * arena-allocated, so the slice and the item addresses it carries are valid for
+ * the workspace's lifetime.
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
  * item the route does not call clean (workspace_item_route) — a squatter above
  * it, a divergence bit, or a pending handover, which a clean row's sources and
  * look derive where its owned record, of the row's own kind, names another profile
  * (workspace_reassigned: a record of another kind is a node the clean row's look
- * found gone). A managed path with none of these is in no report. So a load is
- * clean iff this is empty, and clean over a scope iff it holds none of the scope's
- * items: cmds/status.c display_workspace_status reads its status line that way,
- * filtered or not.
- *
- * Iterate via:
- *   workspace_items_t items = workspace_get_all_diverged(ws);
- *   for (size_t i = 0; i < items.count; i++) {
- *       const workspace_item_t *item = items.entries[i];
- *       ...
- *   }
+ * found gone). A managed path with none of these is not among them, and the halves
+ * lend its row (workspace_files, workspace_directories). So a load is clean iff
+ * this is empty, and clean over a scope iff it holds none of the scope's items:
+ * cmds/status.c display_workspace_status reads its status line that way, filtered
+ * or not.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items
  */
-workspace_items_t workspace_get_all_diverged(const workspace_t *ws);
+workspace_items_t workspace_diverged(const workspace_t *ws);
 
 /**
  * Get workspace item by filesystem path
  *
  * Returns the divergence information for a specific file or directory via O(1)
- * hashmap lookup. Every diverged item is indexed (workspace_get_all_diverged
- * says which those are); a managed path with nothing to say is not, and this
- * returns NULL for it. A row beneath a squatter is always indexed: nothing there
- * was looked at, so there is no reading that could have come back clean
+ * hashmap lookup. Every diverged item is indexed (workspace_diverged says which
+ * those are); a managed path with nothing to say is not, and this returns NULL
+ * for it. A row beneath a squatter is always indexed: nothing there was looked
+ * at, so there is no reading that could have come back clean
  * (workspace_displaced_t).
  *
  * This function enables preflight to efficiently query workspace data instead

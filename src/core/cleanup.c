@@ -81,7 +81,7 @@ error_t *cleanup_plan_build(
     }
 
     error_t *err = NULL;
-    workspace_items_t items = workspace_get_all_diverged(ws);
+    workspace_items_t items = workspace_diverged(ws);
 
     for (size_t i = 0; i < items.count; i++) {
         const workspace_item_t *item = items.entries[i];

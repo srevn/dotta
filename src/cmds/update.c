@@ -220,7 +220,7 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
 }
 
 /**
- * What the filter made of the diverged spine, in scope
+ * What the filter made of the diverged items, in scope
  *
  * One walk partitions every in-scope item three ways. Accepted — the run's work:
  * a deployed item on the capture route, a deleted path, a new file under a tracked
@@ -238,9 +238,9 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
  * same reason the first one exists: one route, three ways out (workspace_fault_t),
  * and the census prints a line per class. Σ faults[f] == refused[UNVERIFIABLE],
  * and faults[NONE] is zero by the fold's invariant. CAPTURE's slot stays zero
- * (that arm is accepted) and CLEAN's (a clean row is in no report); REASSIGNED's
- * counts a handover the census has no line for — apply acknowledges it, the filter
- * only declines it.
+ * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
+ * REASSIGNED's counts a handover the census has no line for — apply acknowledges
+ * it, the filter only declines it.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */
@@ -284,7 +284,7 @@ static error_t *filter_items_for_update(
 
     *partition = (update_partition_t){ 0 };
 
-    workspace_items_t all = workspace_get_all_diverged(ws);
+    workspace_items_t all = workspace_diverged(ws);
     ptr_array_t accepted PTR_ARRAY_AUTO = { 0 };
 
     for (size_t i = 0; i < all.count; i++) {

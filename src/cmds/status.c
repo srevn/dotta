@@ -359,12 +359,11 @@ static void display_workspace_status(
     if (!ws || !out) return;
 
     /* The diverged items, read by the status line's fold and by the sections */
-    workspace_items_t all_items = workspace_get_all_diverged(ws);
+    workspace_items_t all_items = workspace_diverged(ws);
 
-    /* A load holding none is clean (workspace_get_all_diverged), and says so
-     * only when asked. One holding any opens the section whatever the filter
-     * reaches: a filtered profile that reads Clean still counts the divergence
-     * it hides. */
+    /* A load holding none is clean (workspace_diverged), and says so only when
+     * asked. One holding any opens the section whatever the filter reaches: a
+     * filtered profile that reads Clean still counts the divergence it hides. */
     if (all_items.count == 0 && !output_is_verbose(out)) {
         return;
     }
@@ -547,8 +546,8 @@ static void display_workspace_status(
 
                         case WORKSPACE_ROUTE_CLEAN:
                             /* None: a diverged item has something to say
-                             * (workspace_get_all_diverged), and the line above
-                             * counted each one */
+                             * (workspace_diverged), and the line above counted
+                             * each one */
                             break;
                     }
                     break;

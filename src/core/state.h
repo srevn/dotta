@@ -705,8 +705,8 @@ const char *state_peek_profile_target(
  *   - core/workspace.c workspace_partition: pairs each record with the managed
  *     item at its path by the items' own search (find_managed); the orphans keep
  *     strcmp order, which look_orphans' parents-first walk, their search
- *     (find_item) and the report's orphan listing (workspace_analyze_orphans,
- *     which the screens print) rest on
+ *     (find_item) and the diverged items' orphan listing (workspace_list, which
+ *     the screens print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
  *   - cmds/add.c write_record (the takeover note), cmds/remove.c

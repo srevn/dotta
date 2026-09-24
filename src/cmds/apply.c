@@ -1980,8 +1980,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and the look — the record dotta owns names one profile, the row another,
      * and describes the row's node, or a node of its own still standing
      * (core/workspace.h workspace_reassigned) — and one of the two reasons a
-     * deploy-clean row is in the report at all (the other is the blob bit,
-     * ENCRYPTION, which neither loop here reads). DIVERGENCE_STALE and
+     * deploy-clean row is among the diverged items at all (the other is the blob
+     * bit, ENCRYPTION, which neither loop here reads). DIVERGENCE_STALE and
      * DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
      * what dotta last reconciled — the content, another blob or the same blob
      * under another kind (core/workspace.h workspace_stale), or a claim
@@ -2080,7 +2080,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the record step below.
      *
      * Division of labor with the earlier flush: the proof of this run's match
-     * comes from workspace_analyze_file leaving the entry out of ws->diverged,
+     * comes from the workspace leaving the entry out of the diverged items
+     * (core/workspace.h workspace_diverged: a DEPLOYED item the route calls clean),
      * and workspace_flush_updates above put the pair that proof rests on where
      * this loop can read it — a slow-path CMP_EQUAL patched onto the snapshot
      * record, a recordless clean row's record created by the observation and

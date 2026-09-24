@@ -1976,11 +1976,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * too — an empty plan has no pending rows, so the clean half is the whole
      * of it there.
      *
-     * A reassignment is the workspace's reading of the record against the row —
-     * the record dotta owns names one profile, the row another — and one of the
-     * two reasons a deploy-clean row has an item at all (the other is the
-     * blob-family ENCRYPTION bit, which neither loop here reads). DIVERGENCE_STALE
-     * and DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
+     * A reassignment is the workspace's reading of the record against the row
+     * and the look — the record dotta owns names one profile, the row another,
+     * and describes the row's node, or a node of its own still standing
+     * (core/workspace.h workspace_reassigned) — and one of the two reasons a
+     * deploy-clean row has an item at all (the other is the blob-family ENCRYPTION
+     * bit, which neither loop here reads). DIVERGENCE_STALE and
+     * DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
      * what dotta last reconciled — the content, another blob or the same blob
      * under another kind (core/workspace.h workspace_stale), or a claim
      * (workspace_claims_moved) — a persistent signal that survives status→apply
@@ -2028,7 +2030,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * preflight's answer does not change it. */
             if (!claimed[b].clean) continue;
 
-            if (workspace_reassigned(item->row, item->anchor)) {
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
@@ -2069,12 +2071,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * first rung (core/workspace.h workspace_compare_confirmed): a link beside
      * a file is another kind there, where path_type_kind would call both files.
      *
-     * A clean row whose record dotta owns under another profile is a reassignment:
-     * disk holds what A deployed, B owns the path now, and the content is the
-     * same. It sits in files.clean by construction (nothing to deploy), so this
-     * loop is the one place its record is re-stamped under B — the acknowledgement.
-     * Same write, same stat, one more counter; a stale reassignment is acknowledged
-     * by its deployment and counted after the record step below.
+     * A clean row whose record dotta owns under another profile, of the row's
+     * own kind, is a reassignment: disk holds what A deployed, B owns the path
+     * now, and the content is the same. It sits in files.clean by construction
+     * (nothing to deploy), so this loop is the one place its record is re-stamped
+     * under B — the acknowledgement. Same write, same stat, one more counter; a
+     * stale reassignment is acknowledged by its deployment and counted after
+     * the record step below.
      *
      * Division of labor with the earlier flush: the proof of this run's match
      * comes from analyze_file_divergence leaving the entry out of ws->diverged,
@@ -2141,8 +2144,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * is the predicate's half: a name flip within one profile is bookkeeping
          * the user did not ask for and cannot act on from this screen, and counting
          * it would make the run's line disagree with the preview's, which reads
-         * the same rule off the item. */
-        bool reassigns = workspace_reassigned(file, anchor);
+         * the same rule off the item. Asked only of what this loop acknowledges
+         * — a record of the row's own kind, adopt having taken every other — so
+         * the look this loop does not hold is never wanted: the predicate asks
+         * one only across kinds. */
+        bool reassigns = acknowledge && workspace_reassigned(file, anchor, FS_OCCUPANT_UNKNOWN);
 
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's content on every route a
@@ -2212,14 +2218,21 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < ackable.count; i++) {
         const manifest_row_t *dir = ackable.entries[i];
 
+        /* A pending handover of this directory: a record dotta owns, of this
+         * directory's kind, bound to another row. One of another kind is another
+         * node's (core/workspace.h workspace_compare_confirmed): a run has observed
+         * the directory in its place already (workspace_observe_retyped), and a
+         * preview reads it as the run will. */
         const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
+            workspace_compare_confirmed(dir, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF &&
             !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
 
         /* The file loop's counter, the same rule and the same reason it is read
-         * here: the write below rewrites the record it reads. */
-        bool reassigns = workspace_reassigned(dir, anchor);
+         * here: the write below rewrites the record it reads. A record of this
+         * directory's kind alone reaches it, so no look is wanted either. */
+        bool reassigns = workspace_reassigned(dir, anchor, FS_OCCUPANT_UNKNOWN);
 
         if (!opts->dry_run) {
             error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
@@ -2385,7 +2398,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
             const workspace_item_t *item = kinds[k]->entries[i].item;
 
-            if (workspace_reassigned(item->row, item->anchor)) {
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
                 reassigned[reassigned_count++] = (reassignment_t){
                     .path = item->filesystem_path,
                     .from = item->anchor->profile,
@@ -2716,7 +2729,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 /* Derived before anchoring: the write below rewrites the record
                  * the reassignment fact is read against. */
-                bool acknowledges = workspace_reassigned(item->row, item->anchor);
+                bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
 
                 error_t *anchor_err = workspace_anchor(ws, item->row, &o->stat, now);
                 if (anchor_err) {
@@ -2742,7 +2755,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
                 /* Derived before either write: both rewrite the record the
                  * reassignment fact is read against. */
-                bool acknowledges = workspace_reassigned(item->row, item->anchor);
+                bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
 
                 if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !acknowledges) {
                     /* A fix: the claims it set, which the record still lacks.

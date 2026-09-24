@@ -2252,17 +2252,18 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * no load runs after the pull: it hints until one learns it, the apply
          * it names or the next sync's own; an owned record naming a profile the
          * row does not is a handover apply acknowledges (core/workspace.h's rule,
-         * which is also what keeps a derived claim out of it); and a row the
-         * record cannot vouch for is work apply has not done. Vouching differs
-         * by kind because apply's answer does — a file needs an OWNED record,
-         * since apply adopts a path it merely observed and says so; a directory
-         * needs only a record, since apply never adopts one: an absent row has
-         * none, and one already standing is settled by any load's observation.
-         * The executable half of the record's type is a copy of the row's, never
-         * confirmed — the compare's ladder tests S_ISREG for either blob mode
-         * and never the bit — so a FILE ↔ EXECUTABLE move Git made under an
-         * untouched copy is not stale either, and asking the type whole would
-         * leave a hint no apply could ever take away (core/workspace.h
+         * which is also what keeps a derived claim out of it — asked with no
+         * look, which across kinds leaves the answer to the stale arm before
+         * it); and a row the record cannot vouch for is work apply has not done.
+         * Vouching differs by kind because apply's answer does — a file needs
+         * an OWNED record, since apply adopts a path it merely observed and says
+         * so; a directory needs only a record, since apply never adopts one: an
+         * absent row has none, and one already standing is settled by any load's
+         * observation. The executable half of the record's type is a copy of
+         * the row's, never confirmed — the compare's ladder tests S_ISREG for
+         * either blob mode and never the bit — so a FILE ↔ EXECUTABLE move Git
+         * made under an untouched copy is not stale either, and asking the type
+         * whole would leave a hint no apply could ever take away (core/workspace.h
          * workspace_stale); and where a sheet claim stands, such a flip moves
          * no claim either — the row's mode is the claim's, not the filemode's.
          *
@@ -2282,7 +2283,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             if (workspace_stale(row, anchor->type, &anchor->blob_oid) ||
                 workspace_claims_moved(row, anchor) != DIVERGENCE_NONE ||
-                workspace_reassigned(row, anchor)) {
+                workspace_reassigned(row, anchor, FS_OCCUPANT_UNKNOWN)) {
                 apply_pending = true;
             }
         }

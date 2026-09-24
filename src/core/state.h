@@ -260,7 +260,9 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * binding names the branch asked whether it still holds the path — and an owned
  * record whose profile ≠ the active row's profile is a reassignment apply has
  * not acknowledged: on a file row and on a directory the profile manages, never
- * on a derived ancestor claim nobody made (core/workspace.h workspace_reassigned).
+ * on a derived ancestor claim nobody made, and across kinds only while a look
+ * finds the record's own node still standing (core/workspace.h
+ * workspace_reassigned).
  */
 typedef struct anchor {
     const char *filesystem_path; /* Deployed path (PRIMARY KEY), as spelled */

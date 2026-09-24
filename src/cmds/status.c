@@ -654,14 +654,14 @@ static void display_workspace_status(
         /* Section 3: Displaced paths — beneath a squatter one of the two sections
          * above holds (the route's DISPLACED_* arms, the claimant's): nothing
          * there was looked at, so the line shows [displaced] and only what no
-         * look decides beside it (the blob's verdict, a handover), and the header
-         * sends the user to the squatter, whose own section names its verb. The
-         * header opens with the predicate, as every sentence about such a path
-         * does, and spells the squatter out where the other four name it with
-         * the word — this is where the word is grounded (core/workspace.h
-         * workspace_displaced_t). Named by section rather than "above": under
-         * -p the squatter's row may be filtered while a child is not, and the
-         * bare status lists both. */
+         * look decides or disproves beside it (the blob's verdict, a handover),
+         * and the header sends the user to the squatter, whose own section names
+         * its verb. The header opens with the predicate, as every sentence about
+         * such a path does, and spells the squatter out where the other four
+         * name it with the word — this is where the word is grounded
+         * (core/workspace.h workspace_displaced_t). Named by section rather than
+         * "above": under -p the squatter's row may be filtered while a child is
+         * not, and the bare status lists both. */
         if (displaced_count > 0) {
             output_list_t *list = output_list_create(
                 out, "Displaced paths",

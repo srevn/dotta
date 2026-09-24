@@ -236,8 +236,8 @@ typedef enum {
  * Readers: workspace_item_route, core/cleanup.c cleanup_verdict, core/deploy.c
  * deploy_needs_work and deploy_plan_build (the --skip-existing test), workspace.c
  * workspace_item_extract_display_info (the DEPLOYED arm's [displaced], beside
- * which only what no look decides rides, and the ORPHANED arm's rider),
- * cmds/status.c display_workspace_status's Issues hint, and cmds/diff.c
+ * which only what no look decides or disproves rides, and the ORPHANED arm's
+ * rider), cmds/status.c display_workspace_status's Issues hint, and cmds/diff.c
  * get_status_message_from_item and show_file_diff_from_workspace (the colour
  * ladder and the content gate), should_show_item_for_direction beside them; and
  * core/deploy.c check_ancestry, off the squatted directory itself — a caller
@@ -462,11 +462,14 @@ typedef struct {
  * what it is to disk — and its kind rung alone, asked of the record. A record
  * of another kind than its row describes another node, so it is none of the row's:
  * no base for its claim (workspace_claims_moved below), no target for what the
- * load learns (core/workspace.c workspace_record_confirmation). Where the look
- * found the row's own kind in its place, that node is gone, and apply adopts a
- * file over the record (cmds/apply.c cmd_apply) and observes a directory in the
- * record's place (workspace_observe_retyped). A reader not on this list is a
- * bug; the boolean reading of it is workspace_stale below.
+ * load learns (core/workspace.c workspace_record_confirmation), no directory's
+ * handover to acknowledge (cmds/apply.c cmd_apply's acknowledgement). Whether
+ * that node still stands is a look's to say. While it does, the row's deployment
+ * replaces dotta's own node there, which is a handover (workspace_reassigned
+ * below); where the look found the row's own kind in its place, that node is
+ * gone, and apply adopts a file over the record (cmd_apply's adoption) and observes
+ * a directory in the record's place (workspace_observe_retyped). A reader not
+ * on this list is a bug; the boolean reading of it is workspace_stale below.
  *
  * Not this: compute_orphan_divergence's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
@@ -484,12 +487,30 @@ static inline compare_result_t workspace_compare_confirmed(
 }
 
 /**
- * A pending handover: the record dotta owns names a profile the row does not
+ * A pending handover: the record dotta owns names a profile the row does not,
+ * and describes the node the row's deployment takes over
  *
- * The join over its two subjects — a view row and the record at its path — since
- * that is what every caller holds; an item-shaped caller passes item->row and
- * item->anchor. NULL on either side is no handover: an orphan item carries no
+ * The join over its two subjects — a view row and the record at its path — and
+ * the look at that path, since a record describes a node and only a look says
+ * whether one stands; an item-shaped caller passes item->row, item->anchor and
+ * item->occupant. NULL on either side is no handover: an orphan item carries no
  * row, and a path dotta has no record of has nothing to hand over.
+ *
+ * The record's kind decides what the look is asked (the ladder's first rung,
+ * workspace_compare_confirmed above). Of the row's kind, the record is the row's
+ * own node's history, and the handover stands whatever the look found: a copy
+ * the user edited, replaced or deleted is still the one the record names, and
+ * the write that answers the row re-stamps the record under it. Of another kind,
+ * it is another node's — a link where the row claims a file, a file where it
+ * claims a directory — handed over only while that node stands: the row's
+ * deployment then replaces dotta's own node, and the replacement is the
+ * acknowledgement, the line a same-kind handover reads. A look that found anything
+ * else found that node gone — the row's own kind in its place, another node, or
+ * nothing — and there is nothing to hand over: the path reads as one the record
+ * does not name, a clean file adopted and a directory observed anew (cmds/apply.c
+ * cmd_apply, workspace_observe_retyped). No look — withheld beneath a squatter,
+ * failed, or not in the caller's hands (FS_OCCUPANT_UNKNOWN) — disproves nothing,
+ * and the handover stands: absence is never inferred from a failure to look.
  *
  * Reads the LIVE record — after apply acknowledges (workspace_anchor rewrites
  * the record under the row's profile) the same read honestly answers false, so
@@ -514,26 +535,56 @@ static inline compare_result_t workspace_compare_confirmed(
  * its profile equals the record's (the strict same-profile rule of the relocation
  * read), so no reader needs an orphan guard.
  *
- * Readers: both divergence analyzers, which emit an item for a clean row that
- * carries this; the display tags and the route table; diff's filter and its
- * "acknowledged by apply" line (cmds/diff.c); apply's collection and its two
- * acknowledgement loops, the writers that move the record onto the row's profile
- * (cmds/apply.c); and sync's apply hint, which asks it of the record against
- * the view with no workspace at all (cmds/sync.c). A record's WRITER asks the
- * whole binding — profile and storage path both — which is manifest_is_claim;
- * this is the half the screens name and the receipts count. Not
- * manifest_diff_stats_t's `reassigned`, which counts one transition's own delta
- * between two views; this is the record against the view, standing from whenever
- * it began.
+ * Readers: both divergence analyzers, with the look each holds, which emit an
+ * item for a clean row that carries this; the display tags and the route table,
+ * with the item's; diff's filter, its "acknowledged by apply" line and its status
+ * colour (cmds/diff.c), with the item's; apply's collection and its record step,
+ * with the item's, and its two acknowledgement loops, the writers that move the
+ * record onto the row's profile, with none — only a record of the row's kind
+ * reaches either, the adoption and the kind rung having taken every other
+ * (cmds/apply.c); and sync's apply hint, with none, which asks it of the record
+ * against the view with no workspace at all, workspace_stale answering first
+ * across kinds (cmds/sync.c). A record's WRITER asks the whole binding — profile
+ * and storage path both — which is manifest_is_claim; this is the half the screens
+ * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
+ * counts one transition's own delta between two views; this is the record against
+ * the view, standing from whenever it began.
  *
- * The record against the view has three words, and this is the binding's;
- * workspace_stale below is the content's, workspace_claims_moved the claim's.
+ * The record against the view has three words, and this is the binding's — the
+ * one of the three that reads the look; workspace_stale below is the content's,
+ * workspace_claims_moved the claim's.
  */
 static inline bool workspace_reassigned(
-    const manifest_row_t *row, const anchor_t *anchor
+    const manifest_row_t *row, const anchor_t *anchor, fs_occupant_t occupant
 ) {
-    return row && anchor && anchor->deployed_at > 0 && !manifest_is_derived(row) &&
-           strcmp(anchor->profile, row->profile) != 0;
+    /* A record dotta owns, a claim the row makes, and another profile named */
+    if (!row || !anchor || anchor->deployed_at == 0 || manifest_is_derived(row) ||
+        strcmp(anchor->profile, row->profile) == 0) {
+        return false;
+    }
+
+    /* Of the row's kind: the row's own node's history, whatever the look found */
+    if (workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF) {
+        return true;
+    }
+
+    /* Of another kind: its own node's, while a look finds it standing — and no
+     * look disproves nothing */
+    if (occupant == FS_OCCUPANT_UNKNOWN) {
+        return true;
+    }
+
+    /* What the record's node stands as, in the ladder's division: a regular file
+     * for either blob mode, a link, a directory */
+    switch (anchor->type) {
+        case PATH_TYPE_FILE:
+        case PATH_TYPE_EXECUTABLE: return occupant == FS_OCCUPANT_REGULAR;
+        case PATH_TYPE_SYMLINK:    return occupant == FS_OCCUPANT_SYMLINK;
+        case PATH_TYPE_DIRECTORY:  return occupant == FS_OCCUPANT_DIRECTORY;
+    }
+
+    /* Unreachable once every enum value is handled */
+    return false;
 }
 
 /**
@@ -542,7 +593,7 @@ static inline bool workspace_reassigned(
  * The row's content is not the confirmed pair's: another blob, or the same blob
  * under another kind. The rule is workspace_compare_confirmed's above; this is
  * the word the screens and the record's own contract keep for it, beside
- * workspace_reassigned over the same two subjects.
+ * workspace_reassigned over the same two subjects and a look.
  *
  * A zero blob is stale against any file row: nothing was confirmed, so nothing
  * vouches. Two zero blobs under one kind are not — a directory record under a
@@ -905,11 +956,13 @@ error_t *workspace_load(
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
  * item the route does not call clean (workspace_item_route) — a squatter above
- * it, a divergence bit, or a pending handover, which a clean row's sources derive
- * where its owned record names another profile (workspace_reassigned). A managed
- * path with none of these has no item. So a load is clean iff this is empty,
- * and clean over a scope iff it holds none of the scope's items: cmds/status.c
- * display_workspace_status reads its status line that way, filtered or not.
+ * it, a divergence bit, or a pending handover, which a clean row's sources and
+ * look derive where its owned record, of the row's own kind, names another profile
+ * (workspace_reassigned: a record of another kind is a node the clean row's look
+ * found gone). A managed path with none of these has no item. So a load is clean
+ * iff this is empty, and clean over a scope iff it holds none of the scope's
+ * items: cmds/status.c display_workspace_status reads its status line that way,
+ * filtered or not.
  *
  * Iterate via:
  *   workspace_items_t items = workspace_get_all_diverged(ws);

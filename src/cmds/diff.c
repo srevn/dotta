@@ -68,13 +68,18 @@ static bool should_show_item_for_direction(
          * line says so. ENCRYPTION alone stays out: how Git stores the blob is
          * no difference between Git and disk, and apply deploying it changes
          * nothing. */
-        return (item->state == WORKSPACE_STATE_UNDEPLOYED) ||
-               (item->state == WORKSPACE_STATE_DELETED) ||
-               (item->state == WORKSPACE_STATE_DEPLOYED &&
-               (item->displaced != WORKSPACE_DISPLACED_NONE ||
+        if (item->state == WORKSPACE_STATE_UNDEPLOYED ||
+            item->state == WORKSPACE_STATE_DELETED) {
+            return true;
+        }
+        if (item->state != WORKSPACE_STATE_DEPLOYED) {
+            return false;
+        }
+        return item->displaced != WORKSPACE_DISPLACED_NONE ||
                (item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE |
                DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP | DIVERGENCE_TYPE |
-               DIVERGENCE_UNVERIFIED)) || workspace_reassigned(item->row, item->anchor)));
+               DIVERGENCE_UNVERIFIED)) ||
+               workspace_reassigned(item->row, item->anchor, item->occupant);
     }
 
     if (direction == DIFF_DOWNSTREAM) {
@@ -231,7 +236,7 @@ static const char *get_status_message_from_item(
 
     /* Profile reassignment with no content/metadata divergence. Only reachable
      * via UPSTREAM (DOWNSTREAM filtered by should_show_item). */
-    if (workspace_reassigned(item->row, item->anchor)) {
+    if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
         return "profile reassigned (acknowledged by apply)";
     }
 
@@ -297,7 +302,7 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_MAGENTA; /* status's colour for the failed look */
     } else if (item->divergence & DIVERGENCE_TYPE) {
         status_color = OUTPUT_COLOR_RED;
-    } else if (workspace_reassigned(item->row, item->anchor) &&
+    } else if (workspace_reassigned(item->row, item->anchor, item->occupant) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
         /* A pure handover. The blob-family ENCRYPTION bit does not demote it:
          * it is about how Git stores the blob, not a difference between Git and

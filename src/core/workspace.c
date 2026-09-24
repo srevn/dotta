@@ -989,7 +989,9 @@ static error_t *analyze_claim_divergence(
  * clean row, the deployment itself for a stale one). Only an owned record
  * qualifies: an observed or confirmed record that dotta never deployed names
  * the row the path was first seen under, not a deployer, and apply adopts such
- * a path rather than acknowledging it.
+ * a path rather than acknowledging it. And across kinds only while the look finds
+ * the record's own node standing — that is when disk holds what A deployed
+ * (workspace_reassigned).
  *
  * The blob-family ENCRYPTION verdict (workspace.h, divergence_type_t) is settled
  * here too, once per row, from the row and the config alone: row->encrypted is
@@ -1474,8 +1476,10 @@ static error_t *analyze_file_divergence(
     if (err) return err;
 
     /* Add to workspace if anything diverged or a handover is pending — the rule
-     * read over the pair this analysis has held throughout. */
-    if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
+     * read over the pair and the look this analysis has held throughout. The
+     * look stands at the row's kind here, so a record of another kind is a node
+     * that is gone and hands nothing over. */
+    if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor, look->occupant)) {
         err = workspace_add_diverged(
             ws, row, anchor, WORKSPACE_STATE_DEPLOYED, divergence, look->occupant,
             WORKSPACE_FAULT_NONE
@@ -3479,14 +3483,16 @@ static error_t *analyze_directories_divergence(workspace_t *ws) {
         if (err) return err;
 
         /* Record divergence if any metadata differs, or a pending handover stands
-         * — the rule read over the pair this loop has held throughout, and the
-         * tail the file analyzer has: a clean reassigned row emits an item, state
-         * DEPLOYED, divergence NONE, so status's Reassigned section and apply's
-         * collection see both kinds. One rule, both kinds — and the rule asks
-         * the row's class itself, so a derived claim answers false here whatever
-         * its record says, and the tracked gate above is about everything else
-         * this loop measures. */
-        if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor)) {
+         * — the rule read over the pair and the look this loop has held throughout,
+         * and the tail the file analyzer has: a clean reassigned row emits an
+         * item, state DEPLOYED, divergence NONE, so status's Reassigned section
+         * and apply's collection see both kinds. One rule, both kinds — and the
+         * rule asks the row's class itself, so a derived claim answers false
+         * here whatever its record says, and the tracked gate above is about
+         * everything else this loop measures. The look stands at the row's kind
+         * here, so a record of another kind is a node that is gone and hands
+         * nothing over. */
+        if (divergence != DIVERGENCE_NONE || workspace_reassigned(row, anchor, look->occupant)) {
             err = workspace_add_diverged(
                 ws,
                 row,
@@ -3944,8 +3950,9 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_CAPTURE;
     }
 
-    return workspace_reassigned(item->row, item->anchor) ? WORKSPACE_ROUTE_REASSIGNED
-                                                         : WORKSPACE_ROUTE_CLEAN;
+    return workspace_reassigned(item->row, item->anchor, item->occupant)
+           ? WORKSPACE_ROUTE_REASSIGNED
+           : WORKSPACE_ROUTE_CLEAN;
 }
 
 /**
@@ -4018,7 +4025,7 @@ bool workspace_item_extract_display_info(
              * still names the profile that deployed the copy, and apply's redeploy
              * from the new owner is what acknowledges it — the same pair the
              * DEPLOYED arm prints. */
-            if (workspace_reassigned(item->row, item->anchor)) {
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
@@ -4038,8 +4045,9 @@ bool workspace_item_extract_display_info(
                  * off a look nobody took would name work no verb takes. The path's
                  * one tag, at the default colour: the squatter's own row carries
                  * the path's severity, and the route lists this item under it.
-                 * What no look decides still rides below, the blob's verdict
-                 * and the handover. */
+                 * What no look decides or disproves still rides below: the blob's
+                 * verdict, and the handover — which a look ends across kinds,
+                 * and none was taken here. */
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "displaced";
                 }
@@ -4143,13 +4151,13 @@ bool workspace_item_extract_display_info(
             }
 
             /* Profile reassignment tag (can coexist with divergence tags, and
-             * with [displaced]: the record against the row, no observation
-             * involved)
+             * with [displaced]: the record against the row, and across kinds
+             * against the item's look — workspace_reassigned)
              *
              * Added after divergence tags as secondary information. Color only
              * set for pure reassignment (sole tag) to avoid overriding
              * severity-based colors from divergence. */
-            if (workspace_reassigned(item->row, item->anchor)) {
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_DISPLAY_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }

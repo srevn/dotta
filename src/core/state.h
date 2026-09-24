@@ -100,7 +100,11 @@ typedef struct manifest_row manifest_row_t;
  * write-side); the record then advances blob-only and the next load's slow path
  * confirms once, in a closed second. A capture of a file edited this second
  * therefore defers its fast path one load. A triple born from the write itself
- * (stat_cache_from_write) is exempt: authorship, not a read, is its proof.
+ * (stat_cache_from_write) is exempt: authorship, not a read, is its proof. And
+ * as ce_match_stat reads the entry's mode beside its stat data, the kind is read
+ * beside the triple, never stored in it: the record and the released copy carry
+ * it already, the type every writer of a triple writes with it
+ * (stat_cache_matches).
  */
 typedef struct {
     int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
@@ -168,25 +172,41 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
 /**
  * Does a live look still stand behind the proof? — the fast path, spelled once
  *
- * True iff the triple is set and the look's own (mtime, size, ino) are it, which
- * is safety-grade rather than a guess because of the two constructors above: a
- * set triple is born only beside bytes dotta had verified or had itself written,
- * and only the verbs that verify advance it (state_confirm, state_anchor), so a
- * look that matches it is the same node unwritten since — disk still holds the
- * blob the proof was taken beside, with nothing loaded and nothing hashed. A
- * released copy's triple was copied verbatim from a record those verbs advanced,
- * so the proof holds through the copy. An UNSET triple (mtime 0 — never confirmed,
- * or the read-derived constructor's smudge) matches no look, which is the slow
- * path by default.
+ * True iff the triple is set, the look is a node of the kind the proof was taken
+ * of, and the look's own (mtime, size, ino) are the triple — safety-grade rather
+ * than a guess because of the two constructors above: a set triple is born only
+ * beside bytes dotta had verified or had itself written, and only the verbs that
+ * verify advance it (state_confirm, state_anchor), so a look that matches it is
+ * the same node unwritten since — disk still holds the blob the proof was taken
+ * beside, with nothing loaded and nothing hashed. A released copy's triple was
+ * copied verbatim from a record those verbs advanced, so the proof holds through
+ * the copy. An UNSET triple (mtime 0 — never confirmed, or the read-derived
+ * constructor's smudge) matches no look, which is the slow path by default.
+ *
+ * The kind is the proof's own: the type beside the triple in the record or the
+ * released copy, which every verb that writes the triple writes with it, of the
+ * node the triple was taken of. A node's kind is fixed for the life of its inode,
+ * and the inode is the filesystem's to hand out again: a node of another kind
+ * reusing it at the proof's size within the proof's second is not the node the
+ * proof was taken of, and taken for it, a link the user made reads as dotta's
+ * file — clean, or pruned as an orphan. Git's ce_match_stat asks the entry's
+ * mode before its stat data for the same reason. Asked in the ladder's division,
+ * a link for a link and a regular file for either blob mode (infra/compare.c
+ * mode_stands, the same division over a git filemode); never of a directory,
+ * which confirms no content and so carries no proof.
  *
  * Whether there is a proof to ask about is the asker's question, not this one's.
  *
  * Readers: core/workspace.c analyze_file_divergence, which asks it of the base's
- * proof, and compute_orphan_divergence, which asks it of the record's — the two
- * fast paths, which must not disagree about what a proof proves.
+ * proof under the base's type, and compute_orphan_divergence, of the record's
+ * under the record's — the two fast paths, which must not disagree about what a
+ * proof proves.
  */
-static inline bool stat_cache_matches(const stat_cache_t *proof, const struct stat *st) {
+static inline bool stat_cache_matches(
+    const stat_cache_t *proof, path_type_t type, const struct stat *st
+) {
     return proof->mtime != 0
+           && (type == PATH_TYPE_SYMLINK ? S_ISLNK(st->st_mode) : S_ISREG(st->st_mode))
            && proof->mtime == (int64_t) st->st_mtime
            && proof->size == (int64_t) st->st_size
            && proof->ino == (uint64_t) st->st_ino;
@@ -237,7 +257,8 @@ static inline bool stat_cache_matches(const stat_cache_t *proof, const struct st
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
  *     matched that blob. Zero means "never confirmed."
- *   - stat matching live stat is fast-path proof that disk still equals blob_oid.
+ *   - stat matching a live look of the record's kind is fast-path proof that
+ *     disk still equals blob_oid (stat_cache_matches).
  *   - the confirmed pair (type, blob_oid) is not the manifest row's content iff
  *     the Git-expected value has advanced past the last disk confirmation — i.e.,
  *     stale. The pair, not the blob alone: Git hashes a link's target exactly

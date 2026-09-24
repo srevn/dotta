@@ -1227,19 +1227,19 @@ static error_t *analyze_file_divergence(
     /* BASE FAST PATH (safety-grade)
      *
      * The base binds the blob dotta last confirmed on disk, the kind it was read
-     * as, and the stat triple captured at that confirmation. A live look that
-     * still stands behind that triple is proof that disk is the base's pair —
-     * why it is proof and not a guess is the triple's own to say (core/state.h
-     * stat_cache_matches) — so no blob is loaded and nothing is hashed, and the
-     * second question is answered for free: ours == base. The first question is
-     * then the whole of the comparison, because disk IS the base: what the row
-     * is to the pair is what it is to disk, in the comparison's own words
-     * (core/workspace.h workspace_compare_confirmed). A kind Git moved under an
-     * untouched copy therefore answers CMP_TYPE_DIFF here and STALE below, the
-     * same as the slow path reaches by reading — where an answer off git_moved
-     * alone would have called one state clean and its mirror a mode change. A
-     * path with no base has no triple to match. */
-    if (base_stat && stat_cache_matches(base_stat, &look->st)) {
+     * as, and the stat triple captured at that confirmation. A live look of that
+     * kind that still stands behind that triple is proof that disk is the base's
+     * pair — why it is proof and not a guess is the proof's own to say
+     * (core/state.h stat_cache_matches) — so no blob is loaded and nothing is
+     * hashed, and the second question is answered for free: ours == base. The
+     * first question is then the whole of the comparison, because disk IS the
+     * base: what the row is to the pair is what it is to disk, in the comparison's
+     * own words (core/workspace.h workspace_compare_confirmed). A kind Git moved
+     * under an untouched copy therefore answers CMP_TYPE_DIFF here and STALE
+     * below, the same as the slow path reaches by reading — where an answer off
+     * git_moved alone would have called one state clean and its mirror a mode
+     * change. A path with no base has no triple to match. */
+    if (base_stat && stat_cache_matches(base_stat, base_type, &look->st)) {
         /* the look stands behind the proof ⟹ disk == the base's pair */
         disk_at_base = true;
         cmp_result = workspace_compare_confirmed(row, base_type, base_blob);
@@ -1252,10 +1252,13 @@ static error_t *analyze_file_divergence(
          * confirmation that gives it one forgets the released row it subsumes
          * in the same breath (state_confirm).
          *
-         * The verdict is the whole gate: a released base the row has since retyped
-         * answers CMP_TYPE_DIFF above, so the pair state_confirm would write —
-         * the row's kind beside a triple taken of the other one — is never queued
-         * from here. */
+         * The verdict is the whole gate: the proof held the look to the base's
+         * kind, and a released base the row has since retyped answers CMP_TYPE_DIFF
+         * above, so the pair state_confirm would write — the row's kind beside
+         * a triple taken of another — is never queued from here. What this queues
+         * stands on the row's kind, as the slow path's confirmation does by its
+         * first rung: a content confirmation is never of a node the row does
+         * not name. */
         if (cmp_result == CMP_EQUAL && released) {
             error_t *err = workspace_record_confirmation(
                 ws, row, anchor, DIVERGENCE_CONTENT, &look->st
@@ -1581,10 +1584,11 @@ static error_t *compute_orphan_divergence(
 
     /* Step 3: Content and type comparison.
      *
-     * Anchor fast path first: a live look that still stands behind the triple
-     * captured at the last confirmation is proof that disk still equals
-     * anchor.blob_oid (core/state.h stat_cache_matches), so the exact node dotta
-     * wrote is recognised without loading or hashing anything.
+     * Anchor fast path first: a live look of the record's kind that still stands
+     * behind the triple captured at the last confirmation is proof that disk
+     * still equals anchor.blob_oid (core/state.h stat_cache_matches), so the
+     * exact node dotta wrote is recognised without loading or hashing anything
+     * — and the claim below is asked of that node, never of another kind's.
      *
      * Otherwise content_compare_blob_to_disk reads the record's blob once, as
      * the entry the record's own type names, and judges the look against what
@@ -1594,7 +1598,7 @@ static error_t *compute_orphan_divergence(
      * sit on the other side of an encryption-policy flip from what Git holds
      * now. The caller's look is forwarded: the seam reads, the pair judges, and
      * neither takes a look of its own. */
-    if (stat_cache_matches(&anchor->stat, st)) {
+    if (stat_cache_matches(&anchor->stat, anchor->type, st)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         cmp_result = CMP_EQUAL;
     } else {

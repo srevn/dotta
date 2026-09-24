@@ -84,9 +84,12 @@ static void display_enabled_profiles(
             output_styled(out, OUTPUT_NORMAL, " {dim}→ %s{reset}", shown);
         }
 
-        /* One walk of the view per profile: the latest ownership event among
-         * the rows the profile owns now — the honest set for an enabled-profiles
-         * header — and the verbose per-kind counts. */
+        /* One walk of the view per profile: the latest of its own ownership events
+         * among the rows it owns now — the honest set for an enabled-profiles
+         * header — and the verbose per-kind counts. A record another profile's
+         * deployment left at one of those rows is that profile's event, a handover
+         * apply has yet to acknowledge (core/workspace.h workspace_reassigned),
+         * and dates this one nothing. */
         time_t profile_deploy_time = 0;
         size_t file_count = 0;
         size_t dir_count = 0;
@@ -100,7 +103,8 @@ static void display_enabled_profiles(
 
                 const anchor_t *anchor =
                     workspace_get_anchor(ws, row->filesystem_path);
-                if (anchor && anchor->deployed_at > profile_deploy_time) {
+                if (anchor && strcmp(anchor->profile, profile) == 0 &&
+                    anchor->deployed_at > profile_deploy_time) {
                     profile_deploy_time = anchor->deployed_at;
                 }
             }

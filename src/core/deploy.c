@@ -265,7 +265,7 @@ error_t *deploy_plan_build(
          * for the flag to keep — the path is empty once the squatter this run
          * replaces is gone, and one it leaves standing is refused by the ancestry
          * rung either way. Both fates are preflight's (check_ancestry). -e still
-         * holds: a named path is intent, not an observation. */
+         * holds: a named path is intent, not a look's finding. */
         skip_reason_t skip = SKIP_NONE;
         if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
             skip = SKIP_EXCLUDED;
@@ -367,7 +367,7 @@ typedef enum {
  * path needs no clearing, and the answer is undefined for one.
  *
  * @param path Planned path (must not be NULL)
- * @param occ Its occupant, as the workspace observed it
+ * @param occ Its occupant, as the workspace's look found it
  * @param consent Whether replacing it is consented: --force, or on a file row
  *        the workspace's proof that the occupant is dotta's own copy
  */

@@ -16,12 +16,12 @@
  * finishes a directory's, and the one probe of the parent that finishes either
  * kind's (may this run make the removal at all).
  *
- * The verdicts are a function of the workspace's load-time observation — the
- * occupant, divergence, Git authority — of the view, of the plan, and of --force.
- * A confirmation prompt may sit between preflight and execute; nothing here
- * re-observes across it, and nothing pretends to: execute reports what it finds
- * (a path gone by then, a directory that gained an entry) and re-decides nothing.
- * The same stance as core/deploy.
+ * The verdicts are a function of what the workspace's load wrote on the item —
+ * the occupant, divergence, Git authority — of the view, of the plan, and of
+ * --force. A confirmation prompt may sit between preflight and execute; nothing
+ * here looks again across it, and nothing pretends to: execute reports what it
+ * finds (a path gone by then, a directory that gained an entry) and re-decides
+ * nothing. The same stance as core/deploy.
  *
  * One producer per fact:
  * - what stands at an orphan's path: the workspace's lstat, carried on the item
@@ -415,7 +415,7 @@ typedef struct {
 /**
  * Decide the verdicts
  *
- * Files: cleanup_verdict from the item — every observation it reads was made at
+ * Files: cleanup_verdict from the item — every field it reads was written at
  * workspace load — then, for a prunable one, the parent's reach (one fs_eaccess).
  * Directories: cleanup_verdict from the item likewise (a released or unverified
  * directory is left alone, unprobed), then for each candidate the view (a managed

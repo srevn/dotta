@@ -228,10 +228,10 @@ static error_t *initialize_schema(sqlite3 *db) {
          * --delete-files ordered the deployed copy at this path pruned at the
          * next apply, at that moment, and 0 is no order. It lives only while
          * its path is out of the view: born after the fallback short-circuit
-         * (the post-commit view lacks the path), voided by the flush's join when
-         * the path re-enters, written away by an ownership event (the record,
-         * whole), and gone with the row. The stamp is what lets the void name
-         * the order it read.
+         * (the post-commit view lacks the path), voided by the flush when the
+         * path re-enters, written away by an ownership event (the record, whole),
+         * and gone with the row. The stamp is what lets the void name the order
+         * it read.
          *
          * Held by the schema:
          *   - a directory has no content confirmation (blob_oid IS NULL)
@@ -649,7 +649,7 @@ static error_t *prepare_statements(state_t *state) {
         return sqlite_error(state->db, "Failed to prepare order-prune statement");
     }
 
-    /* Void order: the order's view end (the flush's join), a compare-and-swap
+    /* Void order: the order's view end (the flush's void), a compare-and-swap
      * on the stamp the caller read — an order placed again since matches nothing.
      * RETURNING yields a row iff the WHERE matched, as for the confirmations. */
     const char *sql_void_order =
@@ -1786,12 +1786,12 @@ static error_t *forget_released(state_t *state, const char *filesystem_path) {
 }
 
 /**
- * Observe a managed path: record its first sighting on disk
+ * Observe a managed path: record its first observation on disk
  *
  * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on sql_observe and the
  * header contract. Binds the row's key, binding, kind and claim; the blob, stat
  * and lifecycle columns take their NULL / zero defaults, an existing row is left
- * exactly as it was, and *anchor is the sighting's record either way.
+ * exactly as it was, and *anchor is the observation's record either way.
  */
 error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor) {
     CHECK_NULL(state);
@@ -1811,7 +1811,7 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
         return sqlite_error(state->db, "Failed to record observation");
     }
 
-    /* The caller's record is the sighting's, whole — last, so a failure above
+    /* The caller's record is the observation's, whole — last, so a failure above
      * leaves it as it was, and whether the INSERT landed or not (state.h): the
      * columns the statement names, the strings borrowed from the row, and every
      * other field the zero its column defaults to. */
@@ -1884,7 +1884,7 @@ error_t *state_confirm(
 
     /* 7-8. the binding the row's blob opens under — the row's, never the record's:
      * a blob is written only onto a record whose binding it decrypts under
-     * (anchor_t), so the invariant holds whoever queued this */
+     * (anchor_t), so the invariant holds whoever noted this confirmation */
     sqlite3_bind_text(stmt, 7, row->profile, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 8, row->storage_path, -1, SQLITE_TRANSIENT);
 
@@ -2172,7 +2172,7 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t n
  * sql_void_order and the header contract. Writes nothing where the order is not
  * the one read, and *anchor follows only what was written.
  */
-error_t *state_void_prune_order(state_t *state, anchor_t *anchor) {
+error_t *state_void_prune(state_t *state, anchor_t *anchor) {
     CHECK_NULL(state);
     CHECK_NULL(anchor);
     CHECK_NULL(state->db);

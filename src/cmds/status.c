@@ -1513,11 +1513,12 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
             goto cleanup;
         }
 
-        /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
-         * (self-healing optimization). Seeds the fast path for subsequent status
-         * calls. Non-fatal on failure — status still renders correctly, just
-         * won't benefit from the fast path. */
-        error_t *flush_err = workspace_flush_updates(ws);
+        /* What the load owes the record — its observations, its confirmations,
+         * the voids of orders the view took back (core/workspace.h workspace_flush)
+         * — the confirmations seeding the fast path for subsequent status calls.
+         * Non-fatal on failure: status still renders what the load read, and a
+         * flush that fails rolls back what it wrote. */
+        error_t *flush_err = workspace_flush(ws);
         if (flush_err) {
             error_free(flush_err);
         }

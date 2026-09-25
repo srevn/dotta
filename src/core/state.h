@@ -16,8 +16,8 @@
  *     ownership event or content confirmation deletes it in the same breath —
  *     the write that gives the path a newer base.
  * The released copy dies that one way and no other: never with a claim's
- * confirmation or a sighting, which say nothing of the content, and never with
- * disk — it is what dotta last confirmed at the path, the base a later read
+ * confirmation or an observation, which say nothing of the content, and never
+ * with disk — it is what dotta last confirmed at the path, the base a later read
  * measures disk against, and an edit or an absence since does not make it any
  * less that. Everything else — what should stand at a path, from whom — is computed
  * from Git at every load (core/manifest.h) and never stored.
@@ -226,19 +226,19 @@ static inline bool stat_cache_matches(
  * Four groups of columns, one write rule each (the verbs below):
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. Written from
- *     one row, at the first sighting (state_observe) and at every ownership event
- *     (state_anchor: apply deploy, adoption, acknowledgement, add, update); a
- *     confirmation never moves it.
+ *     one row, at the first observation (state_observe) and at every ownership
+ *     event (state_anchor: apply deploy, adoption, acknowledgement, add, update);
+ *     a confirmation never moves it.
  *   - the content (type, blob_oid, stat): the kind the record describes, and
  *     the blob dotta last verified disk against, with the stat of that moment.
- *     The first sighting writes the kind alone; the blob and the stat advance
+ *     The first observation writes the kind alone; the blob and the stat advance
  *     only after disk-matches-blob verification, the kind with them — state_confirm
  *     (the slow-path CMP_EQUAL) and state_anchor. Zero blob_oid is no content
  *     confirmation — a directory, whose whole confirmed-disk record is that it
  *     was observed (a directory has no content confirmation, schema-enforced),
  *     or a file observed but never confirmed.
  *   - the claim (mode, owner, group): the claim dotta last reconciled the path
- *     against — the row's at the first sighting and at every ownership event,
+ *     against — the row's at the first observation and at every ownership event,
  *     and on each axis a look found disk standing on, or a fix made it stand
  *     on, the row's since (state_confirm_claim). It is the base a claim Git moved
  *     is measured from (core/workspace.h workspace_claims_moved), and an orphan's
@@ -252,7 +252,7 @@ static inline bool stat_cache_matches(
  *     --delete-files ordered the copy pruned (state_order_prune, which re-stamps),
  *     0 = no order standing: an ownership event writes it away with the rest of
  *     the record, the flush voids it where the view holds the path again
- *     (state_void_prune_order), and it goes with the row.
+ *     (state_void_prune), and it goes with the row.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
@@ -497,9 +497,9 @@ void state_rollback(state_t *state);
  * Check if state has an active transaction
  *
  * Returns true if BEGIN IMMEDIATE has been executed and not yet committed or
- * rolled back. Used by code paths that may run under either acquisition shape
- * (workspace_flush_updates, ...) to decide whether to start their own scoped
- * transaction or piggyback on the caller's.
+ * rolled back. Read by a code path that may run under either acquisition shape,
+ * to decide whether to start its own scoped transaction or write in the caller's:
+ * core/workspace.c workspace_flush, at its first write, the one reader.
  *
  * @param state State handle (must not be NULL)
  * @return true if transaction is active
@@ -757,24 +757,24 @@ const anchor_t *state_lookup_anchor(
 );
 
 /**
- * Observe a managed path: record its first sighting on disk
+ * Observe a managed path: record its first observation on disk
  *
  * Presence only, idempotent. One INSERT creates the record with the row's binding,
  * kind and claim — no blob, no stat, never owned — and never touches an existing
  * row: ON CONFLICT DO NOTHING absorbs the key's conflict and no other, so every
  * constraint on what it writes still refuses (key_spelling among them). Two
  * callers, both the load's, since the load is where presence is established:
- * the workspace's flush, through workspace_observe, for an active row its load
- * found standing as its own kind with no record — so a directory apply fixes
- * rather than makes was present there and is observed by that flush — and
+ * the workspace's flush (core/workspace.c workspace_flush), for a managed row
+ * its load found standing as its own kind with no record — so a directory apply
+ * fixes rather than makes was present there and is observed by that flush — and
  * workspace_observe_retyped, for a directory its load found standing where the
  * record describes another kind of node, a record that call retires first so
  * the INSERT lands. The record's existence is what the absence classifier reads
  * (workspace.c classify_absent): a path once observed that is now missing was
  * deleted, not never deployed.
  *
- * *anchor is the sighting's record, written last, so a failure leaves it as it
- * was: the row's binding, kind and claim (borrowed — the string pointers are
+ * *anchor is the observation's record, written last, so a failure leaves it as
+ * it was: the row's binding, kind and claim (borrowed — the string pointers are
  * the row's), and nothing else. Written whether the INSERT landed or met a row
  * another writer made since the caller's read — still the INSERT's own values,
  * never that row, and never read back: a confirmation of the path binds this
@@ -784,7 +784,7 @@ const anchor_t *state_lookup_anchor(
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path was observed under (must not be NULL)
- * @param anchor The record the sighting is written into (must not be NULL)
+ * @param anchor The record the observation is written into (must not be NULL)
  * @return Error or NULL on success
  */
 error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor);
@@ -816,15 +816,15 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  *
  * The binding bound is the row's, never the record's: a blob is written only
  * onto a record whose binding it opens under, so anchor_t's rule holds at the
- * write, whoever queued the confirmation. The one place confirmations are queued
- * from asks the same of its snapshot first (core/workspace.c
- * workspace_record_confirmation), so one that cannot land never opens the flush's
+ * write, whoever noted the confirmation. The one place a load notes a content
+ * confirmation asks the same of its record first (core/workspace.c
+ * workspace_note_content), so one that cannot land never opens the flush's
  * transaction. A row the record's binding does not name is a pending handover:
  * apply's acknowledgement moves the record onto it (cmds/apply.c), and until it
  * does the path takes the slow path on every load.
  *
  * @param state State (must not be NULL, must have open database)
- * @param row Active row whose blob disk was found equal to (must not be NULL; a
+ * @param row The row whose blob disk was found equal to (must not be NULL; a
  *            file row with a non-zero blob)
  * @param stat Stat triple captured by the comparison (must not be NULL)
  * @param anchor The path's record as the caller read it — the content this
@@ -983,7 +983,7 @@ error_t *state_anchor(
  * orphan it settles; remove's settle and update's purge, for what their commits
  * let go; add's settle, for the ancestor claims its own commit dropped; and apply's
  * load, through core/workspace.c workspace_observe_retyped, for a directory's
- * record of another kind of node, which the directory's sighting replaces.
+ * record of another kind of node, which the directory's observation replaces.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)
@@ -1006,10 +1006,10 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path);
  * latest, which is what lets the void tell it from one it read.
  *
  * An order lives only while its path is out of the view. Read in exactly one
- * place — the workspace's orphan analysis — voided by the flush's join when the
- * path re-enters the view (state_void_prune_order), written away by an ownership
- * event (state_anchor), and gone with its record (a retire; apply executing the
- * prune is one).
+ * place — the workspace's orphan analysis — voided by the flush when the path
+ * re-enters the view (state_void_prune), written away by an ownership event
+ * (state_anchor), and gone with its record (a retire; apply executing the prune
+ * is one).
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose deployed copy is to be pruned (must not be
@@ -1022,19 +1022,20 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t n
 /**
  * Void a record's prune order, as read
  *
- * The order's view end: the flush's join, for a record the load read whose path
- * the view holds again — the removal the order answered was reverted. One UPDATE,
- * a compare-and-swap on the stamp *anchor holds: it clears the order iff the
- * database still holds that one, so an order placed again since the read — a
- * second removal, answering what the reader's view predates — stands. *anchor
- * follows the statement, last: ordered_at 0 when it wrote, as read when it did not.
+ * The order's view end: the flush's (core/workspace.c workspace_flush), for a
+ * record the load read whose path the view holds again — the removal the order
+ * answered was reverted. One UPDATE, a compare-and-swap on the stamp *anchor
+ * holds: it clears the order iff the database still holds that one, so an order
+ * placed again since the read — a second removal, answering what the reader's
+ * view predates — stands. *anchor follows the statement, last: ordered_at 0 when
+ * it wrote, as read when it did not.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param anchor The record as the caller read it (must not be NULL); advanced
  *               iff the statement wrote
  * @return Error or NULL on success — an order moved since the read is no error
  */
-error_t *state_void_prune_order(state_t *state, anchor_t *anchor);
+error_t *state_void_prune(state_t *state, anchor_t *anchor);
 
 /**
  * Get every released copy, in filesystem_path order

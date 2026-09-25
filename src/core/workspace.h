@@ -15,22 +15,23 @@
  *   The workspace is the authority for the join within its lifetime: the view
  *   (core/manifest.h — every enabled profile at HEAD, built by the dispatcher
  *   at the start of the command and borrowed here, `ctx->run.manifest`) and the
- *   record (the anchors snapshot, state_get_all_anchors). Downstream consumers
- *   (deploy, cleanup, command-internal analyses) read both through workspace
- *   accessors (workspace_files, workspace_directories, workspace_lookup,
+ *   record (read once, state_get_all_anchors, and held by the items). Downstream
+ *   consumers (deploy, cleanup, command-internal analyses) read both through
+ *   workspace accessors (workspace_files, workspace_directories, workspace_lookup,
  *   workspace_get_anchor) rather than building a view or calling
  *   state_get_all_anchors themselves. The view has no writer: it is current by
  *   construction and nothing invalidates it. The record has four writers while
- *   a workspace is live, workspace_observe, workspace_observe_retyped,
+ *   a workspace is live, the flush (workspace_flush), workspace_observe_retyped,
  *   workspace_anchor and workspace_confirm, each of which patches the snapshot
- *   it persists through (the confirmations through state_confirm and
+ *   it persists through: the flush's observation is a record the path's item
+ *   holds from the write on, and its void advances the record it read
+ *   (state_void_prune); the confirmations go through state_confirm and
  *   state_confirm_claim, which advance the record they are handed only when their
- *   statement wrote); the flush voids an order through the record it read
- *   (state_void_prune_order), which that call advances; retirements
- *   (state_retire_anchor, from apply's record step and the verbs) go to the
- *   database directly — no later reader in the run consults a retired path. The
- *   one retirement a later reader does consult is workspace_observe_retyped's,
- *   whose sighting takes the retired record's place in the snapshot.
+ *   statement wrote; retirements (state_retire_anchor, from apply's record step
+ *   and the verbs) go to the database directly — no later reader in the run
+ *   consults a retired path. The one retirement a later reader does consult is
+ *   workspace_observe_retyped's, whose observation takes the retired record's
+ *   place in the snapshot.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -180,7 +181,7 @@ typedef enum {
  * with its reach
  *
  * A directory is squatted when a claim says a directory belongs at the path and
- * the load observed something else standing there. **Nothing beneath a squatter
+ * the load's look found something else standing there. **Nothing beneath a squatter
  * is looked at.** A look there would answer for the occupant — a symlink to a
  * directory answers for the link's target, so a child would read clean, present,
  * modified or new about a tree that is not this path's; a file answers ENOTDIR,
@@ -189,12 +190,11 @@ typedef enum {
  * and one act would be read as an intent per path beneath it. So the ask comes
  * before every look the load takes (squatted_ancestor): beneath a squatter the
  * row or the record is an item as the partition made it, DEPLOYED- or
- * ORPHANED-shaped, occupant UNKNOWN, with no path bit and nothing queued for
- * the record. Every displaced managed item is therefore DEPLOYED with no path
- * bit — a file row's blob bit rides, Git's and no look's — which is what lets a
- * consumer that forgets this field do nothing rather than something wrong: the
- * absence arms are never reached beneath a squatter, so none of them needs a
- * clause.
+ * ORPHANED-shaped, occupant UNKNOWN, with no path bit and nothing owed the record.
+ * Every displaced managed item is therefore DEPLOYED with no path bit — a file
+ * row's blob bit rides, Git's and no look's — which is what lets a consumer that
+ * forgets this field do nothing rather than something wrong: the absence arms
+ * are never reached beneath a squatter, so none of them needs a clause.
  *
  * Two authorities can make the claim, and they reach differently — the reach rule:
  *
@@ -350,8 +350,8 @@ typedef enum {
 
 /**
  * One path the workspace knows — a row of the view, a record the view lacks, or
- * a discovery of the scan — with the load's look at it and the verdict over that
- * look
+ * a discovery of the scan — with the load's look at it, the verdict over that
+ * look, and the confirmation the record is owed
  *
  * One per managed path and one per orphan record, made at the partition before
  * anything is looked at, with the record at its path paired onto it there; a
@@ -365,7 +365,7 @@ typedef enum {
  *
  * The fields are grouped by their writer:
  *   the sources, the identity   the partition, once; the writers point `anchor`
- *                               at a record a path gains (workspace_observe,
+ *                               at a record a path gains (the flush's observation,
  *                               workspace_anchor)
  *   the look                    workspace.c look, once per item a looker
  *                               reaches — and one retraction: the file analysis
@@ -373,10 +373,12 @@ typedef enum {
  *                               ENOENT against a look that said a file stood
  *                               there, so the item and the index say one thing
  *   the verdict                 its kind's analysis, at the arm that decides it
+ *   the confirmation            its kind's analysis, beside the verdict; the
+ *                               flush clears it once written
  *
- * The occupant is the load's one observation of the disk, carried as the sys
- * layer names it rather than folded to a presence bit: what the lstat found at
- * the path — the link itself, never its target. FS_OCCUPANT_NONE is absence;
+ * The occupant is the load's one look at the disk, carried as the sys layer names
+ * it rather than folded to a presence bit: what the lstat found at the path —
+ * the link itself, never its target. FS_OCCUPANT_NONE is absence;
  * FS_OCCUPANT_UNKNOWN is a path the load could not stat, or by the displaced
  * rule did not, or has not yet — the partition makes every item so, a look nobody
  * took — and assumes present either way (absence is never inferred from a failure
@@ -391,11 +393,11 @@ typedef enum {
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
  * present, since deploy judges nothing it could not see), and a new consumer
  * picks one of the two and says which. The divergence bits are the verdict over
- * that observation (DIVERGENCE_TYPE: the occupant is not the row's or the record's
- * kind); every consumer that once re-probed the path to learn its type reads
- * this field instead, so status, deploy and cleanup cannot see three different
- * occupants at one path. And where a look failed outright, whose remedy that
- * is: the fault (workspace_fault_t), NONE on every item the analysis could verify.
+ * that look (DIVERGENCE_TYPE: the occupant is not the row's or the record's kind);
+ * every consumer that once re-probed the path to learn its type reads this field
+ * instead, so status, deploy and cleanup cannot see three different occupants
+ * at one path. And where a look failed outright, whose remedy that is: the fault
+ * (workspace_fault_t), NONE on every item the analysis could verify.
  *
  * `st` is the look's stat, meaningful for a present occupant alone, and
  * `lstat_errno` lstat's errno on an UNKNOWN from a look that failed. The whole
@@ -410,12 +412,22 @@ typedef enum {
  * and symlinks alone (workspace.c workspace_analyze_untracked), which status's
  * New files label reads.
  *
+ * The confirmation is what the analyses established that the record lacks, by
+ * axis, for the flush to write (workspace_flush) and nothing else to read: the
+ * content (DIVERGENCE_CONTENT) where the look found disk to be the row's pair
+ * and the record is this row's content base, with `proof` beside it — the look's
+ * triple, distilled where the comparison stood (workspace.c
+ * workspace_note_content); and each claim Git moved that the look found disk
+ * already standing on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP). The flush clears
+ * it once written, so it is NONE on every item that owes the record nothing —
+ * orphans and discoveries always.
+ *
  * `anchor` is const so a reader holding the item cannot write the record. The
  * workspace's writers cast where they advance one in place (workspace_anchor,
- * workspace_confirm, workspace_observe_retyped), which is defined because no
- * record is an object defined const: every record is the arena's. A record's
- * strings are never freed before the arena, so a pointer read off it outlives
- * any write (apply's reassigned[].from).
+ * workspace_confirm, workspace_observe_retyped, the flush's void), which is defined
+ * because no record is an object defined const: every record is the arena's. A
+ * record's strings are never freed before the arena, so a pointer read off it
+ * outlives any write (apply's reassigned[].from).
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -439,6 +451,10 @@ typedef struct {
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE unless UNVERIFIED */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
+
+    /* The confirmation — its kind's analysis's; the flush clears it once written */
+    divergence_type_t confirmation;      /* The axes the look established that the record lacks */
+    stat_cache_t proof;                  /* The content's, where the comparison stood; UNSET beside a claim */
 } workspace_item_t;
 
 /**
@@ -462,12 +478,13 @@ typedef struct {
  * directory or not.
  *
  * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
- * record's own node, standing), core/workspace.c workspace_analyze_file (its
- * sighting, taken only where the row's kind stands, and the ladder's first rung,
- * off the look before any read — of the row's kind for the first question, of
- * the base's for the second) and workspace_compare_orphan (the same rung),
- * core/deploy.c occupant_conflicts (what stands at a planned path, against the
- * node its row lands). A reader not on this list is a bug.
+ * record's own node, standing), workspace_flush (the observation, owed only where
+ * the row's own kind stands, either kind of row), core/workspace.c
+ * workspace_analyze_file (the ladder's first rung, off the look before any read
+ * — of the row's kind for the first question, of the base's for the second) and
+ * workspace_compare_orphan (the same rung), core/deploy.c occupant_conflicts
+ * (what stands at a planned path, against the node its row lands). A reader not
+ * on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {
@@ -505,15 +522,15 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * what it is to disk — and its kind rung alone, asked of the record. A record
  * of another kind than its row describes another node, so it is none of the row's:
  * no base for its claim (workspace_claims_moved below), no target for what the
- * load learns (core/workspace.c workspace_record_confirmation), no witness to
- * its deletion (classify_absent), no directory's handover to acknowledge
- * (cmds/apply.c cmd_apply's acknowledgement). Whether that node still stands is
- * a look's to say. While it does, the row's deployment replaces dotta's own node
- * there, which is a handover (workspace_reassigned below); where the look found
- * the row's own kind in its place, that node is gone, and apply adopts a file
- * over the record (cmd_apply's adoption) and observes a directory in the record's
- * place (workspace_observe_retyped). A reader not on this list is a bug; the
- * boolean reading of it is workspace_stale below.
+ * load learns (core/workspace.c workspace_note_content), no witness to its deletion
+ * (classify_absent), no directory's handover to acknowledge (cmds/apply.c
+ * cmd_apply's acknowledgement). Whether that node still stands is a look's to
+ * say. While it does, the row's deployment replaces dotta's own node there, which
+ * is a handover (workspace_reassigned below); where the look found the row's
+ * own kind in its place, that node is gone, and apply adopts a file over the
+ * record (cmd_apply's adoption) and observes a directory in the record's place
+ * (workspace_observe_retyped). A reader not on this list is a bug; the boolean
+ * reading of it is workspace_stale below.
  *
  * Not this: workspace_compare_orphan's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
@@ -781,9 +798,8 @@ typedef enum {
 /**
  * Decide which verb's work a deployed item is, from the item alone
  *
- * Pure in the fields the analysis observed once at load — the displaced class,
- * divergence, kind, occupant, reassignment. No syscall, no options; first match
- * wins:
+ * Pure in the fields the load wrote once — the displaced class, divergence, kind,
+ * occupant, reassignment. No syscall, no options; first match wins:
  *
  *   displaced, TRACKED       DISPLACED_TRACKED — a squatter a tracked row
  *                            claims stands above the path, so nothing there was
@@ -1088,12 +1104,12 @@ const manifest_row_t *workspace_lookup(
 /**
  * A squatted directory, and whose claim holds it
  *
- * A claim says a directory belongs at the path and the load observed another
+ * A claim says a directory belongs at the path and the load's look found another
  * kind standing there (workspace_displaced_t: the words, and the reach the claim's
  * class decides). One producer for both authorities of the reach rule: the look
  * that found the squatter (workspace.c look), over a view row whose class names
  * the claim or over a directory record another kind of node stands at, noted
- * where it was observed, so the claim is the producer's and is never re-derived:
+ * where it was found, so the claim is the producer's and is never re-derived:
  * an item the squatted directory reaches carries it as its displaced class —
  * the outermost's, where two reach the item — and a caller holding a path is
  * lent the element itself (workspace_squatted_ancestor).
@@ -1172,8 +1188,8 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  * The record the item at the path holds, managed and orphan paths alike, each
  * found by its array's search. Returns NULL when dotta has never observed the
  * path on disk while it was managed. Within a run the answer follows the writers:
- * a record workspace_observe or workspace_anchor created or patched reads back
- * here with its post-write value.
+ * a record the flush's observation or workspace_anchor created, or a writer
+ * advanced, reads back here with its post-write value.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
@@ -1252,60 +1268,24 @@ bool workspace_item_extract_display_info(
 );
 
 /**
- * Observe a managed path with in-memory consistency
- *
- * Workspace-scope side of state_observe (see state.h): records the path's first
- * sighting, its row's own kind found standing — presence only, no blob, no stat
- * — into a record it allocates before the statement, which the verb writes, and
- * which the path's item then holds, so every later reader in the run
- * (workspace_get_anchor, the adoption loop's ownership test) sees it and
- * item->anchor is the live record from the record's creation on. A path whose
- * item already holds a record, paired at load or created earlier in this run,
- * is left exactly as it is and no statement runs: observation is idempotent on
- * both sides.
- *
- * Single entry point for the observation of a path with no record: the flush
- * (workspace_flush_updates — file and directory rows whose look found their own
- * kind standing with no record during analysis). The observations have two
- * producers, both the load's, because the analysis is where presence is
- * established: this one, and workspace_observe_retyped for a directory standing
- * where its record describes another kind of node. Every active path where the
- * load found its row's own kind standing has a record once the flush has run,
- * and a path the run makes afterwards is an ownership event (workspace_anchor),
- * not an observation.
- *
- * The row pointer is borrowed from the workspace's active partition; the record
- * created here borrows its strings from that row for the workspace's lifetime.
- *
- * @param ws Workspace (must not be NULL, state must be open)
- * @param row Active row whose own kind was found standing at its path (must not
- *            be NULL, borrowed from workspace's active partition)
- * @return Error from state_observe, or NULL on success
- */
-error_t *workspace_observe(
-    workspace_t *ws,
-    const manifest_row_t *row
-);
-
-/**
  * Observe the directories the load found standing where their records describe
  * another kind of node
  *
  * A directory row whose record is of another kind — a file, a link — where the
  * load's look found a directory: the node the record describes is gone, a directory
  * stands in its place, and nothing has observed it, because the record holds
- * the place a sighting would take (state_observe creates, it never replaces).
+ * the place an observation would take (state_observe creates, it never replaces).
  * Left there, the record is no base for the directory's claim
  * (workspace_claims_moved), so a claim Git moves reads as the user's and update
  * commits disk's over it, and sync's hint reads the record stale with nothing
  * left for apply to do. Each such record retires, keeping its base as the path's
  * released copy (state_retire_anchor), and the directory is observed in its place
  * (state_observe), written into the same live record, so every reader in the
- * run reads the sighting: the row's binding, kind and claim, never owned — capture
- * is a directory's ownership event, and a look never is. Both classes: a derived
- * rung is observed as a tracked directory is. A file row's record of another
- * kind is not this pass's: apply adopts the file, which writes the record whole
- * (cmds/apply.c cmd_apply).
+ * run reads the observation: the row's binding, kind and claim, never owned —
+ * capture is a directory's ownership event, and a look never is. Both classes:
+ * a derived rung is observed as a tracked directory is. A file row's record of
+ * another kind is not this pass's: apply adopts the file, which writes the record
+ * whole (cmds/apply.c cmd_apply).
  *
  * Apply's alone, after its flush and ahead of its plan, in the transaction its
  * load was read in: a retire is blind (state_retire_anchor), so it is taken only
@@ -1373,112 +1353,116 @@ error_t *workspace_anchor(
  * axes named
  *
  * Workspace-scope side of state_confirm and state_confirm_claim: the content —
- * the row's pair, with `stat` as its proof (DIVERGENCE_CONTENT) — through the
- * first; the row's mode (DIVERGENCE_MODE) and its owner and group
- * (DIVERGENCE_OWNERSHIP) through the second, the record's own on an axis not
- * named. Each verb advances the path's live record in place when its statement
- * wrote, so every later reader in the run sees what the database holds. The axes
- * are the caller's, established where it stood: this writes what it is handed
- * and asks nothing again.
+ * the row's pair, with the proof the load distilled onto the item where its
+ * comparison stood (DIVERGENCE_CONTENT) — through the first; the row's mode
+ * (DIVERGENCE_MODE) and its owner and group (DIVERGENCE_OWNERSHIP) through the
+ * second, the record's own on an axis not named. Each verb advances the item's
+ * record in place when its statement wrote, so every holder of the item reads
+ * what the database holds. The axes are the caller's, established where it stood:
+ * this writes what it is handed and asks nothing again.
  *
  * Never an ownership event: the binding and the lifecycle are not written, so a
  * pending handover keeps reading as one, and a directory the user made is never
  * handed to the prune.
  *
- * Two callers: the flush (workspace_flush_updates), for what the load established,
- * and cmds/apply.c cmd_apply's record step, for the claims a fix set on a tracked
- * directory it converged in place.
+ * Two callers, each holding the item: the flush (workspace_flush), for what the
+ * load established, and cmds/apply.c cmd_apply's record step, for the claims a
+ * fix set on a tracked directory it converged in place — never the content, which
+ * only a load's comparison proves.
  *
  * @param ws Workspace (must not be NULL, state must be open)
- * @param row Active row the axes were established against (must not be NULL,
- *            borrowed from the workspace's active partition; the path has a record
- *            wherever axes is not NONE)
+ * @param item The managed item the axes were established on (must not be NULL;
+ *             a row's, whose record stands wherever axes is not NONE)
  * @param axes The axes established, named by their divergence bits (NONE writes
- *             nothing)
- * @param stat The proof beside the content (must not be NULL when axes carries
- *             DIVERGENCE_CONTENT; unread otherwise)
+ *             nothing); DIVERGENCE_CONTENT only as the load noted it, its proof
+ *             on the item (workspace_item_t's confirmation)
  * @return Error from either verb, or NULL on success — a record moved since the
  *         load is no error
  */
 error_t *workspace_confirm(
     workspace_t *ws,
-    const manifest_row_t *row,
-    divergence_type_t axes,
-    const stat_cache_t *stat
+    const workspace_item_t *item,
+    divergence_type_t axes
 );
 
 /**
- * Flush the updates accumulated during workspace_load to the state database
+ * Write what the load owes the record
  *
- * Both channels drain here, in one transaction, observations first:
+ * Three writes, each derived from one managed item and made for it, item by item
+ * — a path is observed before it is confirmed, since a confirmation is an UPDATE
+ * that creates nothing:
  *
- *   Observations — file and directory rows whose look found the row's own kind
- *   standing while the path had no record: a node of another kind is no sighting,
- *   since the record names the row's kind and the absence rung reads that as
- *   the node dotta saw. Through workspace_observe, so the snapshot gains the
- *   record the INSERT creates.
+ *   The observation — a path whose look found its row's own kind standing, either
+ *   kind of row, where dotta has no record: presence of that kind, the record's
+ *   first write (core/state.h state_observe), which the path's item holds from
+ *   the write on. A node of another kind is no observation: the record names
+ *   the row's kind, and the absence rung reads that as the node dotta saw. One
+ *   of the record's two observations, both the load's, because the analysis is
+ *   where presence is established — workspace_observe_retyped is the other, for
+ *   a directory standing where its record describes another kind of node. Every
+ *   managed path whose look found its row's own kind has a record once the flush
+ *   has run, and a path the run makes afterwards is an ownership event
+ *   (workspace_anchor), not an observation.
  *
- *   Confirmations — what the analysis established that the record does not yet
- *   hold, by axis, through workspace_confirm. The content of a file found equal
- *   to its row (the slow path's CMP_EQUAL, or a released base's triple vouching
- *   for the row's content), with the stat it was verified with: persisting it
- *   beside the row's blob (state_confirm) lets subsequent runs short-circuit
- *   via the fast-path stat AND — if Git advances blob_oid in the meantime —
- *   classify the file as stale directly from the fast path instead of re-hashing.
- *   And a claim Git moved that a look of either kind found disk already standing
- *   on (state_confirm_claim): the record follows every agreement, so the user's
- *   next move on that axis reads as the user's. Neither rewrites the binding,
- *   an ownership event's to change, so a clean reassignment keeps reading as
- *   one until apply acknowledges it. Only a row the record's binding names is
- *   ever queued a content confirmation (workspace_record_confirmation), where
- *   state_confirm would land no other: the blob a record carries is the blob of
- *   the row its binding names, so a path whose record is bound to another row
- *   takes the slow path on every load until an ownership event moves the record
- *   onto the standing one; a claim opens nothing, and is learned whichever row's
- *   it is. Each is a compare-and-swap on the record this load read: written,
- *   and the snapshot's record advanced on the same columns, only where the database
- *   still holds that record — one another writer moved since the load stays theirs,
- *   and memory behind it. Nothing is ever queued from beneath a squatter, because
- *   nothing there is looked at (workspace_displaced_t): a confirmation taken
- *   through one would advance the record's blob to the row's on the strength of
- *   the squatter's target, and the three-way frame would then read the bytes
- *   dotta actually deployed as the user's own edit once the squatter went —
- *   apply-side work turned into update-side work by one squat. Through a symlinked
- *   ancestor the view does not claim, the arrangement is the user's own and so
- *   is the proof.
+ *   The confirmation — what the analyses established that the record lacks, by
+ *   axis (workspace_item_t's confirmation), through workspace_confirm. The content
+ *   of a file found equal to its row (the slow path's CMP_EQUAL, or a released
+ *   base's triple vouching for the row's content), with the look's triple as
+ *   its proof: persisting it beside the row's blob (state_confirm) lets subsequent
+ *   runs short-circuit via the fast-path stat AND — if Git advances blob_oid in
+ *   the meantime — classify the file as stale directly from the fast path instead
+ *   of re-hashing. Only a row the record's binding names is ever noted a content
+ *   confirmation (core/workspace.c workspace_note_content), where state_confirm
+ *   would land no other: the blob a record carries is the blob of the row its
+ *   binding names, so a path whose record is bound to another row takes the slow
+ *   path on every load until an ownership event moves the record onto the standing
+ *   one. And a claim Git moved that a look of either kind found disk already
+ *   standing on (state_confirm_claim), whichever row's it is, since a claim opens
+ *   nothing: the record follows every agreement, so the user's next move on that
+ *   axis reads as the user's.
  *
- * The order is load-bearing: a confirmation is an UPDATE that creates nothing,
- * so a path that had no record at analysis (it is in both lists) must take the
- * observation's INSERT first. DB and memory agree for downstream readers in the
- * same run wherever the database still holds what the load read: every write
- * here is conditional on that reading — an observation lands only where no record
- * stands, a confirmation only on the record it was made against — so a record
- * another writer moved since the load is left theirs, and memory behind it, the
- * direction the next load corrects. The void too names what it replaces — the
- * order the load read, by its stamp — so an order placed again since the load
- * stands.
+ *   The void — every order a record the load read carries, where the view has
+ *   the path again: the order's view end (core/state.h's lifetime rule), here
+ *   because the view is. A released copy has no end here: its one is its path's
+ *   next ownership event or content confirmation.
  *
- * The join runs last — the order's view end (state.h's lifetime rule), here because
- * the view is: every order a record the load read carries, where the view has
- * the path, is void — on the order it read, since an order placed after it answers
- * a removal this view predates. A released copy has no end here: its one is its
- * path's next ownership event or content confirmation.
+ * Nothing is owed from beneath a squatter, because nothing there is looked at
+ * (workspace_displaced_t): a confirmation taken through one would advance the
+ * record's blob to the row's on the strength of the squatter's target, and the
+ * three-way frame would then read the bytes dotta actually deployed as the user's
+ * own edit once the squatter went — apply-side work turned into update-side work
+ * by one squat. Through a symlinked ancestor the view does not claim, the
+ * arrangement is the user's own and so is the proof.
+ *
+ * Every write is derived from the load, and outside a run of apply the load held
+ * no lock, so each is conditional on what the load read: an observation lands
+ * only where no record stands, a confirmation only on the record it was made
+ * against, a void only on the order the load read, by its stamp. DB and memory
+ * agree for downstream readers in the same run wherever the database still holds
+ * what the load read; a record another writer moved since is left theirs, and
+ * memory behind it, the direction the next load corrects. None writes the binding,
+ * an ownership event's to change, so a clean handover keeps reading as one until
+ * apply acknowledges it; nor deployed_at — this flush confirms observations,
+ * not deployments, and apply and the capturing verbs remain its writers.
+ *
+ * The first write takes the store's lock where the caller holds none — status,
+ * diff, sync, update and a preview of apply — and the flush commits it; a run
+ * of apply passes its dispatch transaction, and the writes land in it. A load
+ * that owes nothing, the common one, takes no lock and writes nothing. What a
+ * flush writes is owed no more: an observation leaves its record on the item,
+ * and a confirmation is cleared from it once written, landed or not; a void that
+ * found its order moved since the load stays owed, and finds it moved again.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path
  * for unchanged files and tags STALE directly for externally-modified profiles.
  *
- * The deployed_at timestamp is intentionally not advanced here — this flush
- * confirms observations, not deployments. Apply and the capturing verbs remain
- * the writers of anchor.deployed_at.
- *
- * Safe to call on any workspace — returns immediately if no updates pending.
- * Uses the workspace's internal state handle for database writes.
- *
- * @param ws Workspace (must not be NULL)
- * @return Error or NULL on success
+ * @param ws Workspace (must not be NULL); written through the state handle its
+ *           load borrowed
+ * @return Error or NULL on success; a transaction the flush took is rolled back
+ *         on its failure, and one the caller holds is the caller's to end
  */
-error_t *workspace_flush_updates(workspace_t *ws);
+error_t *workspace_flush(workspace_t *ws);
 
 /**
  * Free workspace

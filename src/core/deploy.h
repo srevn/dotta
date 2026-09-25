@@ -5,8 +5,8 @@
  *
  *   deploy_plan_build   — decide *what* from (workspace, scope), once
  *   deploy_preflight    — decide the fate of every planned row, from the
- *                         workspace's observation and the row: a verdict (how
- *                         it is materialized) or a skip (why it is not)
+ *                         workspace's look and the row: a verdict (how it is
+ *                         materialized) or a skip (why it is not)
  *   deploy_execute      — carry the verdicts out; decides nothing
  *
  * Preview, prompt, reporting and apply's record step all read the one plan and
@@ -15,12 +15,12 @@
  *
  * Design principles:
  * - Every decision is taken at preflight, before anything changes, from the
- *   occupant the workspace observed (workspace_item_t.occupant) and the row —
- *   one fate per planned row, a verdict or an explicit skip. A confirmation prompt
- *   may sit between preflight and execute; nothing re-observes across it, and
- *   nothing pretends to: the mechanisms refuse what a verdict no longer describes
- *   (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the refusal is that row's outcome,
- *   not the run's end. The same stance as core/cleanup
+ *   occupant the workspace's look found (workspace_item_t.occupant) and the row
+ *   — one fate per planned row, a verdict or an explicit skip. A confirmation
+ *   prompt may sit between preflight and execute; nothing looks again across
+ *   it, and nothing pretends to: the mechanisms refuse what a verdict no longer
+ *   describes (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the refusal is that
+ *   row's outcome, not the run's end. The same stance as core/cleanup
  * - One element type per phase: the plan buckets borrowed rows and authors nothing;
  *   preflight authors the fates — a verdict or a skip, carrying everything decided
  *   about the row; execute authors the outcomes — one per verdict, landed or
@@ -86,8 +86,8 @@ typedef struct {
  * (deploy_skip_t). Its row is the fate's: the view holds one row per path, and
  * a managed path's item is that row's own, so the row is read off the item
  * (item->row) and never carried beside it. An item's join facts (row, anchor,
- * profile) are sound on every fate; a row beneath a squatter carries no observation
- * at all (core/workspace.h workspace_displaced_t), which is why the fate's own
+ * profile) are sound on every fate; a row beneath a squatter carries no look at
+ * all (core/workspace.h workspace_displaced_t), which is why the fate's own
  * occupant says what the run will find. What a fate declines to consult it declines
  * at the reader, never by blanking the pointer.
  *
@@ -234,7 +234,7 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * ENOTEMPTY) is a failed row, cleanup's a skipped directory, and both headers
  * say why.
  *
- * Precedence. ANCESTOR ranks first: an observation taken through a squatted claimed
+ * Precedence. ANCESTOR ranks first: a look taken through a squatted claimed
  * ancestor is void, so no judgment made through it can outrank the fact — the
  * ancestry rung (check_ancestry) asks it before any probe of the row's own, the
  * landing check included, whose access(2) resolves through a squatting symlink
@@ -648,15 +648,15 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  * One fate per pending row (the totality equation, deploy_preflight_result_t),
  * each question asked of its one authority, the first skip reason that applies
  * winning (deploy_skip_reason_t):
- * - Ancestry — the observation must bind. A squatted directory row above the
- *   path (workspace_squatted_ancestor) voids every probe taken beneath it, the
- *   landing check's included — the workspace took none there at all, so the row
- *   arrives with nothing measured — so this rung runs first and answers from
- *   the run's own fates (check_ancestry): an ancestor the directory pass converges
- *   first means the row is planned absent and asked nothing else; one the pass
- *   skips means the row takes that skip's class, ancestor named; one the run
- *   never acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity,
- *   and the remedy is a run that reaches it, or, for a claim the run cannot reach
+ * - Ancestry — the look must bind. A squatted directory row above the path
+ *   (workspace_squatted_ancestor) voids every probe taken beneath it, the landing
+ *   check's included — the workspace took none there at all, so the row arrives
+ *   with nothing measured — so this rung runs first and answers from the run's
+ *   own fates (check_ancestry): an ancestor the directory pass converges first
+ *   means the row is planned absent and asked nothing else; one the pass skips
+ *   means the row takes that skip's class, ancestor named; one the run never
+ *   acts on (scope, -p, -e, an ancestor claim) is ANCESTOR — an incapacity, and
+ *   the remedy is a run that reaches it, or, for a claim the run cannot reach
  *   at all because nothing plans it, a re-derivation of the chain.
  * - Landing — the write must be able to land. Every arm of the executor writes
  *   through the *parent* — a temp file renamed over the target, a symlink unlinked
@@ -671,18 +671,18 @@ static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
  *   items, so this is the one fresh probe preflight takes; the mechanism
  *   (ensure_parents) asks the same questions of the same ancestor, so this predicts
  *   the run rather than modelling it.
- * - Type — the occupant the workspace observed at the planned path, both kinds
- *   (workspace_item_t.occupant; a row planned beneath a squatter this run replaces
- *   is absent, and asked nothing). A different kind at the path — a non-directory
- *   where a directory belongs, the reverse, or a file row's other kind — is skipped
- *   unless --force (TYPE), save a file row's occupant the workspace proved is
- *   dotta's own copy with only its kind moved by Git (STALE): that one is replaced
- *   unasked, as a STALE row's bytes are overwritten. A directory holding untracked
- *   paths is skipped either way (OCCUPIED), because deploy removes single nodes
- *   and never a tree. A row the workspace could not settle (DIVERGENCE_UNVERIFIED
- *   — an unexaminable occupant, or a look at its content that failed) is skipped
- *   as UNREADABLE when the landing had nothing to say: no verdict can say what
- *   the run will find there.
+ * - Type — the occupant the workspace's look found at the planned path, both
+ *   kinds (workspace_item_t.occupant; a row planned beneath a squatter this run
+ *   replaces is absent, and asked nothing). A different kind at the path — a
+ *   non-directory where a directory belongs, the reverse, or a file row's other
+ *   kind — is skipped unless --force (TYPE), save a file row's occupant the
+ *   workspace proved is dotta's own copy with only its kind moved by Git (STALE):
+ *   that one is replaced unasked, as a STALE row's bytes are overwritten. A
+ *   directory holding untracked paths is skipped either way (OCCUPIED), because
+ *   deploy removes single nodes and never a tree. A row the workspace could not
+ *   settle (DIVERGENCE_UNVERIFIED — an unexaminable occupant, or a look at its
+ *   content that failed) is skipped as UNREADABLE when the landing had nothing
+ *   to say: no verdict can say what the run will find there.
  * - Content — the workspace's divergence verdict, the only authority for a fact
  *   no lstat can settle. Skipped unless --force (CONTENT; STALE without CONTENT
  *   never skips: disk still holds the blob dotta deployed, so the overwrite loses

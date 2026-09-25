@@ -1598,15 +1598,16 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
         goto cleanup;
     }
 
-    /* Persist deployment-anchor advances from slow-path CMP_EQUAL checks
-     * (self-healing optimization). Seeds the fast path for subsequent
-     * status/apply/update calls. Non-fatal on failure — update still proceeds;
-     * just won't seed the fast path.
+    /* What the load owes the record — its observations, its confirmations, the
+     * voids of orders the view took back (core/workspace.h workspace_flush) —
+     * the confirmations seeding the fast path for subsequent status/apply/update
+     * calls. Non-fatal on failure: update still proceeds on what the load read,
+     * and a flush that fails rolls back what it wrote.
      *
      * Files actually updated by this command get their anchor advanced separately
      * inside update_write_record(); this flush covers the clean files the analysis
      * verified but didn't modify. */
-    error_t *flush_err = workspace_flush_updates(ws);
+    error_t *flush_err = workspace_flush(ws);
     if (flush_err) {
         error_free(flush_err);
     }

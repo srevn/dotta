@@ -1666,15 +1666,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* Persist deployment-anchor advances for files verified clean via the slow
-     * path, and observations of paths seen with no record. A run's land in its
-     * dispatch transaction — committed atomically with deployment changes; a
-     * preview holds none, so the flush takes and commits a scoped one of its
-     * own, exactly as it does for status, diff, sync and update (state_locked,
-     * in core/state.h). Routed through workspace_anchor / workspace_observe, so
-     * each persisted update also lands in the workspace's anchors snapshot —
-     * downstream readers in this run see DB and memory agreeing. */
-    err = workspace_flush_updates(ws);
+    /* What the load owes the record — its observations, its confirmations, the
+     * voids of orders the view took back (core/workspace.h workspace_flush). A
+     * run's land in its dispatch transaction — committed atomically with deployment
+     * changes; a preview holds none, so the flush takes and commits a scoped
+     * one of its own at its first write, exactly as it does for status, diff,
+     * sync and update (state_locked, in core/state.h). Each lands on the record
+     * the path's item holds, so downstream readers in this run see DB and memory
+     * agreeing. */
+    err = workspace_flush(ws);
     if (err) {
         /* A run's flush writes into the transaction the run will commit, so a
          * failure there poisons everything it has left to do. A preview holds
@@ -1689,14 +1689,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* The one sighting the flush cannot make: a directory standing where its
+    /* The one observation the flush cannot make: a directory standing where its
      * record describes another kind of node — a file, a link — whose record holds
-     * the place the sighting would take. A run holds its load's lock, which a
-     * retire needs, so the record retires here and the directory is observed in
-     * its place, never owned (workspace_observe_retyped); a preview writes nothing,
-     * and the next run makes it. Ahead of the plan, so no loop below meets such
-     * a record in a run: the acknowledgement owns no directory the user made
-     * where dotta's file was, and a fix confirms onto the sighting. */
+     * the place the observation would take. A run holds its load's lock, which
+     * a retire needs, so the record retires here and the directory is observed
+     * in its place, never owned (workspace_observe_retyped); a preview writes
+     * nothing, and the next run makes it. Ahead of the plan, so no loop below
+     * meets such a record in a run: the acknowledgement owns no directory the
+     * user made where dotta's file was, and a fix confirms onto the observation. */
     if (!opts->dry_run) {
         err = workspace_observe_retyped(ws);
         if (err) {
@@ -2065,9 +2065,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A record of another kind than the row is no record for it either: it is a
      * fact about a node that is gone — Git retyped the name, and the row's own
      * kind stands there clean — so the load learned nothing into it
-     * (core/workspace.c workspace_record_confirmation), and its ownership stamp
-     * vouches for a node dotta never wrote. The row is adopted as a row with no
-     * record is, and the anchor rewrites the record whole. The kind is the ladder's
+     * (core/workspace.c workspace_note_content), and its ownership stamp vouches
+     * for a node dotta never wrote. The row is adopted as a row with no record
+     * is, and the anchor rewrites the record whole. The kind is the ladder's
      * first rung (core/workspace.h workspace_compare_confirmed): a link beside
      * a file is another kind there, where path_type_kind would call both files.
      *
@@ -2082,12 +2082,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Division of labor with the earlier flush: the proof of this run's match
      * comes from the workspace leaving the entry out of the diverged items
      * (core/workspace.h workspace_diverged: a DEPLOYED item the route calls clean),
-     * and workspace_flush_updates above put the pair that proof rests on where
-     * this loop can read it — a slow-path CMP_EQUAL patched onto the snapshot
-     * record, a recordless clean row's record created by the observation and
-     * confirmed in the same flush. A confirmation rewrites neither deployed_at
-     * nor the record's profile, so both remain valid probes here; DB and in-memory
-     * views are kept coherent by workspace_anchor.
+     * and workspace_flush above put the pair that proof rests on where this loop
+     * can read it — a slow-path CMP_EQUAL patched onto the snapshot record, a
+     * recordless clean row's record created by the observation and confirmed in
+     * the same flush. A confirmation rewrites neither deployed_at nor the record's
+     * profile, so both remain valid probes here; DB and in-memory views are kept
+     * coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2788,7 +2788,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                         : DIVERGENCE_MODE;
 
                     error_t *confirm_err = workspace_confirm(
-                        ws, item->row, workspace_claims_moved(item->row, anchor) & landed, NULL
+                        ws, item, workspace_claims_moved(item->row, anchor) & landed
                     );
                     if (confirm_err) {
                         output_warning(

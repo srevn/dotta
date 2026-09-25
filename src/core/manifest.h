@@ -195,10 +195,11 @@ typedef struct manifest_row {
  * Both halves, because within one profile a path is not an identity.
  *
  * Readers: add's anchor pass (cmds/add.c), update's capture loop (cmds/update.c),
- * the workspace's confirmation recorder (core/workspace.c) and apply's two
- * acknowledgement loops (cmds/apply.c), which are what moves a record onto the
- * claim standing at its path. The let-go loops ask the other direction — whether
- * any row still stands at the path — and are not readers of this. NULL is no claim.
+ * the workspace's content note (core/workspace.c workspace_note_content) and
+ * apply's two acknowledgement loops (cmds/apply.c), which are what moves a record
+ * onto the claim standing at its path. The let-go loops ask the other direction
+ * — whether any row still stands at the path — and are not readers of this. NULL
+ * is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path
@@ -338,7 +339,7 @@ typedef struct manifest manifest_t;
  *
  * A profile whose branch does not exist contributes no rows; the scope layer
  * already warns about the dead branch on every run, and the workspace reads that
- * profile's records as orphans. The unbound claim is that observation's sibling
+ * profile's records as orphans. The unbound claim is the dead branch's sibling
  * at claim scale: this machine cannot place it, and the build says so as data,
  * not failure. Only those two questions are tolerant: a branch that exists but
  * cannot be loaded (corrupt object, I/O) still fails the build, as do a failed

@@ -147,34 +147,40 @@ typedef enum {
 } skip_reason_t;
 
 /**
- * Route one in-scope row into its partition bucket, or drop it
+ * Route one active item in scope into its partition bucket, or drop it
  *
- * A row with no work is adoptable unless -e named it: --exclude means "leave
+ * Three inputs, three owners: whether there is work is the item's to say
+ * (deploy_needs_work), why its work is skipped the plan's (-e, --skip-existing),
+ * and which partition it goes to the loop's, one per kind. An item with no work
+ * is apply's to adopt or acknowledge unless -e named it: --exclude means "leave
  * this path alone entirely", while --skip-existing only means "do not overwrite",
- * and adoption overwrites nothing. So SKIP_EXISTING on a clean row — every clean
- * row with something standing, under --skip-existing — is not a skip at all.
+ * and neither ownership event overwrites anything. So SKIP_EXISTING on a clean
+ * item — every clean one with something standing, under --skip-existing — is
+ * not a skip at all.
  *
- * @param part Partition for the row's kind (must not be NULL)
- * @param row Borrowed view row (must not be NULL)
- * @param work Deploy's work predicate for the row
- * @param skip Why the row's work is skipped, if it is
+ * The plan's one writer, and so the one place its buckets' element type is kept:
+ * a ptr_array_t says nothing of what it holds, and every reader projects it as
+ * items (core/workspace.h workspace_items).
+ *
+ * @param part Partition for the item's kind (must not be NULL)
+ * @param item An active item in scope, borrowed (must not be NULL)
+ * @param skip Why the item's work is skipped, if it is
  * @return Error or NULL on success
  */
 static error_t *deploy_classify(
     deploy_partition_t *part,
-    const manifest_row_t *row,
-    bool work,
+    const workspace_item_t *item,
     skip_reason_t skip
 ) {
-    if (!work) {
-        if (skip == SKIP_EXCLUDED) return NULL;   /* neither work nor adoptable */
-        return ptr_array_push(&part->clean, row);
+    if (!deploy_needs_work(item)) {
+        if (skip == SKIP_EXCLUDED) return NULL;   /* neither work nor apply's to own */
+        return ptr_array_push(&part->clean, item);
     }
 
     switch (skip) {
-        case SKIP_NONE:     return ptr_array_push(&part->pending, row);
-        case SKIP_EXCLUDED: return ptr_array_push(&part->excluded, row);
-        case SKIP_EXISTING: return ptr_array_push(&part->skipped_existing, row);
+        case SKIP_NONE:     return ptr_array_push(&part->pending, item);
+        case SKIP_EXCLUDED: return ptr_array_push(&part->excluded, item);
+        case SKIP_EXISTING: return ptr_array_push(&part->skipped_existing, item);
     }
 
     /* Unreachable once every enum value is handled */
@@ -229,7 +235,7 @@ error_t *deploy_plan_build(
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
         err = deploy_classify(
-            &plan->directories, item->row, deploy_needs_work(item),
+            &plan->directories, item,
             scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
@@ -265,7 +271,7 @@ error_t *deploy_plan_build(
             skip = SKIP_EXISTING;
         }
 
-        err = deploy_classify(&plan->files, item->row, deploy_needs_work(item), skip);
+        err = deploy_classify(&plan->files, item, skip);
         if (err) goto cleanup;
     }
 
@@ -278,7 +284,7 @@ cleanup:
 }
 
 /**
- * Free a plan — bucket buffers only; the rows belong to the workspace
+ * Free a plan — bucket buffers only; the items belong to the workspace
  */
 void deploy_plan_free(deploy_plan_t *plan) {
     if (!plan) {
@@ -909,9 +915,9 @@ static bool above_deployable_row(
  * Decide the fate of every planned row: a verdict, or a skip
  *
  * Workspace = analysis layer, preflight = decision layer, execute = execution
- * layer. Divergence verdicts and occupants are O(1) index probes; the one
- * filesystem-level question is the landing (and, for a directory standing where
- * a file belongs, the readdir under path_clearance).
+ * layer. Divergence verdicts and occupants are read off the item each pending
+ * bucket holds; the one filesystem-level question is the landing (and, for a
+ * directory standing where a file belongs, the readdir under path_clearance).
  *
  * Every pending row gets exactly one fate — a verdict or a skip, the totality
  * equation — so the verdict arrays hold deployable rows alone and the executors
@@ -945,12 +951,12 @@ error_t *deploy_preflight(
         return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
     }
 
-    /* One slot per pending row — verdict or skip, so the skip array's bound is
-     * both kinds together — and one per directory row of the view for the ancestors
-     * (an upper bound; the count says how many were decided). A zero count
-     * allocates one slot rather than nothing, so every array is an array. */
-    manifest_rows_t files = manifest_rows_view(&plan->files.pending);
-    manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
+    /* One slot per pending item — verdict or skip, so the skip array's bound is
+     * both kinds together — and one per directory item for the ancestors (an
+     * upper bound; the count says how many were decided). A zero count allocates
+     * one slot rather than nothing, so every array is an array. */
+    workspace_items_t files = workspace_items(&plan->files.pending);
+    workspace_items_t dirs = workspace_items(&plan->directories.pending);
     workspace_items_t all_dirs = workspace_directories(ws);
 
     result->directories.entries = calloc(dirs.count + 1, sizeof(deploy_verdict_t));
@@ -983,15 +989,8 @@ error_t *deploy_preflight(
      * rows it may make on the way is derived from the planned rows as a whole,
      * not decided row by row. */
     for (size_t i = 0; i < dirs.count; i++) {
-        const manifest_row_t *row = dirs.entries[i];
-        const char *path = row->filesystem_path;
-
-        /* The row's item, carried verbatim by whichever fate the row takes. Every
-         * pending row's is lent: work is something to say — a state but DEPLOYED,
-         * a path bit, a squatter above — so its item is among the diverged items
-         * (core/workspace.h workspace_diverged), a row beneath a squatter included,
-         * whose item says nothing there was looked at. */
-        const workspace_item_t *item = workspace_get_item(ws, path);
+        const workspace_item_t *item = dirs.entries[i];
+        const char *path = item->filesystem_path;
 
         /* Its ancestry first, before any probe: a squatted directory row above
          * this path invalidates every look taken beneath it, the landing check's
@@ -1031,7 +1030,7 @@ error_t *deploy_preflight(
              * is the row converging in place — so path_clearance cannot refuse
              * here, TYPE is the only reachable arm, and "use --force" is always
              * the true remedy. */
-            if (skip.reason == DEPLOY_SKIP_NONE && occupant_conflicts(occupant, row->type) &&
+            if (skip.reason == DEPLOY_SKIP_NONE && occupant_conflicts(occupant, item->row->type) &&
                 path_clearance(path, occupant, opts->force) != CLEARANCE_OK) {
                 skip.reason = DEPLOY_SKIP_TYPE;
             }
@@ -1052,7 +1051,7 @@ error_t *deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, row, &uid, &gid, &skip.reason);
+            err = check_ownership(opts, result->warnings, item->row, &uid, &gid, &skip.reason);
             if (err) goto cleanup;
         }
 
@@ -1070,12 +1069,8 @@ error_t *deploy_preflight(
     }
 
     for (size_t i = 0; i < files.count; i++) {
-        const manifest_row_t *row = files.entries[i];
-        const char *path = row->filesystem_path;
-
-        /* The row's item, carried by whichever fate it takes (see the directory
-         * loop). */
-        const workspace_item_t *item = workspace_get_item(ws, path);
+        const workspace_item_t *item = files.entries[i];
+        const char *path = item->filesystem_path;
 
         /* Its ancestry first (see the directory loop): the directory pass is
          * decided in full, so a squatted ancestor is converged, skipped, or out
@@ -1101,7 +1096,7 @@ error_t *deploy_preflight(
             if (err) goto cleanup;
 
             if (skip.reason == DEPLOY_SKIP_NONE) {
-                if (occupant_conflicts(occupant, row->type)) {
+                if (occupant_conflicts(occupant, item->row->type)) {
                     /* Type: what stands at the path decides the remedy, and whose
                      * it is decides the consent. STALE on a kind the row does
                      * not have is the workspace's proof that the occupant is
@@ -1165,7 +1160,7 @@ error_t *deploy_preflight(
         gid_t gid = (gid_t) -1;
 
         if (skip.reason == DEPLOY_SKIP_NONE) {
-            err = check_ownership(opts, result->warnings, row, &uid, &gid, &skip.reason);
+            err = check_ownership(opts, result->warnings, item->row, &uid, &gid, &skip.reason);
             if (err) goto cleanup;
         }
 

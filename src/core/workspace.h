@@ -19,20 +19,19 @@
  *   consumers (deploy, cleanup, command-internal analyses) read both through
  *   workspace accessors — the active items, each carrying its row and the record
  *   at its path (workspace_active, workspace_directories, workspace_files), and
- *   workspace_lookup and workspace_get_anchor — rather than building a view or
- *   calling state_get_all_anchors themselves. The view has no writer: it is current
- *   by construction and nothing invalidates it. The record has four writers while
- *   a workspace is live, the flush (workspace_flush), workspace_observe_retyped,
- *   workspace_anchor and workspace_confirm, each of which patches the snapshot
- *   it persists through: the flush's observation is a record the path's item
- *   holds from the write on, and its void advances the record it read
- *   (state_void_prune); the confirmations go through state_confirm and
- *   state_confirm_claim, which advance the record they are handed only when their
- *   statement wrote; retirements (state_retire_anchor, from apply's record step
- *   and the verbs) go to the database directly — no later reader in the run
- *   consults a retired path. The one retirement a later reader does consult is
- *   workspace_observe_retyped's, whose observation takes the retired record's
- *   place in the snapshot.
+ *   workspace_lookup — rather than building a view or calling state_get_all_anchors
+ *   themselves. The view has no writer: it is current by construction and nothing
+ *   invalidates it. The record has four writers while a workspace is live, the
+ *   flush (workspace_flush), workspace_observe_retyped, workspace_anchor and
+ *   workspace_confirm, each of which patches the snapshot it persists through:
+ *   the flush's observation is a record the path's item holds from the write
+ *   on, and its void advances the record it read (state_void_prune); the
+ *   confirmations go through state_confirm and state_confirm_claim, which advance
+ *   the record they are handed only when their statement wrote; retirements
+ *   (state_retire_anchor, from apply's record step and the verbs) go to the
+ *   database directly — no later reader in the run consults a retired path. The
+ *   one retirement a later reader does consult is workspace_observe_retyped's,
+ *   whose observation takes the retired record's place in the snapshot.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -597,17 +596,15 @@ static inline compare_result_t workspace_compare_confirmed(
  * row that carries this through it (core/workspace.c workspace_list) — and the
  * tags (workspace_item_tags), with the item's; diff's filter, its "acknowledged
  * by apply" line and its status colour (cmds/diff.c), with the item's; apply's
- * collection and its record step, with the item's, and its two acknowledgement
- * loops, the writers that move the record onto the row's profile, with none —
- * only a record of the row's kind reaches either, the adoption and the kind rung
- * having taken every other (cmds/apply.c); and sync's apply hint, with none,
- * which asks it of the record against the view with no workspace at all,
- * workspace_stale answering first across kinds (cmds/sync.c). A record's WRITER
- * asks the whole binding — profile and storage path both — which is
- * manifest_is_claim; this is the half the screens name and the receipts count.
- * Not manifest_diff_stats_t's `reassigned`, which counts one transition's own
- * delta between two views; this is the record against the view, standing from
- * whenever it began.
+ * collection, its two acknowledgement loops — the writers that move the record
+ * onto the row's profile — and its record step, each with the item's
+ * (cmds/apply.c); and sync's apply hint, with none, which asks it of the record
+ * against the view with no workspace at all, workspace_stale answering first
+ * across kinds (cmds/sync.c). A record's WRITER asks the whole binding — profile
+ * and storage path both — which is manifest_is_claim; this is the half the screens
+ * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
+ * counts one transition's own delta between two views; this is the record against
+ * the view, standing from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -711,12 +708,13 @@ static inline divergence_type_t workspace_claims_moved(
  * Structural type — parallels manifest_rows_t. Callers receive a typed handle
  * instead of triple-star out-params.
  *
- * Pass by value. Lifetime is the producer's: cleanup's plan / verdict / result
- * buckets project through workspace_items_view and borrow for the bucket's life;
- * the workspace's own — the active items, both kinds or one (workspace_active,
- * workspace_directories, workspace_files), and the diverged items
- * (workspace_diverged) — borrow for the workspace's life; update's filters hand
- * over heap buffers the caller frees.
+ * Pass by value. Lifetime is the producer's: the engines' buckets — deploy's
+ * plan (core/deploy.h deploy_partition_t), cleanup's plan and verdicts
+ * (core/cleanup.h) — project through workspace_items and borrow for the bucket's
+ * life; the workspace's own — the active items, both kinds or one
+ * (workspace_active, workspace_directories, workspace_files), and the diverged
+ * items (workspace_diverged) — borrow for the workspace's life; update's filters
+ * hand over heap buffers the caller frees.
  */
 typedef struct {
     const workspace_item_t *const *entries;
@@ -724,13 +722,16 @@ typedef struct {
 } workspace_items_t;
 
 /**
- * Project a ptr_array_t bucket of borrowed items as a typed slice
+ * The items a ptr_array_t bucket holds, as a typed slice
  *
- * Mirrors manifest_rows_view: buckets filled by ptr_array_push(&bucket, item)
- * hold `void *`, and the cast layers const onto both pointer levels. The view
- * aliases the bucket's storage and is valid for the bucket's lifetime.
+ * A bucket says nothing of its element, so the cast is only as sound as its
+ * writers: every bucket that projects through here holds items alone — deploy's
+ * plan by its one writer (core/deploy.c deploy_classify), cleanup's where each
+ * item is routed, the diverged items where they are listed. The cast layers const
+ * onto both pointer levels. The slice aliases the bucket's storage and is valid
+ * for the bucket's lifetime.
  */
-static inline workspace_items_t workspace_items_view(const ptr_array_t *bucket) {
+static inline workspace_items_t workspace_items(const ptr_array_t *bucket) {
     return (workspace_items_t){
         .entries = (const workspace_item_t *const *) bucket->items,
         .count = bucket->count,
@@ -1035,8 +1036,9 @@ workspace_items_t workspace_diverged(const workspace_t *ws);
  * at, so there is no reading that could have come back clean
  * (workspace_displaced_t).
  *
- * This function enables preflight to efficiently query workspace data instead
- * of re-analyzing files, eliminating redundant comparisons.
+ * For a reader that meets a path cold: core/cleanup.c vouch_entry, whose emptiness
+ * walk meets a child entry and asks what the load holds there. A reader holding
+ * an item — the kinds' items, an engine's bucket, a fate — asks nothing by path.
  *
  * @param ws Workspace (must not be NULL)
  * @param filesystem_path Path to query (must not be NULL)
@@ -1196,24 +1198,6 @@ typedef struct {
 const workspace_squatted_t *workspace_squatted_ancestor(
     const workspace_t *ws,
     const char *path
-);
-
-/**
- * Look up the record dotta keeps of a path
- *
- * The record the item at the path holds, active and orphan paths alike, each
- * found by its array's search. Returns NULL when dotta has never observed the
- * path on disk while it was active. Within a run the answer follows the writers:
- * a record the flush's observation or workspace_anchor created, or a writer
- * advanced, reads back here with its post-write value.
- *
- * @param ws Workspace (NULL returns NULL)
- * @param filesystem_path Path to look up (NULL returns NULL)
- * @return Borrowed record pointer, or NULL if the path has none
- */
-const anchor_t *workspace_get_anchor(
-    const workspace_t *ws,
-    const char *filesystem_path
 );
 
 /**

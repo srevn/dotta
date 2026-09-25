@@ -546,7 +546,7 @@ static void print_withheld(
 ) {
     /* -e reaches all three kinds, so its summary counts "paths"; the verbose
      * breakdown names each kind and what it was spared. */
-    workspace_items_t excluded_orphans = workspace_items_view(&cleanup_plan->excluded);
+    workspace_items_t excluded_orphans = workspace_items(&cleanup_plan->excluded);
     size_t excluded_orphan_files = 0; size_t excluded_orphan_dirs = 0;
 
     for (size_t i = 0; i < excluded_orphans.count; i++) {
@@ -919,7 +919,7 @@ static void print_cleanup_results(
     }
 
     if (verdicts->released_files.count > 0) {
-        workspace_items_t items = workspace_items_view(&verdicts->released_files);
+        workspace_items_t items = workspace_items(&verdicts->released_files);
 
         output_section(out, OUTPUT_VERBOSE, "Released files");
         for (size_t i = 0; i < items.count; i++) {
@@ -934,14 +934,14 @@ static void print_cleanup_results(
      * block for the item's own, the needing-root block for the run's — and both
      * always print; the receipt only confirms the skip. */
     if (verdicts->skipped_files.count + verdicts->refused_files.count > 0) {
-        workspace_items_t held = workspace_items_view(&verdicts->skipped_files);
-        workspace_items_t refused = workspace_items_view(&verdicts->refused_files);
+        workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
+        workspace_items_t refused = workspace_items(&verdicts->refused_files);
 
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned files");
-        for (size_t i = 0; i < held.count; i++) {
+        for (size_t i = 0; i < skipped.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                held.entries[i]->filesystem_path
+                skipped.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < refused.count; i++) {
@@ -953,7 +953,7 @@ static void print_cleanup_results(
     }
 
     if (verdicts->absent_files.count + result->reclaimed_files.count > 0) {
-        workspace_items_t absent = workspace_items_view(&verdicts->absent_files);
+        workspace_items_t absent = workspace_items(&verdicts->absent_files);
 
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned files");
         for (size_t i = 0; i < absent.count; i++) {
@@ -981,7 +981,7 @@ static void print_cleanup_results(
     }
 
     if (verdicts->released_dirs.count > 0) {
-        workspace_items_t items = workspace_items_view(&verdicts->released_dirs);
+        workspace_items_t items = workspace_items(&verdicts->released_dirs);
 
         output_section(out, OUTPUT_VERBOSE, "Released directories");
         for (size_t i = 0; i < items.count; i++) {
@@ -994,14 +994,14 @@ static void print_cleanup_results(
 
     if (verdicts->skipped_dirs.count + verdicts->refused_dirs.count +
         result->skipped_dirs.count > 0) {
-        workspace_items_t held = workspace_items_view(&verdicts->skipped_dirs);
-        workspace_items_t refused = workspace_items_view(&verdicts->refused_dirs);
+        workspace_items_t skipped = workspace_items(&verdicts->skipped_dirs);
+        workspace_items_t refused = workspace_items(&verdicts->refused_dirs);
 
         output_section(out, OUTPUT_VERBOSE, "Skipped orphaned directories");
-        for (size_t i = 0; i < held.count; i++) {
+        for (size_t i = 0; i < skipped.count; i++) {
             output_styled(
                 out, OUTPUT_VERBOSE, "  {yellow}[skipped]{reset} %s\n",
-                held.entries[i]->filesystem_path
+                skipped.entries[i]->filesystem_path
             );
         }
         for (size_t i = 0; i < refused.count; i++) {
@@ -1019,7 +1019,7 @@ static void print_cleanup_results(
     }
 
     if (verdicts->absent_dirs.count + result->reclaimed_dirs.count > 0) {
-        workspace_items_t absent = workspace_items_view(&verdicts->absent_dirs);
+        workspace_items_t absent = workspace_items(&verdicts->absent_dirs);
 
         output_section(out, OUTPUT_VERBOSE, "Reclaimed orphaned directories");
         for (size_t i = 0; i < absent.count; i++) {
@@ -1155,7 +1155,7 @@ static void print_path_list(
     output_color_t color,
     const char *glyph
 ) {
-    workspace_items_t items = workspace_items_view(bucket);
+    workspace_items_t items = workspace_items(bucket);
 
     for (size_t i = 0; i < items.count && i < LIST_LIMIT; i++) {
         output_colored(out, OUTPUT_VERBOSE, color, "    %s", glyph);
@@ -1197,7 +1197,7 @@ static void print_cleanup_preview(
     output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
-    workspace_items_t released = workspace_items_view(&verdicts->released_files);
+    workspace_items_t released = workspace_items(&verdicts->released_files);
     size_t skipped_files = verdicts->skipped_files.count + verdicts->refused_files.count;
     size_t skipped_dirs = verdicts->skipped_dirs.count + verdicts->refused_dirs.count;
 
@@ -1227,7 +1227,7 @@ static void print_cleanup_preview(
          * prunable copy is not inactive — its claim deploys at a new filesystem
          * path — so "(no longer active)" would lie about it. Both classes reach
          * here: a BOUND one by its own verdict, a SHARED one under --force. */
-        workspace_items_t prunable = workspace_items_view(&verdicts->prunable_files);
+        workspace_items_t prunable = workspace_items(&verdicts->prunable_files);
         size_t moved = 0;
         for (size_t i = 0; i < prunable.count; i++) {
             if (prunable.entries[i]->relocation != WORKSPACE_RELOCATION_NONE) moved++;
@@ -1399,7 +1399,7 @@ static void print_cleanup_skips(
     output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
-    workspace_items_t skipped = workspace_items_view(&verdicts->skipped_files);
+    workspace_items_t skipped = workspace_items(&verdicts->skipped_files);
 
     if (skipped.count == 0) {
         return;
@@ -1509,8 +1509,8 @@ static void print_cleanup_refused(
     const cleanup_preflight_result_t *verdicts
 ) {
     const workspace_items_t kinds[] = {
-        workspace_items_view(&verdicts->refused_files),
-        workspace_items_view(&verdicts->refused_dirs),
+        workspace_items(&verdicts->refused_files),
+        workspace_items(&verdicts->refused_dirs),
     };
     size_t total = kinds[0].count + kinds[1].count;
 
@@ -1567,7 +1567,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     error_t *err = NULL;
     scope_t *scope = NULL;
     workspace_t *ws = NULL;
-    deploy_plan_t *deploy_plan = NULL;                 /* Rows borrow from ws; free before ws */
+    deploy_plan_t *deploy_plan = NULL;                 /* Items borrow from ws; free before ws */
     cleanup_plan_t *cleanup_plan = NULL;               /* Items borrow from ws; free before ws */
     deploy_preflight_result_t *deploy_verdicts = NULL; /* Fates borrow items from ws; free after deploy_result */
     cleanup_preflight_result_t *cleanup_verdicts = NULL;
@@ -1797,8 +1797,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Every later consumer — preview, adoption, preflight, the prompt, execution
      * and the skipped report — reads this one object. The workspace already
-     * computed fresh divergence for every active row; the planner gates each
-     * row on scope and classifies it by deploy's work predicate into pending /
+     * computed fresh divergence for every active path; the planner gates each
+     * item on scope and classifies it by deploy's work predicate into pending /
      * clean, or into one of the two skipped buckets (-e, --skip-existing). */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning deployment...\n");
@@ -1812,35 +1812,27 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Per-item trace of the work the planner skipped, by reason: -e for both
      * kinds, --skip-existing for files. output_print gates on the verbosity level,
      * so normal runs pay only the loop cost. */
-    {
-        manifest_rows_t excluded_files = manifest_rows_view(
-            &deploy_plan->files.excluded
-        );
-        manifest_rows_t excluded_dirs = manifest_rows_view(
-            &deploy_plan->directories.excluded
-        );
-        manifest_rows_t existing_files = manifest_rows_view(
-            &deploy_plan->files.skipped_existing
-        );
+    workspace_items_t excluded_files = workspace_items(&deploy_plan->files.excluded);
+    workspace_items_t excluded_dirs = workspace_items(&deploy_plan->directories.excluded);
+    workspace_items_t existing_files = workspace_items(&deploy_plan->files.skipped_existing);
 
-        for (size_t i = 0; i < excluded_files.count; i++) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                excluded_files.entries[i]->filesystem_path
-            );
-        }
-        for (size_t i = 0; i < excluded_dirs.count; i++) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
-                excluded_dirs.entries[i]->filesystem_path
-            );
-        }
-        for (size_t i = 0; i < existing_files.count; i++) {
-            output_print(
-                out, OUTPUT_VERBOSE, "  Skipping (exists): %s\n",
-                existing_files.entries[i]->filesystem_path
-            );
-        }
+    for (size_t i = 0; i < excluded_files.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+            excluded_files.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < excluded_dirs.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Skipping (excluded): %s\n",
+            excluded_dirs.entries[i]->filesystem_path
+        );
+    }
+    for (size_t i = 0; i < existing_files.count; i++) {
+        output_print(
+            out, OUTPUT_VERBOSE, "  Skipping (exists): %s\n",
+            existing_files.entries[i]->filesystem_path
+        );
     }
 
     /* The plan's four counts, each only when it is non-zero — gated the way
@@ -1915,7 +1907,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * emit a per-file line. output_print gates on the verbosity level, so
      * non-verbose runs pay only the loop cost. */
     {
-        workspace_items_t excluded_orphans = workspace_items_view(&cleanup_plan->excluded);
+        workspace_items_t excluded_orphans = workspace_items(&cleanup_plan->excluded);
 
         for (size_t i = 0; i < excluded_orphans.count; i++) {
             output_print(
@@ -1943,7 +1935,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * rows count as matched — the filter found them). Asked after both planners:
      * a path can name an orphan as well as an active row, and finding either is
      * a match. */
-    if (scope_has_paths(scope) && deploy_plan_row_count(deploy_plan) == 0 &&
+    if (scope_has_paths(scope) && deploy_plan_item_count(deploy_plan) == 0 &&
         cleanup_plan_item_count(cleanup_plan) == 0) {
         output_warning(
             out, OUTPUT_NORMAL, "No matching paths found in enabled profiles"
@@ -1956,33 +1948,30 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Collect the pending profile reassignments and count the stale paths, off
      * the plan.
      *
-     * Both are facts the planner read from the item and did not carry — the plan
-     * says what the run does, the item says why — so the planned rows are walked
-     * once more, each paired with its item. The four buckets, both kinds, are
-     * exactly the rows whose record this run's ownership events rewrite: the
-     * clean ones by the adoption and acknowledgement loops below, the pending
-     * ones by the record step behind the deployment. The collection takes two
-     * moments, one per writer: the clean half here, before the loops rewrite
-     * the record the fact is read against, materialized so no print moment re-reads
-     * it; the pending half off the verdicts after preflight, whose fates already
-     * exclude the skips and whose item is this same analysis object — nothing
-     * rewrites a pending row's record before the record step, so nothing is lost
-     * by reading it late, and what the preview names is what the receipt counts.
-     * One array, sized to the four buckets (the verdicts are a subset of the
-     * pending rows), two fills, one print. A row the plan skips (-e,
-     * --skip-existing) is in no bucket and is neither previewed nor counted:
-     * the run will not acknowledge it. The scope is not re-derived — the planner
-     * applied it once, and the buckets are its answer. Collected before the early
-     * exit so a reassignment-only workspace is reported and acknowledged there
-     * too — an empty plan has no pending rows, so the clean half is the whole
-     * of it there.
+     * Both are the item's facts and not the plan's — the plan says what the run
+     * does, the item says why — so the items the plan holds are walked once more.
+     * The four buckets, both kinds, are exactly the items whose record this run's
+     * ownership events rewrite: the clean ones by the adoption and acknowledgement
+     * loops below, the pending ones by the record step behind the deployment.
+     * The collection takes two moments, one per writer: the clean half here,
+     * before the loops rewrite the record the fact is read against, materialized
+     * so no print moment re-reads it; the pending half off the verdicts after
+     * preflight, whose fates already exclude the skips and whose item is this
+     * same analysis object — nothing rewrites a pending row's record before the
+     * record step, so nothing is lost by reading it late, and what the preview
+     * names is what the receipt counts. One array, sized to the four buckets
+     * (the verdicts are a subset of the pending items), two fills, one print. A
+     * row the plan skips (-e, --skip-existing) is in none of the four and is
+     * neither previewed nor counted: the run will not acknowledge it. The scope
+     * is not re-derived — the planner applied it once, and the buckets are its
+     * answer. Collected before the early exit so a reassignment-only workspace
+     * is reported and acknowledged there too — an empty plan has no pending rows,
+     * so the clean half is the whole of it there.
      *
      * A reassignment is the workspace's reading of the record against the row
      * and the look — the record dotta owns names one profile, the row another,
      * and describes the row's node, or a node of its own still standing
-     * (core/workspace.h workspace_reassigned) — and one of the two reasons a
-     * deploy-clean row is among the diverged items at all (the other is the blob
-     * bit, ENCRYPTION, which neither loop here reads). DIVERGENCE_STALE and
+     * (core/workspace.h workspace_reassigned). DIVERGENCE_STALE and
      * DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
      * what dotta last reconciled — the content, another blob or the same blob
      * under another kind (core/workspace.h workspace_stale), or a claim
@@ -1994,16 +1983,16 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     size_t stale_dirs = 0;
     size_t reassigned_count = 0;
     reassignment_t *reassigned = NULL;
-    const struct { manifest_rows_t rows; bool clean; } claimed[] = {
-        { manifest_rows_view(&deploy_plan->files.clean),         true  },
-        { manifest_rows_view(&deploy_plan->files.pending),       false },
-        { manifest_rows_view(&deploy_plan->directories.clean),   true  },
-        { manifest_rows_view(&deploy_plan->directories.pending), false },
+    const struct { workspace_items_t items; bool clean; } claimed[] = {
+        { workspace_items(&deploy_plan->files.clean),         true  },
+        { workspace_items(&deploy_plan->files.pending),       false },
+        { workspace_items(&deploy_plan->directories.clean),   true  },
+        { workspace_items(&deploy_plan->directories.pending), false },
     };
 
     size_t claimed_total = 0;
     for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        claimed_total += claimed[b].rows.count;
+        claimed_total += claimed[b].items.count;
     }
     if (claimed_total > 0) {
         reassigned = arena_alloc(ctx->arena, claimed_total * sizeof(*reassigned));
@@ -2014,11 +2003,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        for (size_t i = 0; i < claimed[b].rows.count; i++) {
-            const workspace_item_t *item = workspace_get_item(
-                ws, claimed[b].rows.entries[i]->filesystem_path
-            );
-            if (!item) continue;   /* no item: nothing stale, no reassignment */
+        for (size_t i = 0; i < claimed[b].items.count; i++) {
+            const workspace_item_t *item = claimed[b].items.entries[i];
 
             if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
                 if (item->item_kind == PATH_KIND_DIRECTORY) stale_dirs++;
@@ -2080,14 +2066,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * the record step below.
      *
      * Division of labor with the earlier flush: the proof of this run's match
-     * comes from the workspace leaving the entry out of the diverged items
-     * (core/workspace.h workspace_diverged: a DEPLOYED item the route calls clean),
-     * and workspace_flush above put the pair that proof rests on where this loop
-     * can read it — a slow-path CMP_EQUAL patched onto the snapshot record, a
-     * recordless clean row's record created by the observation and confirmed in
-     * the same flush. A confirmation rewrites neither deployed_at nor the record's
-     * profile, so both remain valid probes here; DB and in-memory views are kept
-     * coherent by workspace_anchor.
+     * is the item's own verdict, the one that filed it among the clean
+     * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
+     * but the blob's), and workspace_flush above put the pair that proof rests
+     * on where this loop can read it — a slow-path CMP_EQUAL patched onto the
+     * snapshot record, a recordless clean row's record created by the observation
+     * and confirmed in the same flush. A confirmation rewrites neither deployed_at
+     * nor the record's profile, so both remain valid probes here; DB and in-memory
+     * views are kept coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2119,12 +2105,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * gave. */
     size_t adopted_count = 0;
     size_t acknowledged_count = 0;
-    manifest_rows_t adoptable = manifest_rows_view(&deploy_plan->files.clean);
+    workspace_items_t clean_files = workspace_items(&deploy_plan->files.clean);
 
-    for (size_t i = 0; i < adoptable.count; i++) {
-        const manifest_row_t *file = adoptable.entries[i];
+    for (size_t i = 0; i < clean_files.count; i++) {
+        const workspace_item_t *item = clean_files.entries[i];
+        const manifest_row_t *file = item->row;
+        const anchor_t *anchor = item->anchor;
 
-        const anchor_t *anchor = workspace_get_anchor(ws, file->filesystem_path);
         bool adopt = !anchor || anchor->deployed_at == 0 ||
             workspace_compare_confirmed(file, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF;
 
@@ -2145,11 +2132,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * is the predicate's half: a name flip within one profile is bookkeeping
          * the user did not ask for and cannot act on from this screen, and counting
          * it would make the run's line disagree with the preview's, which reads
-         * the same rule off the item. Asked only of what this loop acknowledges
-         * — a record of the row's own kind, adopt having taken every other — so
-         * the look this loop does not hold is never wanted: the predicate asks
-         * one only across kinds. */
-        bool reassigns = acknowledge && workspace_reassigned(file, anchor, FS_OCCUPANT_UNKNOWN);
+         * the same rule off the item. Asked of the item's own look, as the preview
+         * asks it, so an adopted record never reads as one: none, never owned,
+         * or another kind's — a node this clean item's look found gone. */
+        bool reassigns = workspace_reassigned(file, anchor, item->occupant);
 
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's content on every route a
@@ -2214,26 +2200,26 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * another kind of node reaches this loop in no run: the directory standing
      * in its place was observed there after the flush (workspace_observe_retyped),
      * so an owned file record never re-stamps a directory the user made. */
-    manifest_rows_t ackable = manifest_rows_view(&deploy_plan->directories.clean);
+    workspace_items_t clean_dirs = workspace_items(&deploy_plan->directories.clean);
 
-    for (size_t i = 0; i < ackable.count; i++) {
-        const manifest_row_t *dir = ackable.entries[i];
+    for (size_t i = 0; i < clean_dirs.count; i++) {
+        const workspace_item_t *item = clean_dirs.entries[i];
+        const manifest_row_t *dir = item->row;
+        const anchor_t *anchor = item->anchor;
 
         /* A pending handover of this directory: a record dotta owns, of this
          * directory's kind, bound to another row. One of another kind is another
          * node's (core/workspace.h workspace_compare_confirmed): a run has observed
          * the directory in its place already (workspace_observe_retyped), and a
          * preview reads it as the run will. */
-        const anchor_t *anchor = workspace_get_anchor(ws, dir->filesystem_path);
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
             workspace_compare_confirmed(dir, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF &&
             !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
 
         /* The file loop's counter, the same rule and the same reason it is read
-         * here: the write below rewrites the record it reads. A record of this
-         * directory's kind alone reaches it, so no look is wanted either. */
-        bool reassigns = workspace_reassigned(dir, anchor, FS_OCCUPANT_UNKNOWN);
+         * here: the write below rewrites the record it reads. */
+        bool reassigns = workspace_reassigned(dir, anchor, item->occupant);
 
         if (!opts->dry_run) {
             error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
@@ -2353,13 +2339,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Decide deploy's verdicts from the plan, and the skips the run reports
      *
-     * Divergence verdicts and occupants come from workspace_load's analysis (O(1)
-     * index probes); the landing check is filesystem-level. The mode and ownership
-     * every write applies are decided here too — deployable rows alone — so a
-     * strict_ownership failure ends the run before the prompt (the wrap below
-     * is for such real errors; a skip is not one), and the anomalies met on the
-     * way — an owner this system does not know — print as warnings closing the
-     * preview.
+     * Divergence verdicts and occupants come from workspace_load's analysis,
+     * read off the item each planned bucket holds; the landing check is
+     * filesystem-level. The mode and ownership every write applies are decided
+     * here too — deployable rows alone — so a strict_ownership failure ends the
+     * run before the prompt (the wrap below is for such real errors; a skip is
+     * not one), and the anomalies met on the way — an owner this system does
+     * not know — print as warnings closing the preview.
      */
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Running pre-flight checks...\n");
@@ -2635,10 +2621,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * did; on the one run whose warning said nothing ran, they settle
          * unreported. */
         const workspace_items_t decided[] = {
-            workspace_items_view(&cleanup_verdicts->absent_files),
-            workspace_items_view(&cleanup_verdicts->absent_dirs),
-            workspace_items_view(&cleanup_verdicts->released_files),
-            workspace_items_view(&cleanup_verdicts->released_dirs),
+            workspace_items(&cleanup_verdicts->absent_files),
+            workspace_items(&cleanup_verdicts->absent_dirs),
+            workspace_items(&cleanup_verdicts->released_files),
+            workspace_items(&cleanup_verdicts->released_dirs),
         };
         for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
             for (size_t i = 0; i < decided[b].count; i++) {
@@ -2914,8 +2900,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
 cleanup:
     /* Each engine's objects in reverse construction order: the receipt borrows
-     * the fates, and the fates and the plan borrow the workspace's rows and items
-     * — everything before workspace_free. */
+     * the fates, and the fates and the plan borrow the workspace's items —
+     * everything before workspace_free. */
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (deploy_plan) deploy_plan_free(deploy_plan);

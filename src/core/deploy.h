@@ -21,10 +21,10 @@
  *   it, and nothing pretends to: the mechanisms refuse what a verdict no longer
  *   describes (O_NOFOLLOW, EISDIR, EEXIST, ENOTEMPTY) and the refusal is that
  *   row's outcome, not the run's end. The same stance as core/cleanup
- * - One element type per phase: the plan buckets borrowed rows and authors nothing;
- *   preflight authors the fates — a verdict or a skip, carrying everything decided
- *   about the row; execute authors the outcomes — one per verdict, landed or
- *   failed, the one split execute itself takes. A verb inside a landed bucket
+ * - One element type per phase: the plan buckets borrowed items and authors
+ *   nothing; preflight authors the fates — a verdict or a skip, carrying everything
+ *   decided about the row; execute authors the outcomes — one per verdict, landed
+ *   or failed, the one split execute itself takes. A verb inside a landed bucket
  *   is derived from the fate, never stored twice
  * - A dry run is the preview: the caller reads the verdicts and calls no executor,
  *   so there is no dry-run flag beneath the plan
@@ -81,23 +81,21 @@ typedef struct {
  * the receipt's verb for a directory: NONE → created, DIRECTORY → fixed, anything
  * else → replaced (deploy_convergence).
  *
- * The item is the index's answer, looked up once where the fate is decided and
- * filled verbatim on every arm — the planned-absent arms and the skip's included
- * (deploy_skip_t). Its row is the fate's: the view holds one row per path, and
- * an active path's item is that row's own, so the row is read off the item
- * (item->row) and never carried beside it. An item's join facts (row, anchor,
- * profile) are sound on every fate; a row beneath a squatter carries no look at
- * all (core/workspace.h workspace_displaced_t), which is why the fate's own
- * occupant says what the run will find. What a fate declines to consult it declines
- * at the reader, never by blanking the pointer.
+ * The item is the one the fate is taken for, filled verbatim on every arm — the
+ * planned-absent arms and the skip's included (deploy_skip_t). Its row is the
+ * fate's: the view holds one row per path, and an active path's item is that
+ * row's own, so the row is read off the item (item->row) and never carried beside
+ * it. An item's join facts (row, anchor, profile) are sound on every fate; a
+ * row beneath a squatter carries no look at all (core/workspace.h
+ * workspace_displaced_t), which is why the fate's own occupant says what the
+ * run will find. What a fate declines to consult it declines at the reader, never
+ * by blanking the pointer.
  *
  * Never NULL, so a reader dereferences it without a test. A fate is taken for a
  * pending row, a verdict or a skip, or for an ancestor, a verdict alone, and
- * each holds an item by construction: a pending row's is lent by its path, since
- * work is something to say and every such item is among the diverged items
- * (core/workspace.h workspace_get_item, workspace_diverged); an ancestor's is
- * the directory item the pass walks, and every active path has one
- * (workspace_directories).
+ * each holds an item by construction, since every active path has one
+ * (core/workspace.h workspace_active): a pending row's is the item its bucket
+ * holds, an ancestor's the directory item the pass walks (workspace_directories).
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
@@ -345,17 +343,17 @@ typedef enum {
  * the named path where the skip is the squatter's only report — ANCESTOR's alone,
  * and NONE on a row beneath a skipped squatter (deploy_ancestor_class_t).
  *
- * The item is the verdict's: the row's, looked up once where the fate is decided
- * and never NULL (deploy_verdict_t). Whether it holds a look is the row's
- * ancestry's to say, and the item says so itself: a row its ancestry answered
- * for — beneath a squatter that stays, or planned absent and then refused by
- * the row's rung — carries an item nothing looked at, occupant UNKNOWN and no
- * path bit (the displaced class every reader of an item reads, core/workspace.h
- * workspace_displaced_t), never a blanked pointer. So a reader consults the look
- * only where the reason is a sentence about it — a CONTENT skip's route, an
- * UNREADABLE skip's fault: path rungs, asked only where the ancestry did not
- * answer. OWNERSHIP, the row's rung, reads its claim off the row and never the
- * item's look, which a row planned absent does not have.
+ * The item is the verdict's: the one the row's bucket holds, and never NULL
+ * (deploy_verdict_t). Whether it holds a look is the row's ancestry's to say,
+ * and the item says so itself: a row its ancestry answered for — beneath a squatter
+ * that stays, or planned absent and then refused by the row's rung — carries an
+ * item nothing looked at, occupant UNKNOWN and no path bit (the displaced class
+ * every reader of an item reads, core/workspace.h workspace_displaced_t), never
+ * a blanked pointer. So a reader consults the look only where the reason is a
+ * sentence about it — a CONTENT skip's route, an UNREADABLE skip's fault: path
+ * rungs, asked only where the ancestry did not answer. OWNERSHIP, the row's rung,
+ * reads its claim off the row and never the item's look, which a row planned
+ * absent does not have.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.
@@ -410,25 +408,28 @@ typedef struct {
 } deploy_preflight_result_t;
 
 /**
- * One kind's partition of the in-scope active set
+ * One kind's partition of the active items in scope
  *
- * Every active row that passes the scope's profile and path dimensions lands in
- * exactly one bucket, or nowhere: a row that is both clean and excluded enters
- * none (neither work nor adoptable). Out-of-scope rows are invisible.
+ * Every file item and every tracked directory item that passes the scope's profile
+ * and path dimensions lands in exactly one bucket, or nowhere: one that is both
+ * clean and excluded enters none (neither work nor apply's to own). Out-of-scope
+ * items are invisible, and so is an ancestor claim, which is no convergence of
+ * the run's — the plan drops it before scope (deploy_plan_build).
  *
  * Two buckets carry work the run deliberately does not do. They differ by reason,
- * and the reason is the only thing a consumer needs from them — so the bucket a
- * row sits in *is* its reason tag, and a row -e names is reported as excluded
+ * and the reason is the only thing a consumer needs from them — so the bucket
+ * an item sits in *is* its reason tag, and a path -e names is reported as excluded
  * even when --skip-existing would also skip it (a named path is the more explicit
  * intent).
  *
- * Buckets hold borrowed row pointers into the workspace's arena snapshot (workspace
- * lifetime); the plan owns only the bucket buffers. Project a bucket with
- * manifest_rows_view.
+ * Buckets hold borrowed item pointers (workspace lifetime — the items are
+ * arena-allocated, their addresses stable by construction); the plan owns only
+ * the bucket buffers. Project a bucket with workspace_items: its one writer,
+ * deploy.c deploy_classify, keeps the element type the projection reads.
  */
 typedef struct {
     ptr_array_t pending;    /* Need work — deploy_preflight decides how, deploy_execute acts */
-    ptr_array_t clean;      /* In scope, no work — adoption candidates */
+    ptr_array_t clean;      /* In scope, no work — apply's to adopt or acknowledge */
     ptr_array_t excluded;   /* Need work, skipped by -e — reported, never touched */
 
     /* Need work, skipped by --skip-existing: something already occupies the path.
@@ -441,20 +442,21 @@ typedef struct {
 } deploy_partition_t;
 
 /**
- * Deployment plan — deploy's classification of the in-scope active set, one
+ * Deployment plan — deploy's classification of the active items in scope, one
  * partition per kind. Free with deploy_plan_free BEFORE workspace_free (the same
  * ordering rule scope.h documents for scope_free).
  *
- * Both of the workspace's slices arrive ordered by filesystem_path, so a tracked
- * parent precedes its tracked children within directories.pending. Two consumers
- * lean on that: preflight decides a directory row after its ancestors' fates
- * (the ancestry rung reads them), and the execute loop converges a parent before
- * the paths beneath it — which is what lets a replaced directory settle its subtree
- * for the rows that follow (see deploy_preflight, deploy_execute).
+ * Both kinds' items arrive ordered by filesystem_path (workspace_directories,
+ * workspace_files), so a tracked parent precedes its tracked children within
+ * directories.pending. Two consumers lean on that: preflight decides a directory
+ * row after its ancestors' fates (the ancestry rung reads them), and the execute
+ * loop converges a parent before the paths beneath it — which is what lets a
+ * replaced directory settle its subtree for the rows that follow (see
+ * deploy_preflight, deploy_execute).
  */
 typedef struct {
-    deploy_partition_t files;         /* manifest_row_t * (blob types) */
-    deploy_partition_t directories;   /* manifest_row_t * (PATH_TYPE_DIRECTORY) */
+    deploy_partition_t files;         /* workspace_item_t *: the file items */
+    deploy_partition_t directories;   /* workspace_item_t *: the tracked directory items */
 } deploy_plan_t;
 
 /**
@@ -555,12 +557,13 @@ typedef struct {
 /**
  * Build the deployment plan
  *
- * Walks the workspace's directory items and file items once, gating each row on
- * scope_accepts_profile ∧ scope_accepts_path(kind), then classifying it by deploy's
- * work predicate over its item (missing, or diverged in content / mode / ownership
- * / type / stale) and by the reasons a row's work is skipped:
+ * Walks the workspace's directory items and file items once — a directory only
+ * where its profile tracks it, an ancestor claim being no convergence of the
+ * run's — gating each on scope_accepts_profile ∧ scope_accepts_path(kind), then
+ * classifying it by deploy's work predicate (missing, or diverged in content /
+ * mode / ownership / type / stale) and by the reasons its work is skipped:
  * scope_is_excluded(kind), then skip_existing. Every item was analyzed — neither
- * kind is a load's to decline (workspace_load) — so a clean one is a row the
+ * kind is a load's to decline (workspace_load) — so a clean one is a path the
  * load looked at and found agreeing.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
@@ -608,18 +611,18 @@ static inline bool deploy_plan_is_empty(const deploy_plan_t *plan) {
 }
 
 /**
- * How many rows the plan classified — both kinds, every bucket
+ * How many items the plan classified — both kinds, every bucket
  *
  * Distinct from deploy_plan_is_empty, which counts only *work*: a plan of nothing
- * but clean rows is empty there and non-zero here. Apply reads this to tell a
+ * but clean items is empty there and non-zero here. Apply reads this to tell a
  * path filter that named nothing dotta manages from one whose paths are all
  * converged or skipped already.
  *
- * The bucket set lives here so a consumer never has to enumerate it. A row that
- * is both clean and excluded lands in no bucket at all (see deploy_partition_t),
- * so a scope of only such rows counts zero.
+ * The bucket set lives here so a consumer never has to enumerate it. An item
+ * that is both clean and excluded lands in no bucket at all, nor does an ancestor
+ * claim (see deploy_partition_t), so a scope of only such items counts zero.
  */
-static inline size_t deploy_plan_row_count(const deploy_plan_t *plan) {
+static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
     const deploy_partition_t *kinds[] = { &plan->files, &plan->directories };
     size_t total = 0;
 

@@ -251,34 +251,13 @@ static inline bool manifest_is_derived(const manifest_row_t *row) {
  *
  * Structural type — parallels libgit2's git_strarray and base/array's
  * string_array_t. The producer's signature dictates lifetime via the arena (or
- * other allocator) that backs the rows.
- *
- * Lifetime examples:
- *   manifest_rows(view)             → backed by the view's arena (the command's).
- *   apply's local divergent buffer  → backed by a ptr_array_t on the heap;
- *                                     valid for the caller's stack scope.
+ * other allocator) that backs the rows: manifest_rows(view), the one producer,
+ * lends the view's, backed by the view's arena (the command's).
  */
 typedef struct {
     const manifest_row_t *const *entries;
     size_t count;
 } manifest_rows_t;
-
-/**
- * Project a ptr_array_t bucket of borrowed rows as a typed slice
- *
- * Buckets filled by ptr_array_push(&bucket, row) hold `void *`; the cast layers
- * const onto both pointer levels (T ** → const T *const *, the same rule
- * workspace_files relies on). The view aliases the bucket's storage and is valid
- * for the bucket's lifetime — deploy plans and results, and any other producer
- * that accumulates rows, project through this so every consumer reads one carrier
- * shape.
- */
-static inline manifest_rows_t manifest_rows_view(const ptr_array_t *bucket) {
-    return (manifest_rows_t){
-        .entries = (const manifest_row_t *const *) bucket->items,
-        .count = bucket->count,
-    };
-}
 
 /**
  * Convert a path type to its git filemode

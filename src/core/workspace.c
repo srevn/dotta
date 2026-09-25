@@ -248,8 +248,7 @@ static workspace_item_t *find_item(
  * The active item at a path, either kind: the directory items, then the file items
  *
  * Readers: the partition, pairing each record with the item at its path;
- * workspace_anchor, finding the item that holds the record it advances or makes;
- * workspace_get_anchor.
+ * workspace_anchor, finding the item that holds the record it advances or makes.
  */
 static workspace_item_t *find_active(const workspace_t *ws, const char *path) {
     workspace_item_t *item = find_item(ws->active, ws->dir_count, path);
@@ -3397,7 +3396,7 @@ workspace_items_t workspace_diverged(const workspace_t *ws) {
         return (workspace_items_t) { 0 };
     }
 
-    return workspace_items_view(&ws->diverged);
+    return workspace_items(&ws->diverged);
 }
 
 /**
@@ -3484,27 +3483,6 @@ const workspace_squatted_t *workspace_squatted_ancestor(
      * (the reach rule, workspace_displaced_t), and this probe's askers need the
      * squatter itself, which no item carries. */
     return squatted_ancestor(ws, path, false);
-}
-
-/**
- * Look up the record dotta keeps of a path
- *
- * The record the item at the path holds — an active item's, else an orphan's,
- * each found by its array's search — which is the live one: the writers advance
- * it in place, or point the item at a record the path gains.
- */
-const anchor_t *workspace_get_anchor(
-    const workspace_t *ws,
-    const char *filesystem_path
-) {
-    if (!ws || !filesystem_path) return NULL;
-
-    const workspace_item_t *item = find_active(ws, filesystem_path);
-    if (!item) {
-        item = find_item(ws->orphans, ws->orphan_count, filesystem_path);
-    }
-
-    return item ? item->anchor : NULL;
 }
 
 /**
@@ -4193,10 +4171,10 @@ error_t *workspace_flush(workspace_t *ws) {
          * the INSERT landed or met a row another writer made since the load:
          * never that row, which is state_observe's rule and its reason. The item
          * holds it from here on, the live record every later reader in the run
-         * reads (workspace_get_anchor, the adoption loop's ownership test). A
-         * path whose item holds a record is owed none, as the statement's DO
-         * NOTHING leaves one standing: observation is idempotent on both sides.
-         * What reads a record after a read command's flush asks it about ownership
+         * reads off the item (cmds/apply.c cmd_apply's adoption test). A path
+         * whose item holds a record is owed none, as the statement's DO NOTHING
+         * leaves one standing: observation is idempotent on both sides. What
+         * reads a record after a read command's flush asks it about ownership
          * alone — status's header, diff's reassignment, a preview's adoption
          * test — and a record never owned answers as none does; a run of apply
          * cannot meet an ignored INSERT at all, its load and its flush sharing

@@ -433,7 +433,7 @@ error_t *cleanup_preflight(
     /* One verdict per file, read off the item, then one probe for the ones it
      * cleared. An absent file joins neither the prune count nor the fate set:
      * no filesystem effect to preview, and no walk meets it. */
-    workspace_items_t files = workspace_items_view(&plan->files);
+    workspace_items_t files = workspace_items(&plan->files);
 
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
@@ -482,7 +482,7 @@ error_t *cleanup_preflight(
      * its skipped ones skipped, its released ones permanent.
      *
      * The buckets fill in walk order, which is prune order: deepest first. */
-    workspace_items_t dirs = workspace_items_view(&plan->directories);
+    workspace_items_t dirs = workspace_items(&plan->directories);
 
     for (size_t i = 0; i < dirs.count; i++) {
         const workspace_item_t *item = dirs.entries[i];
@@ -668,7 +668,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 1: Prune the orphaned files the verdicts cleared */
-    workspace_items_t files = workspace_items_view(&verdicts->prunable_files);
+    workspace_items_t files = workspace_items(&verdicts->prunable_files);
 
     for (size_t i = 0; i < files.count; i++) {
         const workspace_item_t *item = files.entries[i];
@@ -703,7 +703,7 @@ error_t *cleanup_execute(
     }
 
     /* Step 2: Prune the orphaned directories those files emptied */
-    workspace_items_t dirs = workspace_items_view(&verdicts->prunable_dirs);
+    workspace_items_t dirs = workspace_items(&verdicts->prunable_dirs);
 
     for (size_t i = 0; i < dirs.count; i++) {
         const workspace_item_t *item = dirs.entries[i];

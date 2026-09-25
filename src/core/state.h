@@ -429,10 +429,11 @@ error_t *state_open(git_repository *repo, state_t **out);
  * saves nothing and succeeds.
  *
  * A command whose writes have two lifetimes saves at the boundary between them
- * and begins again (state_begin): apply commits what the load established —
- * observations, confirmations, adoptions — before the first exit it can take
- * without executing, then holds a second transaction for the record of what it
- * executed. Each save is one lifetime's commit.
+ * and begins again (state_begin): apply commits the present — the observations
+ * and confirmations its load owes, the adoptions and acknowledgements of the
+ * rows it found clean — before the first exit it can take without executing,
+ * then holds a second transaction for the record of what it executed. Each save
+ * is one lifetime's commit.
  *
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success

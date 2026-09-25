@@ -1669,12 +1669,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* What the load owes the record — its observations, its confirmations, the
      * voids of orders the view took back (core/workspace.h workspace_flush). A
-     * run's land in its dispatch transaction — committed atomically with deployment
-     * changes; a preview holds none, so the flush takes and commits a scoped
-     * one of its own at its first write, exactly as it does for status, diff,
-     * sync and update (state_locked, in core/state.h). Each lands on the record
-     * the path's item holds, so downstream readers in this run see DB and memory
-     * agreeing. */
+     * run's land in its dispatch transaction, which the checkpoint below commits
+     * with the rest of the present; a preview holds none, so the flush takes
+     * and commits a scoped one of its own at its first write, exactly as it does
+     * for status, diff, sync and update (state_locked, in core/state.h). Each
+     * lands on the record the path's item holds, so downstream readers in this
+     * run see DB and memory agreeing. */
     err = workspace_flush(ws);
     if (err) {
         /* A run's flush writes into the transaction the run will commit, so a
@@ -2152,38 +2152,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 (anchor && !workspace_stale(file, anchor->type, &anchor->blob_oid))
                 ? &anchor->stat : NULL;
 
-            error_t *anchor_err = workspace_anchor(ws, item, stat, now);
-            if (anchor_err) {
-                /* Non-fatal: file is correct on disk; next status's slow-path
-                 * CMP_EQUAL re-confirms the record, and the row will be re-adopted
-                 * (or the reassignment re-acknowledged) on the next apply. */
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to anchor %s: %s",
-                    file->filesystem_path, error_message(anchor_err)
-                );
-                error_free(anchor_err);
-                continue;  /* Failed writes don't count — preview still accurate */
+            err = workspace_anchor(ws, item, stat, now);
+            if (err) {
+                /* The present lands whole or ends the run, as the flush's writes
+                 * do: the store refused this write before anything on disk moved,
+                 * and a refusal SQLite answers by ending the transaction has
+                 * taken the load's writes with it, so a write past it would land
+                 * on its own. */
+                err = error_wrap(err, "Failed to anchor %s", file->filesystem_path);
+                goto cleanup;
             }
         }
         if (adopt) adopted_count++;
         else if (reassigns) acknowledged_count++;
-    }
-
-    /* What the run's reading of the present has to say, in one block: the rows
-     * it claimed, the files Git has moved under it, the work its flags withheld.
-     * One boundary above the three, asked here and paid by whichever of them is
-     * the first to print — a block that says nothing leaves the debt standing
-     * for the next one (base/output.h). At normal nothing stands above it yet,
-     * so the boundary is refused and the block opens the report. */
-    output_gap(out, OUTPUT_NORMAL);
-
-    if (adopted_count > 0) {
-        output_styled(
-            out, OUTPUT_NORMAL,
-            opts->dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
-                          : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
-            adopted_count, adopted_count == 1 ? "" : "s"
-        );
     }
 
     /* The directory half of the acknowledgement — and only that half. A clean
@@ -2222,19 +2203,62 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool reassigns = workspace_reassigned(dir, anchor, item->occupant);
 
         if (!opts->dry_run) {
-            error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
-            if (anchor_err) {
-                /* Non-fatal, the file loop's stance: the reassignment is
-                 * re-acknowledged on the next apply. */
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to anchor %s: %s",
-                    dir->filesystem_path, error_message(anchor_err)
-                );
-                error_free(anchor_err);
-                continue;  /* Failed writes don't count — preview still accurate */
+            err = workspace_anchor(ws, item, NULL, now);
+            if (err) {
+                /* The file loop's stance: the present lands whole or ends the run */
+                err = error_wrap(err, "Failed to anchor %s", dir->filesystem_path);
+                goto cleanup;
             }
         }
         if (reassigns) acknowledged_count++;
+    }
+
+    /* Checkpoint: the run's reading of the present is complete, and recorded
+     *
+     * Everything written so far is a fact about the load — the flush's observations
+     * and confirmations, the directories observed where a record of another kind
+     * of node stood, and the ownership events above, which claim rows the analysis
+     * found clean — and it stays a fact whatever the rest of the run does. Each
+     * landed, or the run ended at the write the store refused, with nothing on
+     * disk moved. What follows can end without writing anything else: the
+     * nothing-to-do exit below, a strict_ownership error, a hook that refuses,
+     * a declined prompt. The dispatch transaction is committed here so that none
+     * of those exits rolls the present back, and before a line of it is said:
+     * "Adopted N files" is said below once the record says it too, or the next
+     * run adopts them again and the next status reads a path the load observed
+     * as never seen. The commit is itself a write the store can refuse — a full
+     * disk meets it here, where the transaction's pages reach the write-ahead
+     * log — and one it refuses ends the run with nothing of the present said. A
+     * preview has no dispatch transaction to commit — its flush took and committed
+     * its own, and this save closes nothing — but the reading is as true as a
+     * run's and is persisted the same way, which is what status does with it too.
+     *
+     * The record of the run's own effects — the anchors the deployment writes,
+     * the records cleanup retires — is the run's second transaction, begun past
+     * the early exit and committed at the end. */
+    err = state_save(state);
+    if (err) {
+        err = error_wrap(err, "Failed to commit state changes");
+        goto cleanup;
+    }
+
+    /* What the run's reading of the present has to say, in one block: the rows
+     * it claimed, the files Git has moved under it, the work its flags withheld
+     * — said once the checkpoint above has committed it, so no line of it stands
+     * above a write the store refused. One boundary above the three, asked here
+     * and paid by whichever of them is the first to print — a block that says
+     * nothing leaves the debt standing for the next one (base/output.h). At normal
+     * nothing stands above it yet, so the boundary is refused and the block opens
+     * the report. */
+    output_gap(out, OUTPUT_NORMAL);
+
+    if (adopted_count > 0) {
+        output_styled(
+            out, OUTPUT_NORMAL,
+            opts->dry_run ? "Would adopt {yellow}%zu{reset} file%s\n"
+                          : "Adopted {yellow}%zu{reset} file%s (now tracked)\n",
+            adopted_count, adopted_count == 1 ? "" : "s"
+        );
     }
 
     /* How many planned paths Git moved past what dotta last reconciled — a file's
@@ -2259,31 +2283,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
         deploy_plan->files.skipped_existing.count;
 
-    /* Checkpoint: the run's reading of the present is complete, and recorded
-     *
-     * Everything written so far is a fact about the load — the flush's observations
-     * and confirmations, the directories observed where a record of another kind
-     * of node stood, and the ownership events above, which claim rows the analysis
-     * found clean — and it stays a fact whatever the rest of the run does. What
-     * follows can end without writing anything else: the nothing-to-do exit below,
-     * a strict_ownership error, a hook that refuses, a declined prompt. The
-     * dispatch transaction is committed here so that none of those exits rolls
-     * the present back — "Adopted N files" has already been said, and the record
-     * must say it too, or the next run adopts them again and the next status
-     * reads a path the load observed as never seen. A preview has no dispatch
-     * transaction to commit — its flush took and committed its own, and this
-     * save closes nothing — but the reading is as true as a run's and is persisted
-     * the same way, which is what status does with it too.
-     *
-     * The record of the run's own effects — the anchors the deployment writes,
-     * the records cleanup retires — is the run's second transaction, begun past
-     * the early exit and committed at the end. */
-    err = state_save(state);
-    if (err) {
-        err = error_wrap(err, "Failed to commit state changes");
-        goto cleanup;
-    }
-
     /* Nothing pends on the filesystem: report the bookkeeping (if any) and leave.
      * Privilege checks, preflight, hooks and the prompt are for runs that touch
      * disk — pure state bookkeeping skips them. Nothing is written past the
@@ -2299,7 +2298,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     "Would acknowledge %zu profile reassignment%s",
                     reassigned_count, reassigned_count == 1 ? "" : "s"
                 );
-            } else if (acknowledged_count > 0) {
+            } else {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",

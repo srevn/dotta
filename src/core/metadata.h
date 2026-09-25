@@ -34,12 +34,12 @@
  * - encrypted: a cache of the blob's own bytes, stamped at the write boundary
  *
  * Two kinds of directory claim, one field between them. "tracked" says the profile
- * manages the directory itself: a walk went into it, so the directory exists
- * because the profile says so, its attributes are the profile's to enforce and
- * its contents the profile's to scan. Without the field the item is only the
- * attributes to give the path if dotta has to create it — an ancestor claim,
- * derived from the chain above a managed path, binding dotta's own creation of
- * that path and nothing else.
+ * tracks the directory itself: a walk went into it, so the directory exists because
+ * the profile says so, its attributes are the profile's to enforce and its contents
+ * the profile's to scan. Without the field the item is only the attributes to
+ * give the path if dotta has to create it — an ancestor claim, derived from the
+ * chain above a tracked path, binding dotta's own creation of that path and nothing
+ * else.
  *
  * Nothing infers a tracked claim away. It leaves the sheet where a verb takes
  * it — `remove` of the directory, or `update` committing the deletion of a
@@ -119,7 +119,7 @@
  *
  * home/.config is an ancestor claim: dotta creates it 0700 if it has to create
  * it at all, and leaves it exactly as it finds it otherwise. home/.config/nvim
- * was walked into, so the profile manages it.
+ * was walked into, so the profile tracks it.
  */
 
 #ifndef DOTTA_METADATA_H
@@ -175,7 +175,7 @@
  * Absence is a value: mode MODE_UNCLAIMED, owner/group NULL, and a tracked that
  * is false — an ancestor claim's whole spelling. The two flags are one kind's
  * each, encrypted the cache of a blob's own bytes and tracked the claim that
- * the profile manages a directory, and each is false for the other kind by
+ * the profile tracks a directory, and each is false for the other kind by
  * construction at both boundaries (the factories and the parser).
  *
  * Every field is read off the item metadata_lookup hands back; the collection
@@ -204,7 +204,7 @@ typedef struct {
     char *owner;        /* Claimed owner, or NULL */
     char *group;        /* Claimed group, or NULL */
     bool encrypted;     /* The blob's ciphertext stamp (false for DIRECTORY) */
-    bool tracked;       /* The profile manages the directory (false for FILE) */
+    bool tracked;       /* The profile tracks the directory (false for FILE) */
 } metadata_item_t;
 
 /**
@@ -256,7 +256,7 @@ error_t *metadata_item_create_file(
  *
  * The class is the author's to answer, which is why it is a parameter and not a
  * default: a walk that entered the directory says true, a derivation of the chain
- * above a managed path says false, and nothing else authors a directory claim.
+ * above a tracked path says false, and nothing else authors a directory claim.
  *
  * Accepts MODE_UNCLAIMED for the parse path (a hand-sparse document may omit
  * the mode); the capture path always claims one from its stat.
@@ -264,7 +264,7 @@ error_t *metadata_item_create_file(
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
  * @param mode Claimed permission bits (e.g., 0700, 0755), or MODE_UNCLAIMED
- * @param tracked The profile manages the directory itself
+ * @param tracked The profile tracks the directory itself
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
@@ -419,7 +419,7 @@ bool metadata_remove_item(
  * any attributes, and it is retracted where it was made (the module header) —
  * so the pass reads one field and asks one question of what is left:
  *
- *   Is anything managed beneath it? The profile's managed set is the index's
+ *   Is anything tracked beneath it? The profile's tracked set is the index's
  *   paths and the sheet's own tracked claims together. The index names every
  *   path a tree can hold and is the sole authority for those — deliberately not
  *   the metadata items, which are sparse by design (a symlink carries an item
@@ -548,7 +548,7 @@ error_t *metadata_capture_from_file(
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
  * @param st Directory stat data (must not be NULL)
- * @param tracked The profile manages the directory itself
+ * @param tracked The profile tracks the directory itself
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
@@ -564,7 +564,7 @@ error_t *metadata_capture_from_directory(
  *
  * The sheet's completeness rule for the chain. Every component between the mount
  * root and `storage_path` that is a real directory right now claims the attributes
- * it has, as an ancestor claim: the profile does not manage the directory, it
+ * it has, as an ancestor claim: the profile does not track the directory, it
  * passes through it, so `tracked` is absent and the claim binds only dotta's
  * own creation of that path (core/deploy's ancestors pass). The mount root itself
  * is never a rung — the climb's rungs are the separators in the tail, and a word

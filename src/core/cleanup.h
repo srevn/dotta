@@ -62,7 +62,7 @@
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
- *                view (the managed paths beneath a directory) and the items (an
+ *                view (the active paths beneath a directory) and the items (an
  *                entry outside the plan) for a directory's remainder
  * - scope.h:     the three filter dimensions
  * - filesystem.h: the emptiness walk, the removals, execute's probe
@@ -368,7 +368,7 @@ cleanup_verdict_t cleanup_verdict(const workspace_item_t *item, bool force);
  *               fate
  *   permanent   an entry this run releases (released_files, released_dirs
  *               beneath); an orphan the plan does not reach whose state is
- *               RELEASED; a managed path — the view has a row beneath the
+ *               RELEASED; an active path — the view has a row beneath the
  *               directory, on disk already or not, so the directory is the ancestor
  *               of an enabled row, one ensure_parents would make anyway; anything
  *               else — the user's
@@ -418,7 +418,7 @@ typedef struct {
  * Files: cleanup_verdict from the item — every field it reads was written at
  * workspace load — then, for a prunable one, the parent's reach (one fs_eaccess).
  * Directories: cleanup_verdict from the item likewise (a released or unverified
- * directory is left alone, unprobed), then for each candidate the view (a managed
+ * directory is left alone, unprobed), then for each candidate the view (an active
  * path beneath it) and one readdir, against the files above, the directories
  * already decided beneath them, and — for an entry outside the plan — its workspace
  * item; then, for one nothing but gone entries is left in, the parent's reach.
@@ -428,7 +428,7 @@ typedef struct {
  * READ-ONLY: modifies neither the filesystem, the state database nor Git.
  *
  * @param ws Workspace the plan was built from (must not be NULL; the view answers
- *        for the managed paths beneath a directory, the items for the entries
+ *        for the active paths beneath a directory, the items for the entries
  *        outside the plan)
  * @param plan Cleanup plan (must not be NULL)
  * @param force --force: prune what would be skipped too; never a released file,

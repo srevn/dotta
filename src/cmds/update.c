@@ -626,7 +626,7 @@ static error_t *update_profile(
                 }
 
                 /* Capture directory metadata. A re-derivation replaces the
-                 * attributes and never the class: whether the profile manages
+                 * attributes and never the class: whether the profile tracks
                  * this directory or only passes through it was decided by the
                  * walk that authored the claim, and an update is not that walk.
                  * The standing item is the authority for it — this is the profile's
@@ -757,7 +757,7 @@ static error_t *update_profile(
      *
      * Catches the implicit-orphaning case (the DELETED branch above handles
      * explicit removals): file removals can leave a parent directory's metadata
-     * entry with nothing managed beneath it. That set is judged against the stage's
+     * entry with nothing tracked beneath it. That set is judged against the stage's
      * index (deletions removed, captures put by the walk) for every path a tree
      * can hold — never against metadata items, which omit unelevated symlinks —
      * and against the sheet's own tracked claims for the one path it cannot, an
@@ -1292,12 +1292,12 @@ static error_t *update_display_preview(
                 }
 
                 /* Extract tags using shared helper */
-                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                 size_t tag_count;
                 output_color_t color;
                 char base_metadata[256];
 
-                if (!workspace_item_extract_display_info(
+                if (!workspace_item_tags(
                     item, tags, &tag_count, &color,
                     base_metadata, sizeof(base_metadata)
                     )) {
@@ -1329,12 +1329,12 @@ static error_t *update_display_preview(
                 if (item->item_kind == PATH_KIND_FILE &&
                     item->state == WORKSPACE_STATE_UNTRACKED
                 ) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         item, tags, &tag_count, &color,
                         metadata, sizeof(metadata)
                         )) {
@@ -1368,12 +1368,12 @@ static error_t *update_display_preview(
                     continue;
                 }
 
-                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                 size_t tag_count;
                 output_color_t color;
                 char base_metadata[256];
 
-                if (!workspace_item_extract_display_info(
+                if (!workspace_item_tags(
                     item, tags, &tag_count, &color,
                     base_metadata, sizeof(base_metadata)
                     )) {
@@ -1429,12 +1429,12 @@ static error_t *update_display_preview(
                 }
 
                 /* Extract tags and metadata using helper */
-                const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                 size_t tag_count;
                 output_color_t color;
                 char base_metadata[256];
 
-                if (workspace_item_extract_display_info(
+                if (workspace_item_tags(
                     item, tags, &tag_count, &color,
                     base_metadata, sizeof(base_metadata)
                     )) {
@@ -1547,8 +1547,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set, the CLI filter's bound.
-     *   scope_active  — update operation face (hook context string).
+     *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
+     *   scope_profiles — update operation face (hook context string).
+     *
      *   scope_paths / scope_is_excluded — per-item gates in filter_items_for_update
      */
     scope_inputs_t scope_inputs = {
@@ -1839,7 +1840,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * nothing), before the prompt: apply's order. The preview's verdicts predate
      * the pre-hook, but the capture stores execute-time bytes — a pre-hook that
      * edits a candidate still commits what it wrote. */
-    profiles_str = string_array_join(scope_active(scope), " ");
+    profiles_str = string_array_join(scope_profiles(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;

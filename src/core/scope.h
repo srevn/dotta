@@ -15,30 +15,30 @@
  *
  * Vocabulary
  * ----------
- *   enabled — persistent enabled profile names, always non-NULL, may be empty.
- *             The same set the dispatcher built the view over (ctx->run.manifest),
- *             validated against the branches — the set the CLI filter is checked
- *             against, and the one the receipts attribute to (sync). The workspace
- *             does not read it: its profile set is the view's own
- *             (manifest_profiles), the same names by construction.
- *   active  — display/hook face of the scope. Equal to the CLI filter
- *             names when one was given, else equal to enabled. "What the user
- *             asked for, not the underlying world."
- *   paths   — the CLI-derived path filter (NULL when no positional args), one
- *             matcher over the two keys a managed path has: its filesystem path
- *             and its storage path (infra/pathspec). Exposed for diff, which
- *             selects a commit range delta by delta, compares a commit's view
- *             under it, and answers the filter's coverage over the view each
- *             arm compares (pathspec_entry_at, pathspec_entry_matches_at), and
- *             for apply's count line (pathspec_count); none of them has a profile
- *             or exclude semantics to honor. In-workspace sites should prefer
- *             scope_accepts_path.
+ *   enabled  — persistent enabled profile names, always non-NULL, may be empty.
+ *              The same set the dispatcher built the view over (ctx->run.manifest),
+ *              validated against the branches — the set the CLI filter is checked
+ *              against, and the one the receipts attribute to (sync). The workspace
+ *              does not read it: its profile set is the view's own
+ *              (manifest_profiles), the same names by construction.
+ *   profiles — display/hook face of the scope. Equal to the CLI filter names
+ *              when one was given, else equal to enabled. "What the user asked
+ *              for, not the underlying world."
+ *   paths    — the CLI-derived path filter (NULL when no positional args), one
+ *              matcher over the two keys a managed path has: its filesystem path
+ *              and its storage path (infra/pathspec). Exposed for diff, which
+ *              selects a commit range delta by delta, compares a commit's view
+ *              under it, and answers the filter's coverage over the view each
+ *              arm compares (pathspec_entry_at, pathspec_entry_matches_at), and
+ *              for apply's count line (pathspec_count); none of them has a profile
+ *              or exclude semantics to honor. In-workspace sites should prefer
+ *              scope_accepts_path.
  *
  * The CRITICAL invariant previously expressed as prose comments in apply.c /
- * sync.c ("use enabled, not active, for workspace_load") is enforced by
- * construction: the workspace never takes a profile list — the view it joins is
- * built over the state's rows, and its profile set is the view's. A CLI filter
- * narrows what a command touches, never what it loads.
+ * sync.c — load the enabled set, never the filter — is enforced by construction:
+ * the workspace never takes a profile list — the view it joins is built over
+ * the state's rows, and its profile set is the view's. A CLI filter narrows what
+ * a command touches, never what it loads.
  *
  * Lifetime and ownership
  * ----------------------
@@ -158,7 +158,7 @@ void scope_free(scope_t *s);
 const string_array_t *scope_enabled(const scope_t *s);
 
 /**
- * Active set — display and hook face of the scope.
+ * The scope's profiles — its display and hook face.
  *
  * Equal to the CLI filter names when -p was given, else equal to scope_enabled(s).
  * Use this for hook context strings ("what the user asked for") and for verbose
@@ -166,7 +166,7 @@ const string_array_t *scope_enabled(const scope_t *s);
  *
  * Always non-NULL. Borrowed; valid until scope_free.
  */
-const string_array_t *scope_active(const scope_t *s);
+const string_array_t *scope_profiles(const scope_t *s);
 
 /* -------------------------------------------------------------------- */
 /* Raw-dimension accessors                                              */

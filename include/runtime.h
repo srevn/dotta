@@ -281,7 +281,7 @@ typedef enum dotta_crypto_mode {
  * manifest
  * --------
  * The view — every enabled profile at HEAD, precedence resolved, one row per
- * managed path (`core/manifest.h`) — `manifest_build` over the state's enabled
+ * active path (`core/manifest.h`) — `manifest_build` over the state's enabled
  * set. Requires `state`. Borrowed by the handler, released by the dispatcher.
  *
  * Who declares it: the commands whose subject is the view — the workspace commands

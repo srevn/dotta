@@ -138,7 +138,7 @@ error_t *encryption_policy_should_encrypt(
  * AND the path matches an active auto-encrypt rule.
  *
  * Used by workspace analysis to flag DIVERGENCE_ENCRYPTION (core/workspace.h)
- * when a managed file matches an auto-encrypt pattern but is stored plaintext
+ * when an active file matches an auto-encrypt pattern but is stored plaintext
  * in Git.
  *
  * Only content-bearing kinds (FILE, EXECUTABLE) can violate. A symlink's blob

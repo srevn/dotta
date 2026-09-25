@@ -25,7 +25,7 @@
  * kinds of claim bind. A rung the profile only passes through, claimed at 0700
  * by the chain above a captured leaf, exports at 0700 — the same fidelity a
  * deployment gives it, reached with no class test anywhere in this file. The
- * distinction core/deploy must draw — converge what the profile manages, only
+ * distinction core/deploy must draw — converge what the profile tracks, only
  * create what it passes through — has no counterpart where nothing pre-exists.
  *
  * Two sheet policies, one per key, and the split is the view's rather than this

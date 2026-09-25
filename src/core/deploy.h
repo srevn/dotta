@@ -84,7 +84,7 @@ typedef struct {
  * The item is the index's answer, looked up once where the fate is decided and
  * filled verbatim on every arm — the planned-absent arms and the skip's included
  * (deploy_skip_t). Its row is the fate's: the view holds one row per path, and
- * a managed path's item is that row's own, so the row is read off the item
+ * an active path's item is that row's own, so the row is read off the item
  * (item->row) and never carried beside it. An item's join facts (row, anchor,
  * profile) are sound on every fate; a row beneath a squatter carries no look at
  * all (core/workspace.h workspace_displaced_t), which is why the fate's own
@@ -93,12 +93,11 @@ typedef struct {
  *
  * Never NULL, so a reader dereferences it without a test. A fate is taken for a
  * pending row, a verdict or a skip, or for an ancestor, a verdict alone, and
- * each holds an item by construction: a pending row because its item is what
- * put it in the bucket (deploy_needs_work(NULL) is false); an ancestor because
- * the pass admits one only where its item read absent, or where the ancestry
- * rung planned it absent — a row beneath a squatter, and the load gives an item
- * to every path it declined to look at, asked with the same probe the rung asks
- * (check_ancestry, core/workspace.h workspace_displaced_t).
+ * each holds an item by construction: a pending row's is lent by its path, since
+ * work is something to say and every such item is among the diverged items
+ * (core/workspace.h workspace_get_item, workspace_diverged); an ancestor's is
+ * the directory item the pass walks, and every active path has one
+ * (workspace_directories).
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
@@ -556,14 +555,13 @@ typedef struct {
 /**
  * Build the deployment plan
  *
- * Walks the workspace's active file and directory slices once, gating each row
- * on scope_accepts_profile ∧ scope_accepts_path(kind), then classifying it by
- * deploy's work predicate (missing, or diverged in content / mode / ownership /
- * type / encryption / stale) and by the reasons a row's work is skipped:
- * scope_is_excluded(kind), then skip_existing.
- *
- * Requires a workspace loaded with file AND directory analysis: the plan is derived
- * from the divergence index, and a kind whose analysis did not run plans as clean.
+ * Walks the workspace's directory items and file items once, gating each row on
+ * scope_accepts_profile ∧ scope_accepts_path(kind), then classifying it by deploy's
+ * work predicate over its item (missing, or diverged in content / mode / ownership
+ * / type / stale) and by the reasons a row's work is skipped:
+ * scope_is_excluded(kind), then skip_existing. Every item was analyzed — neither
+ * kind is a load's to decline (workspace_load) — so a clean one is a row the
+ * load looked at and found agreeing.
  *
  * A path beneath a squatted directory needs no rule of the plan's own: the
  * workspace looked at nothing there, so the row's item carries the displaced

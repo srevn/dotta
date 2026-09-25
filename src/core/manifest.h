@@ -2,7 +2,7 @@
  * manifest.h - The precedence oracle
  *
  * The manifest is the precedence-resolved view of every enabled profile at HEAD:
- * one row per managed filesystem path, both kinds, the winning profile's claim
+ * one row per active filesystem path, both kinds, the winning profile's claim
  * already applied (manifest_row_t, below). It is computed from Git at every load
  * and never stored — Git × the state's rows × this machine's $HOME → rows is a
  * pure function; the enabled set and each profile's target are read from the
@@ -115,9 +115,9 @@ typedef struct state state_t;
 typedef struct anchor anchor_t;
 
 /**
- * Manifest row — what should stand at a managed path, and from whom
+ * Manifest row — what should stand at an active path, and from whom
  *
- * A row in the view means the path is managed: the enabled set, in precedence
+ * A row in the view means the path is active: the enabled set, in precedence
  * order, names exactly one profile for it, and that profile's tree (or, for a
  * directory, its metadata.json) says what the path is. Every field is Git-derived;
  * nothing here records what dotta did — the record dotta keeps of a path (anchor_t,
@@ -136,13 +136,13 @@ typedef struct anchor anchor_t;
  * Two kinds of directory row, and `tracked` is the whole difference between them.
  * Every directory row asserts that a path must exist and says what it looks like
  * where dotta has to make it; `tracked` asserts on top of that which paths the
- * profile manages itself — its attributes the profile's to enforce, its contents
+ * profile tracks itself — its attributes the profile's to enforce, its contents
  * the profile's to scan. That is the decision procedure every consumer follows:
  * a question about the path existing is asked of both classes (deploy's ancestors
  * pass, the displacement probe, cleanup's permanence rule), a question about
- * managing it of the tracked ones alone (the untracked scan, the directory
+ * tracking it of the tracked ones alone (the untracked scan, the directory
  * divergence, the deploy plan). The second kind is an ancestor claim — derived
- * from the chain above a managed path, so what it carries binds dotta's own
+ * from the chain above a tracked path, so what it carries binds dotta's own
  * creation of that path and nothing else (core/metadata.h). It is false on every
  * other kind, where nothing reads it.
  *
@@ -180,7 +180,7 @@ typedef struct manifest_row {
     const char *owner;          /* The claimed owner, or NULL; what absence says is the sheet's (metadata.h) */
     const char *group;          /* The claimed group, or NULL */
     bool encrypted;             /* Encryption flag (false for DIRECTORY) */
-    bool tracked;               /* DIRECTORY rows: the profile manages the directory itself */
+    bool tracked;               /* DIRECTORY rows: the profile tracks the directory itself */
 } manifest_row_t;
 
 /**
@@ -209,7 +209,7 @@ static inline bool manifest_is_claim(
 }
 
 /**
- * Is the row an ancestor claim — a directory derived from the chain above a managed
+ * Is the row an ancestor claim — a directory derived from the chain above a tracked
  * path, never named by anyone?
  *
  * The bottom of the lattice a namer reads: the one kind of row that does not
@@ -234,12 +234,13 @@ static inline bool manifest_is_claim(
  * (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
  * one claim that settles nothing about the path it stands at (core/workspace.c
- * scan_directory_for_untracked); status's --full window and update's derive-scope
- * slice (cmds/status.c display_manifest, cmds/update.c cmd_update); and the two
- * refusals of a second name for one path, where a derived claim names nothing
- * and so blocks nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name).
- * Every other `tracked` read in the tree stands where the kind is already settled
- * and asks the field's own meaning, not this predicate.
+ * scan_directory_for_untracked); the tags' clean arm, where a rung nothing diverged
+ * on reads [ancestor] (core/workspace.c workspace_item_tags);
+ * update's derive-scope slice (cmds/update.c cmd_update); and the two refusals
+ * of a second name for one path, where a derived claim names nothing and so blocks
+ * nothing (cmds/add.c cmd_add, cmds/revert.c refuse_second_name). Every other
+ * `tracked` read in the tree stands where the kind is already settled and asks
+ * the field's own meaning, not this predicate.
  */
 static inline bool manifest_is_derived(const manifest_row_t *row) {
     return row && row->type == PATH_TYPE_DIRECTORY && !row->tracked;
@@ -253,7 +254,7 @@ static inline bool manifest_is_derived(const manifest_row_t *row) {
  * other allocator) that backs the rows.
  *
  * Lifetime examples:
- *   workspace_files(ws)             → backed by ws->arena (workspace lifetime).
+ *   manifest_rows(view)             → backed by the view's arena (the command's).
  *   apply's local divergent buffer  → backed by a ptr_array_t on the heap;
  *                                     valid for the caller's stack scope.
  */
@@ -492,7 +493,7 @@ error_t *manifest_build_branch(
 /**
  * Every winning row of the view, both kinds, unordered
  *
- * The index's rows — what stands at each managed path. A name a profile did not
+ * The index's rows — what stands at each active path. A name a profile did not
  * keep and a claim a higher profile overrode are both absent: the first is
  * manifest_unkept's, the second is layering, and neither is a row.
  *
@@ -707,8 +708,8 @@ manifest_unkept_t manifest_unkept(const manifest_t *manifest);
 /**
  * Look up a row by filesystem path
  *
- * O(1) over the view's index — a path is one managed thing, whatever its kind;
- * callers that want one kind test row->type. NULL when the path is not managed.
+ * O(1) over the view's index — a path is one row, whatever its kind;
+ * callers that want one kind test row->type. NULL when the path is not active.
  *
  * @param manifest Manifest (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
@@ -734,7 +735,7 @@ const manifest_row_t *manifest_lookup(
  * somewhere, and a claim precedence overrode — or a name the profile did not
  * keep — wins nowhere and answers NULL. That is exactly what the workspace's
  * relocation read wants: a claim standing under another profile is not "relocated",
- * the copy at the old path is simply no longer managed.
+ * the copy at the old path is simply no longer active.
  *
  * Linear scan — its reader asks once per BACKED orphan (the workspace's relocation
  * read, each of which already cost a Git tree probe; a lazy per-profile storage

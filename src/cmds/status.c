@@ -28,7 +28,7 @@
 #include "sys/upstream.h"
 
 /**
- * Display enabled profiles and last deployment info
+ * Print the enabled profiles and the last deployment of each
  *
  * @param out Output context (must not be NULL)
  * @param state The enabled rows: the binding printed beside a bound profile's
@@ -36,8 +36,8 @@
  * @param profiles Enabled profile names (must not be NULL)
  * @param ws Workspace the view and the record come from: the per-profile
  *           last-deployed timestamp and the verbose per-profile counts are folded
- *           from its rows (NULL when no workspace was loaded — the slices are
- *           empty then, and the header is names alone)
+ *           from its items (NULL when no workspace was loaded — it lends none
+ *           then, and the header is names alone)
  * @param unbound The view's health slice: the claims the build could not place,
  *                annotated onto their profile's line (a count, the paths under
  *                -v), the repair a legend line under the block
@@ -45,7 +45,7 @@
  *               otherwise, annotated and listed the same way. Both say a profile
  *               carries more than it projects, for two different reasons
  */
-static void display_enabled_profiles(
+static void status_print_profiles(
     output_t *out,
     const state_t *state,
     const string_array_t *profiles,
@@ -58,17 +58,15 @@ static void display_enabled_profiles(
     /* Show enabled profiles */
     output_section(out, OUTPUT_NORMAL, "Enabled profiles");
 
-    /* What a profile contributes to this machine is its rows of both kinds; the
-     * slices are only how the view is reached, and each row's own type is what
-     * says which kind it is. */
-    const manifest_rows_t slices[] = {
-        workspace_files(ws), workspace_directories(ws)
-    };
+    /* What a profile contributes to this machine is its active paths of both
+     * kinds — each item's own kind says which, and its record when it deployed */
+    workspace_items_t active = workspace_active(ws);
 
     /* Whether either repair has a line to stand under. The question is about
-     * the profiles this run *displays*, not the slices: -p filters the active
-     * set while the view is always the whole enabled one, so a legend keyed off
-     * a slice's own count would explain an annotation no line above it carries. */
+     * the profiles this run *displays*, not the slices: -p filters the scope's
+     * profiles while the view is always the whole enabled one, so a legend keyed
+     * off a slice's own count would explain an annotation no line above it
+     * carries. */
     bool unbound_shown = false;
     bool unused_shown = false;
 
@@ -93,20 +91,16 @@ static void display_enabled_profiles(
         time_t profile_deploy_time = 0;
         size_t file_count = 0;
         size_t dir_count = 0;
-        for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
-            for (size_t j = 0; j < slices[s].count; j++) {
-                const manifest_row_t *row = slices[s].entries[j];
-                if (strcmp(row->profile, profile) != 0) continue;
+        for (size_t j = 0; j < active.count; j++) {
+            const workspace_item_t *item = active.entries[j];
+            if (strcmp(item->profile, profile) != 0) continue;
 
-                if (row->type == PATH_TYPE_DIRECTORY) dir_count++;
-                else file_count++;
+            if (item->item_kind == PATH_KIND_DIRECTORY) dir_count++;
+            else file_count++;
 
-                const anchor_t *anchor =
-                    workspace_get_anchor(ws, row->filesystem_path);
-                if (anchor && strcmp(anchor->profile, profile) == 0 &&
-                    anchor->deployed_at > profile_deploy_time) {
-                    profile_deploy_time = anchor->deployed_at;
-                }
+            if (item->anchor && strcmp(item->anchor->profile, profile) == 0 &&
+                item->anchor->deployed_at > profile_deploy_time) {
+                profile_deploy_time = item->anchor->deployed_at;
             }
         }
 
@@ -235,22 +229,22 @@ static void display_enabled_profiles(
 }
 
 /**
- * Display the manifest — every active row, with its state
+ * Print the manifest — every active path, with its state
  *
- * The window onto the view (--full): one line per managed path, both kinds merged
- * in path order, tagged as the diverged item at the path says or [clean] when
- * there is none, with the owning profile ("from P", or "P → Q" for a pending
- * reassignment). The one listing that shows the whole view rather than what
- * diverged from it; printed whatever the workspace's cleanliness. Orphans are
- * records, not rows — they stay in the Issues section. Scoped by the CLI filter
- * like every other section.
+ * The window onto the view (--full): one line per active path, both kinds merged
+ * in path order, tagged as its item says — [clean] or [ancestor] where nothing
+ * diverged (workspace_item_tags) — with the owning profile ("from P", or "P →
+ * Q" for a pending reassignment). The one listing that shows the whole view rather
+ * than what diverged from it; printed whatever the workspace's cleanliness. Orphans
+ * are records, not rows — they stay in the Issues section. Scoped by the CLI
+ * filter like every other section.
  *
  * @param ws Workspace (must not be NULL, borrowed from caller)
  * @param scope Operation scope (must not be NULL; its filter dimension drives
  *              display)
  * @param out Output context (must not be NULL)
  */
-static void display_manifest(
+static void status_print_manifest(
     const workspace_t *ws,
     const scope_t *scope,
     output_t *out
@@ -259,73 +253,52 @@ static void display_manifest(
 
     output_list_t *list = output_list_create(
         out, "Manifest",
-        "every managed path; [clean] where nothing diverged, [ancestor] where "
+        "every active path; [clean] where nothing diverged, [ancestor] where "
         "dotta only passes through"
     );
     if (!list) return;
 
-    /* Both slices are in filesystem_path order and share no path (one row per
-     * path, one kind), so a two-finger merge walks the view as one path-ordered
+    /* Each kind's items are in filesystem_path order and share no path (one row
+     * per path, one kind), so a two-finger merge walks the view as one path-ordered
      * sequence. */
-    manifest_rows_t files = workspace_files(ws);
-    manifest_rows_t dirs = workspace_directories(ws);
+    workspace_items_t files = workspace_files(ws);
+    workspace_items_t dirs = workspace_directories(ws);
     size_t f = 0;
     size_t d = 0;
     while (f < files.count || d < dirs.count) {
-        const manifest_row_t *row;
+        const workspace_item_t *item;
         if (d == dirs.count) {
-            row = files.entries[f++];
+            item = files.entries[f++];
         } else if (f == files.count) {
-            row = dirs.entries[d++];
+            item = dirs.entries[d++];
         } else {
             const char *file_path = files.entries[f]->filesystem_path;
             const char *dir_path = dirs.entries[d]->filesystem_path;
-            row = strcmp(file_path, dir_path) < 0 ? files.entries[f++]
-                                                  : dirs.entries[d++];
+            item = strcmp(file_path, dir_path) < 0 ? files.entries[f++]
+                                                   : dirs.entries[d++];
         }
 
-        if (!scope_accepts_profile(scope, row->profile)) continue;
+        if (!scope_accepts_profile(scope, item->profile)) continue;
 
-        const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+        const char *tags[WORKSPACE_ITEM_MAX_TAGS];
         size_t tag_count;
         output_color_t color;
         char metadata[256];
 
-        /* The door lends a diverged path's item alone, and what a row it lends
-         * none reads depends on what was asked of it. A tracked row was compared
-         * and agreed: clean. An ancestor claim was compared with nothing — its
-         * mode and ownership say what to create the path as, never what to make
-         * of the one this machine has, so the directory analysis stops at the
-         * type question — and [clean], which promises that nothing diverged,
-         * would be a promise dotta never checked. One that DID diverge keeps
-         * its own tags: absence and a squatter are read of both classes, and
-         * they already say the actionable thing. A row beneath a squatter never
-         * reaches this arm at all: nothing there was looked at, so the door always
-         * lends its item (core/workspace.h workspace_displaced_t) and neither
-         * word could be honest of it. */
-        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
-        if (item) {
-            if (!workspace_item_extract_display_info(
-                item, tags, &tag_count, &color, metadata, sizeof(metadata)
-                )) {
-                continue;
-            }
-        } else {
-            bool derived = manifest_is_derived(row);
-
-            tags[0] = derived ? "ancestor" : "clean";
-            tag_count = 1;
-            color = derived ? OUTPUT_COLOR_DIM : OUTPUT_COLOR_GREEN;
-            snprintf(metadata, sizeof(metadata), "from %s", row->profile);
+        /* Every item through the one renderer, a clean one too: what agreement
+         * reads as is the class's to say, and one that DID diverge keeps its
+         * own tags — absence and a squatter are read of both classes, and they
+         * already say the actionable thing. */
+        if (!workspace_item_tags(
+            item, tags, &tag_count, &color, metadata, sizeof(metadata)
+            )) {
+            continue;
         }
 
-        /* The window is onto rows, so the row's type is what says the kind —
-         * the item at a path, when there is one, was analyzed from that row and
-         * carries the same */
         char path[PATH_MAX + 2];
         snprintf(
-            path, sizeof(path), "%s%s", row->filesystem_path,
-            path_kind_suffix(path_type_kind(row->type))
+            path, sizeof(path), "%s%s", item->filesystem_path,
+            path_kind_suffix(item->item_kind)
         );
 
         output_list_add(list, tags, tag_count, color, path, metadata);
@@ -336,7 +309,7 @@ static void display_manifest(
 }
 
 /**
- * Display workspace status
+ * Print the workspace status
  *
  * Shows the consistency between the view, the record and the filesystem: the
  * status line, then the diverged items in actionable sections (git-like structure).
@@ -351,7 +324,7 @@ static void display_manifest(
  *              display)
  * @param out Output context (must not be NULL)
  */
-static void display_workspace_status(
+static void status_print_workspace(
     const workspace_t *ws,
     const scope_t *scope,
     output_t *out
@@ -399,19 +372,15 @@ static void display_workspace_status(
 
     /* The line: the fold's decision, in the same words filtered or not */
     if (scoped_diverged == 0) {
-        /* Managed paths the filter reaches, both kinds — what stands aligned at
+        /* Active paths the filter reaches, both kinds — what stands aligned at
          * a path is not a question about which kind stands there. With no filter
-         * every row is accepted, so this is the whole view. Counted here, the
+         * every item is accepted, so this is the whole view. Counted here, the
          * one arm that prints it. */
-        const manifest_rows_t slices[] = {
-            workspace_files(ws), workspace_directories(ws)
-        };
+        workspace_items_t active = workspace_active(ws);
         size_t scoped_paths = 0;
-        for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
-            for (size_t i = 0; i < slices[s].count; i++) {
-                if (scope_accepts_profile(scope, slices[s].entries[i]->profile)) {
-                    scoped_paths++;
-                }
+        for (size_t i = 0; i < active.count; i++) {
+            if (scope_accepts_profile(scope, active.entries[i]->profile)) {
+                scoped_paths++;
             }
         }
 
@@ -591,13 +560,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < conflict_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         conflicts[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -629,13 +598,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < squatted_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         squatted[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -675,13 +644,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < displaced_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         displaced[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -727,13 +696,13 @@ static void display_workspace_status(
                 size_t legend_width = 0;
 
                 for (size_t i = 0; i < unverifiable_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (!workspace_item_extract_display_info(
+                    if (!workspace_item_tags(
                         unverifiable[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -822,13 +791,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < uncommitted_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         uncommitted[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -856,13 +825,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < reassigned_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         reassigned[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -893,13 +862,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < undeployed_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         undeployed[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -927,13 +896,13 @@ static void display_workspace_status(
 
             if (list) {
                 for (size_t i = 0; i < new_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (workspace_item_extract_display_info(
+                    if (workspace_item_tags(
                         new_files[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -985,13 +954,13 @@ static void display_workspace_status(
                     "behind --force";
 
                 for (size_t i = 0; i < orphaned_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_DISPLAY_TAGS];
+                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
                     size_t tag_count;
                     output_color_t color;
                     char metadata[256];
                     char path[PATH_MAX + 2];
 
-                    if (!workspace_item_extract_display_info(
+                    if (!workspace_item_tags(
                         orphaned[i], tags, &tag_count,
                         &color, metadata, sizeof(metadata)
                         )) {
@@ -1160,12 +1129,12 @@ static void display_workspace_status(
 }
 
 /**
- * Display remote sync status for profiles
+ * Print the remote sync status for profiles
  *
  * By default shows only enabled profiles for consistency with workspace status.
  * Use show_all_profiles to report on every branch in the repository.
  */
-static error_t *display_remote_status(
+static error_t *status_print_remote(
     const dotta_ctx_t *ctx,
     const string_array_t *profiles,
     bool show_all_profiles,
@@ -1481,8 +1450,8 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set, the CLI filter's bound.
-     *   scope_active  — display face (enabled profile list, remote status).
+     *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
+     *   scope_profiles — display face (enabled profile list, remote status).
      *
      * Zero enabled profiles is a valid state: workspace classifies all state
      * entries as orphaned. This enables the "disable last profile, then status"
@@ -1524,33 +1493,33 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         }
     }
 
-    /* Display enabled profiles and last deployment info */
-    display_enabled_profiles(
-        out, state, scope_active(scope), ws, manifest_unbound(manifest),
+    /* The enabled profiles and the last deployment of each */
+    status_print_profiles(
+        out, state, scope_profiles(scope), ws, manifest_unbound(manifest),
         manifest_unkept(manifest)
     );
 
     /* The whole view, on request — before the status line and the sections that
      * name only what diverged from it */
     if (opts->show_local && opts->full) {
-        display_manifest(ws, scope, out);
+        status_print_manifest(ws, scope, out);
     }
 
-    /* Display workspace status (with profile filtering for Coherent Scope)
+    /* The workspace status (with profile filtering for Coherent Scope)
      *
      * The workspace was loaded over the persistent enabled set (the view's) for
-     * accurate divergence analysis. display_workspace_status then applies the
-     * CLI filter dimension via scope_accepts_profile so `dotta status -p work`
-     * matches `dotta apply -p work` behavior.
+     * accurate divergence analysis. status_print_workspace then applies the CLI
+     * filter dimension via scope_accepts_profile so `dotta status -p work` matches
+     * `dotta apply -p work` behavior.
      */
     if (opts->show_local) {
-        display_workspace_status(ws, scope, out);
+        status_print_workspace(ws, scope, out);
     }
 
     /* Show remote sync status (if requested) */
     if (opts->show_remote) {
-        err = display_remote_status(
-            ctx, scope_active(scope), opts->all_profiles, opts->no_fetch
+        err = status_print_remote(
+            ctx, scope_profiles(scope), opts->all_profiles, opts->no_fetch
         );
         if (err) {
             /* Non-fatal: might not have remote configured */
@@ -1641,7 +1610,7 @@ static const args_opt_t status_opts[] = {
     ARGS_FLAG(
         "full",
         cmd_status_options_t,full,
-        "List every managed path with its state"
+        "List every active path with its state"
     ),
     ARGS_FLAG(
         "v verbose",
@@ -1682,7 +1651,7 @@ const args_command_t spec_status = {
         "  %s status --no-fetch              # Skip fetch (cached refs)\n"
         "  %s status -p work -p home         # Named profiles only\n"
         "  %s status --all                   # Include non-enabled profiles\n"
-        "  %s status --full                  # Every managed path, clean ones too\n",
+        "  %s status --full                  # Every active path, clean ones too\n",
     .epilogue     =
         "See also:\n"
         "  %s apply           # Deploy the pending filesystem changes\n"

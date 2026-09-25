@@ -818,7 +818,7 @@ static error_t *compare_tree_files_to_filesystem(
  * for what it is: a path with no content to diff — a tracked directory or a derived
  * one alike, since neither kind has any (core/manifest.h). One that reaches nothing
  * — which likely indicates a typo — is warned in the words of what the view's
- * paths are: the enabled view's are managed paths, a commit's are the commit's,
+ * paths are: the enabled view's are active paths, a commit's are the commit's,
  * and a miss in one says nothing of the other. The list hint follows the warnings
  * as their remedy.
  *
@@ -836,7 +836,7 @@ static error_t *compare_tree_files_to_filesystem(
  *
  * @param file_filter File filter to validate (NULL = no filter, nothing to answer)
  * @param view The view the arm compares against (must not be NULL)
- * @param what What the view's paths are on the screen: "managed path" for the
+ * @param what What the view's paths are on the screen: "active path" for the
  *             enabled view, "path of the commit" for one commit's (must not be
  *             NULL)
  * @param out Output context for the answers
@@ -1342,7 +1342,7 @@ static error_t *diff_workspace(
     /* Step 1: The filter's coverage over the view — the one the workspace joins,
      * and all the question needs. Where no entry reaches content, nothing can
      * diff, the answers are the whole report, and no workspace is loaded. */
-    if (!validate_filter_paths(scope_paths(scope), manifest, "managed path", out)) {
+    if (!validate_filter_paths(scope_paths(scope), manifest, "active path", out)) {
         return NULL;
     }
 

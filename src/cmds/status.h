@@ -24,7 +24,7 @@ typedef struct {
     bool verbose;               /* Print verbose output */
     bool no_fetch;              /* Skip fetch before remote status check */
     bool all_profiles;          /* Show all profiles, not just enabled ones */
-    bool full;                  /* List the whole manifest: every active row with its state */
+    bool full;                  /* List the whole manifest: every active path with its state */
 
     /* Intent flags (written by ARGS_FLAG; derived outputs below). */
     int want_local;             /* 1 if --local was seen */

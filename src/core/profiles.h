@@ -233,9 +233,9 @@ error_t *profile_require(git_repository *repo, const char *name);
  * the two routes meet is that both take the framing off the same claim; nothing
  * structural does, and the raw sum here disagreed with those rows by it on every
  * profile holding a sealed file until 228 C2c. `status -v` is no such screen —
- * it counts the view's rows a profile wins (cmds/status.c
- * display_enabled_profiles), the other half of the holds/wins split above, and
- * the two are free to disagree (docs/profiles.md).
+ * it counts the view's rows a profile wins (cmds/status.c status_print_profiles),
+ * the other half of the holds/wins split above, and the two are free to disagree
+ * (docs/profiles.md).
  */
 typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */

@@ -631,7 +631,7 @@ const args_command_t spec_bootstrap = {
         "Environment Variables:\n"
         "  DOTTA_REPO_DIR    Path to the dotta repository.\n"
         "  DOTTA_PROFILE     Current profile name.\n"
-        "  DOTTA_PROFILES    Space-separated list of all active profiles.\n"
+        "  DOTTA_PROFILES    Space-separated list of all profiles being bootstrapped.\n"
         "  HOME              User home directory.\n",
     .notes       =
         "Clone integration:\n"

@@ -224,10 +224,10 @@ static error_t *pull_branch_ff(
 /**
  * Phase 1: Fetch profiles in sync scope from remote
  *
- * Operates on the active set (scope_active): fetching is driven by what the user
- * asked for. `dotta sync -p work` fetches only `work`, not every enabled profile.
- * Precedence-adjacent work (push phase) still uses the full enabled set — different
- * role, different accessor.
+ * Operates on the scope's profiles (scope_profiles): fetching is driven by what
+ * the user asked for. `dotta sync -p work` fetches only `work`, not every enabled
+ * profile. Precedence-adjacent work (push phase) still uses the full enabled
+ * set — different role, different accessor.
  */
 static error_t *sync_fetch_phase(
     git_repository *repo,
@@ -243,7 +243,7 @@ static error_t *sync_fetch_phase(
     CHECK_NULL(results);
     CHECK_NULL(out);
 
-    const string_array_t *profiles = scope_active(scope);
+    const string_array_t *profiles = scope_profiles(scope);
 
     /* Check if remote exists */
     git_remote *remote = NULL;
@@ -364,9 +364,9 @@ static error_t *sync_fetch_phase(
 /**
  * Phase 2: Analyze branch states for profiles in sync scope
  *
- * Operates on the active set (scope_active), matching sync_fetch_phase: analyze
- * only what the user asked for. results is sized from scope_active(scope)->count
- * by the caller; the two counts agree.
+ * Operates on the scope's profiles (scope_profiles), matching sync_fetch_phase:
+ * analyze only what the user asked for. results is sized from
+ * scope_profiles(scope)->count by the caller; the two counts agree.
  */
 static error_t *sync_analyze_phase(
     git_repository *repo,
@@ -381,7 +381,7 @@ static error_t *sync_analyze_phase(
     CHECK_NULL(results);
     CHECK_NULL(out);
 
-    const string_array_t *profiles = scope_active(scope);
+    const string_array_t *profiles = scope_profiles(scope);
 
     for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
@@ -1271,12 +1271,11 @@ static void sync_render_summary(
 
     /* The hint states a fact about the record, not about this sync. The manifest
      * block is the direct evidence of new work — it is empty exactly when the
-     * Git phase touched nothing managed (a pull of README or .dottaignore, a
-     * push, 'ours'), which no guess from the outcome tallies could tell apart —
-     * and apply_pending is the work that was already there: an earlier sync
-     * reviewed with status instead of apply, a scope change, local drift. The
-     * block is a delta and prints once; the hint prints for as long as the work
-     * stands. */
+     * Git phase touched nothing active (a pull of README or .dottaignore, a push,
+     * 'ours'), which no guess from the outcome tallies could tell apart — and
+     * apply_pending is the work that was already there: an earlier sync reviewed
+     * with status instead of apply, a scope change, local drift. The block is a
+     * delta and prints once; the hint prints for as long as the work stands. */
     if (manifest_changed || apply_pending) {
         output_gap(out, OUTPUT_NORMAL);
         output_hint(
@@ -1590,9 +1589,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set, the CLI filter's bound and
-     *                   the Manifest block's attribution.
-     *   scope_active  — sync operation face (fetch / analyze / pull targets).
+     *   scope_enabled  — the persistent enabled set, the CLI filter's bound and
+     *                    the Manifest block's attribution.
+     *   scope_profiles — sync operation face (fetch / analyze / pull targets).
      */
     scope_inputs_t scope_inputs = {
         .profiles      = opts->profiles,
@@ -1611,7 +1610,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Create results tracker */
-    results = sync_results_create(scope_active(scope)->count);
+    results = sync_results_create(scope_profiles(scope)->count);
     if (!results) {
         err = ERROR(ERR_MEMORY, "Failed to create results");
         goto cleanup;
@@ -1967,7 +1966,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * and post-sync (after the manifest block). profiles_str / remote_env are
      * heap-allocated and freed at cleanup; sync_extras is a stack literal whose
      * lifetime is cmd_sync's frame — covers both fire sites. */
-    profiles_str = string_array_join(scope_active(scope), " ");
+    profiles_str = string_array_join(scope_profiles(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook env");
         goto cleanup;
@@ -2081,9 +2080,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * view. Sync writes no state.
      *
      * Attribution is per enabled profile — scope_enabled, never the -p narrowed
-     * scope_active: precedence runs across the whole enabled set, which is what
-     * both views are built over (the state's rows, untouched since dispatch —
-     * nothing in sync mutates enabled_profiles; a missing branch contributes
+     * scope_profiles: precedence runs across the whole enabled set, which is
+     * what both views are built over (the state's rows, untouched since dispatch
+     * — nothing in sync mutates enabled_profiles; a missing branch contributes
      * nothing to either and was warned about at scope_build time). A path p lost
      * to q is p's reassignment and q's claim; a path that moved between two pulled
      * profiles is one reassignment, never a transient release.
@@ -2097,7 +2096,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * claim this machine cannot place does not fail the build; the health notice
      * after the block is its signal. */
     const string_array_t *enabled = scope_enabled(scope);
-    bool manifest_changed = false;    /* The block printed: the Git phase moved something managed */
+    bool manifest_changed = false;    /* The block printed: the Git phase moved something active */
     bool apply_pending = false;       /* The record disagrees with the view, whenever that began */
 
     err = manifest_build(repo, state, ctx->arena, &after);

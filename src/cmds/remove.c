@@ -97,7 +97,7 @@ typedef struct {
  * A candidate is a path the removal's Git effect no longer claims, joined to
  * the record standing at it. The file route's commit lets go of the claims the
  * arguments named and the directory entries the metadata step reaped once nothing
- * managed stood beneath them; the profile route lets go of every path whose record
+ * tracked stood beneath them; the profile route lets go of every path whose record
  * names the deleted profile. Only paths bearing this profile's record become
  * candidates — a record naming another profile is not ours to settle, and a path
  * with no record was never observed: nothing to settle.
@@ -984,7 +984,7 @@ static error_t *remove_files_from_profile(
     /* Prune redundant directory entries against the stage's index — the branch
      * tree minus the removed file claims, the tree the impending commit will
      * record (the judge's own contract, metadata.h). Removing a file may leave
-     * its parent directory metadata entry with nothing managed beneath it. The
+     * its parent directory metadata entry with nothing tracked beneath it. The
      * index answers that for every path a tree can hold — never the metadata
      * items, which omit unelevated symlinks — and the sheet's own tracked claims
      * answer it for the one path it cannot, an empty directory. */

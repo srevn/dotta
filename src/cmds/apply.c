@@ -632,7 +632,7 @@ static void print_withheld(
  *   removal)
  * - ancestors: Directories the run made on the way to a planned path, outside
  *   the plan — either class, since a claimed rung is created at its claim whether
- *   the profile manages it or only passes through it. Verbose only — the preview
+ *   the profile tracks it or only passes through it. Verbose only — the preview
  *   never counted them, and the summary says what the preview said; the verbose
  *   listing accounts for every owned record the run wrote
  *
@@ -1582,14 +1582,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Build operation scope
      *
-     *   scope_enabled — the persistent enabled set, the CLI filter's bound. Empty
-     *                   is a valid convergence target: every record becomes an
-     *                   orphan and apply cleans them up. Enables the "disable
-     *                   last profile, then apply" workflow.
-     *   scope_active  — operation face (the verbose listing, hook context).
+     *   scope_enabled  — the persistent enabled set, the CLI filter's bound. Empty
+     *                    is a valid convergence target: every record becomes an
+     *                    orphan and apply cleans them up. Enables the "disable
+     *                    last profile, then apply" workflow.
+     *   scope_profiles — operation face (the verbose listing, hook context).
+     *
      *   scope_has_filter / scope_has_paths / scope_paths — the build's shape,
-     *                   for the wording of the no-match warning and the
-     *                   nothing-to-do exit.
+     *                    for the wording of the no-match warning and the
+     *                    nothing-to-do exit.
      *
      * The per-iteration predicates are the two planners' (deploy_plan_build,
      * cleanup_plan_build): apply reads the scope through the plans and applies
@@ -1612,13 +1613,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     output_print(
         out, OUTPUT_VERBOSE, "Using %zu profile%s:\n",
-        scope_active(scope)->count,
-        scope_active(scope)->count == 1 ? "" : "s"
+        scope_profiles(scope)->count,
+        scope_profiles(scope)->count == 1 ? "" : "s"
     );
-    for (size_t i = 0; i < scope_active(scope)->count; i++) {
+    for (size_t i = 0; i < scope_profiles(scope)->count; i++) {
         output_styled(
             out, OUTPUT_VERBOSE, "  {cyan}•{reset} %s\n",
-            scope_active(scope)->items[i]
+            scope_profiles(scope)->items[i]
         );
     }
 
@@ -1634,7 +1635,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* The hooks' profile list, joined beside the scope it reads: the one allocation
      * on the way to the hooks fails here, before the previews are on screen,
      * rather than under a consent text the run then abandons. */
-    profiles_str = string_array_join(scope_active(scope), " ");
+    profiles_str = string_array_join(scope_profiles(scope), " ");
     if (!profiles_str) {
         err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
         goto cleanup;
@@ -1642,9 +1643,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* Load workspace (partitions the view's rows and runs divergence analysis)
      *
-     * After workspace_load returns, workspace_files(ws) yields the in-scope active
-     * slice; we use that view throughout the command instead of building a separate
-     * manifest.
+     * After workspace_load returns, every active path is an item, the clean ones
+     * too — the whole enabled set, over the view the dispatcher built; the plan
+     * below applies the scope.
      *
      * Pass state handle to workspace so it analyzes within our write transaction.
      * This ensures consistency and eliminates redundant database connections.
@@ -2052,15 +2053,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A clean in-scope row whose record has deployed_at == 0 — or no record at
      * all — represents a file the user declared scope over (via profile enable
      * or add/update) AND that workspace_analyze_file just classified as clean
-     * for deploy's purposes: no item, or one carrying only the blob bit,
-     * ENCRYPTION, which deploy_needs_work masks out. Apply is the ownership moment:
-     * running it is how the user claims the in-scope set. Stamping here collapses
-     * the "enable → apply on a pre-existing matching file" flow to a coherent
-     * (blob, now, stat), so a later `rm file` is classified as [deleted] and
-     * `update` commits the deletion. The stat is the analysis's own — the snapshot
-     * pair, when it vouches for this row's blob — never a fresh lstat, which
-     * would bind whatever stands at the path now to a verdict from two phases
-     * earlier.
+     * for deploy's purposes: an item carrying no bit but the blob's, ENCRYPTION,
+     * which deploy_needs_work masks out. Apply is the ownership moment: running
+     * it is how the user claims the in-scope set. Stamping here collapses the
+     * "enable → apply on a pre-existing matching file" flow to a coherent (blob,
+     * now, stat), so a later `rm file` is classified as [deleted] and `update`
+     * commits the deletion. The stat is the analysis's own — the snapshot pair,
+     * when it vouches for this row's blob — never a fresh lstat, which would
+     * bind whatever stands at the path now to a verdict from two phases earlier.
      *
      * A record of another kind than the row is no record for it either: it is a
      * fact about a node that is gone — Git retyped the name, and the row's own
@@ -2428,7 +2428,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * to add here. What the run planned and could not deliver reaches the exit
      * code at the run's tail. */
 
-    /* Build hook invocation with all active profiles */
+    /* Build hook invocation with the scope's profiles */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_APPLY,
         .profile    = profiles_str,

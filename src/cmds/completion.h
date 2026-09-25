@@ -57,7 +57,7 @@ void completion_profiles(
 );
 
 /**
- * The view's files: one row per managed path, the winning profile beside it.
+ * The view's files: one row per active path, the winning profile beside it.
  *
  * A winner filter keeps the rows those profiles win — exactly the rows a workspace
  * verb with that filter acts on; a path a filtered profile holds but does not

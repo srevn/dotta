@@ -19,7 +19,7 @@
 /**
  * Internal scope representation.
  *
- * `enabled` and `filter` are owned by scope_t and freed in scope_free. `active`
+ * `enabled` and `filter` are owned by scope_t and freed in scope_free. `profiles`
  * is a borrowed pointer into either `enabled` or `filter` — set once during build,
  * dangles after scope_free returns (which is fine: no one is meant to dereference
  * it post-free).
@@ -34,7 +34,7 @@ struct scope {
     string_array_t *filter;             /* CLI filter; NULL when no -p */
     const gitignore_ruleset_t *excludes_ruleset; /* The -e layer; arena-borrowed; NULL when no excludes */
     pathspec_t *paths;                  /* CLI path filter; arena-borrowed; NULL when no positional args */
-    const string_array_t *active;       /* Borrowed: filter if set, else enabled */
+    const string_array_t *profiles;     /* Borrowed: filter if set, else enabled */
 };
 
 /* -------------------------------------------------------------------- */
@@ -121,9 +121,9 @@ error_t *scope_build(
         }
     }
 
-    /* 3. Derive active pointer — used by scope_active accessor. Valid as long
-     *    as scope is alive. */
-    s->active = s->filter ? s->filter : s->enabled;
+    /* 3. The profiles pointer — scope_profiles' answer. Valid as long as scope
+     *    is alive. */
+    s->profiles = s->filter ? s->filter : s->enabled;
 
     /* 4. The path filter: one matcher over both keys a managed path has, each
      *    input read in the key its own shape names (infra/pathspec). */
@@ -154,7 +154,7 @@ void scope_free(scope_t *s) {
     if (!s) return;
     string_array_free(s->enabled);
     string_array_free(s->filter);
-    /* s->paths and s->excludes_ruleset are the arena's; s->active is a borrow. */
+    /* s->paths and s->excludes_ruleset are the arena's; s->profiles is a borrow. */
     free(s);
 }
 
@@ -166,8 +166,8 @@ const string_array_t *scope_enabled(const scope_t *s) {
     return s->enabled;
 }
 
-const string_array_t *scope_active(const scope_t *s) {
-    return s->active;
+const string_array_t *scope_profiles(const scope_t *s) {
+    return s->profiles;
 }
 
 const pathspec_t *scope_paths(const scope_t *s) {

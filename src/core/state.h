@@ -219,7 +219,7 @@ static inline bool stat_cache_matches(
  * deployed_at is 0, what it was looking at when it first observed the path —
  * and what it confirmed there. One row per filesystem path, both kinds. A row
  * exists iff dotta has observed the node its kind names at the path while it
- * was managed — seen standing there, or put there: there is no "never observed"
+ * was active — seen standing there, or put there: there is no "never observed"
  * row — the row's existence is the observation (core/workspace.c classify_absent
  * reads it, of the kind the record names), and no column restates it.
  *
@@ -277,13 +277,13 @@ static inline bool stat_cache_matches(
  *     statement matches only a record whose binding is the one its row's blob
  *     opens under.
  *
- * The binding and the claim are what an orphan (a record whose path no active
- * row names) is measured against — the claim is its reference on disk, and the
- * binding names the branch asked whether it still holds the path — and an owned
- * record whose profile ≠ the active row's profile is a reassignment apply has
- * not acknowledged: on a file row and on a directory the profile manages, never
- * on a derived ancestor claim nobody made, and across kinds only while a look
- * finds the record's own node still standing (core/workspace.h
+ * The binding and the claim are what an orphan (a record whose path the view
+ * lacks) is measured against — the claim is its reference on disk, and the binding
+ * names the branch asked whether it still holds the path — and an owned record
+ * whose profile ≠ the profile of the row at its path is a reassignment apply
+ * has not acknowledged: on a file row and on a directory the profile tracks,
+ * never on a derived ancestor claim nobody made, and across kinds only while a
+ * look finds the record's own node still standing (core/workspace.h
  * workspace_reassigned).
  */
 typedef struct anchor {
@@ -702,9 +702,9 @@ const char *state_peek_profile_target(
  * hydrates to a zero OID, a NULL mode to 0.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
- *   - core/workspace.c workspace_partition: pairs each record with the managed
- *     item at its path by the items' own search (find_managed); the orphans keep
- *     strcmp order, which look_orphans' parents-first walk, their search
+ *   - core/workspace.c workspace_partition: pairs each record with the active
+ *     item at its path by the items' own search (find_active); the orphans keep
+ *     strcmp order, which workspace_look_orphans' parents-first walk, their search
  *     (find_item) and the diverged items' orphan listing (workspace_list, which
  *     the screens print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
@@ -757,14 +757,14 @@ const anchor_t *state_lookup_anchor(
 );
 
 /**
- * Observe a managed path: record its first observation on disk
+ * Observe an active path: record its first observation on disk
  *
  * Presence only, idempotent. One INSERT creates the record with the row's binding,
  * kind and claim — no blob, no stat, never owned — and never touches an existing
  * row: ON CONFLICT DO NOTHING absorbs the key's conflict and no other, so every
  * constraint on what it writes still refuses (key_spelling among them). Two
  * callers, both the load's, since the load is where presence is established:
- * the workspace's flush (core/workspace.c workspace_flush), for a managed row
+ * the workspace's flush (core/workspace.c workspace_flush), for an active row
  * its load found standing as its own kind with no record — so a directory apply
  * fixes rather than makes was present there and is observed by that flush — and
  * workspace_observe_retyped, for a directory its load found standing where the
@@ -790,7 +790,7 @@ const anchor_t *state_lookup_anchor(
 error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor);
 
 /**
- * Confirm a managed path: advance its record to what the comparison established
+ * Confirm an active path: advance its record to what the comparison established
  *
  * The slow path's CMP_EQUAL, persisted: rewrites what the comparison established
  * — the content: the kind (type), the blob (blob_oid) and the stat triple captured
@@ -840,7 +840,7 @@ error_t *state_confirm(
 );
 
 /**
- * Confirm a managed path's claim: advance its record to the claim disk was found,
+ * Confirm an active path's claim: advance its record to the claim disk was found,
  * or made, to stand on
  *
  * The claim's confirmation, beside state_confirm's content: mode, owner and group
@@ -883,7 +883,7 @@ error_t *state_confirm_claim(
 );
 
 /**
- * Anchor a managed path: record the row dotta reconciled it against
+ * Anchor an active path: record the row dotta reconciled it against
  *
  * The ownership event — apply deploy, adoption, acknowledgement, add, update.
  * Call after confirming disk content matches row->blob_oid (or, for a DIRECTORY

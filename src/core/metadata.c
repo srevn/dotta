@@ -156,7 +156,7 @@ error_t *metadata_item_create_file(
     item->owner = NULL;    /* Optional, set by caller if needed */
     item->group = NULL;    /* Optional, set by caller if needed */
     item->encrypted = encrypted;
-    item->tracked = false; /* A file is no directory to manage */
+    item->tracked = false; /* A file is no directory to track */
 
     *out = item;
     return NULL;
@@ -475,7 +475,7 @@ bool metadata_remove_item(
 /**
  * Does a tracked claim stand beneath this key?
  *
- * The sheet's half of the managed set. An empty directory is named by its own
+ * The sheet's half of the tracked set. An empty directory is named by its own
  * claim and by nothing else, so a tracked claim is the one thing beneath a
  * derivation that no index can name. A derivation anchors nothing — it survives
  * by being anchored itself, and letting one anchor another would hold a doomed
@@ -530,7 +530,7 @@ error_t *metadata_prune_ancestors(
         const metadata_item_t *dir = items[d];
 
         /* The subject: a derivation, which exists because something beneath it
-         * does. A tracked claim is the walk's own word that the profile manages
+         * does. A tracked claim is the walk's own word that the profile tracks
          * the directory — it stands with nothing beneath it and at any attributes,
          * and it leaves the sheet where a verb takes it, never by inference
          * (metadata.h). The two fields capture_ancestor reads to leave a standing
@@ -867,13 +867,13 @@ static error_t *capture_ancestor(
     string_array_t *retired
 ) {
     /* Two standing items are not a derivation's to touch. A tracked claim is
-     * the walk's own word about a directory the profile manages, and nothing
-     * derived refreshes or retires it. A FILE item is the tree's business: a
-     * path is a blob or a tree, so an item of that kind at a directory's key is
-     * stale metadata, and the tree is its authority — the view drops it where
-     * its own walk met the blob (core/manifest.c manifest_contribute), and a
-     * capture at that key replaces it. The prune is no authority over it: it
-     * takes derivations, and this item is not one. */
+     * the walk's own word about a directory the profile tracks, and nothing derived
+     * refreshes or retires it. A FILE item is the tree's business: a path is a
+     * blob or a tree, so an item of that kind at a directory's key is stale
+     * metadata, and the tree is its authority — the view drops it where its own
+     * walk met the blob (core/manifest.c manifest_contribute), and a capture at
+     * that key replaces it. The prune is no authority over it: it takes
+     * derivations, and this item is not one. */
     const metadata_item_t *held = metadata_lookup(metadata, storage_path);
     if (held && (held->kind != PATH_KIND_DIRECTORY || held->tracked)) {
         return NULL;

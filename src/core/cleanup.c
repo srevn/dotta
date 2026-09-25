@@ -315,7 +315,7 @@ typedef struct {
  * the scope did not reach it this run (-e, -p, a path filter), an unfiltered
  * run would decide it, and scope decides reach, never verdict — so a filtered
  * run must not change its parent's fate. Everything else is permanent: a RELEASED
- * orphan stays where it is; a managed path (the view has a row, and a row's item
+ * orphan stays where it is; an active path (the view has a row, and a row's item
  * is never an orphan's) stands in an enabled profile's name, the door lending
  * its item or, where it is clean, none; an entry the load holds no item for is
  * the user's.
@@ -344,27 +344,25 @@ static bool vouch_entry(const char *child, void *ctx) {
 /**
  * Does the view claim a path beneath this directory?
  *
- * A managed path beneath an orphaned directory makes the directory the ancestor
+ * An active path beneath an orphaned directory makes the directory the ancestor
  * of an enabled row — one ensure_parents would make anyway — and nothing dotta
  * does empties it: permanent, whether the row is on disk yet or not. The readdir
- * meets the rows already deployed (a managed path's entry is permanent,
+ * meets the rows already deployed (an active path's entry is permanent,
  * vouch_entry); this answers for the ones deployment will put there — this run,
  * or a later one that reaches them — which is exactly why the disk cannot answer
  * it. Read from the view, not from the deployment plan, so the answer does not
  * move with -p, -e or a path filter: scope decides reach, never verdict.
  *
- * Every directory above a managed path is its ancestor, not just the immediate
+ * Every directory above an active path is its ancestor, not just the immediate
  * parent: the ones deployment creates on the way count too.
  */
-static bool managed_beneath(const workspace_t *ws, const char *dir) {
+static bool cleanup_active_beneath(const workspace_t *ws, const char *dir) {
     size_t len = strlen(dir);
-    const manifest_rows_t slices[] = { workspace_files(ws), workspace_directories(ws) };
+    workspace_items_t active = workspace_active(ws);
 
-    for (size_t s = 0; s < sizeof(slices) / sizeof(slices[0]); s++) {
-        for (size_t i = 0; i < slices[s].count; i++) {
-            if (str_path_beneath(slices[s].entries[i]->filesystem_path, dir, len)) {
-                return true;
-            }
+    for (size_t i = 0; i < active.count; i++) {
+        if (str_path_beneath(active.entries[i]->filesystem_path, dir, len)) {
+            return true;
         }
     }
 
@@ -516,13 +514,13 @@ error_t *cleanup_preflight(
                 /* A directory the workspace saw and can read (the occupant is
                  * DIRECTORY: anything else in its place was released above).
                  * What is left in it after this run, and then the run's reach,
-                 * finish the verdict. A managed path beneath it is known from
+                 * finish the verdict. An active path beneath it is known from
                  * the view before any look at the disk; otherwise one readdir,
                  * which stops at the first permanent entry and notes any skipped
                  * one it passed. UNREADABLE is a directory that was readable at
                  * load and is not now — the world moved, and it is skipped like
                  * a refusal on removal, not released. */
-                if (managed_beneath(ws, path)) {
+                if (cleanup_active_beneath(ws, path)) {
                     fate = FATE_PERMANENT;
                 } else {
                     walk_t walk = { .fates = fates, .ws = ws, .skipped = false };

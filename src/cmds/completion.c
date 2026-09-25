@@ -125,9 +125,9 @@ void completion_remotes(const dotta_ctx_t *ctx, FILE *out) {
  * The view's files, narrowed to the winners named — and, when asked, its directory
  * claims, slash-marked
  *
- * Directory claims are offered whichever class they are: an ancestor claim is a
- * managed path, and the update remedy ('dotta update <dir>') names exactly such
- * a path — a completer that hid the spine would hide the cure.
+ * Directory claims are offered whichever class they are: an ancestor claim is
+ * an active path, and the update remedy ('dotta update <dir>') names exactly
+ * such a path — a completer that hid the spine would hide the cure.
  */
 void completion_files(
     const dotta_ctx_t *ctx, FILE *out,
@@ -211,7 +211,7 @@ typedef struct {
 } refspec_walk_ctx_t;
 
 /**
- * Tree-walk callback: emit one token per managed file blob.
+ * Tree-walk callback: emit one token per tracked file blob.
  *
  * The content gate every walk over a branch asks (infra/label.h label_prefixes):
  * a name in the grammar is content, and a blob under no label — a top-level one,

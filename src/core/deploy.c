@@ -40,19 +40,14 @@
  * kind-specific arm. A file row can carry ENCRYPTION beside any of those; the
  * arm masks it either way.
  *
- * The planner iterates the active slices, so the three non-active states never
- * reach this; their arms name the owner that does handle them and keep -Wswitch
- * quiet.
+ * The planner walks the active items, so the three states an orphan or a discovery
+ * takes never reach this; their arms name the owner that does handle them and
+ * keep -Wswitch quiet.
  *
- * @param item Workspace divergence verdict (NULL = not in the index = clean)
+ * @param item An active item, the verdict on it (must not be NULL)
  * @return true when deploy must act on the path
  */
 static bool deploy_needs_work(const workspace_item_t *item) {
-    if (item == NULL) {
-        /* Not in workspace divergence index -> file is clean */
-        return false;
-    }
-
     /* Decision tree: state (existence) determines baseline, then check divergence (quality) */
     switch (item->state) {
         case WORKSPACE_STATE_UNDEPLOYED:
@@ -102,9 +97,8 @@ static bool deploy_needs_work(const workspace_item_t *item) {
         case WORKSPACE_STATE_ORPHANED:
             /* A record whose path the view lacks.
              *
-             * Not reachable from the planner: both active slices are partitioned
-             * to enabled profiles, and orphan rows are exactly the ones that
-             * partition rejected.
+             * Not reachable from the planner: it walks the active items, and an
+             * orphan is a record whose path the view lacks.
              *
              * Never deployment — cleanup owns orphan removal. */
             return false;
@@ -112,8 +106,8 @@ static bool deploy_needs_work(const workspace_item_t *item) {
         case WORKSPACE_STATE_UNTRACKED:
             /* File exists on filesystem in a tracked directory but not in Git.
              *
-             * Architectural invariant: Untracked files should NOT appear in the
-             * active slice (which is built from view rows, not filesystem scans).
+             * Architectural invariant: Untracked files should NOT appear among
+             * the active items (made from the view's rows, not filesystem scans).
              * If we reach here, it's a programming error.
              *
              * Defensive: Return false (don't deploy untracked files, user must
@@ -157,8 +151,8 @@ typedef enum {
  *
  * A row with no work is adoptable unless -e named it: --exclude means "leave
  * this path alone entirely", while --skip-existing only means "do not overwrite",
- * and adoption overwrites nothing. So SKIP_EXISTING on a clean row (one the index
- * holds only for a profile reassignment, say) is not a skip at all.
+ * and adoption overwrites nothing. So SKIP_EXISTING on a clean row — every clean
+ * row with something standing, under --skip-existing — is not a skip at all.
  *
  * @param part Partition for the row's kind (must not be NULL)
  * @param row Borrowed view row (must not be NULL)
@@ -166,9 +160,9 @@ typedef enum {
  * @param skip Why the row's work is skipped, if it is
  * @return Error or NULL on success
  */
-static error_t *partition_push(
+static error_t *deploy_classify(
     deploy_partition_t *part,
-    const void *row,
+    const manifest_row_t *row,
     bool work,
     skip_reason_t skip
 ) {
@@ -209,9 +203,9 @@ error_t *deploy_plan_build(
     /* Directories then files — the order preflight decides and the run acts in.
      * Convention alone: each row's classification reads the workspace and the
      * scope, never the buckets, so neither loop depends on the other having run. */
-    manifest_rows_t dirs = workspace_directories(ws);
+    workspace_items_t dirs = workspace_directories(ws);
     for (size_t i = 0; i < dirs.count; i++) {
-        const manifest_row_t *row = dirs.entries[i];
+        const workspace_item_t *item = dirs.entries[i];
 
         /* An ancestor claim is not the run's to converge, so it is not the plan's
          * to hold. dotta creates such a path on the way to something beneath it
@@ -223,59 +217,55 @@ error_t *deploy_plan_build(
          * must not take ownership of a parent it found already there). Prior to
          * scope, because scope decides reach and this decides whether there is
          * anything to reach for. */
-        if (!row->tracked) continue;
+        if (!item->row->tracked) continue;
 
-        if (!scope_accepts_profile(scope, row->profile) ||
+        if (!scope_accepts_profile(scope, item->profile) ||
             !scope_accepts_path(
-            scope, row->filesystem_path, row->storage_path, PATH_KIND_DIRECTORY
+            scope, item->filesystem_path, item->storage_path, PATH_KIND_DIRECTORY
             )) {
             continue;                        /* out of scope: invisible */
         }
 
         /* No SKIP_EXISTING arm: --skip-existing does not reach tracked directories
          * (see deploy_partition_t). */
-        err = partition_push(
-            &plan->directories, row,
-            deploy_needs_work(workspace_get_item(ws, row->filesystem_path)),
-            scope_is_excluded(scope, row->storage_path, PATH_KIND_DIRECTORY)
+        err = deploy_classify(
+            &plan->directories, item->row, deploy_needs_work(item),
+            scope_is_excluded(scope, item->storage_path, PATH_KIND_DIRECTORY)
                 ? SKIP_EXCLUDED : SKIP_NONE
         );
         if (err) goto cleanup;
     }
 
-    manifest_rows_t files = workspace_files(ws);
+    workspace_items_t files = workspace_files(ws);
     for (size_t i = 0; i < files.count; i++) {
-        const manifest_row_t *row = files.entries[i];
+        const workspace_item_t *item = files.entries[i];
 
-        if (!scope_accepts_profile(scope, row->profile) ||
+        if (!scope_accepts_profile(scope, item->profile) ||
             !scope_accepts_path(
-            scope, row->filesystem_path, row->storage_path, PATH_KIND_FILE
+            scope, item->filesystem_path, item->storage_path, PATH_KIND_FILE
             )) {
             continue;
         }
 
-        const workspace_item_t *item = workspace_get_item(ws, row->filesystem_path);
-
-        /* Occupancy is the workspace's own lstat, not a fresh probe: a row with
-         * work is always lent its item (deploy_needs_work(NULL) is false), and
-         * lstat truth counts a broken symlink as occupying the path — which is
-         * what the flag says, and what a stat that follows links could not tell
-         * us. A row beneath a squatter is the one exception: no lstat was taken
-         * there (core/workspace.h workspace_displaced_t), so nothing is "existing"
-         * for the flag to keep — the path is empty once the squatter this run
-         * replaces is gone, and one it leaves standing is refused by the ancestry
-         * rung either way. Both fates are preflight's (check_ancestry). -e still
-         * holds: a named path is intent, not a look's finding. */
+        /* Occupancy is the workspace's own lstat, not a fresh probe: every row's
+         * item carries its look, and lstat truth counts a broken symlink as
+         * occupying the path — which is what the flag says, and what a stat that
+         * follows links could not tell us. A row beneath a squatter is the one
+         * exception: no lstat was taken there (core/workspace.h
+         * workspace_displaced_t), so nothing is "existing" for the flag to keep
+         * — the path is empty once the squatter this run replaces is gone, and
+         * one it leaves standing is refused by the ancestry rung either way.
+         * Both fates are preflight's (check_ancestry). -e still holds: a named
+         * path is intent, not a look's finding. */
         skip_reason_t skip = SKIP_NONE;
-        if (scope_is_excluded(scope, row->storage_path, PATH_KIND_FILE)) {
+        if (scope_is_excluded(scope, item->storage_path, PATH_KIND_FILE)) {
             skip = SKIP_EXCLUDED;
-        } else if (skip_existing && item &&
-            item->displaced == WORKSPACE_DISPLACED_NONE &&
+        } else if (skip_existing && item->displaced == WORKSPACE_DISPLACED_NONE &&
             item->occupant != FS_OCCUPANT_NONE) {
             skip = SKIP_EXISTING;
         }
 
-        err = partition_push(&plan->files, row, deploy_needs_work(item), skip);
+        err = deploy_classify(&plan->files, item->row, deploy_needs_work(item), skip);
         if (err) goto cleanup;
     }
 
@@ -961,7 +951,7 @@ error_t *deploy_preflight(
      * allocates one slot rather than nothing, so every array is an array. */
     manifest_rows_t files = manifest_rows_view(&plan->files.pending);
     manifest_rows_t dirs = manifest_rows_view(&plan->directories.pending);
-    manifest_rows_t all_dirs = workspace_directories(ws);
+    workspace_items_t all_dirs = workspace_directories(ws);
 
     result->directories.entries = calloc(dirs.count + 1, sizeof(deploy_verdict_t));
     result->files.entries = calloc(files.count + 1, sizeof(deploy_verdict_t));
@@ -997,8 +987,9 @@ error_t *deploy_preflight(
         const char *path = row->filesystem_path;
 
         /* The row's item, carried verbatim by whichever fate the row takes. Every
-         * pending row has one: the item is what put it in the bucket
-         * (deploy_needs_work(NULL) is false), a row beneath a squatter included,
+         * pending row's is lent: work is something to say — a state but DEPLOYED,
+         * a path bit, a squatter above — so its item is among the diverged items
+         * (core/workspace.h workspace_diverged), a row beneath a squatter included,
          * whose item says nothing there was looked at. */
         const workspace_item_t *item = workspace_get_item(ws, path);
 
@@ -1194,12 +1185,12 @@ error_t *deploy_preflight(
     /* The ancestors: every directory row the run does not act on, absent as the
      * run will find it, that stands above a deployable row. Absent has two
      * readings, both fate-aware now: the rung's — beneath a squatted ancestor
-     * the run converges first — or the workspace's own occupant (a row without
-     * an item is present and converged). ensure_parents creates exactly these
-     * on the way down to a deployed path, with the metadata decided here; a
-     * candidate the world makes present before then is simply not created and
-     * costs nothing, and one made present past the probe meets the create's
-     * refusal, never a convergence (fs_create_dir_exclusive).
+     * the run converges first — or the workspace's own occupant (a clean item's
+     * is its look, present). ensure_parents creates exactly these on the way
+     * down to a deployed path, with the metadata decided here; a candidate the
+     * world makes present before then is simply not created and costs nothing,
+     * and one made present past the probe meets the create's refusal, never a
+     * convergence (fs_create_dir_exclusive).
      *
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
@@ -1208,8 +1199,8 @@ error_t *deploy_preflight(
      * not absent (present, as its item read), and a landing-skipped one has no
      * deployable row beneath it (the invariant, deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
-        const manifest_row_t *row = all_dirs.entries[i];
-        const char *path = row->filesystem_path;
+        const workspace_item_t *item = all_dirs.entries[i];
+        const char *path = item->filesystem_path;
 
         if (directory_is_deployable(result, path)) {
             continue;
@@ -1217,8 +1208,8 @@ error_t *deploy_preflight(
 
         /* Its ancestry, as the ladders ask it. An ancestor takes no skip (below),
          * so this one is the rung's answer alone: its reason is read and it is
-         * never pushed, which is why it carries no item. */
-        deploy_skip_t skip = { 0 };
+         * never pushed. */
+        deploy_skip_t skip = { .item = item };
         bool absent = false;
 
         check_ancestry(ws, result, path, &skip, &absent);
@@ -1226,9 +1217,7 @@ error_t *deploy_preflight(
             continue;   /* skipped beneath a squatted ancestor that stays */
         }
 
-        const workspace_item_t *item = workspace_get_item(ws, path);
-
-        if (!(absent || (item && item->occupant == FS_OCCUPANT_NONE)) ||
+        if (!(absent || item->occupant == FS_OCCUPANT_NONE) ||
             !above_deployable_row(result, path)) {
             continue;
         }
@@ -1246,7 +1235,7 @@ error_t *deploy_preflight(
          * accepts for a foreign-owned derived claim above a landing the invoker
          * can write. */
         err = resolve_deployment_ownership(
-            row, opts->strict_ownership, result->warnings, &v->uid, &v->gid
+            item->row, opts->strict_ownership, result->warnings, &v->uid, &v->gid
         );
         if (err) goto cleanup;
     }

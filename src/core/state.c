@@ -219,7 +219,7 @@ static error_t *initialize_schema(sqlite3 *db) {
 
         /* The record: what dotta last reconciled each managed path against, and
          * what it confirmed there. A row exists iff dotta has observed the path
-         * on disk while it was managed, and its existence is the whole of that
+         * on disk while it was active, and its existence is the whole of that
          * fact: no column restates it. One path, one kind, one record — the PRIMARY
          * KEY; the kind is `type`. No foreign key in either direction: nothing
          * is a parent, nothing cascades.
@@ -1786,7 +1786,7 @@ static error_t *forget_released(state_t *state, const char *filesystem_path) {
 }
 
 /**
- * Observe a managed path: record its first observation on disk
+ * Observe an active path: record its first observation on disk
  *
  * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on sql_observe and the
  * header contract. Binds the row's key, binding, kind and claim; the blob, stat
@@ -1829,7 +1829,7 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
 }
 
 /**
- * Confirm a managed path: advance its record to what the comparison established
+ * Confirm an active path: advance its record to what the comparison established
  *
  * A compare-and-swap on the record the caller read — see the SQL comment on
  * sql_confirm and the header contract. Writes the kind, the blob and the stat
@@ -1931,7 +1931,7 @@ error_t *state_confirm(
 }
 
 /**
- * Confirm a managed path's claim: advance its record to the claim disk was found,
+ * Confirm an active path's claim: advance its record to the claim disk was found,
  * or made, to stand on
  *
  * A compare-and-swap on the record the caller read — see the SQL comment on
@@ -1992,7 +1992,7 @@ error_t *state_confirm_claim(
 }
 
 /**
- * Anchor a managed path: record the row dotta reconciled it against
+ * Anchor an active path: record the row dotta reconciled it against
  *
  * The ownership event. See state.h for the full contract. In brief:
  *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.

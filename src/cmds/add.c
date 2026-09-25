@@ -2384,7 +2384,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Capture directory metadata using stat data. The walk entered this
-         * directory, so the claim is a tracked one: the profile manages the path
+         * directory, so the claim is a tracked one: the profile tracks the path
          * itself, scans it for new files and converges its attributes. */
         metadata_item_t *dir_item = NULL;
         err = metadata_capture_from_directory(storage_path, &dir_stat, true, &dir_item);

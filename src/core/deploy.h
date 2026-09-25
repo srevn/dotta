@@ -129,7 +129,7 @@ typedef struct {
  * workspace.h) assumes an unstattable path present; this is deploy's stricter
  * reading, for judgments — one producer, read by occupant_conflicts (both ladders'
  * type rung) and deploy_file (the symlink arm's clear) in deploy.c, and by
- * cmds/apply.c print_deploy_preview (the overwrite count).
+ * cmds/apply.c apply_print_deploy_preview (the overwrite count).
  */
 static inline bool deploy_occupant_present(fs_occupant_t occ) {
     return occ != FS_OCCUPANT_NONE && occ != FS_OCCUPANT_UNKNOWN;
@@ -189,8 +189,8 @@ static inline deploy_convergence_t deploy_convergence(fs_occupant_t occ) {
  * whose STALE arm rests on this).
  *
  * Two readers, two files: the file ladder's consent rung (deploy_preflight),
- * and the forced preview's counterweight (cmds/apply.c print_deploy_preview) —
- * a verdict overwrites local content iff something stands at its path AND this
+ * and the forced preview's counterweight (cmds/apply.c apply_print_deploy_preview)
+ * — a verdict overwrites local content iff something stands at its path AND this
  * answers yes, so the preview reads it beside deploy_occupant_present. Each hands
  * it the row's item, which every fate carries (deploy_verdict_t).
  *
@@ -254,11 +254,12 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * reason already holds, and its place in the order is the place the decision takes.
  *
  * Each reason is a sentence about the row that carries it, read off that skip's
- * own fields (cmds/apply.c print_deploy_skips): the ancestor it names (PERMISSION,
- * ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED), its own
- * item (CONTENT, UNREADABLE), its own claim (OWNERSHIP). So a row beneath a skipped
- * squatter takes the squatter's class and never its reason (check_ancestry):
- * the squatter's sentence is about the squatter, whatever reason a later rung adds.
+ * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
+ * (PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED),
+ * its own item (CONTENT, UNREADABLE), its own claim (OWNERSHIP). So a row beneath
+ * a skipped squatter takes the squatter's class and never its reason
+ * (check_ancestry): the squatter's sentence is about the squatter, whatever reason
+ * a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -309,7 +310,7 @@ static inline bool deploy_skip_needs_force(deploy_skip_reason_t reason) {
  * as its displaced class, so the remedy here and status's Displaced paths section
  * cannot name two claimants for one squatter; UNCLAIMED by the landing check
  * (check_landing), the one class it can find. Read by cmds/apply.c
- * print_deploy_skips, whose remedies part on it.
+ * apply_print_deploy_skips, whose remedies part on it.
  *
  * The class answers for ANCESTOR, where the reason is one and the cure is not —
  * and only where the skip is the squatter's only report: a squatter this run

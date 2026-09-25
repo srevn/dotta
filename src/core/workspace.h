@@ -150,9 +150,9 @@ typedef enum {
  *
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
  * screen names a claim axis that differs — the tags (workspace_item_tags), which
- * apply's fixed directories print too (cmds/apply.c print_deploy_results), diff's
- * status line (cmds/diff.c get_status_message_from_item), and a skipped orphan's
- * label and legend (cmds/apply.c print_cleanup_skips, cmds/status.c
+ * apply's fixed directories print too (cmds/apply.c apply_print_deploy_results),
+ * diff's status line (cmds/diff.c get_status_message_from_item), and a skipped
+ * orphan's label and legend (cmds/apply.c apply_print_cleanup_skips, cmds/status.c
  * status_print_workspace) — and a sentence that names both says "mode and
  * ownership", never "permissions", which is one word for two axes. STALE and
  * CLAIM_MOVED are one word: [stale] on a tag, and "changed in Git" in a sentence
@@ -429,7 +429,7 @@ typedef enum {
  * (workspace_anchor) — which is defined because neither is an object defined
  * const: every record and every item is the arena's. A record's strings are never
  * freed before the arena, so a pointer read off it outlives any write (apply's
- * reassigned[].from).
+ * reassignment_t, its from).
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -525,14 +525,14 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * of another kind than its row describes another node, so it is none of the row's:
  * no base for its claim (workspace_claims_moved below), no target for what the
  * load learns (core/workspace.c workspace_note_content), no witness to its deletion
- * (classify_absent), no directory's handover to acknowledge (cmds/apply.c
- * cmd_apply's acknowledgement). Whether that node still stands is a look's to
- * say. While it does, the row's deployment replaces dotta's own node there, which
- * is a handover (workspace_reassigned below); where the look found the row's
- * own kind in its place, that node is gone, and apply adopts a file over the
- * record (cmd_apply's adoption) and observes a directory in the record's place
- * (workspace_observe_retyped). A reader not on this list is a bug; the boolean
- * reading of it is workspace_stale below.
+ * (classify_absent), no record a directory's acknowledgement moves onto its row
+ * (cmds/apply.c cmd_apply's acknowledgement). Whether that node still stands is
+ * a look's to say. While it does, the row's deployment replaces dotta's own node
+ * there, which is a reassignment (workspace_reassigned below); where the look
+ * found the row's own kind in its place, that node is gone, and apply adopts a
+ * file over the record (cmd_apply's adoption) and observes a directory in the
+ * record's place (workspace_observe_retyped). A reader not on this list is a
+ * bug; the boolean reading of it is workspace_stale below.
  *
  * Not this: workspace_compare_orphan's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a proof that holds is CMP_EQUAL
@@ -549,49 +549,51 @@ static inline compare_result_t workspace_compare_confirmed(
 }
 
 /**
- * A pending handover: the record dotta owns names a profile the row does not,
- * and describes the node the row's deployment takes over
+ * A pending reassignment: the record dotta owns names a profile the row does
+ * not, and describes the node the row's deployment takes over
  *
  * The join over its two subjects — a view row and the record at its path — and
  * the look at that path, since a record describes a node and only a look says
  * whether one stands; an item-shaped caller passes item->row, item->anchor and
- * item->occupant. NULL on either side is no handover: an orphan item carries no
- * row, and a path dotta has no record of has nothing to hand over.
+ * item->occupant. NULL on either side is no reassignment: an orphan item carries
+ * no row, and a path dotta has no record of has no owner to reassign it from.
  *
  * The record's kind decides what the look is asked (the ladder's first rung,
  * workspace_compare_confirmed above). Of the row's kind, the record is the row's
- * own node's history, and the handover stands whatever the look found: a copy
- * the user edited, replaced or deleted is still the one the record names, and
- * the write that answers the row re-stamps the record under it. Of another kind,
- * it is another node's — a link where the row claims a file, a file where it
- * claims a directory — handed over only while that node stands: the row's
+ * own node's history, and the reassignment stands whatever the look found: a
+ * copy the user edited, replaced or deleted is still the one the record names,
+ * and the write that answers the row re-stamps the record under it. Of another
+ * kind, it is another node's — a link where the row claims a file, a file where
+ * it claims a directory — reassigned only while that node stands: the row's
  * deployment then replaces dotta's own node, and the replacement is the
- * acknowledgement, the line a same-kind handover reads. A look that found anything
- * else found that node gone — the row's own kind in its place, another node, or
- * nothing — and there is nothing to hand over: the path reads as one the record
- * does not name, a clean file adopted and a directory observed anew (cmds/apply.c
- * cmd_apply, workspace_observe_retyped). No look — withheld beneath a squatter,
- * failed, or not in the caller's hands (FS_OCCUPANT_UNKNOWN) — disproves nothing,
- * and the handover stands: absence is never inferred from a failure to look.
+ * acknowledgement, the line a same-kind reassignment reads. A look that found
+ * anything else found that node gone — the row's own kind in its place, another
+ * node, or nothing — and there is nothing to reassign: the path reads as one
+ * the record does not name, a clean file adopted and a directory observed anew
+ * (cmds/apply.c cmd_apply, workspace_observe_retyped). No look — withheld beneath
+ * a squatter, failed, or not in the caller's hands (FS_OCCUPANT_UNKNOWN) —
+ * disproves nothing, and the reassignment stands: absence is never inferred from
+ * a failure to look.
  *
  * Reads the LIVE record — after apply acknowledges (workspace_anchor rewrites
  * the record under the row's profile) the same read honestly answers false, so
  * a consumer that wants the load-time fact reads before the run's ownership events
- * rewrite it (apply's collection does).
+ * rewrite it (each of apply's writers does, before its own).
  *
  * Only an owned record qualifies: an observed or confirmed record dotta never
  * deployed names the row the path was first seen under, not a deployer, and apply
  * adopts such a path rather than acknowledging it.
  *
- * Both kinds — and of a directory's two classes, the tracked one alone. A handover
- * is a question about tracking the path, which core/manifest.h asks of tracked
- * claims alone: a derived ancestor claim carries no intent to acknowledge, deploy's
- * plan drops such a row before scope and the directory analysis stops at the
- * same line, so nothing would ever discharge one. The clause lives in the rule
- * and not at the callers because most callers stand inside a loop that has already
- * settled the row's kind and class, and the ones that do not cannot see that
- * they need it. manifest_is_derived is that clause entire: a file row's `tracked`
- * is a don't-care, and the kind gates the read inside the predicate.
+ * Both kinds — and of a directory's two classes, the tracked one alone. A
+ * reassignment is a question about tracking the path, which core/manifest.h asks
+ * of tracked claims alone: a derived ancestor claim carries no intent to
+ * acknowledge, deploy's plan drops such a row before scope and the directory
+ * analysis stops at the same line, so nothing would ever discharge one. The clause
+ * lives in the rule and not at the callers because most callers stand inside a
+ * loop that has already settled the row's kind and class, and the ones that do
+ * not cannot see that they need it. manifest_is_derived is that clause entire:
+ * a file row's `tracked` is a don't-care, and the kind gates the read inside
+ * the predicate.
  *
  * Orphans: false by construction — an orphan item carries no row, so no reader
  * needs an orphan guard.
@@ -600,15 +602,16 @@ static inline compare_result_t workspace_compare_confirmed(
  * row that carries this through it (core/workspace.c workspace_list) — and the
  * tags (workspace_item_tags), with the item's; diff's filter, its "acknowledged
  * by apply" line and its status colour (cmds/diff.c), with the item's; apply's
- * collection, its two acknowledgement loops — the writers that move the record
- * onto the row's profile — and its record step, each with the item's
- * (cmds/apply.c); and sync's apply hint, with none, which asks it of the record
- * against the view with no workspace at all, workspace_stale answering first
- * across kinds (cmds/sync.c). A record's WRITER asks the whole binding — profile
- * and storage path both — which is manifest_is_claim; this is the half the screens
- * name and the receipts count. Not manifest_diff_stats_t's `reassigned`, which
- * counts one transition's own delta between two views; this is the record against
- * the view, standing from whenever it began.
+ * two acknowledgement loops — the writers that move the record onto the row's
+ * profile — its pending reassignments off the verdicts, and its record step,
+ * each with the item's (cmds/apply.c cmd_apply); and sync's apply hint, with
+ * none, which asks it of the record against the view with no workspace at all,
+ * workspace_stale answering first across kinds (cmds/sync.c). A record's WRITER
+ * asks the whole binding — profile and storage path both — which is
+ * manifest_is_claim; this is the half the screens name and the receipts count.
+ * Not manifest_diff_stats_t's `reassigned`, which counts one transition's own
+ * delta between two views; this is the record against the view, standing from
+ * whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -872,7 +875,7 @@ typedef enum {
  *                            not move: update's to commit. A file row's file ↔
  *                            symlink stays here: the copy commits it as the new
  *                            kind.
- *   none, record disagrees   REASSIGNED — a pending handover apply
+ *   none, record disagrees   REASSIGNED — a pending reassignment apply
  *                            acknowledges.
  *   none                     CLEAN.
  *
@@ -1016,14 +1019,15 @@ error_t *workspace_load(
  *
  * Every item it holds has something to say: a state but DEPLOYED, or a DEPLOYED
  * item the route does not call clean (workspace_item_route) — a squatter above
- * it, a divergence bit, or a pending handover, which a clean row's sources and
- * look derive where its owned record, of the row's own kind, names another profile
- * (workspace_reassigned: a record of another kind is a node the clean row's look
- * found gone). An active path with none of these is not among them, and is lent
- * among the active items all the same (workspace_active, and its kind's:
- * workspace_directories, workspace_files). So a load is clean iff this is empty,
- * and clean over a scope iff it holds none of the scope's items: cmds/status.c
- * status_print_workspace reads its status line that way, filtered or not.
+ * it, a divergence bit, or a pending reassignment, which a clean row's sources
+ * and look derive where its owned record, of the row's own kind, names another
+ * profile (workspace_reassigned: a record of another kind is a node the clean
+ * row's look found gone). An active path with none of these is not among them,
+ * and is lent among the active items all the same (workspace_active, and its
+ * kind's: workspace_directories, workspace_files). So a load is clean iff this
+ * is empty, and clean over a scope iff it holds none of the scope's items:
+ * cmds/status.c status_print_workspace reads its status line that way, filtered
+ * or not.
  *
  * @param ws Workspace (NULL returns an empty slice)
  * @return Borrowed slice over the diverged items
@@ -1231,9 +1235,9 @@ const workspace_squatted_t *workspace_squatted_ancestor(
  *      The look that failed, worded by the item's fault (workspace_fault_t)
  *      so one path reads the same word wherever it is listed. What settles it
  *      is the block's to say, in its own words, not the row's
- *   6. "reassigned" (CYAN when alone) - A pending handover (workspace_reassigned),
- *      last and beside any of the above: the record against the row, no look
- *      involved
+ *   6. "reassigned" (CYAN when alone) - A pending reassignment
+ *      (workspace_reassigned), last and beside any of the above: the record against
+ *      the row, and the look only where the record is of another kind
  *
  * The function handles special cases:
  *   - TYPE divergence suppresses MODE tag (type change makes mode irrelevant)
@@ -1318,10 +1322,10 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  * nothing reads update's after its record write). Its callers, cmds/apply.c
  * cmd_apply's, each holding the item:
  *   - the adoption and acknowledgement loops, over the clean items (an ownership
- *     event on a file's first claim, and the acknowledgement of a clean handover,
- *     a file's or a tracked directory's — the record's binding becomes the row's,
- *     whichever half of it moved: another profile's row, or another name of the
- *     same profile that the view gave the path to)
+ *     event on a file's first claim, and the acknowledgement of a clean row the
+ *     record has yet to follow, a file's or a tracked directory's — the record's
+ *     binding becomes the row's, whichever half of it moved: another profile's
+ *     row, or another name of the same profile that the view gave the path to)
  *   - the record step (an ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
  *     parent of a planned path — and a directory fixed in place whose owned record
@@ -1369,8 +1373,8 @@ error_t *workspace_anchor(
  * this writes what it is handed and asks nothing again.
  *
  * Never an ownership event: the binding and the lifecycle are not written, so a
- * pending handover keeps reading as one, and a directory the user made is never
- * handed to the prune.
+ * pending reassignment keeps reading as one, and a directory the user made is
+ * never handed to the prune.
  *
  * Two callers, each holding the item: the flush (workspace_flush), for what the
  * load established, and cmds/apply.c cmd_apply's record step, for the claims a
@@ -1448,8 +1452,8 @@ error_t *workspace_confirm(
  * agree for downstream readers in the same run wherever the database still holds
  * what the load read; a record another writer moved since is left theirs, and
  * memory behind it, the direction the next load corrects. None writes the binding,
- * an ownership event's to change, so a clean handover keeps reading as one until
- * apply acknowledges it; nor deployed_at — this flush confirms observations,
+ * an ownership event's to change, so a clean reassignment keeps reading as one
+ * until apply acknowledges it; nor deployed_at — this flush confirms observations,
  * not deployments, and apply and the capturing verbs remain its writers.
  *
  * The first write takes the store's lock where the caller holds none — status,

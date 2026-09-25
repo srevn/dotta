@@ -85,7 +85,7 @@
  * what it will do, then what it will not and why. No total-count line: the exit
  * error's message is the count's one home.
  */
-static void print_deploy_skips(
+static void apply_print_deploy_skips(
     output_t *out, const deploy_preflight_result_t *verdicts
 ) {
     if (verdicts->skipped.count == 0) {
@@ -318,8 +318,8 @@ static void print_deploy_skips(
  * forced run's counterweight to the confirmation prompt --force skips. At verbose
  * the paths are listed under their count, capped the way every preview list is
  * — one list, the glyph carrying the overwrite split: a yellow bullet on exactly
- * the rows the yellow line counted, cyan on the rest (print_path_list's idiom —
- * the glyph says which count the path belongs to). The ancestors the run may
+ * the rows the yellow line counted, cyan on the rest (apply_print_paths's idiom
+ * — the glyph says which count the path belongs to). The ancestors the run may
  * make on the way are not here: they are the mechanics of landing a planned path,
  * and the receipt names the ones it made.
  *
@@ -332,7 +332,7 @@ static void print_deploy_skips(
  *
  * Empty verdicts have nothing to say, and say nothing.
  */
-static void print_deploy_preview(
+static void apply_print_deploy_preview(
     output_t *out,
     const deploy_preflight_result_t *verdicts
 ) {
@@ -477,42 +477,43 @@ static void print_deploy_preview(
 }
 
 /**
- * A pending profile reassignment, materialized at collect time
+ * A profile reassignment the run acknowledges: its item, and whose it was
  *
- * Exactly what the preview prints: the path (with its kind, for the directory
- * marker) and the two profiles of the handover, captured off the item before
+ * The item carries the path, its kind (the slash after a directory path) and
+ * the new owner, the row's profile. The one fact it cannot carry is the old owner:
  * the run's ownership events (the adoption and acknowledgement loops' re-stamp,
- * the deployment's anchor) rewrite the record the fact derives from. Strings
- * are borrowed from the workspace arena (command lifetime).
+ * the deployment's anchor) rewrite the record it is read from, so the writer
+ * that names the reassignment reads it first. The record's strings outlive the
+ * write (core/workspace.h workspace_item_t), and the item is the workspace's.
  */
 typedef struct {
-    const char *path;      /* Filesystem path */
-    const char *from;      /* The record's profile at load */
-    const char *to;        /* The row's profile — the new owner */
-    path_kind_t kind;      /* The item's kind — the slash after a directory path */
+    const workspace_item_t *item;  /* The workspace's; the new owner is its profile */
+    const char *from;              /* The record's profile, read before the write re-stamps it */
 } reassignment_t;
 
 /**
- * Print pending profile reassignments
+ * Print the profile reassignments the run acknowledges
  *
- * `reassigned` holds the planned rows whose owning profile changed (collected
- * off the plan's clean buckets, both kinds, and then off the verdicts) — the
- * exact set the run will acknowledge: a clean one by its re-stamp, a deployable
- * one by the record step behind its deployment, creation, replacement or
- * convergence.
+ * `reassignments` holds the planned items whose owning profile changed (named
+ * by the adoption and acknowledgement loops over the plan's clean buckets, both
+ * kinds, and then off the verdicts) — the exact set the run will acknowledge: a
+ * clean one by its re-stamp, a deployable one by the record step behind its
+ * deployment, creation, replacement or convergence.
  */
-static void print_reassignments(
-    output_t *out, const reassignment_t *reassigned, size_t count
+static void apply_print_reassignments(
+    output_t *out, const reassignment_t *reassignments, size_t count
 ) {
     if (count == 0) return;
 
     output_section(out, OUTPUT_NORMAL, "Profile reassignments");
     for (size_t i = 0; i < count; i++) {
+        const workspace_item_t *item = reassignments[i].item;
+
         output_styled(
             out, OUTPUT_NORMAL,
             "  {yellow}→{reset} %s%s: {cyan}%s{reset} → {cyan}%s{reset}\n",
-            reassigned[i].path, path_kind_suffix(reassigned[i].kind),
-            reassigned[i].from, reassigned[i].to
+            item->filesystem_path, path_kind_suffix(item->item_kind),
+            reassignments[i].from, item->profile
         );
     }
     output_info(
@@ -539,7 +540,7 @@ static void print_reassignments(
  * @param cleanup_plan Cleanup plan, whose `excluded` bucket carries the orphans
  *        an -e pattern spared (must not be NULL)
  */
-static void print_withheld(
+static void apply_print_withheld(
     output_t *out,
     const deploy_plan_t *deploy_plan,
     const cleanup_plan_t *cleanup_plan
@@ -620,8 +621,8 @@ static void print_withheld(
  * Handles all output for deployment results. The deploy layer only collects
  * outcomes; this function handles all presentation — the run's receipt, per-item
  * sections at verbose and summary counts at normal. Every number is the same
- * fold the preview takes over the verdicts (print_deploy_preview), taken here
- * over the verdicts the run carried out — so the receipt restates the preview
+ * fold the preview takes over the verdicts (apply_print_deploy_preview), taken
+ * here over the verdicts the run carried out — so the receipt restates the preview
  * by construction, adding nothing of its own.
  *
  * Categories (each semantically distinct):
@@ -648,18 +649,18 @@ static void print_withheld(
  * carrying its ownership when the row holds one — a link's entry exists to carry
  * exactly that, so the receipt is where the claim becomes visible.
  *
- * Work the run skipped is not here: the plan decided it, print_withheld reports
- * it, and it must be said even on runs that never execute. A failure IS here —
- * one line per row that did not land, its cause beside it (the receipt's failed
- * bucket), at every verbosity and last, after what did land: a receipt that omits
- * what went wrong is not a receipt, and no run-level error will name it (cleanup's
- * receipt ends on its failures the same way). No total-count line: the exit error's
- * message is the count's one home, as for the skip block.
+ * Work the run skipped is not here: the plan decided it, apply_print_withheld
+ * reports it, and it must be said even on runs that never execute. A failure IS
+ * here — one line per row that did not land, its cause beside it (the receipt's
+ * failed bucket), at every verbosity and last, after what did land: a receipt
+ * that omits what went wrong is not a receipt, and no run-level error will name
+ * it (cleanup's receipt ends on its failures the same way). No total-count line:
+ * the exit error's message is the count's one home, as for the skip block.
  *
  * Adoption (ownership stamping for pre-existing matching files) is an apply-level
  * concern and its summary is printed by cmd_apply directly.
  */
-static void print_deploy_results(
+static void apply_print_deploy_results(
     output_t *out,
     const deploy_result_t *result
 ) {
@@ -668,8 +669,8 @@ static void print_deploy_results(
     deploy_outcomes_t ancestors = result->ancestors;
 
     /* The verbs, folded off the carried-out fates exactly as the preview folds
-     * them off the verdicts (print_deploy_preview) — the receipt restates the
-     * preview by construction: one producer, so they cannot drift. */
+     * them off the verdicts (apply_print_deploy_preview) — the receipt restates
+     * the preview by construction: one producer, so they cannot drift. */
     size_t created = 0; size_t fixed = 0; size_t replaced = 0;
 
     for (size_t i = 0; i < converged.count; i++) {
@@ -899,7 +900,7 @@ static void print_deploy_results(
  * by the time the run looked) — the verdicts' rows print first, so a run that
  * had both names each once.
  */
-static void print_cleanup_results(
+static void apply_print_cleanup_results(
     output_t *out,
     const cleanup_preflight_result_t *verdicts,
     const cleanup_result_t *result
@@ -1149,7 +1150,7 @@ static void print_cleanup_results(
  * count the path belongs to: a cyan bullet for what the run acts on, a yellow
  * slash for what it deliberately leaves.
  */
-static void print_path_list(
+static void apply_print_paths(
     output_t *out,
     const ptr_array_t *bucket,
     output_color_t color,
@@ -1180,7 +1181,7 @@ static void print_path_list(
  * in tense. Equal counts for a run the world did not move under: a path gone,
  * or a directory refilled, between the prompt and the removal moves one item
  * from the promise here to the receipt's own buckets (reclaimed, skipped), and
- * the receipt says so from its side (print_cleanup_results).
+ * the receipt says so from its side (apply_print_cleanup_results).
  *
  * The summaries only count the files the run will not prune; three blocks name
  * them, with different messaging. The released ones close this preview: a release
@@ -1188,12 +1189,12 @@ static void print_path_list(
  * it, so the block is the preview's to make. The skipped ones are two buckets
  * under one count — the skip is the fate, and the record stays either way — named
  * apart by what stands in their way: the item's own reason and the one lever
- * that overrides it (print_cleanup_skips), or the parent that refuses the run
- * and the command that holds root (print_cleanup_refused). Cleanup took that
- * split when it bucketed each file; this is display, so it counts nothing and
- * only routes per item.
+ * that overrides it (apply_print_cleanup_skips), or the parent that refuses the
+ * run and the command that holds root (apply_print_cleanup_refused). Cleanup
+ * took that split when it bucketed each file; this is display, so it counts nothing
+ * and only routes per item.
  */
-static void print_cleanup_preview(
+static void apply_print_cleanup_preview(
     output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
@@ -1257,7 +1258,7 @@ static void print_cleanup_preview(
          * own below — the released ones closing this preview, the skipped ones
          * with their reasons in the block after it — so their counts stand
          * alone. */
-        print_path_list(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
+        apply_print_paths(out, &verdicts->prunable_files, OUTPUT_COLOR_CYAN, "•");
 
         if (released.count > 0) {
             output_styled(
@@ -1303,7 +1304,7 @@ static void print_cleanup_preview(
             );
         }
 
-        print_path_list(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
+        apply_print_paths(out, &verdicts->prunable_dirs, OUTPUT_COLOR_CYAN, "•");
 
         /* All three fates are named here, each list under its own count, because
          * a directory gets no block of its own: nothing is asked of the user
@@ -1324,7 +1325,7 @@ static void print_cleanup_preview(
             );
         }
 
-        print_path_list(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
+        apply_print_paths(out, &verdicts->released_dirs, OUTPUT_COLOR_CYAN, "→");
 
         if (skipped_dirs > 0) {
             output_styled(
@@ -1333,8 +1334,8 @@ static void print_cleanup_preview(
             );
         }
 
-        print_path_list(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
-        print_path_list(out, &verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        apply_print_paths(out, &verdicts->skipped_dirs, OUTPUT_COLOR_YELLOW, "⊘");
+        apply_print_paths(out, &verdicts->refused_dirs, OUTPUT_COLOR_YELLOW, "⊘");
 
         if (verdicts->absent_dirs.count > 0) {
             output_styled(
@@ -1395,7 +1396,7 @@ static void print_cleanup_preview(
  * It comes last of the previews, so that guidance is what the user is looking
  * at when the confirmation prompt arrives.
  */
-static void print_cleanup_skips(
+static void apply_print_cleanup_skips(
     output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
@@ -1491,12 +1492,12 @@ static void print_cleanup_skips(
  * row uses for the same fact ("… is not writable"; "ancestry cannot be reached"
  * where the workspace's own lstat was refused on the way — the occupant says
  * so, and the parent the probe asked is then not the rung that refused), and
- * the one closer: sudo, named for a run that holds none the way print_deploy_skips
- * names it — asked of the identity, never handed in. Capped like deploy's block
- * — one root-owned parent can refuse a whole subtree — where cleanup's
- * skipped-files block is not (every row there carries a reason of its own). Neither
- * a --force line nor a by-hand one: root is not a flag, and the row already names
- * the directory a hand would have to open.
+ * the one closer: sudo, named for a run that holds none the way
+ * apply_print_deploy_skips names it — asked of the identity, never handed in.
+ * Capped like deploy's block — one root-owned parent can refuse a whole subtree
+ * — where cleanup's skipped-files block is not (every row there carries a reason
+ * of its own). Neither a --force line nor a by-hand one: root is not a flag,
+ * and the row already names the directory a hand would have to open.
  *
  * Last of the previews, after the skips it is the sibling of: a refusal is a
  * skip by fate — the count lines above say "skipped", the record stays, the receipt
@@ -1504,7 +1505,7 @@ static void print_cleanup_skips(
  * run's rather than the item's (cleanup_preflight_result_t). Empty under a run
  * that holds root, by construction, and prints nothing.
  */
-static void print_cleanup_refused(
+static void apply_print_cleanup_refused(
     output_t *out,
     const cleanup_preflight_result_t *verdicts
 ) {
@@ -1837,7 +1838,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The plan's four counts, each only when it is non-zero — gated the way
      * cleanup's two lines below are, and by the preview's own rule: an empty
-     * bucket has nothing to say, and says nothing (print_deploy_preview). */
+     * bucket has nothing to say, and says nothing (apply_print_deploy_preview). */
     if (deploy_plan->files.pending.count > 0) {
         output_print(
             out, OUTPUT_VERBOSE, "  %zu %s deployment (missing or divergent)\n",
@@ -1945,87 +1946,35 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Collect the pending profile reassignments and count the stale paths, off
-     * the plan.
-     *
-     * Both are the item's facts and not the plan's — the plan says what the run
-     * does, the item says why — so the items the plan holds are walked once more.
-     * The four buckets, both kinds, are exactly the items whose record this run's
-     * ownership events rewrite: the clean ones by the adoption and acknowledgement
-     * loops below, the pending ones by the record step behind the deployment.
-     * The collection takes two moments, one per writer: the clean half here,
-     * before the loops rewrite the record the fact is read against, materialized
-     * so no print moment re-reads it; the pending half off the verdicts after
-     * preflight, whose fates already exclude the skips and whose item is this
-     * same analysis object — nothing rewrites a pending row's record before the
-     * record step, so nothing is lost by reading it late, and what the preview
-     * names is what the receipt counts. One array, sized to the four buckets
-     * (the verdicts are a subset of the pending items), two fills, one print. A
-     * row the plan skips (-e, --skip-existing) is in none of the four and is
-     * neither previewed nor counted: the run will not acknowledge it. The scope
-     * is not re-derived — the planner applied it once, and the buckets are its
-     * answer. Collected before the early exit so a reassignment-only workspace
-     * is reported and acknowledged there too — an empty plan has no pending rows,
-     * so the clean half is the whole of it there.
+    /* The profile reassignments the run acknowledges, named by the writers that
+     * acknowledge them, each where it decides its write: the clean ones by the
+     * adoption and acknowledgement loops below, the pending ones off the verdicts
+     * after preflight, ahead of the record step behind the deployment. Each is
+     * named before the write that acknowledges it rewrites the record it is read
+     * from (reassignment_t). The four buckets, both kinds, are exactly the items
+     * whose record this run's ownership events rewrite, so the list is sized to
+     * them (the verdicts are a subset of the pending items). A row the plan skips
+     * (-e, --skip-existing) is in none of the four and is neither previewed nor
+     * counted: the run will not acknowledge it. The scope is not re-derived —
+     * the planner applied it once, and the buckets are its answer. The loops
+     * run before the early exit, so a reassignment-only workspace is reported
+     * and acknowledged there too — an empty plan has no pending rows, so the
+     * clean ones are the whole of it there.
      *
      * A reassignment is the workspace's reading of the record against the row
      * and the look — the record dotta owns names one profile, the row another,
      * and describes the row's node, or a node of its own still standing
-     * (core/workspace.h workspace_reassigned). DIVERGENCE_STALE and
-     * DIVERGENCE_CLAIM_MOVED are the workspace's verdict that Git moved past
-     * what dotta last reconciled — the content, another blob or the same blob
-     * under another kind (core/workspace.h workspace_stale), or a claim
-     * (workspace_claims_moved) — a persistent signal that survives status→apply
-     * sequences and counts the same however the branch moved; work by definition,
-     * so only a pending row carries either. A file's bytes or claim, a directory's
-     * claim: counted by kind for the sentence below. */
-    size_t stale_files = 0;
-    size_t stale_dirs = 0;
-    size_t reassigned_count = 0;
-    reassignment_t *reassigned = NULL;
-    const struct { workspace_items_t items; bool clean; } claimed[] = {
-        { workspace_items(&deploy_plan->files.clean),         true  },
-        { workspace_items(&deploy_plan->files.pending),       false },
-        { workspace_items(&deploy_plan->directories.clean),   true  },
-        { workspace_items(&deploy_plan->directories.pending), false },
-    };
-
-    size_t claimed_total = 0;
-    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        claimed_total += claimed[b].items.count;
-    }
-    if (claimed_total > 0) {
-        reassigned = arena_alloc(ctx->arena, claimed_total * sizeof(*reassigned));
-        if (!reassigned) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate reassignment collection");
-            goto cleanup;
-        }
-    }
-
-    for (size_t b = 0; b < sizeof(claimed) / sizeof(claimed[0]); b++) {
-        for (size_t i = 0; i < claimed[b].items.count; i++) {
-            const workspace_item_t *item = claimed[b].items.entries[i];
-
-            if (item->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
-                if (item->item_kind == PATH_KIND_DIRECTORY) stale_dirs++;
-                else stale_files++;
-            }
-
-            /* The pending half reads the verdicts, after preflight. The stale
-             * count above stands for every planned row, a row preflight will
-             * skip included — a Git move is the record against the view, and
-             * preflight's answer does not change it. */
-            if (!claimed[b].clean) continue;
-
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
-                reassigned[reassigned_count++] = (reassignment_t){
-                    .path = item->filesystem_path,
-                    .from = item->anchor->profile,
-                    .to = item->profile,
-                    .kind = item->item_kind,
-                };
-            }
-        }
+     * (core/workspace.h workspace_reassigned). */
+    size_t reassignment_count = 0;
+    reassignment_t *reassignments = arena_alloc(
+        ctx->arena,
+        (deploy_plan->files.clean.count + deploy_plan->files.pending.count +
+        deploy_plan->directories.clean.count + deploy_plan->directories.pending.count) *
+        sizeof(*reassignments)
+    );
+    if (!reassignments) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile reassignments");
+        goto cleanup;
     }
 
     /* One moment for everything this run records — the adoption loop below and
@@ -2061,9 +2010,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * own kind, is a reassignment: disk holds what A deployed, B owns the path
      * now, and the content is the same. It sits in files.clean by construction
      * (nothing to deploy), so this loop is the one place its record is re-stamped
-     * under B — the acknowledgement. Same write, same stat, one more counter; a
-     * stale reassignment is acknowledged by its deployment and counted after
-     * the record step below.
+     * under B — the acknowledgement. Same write, same stat, one more name on
+     * the list; a stale reassignment is acknowledged by its deployment and named
+     * off the verdicts below.
      *
      * Division of labor with the earlier flush: the proof of this run's match
      * is the item's own verdict, the one that filed it among the clean
@@ -2104,7 +2053,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * acknowledging one would re-stamp an owned record with a proof no look
      * gave. */
     size_t adopted_count = 0;
-    size_t acknowledged_count = 0;
     workspace_items_t clean_files = workspace_items(&deploy_plan->files.clean);
 
     for (size_t i = 0; i < clean_files.count; i++) {
@@ -2117,25 +2065,29 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* A record dotta owns whose binding names another row than this — another
          * profile's, or another name of the same profile, whose path the view
-         * gave to this one — is a handover, and this loop is where the record
-         * follows it. The whole binding is the test because the whole binding
-         * is what a record follows: the blob it carries is the blob of the row
-         * its binding names (core/state.h anchor_t), so a record left on a name
-         * no row stands at is never confirmed again — every load re-hashes the
-         * path, and its base drifts further from what is there. */
+         * gave to this one — has yet to follow this row, and this loop is where
+         * it does. The whole binding is the test because the whole binding is
+         * what a record follows: the blob it carries is the blob of the row its
+         * binding names (core/state.h anchor_t), so a record left on a name no
+         * row stands at is never confirmed again — every load re-hashes the path,
+         * and its base drifts further from what is there. */
         bool acknowledge = !adopt &&
             !manifest_is_claim(file, anchor->profile, anchor->storage_path);
         if (!adopt && !acknowledge) continue;
 
-        /* The handover the receipt counts, read before the write below rewrites
-         * the record it is read from. Only the profile half is that fact, which
-         * is the predicate's half: a name flip within one profile is bookkeeping
-         * the user did not ask for and cannot act on from this screen, and counting
-         * it would make the run's line disagree with the preview's, which reads
-         * the same rule off the item. Asked of the item's own look, as the preview
-         * asks it, so an adopted record never reads as one: none, never owned,
-         * or another kind's — a node this clean item's look found gone. */
-        bool reassigns = workspace_reassigned(file, anchor, item->occupant);
+        /* The reassignment this write acknowledges, named before the write below
+         * rewrites the record it is read from. Only the profile half is that
+         * fact, which is the predicate's half: a name flip within one profile
+         * is bookkeeping the user did not ask for and cannot act on from this
+         * screen. Asked of the item's own look, so an adopted record never reads
+         * as one: none, never owned, or another kind's — a node this clean item's
+         * look found gone. */
+        if (workspace_reassigned(file, anchor, item->occupant)) {
+            reassignments[reassignment_count++] = (reassignment_t){
+                .item = item,
+                .from = anchor->profile,
+            };
+        }
 
         if (!opts->dry_run) {
             /* The snapshot pair vouches for this row's content on every route a
@@ -2164,15 +2116,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             }
         }
         if (adopt) adopted_count++;
-        else if (reassigns) acknowledged_count++;
     }
 
     /* The directory half of the acknowledgement — and only that half. A clean
      * in-scope directory row whose owned record names another profile is the
-     * same pending handover a file row is, and this loop is the one place its
-     * record is re-stamped under the row's profile (same derivation as the file
-     * loop's, its inputs in hand; NULL stat — a directory has none). The adopt
-     * half is deliberately not taken: capture (add, update) is the ownership
+     * same pending reassignment a file row is, and this loop is the one place
+     * its record is re-stamped under the row's profile (same derivation as the
+     * file loop's, its inputs in hand; NULL stat — a directory has none). The
+     * adopt half is deliberately not taken: capture (add, update) is the ownership
      * event for a directory, apply's observation is not — an apply that adopted
      * every pre-existing clean parent would own it and prune it at scope exit.
      * A recordless clean directory stays the flush's observation, exactly as
@@ -2188,19 +2139,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const manifest_row_t *dir = item->row;
         const anchor_t *anchor = item->anchor;
 
-        /* A pending handover of this directory: a record dotta owns, of this
-         * directory's kind, bound to another row. One of another kind is another
-         * node's (core/workspace.h workspace_compare_confirmed): a run has observed
-         * the directory in its place already (workspace_observe_retyped), and a
-         * preview reads it as the run will. */
+        /* A record this loop moves onto the directory's row: one dotta owns, of
+         * the directory's kind, bound to another row. One of another kind is
+         * another node's (core/workspace.h workspace_compare_confirmed): a run
+         * has observed the directory in its place already
+         * (workspace_observe_retyped), and a preview reads it as the run will. */
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
             workspace_compare_confirmed(dir, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF &&
             !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
 
-        /* The file loop's counter, the same rule and the same reason it is read
-         * here: the write below rewrites the record it reads. */
-        bool reassigns = workspace_reassigned(dir, anchor, item->occupant);
+        /* The file loop's naming, by the same rule and for the same reason: the
+         * write below rewrites the record it reads. */
+        if (workspace_reassigned(dir, anchor, item->occupant)) {
+            reassignments[reassignment_count++] = (reassignment_t){
+                .item = item,
+                .from = anchor->profile,
+            };
+        }
 
         if (!opts->dry_run) {
             err = workspace_anchor(ws, item, NULL, now);
@@ -2210,7 +2166,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 goto cleanup;
             }
         }
-        if (reassigns) acknowledged_count++;
     }
 
     /* Checkpoint: the run's reading of the present is complete, and recorded
@@ -2264,7 +2219,34 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* How many planned paths Git moved past what dotta last reconciled — a file's
      * bytes or claim, a directory's claim. [stale] alone the plan brings like
      * any other divergence; beside [modified] it is a conflict preflight reports.
-     * Released files are covered by the orphan-prune summary below. */
+     * Released files are covered by the orphan-prune summary below.
+     *
+     * The item's fact and not the plan's — the plan says what the run does, the
+     * item says why — so the plan's pending items are walked once more, each
+     * bucket one kind. DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the
+     * workspace's verdict of that move — the content, another blob or the same
+     * blob under another kind (core/workspace.h workspace_stale), or a claim
+     * (workspace_claims_moved) — a persistent signal that survives status→apply
+     * sequences and counts the same however the branch moved; work by definition
+     * (core/deploy.c deploy_needs_work), so only a pending item carries either.
+     * Every planned row counts, a row preflight will skip included — a Git move
+     * is the record against the view, and preflight's answer does not change it
+     * — and a row the plan skips (-e, --skip-existing) is in neither bucket. */
+    size_t stale_files = 0;
+    size_t stale_dirs = 0;
+    workspace_items_t pending_files = workspace_items(&deploy_plan->files.pending);
+    workspace_items_t pending_dirs = workspace_items(&deploy_plan->directories.pending);
+
+    for (size_t i = 0; i < pending_files.count; i++) {
+        if (pending_files.entries[i]->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+            stale_files++;
+        }
+    }
+    for (size_t i = 0; i < pending_dirs.count; i++) {
+        if (pending_dirs.entries[i]->divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
+            stale_dirs++;
+        }
+    }
     if (stale_files + stale_dirs > 0) {
         char stale[64];
         output_format_counts(stale_files, stale_dirs, stale, sizeof(stale));
@@ -2278,7 +2260,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * only work was withheld. ("Withheld" is the plan-time word — the user's
      * own flags, -e and --skip-existing; "skipped" is preflight's, a fate the
      * run decided.) */
-    print_withheld(out, deploy_plan, cleanup_plan);
+    apply_print_withheld(out, deploy_plan, cleanup_plan);
     size_t withheld = deploy_plan->files.excluded.count +
         deploy_plan->directories.excluded.count + cleanup_plan->excluded.count +
         deploy_plan->files.skipped_existing.count;
@@ -2289,20 +2271,23 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * checkpoint, so there is nothing left to save. */
     if (deploy_plan_is_empty(deploy_plan) && cleanup_plan_is_empty(cleanup_plan)) {
         output_gap(out, OUTPUT_NORMAL);
-        if (reassigned_count > 0) {
-            print_reassignments(out, reassigned, reassigned_count);
+        if (reassignment_count > 0) {
+            /* Every one the loops above named they wrote, or the run ended at
+             * the write the store refused: the run's count is the list's, as
+             * the dry run's is. */
+            apply_print_reassignments(out, reassignments, reassignment_count);
             output_gap(out, OUTPUT_NORMAL);
             if (opts->dry_run) {
                 output_info(
                     out, OUTPUT_NORMAL,
                     "Would acknowledge %zu profile reassignment%s",
-                    reassigned_count, reassigned_count == 1 ? "" : "s"
+                    reassignment_count, reassignment_count == 1 ? "" : "s"
                 );
             } else {
                 output_styled(
                     out, OUTPUT_NORMAL,
                     "Acknowledged {cyan}%zu{reset} profile reassignment%s\n",
-                    acknowledged_count, acknowledged_count == 1 ? "" : "s"
+                    reassignment_count, reassignment_count == 1 ? "" : "s"
                 );
             }
         } else if (withheld > 0) {
@@ -2369,12 +2354,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* The pending half of the collection, off the verdicts: a row preflight skipped
-     * is not here — its handover rides a deployment that will not happen — and
+    /* What the run acknowledges, for its receipt: the clean reassignments the
+     * loops named — each written, or the run ended at the write the store refused
+     * — and each pending one the record step writes. */
+    size_t acknowledged_count = reassignment_count;
+
+    /* The pending reassignments, off the verdicts: a row preflight skipped is
+     * not here — its reassignment rides a deployment that will not happen — and
      * a deployable row's record is rewritten only by the record step, after this
-     * is printed. The item is the verdict's, verbatim (deploy_verdict_t): never
-     * NULL, and its join facts sound on every one. The ancestors are outside
-     * the plan and stay uncounted, as the record step leaves them. */
+     * is printed, so nothing is lost by naming it late, and the preview names
+     * exactly what the record step acknowledges behind a write that lands. The
+     * item is the verdict's, verbatim (deploy_verdict_t): never NULL, and its
+     * join facts sound on every one. The ancestors are outside the plan and stay
+     * uncounted, as the record step leaves them. */
     const deploy_verdicts_t *kinds[] = {
         &deploy_verdicts->files,
         &deploy_verdicts->directories,
@@ -2385,11 +2377,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             const workspace_item_t *item = kinds[k]->entries[i].item;
 
             if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
-                reassigned[reassigned_count++] = (reassignment_t){
-                    .path = item->filesystem_path,
+                reassignments[reassignment_count++] = (reassignment_t){
+                    .item = item,
                     .from = item->anchor->profile,
-                    .to = item->profile,
-                    .kind = item->item_kind,
                 };
             }
         }
@@ -2399,12 +2389,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * story told the same way — what it will do (the preview, every caveat on
      * the promise with it), then what it will not and why (the skips, closing
      * with their remedies) — read the same way in a real run and a dry run. */
-    print_reassignments(out, reassigned, reassigned_count);
-    print_deploy_preview(out, deploy_verdicts);
-    print_deploy_skips(out, deploy_verdicts);
-    print_cleanup_preview(out, cleanup_verdicts);
-    print_cleanup_skips(out, cleanup_verdicts);
-    print_cleanup_refused(out, cleanup_verdicts);
+    apply_print_reassignments(out, reassignments, reassignment_count);
+    apply_print_deploy_preview(out, deploy_verdicts);
+    apply_print_deploy_skips(out, deploy_verdicts);
+    apply_print_cleanup_preview(out, cleanup_verdicts);
+    apply_print_cleanup_skips(out, cleanup_verdicts);
+    apply_print_cleanup_refused(out, cleanup_verdicts);
 
     /* Neither engine's skips abort: what can be deployed is deployed, what can
      * be pruned is pruned, and what cannot is named with its remedy — better
@@ -2522,7 +2512,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
 
             if (deploy_result) {
-                print_deploy_results(out, deploy_result);
+                apply_print_deploy_results(out, deploy_result);
             }
             if (err) {
                 /* Infrastructure, never a row — a row's own failure is in the
@@ -2589,7 +2579,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * that fails to settle is reported and read as an orphan again by the
          * next apply. */
         if (cleanup_result) {
-            print_cleanup_results(out, cleanup_verdicts, cleanup_result);
+            apply_print_cleanup_results(out, cleanup_verdicts, cleanup_result);
 
             /* What the run found gone: pruned, or gone by the time it looked */
             const cleanup_outcomes_t *gone[] = {
@@ -2689,7 +2679,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          *                             to the prune on the next scope exit — with
          *                             one exception: a record dotta owns whose
          *                             binding names another row — another
-         *                             profile's, a pending handover, or another
+         *                             profile's, a pending reassignment, or another
          *                             name of this one's — must not outlive the
          *                             run that converged the directory, so it
          *                             takes the one anchor that moves it onto
@@ -2707,7 +2697,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * made; each is derived before its anchor (the write rewrites the record
          * the fact is read against) and counted with the clean ones the adoption
          * and acknowledgement loops re-stamped. Ancestors' anchors stay uncounted:
-         * they are outside the plan, so the collection never previewed them,
+         * they are outside the plan, so no writer named them for the preview,
          * and an acknowledgement that rides one heals the record silently.
          */
         if (deploy_result) {
@@ -2820,10 +2810,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * directories). Dry-run previews the in-scope set the preview named. */
     output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
-        if (reassigned_count > 0) {
+        if (reassignment_count > 0) {
             output_info(
                 out, OUTPUT_NORMAL, "Would acknowledge %zu profile reassignment%s",
-                reassigned_count, reassigned_count == 1 ? "" : "s"
+                reassignment_count, reassignment_count == 1 ? "" : "s"
             );
         }
     } else if (acknowledged_count > 0) {

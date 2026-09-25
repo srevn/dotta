@@ -490,7 +490,7 @@ typedef struct {
  * and are read there: they are decisions, and this object reports effects. The
  * preview says both; the receipt's printer restates the decided ones from the
  * verdicts and reports the run's own from here, in the preview's order (apply's
- * print_cleanup_results reads both objects).
+ * apply_print_cleanup_results reads both objects).
  *
  * pruned_* guarantee a filesystem removal happened. reclaimed_* were gone by
  * the time the run looked — after the prompt, before the removal — so no removal

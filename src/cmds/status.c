@@ -85,9 +85,9 @@ static void status_print_profiles(
         /* One walk of the view per profile: the latest of its own ownership events
          * among the rows it owns now — the honest set for an enabled-profiles
          * header — and the verbose per-kind counts. A record another profile's
-         * deployment left at one of those rows is that profile's event, a handover
-         * apply has yet to acknowledge (core/workspace.h workspace_reassigned),
-         * and dates this one nothing. */
+         * deployment left at one of those rows is that profile's event, a
+         * reassignment apply has yet to acknowledge (core/workspace.h
+         * workspace_reassigned), and dates this one nothing. */
         time_t profile_deploy_time = 0;
         size_t file_count = 0;
         size_t dir_count = 0;
@@ -626,7 +626,7 @@ static void status_print_workspace(
         /* Section 3: Displaced paths — beneath a squatter one of the two sections
          * above holds (the route's DISPLACED_* arms, the claimant's): nothing
          * there was looked at, so the line shows [displaced] and only what no
-         * look decides or disproves beside it (the blob's verdict, a handover),
+         * look decides or disproves beside it (the blob's verdict, a reassignment),
          * and the header sends the user to the squatter, whose own section names
          * its verb. The header opens with the predicate, as every sentence about
          * such a path does, and spells the squatter out where the other four
@@ -688,9 +688,9 @@ static void status_print_workspace(
                 /* Keyed by the exact tags the line shows, the way Issues is keyed,
                  * so the column below reads back against the one above. Three
                  * classes (workspace_fault_t), and the policy bit before the
-                 * class and a pending handover after it can each ride on the
-                 * line ([unencrypted] [unreadable] [reassigned]), so twelve keys
-                 * bound the domain. */
+                 * class and a pending reassignment after it can each ride on
+                 * the line ([unencrypted] [unreadable] [reassigned]), so twelve
+                 * keys bound the domain. */
                 struct { char tags[64]; const char *hint; } legend[12];
                 size_t legend_count = 0;
                 size_t legend_width = 0;

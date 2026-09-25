@@ -230,8 +230,8 @@ static inline bool manifest_is_claim(
  * Readers: the projection a namer reads a row through, the two claim passes,
  * the layering and the name test (core/manifest.c manifest_row_claim,
  * manifest_claim_blob, manifest_contribute, manifest_layer, manifest_holds_name);
- * the handover predicate, the absence rule and the route table's derived arm
- * (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
+ * the reassignment predicate, the absence rule and the route table's derived
+ * arm (core/workspace.h workspace_reassigned, core/workspace.c classify_absent,
  * workspace_item_route); the untracked scan's word at a child, a rung being the
  * one claim that settles nothing about the path it stands at (core/workspace.c
  * scan_directory_for_untracked); the tags' clean arm, where a rung nothing diverged

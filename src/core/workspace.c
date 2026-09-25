@@ -481,9 +481,9 @@ static void workspace_note_content(workspace_item_t *item) {
      * encrypted blob opens under one binding and no other, and state_confirm's
      * statement refuses another at the write — asked of the record first, so a
      * confirmation that cannot land never opens the flush's transaction; a row
-     * the binding does not name is a pending handover, which takes the slow path
-     * on every load until apply's acknowledgement moves the record onto it. And
-     * of this row's kind, the ladder's first rung (core/workspace.h
+     * the binding does not name is one the record has yet to follow, which takes
+     * the slow path on every load until apply's acknowledgement moves the record
+     * onto it. And of this row's kind, the ladder's first rung (core/workspace.h
      * workspace_compare_confirmed), never path_type_kind, whose taxonomy files
      * a link beside the files: a record of another kind is a fact about a node
      * that is gone, and a confirmation would carry the ownership stamp dotta
@@ -703,7 +703,7 @@ static void workspace_analyze_claim(workspace_item_t *item) {
  * a path rather than acknowledging it. And across kinds only while the look finds
  * the record's own node standing — that is when disk holds what A deployed
  * (workspace_reassigned). No bit of this verdict says so: the route reads it
- * off the item's sources and look, and a clean handover is among the diverged
+ * off the item's sources and look, and a clean reassignment is among the diverged
  * items by that reading alone (workspace_list).
  *
  * The blob bit, ENCRYPTION (workspace.h, divergence_type_t), is settled here
@@ -762,8 +762,8 @@ static void workspace_analyze_file(
      * read", and the look wrote the class of the claim whose squatter every verb
      * resolves first (workspace_displaced_t). The blob bit rides — it is Git's,
      * and the filesystem is not a party to it — and the record pairs as on every
-     * item, so a pending handover still shows. Nothing is owed the record: a
-     * record is what dotta saw, and dotta saw nothing here. */
+     * item, so a pending reassignment still shows. Nothing is owed the record:
+     * a record is what dotta saw, and dotta saw nothing here. */
     if (item->displaced != WORKSPACE_DISPLACED_NONE) {
         return;
     }
@@ -864,9 +864,9 @@ static void workspace_analyze_file(
      * a blob opens under one (profile, storage path) pair and no other, and each
      * of these facts carries the binding its blob was confirmed under
      * (core/state.h). The row's pair is never a base's — a row the record's binding
-     * does not name is a handover the record has yet to follow, and reading the
-     * base under it authenticates a ciphertext against a tree path it was never
-     * sealed at.
+     * does not name is one the record has yet to follow, and reading the base
+     * under it authenticates a ciphertext against a tree path it was never sealed
+     * at.
      *
      * No base by default — the NULL blob is the no-base state; the row-derived
      * type and pair beside it are never read as a base's (every base question
@@ -1137,7 +1137,7 @@ static void workspace_analyze_file(
              * Anything else is a blocking condition: TYPE. Either way the look
              * stands at another kind than the row's, so the claim is not asked
              * of it; the sources ride along, the same shape as every early return,
-             * so a pending handover does not vanish behind a type change. */
+             * so a pending reassignment does not vanish behind a type change. */
             item->divergence |= disk_at_base ? DIVERGENCE_STALE : DIVERGENCE_TYPE;
             return;
 
@@ -2885,9 +2885,9 @@ cleanup:
  * - DIVERGENCE_OWNERSHIP: the owner or group is not the claim's
  * - DIVERGENCE_CLAIM_MOVED: beside either, where Git moved it past the claim
  *   the record reconciled (workspace_analyze_claim)
- * - A pending handover on a clean row, which no bit carries: the route reads it
- *   off the item's sources and look, and the diverged items list the item for
- *   it (workspace_list), as they list a file row's
+ * - A pending reassignment on a clean row, which no bit carries: the route reads
+ *   it off the item's sources and look, and the diverged items list the item
+ *   for it (workspace_list), as they list a file row's
  *
  * ARCHITECTURE: Reads the view's directory rows, not metadata (Git) directly. A
  * row carries filesystem_path already resolved with target, enabling correct
@@ -3006,8 +3006,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
      * the machine the chain was captured on: they say what to create the path
      * as, never what to make of the one this machine already has — asserting
      * them here would let a ~/.ssh captured at a careless 0755 loosen a correct
-     * 0700 elsewhere, a regression caused by the fix. The handover is the rule's
-     * own: a claim nobody made carries no intent to acknowledge, so
+     * 0700 elsewhere, a regression caused by the fix. The reassignment is the
+     * rule's own: a claim nobody made carries no intent to acknowledge, so
      * workspace_reassigned answers false for a derived claim wherever it is asked
      * — the route's reading for the diverged items included (workspace_list) —
      * and the record keeps the profile dotta actually deployed under, which is
@@ -3169,18 +3169,19 @@ static error_t *workspace_partition(workspace_t *ws) {
  *
  * Something to say: a state but DEPLOYED, or a DEPLOYED item the route does not
  * call clean (workspace_item_route) — a squatter above it, a bit, or a pending
- * handover. One rule, read here over the verdicts the analyses wrote, and none
- * of them lists anything, so no two can list by two rules; an active item none
- * had anything to write on keeps what the partition made it — DEPLOYED, nothing
- * wrong — and is not among them. An orphan is never DEPLOYED, so every analyzed
- * one has something to say: a reclaim, a release, a prune or a skip.
+ * reassignment. One rule, read here over the verdicts the analyses wrote, and
+ * none of them lists anything, so no two can list by two rules; an active item
+ * none had anything to write on keeps what the partition made it — DEPLOYED,
+ * nothing wrong — and is not among them. An orphan is never DEPLOYED, so every
+ * analyzed one has something to say: a reclaim, a release, a prune or a skip.
  *
- * The handover is the one term no analysis writes: a clean row whose owned record
- * names another profile is REASSIGNED by the route, read over the item's sources
- * and its own look (workspace_reassigned) — where that look found the row's kind
- * standing, a record of another kind is a node that is gone and hands nothing
- * over — and listed for it, so status's Reassigned section and apply's collection
- * see both kinds.
+ * The reassignment is the one term no analysis writes: a clean row whose owned
+ * record names another profile is REASSIGNED by the route, read over the item's
+ * sources and its own look (workspace_reassigned) — where that look found the
+ * row's kind standing, a record of another kind is a node that is gone and no
+ * reassignment — and listed for it, so the readers that show one see both kinds:
+ * cmds/status.c status_print_workspace's Profile reassignments section and
+ * cmds/diff.c diff_workspace's filter.
  *
  * Derived once, after every analysis and before any write, so it is a load product:
  * an ownership event that later makes an item's route CLEAN leaves it here (apply
@@ -3614,7 +3615,7 @@ bool workspace_item_tags(
                  * one tag, at the default colour: the squatter's own row carries
                  * the path's severity, and the route lists this item under it.
                  * What no look decides or disproves still rides below: the blob's
-                 * verdict, and the handover — which a look ends across kinds,
+                 * verdict, and the reassignment — which a look ends across kinds,
                  * and none was taken here. */
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "displaced";

@@ -1747,8 +1747,8 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
                             /* Apply's side or nothing: Git moved past what dotta
                              * last reconciled — the bytes or a claim — and disk
                              * did not, the user's claims riding included, or a
-                             * pending handover. No local work a pull puts at
-                             * risk. */
+                             * pending reassignment. No local work a pull puts
+                             * at risk. */
                             break;
                     }
                     break;
@@ -2251,9 +2251,9 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * apply never converges) — a claim disk already stands on included, since
          * no load runs after the pull: it hints until one learns it, the apply
          * it names or the next sync's own; an owned record naming a profile the
-         * row does not is a handover apply acknowledges (core/workspace.h's rule,
-         * which is also what keeps a derived claim out of it — asked with no
-         * look, which across kinds leaves the answer to the stale arm before
+         * row does not is a reassignment apply acknowledges (core/workspace.h's
+         * rule, which is also what keeps a derived claim out of it — asked with
+         * no look, which across kinds leaves the answer to the stale arm before
          * it); and a row the record cannot vouch for is work apply has not done.
          * Vouching differs by kind because apply's answer does — a file needs
          * an OWNED record, since apply adopts a path it merely observed and says

@@ -821,9 +821,9 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  * write, whoever noted the confirmation. The one place a load notes a content
  * confirmation asks the same of its record first (core/workspace.c
  * workspace_note_content), so one that cannot land never opens the flush's
- * transaction. A row the record's binding does not name is a pending handover:
- * apply's acknowledgement moves the record onto it (cmds/apply.c), and until it
- * does the path takes the slow path on every load.
+ * transaction. A row the record's binding does not name is one the record has
+ * yet to follow: apply's acknowledgement moves the record onto it (cmds/apply.c),
+ * and until it does the path takes the slow path on every load.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row The row whose blob disk was found equal to (must not be NULL; a

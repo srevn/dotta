@@ -623,7 +623,7 @@ static void display_overlaps(
     } else if (delete_files) {
         /* The record rule in one clause: the fate applies only where nothing
          * still provides the path — a remaining claimant makes it a fallback,
-         * handed over on apply, not pruned. */
+         * reassigned on apply, not pruned. */
         output_info(
             out, OUTPUT_NORMAL,
             "Paths deployed from '%s' will be pruned on the next 'dotta apply' "

@@ -239,8 +239,8 @@ static void update_commits_free(update_commit_t *commits, size_t count) {
  * and the census prints a line per class. Σ faults[f] == refused[UNVERIFIABLE],
  * and faults[NONE] is zero by the fold's invariant. CAPTURE's slot stays zero
  * (that arm is accepted) and CLEAN's (the diverged items hold no clean row);
- * REASSIGNED's counts a handover the census has no line for — apply acknowledges
- * it, the filter only declines it.
+ * REASSIGNED's counts a reassignment the census has no line for — apply
+ * acknowledges it, the filter only declines it.
  */
 typedef struct {
     workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */

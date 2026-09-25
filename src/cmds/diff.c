@@ -304,8 +304,9 @@ static error_t *show_file_diff_from_workspace(
         status_color = OUTPUT_COLOR_RED;
     } else if (workspace_reassigned(item->row, item->anchor, item->occupant) &&
         (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
-        /* A pure handover. The blob bit, ENCRYPTION, does not demote it: it is
-         * about how Git stores the blob, not a difference between Git and disk. */
+        /* A pure reassignment. The blob bit, ENCRYPTION, does not demote it: it
+         * is about how Git stores the blob, not a difference between Git and
+         * disk. */
         status_color = OUTPUT_COLOR_CYAN;
     }
 
@@ -332,9 +333,9 @@ static error_t *show_file_diff_from_workspace(
 
     /* Only a content difference has bytes to render: the copy's own edit, or
      * the blob Git moved past, which disk still holds. A claim, whoever moved
-     * it (CLAIM_MOVED is no byte), a handover and how Git stores the blob differ
-     * in nothing a hunk could show, and a sealed blob is opened for none of
-     * them. */
+     * it (CLAIM_MOVED is no byte), a reassignment and how Git stores the blob
+     * differ in nothing a hunk could show, and a sealed blob is opened for none
+     * of them. */
     if (!(item->divergence & (DIVERGENCE_CONTENT | DIVERGENCE_STALE))) {
         return NULL;
     }

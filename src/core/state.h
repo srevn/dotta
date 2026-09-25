@@ -983,11 +983,12 @@ error_t *state_anchor(
  * and ends as any other does.
  *
  * A missing record is success: the callers name paths that may have no record —
- * never seen here, nothing to retire. Callers: apply's record step, for every
- * orphan it settles; remove's settle and update's purge, for what their commits
- * let go; add's settle, for the ancestor claims its own commit dropped; and apply's
- * load, through core/workspace.c workspace_observe_retyped, for a directory's
- * record of another kind of node, which the directory's observation replaces.
+ * never seen here, nothing to retire. Callers: apply's record phase (cmds/apply.c
+ * apply_write_record), for every orphan it settles; remove's settle and update's
+ * purge, for what their commits let go; add's settle, for the ancestor claims
+ * its own commit dropped; and apply's load, through core/workspace.c
+ * workspace_observe_retyped, for a directory's record of another kind of node,
+ * which the directory's observation replaces.
  *
  * @param state State (must not be NULL, must have active transaction)
  * @param filesystem_path Path whose record retires (must not be NULL)

@@ -9,7 +9,7 @@
  *                         materialized) or a skip (why it is not)
  *   deploy_execute      — carry the verdicts out; decides nothing
  *
- * Preview, prompt, reporting and apply's record step all read the one plan and
+ * Preview, prompt, reporting and apply's record phase all read the one plan and
  * the one set of verdicts; execution applies no filter and takes no decision of
  * its own. Same shape as core/cleanup.
  *
@@ -142,11 +142,11 @@ static inline bool deploy_occupant_present(fs_occupant_t occ) {
  * directory did → fixed, converged in place, no new entry lands; anything else
  * → replaced, one node cleared and then created. One producer for the mapping
  * deploy_verdict_t documents and deploy_result_t's verbs derive from, so the
- * preview, the receipt, apply's record step and the executor's own poison rule
+ * preview, the receipt, apply's record phase and the executor's own poison rule
  * read one answer and cannot drift. Two facts ride on it and are read as it: a
  * new entry lands iff the convergence is not a fix (preflight's landing question,
  * and poisoned_above's "no directory stands"), and dotta made the directory iff
- * the convergence is not a fix (the record step's ownership gate).
+ * the convergence is not a fix (the record phase's ownership gate).
  *
  * Total over fs_occupant_t, so a new occupant is a build error here and not a
  * silent REPLACE. UNKNOWN is answered — preflight asks before it skips such a
@@ -468,14 +468,14 @@ typedef struct {
  * executor from the fstat of the descriptor it wrote — taken after the last byte
  * and before the rename that publishes it, so it describes exactly what this
  * run wrote, never what a later look at the path would find. It is what lets
- * apply's record step anchor a deployment with the write's own proof instead of
- * leaving the record blob-only.
+ * apply's record phase anchor a deployment with the write's own proof instead
+ * of leaving the record blob-only.
  *
  * UNSET where the act authored no proof — the executor's fact, not a consumer's
  * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
  * describe, and readlink is its whole re-verification), and a directory's write
  * is fchmod/fchown through its own descriptor, whose record carries no triple
- * at all. UNSET and NULL say the same thing to state_anchor, so the record step
+ * at all. UNSET and NULL say the same thing to state_anchor, so the record phase
  * passes the triple blind.
  *
  * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
@@ -532,7 +532,7 @@ typedef struct {
  * in verdict order; count gates every read, so an untaken slot is invisible and
  * the receipt holds exactly what happened, by construction.
  *
- * The derived verb is also the ownership gate apply's record step reads: a
+ * The derived verb is also the ownership gate apply's record phase reads: a
  * converged directory whose convergence is not a fix was made by dotta and anchors
  * as owned; one converged in place was not — anchoring it would set deployed_at
  * on a directory the user made, and hand it to the prune on the next scope exit.
@@ -540,10 +540,10 @@ typedef struct {
  * `ancestors` is outside the plan: the claimed directories the run made as parents
  * of a planned path (create_ancestor), each once, either class. They carry their
  * recorded mode and ownership like any other directory row, and dotta made them
- * — so the record step anchors them as owned, the same event as a created directory
- * — but the plan never named them and the preview never counted them, so the
- * caller's summary keeps them apart from the created count. A parent no row claims
- * has no receipt and no record.
+ * — so the record phase anchors them as owned, the same event as a created
+ * directory — but the plan never named them and the preview never counted them,
+ * so the caller's summary keeps them apart from the created count. A parent no
+ * row claims has no receipt and no record.
  *
  * Free with deploy_result_free, before deploy_preflight_result_free and before
  * workspace_free — the outcomes borrow the verdicts, the verdicts the items.

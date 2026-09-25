@@ -498,8 +498,8 @@ typedef struct {
  * named by the adoption and acknowledgement loops over the plan's clean buckets,
  * both kinds, and acknowledged by their re-stamp — said where they are written;
  * or the pending ones, named off the verdicts and acknowledged by the record
- * step behind their deployment, creation, replacement or convergence — said with
- * the preview.
+ * phase behind their deployment, creation, replacement or convergence — said
+ * with the preview.
  */
 static void apply_print_reassignments(
     output_t *out, const reassignment_t *reassignments, size_t count
@@ -1551,6 +1551,250 @@ static void apply_print_cleanup_refused(
 }
 
 /**
+ * Write the record of what the run did, whole or not at all
+ *
+ * The run's second transaction (begun past cmd_apply's early exit) holds these
+ * writes alone, and this phase ends it — committed by state_save, or rolled back
+ * here — so the post-apply hook meets the database the run leaves, and not a
+ * lock nothing will use again. The orphans' records retire, then each path the
+ * run wrote is recorded, and every write lands or none does.
+ *
+ * A refused statement ends the phase at the first one. The phase's writes are
+ * one transaction and a database that refuses one write may have ended it — SQLite
+ * rolls back under a whole class of errors — so every write past an unexamined
+ * refusal is a coin flip between "in the transaction" and "committed on its own".
+ * The first refusal is the phase's failure, and a refused save is too: nothing
+ * this phase wrote stands, and what the record held before the run is what it
+ * still holds.
+ *
+ * Non-fatal to the command, as add's record phase is (cmds/add.c write_record):
+ * the run's writes on disk stand either way, the receipt and the exit code say
+ * what landed there, and the next apply reads it back — a deployed file clean
+ * and adopted, a pruned orphan's record reclaimed, a released one released again,
+ * a fixed claim learned by the flush — all but a directory the run made, which
+ * the next load observes and never owns (capture is a directory's ownership event,
+ * and a look never is). The caller renders the fate.
+ *
+ * @param ctx Dispatch context (must not be NULL; writes the state it holds, in
+ *            the run's transaction)
+ * @param ws Workspace (must not be NULL): the items every fate carries are its own
+ * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
+ * @param cleanup_result Cleanup's receipt, or NULL where the prune engine could
+ *                       not start
+ * @param deploy_result Deploy's receipt, or NULL where the run deployed nothing
+ * @param now Timestamp of the run's ownership events (must be > 0)
+ * @param acknowledged The pending reassignments the record acknowledged (must
+ *                     not be NULL) — zero where the phase fails, since nothing
+ *                     it wrote stands
+ * @return Error or NULL on success (non-fatal: the caller warns)
+ */
+static error_t *apply_write_record(
+    const dotta_ctx_t *ctx,
+    workspace_t *ws,
+    const cleanup_preflight_result_t *cleanup_verdicts,
+    const cleanup_result_t *cleanup_result,
+    const deploy_result_t *deploy_result,
+    time_t now,
+    size_t *acknowledged
+) {
+    CHECK_NULL(ctx);
+    CHECK_NULL(ws);
+    CHECK_NULL(cleanup_verdicts);
+    CHECK_NULL(acknowledged);
+
+    state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
+    error_t *err = NULL;
+
+    *acknowledged = 0;
+
+    /* The orphans first. Which outcomes settle is cleanup's rule, read off its
+     * receipt and its verdicts (cleanup.h); the act is apply's, and it is one
+     * verb for every outcome: the record retires, and its base outlives it as
+     * the path's released copy (core/state.h state_retire_anchor). Neither kind,
+     * nor the reason the record ended, nor what stands at the path decides anything
+     * here: the copy is what dotta last confirmed there, and a later claim is
+     * measured against it whatever disk has done since. The flow for an orphan:
+     * the path leaves the view (profile disabled, branch moved, target changed)
+     * → the workspace reads its record as an orphan and asks Git why → the verdict
+     * → here → record retired, completing the cycle. Without it, orphaned records
+     * accumulate forever in the path_anchors table.
+     *
+     * What the run found gone: pruned, or gone by the time it looked — the
+     * receipt's, where the prune engine could start. */
+    if (cleanup_result) {
+        const cleanup_outcomes_t *gone[] = {
+            &cleanup_result->pruned_files,
+            &cleanup_result->reclaimed_files,
+            &cleanup_result->pruned_dirs,
+            &cleanup_result->reclaimed_dirs,
+        };
+        for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
+            for (size_t i = 0; i < gone[b]->count; i++) {
+                err = state_retire_anchor(state, gone[b]->entries[i].item->filesystem_path);
+                if (err) goto cleanup;
+            }
+        }
+    }
+
+    /* The verdicts' own, settled whether or not the prune engine could start:
+     * neither needed an effect — what was gone before the run began, and what
+     * the run let go. The receipt's printer told them when it could; on the one
+     * run whose warning said nothing ran, they settle unreported. */
+    const workspace_items_t decided[] = {
+        workspace_items(&cleanup_verdicts->absent_files),
+        workspace_items(&cleanup_verdicts->absent_dirs),
+        workspace_items(&cleanup_verdicts->released_files),
+        workspace_items(&cleanup_verdicts->released_dirs),
+    };
+    for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
+        for (size_t i = 0; i < decided[b].count; i++) {
+            err = state_retire_anchor(state, decided[b].entries[i]->filesystem_path);
+            if (err) goto cleanup;
+        }
+    }
+
+    /* Then what the run wrote, path by path — for a file, the blob dotta just
+     * wrote, the ownership timestamp, and the stat triple the fast path reads
+     * on later runs: the authoritative "dotta confirmed disk == this blob" /
+     * "dotta made this" account. Whatever cleanup did: its failure does not
+     * invalidate what landed, and a record that lost what landed would read a
+     * deployed file as one dotta never wrote.
+     *
+     * The receipt is the whole of it, and the ownership rule is read off each
+     * carried-out fate, never off a bucket topology:
+     *   deployed                  files written or linked — an owned anchor
+     *                             carrying the write's own proof: the receipt's
+     *                             triple, distilled by the executor from the
+     *                             fstat of the bytes it put there
+     *                             (stat_cache_from_write — authorship needs no
+     *                             closed second). A symlink's is UNSET, the same
+     *                             statement as NULL to state_anchor: a link is
+     *                             made by path, no descriptor exists to describe
+     *                             it, and readlink is its whole re-verification
+     *   converged, made           a directory whose convergence is not a fix
+     *   (a create or a replace)   (deploy_convergence) — dotta made it, where
+     *                             nothing stood or in a squatter's place — an
+     *                             owned anchor; a directory has no blob and no stat
+     *   converged in place        dotta did not make it, and it was present at
+     *   (a fix)                   load, so the flush has already observed any
+     *                             that had no record and learned each claim disk
+     *                             already stood on, and the pass after it observed
+     *                             any whose record described another kind of
+     *                             node in that record's place
+     *                             (workspace_observe_retyped): a confirmation
+     *                             of the claims the fix set that the record still
+     *                             lacks, never an ownership event — anchoring
+     *                             it as owned would set deployed_at on a directory
+     *                             the user made and hand it to the prune on the
+     *                             next scope exit — with one exception: a record
+     *                             dotta owns whose binding names another row —
+     *                             another profile's, a pending reassignment, or
+     *                             another name of this one's — must not outlive
+     *                             the run that converged the directory, so it
+     *                             takes the one anchor that moves it onto the
+     *                             row, by the acknowledgement loop's own test
+     *   ancestors                 claimed parents made on the way, either
+     *                             class — dotta made them too, an owned anchor
+     * Every other active directory present on disk was present at load too, and
+     * has its record from the flush by the same argument; the load established
+     * presence at the boundary, and nothing here walks the disk to establish it
+     * again.
+     *
+     * A deployed file — or a converged directory — whose item read [reassigned]
+     * has its record rewritten under the row's profile by the write that records
+     * it, so each is counted before its write, and a write that lands nothing
+     * counts nothing: a deployment the receipt names failed has no write here
+     * at all. The clean ones the adoption and acknowledgement loops re-stamped
+     * were said where they were written. Ancestors' anchors stay uncounted: they
+     * are outside the plan, so no writer named them for the preview, and an
+     * acknowledgement that rides one heals the record silently. */
+    if (deploy_result) {
+        deploy_outcomes_t deployed = deploy_result->deployed;
+
+        for (size_t i = 0; i < deployed.count; i++) {
+            const deploy_outcome_t *o = &deployed.entries[i];
+            const workspace_item_t *item = o->verdict->item;
+
+            /* Counted before the write below rewrites the record the reassignment
+             * is read from; a refusal ends the phase, and the count with it */
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+                (*acknowledged)++;
+            }
+
+            err = workspace_anchor(ws, item, &o->stat, now);
+            if (err) goto cleanup;
+        }
+
+        deploy_outcomes_t converged = deploy_result->converged;
+        for (size_t i = 0; i < converged.count; i++) {
+            const deploy_verdict_t *v = converged.entries[i].verdict;
+            const workspace_item_t *item = v->item;
+
+            /* Counted before either write: both rewrite the record the reassignment
+             * is read from. */
+            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+                (*acknowledged)++;
+            }
+
+            /* Whether the record follows the row: the acknowledgement loop's
+             * own test, asked of the whole binding — a record dotta owns, bound
+             * to another row, another profile's or another name of this one's.
+             * The loop's kind rung is a preview's: in a run, the pass after the
+             * flush has already observed away every record of another kind under
+             * a standing directory (workspace_observe_retyped). The count above
+             * is the binding's profile half, the one the screens name. */
+            const anchor_t *anchor = item->anchor;
+            bool follows = anchor && anchor->deployed_at > 0 &&
+                !manifest_is_claim(item->row, anchor->profile, anchor->storage_path);
+
+            if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
+                /* A fix: the claims it set, which the record still lacks. It
+                 * sets the mode always, and the ownership only where the verdict
+                 * applies a pair — two -1s leave the owner as the load found
+                 * it, apart from the row's (the flush has learned each axis disk
+                 * already stood on): on a fix, an owner this host cannot resolve,
+                 * which preflight warned of. So the record keeps its own there,
+                 * and the claim stays Git's to bring. */
+                divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
+                    ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
+                    : DIVERGENCE_MODE;
+
+                err = workspace_confirm(
+                    ws, item, workspace_claims_moved(item->row, anchor) & landed
+                );
+                if (err) goto cleanup;
+                continue;
+            }
+
+            err = workspace_anchor(ws, item, NULL, now);
+            if (err) goto cleanup;
+        }
+
+        deploy_outcomes_t ancestors = deploy_result->ancestors;
+        for (size_t i = 0; i < ancestors.count; i++) {
+            err = workspace_anchor(ws, ancestors.entries[i].verdict->item, NULL, now);
+            if (err) goto cleanup;
+        }
+    }
+
+    /* The transaction is this phase's to close. The tail is the label's — a refused
+     * save falls into the same settle a refused statement does. */
+    err = state_save(state);
+
+cleanup:
+    /* The phase finishes its own transaction, because the caller runs the
+     * post-apply hook next. state_rollback is a no-op once state_save has
+     * committed, and is also the one call that clears the handle's flag after
+     * SQLite rolled the transaction back itself. And it is what makes the count
+     * true on both ends: a refusal took every write this phase made, the
+     * reassignments' among them. */
+    state_rollback(state);
+    if (err) *acknowledged = 0;
+
+    return err;
+}
+
+/**
  * Apply command implementation
  */
 error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
@@ -1953,14 +2197,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * here, by the adoption and acknowledgement loops below: written into the
      * present, committed at the checkpoint and said once it has, so the list is
      * sized to the two clean buckets. The pending ones off the verdicts after
-     * preflight, previewed ahead of the record step that writes them behind the
-     * deployment (pending_reassignments). Each is named before the write that
-     * acknowledges it rewrites the record it is read from (reassignment_t). A
-     * row the plan skips (-e, --skip-existing) is in no bucket of either and is
-     * neither said nor counted: the run will not acknowledge it. The scope is
-     * not re-derived — the planner applied it once, and the buckets are its answer.
-     * The loops run before the early exit, so a reassignment-only workspace is
-     * reported and acknowledged there too.
+     * preflight, previewed ahead of the record phase that writes them behind
+     * the deployment (pending_reassignments). Each is named before the write
+     * that acknowledges it rewrites the record it is read from (reassignment_t).
+     * A row the plan skips (-e, --skip-existing) is in no bucket of either and
+     * is neither said nor counted: the run will not acknowledge it. The scope
+     * is not re-derived — the planner applied it once, and the buckets are its
+     * answer. The loops run before the early exit, so a reassignment-only workspace
+     * is reported and acknowledged there too.
      *
      * A reassignment is the workspace's reading of the record against the row
      * and the look — the record dotta owns names one profile, the row another,
@@ -2191,7 +2435,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * The record of the run's own effects — the anchors the deployment writes,
      * the records cleanup retires — is the run's second transaction, begun past
-     * the early exit and committed at the end. */
+     * the early exit and ended by the record phase (apply_write_record). */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -2271,7 +2515,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and the checkpoint committed them whatever the rest of the run does — so
      * the run's count is the list's, as the dry run's is, and no later exit (a
      * failed preflight, a refusing hook, a declined prompt) leaves one done and
-     * unsaid. The pending ones are the preview's, ahead of the record step that
+     * unsaid. The pending ones are the preview's, ahead of the record phase that
      * writes them. */
     if (clean_reassignment_count > 0) {
         apply_print_reassignments(out, clean_reassignments, clean_reassignment_count);
@@ -2315,11 +2559,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* The run's transaction: the record of what the two engines do, committed
-     * at the end. Begun here rather than at the first write so the lock the
-     * dispatcher took is this process's again across the preview, the prompt
-     * and the execution — two applies must not interleave, and a status must
-     * not record paths this run is rewriting.
+    /* The run's transaction: the record of what the two engines do, which the
+     * record phase ends (apply_write_record). Begun here rather than at the first
+     * write so the lock the dispatcher took is this process's again across the
+     * preview, the prompt and the execution — two applies must not interleave,
+     * and a status must not record paths this run is rewriting.
      *
      * A preview begins none. It executes nothing, its prompt is gated above,
      * and the transaction it would hold across the exit below is one close_run
@@ -2365,18 +2609,19 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* What the record step acknowledges behind the run's own writes, for the
-     * tail: each pending reassignment it writes. */
+    /* What the record phase acknowledges behind the run's own writes, for the
+     * tail: each pending reassignment it writes, or none where it failed
+     * (apply_write_record). */
     size_t acknowledged_count = 0;
 
     /* The pending reassignments, off the verdicts: a row preflight skipped is
      * not here — its reassignment rides a deployment that will not happen — and
-     * a deployable row's record is rewritten only by the record step, after this
-     * is printed, so nothing is lost by naming it late, and the preview names
-     * exactly what the record step acknowledges behind a write that lands. The
-     * item is the verdict's, verbatim (deploy_verdict_t): never NULL, and its
-     * join facts sound on every one. The ancestors are outside the plan and stay
-     * uncounted, as the record step leaves them. */
+     * a deployable row's record is rewritten only by the record phase, after
+     * this is printed, so nothing is lost by naming it late, and the preview
+     * names exactly what the record phase acknowledges behind a write that lands.
+     * The item is the verdict's, verbatim (deploy_verdict_t): never NULL, and
+     * its join facts sound on every one. The ancestors are outside the plan and
+     * stay uncounted, as the record phase leaves them. */
     size_t pending_reassignment_count = 0;
     reassignment_t *pending_reassignments = arena_alloc(
         ctx->arena,
@@ -2406,7 +2651,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
     }
 
-    /* The previews: the reassignments the record step acknowledges, then each
+    /* The previews: the reassignments the record phase acknowledges, then each
      * engine's story told the same way — what it will do (the preview, every
      * caveat on the promise with it), then what it will not and why (the skips,
      * closing with their remedies) — read the same way in a real run and a dry
@@ -2564,23 +2809,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             output_print(out, OUTPUT_VERBOSE, "No deployment work in scope\n");
         }
 
-        /* Prune the orphans the verdicts cleared, then settle the records: what
-         * the run found gone (the receipt), what was gone before it began and
-         * what it let go (the verdicts).
+        /* Prune the orphans the verdicts cleared. cleanup_execute changes the
+         * filesystem only; apply, as the transaction owner, settles the records
+         * behind what went and what was let go (apply_write_record, below).
          *
-         * cleanup_execute changes the filesystem only; apply, as the transaction
-         * owner, settles the records behind what went and what was let go. The
-         * flow for an orphan: the path leaves the view (profile disabled, branch
-         * moved, target changed) → the workspace reads its record as an orphan
-         * and asks Git why → the verdict → this block → record retired, completing
-         * the cycle. Without it, orphaned records accumulate forever in the
-         * path_anchors table.
-         *
-         * Non-fatal: the deployment's landed writes must be recorded and saved
-         * regardless, or the database would show deployed files as undeployed
-         * and the user would see [undeployed] on working files. The engine's
-         * one error is its receipt's allocation — nothing ran, nothing to record
-         * — and the next apply re-reads the prunable orphans. */
+         * Non-fatal: the deployment's landed writes are recorded whatever the
+         * prune did. The engine's one error is its receipt's allocation — nothing
+         * ran, nothing to record — and the next apply re-reads the prunable
+         * orphans. */
         error_t *prune_err = cleanup_execute(cleanup_verdicts, &cleanup_result);
         if (prune_err) {
             output_warning(
@@ -2590,247 +2826,40 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             error_free(prune_err);
         }
 
-        /* Which outcomes settle is cleanup's rule, read off its receipt and its
-         * verdicts (cleanup.h); the act is apply's, and it is one verb for every
-         * outcome: the record retires, and its base outlives it as the path's
-         * released copy (core/state.h state_retire_anchor). Neither kind, nor
-         * the reason the record ended, nor what stands at the path decides anything
-         * here: the copy is what dotta last confirmed there, and a later claim
-         * is measured against it whatever disk has done since. Non-fatal per
-         * row: the filesystem effect, if any, already happened, and a record
-         * that fails to settle is reported and read as an orphan again by the
-         * next apply. */
         if (cleanup_result) {
             apply_print_cleanup_results(out, cleanup_verdicts, cleanup_result);
-
-            /* What the run found gone: pruned, or gone by the time it looked */
-            const cleanup_outcomes_t *gone[] = {
-                &cleanup_result->pruned_files,
-                &cleanup_result->reclaimed_files,
-                &cleanup_result->pruned_dirs,
-                &cleanup_result->reclaimed_dirs,
-            };
-            for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
-                for (size_t i = 0; i < gone[b]->count; i++) {
-                    const workspace_item_t *item = gone[b]->entries[i].item;
-
-                    error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
-                    if (retire_err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
-                            item->filesystem_path, error_message(retire_err)
-                        );
-                        error_free(retire_err);
-                    }
-                }
-            }
         }
 
-        /* The verdicts' own, settled whether or not the prune engine could start:
-         * neither needed an effect — what was gone before the run began, and
-         * what the run let go. The receipt's printer told them above when it
-         * did; on the one run whose warning said nothing ran, they settle
-         * unreported. */
-        const workspace_items_t decided[] = {
-            workspace_items(&cleanup_verdicts->absent_files),
-            workspace_items(&cleanup_verdicts->absent_dirs),
-            workspace_items(&cleanup_verdicts->released_files),
-            workspace_items(&cleanup_verdicts->released_dirs),
-        };
-        for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
-            for (size_t i = 0; i < decided[b].count; i++) {
-                const workspace_item_t *item = decided[b].entries[i];
+        /* The record of what the run did — the orphans it settled, the paths it
+         * wrote — whole or not at all (apply_write_record). A record the store
+         * refused is said beneath the receipts, with what it left standing; one
+         * that landed says only the reassignments it acknowledged, at the tail. */
+        error_t *record_err = apply_write_record(
+            ctx, ws, cleanup_verdicts, cleanup_result, deploy_result, now, &acknowledged_count
+        );
+        if (record_err) {
+            output_gap(out, OUTPUT_NORMAL);
+            output_warning(
+                out, OUTPUT_NORMAL, "Failed to update the record: %s",
+                error_message(record_err)
+            );
 
-                error_t *retire_err = state_retire_anchor(state, item->filesystem_path);
-                if (retire_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to retire state entry for %s: %s",
-                        item->filesystem_path, error_message(retire_err)
-                    );
-                    error_free(retire_err);
-                }
-            }
-        }
-
-        /* Record what the run did, path by path
-         *
-         * CRITICAL: This writes the record for each path deploy touched — for a
-         * file, the blob dotta just wrote, the ownership timestamp, and the stat
-         * triple used by the fast path on subsequent runs. The record is the
-         * authoritative "dotta confirmed disk == this blob" / "dotta made this"
-         * account.
-         *
-         * IMPORTANT: This operation runs REGARDLESS of cleanup success/failure.
-         * - The landed writes are physically on the filesystem
-         * - State must reflect what landed
-         * - Cleanup failure does NOT invalidate what landed
-         * - This prevents state desynchronization (deployed files marked as
-         *   undeployed)
-         *
-         * Non-critical operation: the landed writes already happened physically,
-         * so record-write failures are non-fatal warnings (preserve consistency).
-         *
-         * The receipt is the whole of it, and the ownership rule is read off
-         * each carried-out fate, never off a bucket topology:
-         *   deployed                  files written or linked — an owned anchor
-         *                             carrying the write's own proof: the receipt's
-         *                             triple, distilled by the executor from
-         *                             the fstat of the bytes it put there
-         *                             (stat_cache_from_write — authorship needs
-         *                             no closed second). A symlink's is UNSET,
-         *                             the same statement as NULL to state_anchor:
-         *                             a link is made by path, no descriptor exists
-         *                             to describe it, and readlink is its whole
-         *                             re-verification
-         *   converged, made           a directory whose convergence is not a fix
-         *   (a create or a replace)   (deploy_convergence) — dotta made it, where
-         *                             nothing stood or in a squatter's place —
-         *                             an owned anchor; a directory has no blob
-         *                             and no stat
-         *   converged in place        dotta did not make it, and it was present at
-         *   (a fix)                   load, so the flush has already observed any
-         *                             that had no record and learned each claim
-         *                             disk already stood on, and the pass after
-         *                             it observed any whose record described
-         *                             another kind of node in that record's place
-         *                             (workspace_observe_retyped): a confirmation
-         *                             of the claims the fix set that the record
-         *                             still lacks, never an ownership event —
-         *                             anchoring it as owned would set deployed_at
-         *                             on a directory the user made and hand it
-         *                             to the prune on the next scope exit — with
-         *                             one exception: a record dotta owns whose
-         *                             binding names another row — another
-         *                             profile's, a pending reassignment, or another
-         *                             name of this one's — must not outlive the
-         *                             run that converged the directory, so it
-         *                             takes the one anchor that moves it onto
-         *                             the row, by the acknowledgement loop's
-         *                             own test
-         *   ancestors                 claimed parents made on the way, either
-         *                             class — dotta made them too, an owned anchor
-         * Every other active directory present on disk was present at load too,
-         * and has its record from the flush by the same argument; the load
-         * established presence at the boundary, and nothing here walks the disk
-         * to establish it again.
-         *
-         * A deployed file — or a converged directory — whose item read [reassigned]
-         * had its record rewritten under the row's profile by the write just
-         * made; each is derived before its anchor (the write rewrites the record
-         * the fact is read against) and counted for the tail — the clean ones
-         * the adoption and acknowledgement loops re-stamped were said where they
-         * were written. Ancestors' anchors stay uncounted: they are outside the
-         * plan, so no writer named them for the preview, and an acknowledgement
-         * that rides one heals the record silently.
-         */
-        if (deploy_result) {
-            deploy_outcomes_t deployed = deploy_result->deployed;
-
-            for (size_t i = 0; i < deployed.count; i++) {
-                const deploy_outcome_t *o = &deployed.entries[i];
-                const workspace_item_t *item = o->verdict->item;
-
-                /* Derived before anchoring: the write below rewrites the record
-                 * the reassignment fact is read against. */
-                bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
-
-                error_t *anchor_err = workspace_anchor(ws, item, &o->stat, now);
-                if (anchor_err) {
-                    /* Non-fatal warning - the write landed, just anchor update
-                     * failed. The file is already on the filesystem with correct
-                     * content. Failure here should not abort the entire
-                     * operation. */
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        item->filesystem_path, error_message(anchor_err)
-                    );
-                    error_free(anchor_err);
-                    continue;
-                }
-
-                if (acknowledges) acknowledged_count++;
-            }
-
-            deploy_outcomes_t converged = deploy_result->converged;
-            for (size_t i = 0; i < converged.count; i++) {
-                const deploy_verdict_t *v = converged.entries[i].verdict;
-                const workspace_item_t *item = v->item;
-
-                /* Derived before either write: both rewrite the record the
-                 * reassignment fact is read against. */
-                bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
-
-                /* Whether the record follows the row: the acknowledgement loop's
-                 * own test, asked of the whole binding — a record dotta owns,
-                 * bound to another row, another profile's or another name of
-                 * this one's. The loop's kind rung is a preview's: in a run,
-                 * the pass after the flush has already observed away every record
-                 * of another kind under a standing directory
-                 * (workspace_observe_retyped). The count above is the binding's
-                 * profile half, the one the screens name. */
-                const anchor_t *anchor = item->anchor;
-                bool follows = anchor && anchor->deployed_at > 0 &&
-                    !manifest_is_claim(item->row, anchor->profile, anchor->storage_path);
-
-                if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
-                    /* A fix: the claims it set, which the record still lacks.
-                     * It sets the mode always, and the ownership only where the
-                     * verdict applies a pair — two -1s leave the owner as the
-                     * load found it, apart from the row's (the flush has learned
-                     * each axis disk already stood on): on a fix, an owner this
-                     * host cannot resolve, which preflight warned of. So the
-                     * record keeps its own there, and the claim stays Git's to
-                     * bring. */
-                    divergence_type_t landed = (v->uid != (uid_t) -1 || v->gid != (gid_t) -1)
-                        ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
-                        : DIVERGENCE_MODE;
-
-                    error_t *confirm_err = workspace_confirm(
-                        ws, item, workspace_claims_moved(item->row, anchor) & landed
-                    );
-                    if (confirm_err) {
-                        output_warning(
-                            out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                            item->filesystem_path, error_message(confirm_err)
-                        );
-                        error_free(confirm_err);
-                    }
-                    continue;
-                }
-
-                error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
-                if (anchor_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        item->filesystem_path, error_message(anchor_err)
-                    );
-                    error_free(anchor_err);
-                    continue;
-                }
-
-                if (acknowledges) acknowledged_count++;
-            }
-
-            deploy_outcomes_t ancestors = deploy_result->ancestors;
-            for (size_t i = 0; i < ancestors.count; i++) {
-                const workspace_item_t *item = ancestors.entries[i].verdict->item;
-
-                error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
-                if (anchor_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
-                        item->filesystem_path, error_message(anchor_err)
-                    );
-                    error_free(anchor_err);
-                }
-            }
+            /* Nothing the phase wrote stands: the first refused statement ended
+             * it and the rollback took the rest, so every path's record is what
+             * it was before the run — and what the run wrote on disk, the next
+             * apply reads back. */
+            output_info(
+                out, OUTPUT_NORMAL,
+                "The record was not written - what it already held stands"
+            );
+            error_free(record_err);
         }
     }
 
     /* The pending reassignments this run acknowledged, both kinds: the ones the
-     * record step rewrote behind the run's own writes (deployed files; converged
-     * directories) — the clean ones were said where they were written. Dry-run
-     * previews the in-scope set the preview named. */
+     * record phase rewrote behind the run's own writes (deployed files; converged
+     * directories), said once it landed — the clean ones were said where they
+     * were written. Dry-run previews the in-scope set the preview named. */
     output_gap(out, OUTPUT_NORMAL);
     if (opts->dry_run) {
         if (pending_reassignment_count > 0) {
@@ -2846,17 +2875,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* Commit the run's transaction: the anchors the deployment wrote and the
-     * records cleanup retired (partial success model — a cleanup failure leaves
-     * the record's writes to commit). The present was committed at the checkpoint;
-     * a preview began no transaction here, and the save closes nothing. */
-    err = state_save(state);
-    if (err) {
-        err = error_wrap(err, "Failed to commit state changes");
-        goto cleanup;
-    }
-
-    /* Execute post-apply hook */
+    /* Execute post-apply hook. The record phase settled the run's transaction
+     * before this — committed or rolled back — and a preview began none, so the
+     * hook meets the database this run leaves. */
     hook_fire_post(config, out, repo_path, &hook_inv);
 
     /* The receipt is printed; what remains is the return value. The plan is the
@@ -2978,12 +2999,12 @@ static const args_opt_t apply_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",        "<name>",
-        cmd_apply_options_t,profiles,         profile_count,
+        cmd_apply_options_t,profiles,           profile_count,
         "Filter deployment to profile(s) (repeatable)"
     ),
     ARGS_APPEND(
         "e exclude",        "<pattern>",
-        cmd_apply_options_t,exclude_patterns, exclude_count,
+        cmd_apply_options_t,exclude_patterns,   exclude_count,
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
@@ -3017,11 +3038,11 @@ static const args_opt_t apply_opts[] = {
      * order. */
     ARGS_POSITIONAL(
         APPLY_CLASS_FILE,
-        cmd_apply_options_t,files,            file_count
+        cmd_apply_options_t,files,              file_count
     ),
     ARGS_POSITIONAL(
         APPLY_CLASS_PROFILE,
-        cmd_apply_options_t,profiles,         profile_count
+        cmd_apply_options_t,profiles,           profile_count
     ),
     ARGS_END,
 };

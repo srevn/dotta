@@ -30,7 +30,7 @@
  *   caller hands it, or gives that item one; the confirmations go through
  *   state_confirm and state_confirm_claim, which advance the record they are
  *   handed only when their statement wrote; retirements (state_retire_anchor,
- *   from apply's record step and the verbs) go to the database directly — no
+ *   from apply's record phase and the verbs) go to the database directly — no
  *   later reader in the run consults a retired path. The one retirement a later
  *   reader does consult is workspace_observe_retyped's, whose observation takes
  *   the retired record's place in the snapshot.
@@ -603,15 +603,15 @@ static inline compare_result_t workspace_compare_confirmed(
  * tags (workspace_item_tags), with the item's; diff's filter, its "acknowledged
  * by apply" line and its status colour (cmds/diff.c), with the item's; apply's
  * two acknowledgement loops — the writers that move the record onto the row's
- * profile — its pending reassignments off the verdicts, and its record step,
- * each with the item's (cmds/apply.c cmd_apply); and sync's apply hint, with
- * none, which asks it of the record against the view with no workspace at all,
- * workspace_stale answering first across kinds (cmds/sync.c). A record's WRITER
- * asks the whole binding — profile and storage path both — which is
- * manifest_is_claim; this is the half the screens name and the receipts count.
- * Not manifest_diff_stats_t's `reassigned`, which counts one transition's own
- * delta between two views; this is the record against the view, standing from
- * whenever it began.
+ * profile — its pending reassignments off the verdicts, and its record phase,
+ * each with the item's (cmds/apply.c cmd_apply, apply_write_record); and sync's
+ * apply hint, with none, which asks it of the record against the view with no
+ * workspace at all, workspace_stale answering first across kinds (cmds/sync.c).
+ * A record's WRITER asks the whole binding — profile and storage path both —
+ * which is manifest_is_claim; this is the half the screens name and the receipts
+ * count. Not manifest_diff_stats_t's `reassigned`, which counts one transition's
+ * own delta between two views; this is the record against the view, standing
+ * from whenever it began.
  *
  * The record against the view has three words, and this is the binding's — the
  * one of the three that reads the look; workspace_stale below is the content's,
@@ -686,8 +686,8 @@ static inline bool workspace_stale(
  *
  * Readers: core/workspace.c workspace_analyze_claim, which both analyses of an
  * active item call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved
- * claim, the record's learning where it has), cmds/apply.c cmd_apply's record
- * step (the claims a fix set that the record still lacks), cmds/sync.c cmd_sync's
+ * claim, the record's learning where it has), cmds/apply.c apply_write_record
+ * (the claims a fix set that the record still lacks), cmds/sync.c cmd_sync's
  * apply hint (the record still disagrees with the view). A reader not on this
  * list is a bug.
  */
@@ -1319,17 +1319,19 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  *
  * The workspace-scope writer for ownership events — add and update write through
  * state_anchor directly (the header's exception: add loads no workspace, and
- * nothing reads update's after its record write). Its callers, cmds/apply.c
- * cmd_apply's, each holding the item:
- *   - the adoption and acknowledgement loops, over the clean items (an ownership
- *     event on a file's first claim, and the acknowledgement of a clean row the
- *     record has yet to follow, a file's or a tracked directory's — the record's
- *     binding becomes the row's, whichever half of it moved: another profile's
- *     row, or another name of the same profile that the view gave the path to)
- *   - the record step (an ownership event after a write: a file deployed, a
- *     directory made — where nothing stood, in a squatter's place, or as the
- *     parent of a planned path — and a directory fixed in place whose owned record
- *     names another row, which follows the row as a clean one's does)
+ * nothing reads update's after its record write). Its callers, in cmds/apply.c,
+ * each holding the item:
+ *   - cmd_apply's adoption and acknowledgement loops, over the clean items (an
+ *     ownership event on a file's first claim, and the acknowledgement of a clean
+ *     row the record has yet to follow, a file's or a tracked directory's — the
+ *     record's binding becomes the row's, whichever half of it moved: another
+ *     profile's row, or another name of the same profile that the view gave the
+ *     path to)
+ *   - apply_write_record, the record phase (an ownership event after a write: a
+ *     file deployed, a directory made — where nothing stood, in a squatter's
+ *     place, or as the parent of a planned path — and a directory fixed in place
+ *     whose owned record names another row, which follows the row as a clean
+ *     one's does)
  * Confirmations are not ownership events and do not come through here: they are
  * workspace_confirm's — the flush's, and apply's for a directory it fixed.
  *
@@ -1377,9 +1379,9 @@ error_t *workspace_anchor(
  * never handed to the prune.
  *
  * Two callers, each holding the item: the flush (workspace_flush), for what the
- * load established, and cmds/apply.c cmd_apply's record step, for the claims a
- * fix set on a tracked directory it converged in place — never the content, which
- * only a load's comparison proves.
+ * load established, and cmds/apply.c apply_write_record, apply's record phase,
+ * for the claims a fix set on a tracked directory it converged in place — never
+ * the content, which only a load's comparison proves.
  *
  * @param ws Workspace (must not be NULL, state must be open)
  * @param item The active item the axes were established on (must not be NULL;

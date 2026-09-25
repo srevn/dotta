@@ -6,7 +6,7 @@
  *   cleanup_preflight    — decide *what happens* to each of them: the verdicts
  *   cleanup_execute      — carry the verdicts out and report what happened
  *
- * Same shape as core/deploy. Preview, prompt, execution and apply's record step
+ * Same shape as core/deploy. Preview, prompt, execution and apply's record phase
  * all read the one plan and the one set of verdicts; execution re-decides nothing
  * and applies no filter of its own.
  *

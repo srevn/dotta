@@ -118,7 +118,7 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             /* The path left its profile in Git (an external commit, a pulled
              * removal, a vanished branch), or dotta never deployed it, and it
              * was released from management. Never needs deployment — cleanup
-             * reports it and apply's record step retires its record. */
+             * reports it and apply's record phase retires its record. */
             return false;
     }
 

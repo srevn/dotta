@@ -220,9 +220,8 @@ static workspace_item_t *workspace_find_item(
 /**
  * The active item at a path, either kind: the directory items, then the file items
  *
- * Readers: the partition, pairing each record with the item at its path;
- * workspace_find, which asks it before the orphans; workspace_anchor, finding
- * the item that holds the record it advances or makes.
+ * Readers: the partition, pairing each record with the item at its path, and
+ * workspace_find, which asks it before the orphans.
  */
 static workspace_item_t *workspace_find_active(const workspace_t *ws, const char *path) {
     workspace_item_t *item = workspace_find_item(ws->active, ws->dir_count, path);
@@ -3957,45 +3956,41 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
 /**
  * Anchor an active path with in-memory consistency
  *
- * The workspace-scope writer for ownership events: hands state_anchor the path's
- * live record, the one its item holds, which the verb advances in place — or,
- * for a path with none, a record allocated before the statement, so a write that
- * landed is never followed by a failure to hold it, and held by the item after
- * it. The statement is the one specification of what an ownership event writes;
- * this function holds none of it.
- *
- * Either arm keeps item->anchor the live record: the verb rewrites in place the
- * object the item already holds — const to every reader, and cast here, where
- * it is written (workspace_item_t) — and a record created here is the item's
- * from the write on.
+ * The workspace-scope writer for ownership events: hands state_anchor the item's
+ * row and the record the item holds, or one the item gains. The statement is
+ * the one specification of what an ownership event writes, and checks the row;
+ * this function holds none of it and reads nothing of the row. Either arm leaves
+ * item->anchor the live record.
  */
 error_t *workspace_anchor(
     workspace_t *ws,
-    const manifest_row_t *row,
+    const workspace_item_t *item,
     const stat_cache_t *stat,
     time_t now
 ) {
     CHECK_NULL(ws);
-    CHECK_NULL(row);
+    CHECK_NULL(item);
 
-    /* The path's live record, advanced in place: every reader holding the item
-     * reads the post-write record through the pointer it already holds. */
-    workspace_item_t *item = workspace_find_active(ws, row->filesystem_path);
+    /* The record the item holds, advanced in place: every holder of the item
+     * reads the post-write record through the pointer it already holds. Const
+     * to every reader, and cast here, where it is written (workspace_item_t). */
     if (item->anchor) {
-        return state_anchor(ws->state, row, stat, now, (anchor_t *) item->anchor);
+        return state_anchor(ws->state, item->row, stat, now, (anchor_t *) item->anchor);
     }
 
-    /* A path with none: its record allocated before the statement, then the
-     * item's. */
+    /* An item holding none: its record allocated before the statement, so a write
+     * that landed is never followed by a failure to hold it, and the item's after
+     * it — the item cast here, where it gains the record, as the record is where
+     * it is advanced (workspace_item_t). */
     anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
     if (!anchor) {
         return ERROR(ERR_MEMORY, "Failed to allocate anchor record");
     }
 
-    error_t *err = state_anchor(ws->state, row, stat, now, anchor);
+    error_t *err = state_anchor(ws->state, item->row, stat, now, anchor);
     if (err) return err;
 
-    item->anchor = anchor;
+    ((workspace_item_t *) item)->anchor = anchor;
     return NULL;
 }
 

@@ -1580,8 +1580,9 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * from enabled profiles) and new files. Orphans (recorded but not in any
      * enabled profile) are out of scope for update operations, and the scan keeps
      * them so without it: a leaf the record holds is no discovery, asked of the
-     * anchor index the load builds whether or not the orphan analysis ran
-     * (core/workspace.h). Running that analysis here would not change one item.
+     * orphan items the load makes whether or not the orphan analysis ran
+     * (core/workspace.h workspace_load). Running that analysis here would not
+     * change one item.
      *
      * State is borrowed from the dispatcher (ctx->run.state). Read-only analysis.
      * The transaction for the record write opens later in update_write_record().

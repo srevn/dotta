@@ -2152,7 +2152,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                 (anchor && !workspace_stale(file, anchor->type, &anchor->blob_oid))
                 ? &anchor->stat : NULL;
 
-            error_t *anchor_err = workspace_anchor(ws, file, stat, now);
+            error_t *anchor_err = workspace_anchor(ws, item, stat, now);
             if (anchor_err) {
                 /* Non-fatal: file is correct on disk; next status's slow-path
                  * CMP_EQUAL re-confirms the record, and the row will be re-adopted
@@ -2222,7 +2222,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         bool reassigns = workspace_reassigned(dir, anchor, item->occupant);
 
         if (!opts->dry_run) {
-            error_t *anchor_err = workspace_anchor(ws, dir, NULL, now);
+            error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
             if (anchor_err) {
                 /* Non-fatal, the file loop's stance: the reassignment is
                  * re-acknowledged on the next apply. */
@@ -2722,7 +2722,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                  * the reassignment fact is read against. */
                 bool acknowledges = workspace_reassigned(item->row, item->anchor, item->occupant);
 
-                error_t *anchor_err = workspace_anchor(ws, item->row, &o->stat, now);
+                error_t *anchor_err = workspace_anchor(ws, item, &o->stat, now);
                 if (anchor_err) {
                     /* Non-fatal warning - the write landed, just anchor update
                      * failed. The file is already on the filesystem with correct
@@ -2786,7 +2786,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
                     continue;
                 }
 
-                error_t *anchor_err = workspace_anchor(ws, item->row, NULL, now);
+                error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
                 if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",
@@ -2803,7 +2803,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             for (size_t i = 0; i < ancestors.count; i++) {
                 const workspace_item_t *item = ancestors.entries[i].verdict->item;
 
-                error_t *anchor_err = workspace_anchor(ws, item->row, NULL, now);
+                error_t *anchor_err = workspace_anchor(ws, item, NULL, now);
                 if (anchor_err) {
                     output_warning(
                         out, OUTPUT_NORMAL, "Failed to update anchor for %s: %s",

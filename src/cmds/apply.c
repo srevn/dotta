@@ -2045,7 +2045,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * "enable → apply on a pre-existing matching file" flow to a coherent (blob,
      * now, stat), so a later `rm file` is classified as [deleted] and `update`
      * commits the deletion. The stat is the analysis's own — the snapshot pair,
-     * when it vouches for this row's blob — never a fresh lstat, which would
+     * when it vouches for this row's content — never a fresh lstat, which would
      * bind whatever stands at the path now to a verdict from two phases earlier.
      *
      * A record of another kind than the row is no record for it either: it is a

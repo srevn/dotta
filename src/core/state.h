@@ -895,15 +895,17 @@ error_t *state_confirm_claim(
  * before the event survives it.
  *
  * ROUTING INVARIANT — this is load-bearing:
- *   - If a workspace is live for this transaction, anchor writes MUST route through
- *     workspace_anchor (workspace.h). That wrapper hands this function the path's
- *     live record — or one it allocated for a path with none — which the
- *     statement's success advances, so every later reader in the run sees the
- *     record the statement wrote. Calling state_anchor directly while a workspace
- *     is live silently desyncs the snapshot.
- *   - If no workspace is live (add's and update's capture loops), this function
- *     is the legitimate direct caller. There is no snapshot to patch, so callers
- *     pass NULL and the next workspace_load reads SQL fresh.
+ *   - If a workspace live for this transaction is read after the write, anchor
+ *     writes MUST route through workspace_anchor (workspace.h). That wrapper
+ *     hands this function the path's live record — or one it allocated for a
+ *     path with none — which the statement's success advances, so every later
+ *     reader in the run sees the record the statement wrote. Calling state_anchor
+ *     directly there silently desyncs the snapshot.
+ *   - If no workspace is read after the write — add's capture loop, which loads
+ *     none, and update's, whose workspace nothing reads after its record write
+ *     (core/workspace.h's exception) — this function is the legitimate direct
+ *     caller. There is no snapshot to patch, so callers pass NULL and the next
+ *     workspace_load reads SQL fresh.
  *
  * Semantics (encoded in the SQL — single source of truth):
  *   - row->blob_oid must be non-zero for a file row: a zero blob would record

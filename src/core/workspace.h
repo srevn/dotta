@@ -1305,20 +1305,24 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  *
  * Workspace-scope side of the routing invariant defined on state_anchor (see
  * state.h): hands state_anchor the path's live record, the one its item holds,
- * which the verb advances in place — or, for a path with none at load, a record
- * allocated before the statement and the item's after it — so item->anchor reads
- * the post-write record either way. The statement is the one specification of
- * what an ownership event writes; this function holds none of it.
+ * which the verb advances in place — or, for a path with none, a record allocated
+ * before the statement and the item's after it — so item->anchor reads the
+ * post-write record either way. The statement is the one specification of what
+ * an ownership event writes; this function holds none of it.
  *
  * The workspace-scope writer for ownership events — add and update write through
- * state_anchor directly, with no workspace live (the header's exception):
- *   - apply's adoption loop (ownership event on first claim, and the
- *     acknowledgement of a clean handover — the record's binding becomes the
- *     row's, whichever half of it moved: another profile's row, or another name
- *     of the same profile that the view gave the path to)
- *   - apply's record step (ownership event after a write: a file deployed, a
+ * state_anchor directly (the header's exception: add loads no workspace, and
+ * nothing reads update's after its record write). Its callers, cmds/apply.c
+ * cmd_apply's:
+ *   - the adoption and acknowledgement loops, over the clean items (an ownership
+ *     event on a file's first claim, and the acknowledgement of a clean handover,
+ *     a file's or a tracked directory's — the record's binding becomes the row's,
+ *     whichever half of it moved: another profile's row, or another name of the
+ *     same profile that the view gave the path to)
+ *   - the record step (an ownership event after a write: a file deployed, a
  *     directory made — where nothing stood, in a squatter's place, or as the
- *     parent of a planned path)
+ *     parent of a planned path — and a directory fixed in place whose owned record
+ *     names another row, which follows the row as a clean one's does)
  * Confirmations are not ownership events and do not come through here: they are
  * workspace_confirm's — the flush's, and apply's for a directory it fixed.
  *
@@ -1330,15 +1334,15 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  *            item's; non-zero blob for a file row)
  * @param stat The stat of the moment this row's content was established on disk,
  *             taken by the code that established it: the analysis's own triple
- *             for an adoption or acknowledgement (the snapshot pair, when its
- *             blob is this row's); the deploy receipt's triple for a file
- *             deployment — the executor's fstat of the bytes it wrote, distilled
- *             at the write (stat_cache_from_write: proof by authorship, no closed
- *             second needed), UNSET for a symlink (made by path, no descriptor
- *             exists to describe it), and UNSET and NULL say the same thing to
- *             state_anchor; NULL for a directory. Never a fresh lstat: a look
- *             taken here binds whatever stands at the path now to a verdict from
- *             earlier.
+ *             for an adoption or acknowledgement (the snapshot pair's, when the
+ *             pair is this row's content); the deploy receipt's triple for a
+ *             file deployment — the executor's fstat of the bytes it wrote,
+ *             distilled at the write (stat_cache_from_write: proof by authorship,
+ *             no closed second needed), UNSET for a symlink (made by path, no
+ *             descriptor exists to describe it), and UNSET and NULL say the same
+ *             thing to state_anchor; NULL for a directory. Never a fresh lstat:
+ *             a look taken here binds whatever stands at the path now to a verdict
+ *             from earlier.
  * @param now Timestamp of the write (must be > 0)
  * @return Error from state_anchor, or NULL on success
  */

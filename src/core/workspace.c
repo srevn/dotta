@@ -14,10 +14,10 @@
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
  * here (the flush, workspace_observe_retyped, workspace_anchor, workspace_confirm)
- * advance it only after a live look at disk — all but the flush's void, which
- * clears an order on the view's word: the path is back in the view. A record
- * whose path the view lacks is an orphan, and the orphan analysis asks Git —
- * the only authority that knows — why it is one.
+ * advance it only on disk's word — a live look there, or the run's own write —
+ * all but the flush's void, which clears an order on the view's word: the path
+ * is back in the view. A record whose path the view lacks is an orphan, and the
+ * orphan analysis asks Git — the only authority that knows — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with

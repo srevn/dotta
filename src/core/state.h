@@ -703,10 +703,11 @@ const char *state_peek_profile_target(
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active
- *     item at its path by the items' own search (find_active); the orphans keep
- *     strcmp order, which workspace_look_orphans' parents-first walk, their search
- *     (find_item) and the diverged items' orphan listing (workspace_list, which
- *     the screens print) rest on
+ *     item at its path by the items' own search (workspace_find_active); the
+ *     orphans keep strcmp order, which workspace_look_orphans' parents-first
+ *     walk, their search (workspace_find_item: workspace_find's and the scan's)
+ *     and the diverged items' orphan listing (workspace_list, which the screens
+ *     print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
  *   - cmds/add.c write_record (the takeover note), cmds/remove.c

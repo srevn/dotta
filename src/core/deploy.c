@@ -504,11 +504,13 @@ static bool nearest_ancestor(
 static const manifest_row_t *holdable_directory(
     const workspace_t *ws, const char *path, const struct stat *st
 ) {
-    const manifest_row_t *dir = workspace_lookup(ws, path);
+    const workspace_item_t *item = workspace_find(ws, path);
 
-    if (dir && dir->type == PATH_TYPE_DIRECTORY
+    /* The view's claim, which an active item carries and an orphan's does not:
+     * a directory only a record remembers is no claim to hold */
+    if (item && item->row && item->item_kind == PATH_KIND_DIRECTORY
         && (st->st_uid == identity()->uid || identity()->privileged)) {
-        return dir;
+        return item->row;
     }
     return NULL;
 }

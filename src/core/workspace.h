@@ -19,19 +19,20 @@
  *   consumers (deploy, cleanup, command-internal analyses) read both through
  *   workspace accessors — the active items, each carrying its row and the record
  *   at its path (workspace_active, workspace_directories, workspace_files), and
- *   workspace_lookup — rather than building a view or calling state_get_all_anchors
- *   themselves. The view has no writer: it is current by construction and nothing
- *   invalidates it. The record has four writers while a workspace is live, the
- *   flush (workspace_flush), workspace_observe_retyped, workspace_anchor and
- *   workspace_confirm, each of which patches the snapshot it persists through:
- *   the flush's observation is a record the path's item holds from the write
- *   on, and its void advances the record it read (state_void_prune); the
- *   confirmations go through state_confirm and state_confirm_claim, which advance
- *   the record they are handed only when their statement wrote; retirements
- *   (state_retire_anchor, from apply's record step and the verbs) go to the
- *   database directly — no later reader in the run consults a retired path. The
- *   one retirement a later reader does consult is workspace_observe_retyped's,
- *   whose observation takes the retired record's place in the snapshot.
+ *   the item at a path (workspace_find) — rather than building a view or calling
+ *   state_get_all_anchors themselves. The view has no writer: it is current by
+ *   construction and nothing invalidates it. The record has four writers while
+ *   a workspace is live, the flush (workspace_flush), workspace_observe_retyped,
+ *   workspace_anchor and workspace_confirm, each of which patches the snapshot
+ *   it persists through: the flush's observation is a record the path's item
+ *   holds from the write on, and its void advances the record it read
+ *   (state_void_prune); the confirmations go through state_confirm and
+ *   state_confirm_claim, which advance the record they are handed only when their
+ *   statement wrote; retirements (state_retire_anchor, from apply's record step
+ *   and the verbs) go to the database directly — no later reader in the run
+ *   consults a retired path. The one retirement a later reader does consult is
+ *   workspace_observe_retyped's, whose observation takes the retired record's
+ *   place in the snapshot.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -385,7 +386,7 @@ typedef enum {
  * taken, and on a released record neither — letting a copy go needs no measurement.
  * An orphan on a load that took no look at the orphans keeps UNKNOWN, and no
  * reader is lent it — nor, whatever its look, one the load did not analyze: the
- * diverged items (workspace_diverged) and workspace_get_item hold an orphan only
+ * diverged items (workspace_diverged) and workspace_find lend an orphan only
  * where the load analyzed the orphans. Presence is
  * therefore `occupant != FS_OCCUPANT_NONE` — the workspace's rule, and cleanup's;
  * deploy judges by the stricter one (deploy_occupant_present: UNKNOWN is not
@@ -1027,29 +1028,6 @@ error_t *workspace_load(
 workspace_items_t workspace_diverged(const workspace_t *ws);
 
 /**
- * Get workspace item by filesystem path
- *
- * Returns the divergence information for a specific file or directory via O(1)
- * hashmap lookup. Every diverged item is indexed (workspace_diverged says which
- * those are); an active path with nothing to say is not, and this returns NULL
- * for it. A row beneath a squatter is always indexed: nothing there was looked
- * at, so there is no reading that could have come back clean
- * (workspace_displaced_t).
- *
- * For a reader that meets a path cold: core/cleanup.c vouch_entry, whose emptiness
- * walk meets a child entry and asks what the load holds there. A reader holding
- * an item — the kinds' items, an engine's bucket, a fate — asks nothing by path.
- *
- * @param ws Workspace (must not be NULL)
- * @param filesystem_path Path to query (must not be NULL)
- * @return Workspace item or NULL if not found/clean (borrowed reference)
- */
-const workspace_item_t *workspace_get_item(
-    const workspace_t *ws,
-    const char *filesystem_path
-);
-
-/**
  * The active items: every row of the view, each as its item
  *
  * Every path an enabled profile claims, the winning profile's claim applied, as
@@ -1104,17 +1082,33 @@ workspace_items_t workspace_files(const workspace_t *ws);
 workspace_items_t workspace_directories(const workspace_t *ws);
 
 /**
- * Look up an active path's row by filesystem path
+ * The managed item at a path, or NULL
  *
- * O(1) random access over the view — a path is one row, whatever its kind; callers
- * that want one kind test row->type. Returns NULL if no enabled profile claims
- * the path — the single chokepoint for "is this path active?" probes.
+ * An active path's item, the clean ones too — the row, the record at its path,
+ * the look and the verdict — else an orphan's, where the load analyzed the orphans:
+ * declining an analysis declines its items (workspace_options_t), and an orphan
+ * no analysis reached carries the verdict the partition made it with, which a
+ * reader would take for a copy to prune. Found by the path's spelling, the join's
+ * own key (see Identity above). NULL where the load lends no item at the path:
+ * no row and no record is spelled so, the orphans went unanalyzed, or the path
+ * is a discovery of the scan, which the diverged items alone lend
+ * (workspace_diverged). Pure value return — no allocation, no error path; the
+ * item is valid for the workspace's lifetime.
+ *
+ * For a reader walking the disk, which meets a path cold: core/cleanup.c
+ * vouch_entry, whose emptiness walk meets an entry outside the plan and asks
+ * whether it is an orphan; core/deploy.c holdable_directory, whose landing climb
+ * meets a present ancestor and asks whether the view names a directory there.
+ * Each asks its own question of the item: an orphan carries no row, and an active
+ * item is never ORPHANED. A reader holding an item — the active items, the diverged
+ * items, an engine's bucket, a fate — asks nothing by path. A reader not on this
+ * list is a bug.
  *
  * @param ws Workspace (NULL returns NULL)
  * @param filesystem_path Path to look up (NULL returns NULL)
- * @return Borrowed row pointer, or NULL if not active
+ * @return The item, borrowed for the workspace's lifetime, or NULL
  */
-const manifest_row_t *workspace_lookup(
+const workspace_item_t *workspace_find(
     const workspace_t *ws,
     const char *filesystem_path
 );

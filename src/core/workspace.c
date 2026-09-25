@@ -82,31 +82,33 @@ struct workspace {
      * the command arena's, its index the dispatcher's to release). Rows are
      * read-only for the whole run — the record a writer patches is the one its
      * item holds (workspace_item_t), never a row. The view's own index answers
-     * workspace_lookup: a path is one row, and every lookup tests row->type for
-     * the kind it wants. */
+     * the scan, at each child it lists and each rung above a root
+     * (scan_directory_for_untracked, blob_over): a path is one row, and each
+     * asks row->type for the kind it wants. A reader outside the module asks
+     * for the path's item instead, which carries its row (workspace_find). */
     const manifest_t *manifest;                  /* Borrowed — NOT freed in workspace_free */
 
     /* The active items: one per row of the view, the directories and then the
      * files, each in strcmp order (workspace_kind_order) — the order they are
-     * looked at in, the one a path is found by (find_active), and the one they
-     * are lent in, whole and by kind (workspace_active, workspace_directories,
-     * workspace_files). Pointers into one arena block, never moved. Never NULL
-     * (workspace_partition). */
+     * looked at in, the one a path is found by (workspace_find_active), and the
+     * one they are lent in, whole and by kind (workspace_active,
+     * workspace_directories, workspace_files). Pointers into one arena block,
+     * never moved. Never NULL (workspace_partition). */
     workspace_item_t **active;                   /* Arena; active[0 .. dir_count) the directories */
     size_t dir_count;                            /* The directory items */
     size_t file_count;                           /* The file items, active[dir_count ..] */
 
     /* The orphan items: the records whose path the view lacks, in the snapshot's
      * strcmp order, which workspace_look_orphans' parents-first walk and their
-     * search (find_item) rest on. Read-only — no row names an orphan's path, so
-     * no writer ever reaches one; the orphan analysis asks Git why each is here.
-     * Each is looked at by workspace_look_orphans, which runs where one of its
-     * readers will (workspace_load); an orphan no look reached reads a look nobody
-     * took, and no reader is lent one. Nor is one the load looked at and never
-     * analyzed — a load with the orphan analysis declined looks at them for the
-     * entries index alone — so the diverged items list the analyzed prefix and
-     * no other, which is every orphan or none (workspace_list). Never NULL
-     * (workspace_partition). */
+     * search (workspace_find_item) rest on. Read-only — no row names an orphan's
+     * path, so no writer ever reaches one; the orphan analysis asks Git why each
+     * is here. Each is looked at by workspace_look_orphans, which runs where
+     * one of its readers will (workspace_load); an orphan no look reached reads
+     * a look nobody took, and no reader is lent one. Nor is one the load looked
+     * at and never analyzed — a load with the orphan analysis declined looks at
+     * them for the entries index alone — so the diverged items list, and a path
+     * finds, the analyzed prefix and no other, which is every orphan or none
+     * (workspace_list, workspace_find). Never NULL (workspace_partition). */
     workspace_item_t **orphans;                  /* Arena; singles, never moved */
     size_t orphan_count;                         /* Number of orphans */
     size_t analyzed_count;                       /* orphans[0 .. analyzed_count): the ones the load analyzed */
@@ -134,10 +136,8 @@ struct workspace {
 
     /* The diverged items: every item the analyses left with something to say,
      * derived once every verdict is in (workspace_list), then the scan's
-     * discoveries. The array owns only the pointer buffer; diverged_index maps
-     * a path straight to its item. */
+     * discoveries. The array owns only the pointer buffer. */
     ptr_array_t diverged;                        /* workspace_item_t *: active, analyzed orphans, discoveries */
-    hashmap_t *diverged_index;                   /* filesystem_path → workspace_item_t * */
 
     /* The squatted directories: every path a claim names as a directory that
      * the load's look found occupied by anything else, with the claim. Noted by
@@ -161,35 +161,6 @@ struct workspace {
 };
 
 /**
- * Create empty workspace
- */
-static error_t *workspace_create_empty(
-    git_repository *repo,
-    workspace_t **out
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(out);
-
-    workspace_t *ws = calloc(1, sizeof(workspace_t));
-    if (!ws) {
-        return ERROR(ERR_MEMORY, "Failed to allocate workspace");
-    }
-
-    ws->repo = repo;
-
-    ws->diverged_index = hashmap_borrow(256);  /* Keys: arena-backed filesystem_path */
-    if (!ws->diverged_index) {
-        free(ws);
-        return ERROR(ERR_MEMORY, "Failed to create diverged index");
-    }
-
-    ptr_array_init(&ws->diverged);
-
-    *out = ws;
-    return NULL;
-}
-
-/**
  * The active items' order: the directories, then the files, each in strcmp order
  *
  * The order the load looks in — its one walk over the active items is this array's
@@ -202,8 +173,8 @@ static error_t *workspace_create_empty(
  * workspace_files), deploy's directories before its files; is deploy's
  * parent-before-child walk within each; is what the untracked scan's registration
  * reads for the tie among one profile's rows standing at one directory; and is
- * the one each kind's search rests on (find_item). The view holds one row per
- * path, so the order is total.
+ * the one each kind's search rests on (workspace_find_item). The view holds one
+ * row per path, so the order is total.
  */
 static int workspace_kind_order(const void *a, const void *b) {
     const workspace_item_t *ia = *(const workspace_item_t *const *) a;
@@ -219,7 +190,7 @@ static int workspace_kind_order(const void *a, const void *b) {
 /* bsearch's: a path against an item's (strcmp) — the order of every array it
  * searches: each kind's active items by workspace_kind_order, the orphans by
  * the snapshot's own (core/state.h state_get_all_anchors) */
-static int compare_path_to_item(const void *key, const void *elem) {
+static int workspace_path_order(const void *key, const void *elem) {
     const workspace_item_t *const *item = elem;
 
     return strcmp(key, (*item)->filesystem_path);
@@ -229,16 +200,18 @@ static int compare_path_to_item(const void *key, const void *elem) {
  * The item at a path in one sorted array — one kind's active items, or the orphans
  * — or NULL
  *
- * No such array is ever NULL (workspace_partition), so an empty one is searched
- * as it stands.
+ * Two askers search the orphans, each to a bound of its own: workspace_find to
+ * the analyzed prefix it lends, the scan's leaf guard to every record, analyzed
+ * or not (scan_directory_for_untracked). No such array is ever NULL
+ * (workspace_partition), so an empty one is searched as it stands.
  */
-static workspace_item_t *find_item(
+static workspace_item_t *workspace_find_item(
     workspace_item_t *const *items,
     size_t count,
     const char *path
 ) {
     workspace_item_t *const *found = bsearch(
-        path, items, count, sizeof(*items), compare_path_to_item
+        path, items, count, sizeof(*items), workspace_path_order
     );
 
     return found ? *found : NULL;
@@ -248,12 +221,13 @@ static workspace_item_t *find_item(
  * The active item at a path, either kind: the directory items, then the file items
  *
  * Readers: the partition, pairing each record with the item at its path;
- * workspace_anchor, finding the item that holds the record it advances or makes.
+ * workspace_find, which asks it before the orphans; workspace_anchor, finding
+ * the item that holds the record it advances or makes.
  */
-static workspace_item_t *find_active(const workspace_t *ws, const char *path) {
-    workspace_item_t *item = find_item(ws->active, ws->dir_count, path);
+static workspace_item_t *workspace_find_active(const workspace_t *ws, const char *path) {
+    workspace_item_t *item = workspace_find_item(ws->active, ws->dir_count, path);
 
-    return item ? item : find_item(ws->active + ws->dir_count, ws->file_count, path);
+    return item ? item : workspace_find_item(ws->active + ws->dir_count, ws->file_count, path);
 }
 
 /**
@@ -374,8 +348,8 @@ static workspace_fault_t workspace_error_fault(error_t *err) {
  *
  * Empty on every healthy load, which is what makes every ask free.
  *
- * Readers: look, before every look the load takes — the one door, which writes
- * the answer onto the item it withholds the look from — and
+ * Readers: workspace_look, before every look the load takes — the one door, which
+ * writes the answer onto the item it withholds the look from — and
  * workspace_squatted_ancestor, the view-only face that lends the answer whole
  * to a caller that needs the squatter itself (core/deploy.c check_ancestry).
  *
@@ -416,15 +390,14 @@ static const workspace_squatted_t *squatted_ancestor(
  * This is the one door the walk's strings leave their frame through, and it copies
  * them rather than aliasing: the path the walk joined and the name the namer
  * answered live in a frame's scratch arena that the frame's next entry reclaims,
- * while ws->diverged_index borrows the key it is handed (base/hashmap.h) and
- * the item outlives every frame. The profile is the owner's — the row's own,
+ * and the item outlives every frame. The profile is the owner's — the row's own,
  * whose tracked directory the walk began at — and is the view's arena's already.
  *
  * No earlier item stands at the path: the view's and the record's paths were
  * skipped at the leaf guard, and no directory is enumerated twice (one scan root
- * per directory, workspace_analyze_untracked), so the index takes the key fresh.
- * Stated rather than guarded — hashmap_set overwrites in silence — and pinned
- * by the exactly-once fixtures (tests/test-scan.sh).
+ * per directory, workspace_analyze_untracked), so the diverged items list the
+ * path once. Stated rather than guarded, and pinned by the exactly-once fixtures
+ * (tests/test-scan.sh).
  *
  * The look is the scan's own: the occupant and the stat its lstat found, so a
  * discovery's `st` is meaningful as every present item's is (workspace.h).
@@ -453,29 +426,23 @@ static error_t *workspace_add_untracked(
     if (!item) {
         return ERROR(ERR_MEMORY, "Failed to allocate untracked item");
     }
-    memset(item, 0, sizeof(*item));
 
-    item->filesystem_path = arena_strdup(ws->arena, filesystem_path);
-    item->storage_path = arena_strdup(ws->arena, storage_path);
-    item->profile = profile;
+    *item = (workspace_item_t){
+        .filesystem_path = arena_strdup(ws->arena, filesystem_path),
+        .storage_path = arena_strdup(ws->arena, storage_path),
+        .profile = profile,
+        .item_kind = PATH_KIND_FILE,
+        .occupant = occupant,
+        .st = *st,
+        .state = WORKSPACE_STATE_UNTRACKED,
+    };
     if (!item->filesystem_path || !item->storage_path) {
         return ERROR(ERR_MEMORY, "Failed to copy untracked paths");
     }
 
-    item->state = WORKSPACE_STATE_UNTRACKED;
-    item->divergence = DIVERGENCE_NONE;
-    item->item_kind = PATH_KIND_FILE;
-    item->occupant = occupant;
-    item->st = *st;
-
     error_t *err = ptr_array_push(&ws->diverged, item);
     if (err) {
         return error_wrap(err, "Failed to append untracked item");
-    }
-
-    err = hashmap_set(ws->diverged_index, item->filesystem_path, item);
-    if (err) {
-        return error_wrap(err, "Failed to index untracked item");
     }
 
     return NULL;
@@ -2668,7 +2635,7 @@ static error_t *scan_directory_for_untracked(
             if (find_scan_root(scan->roots, scan->root_count, st.st_dev, st.st_ino)) {
                 continue;
             }
-        } else if (claim || find_item(ws->orphans, ws->orphan_count, child) ||
+        } else if (claim || workspace_find_item(ws->orphans, ws->orphan_count, child) ||
             standing_item(ws, child, &st)) {
             /* Whether anything already speaks for the leaf — by its spelling
              * and then by its entry, in descending order of standing. The view
@@ -3148,7 +3115,7 @@ static error_t *workspace_partition(workspace_t *ws) {
     for (size_t i = 0; i < anchor_count; i++) {
         anchor_t *anchor = &anchors[i];
 
-        workspace_item_t *active = find_active(ws, anchor->filesystem_path);
+        workspace_item_t *active = workspace_find_active(ws, anchor->filesystem_path);
         if (active) {
             active->anchor = anchor;
             continue;
@@ -3221,10 +3188,9 @@ static error_t *workspace_partition(workspace_t *ws) {
  * reads its reassignment facts before its writes for that reason). The scan appends
  * its discoveries after it (workspace_add_untracked), so the order is the active
  * items', then the orphans', then the discoveries' — the order every screen prints.
- * Each item is indexed by its path beside it, for workspace_get_item.
  *
  * @param ws Workspace (must not be NULL)
- * @return ERR_MEMORY where the list or its index could not grow, NULL otherwise
+ * @return ERR_MEMORY where the list could not grow, NULL otherwise
  */
 static error_t *workspace_list(workspace_t *ws) {
     for (size_t i = 0; i < ws->dir_count + ws->file_count; i++) {
@@ -3236,21 +3202,13 @@ static error_t *workspace_list(workspace_t *ws) {
         }
 
         error_t *err = ptr_array_push(&ws->diverged, item);
-        if (!err) {
-            err = hashmap_set(ws->diverged_index, item->filesystem_path, item);
-        }
         if (err) return err;
     }
 
     /* The analyzed prefix, which is every orphan or none: a load that declined
      * the orphan analysis lists none, whatever it looked at (analyzed_count) */
     for (size_t i = 0; i < ws->analyzed_count; i++) {
-        workspace_item_t *item = ws->orphans[i];
-
-        error_t *err = ptr_array_push(&ws->diverged, item);
-        if (!err) {
-            err = hashmap_set(ws->diverged_index, item->filesystem_path, item);
-        }
+        error_t *err = ptr_array_push(&ws->diverged, ws->orphans[i]);
         if (err) return err;
     }
 
@@ -3278,22 +3236,23 @@ error_t *workspace_load(
     CHECK_NULL(arena);
     CHECK_NULL(out);
 
-    workspace_t *ws = NULL;
-    error_t *err = NULL;
-
-    err = workspace_create_empty(repo, &ws);
-    if (err) {
-        return err;
+    /* Zeroed: every count starts at none — analyzed_count stays so on a load
+     * that declines the orphan analysis — and a zeroed ptr_array_t is the diverged
+     * items' empty state */
+    workspace_t *ws = calloc(1, sizeof(*ws));
+    if (!ws) {
+        return ERROR(ERR_MEMORY, "Failed to allocate workspace");
     }
 
-    /* Borrow caller-owned resources. Lifetime guarantees: state comes from
-     * ctx->run.state (command-scoped); content_cache comes from
-     * ctx->run.content_cache (command-scoped, wraps ctx->run.keymgr); manifest
-     * is ctx->run.manifest (the view the dispatcher built over the enabled set,
-     * command-scoped); arena is ctx->arena (command-scoped). All four must outlive
-     * workspace_free. The view is the persistent enabled set's, never a CLI
-     * filter's: `dotta status -p global` loads the whole workspace and filters
-     * at display time. */
+    /* Borrow caller-owned resources. Lifetime guarantees: repo is ctx->run.repo
+     * (command-scoped); state comes from ctx->run.state (command-scoped);
+     * content_cache comes from ctx->run.content_cache (command-scoped, wraps
+     * ctx->run.keymgr); manifest is ctx->run.manifest (the view the dispatcher
+     * built over the enabled set, command-scoped); arena is ctx->arena
+     * (command-scoped). All five must outlive workspace_free. The view is the
+     * persistent enabled set's, never a CLI filter's: `dotta status -p global`
+     * loads the whole workspace and filters at display time. */
+    ws->repo = repo;
     ws->state = state;
     ws->content_cache = content_cache;
     ws->manifest = manifest;
@@ -3302,9 +3261,10 @@ error_t *workspace_load(
     /* An item per active path and per orphan record, each record paired onto
      * its item. Consumers read the active items, whole or by kind, every one
      * with its record on it (workspace_active, workspace_directories,
-     * workspace_files). The view was computed from Git at dispatch, so it is
-     * current by construction — nothing upstream repairs anything. */
-    err = workspace_partition(ws);
+     * workspace_files), and the item at a path (workspace_find). The view was
+     * computed from Git at dispatch, so it is current by construction — nothing
+     * upstream repairs anything. */
+    error_t *err = workspace_partition(ws);
     if (err) {
         workspace_free(ws);
         return error_wrap(err, "Failed to partition workspace");
@@ -3400,23 +3360,6 @@ workspace_items_t workspace_diverged(const workspace_t *ws) {
 }
 
 /**
- * Get workspace item by filesystem path
- *
- * O(1) lookup via diverged_index hashmap. Returns NULL if item has no divergence
- * (CLEAN items are not indexed).
- */
-const workspace_item_t *workspace_get_item(
-    const workspace_t *ws,
-    const char *filesystem_path
-) {
-    if (!ws || !filesystem_path) {
-        return NULL;
-    }
-
-    return hashmap_get(ws->diverged_index, filesystem_path);
-}
-
-/**
  * The active items, both kinds, in their order
  *
  * The cast adds const at both pointer levels (T ** → const T *const *) — legal
@@ -3455,16 +3398,23 @@ workspace_items_t workspace_directories(const workspace_t *ws) {
 }
 
 /**
- * Look up an active path's row by filesystem path
- *
- * O(1) probe over the view's own index — the active paths are the view's.
+ * The managed item at a path, or NULL
  */
-const manifest_row_t *workspace_lookup(
+const workspace_item_t *workspace_find(
     const workspace_t *ws,
     const char *filesystem_path
 ) {
-    if (!ws) return NULL;
-    return manifest_lookup(ws->manifest, filesystem_path);
+    if (!ws || !filesystem_path) {
+        return NULL;
+    }
+
+    /* An active path's item, the clean ones too; else an orphan's, of the prefix
+     * the load analyzed — every orphan or none, the bound the diverged items
+     * list by (analyzed_count). No path is both: a record is an orphan exactly
+     * where no active item stands (workspace_partition). */
+    const workspace_item_t *item = workspace_find_active(ws, filesystem_path);
+
+    return item ? item : workspace_find_item(ws->orphans, ws->analyzed_count, filesystem_path);
 }
 
 /**
@@ -4030,7 +3980,7 @@ error_t *workspace_anchor(
 
     /* The path's live record, advanced in place: every reader holding the item
      * reads the post-write record through the pointer it already holds. */
-    workspace_item_t *item = find_active(ws, row->filesystem_path);
+    workspace_item_t *item = workspace_find_active(ws, row->filesystem_path);
     if (item->anchor) {
         return state_anchor(ws->state, row, stat, now, (anchor_t *) item->anchor);
     }
@@ -4269,10 +4219,6 @@ void workspace_free(workspace_t *ws) {
 
     /* Free the diverged items' array (the items and their strings are arena-backed) */
     ptr_array_deinit(&ws->diverged);
-
-    /* Free the index (its values are items in ws->arena, borrowed, so no value
-     * free function) */
-    hashmap_free(ws->diverged_index, NULL);
 
     /* The view is borrowed (the dispatcher's); the items, their arrays, the record
      * and the squatted list are arena-allocated and the caller's arena releases

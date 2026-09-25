@@ -311,14 +311,13 @@ typedef struct {
  * with it — and a permanent one stops the walk: the directory is occupied by
  * something this run will not remove and no later run will either.
  *
- * An entry outside the plan is read off its workspace item. ORPHANED is skipped:
- * the scope did not reach it this run (-e, -p, a path filter), an unfiltered
- * run would decide it, and scope decides reach, never verdict — so a filtered
- * run must not change its parent's fate. Everything else is permanent: a RELEASED
- * orphan stays where it is; an active path (the view has a row, and a row's item
- * is never an orphan's) stands in an enabled profile's name, the door lending
- * its item or, where it is clean, none; an entry the load holds no item for is
- * the user's.
+ * An entry outside the plan is read off the item the load holds at its path
+ * (workspace_find). ORPHANED is skipped: the scope did not reach it this run
+ * (-e, -p, a path filter), an unfiltered run would decide it, and scope decides
+ * reach, never verdict — so a filtered run must not change its parent's fate.
+ * Everything else is permanent: a RELEASED orphan stays where it is; an active
+ * path (the view has a row, and a row's item is never an orphan's) stands in an
+ * enabled profile's name; an entry the load holds no item for is the user's.
  *
  * Membership is keyed by filesystem path, which is why the entry arrives as a
  * full path rather than a basename.
@@ -328,7 +327,7 @@ static bool vouch_entry(const char *child, void *ctx) {
     fate_t fate = (fate_t) (uintptr_t) hashmap_get(walk->fates, child);
 
     if (fate == FATE_UNPLANNED) {
-        const workspace_item_t *item = workspace_get_item(walk->ws, child);
+        const workspace_item_t *item = workspace_find(walk->ws, child);
 
         fate = (item && item->state == WORKSPACE_STATE_ORPHANED) ? FATE_SKIPPED
                                                                  : FATE_PERMANENT;

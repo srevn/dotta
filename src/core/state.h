@@ -41,7 +41,8 @@
  * Database location: the store's dotta.db, beside its refs (utils/repo.h)
  *
  * Schema:
- *   - schema_meta: Schema versioning
+ *   - the header: application_id marks the file dotta's, user_version names the
+ *     schema it holds
  *   - enabled_profiles: User's profile management
  *   - path_anchors: The record — what dotta last reconciled each managed path
  *     against, and what it confirmed there (both kinds, one row per path), the
@@ -375,12 +376,12 @@ typedef struct state state_t;
  * Nothing at the store's dotta.db — the filesystem's answer, never one inferred
  * from an open that failed — is a store never written: a usable handle with no
  * connection and no rows, promoted by state_begin at the first write intent.
- * Anything else standing there is opened as dotta's store at this schema version
- * or refused, the refusal naming the file: a file this identity cannot open, a
- * directory, a link to nowhere, a file that is not a database, a database that
- * holds no dotta schema (an empty one included: dotta never leaves one, see
- * state_begin), another version's, or one missing a table. Use for the READ
- * acquisition shape — see runtime.h's dotta_state_mode_t.
+ * Anything else standing there is opened as dotta's store at this schema or
+ * refused, the refusal naming the file: a file this identity cannot open, a
+ * directory, a link to nowhere, a file that is not a database, a database whose
+ * header does not mark it dotta's (an empty one included: dotta never leaves
+ * one, see state_begin), another schema's, or one missing a table. Use for the
+ * READ acquisition shape — see runtime.h's dotta_state_mode_t.
  *
  * The refusals are ERR_STATE_INVALID, never ERR_PERMISSION: SQLite opens the
  * file as the invoker on every run, outside sys/filesystem's second try, so the
@@ -407,7 +408,7 @@ error_t *state_load(git_repository *repo, state_t **out);
  * Load state for update (whole-dispatch transaction held)
  *
  * state_load, promoted by state_begin: WRITE is READ promoted at dispatch, through
- * the one door and the one creation, with the write lock already held (BEGIN
+ * the one admission and the one creation, with the write lock already held (BEGIN
  * IMMEDIATE) when it returns. The transaction is committed by state_save() or
  * rolled back by state_free() (cleanup on error paths). Use for the WRITE
  * acquisition shape — see runtime.h's dotta_state_mode_t. If another process

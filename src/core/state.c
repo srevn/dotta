@@ -31,8 +31,15 @@
 #include "core/manifest.h"
 #include "sys/filesystem.h"
 
-/* Schema version - must match database */
-#define STATE_SCHEMA_VERSION "22"
+/* The database header's two fields that are the application's (SQLite's file
+ * format, offsets 68 and 60): whose file this is — "dott", the id's four bytes
+ * — and the schema it holds. SQL literals, since a PRAGMA takes its value in
+ * its own text and never as a bound parameter: state_initialize writes the header
+ * with them, and state_verify asks the header against them, SQLite comparing
+ * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
+ * is stored as 0, which no admission would take. */
+#define STATE_APPLICATION_ID "0x646f7474"
+#define STATE_SCHEMA_VERSION "23"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -71,8 +78,8 @@ typedef enum {
  * - Enabled-profile rows cached (tiny, read frequently)
  * - The record read on demand, whole (one pass per run)
  * - Prepared statements cached, all of them while db is open and none while it
- *   is not: open_db prepares every one or closes, so a verb that finds db open
- *   takes its statement unchecked (state_statement)
+ *   is not: state_admit prepares every one or closes, so a verb that finds db
+ *   open takes its statement unchecked (state_statement)
  *
  * Row cache invariant:
  *   The cache is the materialized view of enabled_profiles, and it has one state:
@@ -181,13 +188,15 @@ static path_type_t path_type_from_sql_text(const char *s) {
 /**
  * Write the schema into a new database, whole
  *
- * The database is create_db's private file, which no other process can open until
- * it is published, so nothing else has written into it: every object is created
- * plainly, and one already there is a defect to report, not a race to absorb.
- * One transaction, one commit — a failure leaves the transaction open, and
- * create_db discards the file whole.
+ * The database is state_create's private file, which no other process can open
+ * until it is published, so nothing else has written into it: every object is
+ * created plainly, and one already there is a defect to report, not a race to
+ * absorb. One transaction, one commit — the header's two fields among what it
+ * commits — and a failure leaves the transaction open, and state_create discards
+ * the file whole.
  *
- * - schema_meta: Schema versioning
+ * - the header: dotta's id and the schema's number (STATE_APPLICATION_ID,
+ *   STATE_SCHEMA_VERSION)
  * - enabled_profiles: User's profile management (position, name, target)
  * - path_anchors: The record dotta keeps of every managed path
  * - released_copies: The one fact keyed beside it
@@ -195,7 +204,7 @@ static path_type_t path_type_from_sql_text(const char *s) {
  * @param db Connection to the private file (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *initialize_schema(sqlite3 *db) {
+static error_t *state_initialize(sqlite3 *db) {
     CHECK_NULL(db);
 
     char *errmsg = NULL;
@@ -204,15 +213,9 @@ static error_t *initialize_schema(sqlite3 *db) {
     const char *schema_sql =
         "BEGIN;"
 
-        /* Schema versioning table */
-        "CREATE TABLE schema_meta ("
-        "    key TEXT PRIMARY KEY,"
-        "    value TEXT NOT NULL"
-        ") STRICT;"
-
-        /* The version this schema is */
-        "INSERT INTO schema_meta (key, value) "
-        "VALUES ('version', '" STATE_SCHEMA_VERSION "');"
+        /* The header: whose file this is, and the schema it holds */
+        "PRAGMA application_id = " STATE_APPLICATION_ID ";"
+        "PRAGMA user_version = " STATE_SCHEMA_VERSION ";"
 
         /* Enabled profiles table (authority: profile commands).
          *
@@ -327,79 +330,67 @@ static error_t *initialize_schema(sqlite3 *db) {
 }
 
 /**
- * Verify that the database holds this version's schema
+ * Verify that the database's header marks it dotta's store, at this schema
  *
- * The door's admission: the version marker, read. A database with no marker holds
- * no dotta schema — an empty one, or another program's — and a marker naming
- * another version was written by another dotta; both are refused, since this
- * code can read neither. A read that fails keeps SQLite's own cause: a read that
- * could not happen is no verdict about the schema.
+ * The admission's first question about the file. A header that does not mark
+ * the file dotta's is no store this code can read — an empty database, another
+ * program's, a store whose header lacks the mark (made before it, or restored
+ * from a text dump) — and one marking another schema was written by another dotta;
+ * both are refused. Both fields are integers every database carries, 0 where
+ * nothing set them, so a header is never missing one.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *verify_schema_version(sqlite3 *db) {
+static error_t *state_verify(sqlite3 *db) {
     CHECK_NULL(db);
 
-    const char *sql = "SELECT value FROM schema_meta WHERE key = 'version';";
+    /* Whether the header marks the file dotta's, whether it marks this schema,
+     * and which schema it marks: SQLite compares the header's integers against
+     * the literals state_initialize wrote it with. */
     sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(
+        db,
+        "SELECT application_id = " STATE_APPLICATION_ID ", "
+        "user_version = " STATE_SCHEMA_VERSION ", user_version "
+        "FROM pragma_application_id, pragma_user_version;",
+        -1, &stmt, NULL
+    );
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
 
-    /* The one way this fixed query fails to prepare over a database SQLite can
-     * read: the schema holds no schema_meta(key, value) to read it from. */
-    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
-    if (rc == SQLITE_ERROR) {
-        return ERROR(ERR_STATE_INVALID, "The database holds no dotta schema");
-    }
-    if (rc != SQLITE_OK) {
-        return sqlite_error(db, "Failed to read the schema version");
-    }
-
-    rc = sqlite3_step(stmt);
-    if (rc == SQLITE_DONE) {
-        sqlite3_finalize(stmt);
-        return ERROR(ERR_STATE_INVALID, "Database missing schema version");
-    }
+    /* A read that could not happen keeps SQLite's own cause — a file that is
+     * not a database is refused here, by it — and is no verdict about the
+     * header. */
+    error_t *err = NULL;
     if (rc != SQLITE_ROW) {
-        sqlite3_finalize(stmt);
-        return sqlite_error(db, "Failed to read the schema version");
-    }
-
-    const char *db_version = (const char *) sqlite3_column_text(stmt, 0);
-    if (!db_version) {
-        sqlite3_finalize(stmt);
-        return ERROR(ERR_STATE_INVALID, "Schema version is NULL");
-    }
-
-    /* Must match exactly */
-    if (strcmp(db_version, STATE_SCHEMA_VERSION) != 0) {
-        error_t *err = ERROR(
-            ERR_STATE_INVALID,
-            "Schema version mismatch: database has version %s, code expects %s\n"
-            "Database was created by different version of dotta",
-            db_version, STATE_SCHEMA_VERSION
+        err = sqlite_error(db, "Failed to read the database's header");
+    } else if (!sqlite3_column_int(stmt, 0)) {
+        err = ERROR(ERR_STATE_INVALID, "The database is not marked as dotta's");
+    } else if (!sqlite3_column_int(stmt, 1)) {
+        err = ERROR(
+            ERR_STATE_INVALID, "Unsupported schema version: %d (this build reads %s)",
+            sqlite3_column_int(stmt, 2), STATE_SCHEMA_VERSION
         );
-        sqlite3_finalize(stmt);
-        return err;
     }
 
     sqlite3_finalize(stmt);
-    return NULL;
+    return err;
 }
 
 /**
  * Configure the connection
  *
- * The connection's own settings, sent on every open; none of them is the file's:
- * - busy_timeout: Wait up to 3s for a lock — first, because each statement below
- *   reads the schema, and a read can meet a lock like any other
+ * The connection's own settings, sent on every admission once the header is read;
+ * none of them is the file's:
  * - synchronous=NORMAL: Fast but safe
  * - cache_size: Up to 10000 pages (about 40 MB at the default 4096-byte page)
  * - temp_store=MEMORY: Temp operations in RAM
  * - persistent WAL off: the -wal and -shm files go with the last connection
  *
+ * Not the lock wait: that is the admission's, set before its first statement.
  * Not the journal mode: that is the file's own, written into it where the file
- * is made (create_db), and a connection that never sends the pragma reads the
- * mode the file carries.
+ * is made (state_create), and a connection that never sends the pragma reads
+ * the mode the file carries.
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
  * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
@@ -411,16 +402,13 @@ static error_t *verify_schema_version(sqlite3 *db) {
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *configure_db(sqlite3 *db) {
+static error_t *state_configure(sqlite3 *db) {
     CHECK_NULL(db);
 
     char *errmsg = NULL;
     int rc;
 
-    /* 1. Short busy timeout to handle transient locks gracefully */
-    sqlite3_busy_timeout(db, 3000);
-
-    /* 2. Fast synchronization (safe on crash, fast on commit) */
+    /* 1. Fast synchronization (safe on crash, fast on commit) */
     rc = sqlite3_exec(db, "PRAGMA synchronous=NORMAL;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         error_t *err = ERROR(
@@ -431,7 +419,7 @@ static error_t *configure_db(sqlite3 *db) {
         return err;
     }
 
-    /* 3. Larger page cache (10000 pages instead of the default 2000 KiB) */
+    /* 2. Larger page cache (10000 pages instead of the default 2000 KiB) */
     rc = sqlite3_exec(db, "PRAGMA cache_size=10000;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         error_t *err = ERROR(
@@ -442,7 +430,7 @@ static error_t *configure_db(sqlite3 *db) {
         return err;
     }
 
-    /* 4. Store temp tables in memory (faster) */
+    /* 3. Store temp tables in memory (faster) */
     rc = sqlite3_exec(db, "PRAGMA temp_store=MEMORY;", NULL, NULL, &errmsg);
     if (rc != SQLITE_OK) {
         error_t *err = ERROR(
@@ -453,7 +441,7 @@ static error_t *configure_db(sqlite3 *db) {
         return err;
     }
 
-    /* 5. Disable persistent WAL */
+    /* 4. Disable persistent WAL */
     int persist_wal = 0;
     sqlite3_file_control(db, NULL, SQLITE_FCNTL_PERSIST_WAL, &persist_wal);
 
@@ -624,12 +612,12 @@ static const char *state_sql(statement_t statement) {
 /**
  * Prepare every statement on the handle's connection
  *
- * Called once per connection, by open_db. Each statement lives as long as the
- * connection, so it is prepared persistent: SQLite's hint for a statement kept
- * and run many times. A prepare SQLite refuses keeps SQLite's own cause — a table
- * this schema's statements read, missing, is named by it — and returns at once:
- * open_db finalizes what was prepared, so a handle never carries half its
- * statements.
+ * Called once per connection, by state_admit. Each statement lives as long as
+ * the connection, so it is prepared persistent: SQLite's hint for a statement
+ * kept and run many times. A prepare SQLite refuses keeps SQLite's own cause —
+ * a table this schema's statements read, missing, is named by it — and returns
+ * at once: state_admit finalizes what was prepared, so a handle never carries
+ * half its statements.
  *
  * @param state State (must not be NULL, its db open)
  * @return Error or NULL on success
@@ -651,11 +639,11 @@ static error_t *state_prepare(state_t *state) {
 /**
  * Finalize every prepared statement
  *
- * Called by state_free before the connection closes, and by open_db on a refusal:
- * a statement not yet prepared is NULL, which sqlite3_finalize takes as a harmless
- * no-op, so the walk is safe at any point. The walk is the array, whole, so the
- * close that follows finds none of the handle's statements left open — an open
- * one would keep the connection from closing (SQLITE_BUSY).
+ * Called by state_free before the connection closes, and by state_admit on a
+ * refusal: a statement not yet prepared is NULL, which sqlite3_finalize takes
+ * as a harmless no-op, so the walk is safe at any point. The walk is the array,
+ * whole, so the close that follows finds none of the handle's statements left
+ * open — an open one would keep the connection from closing (SQLITE_BUSY).
  *
  * @param state State (must not be NULL)
  */
@@ -706,7 +694,7 @@ static void free_profile_entries(state_t *state) {
  *
  * One SELECT over enabled_profiles, every row (name, target) materialized, ordered
  * by position to match the user's precedence order. Called at every boundary
- * where the table becomes this handle's (the first is the door's open, open_db),
+ * where the table becomes this handle's (the first is the admission, state_admit),
  * and answering every per-profile question thereafter as a linear peek over the
  * cache — no per-question SQL. A handle with no database has no boundary to read
  * at: its rows are the empty cache its load left, which is the answer for a store
@@ -1097,19 +1085,20 @@ error_t *state_reorder_profiles(
 }
 
 /**
- * Open the store's database standing at the handle's path
+ * Admit the database standing at the handle's path as the store's, or refuse it
  *
- * The one door. A load opens through it wherever something stands at the path,
- * and the promotion does once create_db has made sure something does. What stands
- * there is dotta's store at this schema version and is opened — the connection
- * configured, the statements prepared, the rows read (the row cache's first
- * boundary, so every reader of it downstream is a plain read) — or it is refused
- * here, with the file named: one this identity cannot open, a directory, a link
- * to nowhere (SQLite's CANTOPEN, with the OS's reason beside it), a file that
- * is not a database, a database that holds no dotta schema, another version's,
- * or one missing the tables this version prepares. An empty database is among
- * them and no special case: dotta never leaves one (create_db publishes whole),
- * and reading one as a store never written would read a truncated store as empty.
+ * A load admits through here wherever something stands at the path, and the
+ * promotion does once state_create has made sure something does. What stands
+ * there is dotta's store at this schema and is opened — its header read, the
+ * connection configured, the statements prepared, the rows read (the row cache's
+ * first boundary, so every reader of it downstream is a plain read) — or it is
+ * refused here, with the file named: one this identity cannot open, a directory,
+ * a link to nowhere (SQLite's CANTOPEN, with the OS's reason beside it), a file
+ * that is not a database, a database not marked as dotta's, another schema's,
+ * or one missing the tables this schema's statements read. An empty database is
+ * among them and no special case: dotta never leaves one (state_create publishes
+ * whole), and reading one as a store never written would read a truncated store
+ * as empty.
  *
  * READWRITE and never CREATE: the connection is the one state_begin takes its
  * lock on, and SQLite's CREATE follows a link to nowhere and makes its target.
@@ -1119,7 +1108,7 @@ error_t *state_reorder_profiles(
  * @param state Handle whose db_path names the file (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *open_db(state_t *state) {
+static error_t *state_admit(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db_path);
 
@@ -1142,10 +1131,18 @@ static error_t *open_db(state_t *state) {
         goto fail;
     }
 
-    err = configure_db(state->db);
+    /* The lock wait, before the first statement: each one reads the file, and a
+     * read can meet a lock like any other. Up to 3s, for a lock another process
+     * holds for an instant. */
+    sqlite3_busy_timeout(state->db, 3000);
+
+    /* The header first — a database at all, marked dotta's, at this schema — so
+     * a file the admission will not keep is refused by that question, before
+     * anything is configured or prepared for it. */
+    err = state_verify(state->db);
     if (err) goto fail;
 
-    err = verify_schema_version(state->db);
+    err = state_configure(state->db);
     if (err) goto fail;
 
     err = state_prepare(state);
@@ -1178,9 +1175,9 @@ fail:
  * and no creator writes into a file that is not its own.
  *
  * EEXIST is not a failure. Something stands at the path now — most often a store
- * another process published since this handle's load — and the caller opens it
- * through the door like any other: a store is never replaced, and what cannot
- * be admitted is refused there, by name. A filesystem with no hard links refuses
+ * another process published since this handle's load — and the caller admits it
+ * like any other (state_admit): a store is never replaced, and what cannot be
+ * admitted is refused there, by name. A filesystem with no hard links refuses
  * the publication, naming the file; a replacing rename would publish over a store
  * another process made.
  *
@@ -1192,7 +1189,7 @@ fail:
  * @param db_path Where the store's database stands (must not be NULL)
  * @return Error or NULL on success — something stands at the path either way
  */
-static error_t *create_db(const char *db_path) {
+static error_t *state_create(const char *db_path) {
     CHECK_NULL(db_path);
 
     char temp[PATH_MAX];
@@ -1225,7 +1222,7 @@ static error_t *create_db(const char *db_path) {
         goto done;
     }
 
-    err = initialize_schema(db);
+    err = state_initialize(db);
     if (err) goto done;
 
     /* The file's mode is the pragma's answer, not its return code: SQLite answers
@@ -1268,7 +1265,7 @@ done:
  * Load state from repository (read-only)
  *
  * The handle, whether or not a store was ever written: the path is kept for
- * state_begin, and the connection is the door's to open (open_db) wherever
+ * state_begin, and the connection is the admission's to open (state_admit) wherever
  * something stands there. No transaction is started — safe for concurrent reads.
  *
  * @param repo Repository (must not be NULL)
@@ -1293,13 +1290,13 @@ error_t *state_load(git_repository *repo, state_t **out) {
 
     /* Nothing at the path is a store never written, and it is the filesystem's
      * answer alone: a failure to look is never nothing (sys/filesystem.h), so
-     * UNKNOWN is the door's to open or refuse. The handle then holds no connection
-     * and the cache calloc left empty — the answer for a store never written,
-     * not a read skipped — and state_begin brings one into being at the first
-     * write intent (the READ → scoped-write contract, runtime.h's
+     * UNKNOWN is the admission's to open or refuse. The handle then holds no
+     * connection and the cache calloc left empty — the answer for a store never
+     * written, not a read skipped — and state_begin brings one into being at
+     * the first write intent (the READ → scoped-write contract, runtime.h's
      * dotta_state_mode_t). */
     if (fs_lstat_occupant(state->db_path, NULL) != FS_OCCUPANT_NONE) {
-        err = open_db(state);
+        err = state_admit(state);
         if (err) {
             state_free(state);
             return err;
@@ -1314,9 +1311,9 @@ error_t *state_load(git_repository *repo, state_t **out) {
  * Load state for update (with transaction)
  *
  * state_load, promoted by state_begin: WRITE is READ promoted, through the one
- * door and the one creation, and the handle is published only once its lock is
- * held — the row cache read inside it, so the rows this handle answers from are
- * the transaction's own snapshot.
+ * admission and the one creation, and the handle is published only once its lock
+ * is held — the row cache read inside it, so the rows this handle answers from
+ * are the transaction's own snapshot.
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -1381,8 +1378,8 @@ error_t *state_save(state_t *state) {
  *
  * Post-condition on success: state->db is open and write-locked (BEGIN IMMEDIATE
  * held). A handle whose load found nothing at the path is promoted first — the
- * store published (create_db) and opened through the door (open_db) — which is
- * what makes state_open this call over a fresh load.
+ * store published (state_create) and admitted (state_admit) — which is what makes
+ * state_open this call over a fresh load.
  */
 error_t *state_begin(state_t *state) {
     CHECK_NULL(state);
@@ -1393,12 +1390,12 @@ error_t *state_begin(state_t *state) {
 
     /* The promotion. A handle whose load found nothing at the path holds no
      * connection (state_load), and the first write intent is what brings a store
-     * into being: create_db publishes one where nothing stands, or finds that
+     * into being: state_create publishes one where nothing stands, or finds that
      * something does — most often a store another process published since this
-     * handle's load — and either way the door opens what stands there. */
+     * handle's load — and either way what stands there is admitted or refused. */
     if (!state->db) {
-        RETURN_IF_ERROR(create_db(state->db_path));
-        RETURN_IF_ERROR(open_db(state));
+        RETURN_IF_ERROR(state_create(state->db_path));
+        RETURN_IF_ERROR(state_admit(state));
     }
 
     /* The lock. BUSY is another connection holding it past the busy timeout,

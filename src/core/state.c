@@ -1292,10 +1292,10 @@ error_t *state_open(git_repository *repo, state_t **out) {
 /**
  * Save state to repository
  *
- * Commits the transaction started by state_open() if one is active. Safe on any
- * handle shape: a state_load() handle over a store never written, never promoted
- * via state_begin, holds no connection (state->db == NULL), and the guard below
- * makes save a no-op for it.
+ * The commit, on any handle shape: a handle that holds a transaction commits it
+ * through state_commit, the one COMMIT a handle runs, and one that holds none —
+ * a state_load() handle never promoted, with a connection or over a store never
+ * written — saves nothing.
  *
  * @param state State to save (must not be NULL)
  * @return Error or NULL on success
@@ -1303,22 +1303,7 @@ error_t *state_open(git_repository *repo, state_t **out) {
 error_t *state_save(state_t *state) {
     CHECK_NULL(state);
 
-    if (state->db && state->in_transaction) {
-        char *errmsg = NULL;
-        int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
-        if (rc != SQLITE_OK) {
-            error_t *err = ERROR(
-                ERR_STATE_INVALID, "Failed to commit transaction: %s",
-                errmsg ? errmsg : sqlite3_errstr(rc)
-            );
-            sqlite3_free(errmsg);
-            return err;
-        }
-
-        state->in_transaction = false;
-    }
-
-    return NULL;
+    return state->in_transaction ? state_commit(state) : NULL;
 }
 
 /**

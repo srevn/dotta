@@ -91,7 +91,7 @@
  * (state_stat_from_write) is exempt: authorship, not a read, vouches for it.
  * And as ce_match_stat reads the entry's mode beside its stat data, the kind is
  * read beside the triple, never stored in it: the record carries it already,
- * the type every writer of a triple writes with it (state_stat_matches).
+ * the node every triple it holds was taken of (state_stat_matches).
  *
  * Narrower than Git's, and what that leaves, accepted: Git's stat data carries
  * ctime, and these three fields do not. So a stat misses two same-size edits —
@@ -189,11 +189,16 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation and at every ownership event (apply deploy, adoption,
  *     acknowledgement, add, update); a learning keeps the one it read.
- *   - the content (type, blob_oid, stat): the kind the record describes, and
- *     the blob dotta last verified disk against, with the stat of that moment.
- *     The first observation writes the kind alone; the blob and the stat advance
- *     only after disk-matches-blob verification, the kind with them — a learning
- *     of the content (the slow-path CMP_EQUAL) and an ownership event. Zero
+ *   - the content (kind, blob_oid, stat): the node the record describes — a regular
+ *     file, a link or a directory, in a look's own words (fs_occupant_t) — and
+ *     the blob dotta last verified it holds, with the stat of that moment. The
+ *     first observation writes the node alone, the row's; the blob and the stat
+ *     advance only after disk-matches-blob verification — an ownership event,
+ *     which writes all three from the row, and a learning of the content (the
+ *     slow-path CMP_EQUAL), which keeps the node: it is noted only onto a record
+ *     of the row's kind (core/workspace.c workspace_analyze_file), so a record
+ *     of another node is a whole write, never a learning. No node is executable:
+ *     the bit is the claim's mode, and Git's filemode the row's alone. Zero
  *     blob_oid is no content confirmation — a directory, whose whole confirmed-disk
  *     record is that it was observed (a directory has no content confirmation,
  *     schema-enforced), or a file observed but never confirmed.
@@ -202,10 +207,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     and on each axis a look found disk standing on, or a fix made it stand
  *     on, the row's since (a learning of the claim). It is the base a claim Git
  *     moved is measured from (core/workspace.h workspace_claims_moved), and an
- *     orphan's reference on disk. The executable half of the type is copied from
- *     the row beside it and no verdict reads it: the kind rung takes FILE and
- *     EXECUTABLE for one kind (core/workspace.h workspace_compare_confirmed),
- *     and the mode carries the bit.
+ *     orphan's reference on disk. A link claims no mode: its column is NULL,
+ *     and every other node's is permission bits, 0000–0777 (both schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers.
  *     deployed_at advances to now on every ownership event and a learning keeps
  *     it, 0 = dotta never put this here. ordered_at is when remove --delete-files
@@ -219,12 +222,11 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     matched that blob. Zero means "never confirmed."
  *   - a stat matching a live look of the record's kind proves, on the fast path,
  *     that disk still equals blob_oid (state_stat_matches).
- *   - the confirmed pair (type, blob_oid) is not the manifest row's content iff
+ *   - the confirmed pair (kind, blob_oid) is not the manifest row's content iff
  *     the Git-expected value has advanced past the last disk confirmation — i.e.,
  *     stale. The pair, not the blob alone: Git hashes a link's target exactly
  *     as it hashes a file's bytes, so one id stands behind both, and the kind
- *     is what tells them apart (core/workspace.h workspace_stale, which is also
- *     where the executable bit is ruled out of it).
+ *     is what tells them apart (core/workspace.h workspace_stale).
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.
@@ -255,12 +257,12 @@ typedef struct state_record {
     const char *profile;      /* Profile whose row the record follows */
 
     /* The content */
-    path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
+    fs_occupant_t kind;       /* The node: REGULAR, SYMLINK or DIRECTORY */
     git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed: a directory, or observed only) */
     state_stat_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
 
     /* The claim */
-    mode_t mode;              /* Meaningful iff type != SYMLINK */
+    mode_t mode;              /* Meaningful iff kind != SYMLINK */
     const char *owner;        /* The claimed owner, or NULL */
     const char *group;        /* The claimed group, or NULL */
 
@@ -283,16 +285,15 @@ typedef struct state_record {
  * (mtime 0 — never confirmed, or the read-derived constructor's smudge) matches
  * no look, which is the slow path by default.
  *
- * The kind is the stat's own: the record's type, which every write of the triple
- * writes with it, of the node the triple was taken of. A node's kind is fixed
- * for the life of its inode, and the inode is the filesystem's to hand out again:
- * a node of another kind reusing it at the stat's size within the stat's second
- * is not the node the stat was taken of, and taken for it, a link the user made
- * reads as dotta's file — clean, or pruned as an orphan. Git's ce_match_stat
- * asks the entry's mode before its stat data for the same reason. Asked in the
- * ladder's division, a link for a link and a regular file for either blob mode
- * (core/workspace.h workspace_type_occupant); never of a directory, which confirms
- * no content and so carries no stat.
+ * The kind is the stat's own: the record's, the node the triple was taken of. A
+ * node's kind is fixed for the life of its inode, and the inode is the filesystem's
+ * to hand out again: a node of another kind reusing it at the stat's size within
+ * the stat's second is not the node the stat was taken of, and taken for it, a
+ * link the user made reads as dotta's file — clean, or pruned as an orphan. Git's
+ * ce_match_stat asks the entry's mode before its stat data for the same reason.
+ * A link for a link and a regular file for a regular file, the record's kind
+ * being a look's word already; never of a directory, which confirms no content
+ * and so carries no stat.
  *
  * Whether there is a stat to ask about is the asker's question, not this one's.
  *
@@ -303,7 +304,7 @@ typedef struct state_record {
  */
 static inline bool state_stat_matches(const state_record_t *record, const struct stat *st) {
     return record->stat.mtime != 0
-           && (record->type == PATH_TYPE_SYMLINK ? S_ISLNK(st->st_mode) : S_ISREG(st->st_mode))
+           && (record->kind == FS_OCCUPANT_SYMLINK ? S_ISLNK(st->st_mode) : S_ISREG(st->st_mode))
            && record->stat.mtime == (int64_t) st->st_mtime
            && record->stat.size == (int64_t) st->st_size
            && record->stat.ino == (uint64_t) st->st_ino;
@@ -733,9 +734,10 @@ const char *state_target(
  *
  * The one read of the path_records table. Allocates the array and every string
  * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
- * hydrates to a zero OID, a NULL mode to 0. Every column is read exactly or the
- * read fails: a conversion or a copy that cannot allocate is ERR_MEMORY, never
- * a NULL taken for a value the column holds — an owner the path has, read as none.
+ * hydrates to a zero OID, a link's NULL mode to 0. Every column is read exactly
+ * or the read fails: a conversion or a copy that cannot allocate is ERR_MEMORY,
+ * never a NULL taken for a value the column holds — an owner the path has, read
+ * as none.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active
@@ -813,7 +815,10 @@ const state_record_t *state_find_record(
  *
  * The store's own spelling of a record, the one a read gives back (state_records):
  * a zero blob, an absent owner or group bind NULL, and so does a link's mode,
- * which the kind makes a don't-care whatever the record says of it.
+ * which the kind makes a don't-care whatever the record says of it. A kind no
+ * record describes — UNKNOWN, NONE, OTHER: a record built without its node —
+ * has no spelling, and the store refuses it (the column's NOT NULL) rather than
+ * write it as a file.
  *
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its

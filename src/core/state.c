@@ -38,7 +38,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "25"
+#define STATE_SCHEMA_VERSION "26"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -173,28 +173,40 @@ static error_t *state_error(sqlite3 *db, const char *fmt, ...) {
 }
 
 /**
- * Path type ↔ SQL text — the single boundary between the in-memory enum and the
- * on-disk text representation of the type column. The strings are file-scope
- * literals so SQLITE_STATIC is valid at every bind site. The table's CHECK
- * constraint rejects unknown text on write; the read-side fallback to
- * PATH_TYPE_FILE exists only as graceful degradation against a manually edited DB.
+ * A record's node as the text the kind column holds
+ *
+ * The one boundary where a kind becomes a column, as state_kind_from_text is
+ * where the column becomes a kind again. The three nodes a record describes,
+ * each a literal, so SQLITE_STATIC holds at the bind. The rest name no node a
+ * record keeps — an absence, a look not taken, a device — and have no text: a
+ * record built without its kind binds NULL, which the column's NOT NULL refuses
+ * at the step, so the store refuses it rather than write it as a file. Total
+ * over fs_occupant_t, so a new occupant is a build error here.
  */
-static const char *path_type_to_sql_text(path_type_t type) {
-    switch (type) {
-        case PATH_TYPE_SYMLINK:    return "symlink";
-        case PATH_TYPE_EXECUTABLE: return "executable";
-        case PATH_TYPE_DIRECTORY:  return "directory";
-        case PATH_TYPE_FILE:
-        default:                   return "file";
+static const char *state_kind_to_text(fs_occupant_t kind) {
+    switch (kind) {
+        case FS_OCCUPANT_REGULAR:   return "file";
+        case FS_OCCUPANT_SYMLINK:   return "symlink";
+        case FS_OCCUPANT_DIRECTORY: return "directory";
+        case FS_OCCUPANT_UNKNOWN:
+        case FS_OCCUPANT_NONE:
+        case FS_OCCUPANT_OTHER:     return NULL;
     }
+
+    /* Unreachable once every enum value is handled */
+    return NULL;
 }
 
-static path_type_t path_type_from_sql_text(const char *s) {
-    if (!s)                           return PATH_TYPE_FILE;
-    if (strcmp(s, "symlink") == 0)    return PATH_TYPE_SYMLINK;
-    if (strcmp(s, "executable") == 0) return PATH_TYPE_EXECUTABLE;
-    if (strcmp(s, "directory") == 0)  return PATH_TYPE_DIRECTORY;
-    return PATH_TYPE_FILE;
+/**
+ * The node a kind column's text names — state_kind_to_text read back
+ *
+ * The column's CHECK admits the three texts and nothing else, so 'file' is the
+ * one left when the other two are not.
+ */
+static fs_occupant_t state_kind_from_text(const char *text) {
+    if (strcmp(text, "symlink") == 0) return FS_OCCUPANT_SYMLINK;
+    if (strcmp(text, "directory") == 0) return FS_OCCUPANT_DIRECTORY;
+    return FS_OCCUPANT_REGULAR;
 }
 
 /**
@@ -254,7 +266,7 @@ static error_t *state_initialize(sqlite3 *db) {
          *     no reader meets a spelling no binder wrote, and the row cache is
          *     the table with no rule of its own. Named, so the refusal a hand
          *     meets reads "CHECK constraint failed: target_spelling"; the record's
-         *     `type IN (…)` below is unnamed because its expression is its own
+         *     `kind IN (…)` below is unnamed because its expression is its own
          *     sentence. */
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
@@ -266,9 +278,9 @@ static error_t *state_initialize(sqlite3 *db) {
         /* The record: what dotta last reconciled each managed path against, and
          * what it confirmed there. A row exists iff dotta has observed the path
          * on disk while it was active, and its existence is the whole of that
-         * fact: no column restates it. One path, one kind, one record — the PRIMARY
-         * KEY; the kind is `type`. No foreign key in either direction: nothing
-         * is a parent, nothing cascades.
+         * fact: no column restates it. One path, one node, one record — the PRIMARY
+         * KEY, and the node's kind a column of it. No foreign key in either
+         * direction: nothing is a parent, nothing cascades.
          *
          * The one deferred intent is the record's own column (ordered_at): remove
          * --delete-files ordered the deployed copy at this path pruned at the
@@ -279,6 +291,18 @@ static error_t *state_initialize(sqlite3 *db) {
          * — and gone with the row.
          *
          * Held by the schema:
+         *   - the node is a regular file, a link or a directory
+         *     (state_kind_to_text's three texts): the executable bit is no kind,
+         *     and no record describes an absence, a look not taken or a device
+         *   - a link claims no mode and every other node does: (kind = 'symlink')
+         *     = (mode IS NULL), an expression that is never NULL — a CHECK that
+         *     evaluates to NULL passes — and the one spelling of a link's
+         *     don't-care, so a claim read back is the claim a writer bound
+         *   - a mode is permission bits alone, 0000–0777 (511): the claim sheet's
+         *     bound (core/metadata.h), which every compare meets as st_mode &
+         *     0777, so a mode beyond it — a sticky or setuid bit, MODE_UNCLAIMED
+         *     leaking out of the sheet — would read as moved for ever. A link's
+         *     NULL passes it
          *   - a directory has no content confirmation (blob_oid IS NULL)
          *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
          *     set); a row with a blob and deployed_at = 0 is a confirmation,
@@ -297,8 +321,8 @@ static error_t *state_initialize(sqlite3 *db) {
         "        " FOLDED_SPELLING("filesystem_path") ","
         "    storage_path TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
-        "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable', 'directory')),"
-        "    mode INTEGER,"
+        "    kind TEXT NOT NULL CHECK(kind IN ('file', 'symlink', 'directory')),"
+        "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
         "    owner TEXT,"
         "    \"group\" TEXT,"
         "    "
@@ -311,8 +335,9 @@ static error_t *state_initialize(sqlite3 *db) {
         "    deployed_at INTEGER NOT NULL DEFAULT 0,"
         "    ordered_at  INTEGER NOT NULL DEFAULT 0,"
         "    "
-        "    CHECK (type != 'directory' OR blob_oid IS NULL),"
-        "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
+        "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
+        "    CHECK (kind != 'directory' OR blob_oid IS NULL),"
+        "    CHECK (deployed_at = 0 OR kind = 'directory' OR blob_oid IS NOT NULL)"
         ") STRICT, WITHOUT ROWID;"
 
         "COMMIT;";
@@ -489,7 +514,7 @@ static const char *state_sql(statement_t statement) {
          * that must survive a write cannot live beside these.
          *
          * Bind order (numbered placeholders):
-         *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 type
+         *   ?1 filesystem_path  ?2 storage_path  ?3 profile  ?4 kind
          *   ?5 mode — NULL for a link  ?6 owner  ?7 group — NULL where absent
          *   ?8 blob_oid — NULL where zero
          *   ?9 stat_mtime  ?10 stat_size  ?11 stat_ino
@@ -497,7 +522,7 @@ static const char *state_sql(statement_t statement) {
         case STATEMENT_WRITE:
             return
                 "INSERT OR REPLACE INTO path_records "
-                "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
+                "(filesystem_path, storage_path, profile, kind, mode, owner, \"group\", "
                 " blob_oid, stat_mtime, stat_size, stat_ino, deployed_at) "
                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
 
@@ -1453,7 +1478,7 @@ error_t *state_records(
      * blob and its stat, the lifecycle), and the table's size in a 14th: the
      * first row sizes the allocation */
     const char *sql =
-        "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
+        "SELECT filesystem_path, storage_path, profile, kind, mode, owner, \"group\", "
         "blob_oid, stat_mtime, stat_size, stat_ino, deployed_at, ordered_at, "
         "(SELECT count(*) FROM path_records) "
         "FROM path_records ORDER BY filesystem_path;";
@@ -1482,7 +1507,7 @@ error_t *state_records(
         /* Column layout matches the SELECT above:
          *   0:     the key (filesystem_path)
          *   1-2:   the binding (storage_path, profile)
-         *   3:     the content's kind (type)
+         *   3:     the content's node (kind)
          *   4-6:   the claim (mode, owner, group)
          *   7-10:  the content's blob and stat (blob_oid, stat_mtime, stat_size,
          *          stat_ino)
@@ -1500,7 +1525,7 @@ error_t *state_records(
         int owner_type = sqlite3_column_type(stmt, 5);
         int group_type = sqlite3_column_type(stmt, 6);
         int blob_type = sqlite3_column_type(stmt, 7);
-        const char *type = (const char *) sqlite3_column_text(stmt, 3);
+        const char *kind = (const char *) sqlite3_column_text(stmt, 3);
         const void *blob = blob_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 7) : NULL;
 
         record->filesystem_path = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 0));
@@ -1509,7 +1534,7 @@ error_t *state_records(
         record->owner = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 5));
         record->group = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 6));
 
-        if (!record->filesystem_path || !record->storage_path || !record->profile || !type ||
+        if (!record->filesystem_path || !record->storage_path || !record->profile || !kind ||
             (owner_type != SQLITE_NULL && !record->owner) ||
             (group_type != SQLITE_NULL && !record->group) ||
             (blob_type != SQLITE_NULL && !blob)) {
@@ -1518,13 +1543,11 @@ error_t *state_records(
         }
 
         /* A NULL blob (a directory, or observed only) is the zero OID calloc
-         * left; a stored one is 20 bytes by CHECK. A NULL mode — a link's record
-         * — is 0, read only under the kind. */
+         * left; a stored one is 20 bytes by CHECK. A NULL mode — a link's, by
+         * CHECK — reads 0, SQLite's integer for NULL, read only under the kind. */
         if (blob) memcpy(record->blob_oid.id, blob, GIT_OID_RAWSZ);
-        record->type = path_type_from_sql_text(type);
-        record->mode = sqlite3_column_type(stmt, 4) != SQLITE_NULL
-            ? (mode_t) sqlite3_column_int(stmt, 4)
-            : 0;
+        record->kind = state_kind_from_text(kind);
+        record->mode = (mode_t) sqlite3_column_int(stmt, 4);
         record->stat = (state_stat_t){
             .mtime = sqlite3_column_int64(stmt, 8),
             .size = sqlite3_column_int64(stmt, 9),
@@ -1586,20 +1609,22 @@ error_t *state_write(state_t *state, const state_record_t *record) {
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_WRITE);
 
-    /* 1-4. the key, the binding and the kind */
+    /* 1-4. the key, the binding and the node: a kind with no text binds NULL,
+     * which the column refuses (state_kind_to_text) */
     int rc = sqlite3_bind_text(stmt, 1, record->filesystem_path, -1, SQLITE_TRANSIENT);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, record->storage_path, -1, SQLITE_TRANSIENT)
-        ;
+    if (rc == SQLITE_OK) {
+        rc = sqlite3_bind_text(stmt, 2, record->storage_path, -1, SQLITE_TRANSIENT);
+    }
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 3, record->profile, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) {
-        rc = sqlite3_bind_text(stmt, 4, path_type_to_sql_text(record->type), -1, SQLITE_STATIC);
+        rc = sqlite3_bind_text(stmt, 4, state_kind_to_text(record->kind), -1, SQLITE_STATIC);
     }
 
     /* 5-7. the claim: a link's mode a don't-care, bound NULL by the kind; an
      * absent owner or group NULL */
     if (rc == SQLITE_OK) {
-        rc = record->type == PATH_TYPE_SYMLINK ? sqlite3_bind_null(stmt, 5)
-                                               : sqlite3_bind_int(stmt, 5, record->mode);
+        rc = record->kind == FS_OCCUPANT_SYMLINK ? sqlite3_bind_null(stmt, 5)
+                                                 : sqlite3_bind_int(stmt, 5, record->mode);
     }
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 6, record->owner, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 7, record->group, -1, SQLITE_TRANSIENT);

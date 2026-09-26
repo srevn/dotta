@@ -2257,14 +2257,12 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * an OWNED record, since apply adopts a path it merely observed and says
          * so; a directory needs only a record, since apply never adopts one: an
          * absent or squatted row has none, and one standing as a directory is
-         * settled by any load's observation. The executable half of the record's
-         * type is a copy of the row's, never confirmed — the compare's ladder
-         * tests S_ISREG for either blob mode and never the bit — so a FILE ↔
-         * EXECUTABLE move Git made under an untouched copy is not stale either,
-         * and asking the type whole would leave a hint no apply could ever take
-         * away (core/workspace.h workspace_stale); and where a sheet claim stands,
-         * such a flip moves no claim either — the row's mode is the claim's,
-         * not the filemode's.
+         * settled by any load's observation. A FILE ↔ EXECUTABLE move Git made
+         * under an untouched copy is not stale: the record keeps the node, and
+         * either blob mode stands as one (core/workspace.h workspace_stale); it
+         * moves the mode, where no sheet claim stands, and the claim arm hints
+         * it — where one stands, the row's mode is the claim's, not the filemode's,
+         * and nothing moved.
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */

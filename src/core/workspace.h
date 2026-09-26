@@ -79,7 +79,6 @@
 #include "core/state.h"
 #include "infra/compare.h"
 #include "infra/content.h"
-#include "sys/filesystem.h"
 
 /* The most tags one item's line carries — six, on a deployed item: [modified],
  * [stale], [mode], [ownership], [unencrypted] and [reassigned]. A kind that
@@ -472,28 +471,41 @@ typedef struct {
  * A regular file for either blob mode, a link, a directory: as finely as
  * infra/compare.h's ladder tells one from another — compare.c tests S_ISLNK for
  * a link and S_ISREG for either blob mode, and never the executable bit — so
- * FILE and EXECUTABLE are one kind, their difference the mode axis's, and a
- * record's type carries the executable half as a copy of the row's rather than
- * as something confirmed (core/state.h state_record_t). A directory is the third
- * kind. Named in the look's words because a kind is what a look can tell apart:
- * two types are one kind iff they stand as one occupant, and a look finds a type's
- * node iff it found this occupant. No type stands as an absence, as a look failed
- * or not taken, or as a FIFO, a socket or a device (FS_OCCUPANT_NONE,
- * FS_OCCUPANT_UNKNOWN, FS_OCCUPANT_OTHER).
+ * FILE and EXECUTABLE are one kind, their difference the mode axis's. A directory
+ * is the third kind. Named in the look's words because a kind is what a look
+ * can tell apart: two types are one kind iff they stand as one occupant, and a
+ * look finds a type's node iff it found this occupant. No type stands as an
+ * absence, as a look failed or not taken, or as a FIFO, a socket or a device
+ * (FS_OCCUPANT_NONE, FS_OCCUPANT_UNKNOWN, FS_OCCUPANT_OTHER).
+ *
+ * The record keeps the node it describes in the same words (core/state.h
+ * state_record_t's kind), so a row and the record at its path are of one kind
+ * iff this answers the record's — the ladder's first rung, asked of a record,
+ * which no reader asks any other way. A record of another kind than its row
+ * describes another node, so it is none of the row's: no pair the row's content
+ * is measured from (workspace_compare_confirmed below), no base for its claim
+ * (workspace_claims_moved below), no target for what the load learns
+ * (core/workspace.c workspace_analyze_file's content note), no witness to its
+ * deletion (classify_absent), and no record apply's acknowledgement moves onto
+ * a directory's row (cmds/apply.c cmd_apply). Whether that node still stands is
+ * a look's to say. While it does, the row's deployment replaces dotta's own node
+ * there, which is a reassignment (workspace_reassigned below); where the look
+ * found the row's own kind in its place, that node is gone, and apply adopts a
+ * file over the record (cmd_apply's adoption) and observes a directory in the
+ * record's place (workspace_observe_retyped).
  *
  * The same division one layer down, over a stat: infra/compare.c mode_stands,
  * under a git filemode, and core/state.h state_stat_matches, under the record's
- * type. core/workspace.c claim_stands asks a coarser question of its own: a
+ * kind. core/workspace.c claim_stands asks a coarser question of its own: a
  * directory or not.
  *
- * Readers: workspace_compare_confirmed's kind rung, workspace_reassigned (the
- * record's own node, standing), workspace_flush (the observation, owed only where
- * the row's own kind stands, either kind of row), core/workspace.c
- * workspace_analyze_file (the ladder's first rung, off the look before any read
- * — of the row's kind for the first question, of the base's for the second) and
- * workspace_compare_orphan (the same rung), core/deploy.c occupant_conflicts
- * (what stands at a planned path, against the node its row lands). A reader not
- * on this list is a bug.
+ * Readers: the rung's, named above — asked of a directory row, whose kind needs
+ * no mapping, as FS_OCCUPANT_DIRECTORY; workspace_observation (the kind a row's
+ * record is born with); workspace_flush (the observation, owed only where the
+ * row's own kind stands, either kind of row); core/workspace.c
+ * workspace_analyze_file (the ladder's first rung, off the look before any read);
+ * core/deploy.c occupant_conflicts (what stands at a planned path, against the
+ * node its row lands). A reader not on this list is a bug.
  */
 static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
     switch (type) {
@@ -516,26 +528,17 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  *
  * The kind rung is what keeps one object from standing for two contents: Git
  * hashes a link's target exactly as it hashes a file's bytes, so a single id
- * sits behind both and means a different thing under each. Two types are one
- * kind iff they stand as one node (workspace_type_occupant above); a directory
- * claims no content at all, so a blob row and a directory row are never one
+ * sits behind both and means a different thing under each. A row and a record
+ * are one kind iff the row's type stands as the record's node
+ * (workspace_type_occupant above, which says what another kind means); a directory
+ * claims no content at all, so a blob row and a directory record are never one
  * another's, whatever their (zero) blobs say.
  *
  * Readers: core/workspace.c workspace_analyze_file's base fast path, which reaches
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's stat means disk IS the pair, so what the row is to the pair is what
- * it is to disk — and its kind rung alone, asked of the record. A record of another
- * kind than its row describes another node, so it is none of the row's: no base
- * for its claim (workspace_claims_moved below), no target for what the load learns
- * (the same analysis's slow-path note), no witness to its deletion
- * (classify_absent), no record a directory's acknowledgement moves onto its row
- * (cmds/apply.c cmd_apply's acknowledgement). Whether that node still stands is
- * a look's to say. While it does, the row's deployment replaces dotta's own node
- * there, which is a reassignment (workspace_reassigned below); where the look
- * found the row's own kind in its place, that node is gone, and apply adopts a
- * file over the record (cmd_apply's adoption) and observes a directory in the
- * record's place (workspace_observe_retyped). A reader not on this list is a
- * bug; the boolean reading of it is workspace_stale below.
+ * it is to disk — and workspace_stale below, the boolean reading of it. A reader
+ * not on this list is a bug.
  *
  * Not this: workspace_compare_orphan's fast path, whose reference IS the record's
  * pair. Nothing stands on the other side there, so a stat that matches is CMP_EQUAL
@@ -544,7 +547,7 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
 static inline compare_result_t workspace_compare_confirmed(
     const manifest_row_t *row, const state_record_t *record
 ) {
-    if (workspace_type_occupant(record->type) != workspace_type_occupant(row->type)) {
+    if (record->kind != workspace_type_occupant(row->type)) {
         return CMP_TYPE_DIFF;
     }
 
@@ -562,7 +565,7 @@ static inline compare_result_t workspace_compare_confirmed(
  * no row, and a path dotta has no record of has no owner to reassign it from.
  *
  * The record's kind decides what the look is asked (the ladder's first rung,
- * workspace_compare_confirmed above). Of the row's kind, the record is the row's
+ * workspace_type_occupant above). Of the row's kind, the record is the row's
  * own node's history, and the reassignment stands whatever the look found: a
  * copy the user edited, replaced or deleted is still the one the record names,
  * and the write that answers the row re-stamps the record under it. Of another
@@ -632,14 +635,13 @@ static inline bool workspace_reassigned(
     }
 
     /* Of the row's kind: the row's own node's history, whatever the look found */
-    if (workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF) {
+    if (record->kind == workspace_type_occupant(row->type)) {
         return true;
     }
 
     /* Of another kind: its own node's, while a look finds it standing — and no
      * look disproves nothing */
-    return occupant == FS_OCCUPANT_UNKNOWN ||
-           occupant == workspace_type_occupant(record->type);
+    return occupant == FS_OCCUPANT_UNKNOWN || occupant == record->kind;
 }
 
 /**
@@ -675,16 +677,14 @@ static inline bool workspace_stale(const manifest_row_t *row, const state_record
  * one owner are two claims.
  *
  * A link claims no mode, and is never asked for one: a link row's 0 is a
- * don't-care, and a link record's column should be NULL but is not always — a
- * record retyped across kinds before the kind rung guarded the write kept the
- * file's mode, and a mode asked of it would read a move no learning can land (a
- * write binds a link's mode NULL, core/state.h state_write).
+ * don't-care, and so is a link record's (its column NULL, core/state.h
+ * state_record_t).
  *
  * NONE where the record is no base for the row's claim: no record; a record of
- * another kind (the kind rung of workspace_compare_confirmed above — another
- * node's, whose claim says nothing of the row's, whether or not that node still
- * stands); a derived row, whose claim says what to create the path as and nothing
- * the analysis measures (the clause workspace_reassigned keeps).
+ * another kind (the kind rung, workspace_type_occupant above — another node's,
+ * whose claim says nothing of the row's, whether or not that node still stands);
+ * a derived row, whose claim says what to create the path as and nothing the
+ * analysis measures (the clause workspace_reassigned keeps).
  *
  * Readers: core/workspace.c workspace_analyze_claim, which both analyses of an
  * active item call (DIVERGENCE_CLAIM_MOVED where disk has not followed a moved
@@ -697,7 +697,7 @@ static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const state_record_t *record
 ) {
     if (!record || manifest_is_derived(row) ||
-        workspace_compare_confirmed(row, record) == CMP_TYPE_DIFF) {
+        record->kind != workspace_type_occupant(row->type)) {
         return DIVERGENCE_NONE;
     }
 
@@ -1299,7 +1299,7 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
         .filesystem_path = row->filesystem_path,
         .storage_path = row->storage_path,
         .profile = row->profile,
-        .type = row->type,
+        .kind = workspace_type_occupant(row->type),
         .mode = row->mode,
         .owner = row->owner,
         .group = row->group,

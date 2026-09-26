@@ -519,7 +519,7 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
  * user removes leaves no witness — so no record means there was no filesystem
  * obligation to break: absence is UNDEPLOYED, apply's to create. And the record
  * has to have seen the claim's kind of node: one of another kind (the kind rung,
- * core/workspace.h workspace_compare_confirmed) saw a node that is gone — a file
+ * core/workspace.h workspace_type_occupant) saw a node that is gone — a file
  * where the claim is now a directory, a link where it is now a file — and the
  * node the claim asserts was never here to be removed, so its absence deletes
  * nothing and update must not commit it as a removal.
@@ -536,7 +536,7 @@ static workspace_state_t classify_absent(
         return WORKSPACE_STATE_UNDEPLOYED;
     }
 
-    return record && workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF
+    return record && record->kind == workspace_type_occupant(row->type)
            ? WORKSPACE_STATE_DELETED
            : WORKSPACE_STATE_UNDEPLOYED;
 }
@@ -647,17 +647,17 @@ static error_t *workspace_compare_base(
         return NULL;
     }
 
-    /* The kind, off the look before any read — the ladder's first rung: another
-     * kind than the record's stands, which no byte can change, so no blob is
-     * opened and no key asked to learn what the look already tells
-     * (core/workspace.h workspace_type_occupant). Read first, a sealed base would
-     * read [locked] without the key where the look finds another node. */
-    if (item->occupant != workspace_type_occupant(base->type)) {
+    /* The kind, off the look before any read — the ladder's first rung, the
+     * record's kind being a look's word already: another kind than the record's
+     * stands, which no byte can change, so no blob is opened and no key asked
+     * to learn what the look already tells. Read first, a sealed base would read
+     * [locked] without the key where the look finds another node. */
+    if (item->occupant != base->kind) {
         *out = CMP_TYPE_DIFF;
         return NULL;
     }
 
-    /* One read of the record's blob, as the entry its own type names, under its
+    /* One read of the record's blob, as the entry its own kind names, under its
      * own binding — the pair its blob opens under (core/state.h state_record_t)
      * — judged against the caller's look, which is forwarded: the seam reads,
      * the pair judges, and neither takes a look of its own (infra/content.h
@@ -671,7 +671,7 @@ static error_t *workspace_compare_base(
         ws->content_cache,
         &base->blob_oid,
         item->filesystem_path,
-        path_type_to_git_filemode(base->type),
+        base->kind == FS_OCCUPANT_SYMLINK ? GIT_FILEMODE_LINK : GIT_FILEMODE_BLOB,
         &item->st,
         base->storage_path,
         base->profile,
@@ -1018,7 +1018,7 @@ static void workspace_analyze_file(
              * a row the binding does not name is one the record has yet to follow,
              * which takes the slow path on every load until apply's acknowledgement
              * moves the record onto it. And of this row's kind, the ladder's
-             * first rung (core/workspace.h workspace_compare_confirmed), never
+             * first rung (core/workspace.h workspace_type_occupant), never
              * path_type_kind, whose taxonomy files a link beside the files: a
              * record of another kind is a fact about a node that is gone, and a
              * confirmation would carry the ownership stamp dotta earned for it
@@ -1027,7 +1027,7 @@ static void workspace_analyze_file(
              * a row with no record (cmds/apply.c). Either way the stat above
              * rides the ownership event that moves the record onto the row. */
             if (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
-                workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF)) {
+                record->kind == workspace_type_occupant(row->type))) {
                 item->confirmation |= DIVERGENCE_CONTENT;
             }
         }
@@ -1131,7 +1131,7 @@ static void workspace_analyze_file(
  * safety is measured against the record, never against a view blob: Git may have
  * moved on after the deployment and before the path left scope, and that move
  * is not the user's edit. The record is the honest reference on every axis —
- * its type, blob and stat for the content, its mode, owner and group for the
+ * its kind, blob and stat for the content, its mode, owner and group for the
  * claim — the claim dotta last reconciled the path against, which follows every
  * agreement a load found or a fix made (core/state.h state_record_t), so a claim
  * Git moved and disk followed while the path was active is measured as the one
@@ -1148,7 +1148,7 @@ static void workspace_analyze_file(
  * is released, not measured.
  *
  * Architecture:
- * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
+ * - Uses the record alone (kind, blob_oid, stat, mode, owner, group)
  * - The content against the record's own pair, the question the file analysis's
  *   second question asks too (workspace_compare_base): the stat — a match means
  *   the exact node dotta wrote, no hashing — else the node's kind off the look,
@@ -1253,7 +1253,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * syscalls.
      */
     if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-        if (record->type != PATH_TYPE_SYMLINK
+        if (record->kind != FS_OCCUPANT_SYMLINK
             && (item->st.st_mode & 0777) != record->mode) {
             item->divergence |= DIVERGENCE_MODE;
         }
@@ -1887,7 +1887,7 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  *
  * Each was set aside by workspace_partition because no active row names its path:
  * the partition itself is the orphan predicate, and nothing about why a record
- * is here is stored anywhere. Both kinds walk one loop; the record's type says
+ * is here is stored anywhere. Both kinds walk one loop; the record's kind says
  * which questions apply.
  *
  * Per orphan, in order — the ancestry, presence, the occupant's kind, the prune
@@ -2018,7 +2018,7 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
         /* Another kind of path where dotta's copy was (see the doc above): a
          * directory at a file record's path, anything but a directory at a
          * directory record's — the claim's kind failing to stand at its key,
-         * which is claim_stands' own question over the record's type. An occupant
+         * which is claim_stands' own question over the record's kind. An occupant
          * that could not be stat'd is not taken for another kind, which is the
          * first term. claim_stands answers the same of an absent record — nothing
          * standing vouches for nothing — which is why the absence arm above decides
@@ -3027,7 +3027,8 @@ static error_t *workspace_partition(workspace_t *ws) {
             .filesystem_path = record->filesystem_path,
             .storage_path = record->storage_path,
             .profile = record->profile,
-            .item_kind = path_type_kind(record->type),
+            .item_kind = record->kind == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY
+                                                               : PATH_KIND_FILE,
             .occupant = FS_OCCUPANT_UNKNOWN,
             .state = WORKSPACE_STATE_ORPHANED,
         };
@@ -3797,14 +3798,16 @@ bool workspace_item_tags(
 /**
  * The record a learning writes: `base` with the row's words on each axis named
  *
- * The content (DIVERGENCE_CONTENT) is the row's pair — its type and its blob,
- * which the comparison confirmed together — with the stat the load distilled
- * where its comparison stood (workspace_item_t's stat); the mode (DIVERGENCE_MODE)
- * and the owner and group (DIVERGENCE_OWNERSHIP) are the row's claim. Every other
- * column is the base's own — the binding it was read under, the stamp — and the
- * order none: the item is active, so the view has taken the path back (the void).
- * A file row's blob is Git's and never zero, so a learning of the content always
- * confirms one.
+ * The content (DIVERGENCE_CONTENT) is the row's blob, with the stat the load
+ * distilled where its comparison stood (workspace_item_t's stat); the mode
+ * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
+ * claim. Every other column is the base's own — the node and the binding it was
+ * read under, the stamp — and the order none: the item is active, so the view
+ * has taken the path back (the void). The node needs no word of the row's: the
+ * content is noted only where the base is of the row's kind
+ * (workspace_analyze_file), so the blob is confirmed as the node the base already
+ * names. A file row's blob is Git's and never zero, so a learning of the content
+ * always confirms one.
  *
  * Two callers, the load's learning and a fix's, which would otherwise drift apart:
  * workspace_flush, over what the analyses noted, and workspace_learn, over the
@@ -3818,7 +3821,6 @@ static state_record_t workspace_learning(
     const manifest_row_t *row = item->row;
 
     if (axes & DIVERGENCE_CONTENT) {
-        base.type = row->type;
         base.blob_oid = row->blob_oid;
         base.stat = item->stat;
     }
@@ -3855,9 +3857,7 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
         if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
         /* Over a record of another kind: that record's node is gone */
-        if (!record || workspace_compare_confirmed(item->row, record) != CMP_TYPE_DIFF) {
-            continue;
-        }
+        if (!record || record->kind == FS_OCCUPANT_DIRECTORY) continue;
 
         /* The directory's observation, written whole over it */
         state_record_t *observation = arena_alloc(ws->arena, sizeof(*observation));

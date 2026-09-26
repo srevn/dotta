@@ -2244,7 +2244,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * (core/workspace.c workspace_analyze_file), and its ownership stamp vouches
      * for a node dotta never wrote. The row is adopted as a row with no record
      * is, and the ownership event rewrites the record whole. The kind is the
-     * ladder's first rung (core/workspace.h workspace_compare_confirmed): a link
+     * ladder's first rung (core/workspace.h workspace_type_occupant): a link
      * beside a file is another kind there, where path_type_kind would call both
      * files.
      *
@@ -2261,10 +2261,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
      * but the blob's), and the stat it stood on is the item's too. What this
      * loop reads of the flush's work is the record alone — a recordless clean
-     * row's, created by the observation in the same flush — and a learning rewrites
-     * neither deployed_at nor the record's profile, so both remain valid probes
-     * here; each writer points the item at the record it wrote, so the item holds
-     * what the store holds.
+     * row's, created by the observation in the same flush — and a learning keeps
+     * the stamp, the node and the binding it read, so all three remain valid
+     * probes here; each writer points the item at the record it wrote, so the
+     * item holds what the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2302,7 +2302,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const state_record_t *record = item->record;
 
         bool adopt = !record || record->deployed_at == 0 ||
-            workspace_compare_confirmed(file, record) == CMP_TYPE_DIFF;
+            record->kind != workspace_type_occupant(file->type);
 
         /* A record dotta owns whose binding names another row than this — another
          * profile's, or another name of the same profile, whose path the view
@@ -2355,8 +2355,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * in-scope directory row whose owned record names another profile is the
      * same pending reassignment a file row is, and this loop is the one place
      * its record is re-stamped under the row's profile (same derivation as the
-     * file loop's, its inputs in hand; NULL stat — a directory has none). The
-     * adopt half is deliberately not taken: capture (add, update) is the ownership
+     * file loop's, its inputs in hand; no stat — a directory has none). The adopt
+     * half is deliberately not taken: capture (add, update) is the ownership
      * event for a directory, apply's observation is not — an apply that adopted
      * every pre-existing clean parent would own it and prune it at scope exit.
      * A recordless clean directory stays the flush's observation, exactly as
@@ -2374,11 +2374,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* A record this loop moves onto the directory's row: one dotta owns, of
          * the directory's kind, bound to another row. One of another kind is
-         * another node's (core/workspace.h workspace_compare_confirmed): a run
-         * has observed the directory in its place already
-         * (workspace_observe_retyped), and a preview reads it as the run will. */
+         * another node's (core/workspace.h workspace_type_occupant): a run has
+         * observed the directory in its place already (workspace_observe_retyped),
+         * and a preview reads it as the run will. */
         bool acknowledge = record && record->deployed_at > 0 &&
-            workspace_compare_confirmed(dir, record) != CMP_TYPE_DIFF &&
+            record->kind == FS_OCCUPANT_DIRECTORY &&
             !manifest_is_claim(dir, record->profile, record->storage_path);
         if (!acknowledge) continue;
 

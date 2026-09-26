@@ -54,7 +54,6 @@
 #include "core/scope.h"
 #include "core/state.h"
 #include "core/workspace.h"
-#include "sys/filesystem.h"
 
 /* Forward declaration — the content cache is deploy_execute's input alone
  * (infra/content.h); everything else this header names is workspace vocabulary,

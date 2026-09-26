@@ -819,33 +819,13 @@ bool fs_exists(const char *path);
 bool fs_lexists(const char *path);
 
 /**
- * What occupies a path, from one lstat
- *
- * The link itself, never its target: a symlink is a distinct occupant, not the
- * thing it points to. Every reader that removes or replaces a path acts on the
- * node at the path, so the target's type and permissions are none of its business.
+ * lstat a path and name what it found (fs_occupant_t, include/types.h)
  *
  * Two failures are absence: ENOENT, and ENOTDIR — a component above the path is
  * not a directory, so nothing can be at the path either. Any other failure (EACCES,
- * ELOOP, EIO, …) is UNKNOWN: something may well be there, and a reader must never
- * infer absence from a failure to look. So UNKNOWN is the zero too: an occupant
- * no look wrote reads as a look nobody took, never as absence.
- */
-typedef enum {
-    FS_OCCUPANT_UNKNOWN = 0, /* unstattable for a reason other than absence, or not looked at */
-    FS_OCCUPANT_NONE,        /* absent, or beneath a non-directory */
-    FS_OCCUPANT_REGULAR,
-    FS_OCCUPANT_SYMLINK,     /* the link itself, never its target */
-    FS_OCCUPANT_DIRECTORY,
-    FS_OCCUPANT_OTHER        /* fifo, socket, device */
-} fs_occupant_t;
-
-/**
- * lstat a path and name what it found
- *
- * On FS_OCCUPANT_UNKNOWN, errno is lstat's — read it before anything else runs.
- * *st is meaningful only for a present occupant; a caller that wants the type
- * alone passes NULL.
+ * ELOOP, EIO, …) is UNKNOWN. On FS_OCCUPANT_UNKNOWN, errno is lstat's — read it
+ * before anything else runs. *st is meaningful only for a present occupant; a
+ * caller that wants the type alone passes NULL.
  *
  * @param path Path to probe (must not be NULL)
  * @param st Receives the lstat of a present occupant (may be NULL)

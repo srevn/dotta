@@ -2,23 +2,26 @@
  * types.h - The vocabulary every layer may assume
  *
  * A prelude, not a module: four opaque handles, base's error codes and transparent
- * containers, and a managed path's kind and type — not its two keys, which are
- * strings and declare nothing (infra/path.h). include/config.h is the second
- * prelude — the config layout, read by core without including utils/. base/args.h
- * and base/hashmap.h re-declare the handles they need instead of including this,
- * staying standalone engines with no domain dependency; every other base header
- * includes it.
+ * containers, a managed path's kind and type, and what a look finds standing at
+ * a path — not its two keys, which are strings and declare nothing (infra/path.h).
+ * include/config.h is the second prelude — the config layout, read by core without
+ * including utils/. base/args.h and base/hashmap.h re-declare the handles they
+ * need instead of including this, staying standalone engines with no domain
+ * dependency; every other base header includes it.
  *
  * Admission is by meaning, not by owner. A value a reader can interpret holding
  * nothing else stands here; a verdict one module computes stands with that module:
  * workspace_state_t and divergence_type_t in core/workspace.h, beside
  * workspace_displaced_t and workspace_fault_t. Reach bounds what meaning admits:
  * every type here is named by three headers or more, and the best candidate below
- * — hashmap_t, fs_occupant_t, output_color_t — by two.
+ * — hashmap_t, output_color_t — by two besides its own.
  *
- * path_kind_t and path_type_t cross layers besides: infra/pathspec matches on
- * the kind core/manifest produces, and manifest.h, state.h, deploy.h and policy.h
- * read the type where none can hold it for the other three.
+ * path_kind_t, path_type_t and fs_occupant_t cross layers besides: infra/pathspec
+ * matches on the kind core/manifest produces; the type is read by manifest.h
+ * and policy.h, neither of which can hold it for the other, and mapped onto the
+ * node it stands as by workspace.h; and the occupant sys/filesystem's look produces
+ * is the node core/state keeps a record of, which core/workspace and core/deploy
+ * hold against the next look.
  *
  * <stdint.h> and <stdbool.h> have no user here: base/gitignore.h reaches uint8_t
  * and a dozen headers reach bool through this file. Not unused.
@@ -94,6 +97,11 @@ typedef struct {
  * gitignore's treatment — a symlink is never descended). Layer-neutral: carried
  * by workspace items and consumed by the infra matchers, whose directory-only
  * patterns (`dir/`) need it.
+ *
+ * Two divisions are called a kind, and this is the coarse one. The ladder's keeps
+ * a link apart from a file: the node a type stands as (fs_occupant_t below,
+ * core/workspace.h workspace_type_occupant), which is the kind a record keeps
+ * (core/state.h state_record_t).
  */
 typedef enum {
     PATH_KIND_FILE,       /* Regular file, symlink, or executable — content + metadata */
@@ -103,11 +111,13 @@ typedef enum {
 /**
  * Path type — what stands at a managed path
  *
- * The one type axis for a manifest row and for the record dotta keeps of it
- * (core/manifest.h, core/state.h). The first three are the Git filemodes a blob
- * can carry; the fourth is a metadata-only container dotta creates and converges,
- * claimed through a profile's metadata.json rather than its tree. Kind is coarse
- * and derived from it (path_type_kind); it is never stored beside the type.
+ * The type axis of a manifest row (core/manifest.h). The first three are the
+ * Git filemodes a blob can carry; the fourth is a metadata-only container dotta
+ * creates and converges, claimed through a profile's metadata.json rather than
+ * its tree. Kind is coarse and derived from it (path_type_kind); it is never
+ * stored beside the type. The record dotta keeps of a path holds no type: it
+ * keeps the node it describes (fs_occupant_t below), and the executable half,
+ * Git's filemode, is the row's alone.
  */
 typedef enum {
     PATH_TYPE_FILE,        /* Regular blob, 0644 default */
@@ -141,5 +151,31 @@ static inline path_kind_t path_type_kind(path_type_t type) {
 static inline const char *path_kind_suffix(path_kind_t kind) {
     return kind == PATH_KIND_DIRECTORY ? "/" : "";
 }
+
+/**
+ * Occupant — what stands at a path, as one look finds it
+ *
+ * The link itself, never its target: a symlink is a distinct occupant, not the
+ * thing it points to. Every reader that removes or replaces a path acts on the
+ * node at the path, so the target's type and permissions are none of its business.
+ *
+ * NONE is absence. UNKNOWN is a look that failed for any other reason — something
+ * may well be there, and a reader must never infer absence from a failure to
+ * look — or no look at all. So UNKNOWN is the zero too: an occupant no look wrote
+ * reads as a look nobody took, never as absence.
+ *
+ * One producer, the look (sys/filesystem.h fs_lstat_occupant). The record keeps
+ * one as the node it describes — a regular file, a link or a directory, never
+ * the rest (core/state.h state_record_t) — so a look is asked whether that node
+ * still stands by one compare.
+ */
+typedef enum {
+    FS_OCCUPANT_UNKNOWN = 0, /* unstattable for a reason other than absence, or not looked at */
+    FS_OCCUPANT_NONE,        /* absent, or beneath a non-directory */
+    FS_OCCUPANT_REGULAR,
+    FS_OCCUPANT_SYMLINK,     /* the link itself, never its target */
+    FS_OCCUPANT_DIRECTORY,
+    FS_OCCUPANT_OTHER        /* fifo, socket, device */
+} fs_occupant_t;
 
 #endif /* DOTTA_TYPES_H */

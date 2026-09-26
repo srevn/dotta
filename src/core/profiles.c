@@ -226,89 +226,11 @@ cleanup:
 }
 
 /**
- * Validate state profiles and filter out non-existent ones
- *
- * Checks that all profiles listed in state exist as local branches. Warns about
- * missing profiles and filters them out.
- *
- * @param repo Repository (must not be NULL)
- * @param enabled_profiles Profiles from state (must not be NULL)
- * @param out_valid_profiles Valid profiles (caller must free)
- * @param out_missing_profiles Missing profiles (caller must free, can be NULL)
- * @return Error or NULL on success
- */
-static error_t *validate_state_profiles(
-    git_repository *repo,
-    const string_array_t *enabled_profiles,
-    string_array_t **out_valid_profiles,
-    string_array_t **out_missing_profiles
-) {
-    CHECK_NULL(repo);
-    CHECK_NULL(enabled_profiles);
-    CHECK_NULL(out_valid_profiles);
-
-    error_t *err = NULL;
-    string_array_t *valid = NULL;
-    string_array_t *missing = NULL;
-
-    valid = string_array_new(0);
-    if (!valid) {
-        err = ERROR(
-            ERR_MEMORY, "Failed to allocate valid profiles array"
-        );
-        goto cleanup;
-    }
-
-    if (out_missing_profiles) {
-        missing = string_array_new(0);
-        if (!missing) {
-            err = ERROR(
-                ERR_MEMORY, "Failed to allocate missing profiles array"
-            );
-            goto cleanup;
-        }
-    }
-
-    /* Check each profile */
-    for (size_t i = 0; i < enabled_profiles->count; i++) {
-        const char *profile = enabled_profiles->items[i];
-
-        bool exists = false;
-        err = gitops_branch_exists(repo, profile, &exists);
-        if (err) goto cleanup;
-
-        if (exists) {
-            err = string_array_push(valid, profile);
-            if (err) goto cleanup;
-        } else {
-            /* Profile doesn't exist */
-            if (missing) {
-                err = string_array_push(missing, profile);
-                if (err) goto cleanup;
-            }
-        }
-    }
-
-    /* Success */
-    *out_valid_profiles = valid;
-    if (out_missing_profiles) *out_missing_profiles = missing;
-
-    return NULL;
-
-cleanup:
-    string_array_free(valid);
-    string_array_free(missing);
-
-    return err;
-}
-
-/**
  * Resolve enabled profile names from state database
  *
  * Lightweight name-only resolution — no Git ref resolution or tree loading. Reads
- * enabled profiles from the borrowed state handle, validates that each still
- * exists as a branch, and returns the validated names. Warns on stderr about
- * missing profiles.
+ * the enabled rows the borrowed state handle holds, keeps each whose branch still
+ * exists, and returns their names. Warns on stderr about missing profiles.
  *
  * @param repo Repository (must not be NULL)
  * @param state Borrowed state handle (must not be NULL)
@@ -324,30 +246,33 @@ error_t *profile_resolve_enabled(
     CHECK_NULL(state);
     CHECK_NULL(out);
 
+    /* The enabled rows, where the handle holds them: nothing below moves them
+     * (core/state.h state_profiles) */
+    state_profiles_t enabled_profiles = state_profiles(state);
+    if (enabled_profiles.count == 0) {
+        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+    }
+
     error_t *err = NULL;
-    string_array_t *enabled_profiles = NULL;
-    string_array_t *valid_profiles = NULL;
-    string_array_t *missing_profiles = NULL;
-
-    /* Get profile names from state */
-    err = state_names(state, &enabled_profiles);
-    if (err) {
-        error_free(err);
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-    }
-
-    if (!enabled_profiles || enabled_profiles->count == 0) {
-        string_array_free(enabled_profiles);
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
-    }
-
-    /* Validate: check which profiles still exist as branches */
-    err = validate_state_profiles(
-        repo, enabled_profiles, &valid_profiles, &missing_profiles
-    );
-    if (err) {
-        err = error_wrap(err, "Failed to validate state profiles");
+    string_array_t *valid_profiles = string_array_new(0);
+    string_array_t *missing_profiles = string_array_new(0);
+    if (!valid_profiles || !missing_profiles) {
+        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
         goto cleanup;
+    }
+
+    /* Validate: check which profiles still exist as local branches — one that
+     * does not is warned about below and filtered out */
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        const char *profile = enabled_profiles.entries[i].name;
+
+        bool exists = false;
+        err = gitops_branch_exists(repo, profile, &exists);
+        if (!err) err = string_array_push(exists ? valid_profiles : missing_profiles, profile);
+        if (err) {
+            err = error_wrap(err, "Failed to validate state profiles");
+            goto cleanup;
+        }
     }
 
     /* Warn about missing profiles (diagnostic message)
@@ -356,7 +281,7 @@ error_t *profile_resolve_enabled(
      * without access to an output_t. This is consistent with other core modules
      * (deploy.c, workspace.c) that also write diagnostic warnings to stderr.
      */
-    if (missing_profiles && missing_profiles->count > 0) {
+    if (missing_profiles->count > 0) {
         fprintf(
             stderr, "Warning: State references non-existent profiles:\n"
         );
@@ -368,26 +293,22 @@ error_t *profile_resolve_enabled(
             "      or 'dotta profile enable <name>' to enable profiles\n\n"
         );
     }
-    string_array_free(missing_profiles);
-    missing_profiles = NULL;
 
     /* No valid profiles after filtering */
     if (valid_profiles->count == 0) {
-        string_array_free(valid_profiles);
-        string_array_free(enabled_profiles);
-        return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+        err = ERROR(ERR_NOT_FOUND, "No enabled profiles found");
+        goto cleanup;
     }
 
     /* Success */
+    string_array_free(missing_profiles);
     *out = valid_profiles;
-    string_array_free(enabled_profiles);
 
     return NULL;
 
 cleanup:
     string_array_free(valid_profiles);
     string_array_free(missing_profiles);
-    string_array_free(enabled_profiles);
 
     return err;
 }

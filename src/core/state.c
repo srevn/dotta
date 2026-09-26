@@ -26,7 +26,6 @@
 #include <unistd.h>
 
 #include "base/arena.h"
-#include "base/array.h"
 #include "base/error.h"
 #include "core/manifest.h"
 #include "sys/filesystem.h"
@@ -795,36 +794,6 @@ const char *state_target(
 
     const state_profile_entry_t *entry = state_find_profile(state, profile);
     return entry ? entry->target : NULL;
-}
-
-/**
- * The enabled profiles' names, copied
- *
- * Built from the row cache; the copy is the caller's to free.
- *
- * @param state State (must not be NULL)
- * @param out Profile names (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *state_names(const state_t *state, string_array_t **out) {
-    CHECK_NULL(state);
-    CHECK_NULL(out);
-
-    string_array_t *copy = string_array_new(0);
-    if (!copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-    }
-
-    for (size_t i = 0; i < state->profiles.count; i++) {
-        error_t *err = string_array_push(copy, state->profiles.entries[i].name);
-        if (err) {
-            string_array_free(copy);
-            return err;
-        }
-    }
-
-    *out = copy;
-    return NULL;
 }
 
 /**

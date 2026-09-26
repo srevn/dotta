@@ -112,15 +112,17 @@ void profile_order(string_array_t *names);
 /**
  * Resolve enabled profile names from state database
  *
- * Lightweight name-only resolution: reads enabled profiles from state, validates
- * that each exists as a branch, and returns validated names. Warns on stderr
- * about profiles referenced in state that no longer exist.
+ * Lightweight name-only resolution: reads the enabled rows the handle holds
+ * (core/state.h state_profiles), keeps each whose branch is here, and returns
+ * their names in the rows' order. Warns on stderr about profiles referenced in
+ * state that no longer exist.
  *
  * Does NOT resolve Git references or load profile trees.
  *
  * @param repo Repository (must not be NULL)
- * @param state State handle (must not be NULL; borrowed, not freed). Only SELECTs
- *              are executed — safe to pass a state_open() handle.
+ * @param state State handle (must not be NULL; borrowed, not freed). Nothing is
+ *              executed on it — the rows are the handle's own — so a handle in
+ *              any shape serves.
  * @param out Validated profile names (must not be NULL, caller must free)
  * @return Error (ERR_NOT_FOUND if no enabled profiles) or NULL on success
  */

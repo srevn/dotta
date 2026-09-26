@@ -195,7 +195,6 @@ static error_t *build_items(
 ) {
     error_t *err = NULL;
     string_array_t *all_profiles = NULL;
-    string_array_t *enabled_profiles = NULL;
     hashmap_t *profile_map = NULL;
     bool *used = NULL;
     size_t item_idx = 0;
@@ -210,9 +209,10 @@ static error_t *build_items(
 
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
      * of zero rows, which is the correct empty enabled set rather than a failure
-     * to absorb. Save via 'w' publishes the store's dotta.db in state_begin. */
-    err = state_names(deploy_state, &enabled_profiles);
-    if (err) goto cleanup;
+     * to absorb. Save via 'w' publishes the store's dotta.db in state_begin.
+     * The rows are read where the handle holds them: nothing here moves them
+     * (core/state.h state_profiles). */
+    state_profiles_t enabled_profiles = state_profiles(deploy_state);
 
     /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
      * the "not found" NULL return. */
@@ -241,24 +241,22 @@ static error_t *build_items(
     }
 
     /* Pass A: enabled profiles in their saved order. */
-    if (enabled_profiles) {
-        for (size_t i = 0; i < enabled_profiles->count; i++) {
-            const char *name = enabled_profiles->items[i];
-            void *idx_ptr = hashmap_get(profile_map, name);
-            if (!idx_ptr) {
-                /* Persisted name no longer exists locally — drop silently. */
-                continue;
-            }
-            size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
-            used[idx] = true;
-            view->items[item_idx].name = strdup(name);
-            if (!view->items[item_idx].name) {
-                err = error_create(ERR_MEMORY, "failed to duplicate profile name");
-                goto cleanup;
-            }
-            view->items[item_idx].enabled = true;
-            item_idx++;
+    for (size_t i = 0; i < enabled_profiles.count; i++) {
+        const char *name = enabled_profiles.entries[i].name;
+        void *idx_ptr = hashmap_get(profile_map, name);
+        if (!idx_ptr) {
+            /* Persisted name no longer exists locally — drop silently. */
+            continue;
         }
+        size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
+        used[idx] = true;
+        view->items[item_idx].name = strdup(name);
+        if (!view->items[item_idx].name) {
+            err = error_create(ERR_MEMORY, "failed to duplicate profile name");
+            goto cleanup;
+        }
+        view->items[item_idx].enabled = true;
+        item_idx++;
     }
 
     /* Pass B: remaining profiles, disabled, in list order. */
@@ -275,7 +273,6 @@ static error_t *build_items(
 
 cleanup:
     view->item_count = item_idx;
-    string_array_free(enabled_profiles);
     string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);

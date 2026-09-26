@@ -627,18 +627,6 @@ error_t *state_disable_profile(
 error_t *state_reorder_profiles(state_t *state, const string_array_t *profiles);
 
 /**
- * The enabled profiles' names, copied
- *
- * In position order, owned by the caller: a copy outlives the boundaries that
- * end state_profiles' slice, which is what its callers keep it across.
- *
- * @param state State (must not be NULL)
- * @param out Profile names (must not be NULL, caller must free)
- * @return Error or NULL on success
- */
-error_t *state_names(const state_t *state, string_array_t **out);
-
-/**
  * Check if a profile is enabled
  *
  * Fast O(n) check where n = number of enabled profiles (typically < 10). Useful
@@ -684,8 +672,10 @@ typedef struct {
  *   - state_free
  *
  * A caller that must outlive one of those copies what it needs, and says so:
- * cmds/profile.c's disable receipt the targets it is about to forget, and
- * cmds/add.c's pre-flight the binding its receipt names after the record phase.
+ * cmds/profile.c profile_disable the names it disables and the targets they forget,
+ * and cmds/add.c cmd_add the binding its receipt names after the record phase.
+ * Every other reader reads the rows between two boundaries and keeps nothing
+ * past them.
  *
  * @param state State (NULL returns an empty slice)
  * @return Borrowed slice over the rows
@@ -699,11 +689,15 @@ state_profiles_t state_profiles(const state_t *state);
  * state_profiles. The answer is a key or NULL, the column holding nothing else
  * (the table's paragraph above).
  *
- * Readers: the three binders and add's pre-flight (cmds/add.c, cmds/profile.c,
- * cmds/interactive.c), the two screens that print a binding beside its profile
- * (cmds/status.c, cmds/profile.c) and the disable receipt that names the one it
- * forgets, the interactive editor's seed, and add's path completion, which asks
- * outside a repository too (cmds/completion.c completion_paths_under).
+ * Readers, each asking of one profile by its name: the binders that hold a --target
+ * to the row's binding — cmds/add.c cmd_add, whose receipt names it after the
+ * record phase, and cmds/profile.c profile_enable, where another directory is a
+ * move; cmds/profile.c profile_disable, whose receipt names the one it forgets;
+ * cmds/status.c status_print_profiles, which prints a binding beside its profile;
+ * cmds/interactive.c read_targets, the editor's seed; and add's path completion,
+ * which asks outside a repository too (cmds/completion.c completion_paths_under).
+ * A reader walking the rows reads each one's target where it stands (cmds/profile.c
+ * profile_list).
  *
  * @param state State (NULL answers NULL: a run with no database holds no row)
  * @param profile Profile name to look up (must not be NULL)

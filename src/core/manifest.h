@@ -110,7 +110,7 @@
 
 /* manifest_build reads the enabled set from the state handle and manifest_diff
  * reads the record (core/state.h) by pointer; both are named here and defined
- * there, as state.h names the row. */
+ * there. */
 typedef struct state state_t;
 typedef struct state_record state_record_t;
 

@@ -968,11 +968,16 @@ static error_t *update_write_record(
                 continue;
             }
 
-            err = state_anchor(
-                state, row,
-                row->type == PATH_TYPE_DIRECTORY ? NULL : &capture->stat,
-                now, NULL
-            );
+            /* The ownership event's record, as a workspace writes one
+             * (core/workspace.h workspace_anchor): the row's observation with
+             * its content — the row's blob, under the capture's stat, which a
+             * directory's capture carries none of — and the phase's stamp */
+            state_record_t record = workspace_observation(row);
+            record.blob_oid = row->blob_oid;
+            record.stat = capture->stat;
+            record.deployed_at = now;
+
+            err = state_write(state, &record);
             if (err) goto cleanup;
             synced++;
         }

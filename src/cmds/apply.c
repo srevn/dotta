@@ -1666,9 +1666,8 @@ static error_t *apply_write_record(
      *                             triple, distilled by the executor from the
      *                             fstat of the bytes it put there
      *                             (state_stat_from_write — authorship needs no
-     *                             closed second). A symlink's is UNSET, the same
-     *                             statement as NULL to state_anchor: a link is
-     *                             made by path, no descriptor exists to describe
+     *                             closed second). A symlink's is UNSET: a link
+     *                             is made by path, no descriptor exists to describe
      *                             it, and readlink is its whole re-verification
      *   converged, made           a directory whose convergence is not a fix
      *   (a create or a replace)   (deploy_convergence) — dotta made it, where
@@ -1681,8 +1680,8 @@ static error_t *apply_write_record(
      *                             already stood on, and the pass after it observed
      *                             any whose record described another kind of
      *                             node in that record's place
-     *                             (workspace_observe_retyped): a confirmation
-     *                             of the claims the fix set that the record still
+     *                             (workspace_observe_retyped): a learning of
+     *                             the claims the fix set that the record still
      *                             lacks, never an ownership event — anchoring
      *                             it as owned would set deployed_at on a directory
      *                             the user made and hand it to the prune on the
@@ -1723,7 +1722,7 @@ static error_t *apply_write_record(
                 (*acknowledged)++;
             }
 
-            err = workspace_anchor(ws, item, &o->stat, now);
+            err = workspace_anchor(ws, item, o->stat, now);
             if (err) goto cleanup;
         }
 
@@ -1732,9 +1731,8 @@ static error_t *apply_write_record(
             const deploy_verdict_t *v = converged.entries[i].verdict;
             const workspace_item_t *item = v->item;
 
-            /* Counted before either write: an ownership event replaces the record
-             * the reassignment is read from, and a confirmation writes it in
-             * place. */
+            /* Counted before either write: each replaces the record the
+             * reassignment is read from — an ownership event, and a learning. */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 (*acknowledged)++;
             }
@@ -1762,20 +1760,22 @@ static error_t *apply_write_record(
                     ? DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP
                     : DIVERGENCE_MODE;
 
-                err = workspace_confirm(
+                err = workspace_learn(
                     ws, item, workspace_claims_moved(item->row, record) & landed
                 );
                 if (err) goto cleanup;
                 continue;
             }
 
-            err = workspace_anchor(ws, item, NULL, now);
+            err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
             if (err) goto cleanup;
         }
 
         deploy_outcomes_t ancestors = deploy_result->ancestors;
         for (size_t i = 0; i < ancestors.count; i++) {
-            err = workspace_anchor(ws, ancestors.entries[i].verdict->item, NULL, now);
+            err = workspace_anchor(
+                ws, ancestors.entries[i].verdict->item, STATE_STAT_UNSET, now
+            );
             if (err) goto cleanup;
         }
     }
@@ -1920,10 +1920,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * voids of orders the view took back (core/workspace.h workspace_flush). A
      * run's land in its dispatch transaction, which the checkpoint below commits
      * with the rest of the present; a preview holds none, so the flush takes
-     * and commits a scoped one of its own at its first write, exactly as it does
-     * for status, diff, sync and update (state_locked, in core/state.h). Each
-     * lands on the record the path's item holds, so downstream readers in this
-     * run see DB and memory agreeing.
+     * and commits a scoped one of its own once it owes anything, exactly as it
+     * does for status, diff, sync and update (state_locked, in core/state.h).
+     * Each owed item holds the record the store holds once the flush has run,
+     * so downstream readers in this run see DB and memory agreeing.
      *
      * The failure goes with the transaction. A run's flush writes into the one
      * the run will commit, so a failure there poisons everything it has left to
@@ -1935,12 +1935,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
     /* The one observation the flush cannot make: a directory standing where its
      * record describes another kind of node — a file, a link — whose record holds
-     * the place the observation would take. A run holds its load's lock, which
-     * a retire needs, so the record retires here and the directory is observed
-     * in its place, never owned (workspace_observe_retyped); a preview writes
-     * nothing, and the next run makes it. Ahead of the plan, so no loop below
-     * meets such a record in a run: the acknowledgement owns no directory the
-     * user made where dotta's file was, and a fix confirms onto the observation. */
+     * the place the observation would take. A run observes the directory over
+     * it, never owned (workspace_observe_retyped); a preview writes nothing,
+     * and the next run makes it. Ahead of the plan, so no loop below meets such
+     * a record in a run: the acknowledgement owns no directory the user made
+     * where dotta's file was, and a fix learns onto the observation. */
     if (!opts->dry_run) {
         err = workspace_observe_retyped(ws);
         if (err) {
@@ -2262,9 +2261,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
      * but the blob's), and the stat it stood on is the item's too. What this
      * loop reads of the flush's work is the record alone — a recordless clean
-     * row's, created by the observation in the same flush — and a confirmation
-     * rewrites neither deployed_at nor the record's profile, so both remain valid
-     * probes here; DB and in-memory views are kept coherent by workspace_anchor.
+     * row's, created by the observation in the same flush — and a learning rewrites
+     * neither deployed_at nor the record's profile, so both remain valid probes
+     * here; each writer points the item at the record it wrote, so the item holds
+     * what the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2338,14 +2338,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * included: bound to another row, or of another kind. UNSET where
              * the read met a second still open, and the next load's slow path
              * confirms. */
-            err = workspace_anchor(ws, item, &item->stat, now);
+            err = workspace_anchor(ws, item, item->stat, now);
             if (err) {
                 /* The present lands whole or ends the run, as the flush's writes
                  * do: the store refused this write before anything on disk moved,
                  * and a refusal SQLite answers by ending the transaction has
                  * taken the load's writes with it, so a write past it would land
                  * on its own. */
-                err = error_wrap(err, "Failed to anchor %s", file->filesystem_path);
                 goto cleanup;
             }
         }
@@ -2393,10 +2392,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         if (!opts->dry_run) {
-            err = workspace_anchor(ws, item, NULL, now);
+            err = workspace_anchor(ws, item, STATE_STAT_UNSET, now);
             if (err) {
                 /* The file loop's stance: the present lands whole or ends the run */
-                err = error_wrap(err, "Failed to anchor %s", dir->filesystem_path);
                 goto cleanup;
             }
         }

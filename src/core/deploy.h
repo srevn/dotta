@@ -474,8 +474,8 @@ typedef struct {
  * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
  * describe, and readlink is its whole re-verification), and a directory's write
  * is fchmod/fchown through its own descriptor, whose record carries no triple
- * at all. UNSET and NULL say the same thing to state_anchor, so the record phase
- * passes the triple blind.
+ * at all. The record phase passes the triple blind: an ownership event writes
+ * UNSET as no stat (core/workspace.h workspace_anchor).
  *
  * The error is the failed bucket's tail — the row's own cause, verbatim (ENOSPC,
  * a blob that would not load, an ancestor this run did not converge) — and NULL

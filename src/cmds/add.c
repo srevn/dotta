@@ -27,6 +27,7 @@
 #include "core/metadata.h"
 #include "core/policy.h"
 #include "core/state.h"
+#include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -1332,10 +1333,11 @@ static error_t *write_record(
 
         /* Both lists, one rule and one count. The kind decides one thing — what
          * the ownership event binds: the capture's own stat triple for a file,
-         * and nothing for a directory, which has no content to confirm — so the
-         * two lists were two loops for one line of difference, and the accounting
-         * drifted apart in exactly that gap, the directory count the receipt
-         * printed being the sheet's, taken before the pass that could refuse it.
+         * and nothing for a directory, which has no content to confirm and whose
+         * listing carries none — so the two lists were two loops for one line
+         * of difference, and the accounting drifted apart in exactly that gap,
+         * the directory count the receipt printed being the sheet's, taken before
+         * the pass that could refuse it.
          *
          * Both kinds earn one event. A path was captured from disk, so it is
          * dotta's to prune on scope exit — the ownership the gate asks for, which
@@ -1405,11 +1407,16 @@ static error_t *write_record(
                     continue;
                 }
 
-                err = state_anchor(
-                    state, row,
-                    path->claim.kind == PATH_KIND_DIRECTORY ? NULL : &path->stat,
-                    now, NULL
-                );
+                /* The ownership event's record, as a workspace writes one
+                 * (core/workspace.h workspace_anchor): the row's observation
+                 * with its content — the row's blob, under the capture's stat —
+                 * and the phase's stamp */
+                state_record_t record = workspace_observation(row);
+                record.blob_oid = row->blob_oid;
+                record.stat = path->stat;
+                record.deployed_at = now;
+
+                err = state_write(state, &record);
                 if (err) goto cleanup;
                 receipt->anchored++;
 

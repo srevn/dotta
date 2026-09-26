@@ -30,8 +30,8 @@
  * comparisons if a call site ever needs to.
  */
 #define DOTTA_VERSION_MAJOR 0
-#define DOTTA_VERSION_MINOR 151
-#define DOTTA_VERSION_PATCH 29
+#define DOTTA_VERSION_MINOR 152
+#define DOTTA_VERSION_PATCH 0
 
 /**
  * Pre-release suffix, including a leading dash when present.

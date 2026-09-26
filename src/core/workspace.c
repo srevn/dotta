@@ -13,11 +13,13 @@
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
- * here (the flush, workspace_observe_retyped, workspace_anchor, workspace_confirm)
- * advance it only on disk's word — a live look there, or the run's own write —
+ * here (the flush, workspace_observe_retyped, workspace_anchor, workspace_learn)
+ * write it only on disk's word — a live look there, or the run's own write —
  * all but the flush's void, which clears an order on the view's word: the path
- * is back in the view. A record whose path the view lacks is an orphan, and the
- * orphan analysis asks Git — the only authority that knows — why it is one.
+ * is back in the view. Each writes a record whole and publishes it: the item at
+ * the path holds the record the store holds, and the one it held before is never
+ * written. A record whose path the view lacks is an orphan, and the orphan analysis
+ * asks Git — the only authority that knows — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -116,8 +118,8 @@ struct workspace {
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition — the record, which the items
      * hold — then written through by the four writers (the flush,
-     * workspace_observe_retyped, workspace_anchor, workspace_confirm), each
-     * advancing the record it persists. */
+     * workspace_observe_retyped, workspace_anchor, workspace_learn), each
+     * publishing the record the store then holds. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -926,28 +928,29 @@ static void workspace_analyze_file(
             item->stat = state_stat_from_read(&item->st);
 
             /* The content half of the item's confirmation, for the flush to write
-             * (workspace_confirm) — the claim's half is workspace_analyze_claim's,
+             * (workspace_flush) — the claim's half is workspace_analyze_claim's,
              * below. The row's blob, the one the look was found equal to, beside
              * the stat above, so the next run can short-circuit via the fast
-             * path. A path with no record is noted like any other: the flush
-             * observes it before it confirms, and the observation is this row's.
+             * path. A path with no record is noted like any other: the flush's
+             * first observation of it carries the content, and the observation
+             * is this row's.
              *
              * Only onto a record that is this row's content base. Bound to this
              * row: an encrypted blob opens under one binding and no other, and
-             * state_confirm's statement refuses another at the write — asked of
-             * the record first, so a confirmation that cannot land never opens
-             * the flush's transaction; a row the binding does not name is one
-             * the record has yet to follow, which takes the slow path on every
-             * load until apply's acknowledgement moves the record onto it. And
-             * of this row's kind, the ladder's first rung (core/workspace.h
-             * workspace_compare_confirmed), never path_type_kind, whose taxonomy
-             * files a link beside the files: a record of another kind is a fact
-             * about a node that is gone, and a confirmation would carry the
-             * ownership stamp dotta earned for it onto a node dotta never wrote
-             * — a link the user made, a file where dotta's directory was — which
-             * apply adopts instead, as it adopts a row with no record
-             * (cmds/apply.c). Either way the stat above rides the ownership event
-             * that moves the record onto the row. */
+             * a learning keeps the binding it read, so this is where the blob a
+             * record carries is kept the blob of the row its binding names
+             * (core/state.h state_record_t) — the store writes what it is handed;
+             * a row the binding does not name is one the record has yet to follow,
+             * which takes the slow path on every load until apply's acknowledgement
+             * moves the record onto it. And of this row's kind, the ladder's
+             * first rung (core/workspace.h workspace_compare_confirmed), never
+             * path_type_kind, whose taxonomy files a link beside the files: a
+             * record of another kind is a fact about a node that is gone, and a
+             * confirmation would carry the ownership stamp dotta earned for it
+             * onto a node dotta never wrote — a link the user made, a file where
+             * dotta's directory was — which apply adopts instead, as it adopts
+             * a row with no record (cmds/apply.c). Either way the stat above
+             * rides the ownership event that moves the record onto the row. */
             if (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
                 workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
@@ -3804,23 +3807,58 @@ bool workspace_item_tags(
 }
 
 /**
+ * The record a learning writes: `base` with the row's words on each axis named
+ *
+ * The content (DIVERGENCE_CONTENT) is the row's pair — its type and its blob,
+ * which the comparison confirmed together — with the stat the load distilled
+ * where its comparison stood (workspace_item_t's stat); the mode (DIVERGENCE_MODE)
+ * and the owner and group (DIVERGENCE_OWNERSHIP) are the row's claim. Every other
+ * column is the base's own — the binding it was read under, the stamp — and the
+ * order none: the item is active, so the view has taken the path back (the void).
+ * A file row's blob is Git's and never zero, so a learning of the content always
+ * confirms one.
+ *
+ * Two callers, the load's learning and a fix's, which would otherwise drift apart:
+ * workspace_flush, over what the analyses noted, and workspace_learn, over the
+ * claims apply's fix set.
+ */
+static state_record_t workspace_learning(
+    state_record_t base,
+    const workspace_item_t *item,
+    divergence_type_t axes
+) {
+    const manifest_row_t *row = item->row;
+
+    if (axes & DIVERGENCE_CONTENT) {
+        base.type = row->type;
+        base.blob_oid = row->blob_oid;
+        base.stat = item->stat;
+    }
+    if (axes & DIVERGENCE_MODE) {
+        base.mode = row->mode;
+    }
+    if (axes & DIVERGENCE_OWNERSHIP) {
+        base.owner = row->owner;
+        base.group = row->group;
+    }
+    base.ordered_at = 0;
+
+    return base;
+}
+
+/**
  * Observe the directories standing where their records describe another kind of
  * node
  *
  * The rule is the header's. Here: the directory items are read, each with its
- * look and its record, and each record found wanting retires before its observation
- * is written, so the INSERT lands — the run's transaction was taken before the
- * load read the record, and nothing else writes inside it. The observation is
- * written into the record the path's item already holds: one object rewritten
- * in place — const to every reader, and cast here, where it is written
- * (workspace_item_t).
+ * look and its record, and each record found wanting gives way to the directory's
+ * observation, built before its write and held by the item once the write lands.
  */
 error_t *workspace_observe_retyped(workspace_t *ws) {
     CHECK_NULL(ws);
 
     for (size_t i = 0; i < ws->dir_count; i++) {
-        const workspace_item_t *item = ws->active[i];
-        const manifest_row_t *row = item->row;
+        workspace_item_t *item = ws->active[i];
         const state_record_t *record = item->record;
 
         /* A directory standing: the row's own kind, found by the load's look at
@@ -3829,20 +3867,20 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
         if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
         /* Over a record of another kind: that record's node is gone */
-        if (!record || workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF) {
+        if (!record || workspace_compare_confirmed(item->row, record) != CMP_TYPE_DIFF) {
             continue;
         }
 
-        /* The record retires, and the directory is observed in its place */
-        error_t *err = state_retire(ws->state, row->filesystem_path);
-        if (!err) {
-            err = state_observe(ws->state, row, (state_record_t *) record);
+        /* The directory's observation, written whole over it */
+        state_record_t *observation = arena_alloc(ws->arena, sizeof(*observation));
+        if (!observation) {
+            return ERROR(ERR_MEMORY, "Failed to allocate observation record");
         }
-        if (err) {
-            return error_wrap(
-                err, "Failed to observe '%s' in its record's place", row->filesystem_path
-            );
-        }
+        *observation = workspace_observation(item->row);
+
+        error_t *err = state_write(ws->state, observation);
+        if (err) return err;
+        item->record = observation;
     }
 
     return NULL;
@@ -3852,28 +3890,32 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
  * Anchor an active path: its ownership event, written as a fresh record the item
  * holds once the statement lands
  *
- * The rule is the header's. Here: one allocation, the statement, and the item
- * pointed at what it wrote. The statement is the one specification of what an
- * ownership event writes, and checks the row; this function holds none of it
- * and reads nothing of the row.
+ * The rule is the header's. Here: one allocation, the record built, the write,
+ * and the item pointed at what it wrote.
  */
 error_t *workspace_anchor(
     workspace_t *ws,
     const workspace_item_t *item,
-    const state_stat_t *stat,
+    state_stat_t stat,
     time_t now
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The record the event writes, allocated before the statement, so a write
-     * that landed is never followed by a failure to hold it */
+    /* The record the event writes, built before the statement, so a write that
+     * landed is never followed by a failure to hold it: the row's observation
+     * with its content — the row's blob, zero for a directory, under the stat
+     * the event stands on — and the event's stamp */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
     if (!record) {
         return ERROR(ERR_MEMORY, "Failed to allocate record");
     }
+    *record = workspace_observation(item->row);
+    record->blob_oid = item->row->blob_oid;
+    record->stat = stat;
+    record->deployed_at = now;
 
-    error_t *err = state_anchor(ws->state, item->row, stat, now, record);
+    error_t *err = state_write(ws->state, record);
     if (err) return err;
 
     /* The item holds the record the statement wrote — cast here, where its pointer
@@ -3883,14 +3925,13 @@ error_t *workspace_anchor(
 }
 
 /**
- * Confirm an active path with in-memory consistency
+ * Learn the claims a fix set
  *
- * Workspace-scope writer for confirmations: the item's record is the one both
- * verbs are handed, so each advances it in place when its statement wrote, and
- * every holder of the item reads the same. No record is created here — a
- * confirmation is an UPDATE of what the load or the flush's observation made.
+ * The rule is the header's. Here: nothing established is nothing written; else
+ * one allocation, the record built from the item's, the write, and the item pointed
+ * at what it wrote.
  */
-error_t *workspace_confirm(
+error_t *workspace_learn(
     workspace_t *ws,
     const workspace_item_t *item,
     divergence_type_t axes
@@ -3898,40 +3939,25 @@ error_t *workspace_confirm(
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The row the axes were established against, read below for the claim's values
-     * before any verb could check it: an orphan's item has none. */
-    const manifest_row_t *row = item->row;
-    CHECK_NULL(row);
+    /* Nothing established: nothing written, and the item keeps its record. Else
+     * the item holds one — the axes are claims its row moved past the record's
+     * (workspace_claims_moved), NONE where there is none. */
+    if (axes == DIVERGENCE_NONE) return NULL;
 
-    /* The item's record: the load's, or the one the flush's observation made.
-     * Const to every reader, and cast here, where it is written
-     * (workspace_item_t). */
-    state_record_t *record = (state_record_t *) item->record;
-
-    /* The content, under the row's binding (state_confirm), proven by the triple
-     * the load distilled where its comparison stood (workspace_item_t's stat).
-     * Either statement may run first: each binds the record as the snapshot holds
-     * it and advances the snapshot when it writes, so the type the content writes
-     * within its kind is the type the claim's then binds. */
-    if (axes & DIVERGENCE_CONTENT) {
-        error_t *err = state_confirm(ws->state, row, &item->stat, record);
-        if (err) return err;
+    /* The record the learning writes, built before the statement */
+    state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
+    if (!record) {
+        return ERROR(ERR_MEMORY, "Failed to allocate record");
     }
+    *record = workspace_learning(*item->record, item, axes);
 
-    if (!(axes & (DIVERGENCE_MODE | DIVERGENCE_OWNERSHIP))) {
-        return NULL;
-    }
+    error_t *err = state_write(ws->state, record);
+    if (err) return err;
 
-    /* The claim, under no binding (state_confirm_claim): the row's on each axis
-     * named, the record's own on the other — a value per column, the strings
-     * borrowed from the row as the other two writers borrow them. */
-    return state_confirm_claim(
-        ws->state,
-        (axes & DIVERGENCE_MODE) ? row->mode : record->mode,
-        (axes & DIVERGENCE_OWNERSHIP) ? row->owner : record->owner,
-        (axes & DIVERGENCE_OWNERSHIP) ? row->group : record->group,
-        record
-    );
+    /* The item holds the record the statement wrote — cast here, where its pointer
+     * moves (workspace_item_t) */
+    ((workspace_item_t *) item)->record = record;
+    return NULL;
 }
 
 /**
@@ -3939,157 +3965,133 @@ error_t *workspace_confirm(
  *
  * The rule is the header's. Here: one walk over the active items — the paths
  * the view holds, where every debt stands; not the orphans, since the path back
- * in the view is exactly the case with no orphan — each written whole: its
- * observation, then its confirmation, then its void, so a path is observed before
- * it is confirmed, the one order the writes need: a confirmation is an UPDATE
- * that creates nothing, and one cannot confirm what one has not seen. Across
- * paths the order is free, every statement keyed by its own path and reading no
- * other. The first write takes the transaction where the caller holds none, so
- * a load that owes nothing takes none.
+ * in the view is exactly the case with no orphan — building the record each owed
+ * item's write makes; then the writes, in whichever transaction is the writes';
+ * then the publication, once the store holds them. Across paths the order is
+ * free, every statement keyed by its own path and reading no other.
  */
 error_t *workspace_flush(workspace_t *ws) {
     CHECK_NULL(ws);
 
-    bool scoped = false;
+    const size_t active_count = ws->dir_count + ws->file_count;
+
+    /* Whose transaction the writes are for: the caller's — a run of apply, whose
+     * dispatch transaction was taken before the load read anything — or one this
+     * flush takes, status's, diff's, sync's, update's and a preview's, whose
+     * failures are then the flush's own, from the first (below) */
+    const bool scoped = !state_locked(ws->state);
     error_t *err = NULL;
 
-    for (size_t i = 0; i < ws->dir_count + ws->file_count; i++) {
+    /* 1. What the load owes: the record each owed item's write makes — a learning
+     *    — held beside the item by its place among the active items, NULL where
+     *    it owes nothing, and built before any statement, so a write that landed
+     *    is never followed by a failure to hold it. The table is taken at the
+     *    first owed item, so a load that owes nothing allocates nothing. */
+    const state_record_t **learnings = NULL;
+
+    for (size_t i = 0; i < active_count; i++) {
         workspace_item_t *item = ws->active[i];
+        const state_record_t *record = item->record;
 
-        /* Owed nothing: a record the load learned nothing new of, standing on
-         * no order; or no record, and no node of the row's own kind to observe
-         * — nothing stands, another kind does, or no look was taken (withheld
-         * beneath a squatter, failed, or retracted by a read that met absence).
-         * A confirmation rides the observation: a content confirmation is noted
-         * only where the row's kind stands (the ladder's first rung, and the
-         * stat's), and a claim is learned only onto a record
-         * (workspace_claims_moved), so a path skipped here is owed no confirmation
-         * either. */
-        if (item->record && item->confirmation == DIVERGENCE_NONE &&
-            item->record->ordered_at == 0) {
+        /* What the write starts from — a value, not a verdict:
+         *   - the row's first observation, where the look found the row's own
+         *     node and dotta holds no record, file and directory rows alike and
+         *     either class of directory — the record answers whether dotta has
+         *     seen the path for an ancestor claim too (classify_absent). It closes
+         *     the "user created the path after scope entry" gap: the next absence
+         *     reads DELETED, not UNDEPLOYED, and update propagates the user's
+         *     removal. A node of another kind is no observation — the record
+         *     would name the row's kind, which classify_absent reads as the node
+         *     dotta saw here, and the user removing what they put in its place
+         *     would read as the claim's deletion — and neither is no look: withheld
+         *     beneath a squatter, failed, or retracted by a read that met absence;
+         *   - the record the load read, where the analyses noted an axis it lacks
+         *     (the item's confirmation), or where it stands on an order: an order
+         *     lives only while its path is out of the view, so one whose path
+         *     the view has is void — the removal it answered was reverted (a
+         *     revert, a sync pulling the path back, an enable providing it),
+         *     verified or not. Left standing, it would outlive the removal and
+         *     prune the copy at the next scope exit instead of the probe releasing
+         *     it; voided — the write carries no order — a later discovered
+         *     departure executes as a release, which is the stated policy for
+         *     every discovered departure;
+         *   - otherwise nothing is owed: a record the load learned nothing new
+         *     of, standing on no order, or no record and no node of the row's
+         *     to observe. A confirmation rides the observation: a content
+         *     confirmation is noted only where the row's kind stands (the ladder's
+         *     first rung, and the stat's), and a claim is learned only onto a
+         *     record (workspace_claims_moved), so a path skipped here owes none. */
+        state_record_t base;
+        if (!record && item->occupant == workspace_type_occupant(item->row->type)) {
+            base = workspace_observation(item->row);
+        } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
+            base = *record;
+        } else {
             continue;
         }
-        if (!item->record && item->occupant != workspace_type_occupant(item->row->type)) {
-            continue;
-        }
 
-        /* The first write takes the store's lock where the caller holds none —
-         * status, diff, sync, update and a preview of apply — and that
-         * transaction is the flush's, its failure too, from the lock on (below);
-         * a run of apply passes its dispatch transaction, and the writes land
-         * in it (state_locked). Taken only where the store still stands as the
-         * handle's admission left it (state_resume): the view and the record
-         * read the load decided from are then the store the writes land on, and
-         * a commit since — an order placed after the view was built, a record
-         * moved after it was read — refuses the flush rather than meet a write
-         * decided without it. Taken here, at a write, so a load that owes nothing
-         * never waits on another writer's lock. A load over a store never written
-         * owes nothing — its view is built from no rows — so this lock never
-         * brings one into being. */
-        if (!state_locked(ws->state)) {
-            scoped = true;
-            err = state_resume(ws->state);
-            if (err) goto rollback;
-        }
-
-        /* The observation: presence of the row's own kind, the path's first record,
-         * file and directory rows alike and either class of directory — the record
-         * answers whether dotta has seen the path for an ancestor claim too
-         * (classify_absent). It closes the "user created the path after scope
-         * entry" gap: the next absence reads DELETED, not UNDEPLOYED, and update
-         * propagates the user's removal. A node of another kind is no observation:
-         * the record would name the row's kind, which classify_absent reads as
-         * the node dotta saw here, and the user removing what they put in its
-         * place would read as the claim's deletion.
-         *
-         * The record is allocated before the statement, so a write that landed
-         * is never followed by a failure to hold it, and state_observe writes
-         * into it the INSERT's own values — the row's binding, kind and claim,
-         * the strings borrowed from the row for the workspace's lifetime — whether
-         * the INSERT landed or met a row another writer made since the load:
-         * never that row, which is state_observe's rule and its reason. The item
-         * holds it from here on, the live record every later reader in the run
-         * reads off the item (cmds/apply.c cmd_apply's adoption test). A path
-         * whose item holds a record is owed none, as the statement's DO NOTHING
-         * leaves one standing: observation is idempotent on both sides. What
-         * reads a record after a read command's flush asks it about ownership
-         * alone — status's header, diff's reassignment, a preview's adoption
-         * test — and a record never owned answers as none does; a run of apply
-         * cannot meet an ignored INSERT at all, its load and its flush sharing
-         * one transaction. */
-        if (!item->record) {
-            state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-            err = record ? state_observe(ws->state, item->row, record)
-                         : ERROR(ERR_MEMORY, "Failed to allocate observation record");
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to flush observation for '%s'", item->filesystem_path
-                );
-                goto rollback;
-            }
-            item->record = record;
-        }
-
-        /* The confirmation, onto the record the look was made against — the load's,
-         * or the observation's a statement ago — and only where the database
-         * still holds it (workspace_confirm): a record another writer moved since
-         * the load stays theirs, and this one as read. Cleared once written,
-         * landed or not: the load owes the record nothing more of it. */
-        if (item->confirmation != DIVERGENCE_NONE) {
-            err = workspace_confirm(ws, item, item->confirmation);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to flush confirmation for '%s'", item->filesystem_path
-                );
-                goto rollback;
-            }
-            item->confirmation = DIVERGENCE_NONE;
-        }
-
-        /* The void: the order's view end (state.h's lifetime rule), here because
-         * the view is. An order lives only while its path is out of the view,
-         * so every order whose path the view has is void — the removal it answered
-         * was reverted (a revert, a sync pulling the path back, an enable providing
-         * it), verified or not. Left standing, the order would outlive the removal
-         * and prune the copy at the next scope exit instead of the probe releasing
-         * it; voided here, a later discovered departure executes as a release,
-         * which is the stated policy for every discovered departure.
-         *
-         * Selected from the record the load read — the active items' own: an
-         * ownership event writes the order away and an observation is made with
-         * none, so a record a writer made or advanced since carries no order to
-         * void — and voided on the order it read (state_void_prune): an order
-         * placed since the load answers a removal this load's view predates,
-         * and voiding it would undo the removal's intent — the compare-and-swap
-         * leaves it standing. The record is the item's, const to every reader,
-         * and cast here, where it is written (workspace_item_t). */
-        if (item->record->ordered_at > 0) {
-            err = state_void_prune(ws->state, (state_record_t *) item->record);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to void prune order for '%s'", item->filesystem_path
-                );
+        if (!learnings) {
+            learnings = arena_calloc(ws->arena, active_count, sizeof(*learnings));
+            if (!learnings) {
+                err = ERROR(ERR_MEMORY, "Failed to hold what the load owes");
                 goto rollback;
             }
         }
+        state_record_t *learning = arena_alloc(ws->arena, sizeof(*learning));
+        if (!learning) {
+            err = ERROR(ERR_MEMORY, "Failed to hold what the load owes");
+            goto rollback;
+        }
+        *learning = workspace_learning(base, item, item->confirmation);
+        learnings[i] = learning;
     }
 
-    /* The transaction the flush took, committed: every write it owed landed in
-     * it or found its record moved. One the caller holds is the caller's to
-     * commit. */
+    /* A load that owes nothing, the common one, takes no lock and writes nothing */
+    if (!learnings) return NULL;
+
+    /* 2. The writes, each the record whole (state_write): into the caller's
+     *    transaction, or one taken only where the store still stands as the
+     *    handle's admission left it (state_resume). The view and the record read
+     *    the load decided from are then the store the writes land on, so each
+     *    is blind, and a commit since — an order placed after the view was built,
+     *    which the view never answered, a record moved after it was read — refuses
+     *    the flush rather than meet a write decided without it. Taken here, once
+     *    something is owed, so a load that owes nothing never waits on another
+     *    writer's lock; a load over a store never written owes nothing — its
+     *    view is built from no rows — so this lock never brings one into being. */
+    if (scoped) {
+        err = state_resume(ws->state);
+        if (err) goto rollback;
+    }
+    for (size_t i = 0; i < active_count; i++) {
+        if (!learnings[i]) continue;
+        err = state_write(ws->state, learnings[i]);
+        if (err) goto rollback;
+    }
     if (scoped) {
         err = state_commit(ws->state);
         if (err) goto rollback;
     }
 
+    /* 3. Published, now that the store holds them — the flush's commit, or the
+     *    caller's transaction, whose failure ends the run: each owed item holds
+     *    the record its write made, and owes nothing more */
+    for (size_t i = 0; i < active_count; i++) {
+        if (!learnings[i]) continue;
+        ws->active[i]->record = learnings[i];
+        ws->active[i]->confirmation = DIVERGENCE_NONE;
+    }
+
     return NULL;
 
 rollback:
-    /* The failure goes with the transaction. One the caller holds is the caller's
-     * to end, and the failure is its run's. One the flush took is the flush's
-     * to end — a failed COMMIT's too, which leaves it open, so the next scoped
-     * writer does not inherit it — and its failure is the flush's to keep: what
-     * the load owed, the next load owes again. */
+    /* The failure goes with the transaction, and nothing is published either
+     * way: the items hold what the load read and owe what they owed. One the
+     * caller holds is the caller's to end, and the failure is its run's. One
+     * the flush took is the flush's to end — a failed COMMIT's too, which leaves
+     * it open, so the next scoped writer does not inherit it; nothing, where it
+     * failed before the lock — and its failure is the flush's to keep: what the
+     * load owed, the next load owes again. */
     if (!scoped) {
         return err;
     }

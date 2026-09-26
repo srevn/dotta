@@ -690,12 +690,12 @@ const char *state_target(
  *     print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
- *   - cmds/add.c write_record (the takeover note), cmds/remove.c
- *     remove_files_from_profile (the settle's candidates), and core/manifest.c
- *     manifest_diff (a departed row's orphan split, handed the array by
- *     cmds/profile.c profile_enable, profile_disable and cmds/sync.c cmd_sync):
- *     by path, through state_find_record, which rests on strcmp order
- *   - cmds/remove.c delete_profile_branch (every record naming the profile) and
+ *   - cmds/add.c write_record (the takeover note), cmds/remove.c remove_paths
+ *     (the settle's candidates), and core/manifest.c manifest_diff (a departed
+ *     row's orphan split, handed the array by cmds/profile.c profile_enable,
+ *     profile_disable and cmds/sync.c cmd_sync): by path, through
+ *     state_find_record, which rests on strcmp order
+ *   - cmds/remove.c remove_profile (every record naming the profile) and
  *     cmds/sync.c cmd_sync's apply hint (every record against the view the Git
  *     phase produced, with no workspace and no disk): walks, key order unread
  *
@@ -722,9 +722,9 @@ error_t *state_records(
  * one in another order misses what it holds. The empty snapshot — NULL, count 0
  * — holds nothing.
  *
- * Readers: cmds/add.c write_record (the takeover note), cmds/remove.c
- * remove_files_from_profile (the settle's candidates), core/manifest.c
- * manifest_diff (a departed row's orphan split).
+ * Readers: cmds/add.c write_record (the takeover note), cmds/remove.c remove_paths
+ * (the settle's candidates), core/manifest.c manifest_diff (a departed row's
+ * orphan split).
  *
  * @param records The snapshot (NULL when count is 0)
  * @param count Records in it
@@ -956,7 +956,7 @@ error_t *state_retire(state_t *state, const char *filesystem_path);
  * Stamps the record's order (ordered_at = now): remove --delete-files chose the
  * fate of a copy nothing backs any more — one the removal named, or one dotta
  * deployed; never a copy dotta merely found under an unnamed path (the gate the
- * one settle loop enforces, cmds/remove settle_let_go) — and apply is to prune
+ * one settle loop enforces, cmds/remove remove_settle) — and apply is to prune
  * it — a clean copy; cleanup's skip reasons still protect a modified one. A missing
  * record is a no-op success: the UPDATE matches no row, since nothing was ever
  * observed at the path. At birth an ordered path is out of the view by construction

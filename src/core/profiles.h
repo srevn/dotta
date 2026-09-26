@@ -223,19 +223,18 @@ error_t *profile_require(git_repository *repo, const char *name);
  * Readers: the screens that name what a branch holds — `dotta list`'s profile
  * rows and its no-files arm (cmds/list.c list_profiles, cmds/list.c list_files),
  * `profile list`'s enabled and available rows (cmds/profile.c profile_list),
- * and the deletion's preview and confirmation (cmds/remove.c
- * delete_profile_branch). A reader not on this list is a bug, and a screen that
- * counts what a branch holds beside this one is the second producer this count
- * exists to be: list_files kept its own directory fold until it took this one.
- * The verbose file listing's `Total:` is the one that remains, and it is not a
- * second answer but the same one by the other route — the rows it prints, summed
- * as it prints them, which is what a total under a table has to be. What makes
- * the two routes meet is that both take the framing off the same claim; nothing
- * structural does, and the raw sum here disagreed with those rows by it on every
- * profile holding a sealed file until 228 C2c. `status -v` is no such screen —
- * it counts the view's rows a profile wins (cmds/status.c status_print_profiles),
- * the other half of the holds/wins split above, and the two are free to disagree
- * (docs/profiles.md).
+ * and the deletion's preview and confirmation (cmds/remove.c remove_profile). A
+ * reader not on this list is a bug, and a screen that counts what a branch holds
+ * beside this one is the second producer this count exists to be: list_files
+ * kept its own directory fold until it took this one. The verbose file listing's
+ * `Total:` is the one that remains, and it is not a second answer but the same
+ * one by the other route — the rows it prints, summed as it prints them, which
+ * is what a total under a table has to be. What makes the two routes meet is
+ * that both take the framing off the same claim; nothing structural does, and
+ * the raw sum here disagreed with those rows by it on every profile holding a
+ * sealed file until 228 C2c. `status -v` is no such screen — it counts the view's
+ * rows a profile wins (cmds/status.c status_print_profiles), the other half of
+ * the holds/wins split above, and the two are free to disagree (docs/profiles.md).
  */
 typedef struct {
     size_t file_count;       /* Blobs standing under a storage label */

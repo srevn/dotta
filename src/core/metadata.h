@@ -676,9 +676,9 @@ error_t *metadata_load_from_branch(
  * orphan authority's third answer (core/workspace.c compute_orphan_authority,
  * which folds to UNVERIFIED and never to "no claims") and the completion's offer
  * (cmds/completion.c completion_directories). One reader folds without deciding
- * to: the deletion's hook universe (cmds/remove.c delete_profile_branch) drops
- * every directory claim from DOTTA_FILE_n on a sheet it cannot read, where its
- * own sibling a screen up propagates. A further reader would have to argue for one.
+ * to: the deletion's hook universe (cmds/remove.c remove_profile) drops every
+ * directory claim from DOTTA_FILE_n on a sheet it cannot read, where its own
+ * sibling a screen up propagates. A further reader would have to argue for one.
  *
  * @param repo Repository (must not be NULL)
  * @param tree Git tree to load from (must not be NULL)

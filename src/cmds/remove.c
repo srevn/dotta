@@ -37,7 +37,7 @@
 /**
  * Validate command options
  */
-static error_t *validate_options(const cmd_remove_options_t *opts) {
+static error_t *remove_validate(const cmd_remove_options_t *opts) {
     CHECK_NULL(opts);
 
     if (!opts->profile || opts->profile[0] == '\0') {
@@ -89,7 +89,7 @@ typedef struct {
     const char *filesystem_path;   /* arena; NULL when this machine places the
                                     * claim nowhere — an unbound custom/ one */
     path_kind_t kind;
-} removal_claim_t;
+} claim_t;
 
 /**
  * One path a removal let go, and whose word decides its fate
@@ -105,7 +105,7 @@ typedef struct {
  * The routes part on one question — whether the user was asked. Only a named
  * path hears --delete-files with its own voice; a reaped entry lost its reason
  * rather than being asked for, and a profile deletion names the profile, not
- * its paths, so both leave the flag to the record's ownership (settle_let_go).
+ * its paths, so both leave the flag to the record's ownership (remove_settle).
  *
  * The path is the filesystem one, as this profile deploys it; arena-backed, command
  * lifetime. The record borrows from the read the caller indexed.
@@ -114,7 +114,7 @@ typedef struct {
     const char *path;             /* Filesystem path, as this profile deploys it */
     const state_record_t *record; /* The record at that path; names the removed profile */
     bool named;                   /* An argument's reach took it, so the flag speaks to it */
-} removal_candidate_t;
+} candidate_t;
 
 /**
  * What the settle loop did, counted by fate
@@ -128,7 +128,7 @@ typedef struct {
     size_t ordered;    /* Prune ordered — staged for the next apply */
     size_t released;   /* Record retired, the copy left standing */
     size_t fallback;   /* Record kept — a lower profile still provides the path */
-} removal_settlement_t;
+} settlement_t;
 
 /**
  * Settle the candidates a removal let go — the one spelling of the fate rule
@@ -142,15 +142,15 @@ typedef struct {
  * The flag is the user's word about the paths the removal NAMED, and only those
  * — named by the resolver's reach, not the typed line: an argument takes the
  * exact claim and every claim beneath a named directory (naming a directory means
- * untracking it whole, resolve_removal_claims), and the flag speaks for all of
- * them. The flag alone cannot make dotta delete a path it never made: cleanup
- * reads the order ahead of the ownership gate, by design, since a named path
- * the user wants gone must go whether dotta deployed it or only ever found it.
- * For a path the user did not name there is nothing to read ahead of, so the
- * gate answers, and it is read here because the record that carries it is about
- * to retire: dotta takes back what it created on the way in and leaves what it
- * merely found. The flag stays a ceiling over both — a plain remove promises
- * release and deletes nothing, whoever made the path.
+ * untracking it whole, remove_resolve), and the flag speaks for all of them.
+ * The flag alone cannot make dotta delete a path it never made: cleanup reads
+ * the order ahead of the ownership gate, by design, since a named path the user
+ * wants gone must go whether dotta deployed it or only ever found it. For a path
+ * the user did not name there is nothing to read ahead of, so the gate answers,
+ * and it is read here because the record that carries it is about to retire:
+ * dotta takes back what it created on the way in and leaves what it merely found.
+ * The flag stays a ceiling over both — a plain remove promises release and deletes
+ * nothing, whoever made the path.
  *
  * One loop for both routes because the rule drifted while each spelled its own:
  * a let-go record's fate must not turn on which removal retired it. The gate
@@ -161,19 +161,19 @@ typedef struct {
  * Fates are counted as they enter the transaction; on error the caller rolls
  * back and zeroes its settlement — the rollback takes the writes with it.
  */
-static error_t *settle_let_go(
+static error_t *remove_settle(
     state_t *state,
     const manifest_t *after,
-    const removal_candidate_t *candidates,
+    const candidate_t *candidates,
     size_t count,
     bool delete_files,
-    removal_settlement_t *settlement
+    settlement_t *settlement
 ) {
     /* The settle's one moment: every order it places carries it (state_order_prune) */
     time_t now = time(NULL);
 
     for (size_t i = 0; i < count; i++) {
-        const removal_candidate_t *candidate = &candidates[i];
+        const candidate_t *candidate = &candidates[i];
 
         if (manifest_lookup(after, candidate->path)) {
             settlement->fallback++;
@@ -229,14 +229,14 @@ static error_t *settle_let_go(
  * @param claims_out The claims the arguments took, borrowed from ctx->arena (do
  *            not free)
  */
-static error_t *resolve_removal_claims(
+static error_t *remove_resolve(
     const dotta_ctx_t *ctx,
     const git_tree *tree,
     const char *profile,
     char **input_paths,
     size_t path_count,
     const cmd_remove_options_t *opts,
-    removal_claim_t **claims_out,
+    claim_t **claims_out,
     size_t *count_out,
     metadata_t **metadata_out
 ) {
@@ -280,13 +280,13 @@ static error_t *resolve_removal_claims(
         if (items[i]->kind == PATH_KIND_DIRECTORY) dir_count++;
     }
 
-    removal_claim_t *claims = NULL;
+    claim_t *claims = NULL;
     bool *taken = NULL;            /* beside claims[j]: an argument took it */
     size_t claim_count = 0;
     if (profile_files->count + dir_count > 0) {
         claims = arena_alloc(
             ctx->arena,
-            (profile_files->count + dir_count) * sizeof(removal_claim_t)
+            (profile_files->count + dir_count) * sizeof(claim_t)
         );
         taken = arena_calloc(
             ctx->arena, profile_files->count + dir_count, sizeof(bool)
@@ -303,7 +303,7 @@ static error_t *resolve_removal_claims(
             err = ERROR(ERR_MEMORY, "Failed to copy claim path");
             goto cleanup;
         }
-        claims[claim_count++] = (removal_claim_t) {
+        claims[claim_count++] = (claim_t) {
             .storage_path = copy, .kind = PATH_KIND_FILE
         };
     }
@@ -327,7 +327,7 @@ static error_t *resolve_removal_claims(
             err = ERROR(ERR_MEMORY, "Failed to copy claim path");
             goto cleanup;
         }
-        claims[claim_count++] = (removal_claim_t) {
+        claims[claim_count++] = (claim_t) {
             .storage_path = copy, .kind = PATH_KIND_DIRECTORY
         };
     }
@@ -459,7 +459,7 @@ typedef struct {
     const char *filesystem_path;
     const char *storage_path;
     const profile_claims_t *others;
-} removal_overlap_t;
+} overlap_t;
 
 /**
  * The multi-profile section, as data
@@ -469,10 +469,10 @@ typedef struct {
  * different enabled profile, which is what makes a removal change nothing on disk.
  */
 typedef struct {
-    const removal_overlap_t *entries;
+    const overlap_t *entries;
     size_t count;
     bool provided_by_other;
-} removal_overlaps_t;
+} overlaps_t;
 
 /**
  * What this removal shares with the other profiles
@@ -499,19 +499,19 @@ typedef struct {
  * index is not tolerant — a short index is an "also in" a user reads as complete
  * — and its failure is the caller's to weigh.
  */
-static error_t *analyze_overlaps(
+static error_t *remove_overlaps(
     const dotta_ctx_t *ctx,
-    const removal_claim_t *claims,
+    const claim_t *claims,
     size_t claim_count,
     const char *current_profile,
-    removal_overlaps_t *out
+    overlaps_t *out
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(claims);
     CHECK_NULL(current_profile);
     CHECK_NULL(out);
 
-    *out = (removal_overlaps_t){ 0 };
+    *out = (overlaps_t){ 0 };
 
     hashmap_t *index = NULL;
     error_t *err = profile_build_filesystem_index(
@@ -525,7 +525,7 @@ static error_t *analyze_overlaps(
     );
     if (view_err) error_free(view_err);
 
-    removal_overlap_t *overlaps = arena_calloc(
+    overlap_t *overlaps = arena_calloc(
         ctx->arena, claim_count, sizeof(*overlaps)
     );
     if (!overlaps) {
@@ -537,13 +537,13 @@ static error_t *analyze_overlaps(
     size_t count = 0;
     bool provided_by_other = false;
     for (size_t i = 0; i < claim_count; i++) {
-        const removal_claim_t *claim = &claims[i];
+        const claim_t *claim = &claims[i];
         if (!claim->filesystem_path) continue;
 
         void *others = NULL;
         if (!hashmap_remove(index, claim->filesystem_path, &others)) continue;
 
-        overlaps[count++] = (removal_overlap_t){
+        overlaps[count++] = (overlap_t){
             claim->filesystem_path, claim->storage_path, others
         };
 
@@ -556,22 +556,22 @@ static error_t *analyze_overlaps(
     manifest_free(view);
     hashmap_free(index, NULL);
 
-    *out = (removal_overlaps_t){ overlaps, count, provided_by_other };
+    *out = (overlaps_t){ overlaps, count, provided_by_other };
 
     return NULL;
 }
 
 /**
- * Display the overlap section to the user
+ * Print the overlap section
  *
  * One line per shared path: the path, then each other profile and — where its
  * name for the place differs from the removed claim's — the name it holds it
  * under, since under two bindings one path wears two names. The closing line
  * names the fate `delete_files` chose.
  */
-static void display_overlaps(
+static void remove_print_overlaps(
     output_t *out,
-    const removal_overlaps_t *overlaps,
+    const overlaps_t *overlaps,
     const char *current_profile,
     bool delete_files
 ) {
@@ -584,7 +584,7 @@ static void display_overlaps(
     );
 
     for (size_t i = 0; i < overlaps->count; i++) {
-        const removal_overlap_t *overlap = &overlaps->entries[i];
+        const overlap_t *overlap = &overlaps->entries[i];
 
         output_styled(
             out, OUTPUT_NORMAL, "  {yellow}%s{reset} also in:", overlap->filesystem_path
@@ -646,7 +646,7 @@ static void display_overlaps(
  * (the dry-run total, the confirmation prompt, the receipt) and tests pin the
  * wording — one spelling.
  */
-static void format_claim_counts(
+static void remove_format_counts(
     char *buf, size_t size, size_t files, size_t dirs
 ) {
     if (dirs == 0) {
@@ -662,10 +662,10 @@ static void format_claim_counts(
 }
 
 /**
- * Confirm removal operation
+ * Confirm the removal of the claims the arguments took
  */
-static bool confirm_removal(
-    const removal_claim_t *claims,
+static bool remove_confirm_paths(
+    const claim_t *claims,
     size_t claim_count,
     const cmd_remove_options_t *opts,
     const config_t *config,
@@ -702,7 +702,7 @@ static bool confirm_removal(
         else files++;
     }
     char counts[64];
-    format_claim_counts(counts, sizeof(counts), files, dirs);
+    remove_format_counts(counts, sizeof(counts), files, dirs);
 
     /* Prompt user */
     char prompt[512];
@@ -724,12 +724,12 @@ static bool confirm_removal(
 }
 
 /**
- * Confirm profile deletion
+ * Confirm a profile's deletion
  *
  * `counts` is the branch-holdings phrase from the count family
  * (output_format_counts, or its "counts unavailable" stand-in).
  */
-static bool confirm_profile_deletion(
+static bool remove_confirm_profile(
     const char *profile,
     const char *counts,
     const cmd_remove_options_t *opts,
@@ -769,9 +769,9 @@ static bool confirm_profile_deletion(
 }
 
 /**
- * Remove files from profile
+ * Remove paths from a profile
  */
-static error_t *remove_files_from_profile(
+static error_t *remove_paths(
     const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
@@ -787,12 +787,12 @@ static error_t *remove_files_from_profile(
 
     /* Initialize all resources to NULL for safe cleanup */
     error_t *err = NULL;
-    stage_t *stage = NULL;                 /* the branch's tip, tree and index; the commit's */
-    removal_claim_t *claims = NULL;        /* arena — the resolver's */
+    stage_t *stage = NULL;              /* the branch's tip, tree and index; the commit's */
+    claim_t *claims = NULL;             /* arena — the resolver's */
     size_t claim_count = 0;
-    metadata_t *metadata = NULL;           /* the branch's, from the resolver (owned) */
-    removal_overlaps_t overlaps = { 0 };   /* arena — the analysis's */
-    string_array_t pruned_dirs = { 0 };    /* Directory entries the metadata step pruned (storage paths) */
+    metadata_t *metadata = NULL;        /* the branch's, from the resolver (owned) */
+    overlaps_t overlaps = { 0 };        /* arena — the analysis's */
+    string_array_t pruned_dirs = { 0 }; /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
     manifest_t *after = NULL;
 
@@ -817,7 +817,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Resolve the arguments to the claims they remove */
-    err = resolve_removal_claims(
+    err = remove_resolve(
         ctx, stage_tree(stage), opts->profile, opts->paths, opts->path_count, opts,
         &claims, &claim_count, &metadata
     );
@@ -829,7 +829,7 @@ static error_t *remove_files_from_profile(
      * Advisory: the untrack proceeds without the section and says why, since a
      * local branch nobody enabled must not stop the repair — and must not hide
      * a claim in silence either, an absent section reading as "no overlap". */
-    err = analyze_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
+    err = remove_overlaps(ctx, claims, claim_count, opts->profile, &overlaps);
     if (err) {
         output_warning(
             out, OUTPUT_NORMAL, "Could not read the other profiles' claims: %s",
@@ -840,7 +840,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* The overlap section, BEFORE any operation */
-    display_overlaps(out, &overlaps, opts->profile, opts->delete_files);
+    remove_print_overlaps(out, &overlaps, opts->profile, opts->delete_files);
 
     /* Dry run - just show what would be removed */
     if (opts->dry_run) {
@@ -858,7 +858,7 @@ static error_t *remove_files_from_profile(
             else dry_files++;
         }
         char counts[64];
-        format_claim_counts(counts, sizeof(counts), dry_files, dry_dirs);
+        remove_format_counts(counts, sizeof(counts), dry_files, dry_dirs);
         output_gap(out, OUTPUT_NORMAL);
         output_print(
             out, OUTPUT_NORMAL,
@@ -881,7 +881,7 @@ static error_t *remove_files_from_profile(
     }
 
     /* Confirm operation */
-    if (!confirm_removal(claims, claim_count, opts, config, out)) {
+    if (!remove_confirm_paths(claims, claim_count, opts, config, out)) {
         output_print(out, OUTPUT_NORMAL, "Cancelled\n");
         goto cleanup;  /* err is NULL, will return success */
     }
@@ -912,9 +912,9 @@ static error_t *remove_files_from_profile(
     }
 
     /* Build hook invocation with the claims' filesystem paths (resolved by
-     * resolve_removal_claims). Reached only on non-dry-run: the dry-run branch
-     * above early-cleanups before this point, so dry_run is always false here
-     * in practice — still passed for honesty. */
+     * remove_resolve). Reached only on non-dry-run: the dry-run branch above
+     * early-cleanups before this point, so dry_run is always false here in practice
+     * — still passed for honesty. */
     char **hook_paths = arena_alloc(ctx->arena, claim_count * sizeof(char *));
     if (!hook_paths) {
         err = ERROR(ERR_MEMORY, "Failed to allocate hook path array");
@@ -962,7 +962,7 @@ static error_t *remove_files_from_profile(
     }
 
     for (size_t i = 0; i < claim_count; i++) {
-        const removal_claim_t *claim = &claims[i];
+        const claim_t *claim = &claims[i];
 
         if (claim->kind == PATH_KIND_FILE) {
             err = stage_remove(stage, claim->storage_path);
@@ -1044,17 +1044,17 @@ static error_t *remove_files_from_profile(
      * the paths this commit let go — the removed claims, and the directory entries
      * the metadata step pruned as redundant (an ancestor claim above the named
      * path is the common case), which left the view by the same commit — each
-     * joined to its record and settled by the one rule (settle_let_go).
+     * joined to its record and settled by the one rule (remove_settle).
      *
      * Enablement is not consulted: a record dotta holds under a disabled profile
-     * is still dotta's record — the rule delete_profile_branch runs over every
-     * record naming the profile, run here over the candidates.
+     * is still dotta's record — the rule remove_profile runs over every record
+     * naming the profile, run here over the candidates.
      *
      * Non-fatal throughout: Git succeeded and stands. A record this block fails
      * to write is an orphan the next apply reads, asks Git about, finds let go,
      * and releases — the default outcome, minus the prune order under
      * --delete-files. */
-    removal_settlement_t settlement = { 0 };
+    settlement_t settlement = { 0 };
     error_t *record_err = NULL;
 
     /* The record, once, on the READ handle — empty when the database does not
@@ -1074,9 +1074,9 @@ static error_t *remove_files_from_profile(
      *
      * The two buckets are placed differently because they were placed already,
      * or never: a removed claim carries the path the resolver established before
-     * the match (resolve_removal_claims), while a pruned directory entry was no
-     * claim of the arguments and is placed here. */
-    removal_candidate_t *candidates = NULL;
+     * the match (remove_resolve), while a pruned directory entry was no claim
+     * of the arguments and is placed here. */
+    candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     if (!record_err && record_count > 0) {
         candidates = arena_alloc(
@@ -1088,7 +1088,7 @@ static error_t *remove_files_from_profile(
         }
 
         /* The claims the arguments took: the user's word reaches all of them
-         * (settle_let_go). Each joined to its record by a lookup in the read
+         * (remove_settle). Each joined to its record by a lookup in the read
          * (state_find_record). */
         for (size_t i = 0; !record_err && i < claim_count; i++) {
             const char *filesystem_path = claims[i].filesystem_path;
@@ -1096,7 +1096,7 @@ static error_t *remove_files_from_profile(
             const state_record_t *record = state_find_record(records, record_count, filesystem_path)
             ;
             if (!record || strcmp(record->profile, opts->profile) != 0) continue;
-            candidates[candidate_count++] = (removal_candidate_t){
+            candidates[candidate_count++] = (candidate_t){
                 .path = filesystem_path, .record = record, .named = true
             };
         }
@@ -1118,7 +1118,7 @@ static error_t *remove_files_from_profile(
             const state_record_t *record = state_find_record(records, record_count, filesystem_path)
             ;
             if (!record || strcmp(record->profile, opts->profile) != 0) continue;
-            candidates[candidate_count++] = (removal_candidate_t){
+            candidates[candidate_count++] = (candidate_t){
                 .path = filesystem_path, .record = record, .named = false
             };
         }
@@ -1143,7 +1143,7 @@ static error_t *remove_files_from_profile(
             record_err = manifest_build(repo, state, ctx->arena, &after);
 
             if (!record_err) {
-                record_err = settle_let_go(
+                record_err = remove_settle(
                     state, after, candidates, candidate_count,
                     opts->delete_files, &settlement
                 );
@@ -1156,7 +1156,7 @@ static error_t *remove_files_from_profile(
                 );
                 error_free(record_err);
                 state_rollback(state);
-                settlement = (removal_settlement_t){ 0 };   /* the rollback took the writes with it */
+                settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
             } else {
                 /* Commit transaction */
                 error_t *commit_err = state_commit(state);
@@ -1167,7 +1167,7 @@ static error_t *remove_files_from_profile(
                     );
                     error_free(commit_err);
                     state_rollback(state);
-                    settlement = (removal_settlement_t){ 0 };   /* the rollback took the writes with it */
+                    settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
                 } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
                     if (opts->delete_files) {
                         output_info(
@@ -1195,7 +1195,7 @@ static error_t *remove_files_from_profile(
     /* Success */
     if (!opts->quiet) {
         char counts[64];
-        format_claim_counts(counts, sizeof(counts), removed_files, removed_dirs);
+        remove_format_counts(counts, sizeof(counts), removed_files, removed_dirs);
         output_success(
             out, OUTPUT_NORMAL, "Removed %s from profile '%s'",
             counts, opts->profile
@@ -1234,9 +1234,9 @@ cleanup:
 }
 
 /**
- * Delete entire profile branch
+ * Delete a profile
  */
-static error_t *delete_profile_branch(
+static error_t *remove_profile(
     const dotta_ctx_t *ctx,
     const cmd_remove_options_t *opts
 ) {
@@ -1404,7 +1404,7 @@ static error_t *delete_profile_branch(
     state_record_t *records = NULL;
     size_t record_count = 0;
     size_t deployed_count = 0;
-    removal_settlement_t settlement = { 0 };
+    settlement_t settlement = { 0 };
     {
         error_t *read_err = state_records(
             state, ctx->arena, &records, &record_count
@@ -1422,9 +1422,9 @@ static error_t *delete_profile_branch(
      * not, and whether P's tree still claimed the path or had let it go — the
      * user is deleting P and P's files. named = false on each: a profile deletion
      * names the profile, not its paths, so --delete-files speaks only through
-     * the ownership gate (settle_let_go), and an observed record — a path dotta
+     * the ownership gate (remove_settle), and an observed record — a path dotta
      * found rather than made — releases rather than prunes. */
-    removal_candidate_t *candidates = NULL;
+    candidate_t *candidates = NULL;
     size_t candidate_count = 0;
     if (record_count > 0) {
         candidates = arena_alloc(ctx->arena, record_count * sizeof(*candidates));
@@ -1438,7 +1438,7 @@ static error_t *delete_profile_branch(
     for (size_t i = 0; candidates && i < record_count; i++) {
         if (strcmp(records[i].profile, opts->profile) != 0) continue;
         if (records[i].deployed_at > 0) deployed_count++;
-        candidates[candidate_count++] = (removal_candidate_t){
+        candidates[candidate_count++] = (candidate_t){
             .path = records[i].filesystem_path,
             .record = &records[i],
             .named = false,
@@ -1492,7 +1492,7 @@ static error_t *delete_profile_branch(
     }
 
     /* Confirm deletion */
-    if (!confirm_profile_deletion(
+    if (!remove_confirm_profile(
         opts->profile, counts, opts, config, out
         )) {
         output_gap(out, OUTPUT_NORMAL);
@@ -1580,7 +1580,7 @@ static error_t *delete_profile_branch(
     if (err) goto cleanup;
 
     /* No filesystem deletion here either — see the Architectural note in
-     * remove_files_from_profile: apply owns deferred filesystem cleanup. */
+     * remove_paths: apply owns deferred filesystem cleanup. */
 
     /* Delete local branch */
     err = gitops_delete_branch(repo, opts->profile);
@@ -1602,7 +1602,7 @@ static error_t *delete_profile_branch(
      * is computed, and the prune order is the one fact the workspace reads for
      * these records — written once, here, after the branch is gone. The profile
      * leaves the enabled set (if it was in it), and every candidate is settled
-     * against the view that remains by the one rule (settle_let_go); a fallback's
+     * against the view that remains by the one rule (remove_settle); a fallback's
      * record reads [reassigned] P → Q until apply deploys Q's, and a released
      * copy stays decryptable with the branch gone — subkey derivation needs only
      * the profile name.
@@ -1625,7 +1625,7 @@ static error_t *delete_profile_branch(
             }
 
             if (!delete_err) {
-                delete_err = settle_let_go(
+                delete_err = remove_settle(
                     state, after, candidates, candidate_count,
                     opts->delete_files, &settlement
                 );
@@ -1641,7 +1641,7 @@ static error_t *delete_profile_branch(
                 );
                 error_free(delete_err);
                 state_rollback(state);
-                settlement = (removal_settlement_t){ 0 };   /* the rollback took the writes with it */
+                settlement = (settlement_t){ 0 };   /* the rollback took the writes with it */
             } else if (settlement.ordered + settlement.released + settlement.fallback > 0) {
                 if (opts->delete_files) {
                     output_info(
@@ -1726,7 +1726,7 @@ static error_t *delete_profile_branch(
     }
 
     /* The prune itself happens on `apply` — see the Architectural note in
-     * remove_files_from_profile. */
+     * remove_paths. */
 
     /* Execute post-remove hook */
     hook_fire_post(config, out, repo_path, &hook_inv);
@@ -1775,17 +1775,17 @@ error_t *cmd_remove(const dotta_ctx_t *ctx, const cmd_remove_options_t *opts) {
     CHECK_NULL(opts);
 
     /* Validate options */
-    error_t *err = validate_options(opts);
+    error_t *err = remove_validate(opts);
     if (err) {
         return err;
     }
 
-    /* Branch: Delete profile or remove files */
+    /* Branch: delete a profile, or remove paths from one */
     if (opts->delete_profile) {
-        return delete_profile_branch(ctx, opts);
+        return remove_profile(ctx, opts);
     }
 
-    return remove_files_from_profile(ctx, opts);
+    return remove_paths(ctx, opts);
 }
 
 /* ══════════════════════════════════════════════════════════════════

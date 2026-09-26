@@ -114,6 +114,9 @@ struct state {
     bool in_transaction;                    /* The handle's BEGIN, until its COMMIT or ROLLBACK (state_locked) */
     profiles_t begun;                       /* The rows it began with, its rollback's; none outside one */
 
+    /* The last commit: where it left the store, which a resume asks against */
+    int64_t data_version;                   /* SQLite's, read under the lock before the COMMIT (state_commit) */
+
     /* The enabled_profiles rows (see the invariant above) */
     profiles_t profiles;                    /* The table as this handle last read it */
 
@@ -1353,8 +1356,7 @@ error_t *state_begin(state_t *state) {
     int rc = sqlite3_exec(state->db, "BEGIN IMMEDIATE;", NULL, NULL, NULL);
     if (rc == SQLITE_BUSY) {
         return ERROR(
-            ERR_CONFLICT, "Failed to acquire write lock: %s\n"
-            "Another process may be writing to the database",
+            ERR_CONFLICT, "Failed to acquire write lock: %s; another process holds it",
             sqlite3_errmsg(state->db)
         );
     }
@@ -1383,6 +1385,32 @@ error_t *state_begin(state_t *state) {
 }
 
 /**
+ * The store's data_version, as this connection reads it
+ *
+ * SQLite's count of the commits other connections made, as this connection has
+ * seen them: its own commits leave it where it was, so two reads differ iff another
+ * connection committed between them. Read under the write lock, it names the
+ * store the transaction stands on, since no other connection can commit while
+ * the lock is held. Readers: state_commit, before its COMMIT, and state_resume,
+ * once the lock is taken back.
+ */
+static error_t *state_data_version(state_t *state, int64_t *out) {
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, "PRAGMA data_version;", -1, &stmt, NULL);
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+
+    error_t *err = NULL;
+    if (rc == SQLITE_ROW) {
+        *out = sqlite3_column_int64(stmt, 0);
+    } else {
+        err = sqlite_error(state->db, "Failed to read the database's version");
+    }
+
+    sqlite3_finalize(stmt);
+    return err;
+}
+
+/**
  * Commit a transaction started by state_begin()
  */
 error_t *state_commit(state_t *state) {
@@ -1392,6 +1420,13 @@ error_t *state_commit(state_t *state) {
     if (!state->in_transaction) {
         return ERROR(ERR_STATE_INVALID, "No active transaction to commit");
     }
+
+    /* Where this commit leaves the store, read while the lock still holds it
+     * there: the handle's own COMMIT leaves the version as it is, and a read
+     * after it would take in whatever another connection lands once the lock is
+     * let go — the one commit the resume is there to see. */
+    int64_t data_version = 0;
+    RETURN_IF_ERROR(state_data_version(state, &data_version));
 
     char *errmsg = NULL;
     int rc = sqlite3_exec(state->db, "COMMIT;", NULL, NULL, &errmsg);
@@ -1404,7 +1439,10 @@ error_t *state_commit(state_t *state) {
         return err;
     }
 
+    /* Kept once the COMMIT landed: a refused one left the store where the handle's
+     * last commit did. */
     state->in_transaction = false;
+    state->data_version = data_version;
 
     /* The transaction's rows are the table's now: the ones it began with are
      * released, where a write replaced them. */
@@ -1414,6 +1452,31 @@ error_t *state_commit(state_t *state) {
     state->begun = (profiles_t){ 0 };
 
     return NULL;
+}
+
+/**
+ * Take the write lock back where this handle's last commit left the store
+ */
+error_t *state_resume(state_t *state) {
+    CHECK_NULL(state);
+
+    RETURN_IF_ERROR(state_begin(state));
+
+    /* The question the lock was taken back to ask, under it: another connection's
+     * commit since this handle's last one moved the version off the one that
+     * commit kept. */
+    int64_t data_version = 0;
+    error_t *err = state_data_version(state, &data_version);
+    if (!err && data_version != state->data_version) {
+        err = ERROR(
+            ERR_CONFLICT, "Another process wrote to the database since this one last did"
+        );
+    }
+
+    /* Refused — the store moved, or the question had no answer — the lock goes
+     * back with the transaction it began */
+    if (err) state_rollback(state);
+    return err;
 }
 
 /**

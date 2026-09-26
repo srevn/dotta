@@ -386,14 +386,14 @@ error_t *state_open(git_repository *repo, state_t **out);
  * Save state
  *
  * Commits the open transaction — the one state_open() started, or the one
- * state_begin() started after an earlier save. All modifications made since the
- * transaction began are atomically committed; a handle with no open transaction
- * by its own account (state_locked) saves nothing and succeeds.
+ * state_begin() or state_resume() started after an earlier save. All modifications
+ * made since the transaction began are atomically committed; a handle with no
+ * open transaction by its own account (state_locked) saves nothing and succeeds.
  *
  * A command whose writes have two lifetimes saves at the boundary between them
- * and begins again (state_begin): apply commits the present — the observations
- * and confirmations its load owes, the adoptions and acknowledgements of the
- * rows it found clean — before the first exit it can take without executing,
+ * and takes the lock back (state_resume): apply commits the present — the
+ * observations and confirmations its load owes, the adoptions and acknowledgements
+ * of the rows it found clean — before the first exit it can take without executing,
  * then holds a second transaction for the record of what it executed. Each save
  * is one lifetime's commit.
  *
@@ -406,10 +406,8 @@ error_t *state_save(state_t *state);
  * Begin an explicit transaction on a state handle
  *
  * Acquires a write lock (BEGIN IMMEDIATE). Used by batch operations that need
- * atomicity on a state opened via state_load() (no inherent transaction), and
- * by a state_open() handle that has saved once and has more to write (see
- * state_save). Must be paired with state_commit(), state_save() or
- * state_rollback().
+ * atomicity on a state opened via state_load() (no inherent transaction). Must
+ * be paired with state_commit(), state_save() or state_rollback().
  *
  * On a handle whose load found nothing at the path, this first brings the store's
  * database into being — the first write intent, never a read. It is built where
@@ -429,6 +427,12 @@ error_t *state_save(state_t *state);
  * fails is the call's failure: the lock is released, and the handle keeps the
  * rows it held.
  *
+ * What the transaction writes is decided from what it reads inside the lock,
+ * for the same reason: a read made before it is of a store another process may
+ * have moved since, and a write the lock covers is blind to that move. A caller
+ * that must act on what it decided under an earlier lock of its own takes the
+ * lock back with state_resume instead, which refuses where the store moved.
+ *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
  */
@@ -437,10 +441,44 @@ error_t *state_begin(state_t *state);
 /**
  * Commit a transaction started by state_begin()
  *
+ * Keeps where the commit leaves the store — SQLite's data_version, read under
+ * the lock before the COMMIT and kept only once the COMMIT lands — for the resume
+ * that asks the store against it (state_resume). Before, because the version
+ * counts other connections' commits as this one has seen them: this commit does
+ * not move it, and a read after the COMMIT would take in a writer landing between
+ * the two, the one the resume is there to see. A version that cannot be read
+ * fails the commit and leaves the transaction the caller's, as a row cache that
+ * cannot be read fails the begin: a boundary establishes what it keeps, or is
+ * not crossed.
+ *
  * @param state State (must not be NULL, must be in transaction)
  * @return Error or NULL on success
  */
 error_t *state_commit(state_t *state);
+
+/**
+ * Take the write lock back where this handle's last commit left the store
+ *
+ * state_begin, and one question asked under the lock: has another connection
+ * committed since this handle's last commit (state_commit)? Where one has, the
+ * transaction is rolled back and the answer is ERR_CONFLICT; where the version
+ * cannot be read, rolled back, with the read's error. The question is the store's
+ * alone — Git's refs and the disk are no part of it — and it is the whole of
+ * it: any commit moves the version, a learning's as much as a move, so a caller
+ * that resumes is one that would rather refuse than act on what another writer
+ * did. The version is connection-local by SQLite's contract, so the question is
+ * this handle's, asked of a handle that has committed.
+ *
+ * Reader: cmds/apply.c cmd_apply, after the present's checkpoint (state_save):
+ * its plan is the load's, which a run cannot read again without a present of
+ * its own to commit and say, and the lock was let go to say this one. A caller
+ * that decides under the lock it takes — update's record phase, interactive's
+ * save — reads the store as it stands, and owes the question nothing (state_begin).
+ *
+ * @param state State (must not be NULL, must not be in transaction)
+ * @return Error or NULL on success
+ */
+error_t *state_resume(state_t *state);
 
 /**
  * Roll back a transaction started by state_begin()
@@ -635,7 +673,7 @@ typedef struct {
  *
  * Lifetime — the rows and the strings they reference (name, target) stand until
  * the next boundary replaces the cache:
- *   - state_begin
+ *   - state_begin, and state_resume through it
  *   - state_enable_profile
  *   - state_disable_profile
  *   - state_reorder_profiles

@@ -1554,11 +1554,11 @@ static void apply_print_cleanup_refused(
 /**
  * Write the record of what the run did, whole or not at all
  *
- * The run's second transaction (begun past cmd_apply's early exit) holds these
- * writes alone, and this phase ends it — committed by state_save, or rolled back
- * here — so the post-apply hook meets the database the run leaves, and not a
- * lock nothing will use again. The orphans' records retire, then each path the
- * run wrote is recorded, and every write lands or none does.
+ * The run's second transaction (taken back past cmd_apply's early exit) holds
+ * these writes alone, and this phase ends it — committed by state_save, or rolled
+ * back here — so the post-apply hook meets the database the run leaves, and not
+ * a lock nothing will use again. The orphans' records retire, then each path
+ * the run wrote is recorded, and every write lands or none does.
  *
  * A refused statement ends the phase at the first one. The phase's writes are
  * one transaction and a database that refuses one write may have ended it — SQLite
@@ -2429,8 +2429,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * The record of the run's own effects — the ownership events the deployment
      * writes, the records cleanup retires — is the run's second transaction,
-     * begun past the early exit and ended by the record phase
-     * (apply_write_record). */
+     * taken back past the early exit where the store still stands as this commit
+     * leaves it, and ended by the record phase (apply_write_record). */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -2555,18 +2555,28 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
     /* The run's transaction: the record of what the two engines do, which the
-     * record phase ends (apply_write_record). Begun here rather than at the first
-     * write so the lock the dispatcher took is this process's again across the
-     * preview, the prompt and the execution — two applies must not interleave,
-     * and a status must not record paths this run is rewriting.
+     * record phase ends (apply_write_record). Taken back here rather than at
+     * the first write so the lock the dispatcher took is this process's again
+     * across the preview, the prompt and the execution — two applies must not
+     * interleave, and a status must not record paths this run is rewriting.
      *
-     * A preview begins none. It executes nothing, its prompt is gated above,
+     * Taken back only where the store stands as the checkpoint left it. The plan
+     * is the load's, and the lock was let go to say the present, so a writer
+     * there — a profile disabled, an order placed, another apply's present —
+     * would have the run deploy and prune for a store that is gone; the resume
+     * refuses it before anything executes (state_resume). Any commit refuses
+     * it, a learning's as much as a move, since the store cannot tell the two
+     * apart; a status there owes only what this load could not record — a stat
+     * taken in a second still open — or what the disk has done since, so the
+     * refusal is rare, and costs a run that executes nothing.
+     *
+     * A preview resumes none. It executes nothing, its prompt is gated above,
      * and the transaction it would hold across the exit below is one close_run
      * would roll back unread — while another process's writer waited on it. */
     if (!opts->dry_run) {
-        err = state_begin(state);
+        err = state_resume(state);
         if (err) {
-            err = error_wrap(err, "Failed to begin the run's state transaction");
+            err = error_wrap(err, "Nothing was deployed or pruned");
             goto cleanup;
         }
     }

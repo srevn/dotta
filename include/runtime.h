@@ -116,9 +116,10 @@ typedef enum dotta_repo_mode {
  * revert, remove. WRITE is `state_open`, which is `state_load` promoted by
  * `state_begin` at dispatch: `BEGIN IMMEDIATE` held for the lifetime of dispatch,
  * and the command calls `state_save` when its mutation is complete — or at a
- * boundary inside it, taking the lock again with `state_begin` for what remains
- * (apply's checkpoint, core/state.h); `state_free` in the dispatcher rolls back
- * any uncommitted transaction.
+ * boundary inside it, taking the lock back with `state_resume` for what remains,
+ * which refuses where another process wrote in between (apply's checkpoint,
+ * core/state.h); `state_free` in the dispatcher rolls back any uncommitted
+ * transaction.
  *
  * The dispatcher's rollback comes after everything the command does, so a WRITE
  * command that runs anything more once its mutation is over — a hook, a subprocess,

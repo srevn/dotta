@@ -55,6 +55,8 @@
  *   and label_tail assert of every record's; a profile's name is never empty
  *   (profile_spelling); and an owner or a group is whole — so no reader meets a
  *   name that would abort it, print as no one, or read as another
+ * - A stamp is a moment or 0, never negative, so a reader asking `== 0` and one
+ *   asking `> 0` ask one question
  * - A path-keyed table is stored sorted by its key and read in key order: the
  *   key is TEXT under BINARY — memcmp over UTF-8 — and holds no NUL (key_spelling),
  *   which is where BINARY and strcmp meet, so a read comes back in strcmp order:
@@ -216,13 +218,14 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     orphan's reference on disk. A link claims no mode: its column is NULL,
  *     and every other node's is permission bits, 0000–0777; an owner and a group
  *     are whole, NULL where the claim names none (each schema-enforced).
- *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers.
- *     deployed_at advances to now on every ownership event and a learning keeps
- *     it, 0 = dotta never put this here. ordered_at is when remove --delete-files
- *     ordered the copy pruned (state_order_prune, which re-stamps), 0 = no order
- *     standing: no record written whole carries one (state_write) — an ownership
- *     event writes it away, the flush's learning voids it where the view holds
- *     the path again — and it goes with the row.
+ *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
+ *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
+ *     ownership event and a learning keeps it, 0 = dotta never put this here.
+ *     ordered_at is when remove --delete-files ordered the copy pruned
+ *     (state_order_prune, which re-stamps), 0 = no order standing: no record
+ *     written whole carries one (state_write) — an ownership event writes it
+ *     away, the flush's learning voids it where the view holds the path again —
+ *     and it goes with the row.
  *
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content

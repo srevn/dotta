@@ -38,7 +38,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "28"
+#define STATE_SCHEMA_VERSION "29"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -349,6 +349,12 @@ static error_t *state_initialize(sqlite3 *db) {
          *   - ownership implies confirmation for a file (deployed_at > 0 ⇒ blob_oid
          *     set); a row with a blob and deployed_at = 0 is a confirmation,
          *     not a deployment
+         *   - a stamp is a moment or 0, never negative: the readers of one ask
+         *     it both ways — the orphan's ownership gate deployed_at == 0
+         *     (core/workspace.c workspace_analyze_orphans), the disable's receipt
+         *     deployed_at > 0 (core/manifest.c manifest_diff) — which agree on
+         *     these values alone, where a negative stamp would be pruned as dotta's
+         *     by the one and said to be left alone by the other
          *   - a stored blob is a real OID (20 bytes, never zeroblob)
          *   - the key is one a writer spells and C reads whole (key_spelling:
          *     FOLDED_SPELLING above — absolute and folded, the shape mount_resolve
@@ -384,8 +390,8 @@ static error_t *state_initialize(sqlite3 *db) {
         "    stat_size  INTEGER NOT NULL DEFAULT 0,"
         "    stat_ino   INTEGER NOT NULL DEFAULT 0,"
         "    "
-        "    deployed_at INTEGER NOT NULL DEFAULT 0,"
-        "    ordered_at  INTEGER NOT NULL DEFAULT 0,"
+        "    deployed_at INTEGER NOT NULL DEFAULT 0 CHECK(deployed_at >= 0),"
+        "    ordered_at  INTEGER NOT NULL DEFAULT 0 CHECK(ordered_at >= 0),"
         "    "
         "    CHECK ((kind = 'symlink') = (mode IS NULL)),"
         "    CHECK (kind != 'directory' OR blob_oid IS NULL),"

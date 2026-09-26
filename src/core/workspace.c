@@ -3977,13 +3977,18 @@ error_t *workspace_flush(workspace_t *ws) {
          * status, diff, sync, update and a preview of apply — and that
          * transaction is the flush's, its failure too, from the lock on (below);
          * a run of apply passes its dispatch transaction, and the writes land
-         * in it (state_locked). Taken here, at a write, so a load that owes nothing
+         * in it (state_locked). Taken only where the store still stands as the
+         * handle's admission left it (state_resume): the view and the record
+         * read the load decided from are then the store the writes land on, and
+         * a commit since — an order placed after the view was built, a record
+         * moved after it was read — refuses the flush rather than meet a write
+         * decided without it. Taken here, at a write, so a load that owes nothing
          * never waits on another writer's lock. A load over a store never written
          * owes nothing — its view is built from no rows — so this lock never
          * brings one into being. */
         if (!state_locked(ws->state)) {
             scoped = true;
-            err = state_begin(ws->state);
+            err = state_resume(ws->state);
             if (err) goto rollback;
         }
 

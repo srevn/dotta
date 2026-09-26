@@ -357,6 +357,9 @@ typedef struct state state_t;
  * that table becomes this handle's, so every later reader of it is a plain read
  * (state_profiles). A handle with no database reads zero rows; a table that cannot
  * be read is this call's failure, not a later reader's silent "nothing enabled".
+ * Before the rows, it keeps where the store stands as the handle first reads
+ * it: the store a resume asks against until the handle's first commit
+ * (state_resume).
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -432,8 +435,9 @@ error_t *state_save(state_t *state);
  * What the transaction writes is decided from what it reads inside the lock,
  * for the same reason: a read made before it is of a store another process may
  * have moved since, and a write the lock covers is blind to that move. A caller
- * that must act on what it decided under an earlier lock of its own takes the
- * lock back with state_resume instead, which refuses where the store moved.
+ * that must act on what it decided before the lock — from its load, or under an
+ * earlier lock of its own — takes it with state_resume instead, which refuses
+ * where the store moved.
  *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
@@ -466,24 +470,30 @@ error_t *state_begin(state_t *state);
 error_t *state_commit(state_t *state);
 
 /**
- * Take the write lock back where this handle's last commit left the store
+ * Take the write lock only where the store stands as this handle last knew it
  *
  * state_begin, and one question asked under the lock: has another connection
- * committed since this handle's last commit (state_commit)? Where one has, the
- * transaction is rolled back and the answer is ERR_CONFLICT; where the version
- * cannot be read, rolled back, with the read's error. The question is the store's
- * alone — Git's refs and the disk are no part of it — and it is the whole of
- * it: any commit moves the version, a learning's as much as a move, so a caller
- * that resumes is one that would rather refuse than act on what another writer
- * did. The version is connection-local by SQLite's contract, so the question is
- * this handle's, asked of a handle that has committed.
+ * committed since this handle last stood on the store — its last commit
+ * (state_commit), or its admission where it has made none (state_load)? Where
+ * one has, the transaction is rolled back and the answer is ERR_CONFLICT; where
+ * the version cannot be read, rolled back, with the read's error. The question
+ * is the store's alone — Git's refs and the disk are no part of it — and it is
+ * the whole of it: any commit moves the version, a learning's as much as a move,
+ * so a caller that resumes is one that would rather refuse than act on what another
+ * writer did. The version is connection-local by SQLite's contract, so the question
+ * is this handle's.
  *
- * Reader: cmds/apply.c cmd_apply, after the present's checkpoint (state_save):
- * its plan is the load's, which a run cannot read again without a present of
- * its own to commit and say, and the lock was let go to say this one. A caller
- * that decides under the lock it takes — update's record phase, remove's settle,
- * interactive's save — reads the store as it stands, and owes the question nothing
- * (state_begin).
+ * Readers, each writing what it decided from reads made before the lock:
+ *   - cmds/apply.c cmd_apply, after the present's checkpoint (state_save): its
+ *     plan is the load's, which a run cannot read again without a present of
+ *     its own to commit and say, and the lock was let go to say this one;
+ *   - core/workspace.c workspace_flush, where the caller holds no lock: what a
+ *     load owes the record is decided from its view and its record read, both
+ *     taken before any lock, so it is written only where the store is still the
+ *     one they read.
+ * A caller that decides under the lock it takes — update's record phase, remove's
+ * settle, interactive's save — reads the store as it stands, and owes the question
+ * nothing (state_begin).
  *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success

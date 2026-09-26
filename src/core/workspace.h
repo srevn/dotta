@@ -1467,22 +1467,27 @@ error_t *workspace_confirm(
  * diff, sync, update and a preview of apply — and the flush commits it; a run
  * of apply passes its dispatch transaction, and the writes land in it. A load
  * that owes nothing, the common one, takes no lock and writes nothing. The lock
- * is state_begin's, a boundary of the row cache that reads the enabled rows again
- * (core/state.h), so a reader after the flush — cmds/status.c
- * status_print_profiles, cmds/sync.c cmd_sync's view after the pull — reads the
- * rows that lock read. What a flush writes is owed no more: an observation leaves
- * its record on the item, and a confirmation is cleared from it once written,
- * landed or not; a void that found its order moved since the load stays owed,
- * and finds it moved again.
+ * is taken only where the store still stands as the handle's admission left it
+ * (core/state.h state_resume): the view was built from what the admission read,
+ * and the record read after it, so the writes land on the store the load decided
+ * from, or not at all — a commit since, a learning's as much as a move, refuses
+ * the flush. Without it a view older than the record read would void an order
+ * placed between the two, which the view never answered. The lock is a boundary
+ * of the row cache that reads the enabled rows again (core/state.h state_begin),
+ * so a reader after the flush — cmds/status.c status_print_profiles, cmds/sync.c
+ * cmd_sync's view after the pull — reads the rows that lock read. What a flush
+ * writes is owed no more: an observation leaves its record on the item, and a
+ * confirmation is cleared from it once written, landed or not; a void that found
+ * its order moved since the load stays owed, and finds it moved again.
  *
  * The failure goes with the transaction. A write into the caller's transaction
  * that fails is the caller's: the flush returns it, and the run it poisons ends
  * (cmds/apply.c cmd_apply). A transaction the flush took, the flush ends, and
- * keeps its failure — another process's lock held past the busy timeout, a write
- * or a commit the store refuses — and what the load owed, the next load owes
- * again, reading the record anew. So a read command renders what its load read
- * whatever the flush met, and every caller takes what the flush returns as its
- * own failure.
+ * keeps its failure — another process's commit since the load, or its lock held
+ * past the busy timeout, a write or a commit the store refuses — and what the
+ * load owed, the next load owes again, reading the record anew. So a read command
+ * renders what its load read whatever the flush met, and every caller takes what
+ * the flush returns as its own failure.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

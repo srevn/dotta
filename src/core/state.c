@@ -113,8 +113,8 @@ struct state {
     bool in_transaction;                    /* The handle's BEGIN, until its COMMIT or ROLLBACK (state_locked) */
     profiles_t begun;                       /* The rows it began with, its rollback's; none outside one */
 
-    /* The last commit: where it left the store, which a resume asks against */
-    int64_t data_version;                   /* SQLite's, read under the lock before the COMMIT (state_commit) */
+    /* Where this handle last stood on the store, which a resume asks against */
+    int64_t data_version;                   /* SQLite's, as its admission read it, then each commit (state_commit) */
 
     /* The enabled_profiles rows (see the invariant above) */
     profiles_t profiles;                    /* The table as this handle last read it */
@@ -1018,20 +1018,47 @@ error_t *state_reorder_profiles(
 }
 
 /**
+ * The store's data_version, as this connection reads it
+ *
+ * SQLite's count of the commits other connections made, as this connection has
+ * seen them: its own commits leave it where it was, so two reads differ iff another
+ * connection committed between them. Read under the write lock, it names the
+ * store the transaction stands on, since no other connection can commit while
+ * the lock is held. Readers: state_admit, before the handle's first read of the
+ * rows; state_commit, before its COMMIT; and state_resume, once the lock is taken
+ * back.
+ */
+static error_t *state_data_version(state_t *state, int64_t *out) {
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(state->db, "PRAGMA data_version;", -1, &stmt, NULL);
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
+
+    error_t *err = NULL;
+    if (rc == SQLITE_ROW) {
+        *out = sqlite3_column_int64(stmt, 0);
+    } else {
+        err = sqlite_error(state->db, "Failed to read the database's version");
+    }
+
+    sqlite3_finalize(stmt);
+    return err;
+}
+
+/**
  * Admit the database standing at the handle's path as the store's, or refuse it
  *
  * A load admits through here wherever something stands at the path, and the
  * promotion does once state_create has made sure something does. What stands
  * there is dotta's store at this schema and is opened — its header read, the
- * connection configured, the statements prepared, the rows read (the row cache's
- * first boundary, so every reader of it downstream is a plain read) — or it is
- * refused here, with the file named: one this identity cannot open, a directory,
- * a link to nowhere (SQLite's CANTOPEN, with the OS's reason beside it), a file
- * that is not a database, a database not marked as dotta's, another schema's,
- * or one missing the tables this schema's statements read. An empty database is
- * among them and no special case: dotta never leaves one (state_create publishes
- * whole), and reading one as a store never written would read a truncated store
- * as empty.
+ * connection configured, the statements prepared, where the store stands kept
+ * for a resume (state_resume), the rows read (the row cache's first boundary,
+ * so every reader of it downstream is a plain read) — or it is refused here,
+ * with the file named: one this identity cannot open, a directory, a link to
+ * nowhere (SQLite's CANTOPEN, with the OS's reason beside it), a file that is
+ * not a database, a database not marked as dotta's, another schema's, or one
+ * missing the tables this schema's statements read. An empty database is among
+ * them and no special case: dotta never leaves one (state_create publishes whole),
+ * and reading one as a store never written would read a truncated store as empty.
  *
  * READWRITE and never CREATE: the connection is the one state_begin takes its
  * lock on, and SQLite's CREATE follows a link to nowhere and makes its target.
@@ -1079,6 +1106,13 @@ static error_t *state_admit(state_t *state) {
     if (err) goto fail;
 
     err = state_prepare(state);
+    if (err) goto fail;
+
+    /* Where the store stands as the handle first reads it, the store a resume
+     * asks against until the handle's first commit. Before the rows: a commit
+     * landing between the two reads is then one the resume refuses, where read
+     * after them it would be one the resume admits over rows that predate it. */
+    err = state_data_version(state, &state->data_version);
     if (err) goto fail;
 
     err = state_read_profiles(state);
@@ -1348,32 +1382,6 @@ error_t *state_begin(state_t *state) {
     state->begun = state->profiles;
 
     return NULL;
-}
-
-/**
- * The store's data_version, as this connection reads it
- *
- * SQLite's count of the commits other connections made, as this connection has
- * seen them: its own commits leave it where it was, so two reads differ iff another
- * connection committed between them. Read under the write lock, it names the
- * store the transaction stands on, since no other connection can commit while
- * the lock is held. Readers: state_commit, before its COMMIT, and state_resume,
- * once the lock is taken back.
- */
-static error_t *state_data_version(state_t *state, int64_t *out) {
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, "PRAGMA data_version;", -1, &stmt, NULL);
-    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
-
-    error_t *err = NULL;
-    if (rc == SQLITE_ROW) {
-        *out = sqlite3_column_int64(stmt, 0);
-    } else {
-        err = sqlite_error(state->db, "Failed to read the database's version");
-    }
-
-    sqlite3_finalize(stmt);
-    return err;
 }
 
 /**

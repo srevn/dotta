@@ -645,8 +645,8 @@ error_t *state_names(const state_t *state, string_array_t **out);
  * for commands that need to conditionally write the record based on whether a
  * profile is enabled.
  *
- * Answers from the row cache, which is the table (state_profiles): a plain read,
- * with no load to fail underneath it.
+ * Answers from the row cache, the table as the handle last read it
+ * (state_profiles): a plain read, with no load to fail underneath it.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to check (must not be NULL)
@@ -668,9 +668,11 @@ typedef struct {
  * Pure value return — no allocation, no error path. The slice aliases the row
  * cache, which the handle reads with the database and re-reads at every boundary
  * where the table becomes the handle's again, so between boundaries the slice
- * IS the table. A repository with no database (state_load before any state_begin
- * promoted it) holds a read of zero rows, which is the correct answer for it:
- * an empty slice, not a failure.
+ * is the table as the handle last read it — under the lock, the table itself;
+ * on a handle that holds none, what another process commits since is not in it.
+ * A repository with no database (state_load before any state_begin promoted it)
+ * holds a read of zero rows, which is the correct answer for it: an empty slice,
+ * not a failure.
  *
  * Lifetime — the rows and the strings they reference (name, target) stand until
  * the next boundary replaces the cache:

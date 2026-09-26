@@ -3974,17 +3974,17 @@ error_t *workspace_flush(workspace_t *ws) {
         }
 
         /* The first write takes the store's lock where the caller holds none —
-         * status, diff, sync, update and a preview of apply — and the flush owns
-         * that transaction; a run of apply passes its dispatch transaction, and
-         * the writes land in it (state_locked). Taken here, at a write, so a
-         * load that owes nothing never waits on another writer's lock, nor brings
-         * the store into being where none was (state_begin). */
+         * status, diff, sync, update and a preview of apply — and that
+         * transaction is the flush's, its failure too, from the lock on (below);
+         * a run of apply passes its dispatch transaction, and the writes land
+         * in it (state_locked). Taken here, at a write, so a load that owes nothing
+         * never waits on another writer's lock. A load over a store never written
+         * owes nothing — its view is built from no rows — so this lock never
+         * brings one into being. */
         if (!state_locked(ws->state)) {
-            err = state_begin(ws->state);
-            if (err) {
-                return error_wrap(err, "Failed to begin flush transaction");
-            }
             scoped = true;
+            err = state_begin(ws->state);
+            if (err) goto rollback;
         }
 
         /* The observation: presence of the row's own kind, the path's first record,
@@ -4074,22 +4074,23 @@ error_t *workspace_flush(workspace_t *ws) {
      * commit. */
     if (scoped) {
         err = state_commit(ws->state);
-        if (err) {
-            err = error_wrap(err, "Failed to commit flush transaction");
-            goto rollback;
-        }
+        if (err) goto rollback;
     }
 
     return NULL;
 
 rollback:
-    /* A failure rolls back the transaction the flush took — a failed COMMIT's
-     * too, which leaves it open, so the next scoped writer does not inherit it.
-     * One the caller holds is the caller's to end: the failure is its run's. */
-    if (scoped) {
-        state_rollback(ws->state);
+    /* The failure goes with the transaction. One the caller holds is the caller's
+     * to end, and the failure is its run's. One the flush took is the flush's
+     * to end — a failed COMMIT's too, which leaves it open, so the next scoped
+     * writer does not inherit it — and its failure is the flush's to keep: what
+     * the load owed, the next load owes again. */
+    if (!scoped) {
+        return err;
     }
-    return err;
+    state_rollback(ws->state);
+    error_free(err);
+    return NULL;
 }
 
 /**

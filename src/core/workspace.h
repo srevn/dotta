@@ -1466,10 +1466,23 @@ error_t *workspace_confirm(
  * The first write takes the store's lock where the caller holds none — status,
  * diff, sync, update and a preview of apply — and the flush commits it; a run
  * of apply passes its dispatch transaction, and the writes land in it. A load
- * that owes nothing, the common one, takes no lock and writes nothing. What a
- * flush writes is owed no more: an observation leaves its record on the item,
- * and a confirmation is cleared from it once written, landed or not; a void that
- * found its order moved since the load stays owed, and finds it moved again.
+ * that owes nothing, the common one, takes no lock and writes nothing. The lock
+ * is state_begin's, a boundary of the row cache that reads the enabled rows again
+ * (core/state.h), so a reader after the flush — cmds/status.c
+ * status_print_profiles, cmds/sync.c cmd_sync's view after the pull — reads the
+ * rows that lock read. What a flush writes is owed no more: an observation leaves
+ * its record on the item, and a confirmation is cleared from it once written,
+ * landed or not; a void that found its order moved since the load stays owed,
+ * and finds it moved again.
+ *
+ * The failure goes with the transaction. A write into the caller's transaction
+ * that fails is the caller's: the flush returns it, and the run it poisons ends
+ * (cmds/apply.c cmd_apply). A transaction the flush took, the flush ends, and
+ * keeps its failure — another process's lock held past the busy timeout, a write
+ * or a commit the store refuses — and what the load owed, the next load owes
+ * again, reading the record anew. So a read command renders what its load read
+ * whatever the flush met, and every caller takes what the flush returns as its
+ * own failure.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path
@@ -1477,8 +1490,8 @@ error_t *workspace_confirm(
  *
  * @param ws Workspace (must not be NULL); written through the state handle its
  *           load borrowed
- * @return Error or NULL on success; a transaction the flush took is rolled back
- *         on its failure, and one the caller holds is the caller's to end
+ * @return The failure of a write into the caller's transaction, the caller's to
+ *         end; NULL otherwise, a transaction the flush took keeping its own
  */
 error_t *workspace_flush(workspace_t *ws);
 

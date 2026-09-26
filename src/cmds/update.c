@@ -1603,16 +1603,14 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     /* What the load owes the record — its observations, its confirmations, the
      * voids of orders the view took back (core/workspace.h workspace_flush) —
      * the confirmations seeding the fast path for subsequent status/apply/update
-     * calls. Non-fatal on failure: update still proceeds on what the load read,
-     * and a flush that fails rolls back what it wrote.
+     * calls. The flush keeps the failure of the transaction it takes, so update
+     * proceeds on what the load read whatever the flush met.
      *
      * Files actually updated by this command get their record written separately
      * inside update_write_record(); this flush covers the clean files the analysis
      * verified but didn't modify. */
-    error_t *flush_err = workspace_flush(ws);
-    if (flush_err) {
-        error_free(flush_err);
-    }
+    err = workspace_flush(ws);
+    if (err) goto cleanup;
 
     /* The run's filter context, ahead of everything the filter says against it:
      * the verbose "Excluded" log, the census, the nothing-exit and the preview */

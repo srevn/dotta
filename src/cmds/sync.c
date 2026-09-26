@@ -1654,12 +1654,11 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         /* What the load owes the record — its observations, its confirmations,
          * the voids of orders the view took back (core/workspace.h workspace_flush)
          * — the confirmations seeding the fast path for subsequent status/apply
-         * calls. Non-fatal on failure: sync's workspace validation still reads
-         * what the load read, and a flush that fails rolls back what it wrote. */
-        error_t *flush_err = workspace_flush(ws);
-        if (flush_err) {
-            error_free(flush_err);
-        }
+         * calls. The flush keeps the failure of the transaction it takes, so
+         * sync's workspace validation reads what the load read whatever the flush
+         * met. */
+        err = workspace_flush(ws);
+        if (err) goto cleanup;
 
         /* Count what stands between this workspace and a clean sync, in the scope
          * the run names: a pull of the named profiles moves nothing of the others',
@@ -2081,11 +2080,13 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      *
      * Attribution is per enabled profile — scope_enabled, never the -p narrowed
      * scope_profiles: precedence runs across the whole enabled set, which is
-     * what both views are built over (the state's rows, untouched since dispatch
-     * — nothing in sync mutates enabled_profiles; a missing branch contributes
-     * nothing to either and was warned about at scope_build time). A path p lost
-     * to q is p's reassignment and q's claim; a path that moved between two pulled
-     * profiles is one reassignment, never a transient release.
+     * what both views are built over (the state's rows: nothing in sync writes
+     * enabled_profiles, but where its flush takes the lock it reads them again,
+     * so a profile change another process commits in between reaches the view
+     * after alone and reads as the pull's — a residue, accepted; a missing branch
+     * contributes nothing to either and was warned about at scope_build time).
+     * A path p lost to q is p's reassignment and q's claim; a path that moved
+     * between two pulled profiles is one reassignment, never a transient release.
      *
      * Sync does not deploy. Apply's divergence analysis does that, which is what
      * the summary's hint points at.

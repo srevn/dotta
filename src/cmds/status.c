@@ -1485,12 +1485,10 @@ error_t *cmd_status(const dotta_ctx_t *ctx, const cmd_status_options_t *opts) {
         /* What the load owes the record — its observations, its confirmations,
          * the voids of orders the view took back (core/workspace.h workspace_flush)
          * — the confirmations seeding the fast path for subsequent status calls.
-         * Non-fatal on failure: status still renders what the load read, and a
-         * flush that fails rolls back what it wrote. */
-        error_t *flush_err = workspace_flush(ws);
-        if (flush_err) {
-            error_free(flush_err);
-        }
+         * The flush keeps the failure of the transaction it takes, so status
+         * renders what the load read whatever the flush met. */
+        err = workspace_flush(ws);
+        if (err) goto cleanup;
     }
 
     /* The enabled profiles and the last deployment of each */

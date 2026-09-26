@@ -1923,19 +1923,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and commits a scoped one of its own at its first write, exactly as it does
      * for status, diff, sync and update (state_locked, in core/state.h). Each
      * lands on the record the path's item holds, so downstream readers in this
-     * run see DB and memory agreeing. */
+     * run see DB and memory agreeing.
+     *
+     * The failure goes with the transaction. A run's flush writes into the one
+     * the run will commit, so a failure there poisons everything it has left to
+     * do, and ends the run in the flush's own words, which name the write and
+     * the path it failed at; a preview's keeps the failure of its own, as status's
+     * does. */
     err = workspace_flush(ws);
-    if (err) {
-        /* A run's flush writes into the transaction the run will commit, so a
-         * failure there poisons everything it has left to do, and ends the run
-         * in the flush's own words, which name the write and the path it failed
-         * at. A preview holds no such transaction, and a reading it could not
-         * persist is one the next load establishes again — the stance the other
-         * four already take. */
-        if (!opts->dry_run) goto cleanup;
-        error_free(err);
-        err = NULL;
-    }
+    if (err) goto cleanup;
 
     /* The one observation the flush cannot make: a directory standing where its
      * record describes another kind of node — a file, a link — whose record holds

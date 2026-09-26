@@ -662,7 +662,6 @@ static error_t *profile_enable(
     string_array_t *to_enable_validated = NULL;
     hashmap_t *seen_set = NULL;
     manifest_t *after = NULL;
-    manifest_diff_stats_t *stats = NULL;
     const char *target = NULL; /* --target, absolute: what the row stores */
     error_t *err = NULL;
 
@@ -971,7 +970,9 @@ static error_t *profile_enable(
         err = state_records(state, ctx->arena, &records, &record_count);
         if (err) goto cleanup;
 
-        stats = calloc(to_enable_validated->count, sizeof(*stats));
+        manifest_diff_stats_t *stats = arena_calloc(
+            ctx->arena, to_enable_validated->count, sizeof(*stats)
+        );
         if (!stats) {
             err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
             goto cleanup;
@@ -1067,7 +1068,6 @@ static error_t *profile_enable(
 cleanup:
     /* Cleanup all resources. seen_set freed before to_enable, whose strings it
      * borrows as keys, to respect the borrow lifetime. */
-    free(stats);
     manifest_free(after);
     if (seen_set) hashmap_free(seen_set, NULL);
     string_array_free(to_enable_validated);
@@ -1116,7 +1116,6 @@ static error_t *profile_disable(
     hashmap_t *seen_set = NULL;
     manifest_t *before = NULL;
     manifest_t *after = NULL;
-    manifest_diff_stats_t *stats = NULL;
     error_t *err = NULL;
 
     /* Phase 1 observation — tallied during explicit-args validation. */
@@ -1301,6 +1300,7 @@ static error_t *profile_disable(
          * warning already covers it. Once `before` has built, this build cannot
          * fail on Git's account: the post-disable set is a subset of the same
          * profiles at the same HEADs. */
+        manifest_diff_stats_t *stats = NULL;
         if (before) {
             err = manifest_build(repo, state, ctx->arena, &after);
             if (err) {
@@ -1313,7 +1313,7 @@ static error_t *profile_disable(
             err = state_records(state, ctx->arena, &records, &record_count);
             if (err) goto cleanup;
 
-            stats = calloc(to_disable_validated->count, sizeof(*stats));
+            stats = arena_calloc(ctx->arena, to_disable_validated->count, sizeof(*stats));
             if (!stats) {
                 err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
                 goto cleanup;
@@ -1384,7 +1384,6 @@ static error_t *profile_disable(
 cleanup:
     /* Cleanup all resources. seen_set borrows its keys from opts->profiles,
      * caller-owned, which outlives us. */
-    free(stats);
     manifest_free(after);
     manifest_free(before);
     if (seen_set) hashmap_free(seen_set, NULL);

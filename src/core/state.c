@@ -1885,12 +1885,11 @@ error_t *state_confirm_claim(
  * The ownership event. See state.h for the full contract. In brief:
  *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.
  *   - deployed_at = now.
- *   - stat is always written (zeros when NULL), and read before anything is: it
- *     may be the caller's record's own triple.
- *   - *record follows the statement, last.
+ *   - stat is always written (zeros when NULL).
+ *   - *record is set last, to the record the statement wrote.
  *
- * The statement names every column the record carries, so the post-write record
- * is what the caller handed in: the mirror is the inputs, with nothing read back.
+ * The statement names every column the record carries, so the record it wrote
+ * is what the caller handed in: *record is the inputs, with nothing read back.
  */
 error_t *state_anchor(
     state_t *state,
@@ -1932,8 +1931,7 @@ error_t *state_anchor(
     }
 
     /* 9-11. the stat (the fast path's, bound to blob_oid; zeros when the caller
-     * had none — the next read takes the slow path). Copied before anything is
-     * written: it may be the caller's record's own (state.h). */
+     * had none — the next read takes the slow path). */
     state_stat_t triple = stat ? *stat : STATE_STAT_UNSET;
     sqlite3_bind_int64(stmt, 9, triple.mtime);
     sqlite3_bind_int64(stmt, 10, triple.size);
@@ -1947,10 +1945,10 @@ error_t *state_anchor(
         return sqlite_error(state->db, "Failed to anchor path");
     }
 
-    /* The caller's record follows, whole — last, so a failure above leaves it
-     * as read: the columns the statement names, the strings borrowed from the
-     * row, and every other field the zero its column defaults to — no order among
-     * them, the event having written it away. */
+    /* The record the statement wrote, whole — set last, so a failure above leaves
+     * *record untouched: the columns the statement names, the strings borrowed
+     * from the row, and every other field the zero its column defaults to — no
+     * order among them, the event having written it away. */
     if (record) {
         *record = (state_record_t){
             .filesystem_path = row->filesystem_path,

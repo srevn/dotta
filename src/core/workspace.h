@@ -26,14 +26,15 @@
  *   workspace_anchor and workspace_confirm, each of which patches the snapshot
  *   it persists through: the flush's observation is a record the path's item
  *   holds from the write on, and its void advances the record it read
- *   (state_void_prune); an ownership event advances the record of the item its
- *   caller hands it, or gives that item one; the confirmations go through
- *   state_confirm and state_confirm_claim, which advance the record they are
- *   handed only when their statement wrote; retirements (state_retire, from apply's
- *   record phase and the verbs) go to the database directly — no later reader
- *   in the run consults a retired path. The one retirement a later reader does
- *   consult is workspace_observe_retyped's, whose observation takes the retired
- *   record's place in the snapshot.
+ *   (state_void_prune); an ownership event points the item its caller hands it
+ *   at the record the event wrote, a fresh one, so the record the item held before
+ *   is never written; the confirmations go through state_confirm and
+ *   state_confirm_claim, which advance the record they are handed only when their
+ *   statement wrote; retirements (state_retire, from apply's record phase and
+ *   the verbs) go to the database directly — no later reader in the run consults
+ *   a retired path. The one retirement a later reader does consult is
+ *   workspace_observe_retyped's, whose observation takes the retired record's
+ *   place in the snapshot.
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
@@ -365,8 +366,9 @@ typedef enum {
  *
  * The fields are grouped by their writer:
  *   the sources, the identity   the partition, once; the writers point `record`
- *                               at a record a path gains (the flush's observation,
- *                               workspace_anchor)
+ *                               at a record the path gains (the flush's
+ *                               observation) or an ownership event wrote
+ *                               (workspace_anchor)
  *   the look                    workspace.c workspace_look, once per item a looker
  *                               reaches — and one retraction: the file analysis
  *                               sets the occupant to absence when its read met
@@ -424,12 +426,13 @@ typedef enum {
  *
  * `record` is const so a reader holding the item cannot write the record. The
  * workspace's writers cast where they write: the record, where they advance one
- * in place (workspace_anchor, workspace_confirm, workspace_observe_retyped, the
- * flush's void), and the item handed back to one, where it gains its first record
- * (workspace_anchor) — which is defined because neither is an object defined
- * const: every record and every item is the arena's. A record's strings are never
- * freed before the arena, so a pointer read off it outlives any write (apply's
- * reassignment_t, its from).
+ * in place (workspace_confirm, workspace_observe_retyped, the flush's void),
+ * and the item handed back to one, where its record moves (workspace_anchor,
+ * which points it at a fresh record every time, so a record an ownership event
+ * replaces is never written) — which is defined because neither is an object
+ * defined const: every record and every item is the arena's. A record's strings
+ * are never freed before the arena, so a pointer read off it outlives any write
+ * (apply's reassignment_t, its from).
  */
 typedef struct {
     /* The join's sources — borrowed for the workspace's lifetime */
@@ -571,10 +574,12 @@ static inline compare_result_t workspace_compare_confirmed(
  * disproves nothing, and the reassignment stands: absence is never inferred from
  * a failure to look.
  *
- * Reads the LIVE record — after apply acknowledges (workspace_anchor rewrites
- * the record under the row's profile) the same read honestly answers false, so
- * a consumer that wants the load-time fact reads before the run's ownership events
- * rewrite it (each of apply's writers does, before its own).
+ * Reads the LIVE record when handed the item's — after apply acknowledges
+ * (workspace_anchor points the item at a record under the row's profile) the
+ * same read of the item honestly answers false, so a consumer that wants the
+ * load-time fact reads before the run's ownership events, or off the record the
+ * load read, which they replace and never write (each of apply's writers reads
+ * before its own).
  *
  * Only an owned record qualifies: an observed or confirmed record dotta never
  * deployed names the row the path was first seen under, not a deployer, and apply
@@ -1301,14 +1306,17 @@ bool workspace_item_tags(
 error_t *workspace_observe_retyped(workspace_t *ws);
 
 /**
- * Anchor an active path with in-memory consistency
+ * Anchor an active path: its ownership event, written as a fresh record the item
+ * holds once the statement lands
  *
  * Workspace-scope side of the routing invariant defined on state_anchor (see
- * state.h): hands state_anchor the record the item holds, which the verb advances
- * in place — or, for an item holding none, a record allocated before the statement
- * and the item's after it — so item->record reads the post-write record either
- * way. The statement is the one specification of what an ownership event writes;
- * this function holds none of it.
+ * state.h): hands state_anchor a record allocated for the event, which the
+ * statement sets to what it wrote, and points the item at it once the statement
+ * landed — so item->record reads the post-write record. The record the item held
+ * before the event is never written: a reader that took it earlier — apply's
+ * reassignment names, the adoption's stat — reads what the load read, whenever
+ * it reads. The statement is the one specification of what an ownership event
+ * writes; this function holds none of it.
  *
  * The workspace-scope writer for ownership events — add and update write through
  * state_anchor directly (the header's exception: add loads no workspace, and

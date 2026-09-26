@@ -859,10 +859,10 @@ error_t *state_confirm_claim(
  * ROUTING INVARIANT — this is load-bearing:
  *   - If a workspace live for this transaction is read after the write, ownership
  *     events MUST route through workspace_anchor (workspace.h). That wrapper
- *     hands this function the path's live record — or one it allocated for a
- *     path with none — which the statement's success advances, so every later
- *     reader in the run sees the record the statement wrote. Calling state_anchor
- *     directly there silently desyncs the snapshot.
+ *     hands this function a record allocated for the event, and points the path's
+ *     item at it once the statement lands, so every later reader in the run sees
+ *     the record the statement wrote. Calling state_anchor directly there silently
+ *     desyncs the snapshot.
  *   - If no workspace is read after the write — add's capture loop, which loads
  *     none, and update's, whose workspace nothing reads after its record write
  *     (core/workspace.h's exception) — this function is the legitimate direct
@@ -884,13 +884,12 @@ error_t *state_confirm_claim(
  *   - the path's order ends: an ownership event takes the path into the view,
  *     where no order stands (the column's default).
  *
- * *record follows the statement, last — so a failure leaves it as read, the rule
- * state_confirm and state_confirm_claim keep: the record the statement wrote,
- * whole — the row's binding, kind and claim (borrowed: the string pointers are
- * the row's, not copies), the blob, the triple, deployed_at = now, no order —
- * with no column the SQL's to decide, so the mirror is the inputs. `stat` may
- * be the record's own triple — apply's adoption hands &record->stat — and is
- * read before anything is written.
+ * *record is set last, to the record the statement wrote — so a failure leaves
+ * it untouched: whole — the row's binding, kind and claim (borrowed: the string
+ * pointers are the row's, not copies), the blob, the triple, deployed_at = now,
+ * no order — with no column the SQL's to decide, so the record set is the inputs.
+ * It is written, never read: the one caller that keeps it hands one allocated
+ * for the event (core/workspace.h workspace_anchor), never a record a reader holds.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path is anchored to (must not be NULL; non-zero blob for a
@@ -898,9 +897,8 @@ error_t *state_confirm_claim(
  * @param stat Stat triple of the caller's establishing look (may be NULL; see
  *             semantics above)
  * @param now Timestamp of the write (must be > 0)
- * @param record The path's record to advance, or NULL where the caller keeps
- *               none (add's and update's capture loops); for a path with no record,
- *               one the caller allocated before the call
+ * @param record Where the record the statement wrote is set, or NULL where the
+ *               caller keeps none (add's and update's capture loops)
  * @return Error or NULL on success
  */
 error_t *state_anchor(

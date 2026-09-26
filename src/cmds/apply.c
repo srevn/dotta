@@ -482,9 +482,10 @@ static void apply_print_deploy_preview(
  * The item carries the path, its kind (the slash after a directory path) and
  * the new owner, the row's profile. The one fact it cannot carry is the old owner:
  * the run's ownership events (the adoption and acknowledgement loops' re-stamp,
- * a deployment's) rewrite the record it is read from, so the writer that names
- * the reassignment reads it first. The record's strings outlive the write
- * (core/workspace.h workspace_item_t), and the item is the workspace's.
+ * a deployment's) replace the record the item holds, so the writer that names
+ * the reassignment reads it off the record the load read, before its write. That
+ * record is never written, and its strings outlive the write (core/workspace.h
+ * workspace_item_t); the item is the workspace's.
  */
 typedef struct {
     const workspace_item_t *item;  /* The workspace's; the new owner is its profile */
@@ -1701,10 +1702,10 @@ static error_t *apply_write_record(
      * again.
      *
      * A deployed file — or a converged directory — whose item read [reassigned]
-     * has its record rewritten under the row's profile by the write that records
-     * it, so each is counted before its write, and a write that lands nothing
-     * counts nothing: a deployment the receipt names failed has no write here
-     * at all. The clean ones the adoption and acknowledgement loops re-stamped
+     * has its record replaced by one under the row's profile, by the write that
+     * records it, so each is counted before its write, and a write that lands
+     * nothing counts nothing: a deployment the receipt names failed has no write
+     * here at all. The clean ones the adoption and acknowledgement loops re-stamped
      * were said where they were written. Ancestors' ownership events stay
      * uncounted: they are outside the plan, so no writer named them for the
      * preview, and an acknowledgement that rides one heals the record silently. */
@@ -1715,8 +1716,9 @@ static error_t *apply_write_record(
             const deploy_outcome_t *o = &deployed.entries[i];
             const workspace_item_t *item = o->verdict->item;
 
-            /* Counted before the write below rewrites the record the reassignment
-             * is read from; a refusal ends the phase, and the count with it */
+            /* Counted before the write below replaces the item's record, which
+             * the reassignment is read from; a refusal ends the phase, and the
+             * count with it */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 (*acknowledged)++;
             }
@@ -1730,8 +1732,9 @@ static error_t *apply_write_record(
             const deploy_verdict_t *v = converged.entries[i].verdict;
             const workspace_item_t *item = v->item;
 
-            /* Counted before either write: both rewrite the record the reassignment
-             * is read from. */
+            /* Counted before either write: an ownership event replaces the record
+             * the reassignment is read from, and a confirmation writes it in
+             * place. */
             if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 (*acknowledged)++;
             }
@@ -2197,7 +2200,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * sized to the two clean buckets. The pending ones off the verdicts after
      * preflight, previewed ahead of the record phase that writes them behind
      * the deployment (pending_reassignments). Each is named before the write
-     * that acknowledges it rewrites the record it is read from (reassignment_t).
+     * that acknowledges it replaces the record it is read from (reassignment_t).
      * A row the plan skips (-e, --skip-existing) is in no bucket of either and
      * is neither said nor counted: the run will not acknowledge it. The scope
      * is not re-derived — the planner applied it once, and the buckets are its
@@ -2317,13 +2320,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             !manifest_is_claim(file, record->profile, record->storage_path);
         if (!adopt && !acknowledge) continue;
 
-        /* The reassignment this write acknowledges, named before the write below
-         * rewrites the record it is read from. Only the profile half is that
-         * fact, which is the predicate's half: a name flip within one profile
-         * is bookkeeping the user did not ask for and cannot act on from this
-         * screen. Asked of the item's own look, so an adopted record never reads
-         * as one: none, never owned, or another kind's — a node this clean item's
-         * look found gone. */
+        /* The reassignment this write acknowledges, named off the record the
+         * load read, which the write below replaces and never writes. Only the
+         * profile half is that fact, which is the predicate's half: a name flip
+         * within one profile is bookkeeping the user did not ask for and cannot
+         * act on from this screen. Asked of the item's own look, so an adopted
+         * record never reads as one: none, never owned, or another kind's — a
+         * node this clean item's look found gone. */
         if (workspace_reassigned(file, record, item->occupant)) {
             clean_reassignments[clean_reassignment_count++] = (reassignment_t){
                 .item = item,
@@ -2340,7 +2343,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * Content and not bytes: a pair whose kind the row has since left
              * describes another node, and passing its triple would hand the record
              * the stat of the wrong one (core/workspace.h workspace_stale). The
-             * gate asks the snapshot itself; NULL advances the record blob-only,
+             * gate asks the snapshot itself; NULL writes the record blob-only,
              * and the next load's slow path confirms. */
             const state_stat_t *stat =
                 (record && !workspace_stale(file, record)) ? &record->stat : NULL;
@@ -2390,8 +2393,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
             !manifest_is_claim(dir, record->profile, record->storage_path);
         if (!acknowledge) continue;
 
-        /* The file loop's naming, by the same rule and for the same reason: the
-         * write below rewrites the record it reads. */
+        /* The file loop's naming, by the same rule: off the record the load read,
+         * which the write below replaces and never writes. */
         if (workspace_reassigned(dir, record, item->occupant)) {
             clean_reassignments[clean_reassignment_count++] = (reassignment_t){
                 .item = item,

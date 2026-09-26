@@ -989,8 +989,7 @@ static void workspace_analyze_file(
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT), the conservative answer — STALE still holds,
          * because git_moved is a fact about two OIDs. */
-        if (git_moved &&
-            (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF) &&
+        if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF) &&
             item->occupant == workspace_type_occupant(base->type)) {
             compare_result_t at_base;
             error_t *verify_err = content_compare_blob_to_disk(
@@ -3805,8 +3804,8 @@ bool workspace_item_tags(
  * is written, so the INSERT lands — the run's transaction was taken before the
  * load read the record, and nothing else writes inside it. The observation is
  * written into the record the path's item already holds: one object rewritten
- * in place, as workspace_anchor advances one — const to every reader, and cast
- * here, where it is written (workspace_item_t).
+ * in place — const to every reader, and cast here, where it is written
+ * (workspace_item_t).
  */
 error_t *workspace_observe_retyped(workspace_t *ws) {
     CHECK_NULL(ws);
@@ -3842,13 +3841,13 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
 }
 
 /**
- * Anchor an active path with in-memory consistency
+ * Anchor an active path: its ownership event, written as a fresh record the item
+ * holds once the statement lands
  *
- * The workspace-scope writer for ownership events: hands state_anchor the item's
- * row and the record the item holds, or one the item gains. The statement is
- * the one specification of what an ownership event writes, and checks the row;
- * this function holds none of it and reads nothing of the row. Either arm leaves
- * item->record the live record.
+ * The rule is the header's. Here: one allocation, the statement, and the item
+ * pointed at what it wrote. The statement is the one specification of what an
+ * ownership event writes, and checks the row; this function holds none of it
+ * and reads nothing of the row.
  */
 error_t *workspace_anchor(
     workspace_t *ws,
@@ -3859,17 +3858,8 @@ error_t *workspace_anchor(
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The record the item holds, advanced in place: every holder of the item
-     * reads the post-write record through the pointer it already holds. Const
-     * to every reader, and cast here, where it is written (workspace_item_t). */
-    if (item->record) {
-        return state_anchor(ws->state, item->row, stat, now, (state_record_t *) item->record);
-    }
-
-    /* An item holding none: its record allocated before the statement, so a write
-     * that landed is never followed by a failure to hold it, and the item's after
-     * it — the item cast here, where it gains the record, as the record is where
-     * it is advanced (workspace_item_t). */
+    /* The record the event writes, allocated before the statement, so a write
+     * that landed is never followed by a failure to hold it */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
     if (!record) {
         return ERROR(ERR_MEMORY, "Failed to allocate record");
@@ -3878,6 +3868,8 @@ error_t *workspace_anchor(
     error_t *err = state_anchor(ws->state, item->row, stat, now, record);
     if (err) return err;
 
+    /* The item holds the record the statement wrote — cast here, where its pointer
+     * moves, as the record it held before is never written (workspace_item_t) */
     ((workspace_item_t *) item)->record = record;
     return NULL;
 }

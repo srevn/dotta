@@ -1571,10 +1571,6 @@ error_t *state_records(
         }
     }
 
-    /* Helper macros: route allocations through arena */
-    #define DUP(s)      arena_strdup(arena, (s))
-    #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
-
     size_t i = 0;
     while (rc == SQLITE_ROW && i < record_count) {
         /* Column layout matches the SELECT above:
@@ -1587,41 +1583,42 @@ error_t *state_records(
          *   11-12: the lifecycle (deployed_at, ordered_at) */
         state_record_t *record = &records[i];
 
-        const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
-        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
-        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
-        const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
+        /* Every column read whole, or the read fails. The four text columns the
+         * schema holds NOT NULL come back NULL only where their conversion failed
+         * to allocate. A nullable one is asked its type before it is converted,
+         * the one moment SQLite answers it, so a NULL its conversion returns
+         * for a value is that failure too — never an owner the path has for none
+         * — and so is no pointer for a stored blob. Each string is copied into
+         * the arena as it comes, a NULL as NULL, and one arm takes every conversion
+         * and every copy that failed. */
+        int owner_type = sqlite3_column_type(stmt, 5);
+        int group_type = sqlite3_column_type(stmt, 6);
+        int blob_type = sqlite3_column_type(stmt, 7);
+        const char *type = (const char *) sqlite3_column_text(stmt, 3);
+        const void *blob = blob_type != SQLITE_NULL ? sqlite3_column_blob(stmt, 7) : NULL;
 
-        /* Read mode as integer (NULL — a link's record — hydrates to 0, read
-         * only under the type gate) */
-        mode_t mode = 0;
-        if (sqlite3_column_type(stmt, 4) != SQLITE_NULL) {
-            mode = (mode_t) sqlite3_column_int(stmt, 4);
-        }
+        record->filesystem_path = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 0));
+        record->storage_path = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 1));
+        record->profile = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 2));
+        record->owner = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 5));
+        record->group = arena_strdup(arena, (const char *) sqlite3_column_text(stmt, 6));
 
-        const char *owner = (const char *) sqlite3_column_text(stmt, 5);
-        const char *group = (const char *) sqlite3_column_text(stmt, 6);
-
-        /* A NULL blob (a directory, or observed only) hydrates to the zero OID
-         * calloc left; a stored blob is 20 bytes by CHECK. */
-        if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            memcpy(record->blob_oid.id, sqlite3_column_blob(stmt, 7), GIT_OID_RAWSZ);
-        }
-
-        /* Validate non-nullable string columns */
-        if (!filesystem_path || !storage_path || !profile || !type_str) {
+        if (!record->filesystem_path || !record->storage_path || !record->profile || !type ||
+            (owner_type != SQLITE_NULL && !record->owner) ||
+            (group_type != SQLITE_NULL && !record->group) ||
+            (blob_type != SQLITE_NULL && !blob)) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_STATE_INVALID, "NULL value in required column at record %zu", i);
+            return ERROR(ERR_MEMORY, "Failed to copy the record's columns");
         }
 
-        /* Copy strings into arena */
-        record->filesystem_path = DUP(filesystem_path);
-        record->storage_path = DUP(storage_path);
-        record->profile = DUP(profile);
-        record->type = path_type_from_sql_text(type_str);
-        record->mode = mode;
-        record->owner = DUP_OPT(owner);
-        record->group = DUP_OPT(group);
+        /* A NULL blob (a directory, or observed only) is the zero OID calloc
+         * left; a stored one is 20 bytes by CHECK. A NULL mode — a link's record
+         * — is 0, read only under the kind. */
+        if (blob) memcpy(record->blob_oid.id, blob, GIT_OID_RAWSZ);
+        record->type = path_type_from_sql_text(type);
+        record->mode = sqlite3_column_type(stmt, 4) != SQLITE_NULL
+            ? (mode_t) sqlite3_column_int(stmt, 4)
+            : 0;
         record->stat = (state_stat_t){
             .mtime = sqlite3_column_int64(stmt, 8),
             .size = sqlite3_column_int64(stmt, 9),
@@ -1629,12 +1626,6 @@ error_t *state_records(
         };
         record->deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
         record->ordered_at = (time_t) sqlite3_column_int64(stmt, 12);
-
-        /* Check allocation success */
-        if (!record->filesystem_path || !record->storage_path || !record->profile) {
-            sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy the record's strings");
-        }
 
         i++;
         rc = sqlite3_step(stmt);
@@ -1645,9 +1636,6 @@ error_t *state_records(
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to read the record");
     }
-
-    #undef DUP
-    #undef DUP_OPT
 
     *out = records;
     *count = i;

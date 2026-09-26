@@ -733,7 +733,9 @@ const char *state_target(
  *
  * The one read of the path_records table. Allocates the array and every string
  * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
- * hydrates to a zero OID, a NULL mode to 0.
+ * hydrates to a zero OID, a NULL mode to 0. Every column is read exactly or the
+ * read fails: a conversion or a copy that cannot allocate is ERR_MEMORY, never
+ * a NULL taken for a value the column holds — an owner the path has, read as none.
  *
  * In strcmp order (the principle above). Readers, and what each takes from it:
  *   - core/workspace.c workspace_partition: pairs each record with the active

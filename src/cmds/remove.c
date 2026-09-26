@@ -108,7 +108,8 @@ typedef struct {
  * its paths, so both leave the flag to the record's ownership (remove_settle).
  *
  * The path is the filesystem one, as this profile deploys it; arena-backed, command
- * lifetime. The record borrows from the read the caller indexed.
+ * lifetime. The record borrows from the read its producer made
+ * (remove_paths_candidates, remove_profile_candidates).
  */
 typedef struct {
     const char *path;             /* Filesystem path, as this profile deploys it */
@@ -133,11 +134,18 @@ typedef struct {
 /**
  * Settle the candidates a removal let go — the one spelling of the fate rule
  *
- * For each candidate the subject is its record: one whose path the after-view
- * still provides is a fallback — kept, it reads [reassigned] until apply
+ * For each candidate the subject is its record: one whose path the view that
+ * remains still provides is a fallback — kept, it reads [reassigned] until apply
  * acknowledges it; one the view no longer provides takes the fate the user chose
  * — --delete-files orders the copy pruned at the next apply, the default releases
  * (the record retires, and the copy stays on disk — core/state.h state_retire).
+ *
+ * Asked under the caller's lock, of candidates read under it: the fates are written
+ * blind (state_order_prune, state_retire), so the record they are decided from
+ * is the one the lock holds (core/state.h state_begin). The view is built here
+ * under the same lock, over the rows and the Git the route's own effects left —
+ * the commit, the branch deletion, the disable — and only where there is a
+ * candidate to ask it of.
  *
  * The flag is the user's word about the paths the removal NAMED, and only those
  * — named by the resolver's reach, not the typed line: an argument takes the
@@ -162,34 +170,168 @@ typedef struct {
  * back and zeroes its settlement — the rollback takes the writes with it.
  */
 static error_t *remove_settle(
-    state_t *state,
-    const manifest_t *after,
+    const dotta_ctx_t *ctx,
     const candidate_t *candidates,
     size_t count,
     bool delete_files,
     settlement_t *settlement
 ) {
+    /* Nothing let go is recorded: no view to ask, and nothing to write */
+    if (count == 0) return NULL;
+
+    /* The view that remains — what still provides each candidate now */
+    manifest_t *after = NULL;
+    RETURN_IF_ERROR(manifest_build(ctx->run.repo, ctx->run.state, ctx->arena, &after));
+
     /* The settle's one moment: every order it places carries it (state_order_prune) */
     time_t now = time(NULL);
 
-    for (size_t i = 0; i < count; i++) {
+    error_t *err = NULL;
+    for (size_t i = 0; !err && i < count; i++) {
         const candidate_t *candidate = &candidates[i];
 
         if (manifest_lookup(after, candidate->path)) {
             settlement->fallback++;
-            continue;
-        }
-
-        if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
-            error_t *err = state_order_prune(state, candidate->path, now);
-            if (err) return err;
-            settlement->ordered++;
+        } else if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
+            err = state_order_prune(ctx->run.state, candidate->path, now);
+            if (!err) settlement->ordered++;
         } else {
-            error_t *err = state_retire(state, candidate->path);
-            if (err) return err;
-            settlement->released++;
+            err = state_retire(ctx->run.state, candidate->path);
+            if (!err) settlement->released++;
         }
     }
+
+    manifest_free(after);
+    return err;
+}
+
+/**
+ * The candidates a removal of paths settles, as the record stands now
+ *
+ * The paths the commit let go, as this profile deploys them, each joined to the
+ * record standing at it by a lookup in one read (state_find_record): the claims
+ * the arguments took, and the directory entries the metadata step pruned. A
+ * candidate exists only where one of this profile's records stands; a claim that
+ * stands nowhere on this machine (custom/ under a profile with no target here)
+ * names nothing to settle, and is not one.
+ *
+ * The two buckets are placed differently because they were placed already, or
+ * never: a removed claim carries the path the resolver established before the
+ * match (remove_resolve), while a pruned directory entry was no claim of the
+ * arguments and is placed here.
+ *
+ * Asked twice by its one caller (remove_paths): before the lock, whether there
+ * is anything to settle, and under it, what the settle acts on.
+ */
+static error_t *remove_paths_candidates(
+    const dotta_ctx_t *ctx,
+    const char *profile,
+    const claim_t *claims,
+    size_t claim_count,
+    const string_array_t *pruned_dirs,
+    candidate_t **out,
+    size_t *out_count
+) {
+    *out = NULL;
+    *out_count = 0;
+
+    /* The record, one read — empty where the database does not exist */
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
+    if (record_count == 0) return NULL;
+
+    candidate_t *candidates = arena_alloc(
+        ctx->arena, (claim_count + pruned_dirs->count) * sizeof(*candidates)
+    );
+    if (!candidates) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the candidates");
+    }
+    size_t count = 0;
+
+    /* The claims the arguments took: the user's word reaches all of them
+     * (remove_settle). Each joined to its record by a lookup in the read
+     * (state_find_record). */
+    for (size_t i = 0; i < claim_count; i++) {
+        const char *filesystem_path = claims[i].filesystem_path;
+        if (!filesystem_path) continue;
+        const state_record_t *record = state_find_record(records, record_count, filesystem_path);
+        if (!record || strcmp(record->profile, profile) != 0) continue;
+        candidates[count++] = (candidate_t){
+            .path = filesystem_path, .record = record, .named = true
+        };
+    }
+
+    /* The entries the metadata step pruned: nobody asked for them, so the flag
+     * does not speak to them. A resolve that fails here skips the path — Git
+     * stands, and an unsettled record is the orphan the next apply reads and
+     * releases. */
+    for (size_t i = 0; i < pruned_dirs->count; i++) {
+        const char *filesystem_path = NULL;
+        error_t *resolve_err = mount_resolve(
+            ctx->run.mounts, profile, pruned_dirs->items[i], ctx->arena, &filesystem_path
+        );
+        if (resolve_err) {
+            error_free(resolve_err);
+            continue;
+        }
+        if (!filesystem_path) continue;
+        const state_record_t *record = state_find_record(records, record_count, filesystem_path);
+        if (!record || strcmp(record->profile, profile) != 0) continue;
+        candidates[count++] = (candidate_t){
+            .path = filesystem_path, .record = record, .named = false
+        };
+    }
+
+    *out = candidates;
+    *out_count = count;
+    return NULL;
+}
+
+/**
+ * The candidates a profile's deletion settles, as the record stands now
+ *
+ * Every record naming the profile, whether it was enabled or not, and whether
+ * its tree still claimed the path or had let it go — the user is deleting the
+ * profile and its files. None is named: a deletion names the profile, not its
+ * paths, so --delete-files speaks only through the ownership gate (remove_settle),
+ * and an observed record — a path dotta found rather than made — releases rather
+ * than prunes.
+ *
+ * Asked twice by its one caller (remove_profile): before the prompt, for the
+ * preview and whether there is anything to settle, and under the lock, what the
+ * settle acts on.
+ */
+static error_t *remove_profile_candidates(
+    const dotta_ctx_t *ctx,
+    const char *profile,
+    candidate_t **out,
+    size_t *out_count
+) {
+    *out = NULL;
+    *out_count = 0;
+
+    /* The record, one read — empty where the database does not exist */
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
+    if (record_count == 0) return NULL;
+
+    candidate_t *candidates = arena_alloc(ctx->arena, record_count * sizeof(*candidates));
+    if (!candidates) {
+        return ERROR(ERR_MEMORY, "Failed to allocate the candidates");
+    }
+    size_t count = 0;
+
+    for (size_t i = 0; i < record_count; i++) {
+        if (strcmp(records[i].profile, profile) != 0) continue;
+        candidates[count++] = (candidate_t){
+            .path = records[i].filesystem_path, .record = &records[i], .named = false
+        };
+    }
+
+    *out = candidates;
+    *out_count = count;
     return NULL;
 }
 
@@ -781,7 +923,6 @@ static error_t *remove_paths(
     git_repository *repo = ctx->run.repo;
     const char *repo_path = ctx->run.repo_path;
     state_t *state = ctx->run.state;
-    const mount_table_t *mounts = ctx->run.mounts;
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
@@ -794,7 +935,6 @@ static error_t *remove_paths(
     overlaps_t overlaps = { 0 };        /* arena — the analysis's */
     string_array_t pruned_dirs = { 0 }; /* Directory entries the metadata step pruned (storage paths) */
     char *message = NULL;
-    manifest_t *after = NULL;
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1046,7 +1186,7 @@ static error_t *remove_paths(
      * path is the common case), which left the view by the same commit — each
      * joined to its record and settled by the one rule (remove_settle).
      *
-     * Enablement is not consulted: a record dotta holds under a disabled profile
+     * Enablement decides no fate: a record dotta holds under a disabled profile
      * is still dotta's record — the rule remove_profile runs over every record
      * naming the profile, run here over the candidates.
      *
@@ -1055,74 +1195,23 @@ static error_t *remove_paths(
      * and releases — the default outcome, minus the prune order under
      * --delete-files. */
     settlement_t settlement = { 0 };
-    error_t *record_err = NULL;
 
-    /* The record, once, on the READ handle — empty when the database does not
-     * exist. Read before the transaction: state_begin publishes the store's
-     * dotta.db at first write intent (its contract, core/state.h), and a remove
-     * with no record to settle must not grow a never-enabled repository a
-     * database. */
-    state_record_t *records = NULL;
-    size_t record_count = 0;
-    record_err = state_records(state, ctx->arena, &records, &record_count);
-
-    /* The candidates, as this profile deploys them, each joined to its record —
-     * a candidate exists only where one of this profile's records stands, so a
-     * non-empty set is the write intent. A claim that stands nowhere on this
-     * machine (custom/ under a profile with no target here) names nothing to
-     * settle, and is not one.
-     *
-     * The two buckets are placed differently because they were placed already,
-     * or never: a removed claim carries the path the resolver established before
-     * the match (remove_resolve), while a pruned directory entry was no claim
-     * of the arguments and is placed here. */
+    /* Whether there is anything to settle: a candidate as the record stands before
+     * the lock, read on the READ handle — none where the database does not exist
+     * — or the profile enabled here, under which another process can make one
+     * while this command works: an apply deploying a path this commit let go, a
+     * status observing one. A remove with neither takes no lock, and grows a
+     * never-enabled repository no database: state_begin publishes the store's
+     * dotta.db at first write intent (its contract, core/state.h). The one write
+     * this cannot see coming is a record another process makes under the profile
+     * after enabling it since this command began, left to the next apply as a
+     * settle this block fails to write is. The deletion begins on the same two
+     * (remove_profile). */
     candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    if (!record_err && record_count > 0) {
-        candidates = arena_alloc(
-            ctx->arena,
-            (claim_count + pruned_dirs.count) * sizeof(*candidates)
-        );
-        if (!candidates) {
-            record_err = ERROR(ERR_MEMORY, "Failed to allocate the candidates");
-        }
-
-        /* The claims the arguments took: the user's word reaches all of them
-         * (remove_settle). Each joined to its record by a lookup in the read
-         * (state_find_record). */
-        for (size_t i = 0; !record_err && i < claim_count; i++) {
-            const char *filesystem_path = claims[i].filesystem_path;
-            if (!filesystem_path) continue;
-            const state_record_t *record = state_find_record(records, record_count, filesystem_path)
-            ;
-            if (!record || strcmp(record->profile, opts->profile) != 0) continue;
-            candidates[candidate_count++] = (candidate_t){
-                .path = filesystem_path, .record = record, .named = true
-            };
-        }
-
-        /* The entries the metadata step pruned: nobody asked for them, so the
-         * flag does not speak to them. A resolve that fails here skips the path
-         * — Git stands, and an unsettled record is the orphan the next apply
-         * reads and releases. */
-        for (size_t i = 0; !record_err && i < pruned_dirs.count; i++) {
-            const char *filesystem_path = NULL;
-            error_t *resolve_err = mount_resolve(
-                mounts, opts->profile, pruned_dirs.items[i], ctx->arena, &filesystem_path
-            );
-            if (resolve_err) {
-                error_free(resolve_err);
-                continue;
-            }
-            if (!filesystem_path) continue;
-            const state_record_t *record = state_find_record(records, record_count, filesystem_path)
-            ;
-            if (!record || strcmp(record->profile, opts->profile) != 0) continue;
-            candidates[candidate_count++] = (candidate_t){
-                .path = filesystem_path, .record = record, .named = false
-            };
-        }
-    }
+    error_t *record_err = remove_paths_candidates(
+        ctx, opts->profile, claims, claim_count, &pruned_dirs, &candidates, &candidate_count
+    );
 
     if (record_err) {
         output_warning(
@@ -1130,7 +1219,7 @@ static error_t *remove_paths(
             error_message(record_err)
         );
         error_free(record_err);
-    } else if (candidate_count > 0) {
+    } else if (candidate_count > 0 || state_enabled(state, opts->profile)) {
         record_err = state_begin(state);
         if (record_err) {
             output_warning(
@@ -1139,13 +1228,17 @@ static error_t *remove_paths(
             );
             error_free(record_err);
         } else {
-            /* The post-commit view — what still provides each candidate now. */
-            record_err = manifest_build(repo, state, ctx->arena, &after);
+            /* What the settle acts on, read again under the lock: the read above
+             * decided only whether to take it, and another process can write
+             * the record between the two — or while this one waits for it. */
+            record_err = remove_paths_candidates(
+                ctx, opts->profile, claims, claim_count, &pruned_dirs,
+                &candidates, &candidate_count
+            );
 
             if (!record_err) {
                 record_err = remove_settle(
-                    state, after, candidates, candidate_count,
-                    opts->delete_files, &settlement
+                    ctx, candidates, candidate_count, opts->delete_files, &settlement
                 );
             }
 
@@ -1224,7 +1317,6 @@ cleanup:
      * is active, so it safely closes any partially-begun record-update transaction
      * on error paths. */
     state_rollback(state);
-    manifest_free(after);
     free(message);
     string_array_deinit(&pruned_dirs);
     if (metadata) metadata_free(metadata);
@@ -1339,15 +1431,14 @@ static error_t *remove_profile(
         goto cleanup;  /* err is NULL, will return success */
     }
 
-    /* Check for unpushed changes and detect remote Keep remote_name for later
-     * use when pushing deletion
-     */
+    /* Check for unpushed changes, and detect the remote: remote_name is kept
+     * for pushing the deletion below. */
     bool has_unpushed = false;
     bool is_local_only = false;
 
     /* Resolve remote name + URL up-front: the URL feeds the credential helper
-     * for the deletion-push xfer further down (see line where
-     * transfer_context_create is called). One resolve, two consumers. */
+     * for the deletion's push further down (its transfer context). One resolve,
+     * two consumers. */
     err = gitops_resolve_default_remote(
         repo, ctx->arena, &remote_name, &remote_url
     );
@@ -1392,22 +1483,24 @@ static error_t *remove_profile(
         );
     }
 
-    /* Enabled check and the record, once, on the borrowed state. Under spec-driven
-     * READ the handle is always non-NULL here (CHECK_NULL at entry), and state_load
-     * for a missing DB still returns a usable handle (DB-less, reads degrade to
-     * empty) — no defensive fallback needed. One read serves the preview here
-     * and the settle below: nothing between them touches the record (the branch
-     * deletion is Git-only). Failure is non-fatal — warn and decide over what
-     * was read; what this run cannot settle, the next apply reads as orphans
-     * and releases. */
-    bool profile_was_enabled = state_enabled(state, opts->profile);
-    state_record_t *records = NULL;
-    size_t record_count = 0;
+    /* The candidates as the record stands before the prompt, on the borrowed
+     * state: the preview's, and whether there is anything to settle once the
+     * branch is gone. Under spec-driven READ the handle is always non-NULL here
+     * (CHECK_NULL at entry), and state_load for a missing DB still returns a
+     * usable handle (DB-less, reads degrade to empty) — no defensive fallback
+     * needed. The settle reads them again under its lock: the prompt and the
+     * pre-remove hook stand between the two, and another process can write the
+     * record there — an apply that adopts or deploys this profile's files, from
+     * another terminal or from the hook. Failure is non-fatal — warn and decide
+     * over what was read; what this run cannot settle, the next apply reads as
+     * orphans and releases. */
+    candidate_t *candidates = NULL;
+    size_t candidate_count = 0;
     size_t deployed_count = 0;
     settlement_t settlement = { 0 };
     {
-        error_t *read_err = state_records(
-            state, ctx->arena, &records, &record_count
+        error_t *read_err = remove_profile_candidates(
+            ctx, opts->profile, &candidates, &candidate_count
         );
         if (read_err) {
             output_warning(
@@ -1417,40 +1510,17 @@ static error_t *remove_profile(
             error_free(read_err);
         }
     }
-
-    /* The candidates: every record naming the profile, whether P was enabled or
-     * not, and whether P's tree still claimed the path or had let it go — the
-     * user is deleting P and P's files. named = false on each: a profile deletion
-     * names the profile, not its paths, so --delete-files speaks only through
-     * the ownership gate (remove_settle), and an observed record — a path dotta
-     * found rather than made — releases rather than prunes. */
-    candidate_t *candidates = NULL;
-    size_t candidate_count = 0;
-    if (record_count > 0) {
-        candidates = arena_alloc(ctx->arena, record_count * sizeof(*candidates));
-        if (!candidates) {
-            output_warning(
-                out, OUTPUT_NORMAL,
-                "Failed to allocate candidate paths; records left for the next apply"
-            );
-        }
-    }
-    for (size_t i = 0; candidates && i < record_count; i++) {
-        if (strcmp(records[i].profile, opts->profile) != 0) continue;
-        if (records[i].deployed_at > 0) deployed_count++;
-        candidates[candidate_count++] = (candidate_t){
-            .path = records[i].filesystem_path,
-            .record = &records[i],
-            .named = false,
-        };
+    for (size_t i = 0; i < candidate_count; i++) {
+        if (candidates[i].record->deployed_at > 0) deployed_count++;
     }
 
     /* The fates ahead of the prompt, from the same gate the settle reads: with
      * --delete-files the deployed entries are ordered pruned and the observed
      * rest releases; without it everything releases (informational, not a warning).
-     * The after-view does not exist yet, so a fallback — a path a lower profile
-     * still provides — is promised the fate it will not take; the receipt corrects
-     * it. */
+     * The view that remains does not exist yet, so a fallback — a path a lower
+     * profile still provides — is promised the fate it will not take; the receipt
+     * corrects it, as it does a record another process moved before the lock.
+     * With none, the two read the same gate over the same records and agree. */
     if (candidate_count > 0) {
         output_gap(out, OUTPUT_VERBOSE);
         if (opts->delete_files && deployed_count > 0) {
@@ -1592,42 +1662,47 @@ static error_t *remove_profile(
     performed = true;
 
     /* Post-deletion: the enabled set and the record, in one transaction — opened
-     * only when there is something to write: the enabled row must drop, or a
-     * record names the profile (the candidates). A repository with no database
-     * — never enabled, nothing recorded — is left without one: state_begin
-     * publishes the store's dotta.db at first write intent, and a deletion with
-     * nothing to settle is not that.
+     * only where there is, or can come to be, something to write: a record naming
+     * the profile (the candidates read before the prompt), or the profile enabled
+     * here, whose row must drop and under which another process can make one
+     * while this command works. A repository with no database — never enabled,
+     * nothing recorded — is left without one: state_begin publishes the store's
+     * dotta.db at first write intent, and a deletion with nothing to settle is
+     * not that. The one write this cannot see coming is a record another process
+     * makes under the profile after enabling it since this command began, left
+     * to the next apply as a settle this block fails to write is.
      *
      * The order of the branch deletion and this block does not matter: the view
      * is computed, and the prune order is the one fact the workspace reads for
      * these records — written once, here, after the branch is gone. The profile
-     * leaves the enabled set (if it was in it), and every candidate is settled
-     * against the view that remains by the one rule (remove_settle); a fallback's
-     * record reads [reassigned] P → Q until apply deploys Q's, and a released
-     * copy stays decryptable with the branch gone — subkey derivation needs only
-     * the profile name.
+     * leaves the enabled set where a row holds it under the lock, and every
+     * candidate the lock reads is settled against the view that remains by the
+     * one rule (remove_settle); a fallback's record reads [reassigned] P → Q
+     * until apply deploys Q's, and an ordered copy's blob still opens with the
+     * branch gone — the next apply's orphan compare reads it under the record's
+     * own binding, and subkey derivation needs only the profile name.
      *
      * Non-fatal: the branch is gone and stands. A record this block fails to
      * write is an orphan the next apply reads, asks Git about, finds the branch
      * gone, and releases. */
-    if (profile_was_enabled || candidate_count > 0) {
+    if (candidate_count > 0 || state_enabled(state, opts->profile)) {
         error_t *delete_err = state_begin(state);
         if (!delete_err) {
-            manifest_t *after = NULL;
-
-            if (profile_was_enabled) {
+            /* The row and the record as the lock holds them: state_begin read
+             * the rows inside it, and the candidates are read here */
+            if (state_enabled(state, opts->profile)) {
                 delete_err = state_disable_profile(state, opts->profile);
             }
 
-            /* The view that remains — the builder over the post-disable rows. */
             if (!delete_err) {
-                delete_err = manifest_build(repo, state, ctx->arena, &after);
+                delete_err = remove_profile_candidates(
+                    ctx, opts->profile, &candidates, &candidate_count
+                );
             }
 
             if (!delete_err) {
                 delete_err = remove_settle(
-                    state, after, candidates, candidate_count,
-                    opts->delete_files, &settlement
+                    ctx, candidates, candidate_count, opts->delete_files, &settlement
                 );
             }
 
@@ -1660,8 +1735,6 @@ static error_t *remove_profile(
                     );
                 }
             }
-
-            manifest_free(after);
         } else {
             /* Non-fatal: the next workspace load observes the branch gone and
              * releases these records conservatively */
@@ -1673,9 +1746,8 @@ static error_t *remove_profile(
         }
     }
 
-    /* Push deletion to remote if remote exists This is critical for sync to work -
-     * other repos need to know the branch was deleted
-     */
+    /* Push the deletion to the remote, where there is one: sync needs it, since
+     * other repositories learn the branch is gone only from there. */
     if (remote_name && !is_local_only) {
         output_info(
             out, OUTPUT_NORMAL, "Pushing profile deletion to remote '%s'...",
@@ -1702,9 +1774,8 @@ static error_t *remove_profile(
             transfer_context_free(del_xfer);
         }
         if (err) {
-            /* Non-fatal: warn but don't fail the whole operation The local branch
-             * is already deleted, so this is just about syncing
-             */
+            /* Non-fatal: the local branch is already deleted, so what failed is
+             * the sync's half alone — warned, and the operation stands. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to push deletion to remote: %s",
                 error_message(err)

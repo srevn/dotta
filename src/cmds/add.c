@@ -127,12 +127,11 @@ typedef struct {
  * NULL — a statement is not durable until state_save commits the transaction
  * the dispatcher opened.
  *
- * `enabled` is the one fact the error cannot carry, and the reason it is here
- * rather than asked by the tail: a row can hold this profile through a failure
- * (a branch recreated over a leftover row) and can fail to hold it through a
- * success, and after the phase's rollback the tail cannot ask — state_rollback
- * re-reads the profile cache with no error channel. The phase publishes the answer
- * where its transaction settles.
+ * Nor is whether a row holds this profile, which the error cannot carry either
+ * — a row can hold it through a failure (a branch recreated over a leftover row)
+ * and fail to hold it through a success. The handle's rows are the table as the
+ * phase settled it — STEP 1's where the save landed, the ones the phase began
+ * with where it rolled back (state_rollback) — so the tail asks the handle.
  *
  * `anchored` is both kinds. The record's unit is the path — one row per managed
  * path, a directory's differing only in the columns a directory has no content
@@ -156,7 +155,6 @@ typedef struct {
  * an unused path" says.
  */
 typedef struct {
-    bool enabled;          /* A row holds this profile, the phase's writes settled */
     size_t anchored;       /* Captures whose own row took the ownership event */
     size_t taken_over;     /* Of the anchored, records taken from another profile */
     size_t overridden;     /* Captures a higher-precedence profile's row holds */
@@ -1282,20 +1280,17 @@ static error_t *write_record(
 
     /* STEP 1: Scope.
      *
-     * Does a row hold this profile? Asked before the first write, because that
-     * is the answer a rollback leaves — and `enabled` is what STEP 1 leaves
-     * standing: an anchor pass needs a row, and the only row this phase can add
-     * is a created profile's. The tail publishes whichever of the two the
-     * transaction made true.
+     * Does a row hold this profile? The handle answers from the rows as this
+     * transaction holds them, so the question is asked where each answer is wanted:
+     * before the write, whether a row takes the run's binding; after it, whether
+     * the anchor pass has a row to win — the only row this phase can add being
+     * a created profile's.
      *
      * CRITICAL ORDER: the binding is written before the view is built. The
      * builder's own table is built from the rows, so a custom/ claim of this
      * profile stands nowhere until the row holds the target. Atomicity is the
      * transaction's: the enable and the record commit together or not at all. */
-    const bool held = state_has_profile(state, profile);
-    const bool enabled = held || profile_created;
-
-    if (profile_created || (held && target)) {
+    if (profile_created || (target && state_enabled(state, profile))) {
         /* One UPSERT for two acts. A created profile's branch may still meet a
          * row a deleted branch left behind: the row keeps its position, takes
          * this run's binding when it brought one and keeps the leftover's
@@ -1304,7 +1299,7 @@ static error_t *write_record(
          * spelling or binds an unbound row. */
         err = state_enable_profile(state, profile, target);
         if (err) goto cleanup;
-    } else if (!enabled && retired->count == 0) {
+    } else if (!state_enabled(state, profile) && retired->count == 0) {
         /* Nothing to write at all: no row for a capture to win, a target the
          * run brought left unbound (enable's business, when the user gets there),
          * and no claim let go. The settle below is not gated on enablement —
@@ -1324,7 +1319,7 @@ static error_t *write_record(
     err = manifest_build(repo, state, ctx->arena, &manifest);
     if (err) goto cleanup;
 
-    if (enabled) {
+    if (state_enabled(state, profile)) {
         /* The record as it stands first, read before the write that rewrites
          * it, so a takeover is known — looked up by path in the read
          * (state_find_record). */
@@ -1469,12 +1464,10 @@ cleanup:
      * committed, and is also the one call that clears the handle's flag after
      * SQLite rolled the transaction back itself.
      *
-     * And it is what makes the answer below true: what a row says about this
-     * profile once the phase is settled — STEP 1's when the save landed, and
-     * the one this phase found when it did not. Nothing after this point reads
-     * the state, which is the contract state_rollback's own header asks for. */
+     * And it settles the rows the tail asks about this profile: STEP 1's where
+     * the save landed, the ones this phase began with where it did not
+     * (state_rollback). */
     state_rollback(state);
-    receipt->enabled = err ? held : enabled;
 
     manifest_free(manifest);
 
@@ -1554,12 +1547,12 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Where this profile's custom/ tree stands, as its row spells it — the binding
      * this command's table holds for the profile whenever the row has one, a
      * --target below being held to it and taking its spelling. A copy and not
-     * the peek: the record phase's enable and its rollback each replace the row
-     * cache the peek borrows from (core/state.h, state_peek_profiles), and the
+     * the borrow: the record phase's enable and its rollback each replace the
+     * row cache state_target lends from (core/state.h, state_profiles), and the
      * receipt names this binding after both. `target` is the flag's alone, NULL
      * without it: re-rooting an argument is the flag's grammar (spell_argument),
      * never a row's. */
-    const char *bound = state_peek_profile_target(state, opts->profile);
+    const char *bound = state_target(state, opts->profile);
     if (bound) {
         bound = arena_strdup(ctx->arena, bound);
         if (!bound) {
@@ -2328,11 +2321,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         output_gap(out, OUTPUT_NORMAL);
 
         /* The one fact of the record a preview has: no row holds the profile
-         * and this add does not create it — the receipt's `enabled`, read before
+         * and this add does not create it — the tail's question, asked before
          * any phase has run, off the rows the dispatcher loaded. What the rows
          * would take otherwise is the post-commit view's to say, and a preview
          * builds none. */
-        if (profile_exists && !state_has_profile(state, opts->profile)) {
+        if (profile_exists && !state_enabled(state, opts->profile)) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Profile not enabled - nothing would be marked as deployed"
@@ -2588,12 +2581,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The branch is Git's fact and stands whatever the record did; the enabling
      * is a row, which a failed phase can leave standing (a branch recreated over
      * a leftover row) and a successful one cannot invent. So the second clause
-     * keys on membership, not on the fate. */
+     * keys on membership — the handle's rows, as the phase settled them
+     * (record_receipt_t) — not on the fate. */
     if (profile_created) {
         output_success(
             out, OUTPUT_NORMAL,
-            receipt.enabled ? "Profile '%s' created and enabled"
-                           : "Profile '%s' created",
+            state_enabled(state, opts->profile) ? "Profile '%s' created and enabled"
+                                                : "Profile '%s' created",
             opts->profile
         );
     }
@@ -2618,7 +2612,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             out, OUTPUT_NORMAL,
             "The record was not written - what it already held stands"
         );
-    } else if (receipt.enabled) {
+    } else if (state_enabled(state, opts->profile)) {
         /* What the record took of what the capture listed. The unit is the path
          * — one row per managed path, both kinds — and the kinds are named where
          * they were captured, above. Never zero: every argument lists itself or
@@ -2692,7 +2686,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * again with --force over a branch that now holds the bytes: an apply re-earns
      * the event for the files it adopts and never for a directory, and an unowned
      * directory is released at scope exit where an owned one is pruned. */
-    if (!receipt.enabled) {
+    if (!state_enabled(state, opts->profile)) {
         report_enable_hint(out, opts->profile, opts->target, view);
     } else if (record_err) {
         output_hint(

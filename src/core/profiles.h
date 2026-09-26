@@ -160,17 +160,17 @@ error_t *profile_resolve_enabled(
  * (gitops_resolve_commit_in_branch) — the question there is not which profile.
  *
  * @param repo Repository (must not be NULL)
- * @param enabled Profile names, asked in this order (must not be NULL)
+ * @param enabled_profiles Profile names, asked in this order (must not be NULL)
  * @param commit_ref Commit reference (must not be NULL)
  * @param out_commit The resolved commit (must not be NULL, caller must free with
  *                   git_commit_free); its OID is git_commit_id's
  * @param out_profile The profile that holds it (must not be NULL; borrowed from
- *                    `enabled`, valid for as long as it is)
+ *                    `enabled_profiles`, valid for as long as it is)
  * @return Error (ERR_NOT_FOUND when no profile holds it) or NULL on success
  */
 error_t *profile_resolve_commit(
     git_repository *repo,
-    const string_array_t *enabled,
+    const string_array_t *enabled_profiles,
     const char *commit_ref,
     git_commit **out_commit,
     const char **out_profile

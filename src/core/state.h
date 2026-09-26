@@ -312,14 +312,14 @@ static inline bool state_stat_matches(const state_record_t *record, const struct
 /**
  * Enabled profile entry
  *
- * One row from the enabled_profiles table, materialized as an in-memory record.
- * The handle holds the whole table as an array of these — read when the handle
- * opens the database, and again at every boundary that makes the table the handle's
- * own (a transaction taken, a row written, a rollback) — so the array has one
- * state and every reader of it is a plain read.
+ * One row from the enabled_profiles table, copied into memory. The handle holds
+ * the whole table as an array of these — read when the handle opens the database,
+ * and again at every boundary that makes the table the handle's own (a transaction
+ * taken, a row written), and put back by a rollback — so the array has one state
+ * and every reader of it is a plain read.
  *
- * Ownership: state handle owns the strings; callers that peek receive borrowed
- * pointers valid until the next boundary (see state_peek_profiles).
+ * Ownership: the state handle owns the strings; a caller of state_profiles or
+ * state_target borrows them, valid until the next boundary (see state_profiles).
  */
 typedef struct {
     char *name;              /* Profile name (owned) */
@@ -355,9 +355,8 @@ typedef struct state state_t;
  *
  * Reads the enabled_profiles rows into the handle's cache: the boundary where
  * that table becomes this handle's, so every later reader of it is a plain read
- * (state_peek_profiles). A handle with no database reads zero rows; a table that
- * cannot be read is this call's failure, not a later peek's silent "nothing
- * enabled".
+ * (state_profiles). A handle with no database reads zero rows; a table that cannot
+ * be read is this call's failure, not a later reader's silent "nothing enabled".
  *
  * @param repo Repository (must not be NULL)
  * @param out State structure (must not be NULL, caller must free with state_free)
@@ -389,7 +388,7 @@ error_t *state_open(git_repository *repo, state_t **out);
  * Commits the open transaction — the one state_open() started, or the one
  * state_begin() started after an earlier save. All modifications made since the
  * transaction began are atomically committed; a handle with no open transaction
- * saves nothing and succeeds.
+ * by its own account (state_locked) saves nothing and succeeds.
  *
  * A command whose writes have two lifetimes saves at the boundary between them
  * and begins again (state_begin): apply commits the present — the observations
@@ -426,7 +425,9 @@ error_t *state_save(state_t *state);
  *
  * Re-reads the row cache inside the new lock: a handle that has been open since
  * before the lock was taken holds rows another process may have committed since,
- * and the transaction's own snapshot is what its readers must see.
+ * and the transaction's own snapshot is what its readers must see. A read that
+ * fails is the call's failure: the lock is released, and the handle keeps the
+ * rows it held.
  *
  * @param state State (must not be NULL, must not be in transaction)
  * @return Error or NULL on success
@@ -446,12 +447,16 @@ error_t *state_commit(state_t *state);
  *
  * Safe to call on error paths. Silently succeeds if no transaction active.
  *
- * Re-reads the row cache from the rolled-back table — a mutation inside the
- * transaction left it holding rows the database no longer has. This is the one
- * place a read of that table has no channel: a read that fails here empties the
- * cache, and every caller of rollback is already unwinding the command (workspace's
- * flush, add's, remove's and update's record phases, profile's and interactive's
- * cleanup), none of which reads the state again.
+ * The row cache goes back with the table, to the rows the transaction began with:
+ * a write inside it had replaced them, and they are the table again, since no
+ * other connection can move it while the lock is held. Nothing is read, so nothing
+ * can fail, and a reader after a rollback reads the table it returned to: status's
+ * header and sync's post-pull view after a flush's (cmds/status.c
+ * status_print_profiles, cmds/sync.c cmd_sync), and add's receipt after its record
+ * phase's (cmds/add.c cmd_add). The handle's account decides it (state_locked):
+ * after a transaction SQLite ended itself the ROLLBACK finds none, and the rows
+ * still go back — the table as it stood when the transaction began, which a writer
+ * may have moved since the lock was lost.
  *
  * @param state State (must not be NULL)
  */
@@ -464,6 +469,15 @@ void state_rollback(state_t *state);
  * rolled back. Read by a code path that may run under either acquisition shape,
  * to decide whether to start its own scoped transaction or write in the caller's:
  * core/workspace.c workspace_flush, at its first write, the one reader.
+ *
+ * The handle's own account, not SQLite's: where SQLite ends a transaction itself
+ * — on a full disk or an I/O error, at a write or at the COMMIT — this answers
+ * true until the handle's commit or rollback. No decision reads it there, since
+ * every writer stops at its first refused write, and the account is what both
+ * verbs that end a transaction need: the rollback puts back the rows the
+ * transaction began with, and a save of the writes SQLite discarded fails, its
+ * COMMIT finding no transaction, where asking SQLite would find none open and
+ * save nothing in silence.
  *
  * @param state State handle (must not be NULL)
  * @return true if transaction is active
@@ -573,15 +587,16 @@ error_t *state_disable_profile(
 error_t *state_reorder_profiles(state_t *state, const string_array_t *profiles);
 
 /**
- * Get enabled profiles
+ * The enabled profiles' names, copied
  *
- * Returns copy that caller must free.
+ * In position order, owned by the caller: a copy outlives the boundaries that
+ * end state_profiles' slice, which is what its callers keep it across.
  *
  * @param state State (must not be NULL)
  * @param out Profile names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *state_get_profiles(const state_t *state, string_array_t **out);
+error_t *state_names(const state_t *state, string_array_t **out);
 
 /**
  * Check if a profile is enabled
@@ -590,14 +605,14 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out);
  * for commands that need to conditionally write the record based on whether a
  * profile is enabled.
  *
- * Answers from the row cache, which is the table (state_peek_profiles): a plain
- * read, with no load to fail underneath it.
+ * Answers from the row cache, which is the table (state_profiles): a plain read,
+ * with no load to fail underneath it.
  *
  * @param state State (must not be NULL)
  * @param profile Profile name to check (must not be NULL)
  * @return true if profile is enabled, false otherwise
  */
-bool state_has_profile(const state_t *state, const char *profile);
+bool state_enabled(const state_t *state, const char *profile);
 
 /**
  * Bound carrier for the enabled_profiles rows, the manifest_rows_t idiom.
@@ -614,8 +629,8 @@ typedef struct {
  * cache, which the handle reads with the database and re-reads at every boundary
  * where the table becomes the handle's again, so between boundaries the slice
  * IS the table. A repository with no database (state_load before any state_begin
- * promoted it) holds a load of zero rows, which is the correct view of it: an
- * empty slice, not a failure.
+ * promoted it) holds a read of zero rows, which is the correct answer for it:
+ * an empty slice, not a failure.
  *
  * Lifetime — the rows and the strings they reference (name, target) stand until
  * the next boundary replaces the cache:
@@ -633,14 +648,14 @@ typedef struct {
  * @param state State (NULL returns an empty slice)
  * @return Borrowed slice over the rows
  */
-state_profiles_t state_peek_profiles(const state_t *state);
+state_profiles_t state_profiles(const state_t *state);
 
 /**
- * Peek a single profile's deployment target
+ * A single profile's deployment target
  *
  * Returns a borrowed pointer into the row cache. Same lifetime rules as
- * state_peek_profiles. The answer is a key or NULL, the column holding nothing
- * else (the table's paragraph above).
+ * state_profiles. The answer is a key or NULL, the column holding nothing else
+ * (the table's paragraph above).
  *
  * Readers: the three binders and add's pre-flight (cmds/add.c, cmds/profile.c,
  * cmds/interactive.c), the two screens that print a binding beside its profile
@@ -653,7 +668,7 @@ state_profiles_t state_peek_profiles(const state_t *state);
  * @return Borrowed deployment target string, or NULL when the profile has no
  *         deployment target, is not enabled, or the state has no database.
  */
-const char *state_peek_profile_target(
+const char *state_target(
     const state_t *state,
     const char *profile
 );

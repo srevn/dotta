@@ -54,7 +54,7 @@ void completion_profiles(
     if (repo == NULL) return;
 
     if (set == COMPLETION_ENABLED) {
-        state_profiles_t rows = state_peek_profiles(state);
+        state_profiles_t rows = state_profiles(state);
         for (size_t i = 0; i < rows.count; i++) {
             fprintf(out, "%s\tEnabled profile\n", rows.entries[i].name);
         }
@@ -70,8 +70,8 @@ void completion_profiles(
             const char *branch = branches->items[i];
             fprintf(
                 out, "%s\t%s\n", branch,
-                state_has_profile(state, branch) ? "Enabled profile"
-                                                 : "Available profile"
+                state_enabled(state, branch) ? "Enabled profile"
+                                             : "Available profile"
             );
         }
 
@@ -421,7 +421,7 @@ static void commits_emit(
 
     /* None named, or none of them a branch (a positional handed in as a guess
      * may be a path): the enabled histories stand in. */
-    state_profiles_t rows = state_peek_profiles(state);
+    state_profiles_t rows = state_profiles(state);
     const char **enabled = arena_calloc(ctx->arena, rows.count, sizeof(*enabled));
     if (enabled == NULL) return;
     for (size_t i = 0; i < rows.count; i++) {
@@ -526,7 +526,7 @@ bool completion_paths_under(
      * the substitution shows on an absolute token alone. Borrowed from the row
      * cache, which nothing here moves (core/state.h); NULL outside a repository,
      * where there is no row to ask. */
-    const char *bound = state_peek_profile_target(ctx->run.state, profile);
+    const char *bound = state_target(ctx->run.state, profile);
     if (bound && mount_same_target(bound, root)) root = bound;
 
     /* At the root or beneath it the command reads the token as typed, so the

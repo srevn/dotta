@@ -183,7 +183,7 @@ static error_t *profile_list(
     string_array_t *remote_only = NULL;
     error_t *err = NULL;
 
-    err = state_get_profiles(state, &enabled_profiles);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
@@ -254,7 +254,7 @@ static error_t *profile_list(
                 );
             }
 
-            const char *target = state_peek_profile_target(state, profile);
+            const char *target = state_target(state, profile);
             if (target) {
                 char shown[PATH_MAX];
                 output_format_path(target, identity()->home, shown, sizeof(shown));
@@ -649,7 +649,7 @@ cleanup:
  *      UPSERT arm state.h documents (the target moves, the position stays).
  *      enabled_profiles membership and order are now authoritative. Nothing else
  *      is written: the view is computed, never stored. `before` borrows nothing
- *      from the row cache the mutation invalidates.
+ *      from the row cache the mutation replaces.
  *   3. The view after — manifest_build over the post-enable set; manifest_diff
  *      attributes the transition to the newly enabled profiles, so gain-side
  *      stats (claimed / added / updated) land in the right slot per profile.
@@ -671,7 +671,7 @@ static error_t *profile_enable(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *enabled = NULL;
+    string_array_t *enabled_profiles = NULL;
     string_array_t *all_branches = NULL;
     string_array_t *to_enable = NULL;
     string_array_t *to_enable_validated = NULL;
@@ -691,7 +691,7 @@ static error_t *profile_enable(
     size_t no_target = 0;
 
     /* Phase 1: Gather & validate */
-    err = state_get_profiles(state, &enabled);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
@@ -704,15 +704,15 @@ static error_t *profile_enable(
      * args like `enable foo foo` are silently deduped instead of producing two
      * rows in to_enable_validated (and, downstream, two "Enabled foo" lines with
      * split stats attribution). */
-    size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
+    size_t cap = enabled_profiles->count > 0 ? enabled_profiles->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
     seen_set = hashmap_borrow(cap);
     if (!enabled_set || !seen_set) {
         err = ERROR(ERR_MEMORY, "Failed to create membership sets");
         goto cleanup;
     }
-    for (size_t i = 0; i < enabled->count; i++) {
-        err = hashmap_set(enabled_set, enabled->items[i], (void *) (uintptr_t) 1);
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        err = hashmap_set(enabled_set, enabled_profiles->items[i], (void *) (uintptr_t) 1);
         if (err) {
             err = error_wrap(err, "Failed to populate enabled membership set");
             goto cleanup;
@@ -827,7 +827,7 @@ static error_t *profile_enable(
              * its spelling or another (mount_same_target), is an idempotent re-run
              * and stays the skip below, the row's spelling kept. */
             if (target) {
-                const char *current = state_peek_profile_target(state, profile);
+                const char *current = state_target(state, profile);
                 if (!current || !mount_same_target(current, target)) {
                     retarget = profile;
                     err = string_array_push(to_enable_validated, profile);
@@ -1106,7 +1106,7 @@ cleanup:
     string_array_free(to_enable_validated);
     string_array_free(to_enable);
     string_array_free(all_branches);
-    string_array_free(enabled);
+    string_array_free(enabled_profiles);
 
     return err;
 }
@@ -1118,7 +1118,7 @@ cleanup:
  *   1. Gather & validate — filter requested profiles to those actually enabled;
  *      emit not-enabled diagnostics up front. Read the bindings the deletes will
  *      forget: the one fact disable destroys that the user cannot recompute,
- *      copied before the row cache they borrow from dies.
+ *      copied before the deletes replace the row cache they borrow from.
  *   2. The view before — manifest_build over the enabled set as it stands. It
  *      feeds the receipt only: a set that will not build is warned about and
  *      the disable lands without one.
@@ -1146,7 +1146,7 @@ static error_t *profile_disable(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *enabled = NULL;
+    string_array_t *enabled_profiles = NULL;
     string_array_t *to_disable_validated = NULL;
     hashmap_t *enabled_set = NULL;
     hashmap_t *seen_set = NULL;
@@ -1159,7 +1159,7 @@ static error_t *profile_disable(
     size_t not_enabled = 0;
 
     /* Phase 1: Gather & validate */
-    err = state_get_profiles(state, &enabled);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
@@ -1169,7 +1169,7 @@ static error_t *profile_disable(
      * which matches `disable <name>` where <name> is not enabled (also a no-op
      * success). The historic ERR_NOT_FOUND here made the two paths inconsistent
      * for the same user intent. */
-    if (opts->all_profiles && enabled->count == 0) {
+    if (opts->all_profiles && enabled_profiles->count == 0) {
         if (!opts->quiet) {
             output_info(out, OUTPUT_NORMAL, "No enabled profiles to disable");
         }
@@ -1183,15 +1183,15 @@ static error_t *profile_disable(
      * args (`disable foo foo`) are silently deduped and don't produce two rows
      * in to_disable_validated. Only the explicit-args path consults it; --all
      * iterates the unique enabled set. */
-    size_t cap = enabled->count > 0 ? enabled->count * 2 : 16;
+    size_t cap = enabled_profiles->count > 0 ? enabled_profiles->count * 2 : 16;
     enabled_set = hashmap_borrow(cap);
     seen_set = hashmap_borrow(cap);
     if (!enabled_set || !seen_set) {
         err = ERROR(ERR_MEMORY, "Failed to create membership sets");
         goto cleanup;
     }
-    for (size_t i = 0; i < enabled->count; i++) {
-        err = hashmap_set(enabled_set, enabled->items[i], (void *) (uintptr_t) 1);
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        err = hashmap_set(enabled_set, enabled_profiles->items[i], (void *) (uintptr_t) 1);
         if (err) {
             err = error_wrap(err, "Failed to populate enabled membership set");
             goto cleanup;
@@ -1206,8 +1206,8 @@ static error_t *profile_disable(
 
     if (opts->all_profiles) {
         /* --all: every currently enabled profile is, by definition, valid. */
-        for (size_t i = 0; i < enabled->count; i++) {
-            err = string_array_push(to_disable_validated, enabled->items[i]);
+        for (size_t i = 0; i < enabled_profiles->count; i++) {
+            err = string_array_push(to_disable_validated, enabled_profiles->items[i]);
             if (err) {
                 err = error_wrap(err, "Failed to add profile to disable list");
                 goto cleanup;
@@ -1251,8 +1251,8 @@ static error_t *profile_disable(
     }
 
     /* The bindings the deletes forget, spelled as the screens print them — arena
-     * copies, because Phase 3's first delete retires the row cache the peek borrows
-     * from. NULL where the row had none. */
+     * copies, because Phase 3's first delete replaces the row cache state_target
+     * lends from. NULL where the row had none. */
     const char **forgotten = arena_calloc(
         ctx->arena, to_disable_validated->count, sizeof(*forgotten)
     );
@@ -1262,7 +1262,7 @@ static error_t *profile_disable(
     }
     for (size_t i = 0; i < to_disable_validated->count; i++) {
         const char *bound =
-            state_peek_profile_target(state, to_disable_validated->items[i]);
+            state_target(state, to_disable_validated->items[i]);
         if (!bound) continue;
         char shown[PATH_MAX];
         output_format_path(bound, identity()->home, shown, sizeof(shown));
@@ -1438,7 +1438,7 @@ cleanup:
     if (seen_set) hashmap_free(seen_set, NULL);
     if (enabled_set) hashmap_free(enabled_set, NULL);
     string_array_free(to_disable_validated);
-    string_array_free(enabled);
+    string_array_free(enabled_profiles);
 
     return err;
 }
@@ -1462,7 +1462,7 @@ static error_t *profile_reorder(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *current_enabled = NULL;
+    string_array_t *enabled_profiles = NULL;
     error_t *err = NULL;
 
     /* Validation: at least one profile specified */
@@ -1476,14 +1476,14 @@ static error_t *profile_reorder(
     }
 
     /* Get current enabled profiles */
-    err = state_get_profiles(state, &current_enabled);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
     }
 
     /* Edge case: no enabled profiles */
-    if (current_enabled->count == 0) {
+    if (enabled_profiles->count == 0) {
         err = ERROR(
             ERR_VALIDATION, "No enabled profiles to reorder\n"
             "Hint: Run 'dotta profile enable <name>' first"
@@ -1507,7 +1507,7 @@ static error_t *profile_reorder(
 
     /* Validation 2: All provided profiles must be currently enabled */
     for (size_t i = 0; i < opts->profile_count; i++) {
-        if (!string_array_contains(current_enabled, opts->profiles[i])) {
+        if (!string_array_contains(enabled_profiles, opts->profiles[i])) {
             err = ERROR(
                 ERR_VALIDATION, "Profile '%s' is not enabled\n"
                 "Hint: Only enabled profiles can be reordered."
@@ -1521,11 +1521,11 @@ static error_t *profile_reorder(
     /* Validation 3: Profile count must match. With no name twice and every name
      * enabled, equal counts make the named set the enabled set — nothing is left
      * to check for. */
-    if (opts->profile_count != current_enabled->count) {
+    if (opts->profile_count != enabled_profiles->count) {
         err = ERROR(
             ERR_VALIDATION, "Profile count mismatch: %zu enabled, %zu provided\n"
             "Hint: All enabled profiles must be included in reorder",
-            current_enabled->count, opts->profile_count
+            enabled_profiles->count, opts->profile_count
         );
         goto cleanup;
     }
@@ -1533,7 +1533,7 @@ static error_t *profile_reorder(
     /* Check if order actually changed (idempotency) */
     bool order_changed = false;
     for (size_t i = 0; i < opts->profile_count; i++) {
-        if (strcmp(opts->profiles[i], current_enabled->items[i]) != 0) {
+        if (strcmp(opts->profiles[i], enabled_profiles->items[i]) != 0) {
             order_changed = true;
             break;
         }
@@ -1550,10 +1550,10 @@ static error_t *profile_reorder(
     output_section(out, OUTPUT_VERBOSE, "Profile order change");
 
     output_print(out, OUTPUT_VERBOSE, "  Before:");
-    for (size_t i = 0; i < current_enabled->count; i++) {
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
         output_print(
             out, OUTPUT_VERBOSE, " %s",
-            current_enabled->items[i]
+            enabled_profiles->items[i]
         );
     }
     output_endline(out, OUTPUT_VERBOSE);
@@ -1607,7 +1607,7 @@ static error_t *profile_reorder(
 
 cleanup:
     /* Cleanup all resources */
-    string_array_free(current_enabled);
+    string_array_free(enabled_profiles);
 
     return err;
 }
@@ -1629,7 +1629,7 @@ static error_t *profile_validate(
     output_t *out = ctx->out;
 
     /* Resource tracking for cleanup */
-    string_array_t *enabled = NULL;
+    string_array_t *enabled_profiles = NULL;
     string_array_t *missing = NULL;
     string_array_t *deleted = NULL;
     hashmap_t *probed = NULL;
@@ -1651,7 +1651,7 @@ static error_t *profile_validate(
     }
 
     /* Get enabled profiles from state */
-    err = state_get_profiles(state, &enabled);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         err = error_wrap(err, "Failed to get enabled profiles");
         goto cleanup;
@@ -1666,8 +1666,8 @@ static error_t *profile_validate(
         goto cleanup;
     }
 
-    for (size_t i = 0; i < enabled->count; i++) {
-        const char *profile = enabled->items[i];
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        const char *profile = enabled_profiles->items[i];
 
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
@@ -1792,7 +1792,7 @@ cleanup:
     if (probed) hashmap_free(probed, NULL);
     string_array_free(deleted);
     string_array_free(missing);
-    string_array_free(enabled);
+    string_array_free(enabled_profiles);
 
     /* If there's an error, return it now */
     if (err) return err;

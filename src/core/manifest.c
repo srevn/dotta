@@ -1431,7 +1431,7 @@ error_t *manifest_mount_table(
 
     *out = NULL;
 
-    state_profiles_t rows = state_peek_profiles(state);
+    state_profiles_t rows = state_profiles(state);
 
     /* One slot per row plus the binding's, which is always there to reserve:
      * the array is never NULL and mount_table_build takes it with a count of
@@ -1478,7 +1478,7 @@ error_t *manifest_build(
     /* The enabled set, in position order. Borrowed from the row cache for the
      * loop only: every name a row keeps is duplicated below, so the view never
      * depends on the cache's lifetime. */
-    state_profiles_t profiles = state_peek_profiles(state);
+    state_profiles_t profiles = state_profiles(state);
 
     /* The topology the same rows describe — each profile's target, and this
      * machine's $HOME — built here, from the rows of this instant, so a custom/

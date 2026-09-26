@@ -296,7 +296,7 @@ static inline git_filemode_t path_type_to_git_filemode(path_type_t type) {
  * Rows and their strings live in the arena the builder was given; the path index
  * is heap-allocated and released by manifest_free. A view built over the enabled
  * set borrows nothing else — not the state's row cache it was read from — so it
- * stands across the mutations that invalidate the cache, for the arena's lifetime.
+ * stands across the mutations that replace the cache, for the arena's lifetime.
  * A tree view borrows the one thing its caller handed it, the mount table, and
  * lends it back (manifest_mounts).
  */
@@ -306,9 +306,9 @@ typedef struct manifest manifest_t;
  * Build the manifest over the enabled set
  *
  * The enabled profiles, in precedence order, are read from the state handle's
- * row cache (state_peek_profiles) — the one source every caller would otherwise
- * copy them out of. A state with no database (state_load on a repository never
- * touched by `dotta init`) has no rows and yields an empty view.
+ * row cache (state_profiles) — the one source every caller would otherwise copy
+ * them out of. A state with no database (state_load on a repository never touched
+ * by `dotta init`) has no rows and yields an empty view.
  *
  * Performance: O(N) where N is total files across all profiles. One Git tree
  * alive per iteration (loaded, walked, freed).
@@ -350,7 +350,7 @@ typedef struct manifest manifest_t;
  *   - rows, per-row strings, the profile names (duplicated once per profile)
  *     and the mount table: arena-allocated; the caller's arena reclaims them at
  *     arena_destroy. The view borrows nothing from the row cache, so it stands
- *     across the enabled_profiles mutations that invalidate the cache — a `before`
+ *     across the enabled_profiles mutations that replace the cache — a `before`
  *     built ahead of a profile enable reads the same after it, and the view after
  *     is the builder called again.
  *   - index hashmap: heap-allocated; on success the caller releases it with

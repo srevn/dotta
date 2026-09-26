@@ -403,9 +403,8 @@ const mount_root_t *mount_root_of(
  * between them. `*out_filesystem_path` is then NULL — the claim is `custom/`
  * and the profile has no target on this machine, a clone before the target is
  * chosen, a sync that pulled another machine's claims — which is how every lookup
- * in the tree answers an absence (manifest_lookup, state_peek_profile_target,
- * hashmap_get), and the callers read it as the fact it is: the manifest's claim
- * routine skips
+ * in the tree answers an absence (manifest_lookup, state_target, hashmap_get),
+ * and the callers read it as the fact it is: the manifest's claim routine skips
  * the claim and records it on the view (manifest_unbound, the health channel);
  * user-facing contexts fall back to a display spelling (remove.c) or let a hint
  * stand in (ignore.c). HOME and ROOT lookups always answer — those entries are

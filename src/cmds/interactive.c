@@ -195,7 +195,7 @@ static error_t *build_items(
 ) {
     error_t *err = NULL;
     string_array_t *all_profiles = NULL;
-    string_array_t *state_profiles = NULL;
+    string_array_t *enabled_profiles = NULL;
     hashmap_t *profile_map = NULL;
     bool *used = NULL;
     size_t item_idx = 0;
@@ -211,7 +211,7 @@ static error_t *build_items(
     /* First-run case: a handle whose underlying DB doesn't exist holds a load
      * of zero rows, which is the correct empty enabled set rather than a failure
      * to absorb. Save via 'w' publishes the store's dotta.db in state_begin. */
-    err = state_get_profiles(deploy_state, &state_profiles);
+    err = state_names(deploy_state, &enabled_profiles);
     if (err) goto cleanup;
 
     /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
@@ -241,9 +241,9 @@ static error_t *build_items(
     }
 
     /* Pass A: enabled profiles in their saved order. */
-    if (state_profiles) {
-        for (size_t i = 0; i < state_profiles->count; i++) {
-            const char *name = state_profiles->items[i];
+    if (enabled_profiles) {
+        for (size_t i = 0; i < enabled_profiles->count; i++) {
+            const char *name = enabled_profiles->items[i];
             void *idx_ptr = hashmap_get(profile_map, name);
             if (!idx_ptr) {
                 /* Persisted name no longer exists locally — drop silently. */
@@ -275,7 +275,7 @@ static error_t *build_items(
 
 cleanup:
     view->item_count = item_idx;
-    string_array_free(state_profiles);
+    string_array_free(enabled_profiles);
     string_array_free(all_profiles);
     hashmap_free(profile_map, NULL);
     free(used);
@@ -290,9 +290,9 @@ cleanup:
  *
  * The binding first, and it cannot fail: the row's target is the store's fact
  * whatever the branch says, so a branch that will not read keeps its arrow. It
- * borrows from state_peek_profile_target's row cache, whose lifetime ends at
- * the next state_enable/disable/reorder; save runs those much later, so the copy
- * crosses the boundary now.
+ * borrows from state_target's row cache, whose lifetime ends at the next
+ * state_enable/disable/reorder; save runs those much later, so the copy crosses
+ * the boundary now.
  *
  * The need is absorbed, not propagated: the editor is the way out of an enabled
  * set the next load cannot build. A sheet this build refuses on one enabled branch
@@ -307,9 +307,9 @@ static error_t *read_targets(
         item_t *it = &view->items[i];
 
         /* The binding the store holds for this row — only an enabled row has
-         * one, the word cmd_add spells the same peek with. */
+         * one, the word cmd_add spells the same read with. */
         const char *bound = it->enabled
-            ? state_peek_profile_target(deploy_state, it->name) : NULL;
+            ? state_target(deploy_state, it->name) : NULL;
         if (bound) {
             it->target = strdup(bound);
             if (!it->target) {
@@ -430,16 +430,16 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
 
 /* Phase: classify diff against the persisted set BEFORE any state mutation.
  *
- * state_peek_profiles lends the row cache. The first state_enable/disable call
- * re-reads it and frees the strings this slice points at, so everything a row
- * has to give is decided or copied here, while the borrows are live: needs_enable
- * (additions, plus retained rows whose target names another directory),
- * removal_names (arena-strdup'd so they survive the re-read), and the spelling
- * a retained binding keeps, copied onto the item that offered another for it. */
+ * state_profiles lends the row cache, which the first state_enable/disable call
+ * replaces, so everything a row has to give is decided or copied here, while
+ * the borrows are live: needs_enable (additions, plus retained rows whose target
+ * names another directory), removal_names (arena-strdup'd so they outlive the
+ * slice), and the spelling a retained binding keeps, copied onto the item that
+ * offered another for it. */
 static error_t *plan_classify(
     arena_t *arena, state_t *deploy_state, plan_t *plan
 ) {
-    state_profiles_t persisted = state_peek_profiles(deploy_state);
+    state_profiles_t persisted = state_profiles(deploy_state);
 
     if (plan->new_order.count > 0) {
         plan->needs_enable = arena_calloc(
@@ -559,8 +559,8 @@ static error_t *plan_validate(const plan_t *plan) {
 
 /* Phase: apply the diff. Enables first (cache holds every reorder name when reorder
  * runs), removals next, reorder last over the post-diff set. Each enable/disable
- * invalidates the row cache; reorder reloads it on entry so the precondition
- * holds. */
+ * re-reads the row cache after its write, so reorder's precondition reads the
+ * post-diff set. */
 static error_t *plan_apply(state_t *deploy_state, const plan_t *plan) {
     for (size_t i = 0; i < plan->new_order.count; i++) {
         if (!plan->needs_enable[i]) continue;

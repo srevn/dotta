@@ -1267,7 +1267,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
     /* The one line after it differs: a profile this machine has not enabled has
      * nothing to apply the revert to. */
-    if (!state_has_profile(state, profile)) {
+    if (!state_enabled(state, profile)) {
         output_gap(out, OUTPUT_NORMAL);
         output_info(
             out, OUTPUT_NORMAL, "Note: Profile '%s' is not enabled on this machine",

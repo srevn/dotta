@@ -232,19 +232,19 @@ cleanup:
  * missing profiles and filters them out.
  *
  * @param repo Repository (must not be NULL)
- * @param state_profiles Profiles from state (must not be NULL)
+ * @param enabled_profiles Profiles from state (must not be NULL)
  * @param out_valid_profiles Valid profiles (caller must free)
  * @param out_missing_profiles Missing profiles (caller must free, can be NULL)
  * @return Error or NULL on success
  */
 static error_t *validate_state_profiles(
     git_repository *repo,
-    const string_array_t *state_profiles,
+    const string_array_t *enabled_profiles,
     string_array_t **out_valid_profiles,
     string_array_t **out_missing_profiles
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(state_profiles);
+    CHECK_NULL(enabled_profiles);
     CHECK_NULL(out_valid_profiles);
 
     error_t *err = NULL;
@@ -270,8 +270,8 @@ static error_t *validate_state_profiles(
     }
 
     /* Check each profile */
-    for (size_t i = 0; i < state_profiles->count; i++) {
-        const char *profile = state_profiles->items[i];
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        const char *profile = enabled_profiles->items[i];
 
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
@@ -325,25 +325,25 @@ error_t *profile_resolve_enabled(
     CHECK_NULL(out);
 
     error_t *err = NULL;
-    string_array_t *state_profiles = NULL;
+    string_array_t *enabled_profiles = NULL;
     string_array_t *valid_profiles = NULL;
     string_array_t *missing_profiles = NULL;
 
     /* Get profile names from state */
-    err = state_get_profiles(state, &state_profiles);
+    err = state_names(state, &enabled_profiles);
     if (err) {
         error_free(err);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
-    if (!state_profiles || state_profiles->count == 0) {
-        string_array_free(state_profiles);
+    if (!enabled_profiles || enabled_profiles->count == 0) {
+        string_array_free(enabled_profiles);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     /* Validate: check which profiles still exist as branches */
     err = validate_state_profiles(
-        repo, state_profiles, &valid_profiles, &missing_profiles
+        repo, enabled_profiles, &valid_profiles, &missing_profiles
     );
     if (err) {
         err = error_wrap(err, "Failed to validate state profiles");
@@ -374,20 +374,20 @@ error_t *profile_resolve_enabled(
     /* No valid profiles after filtering */
     if (valid_profiles->count == 0) {
         string_array_free(valid_profiles);
-        string_array_free(state_profiles);
+        string_array_free(enabled_profiles);
         return ERROR(ERR_NOT_FOUND, "No enabled profiles found");
     }
 
     /* Success */
     *out = valid_profiles;
-    string_array_free(state_profiles);
+    string_array_free(enabled_profiles);
 
     return NULL;
 
 cleanup:
     string_array_free(valid_profiles);
     string_array_free(missing_profiles);
-    string_array_free(state_profiles);
+    string_array_free(enabled_profiles);
 
     return err;
 }
@@ -397,19 +397,19 @@ cleanup:
  */
 error_t *profile_resolve_commit(
     git_repository *repo,
-    const string_array_t *enabled,
+    const string_array_t *enabled_profiles,
     const char *commit_ref,
     git_commit **out_commit,
     const char **out_profile
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(enabled);
+    CHECK_NULL(enabled_profiles);
     CHECK_NULL(commit_ref);
     CHECK_NULL(out_commit);
     CHECK_NULL(out_profile);
 
-    for (size_t i = 0; i < enabled->count; i++) {
-        const char *profile = enabled->items[i];
+    for (size_t i = 0; i < enabled_profiles->count; i++) {
+        const char *profile = enabled_profiles->items[i];
         git_commit *commit = NULL;
 
         error_t *err = gitops_resolve_commit_in_branch(

@@ -68,6 +68,15 @@ typedef enum {
 #define STATEMENT_COUNT (STATEMENT_VOID_PRUNE + 1)
 
 /**
+ * One read of the enabled_profiles table, whole: its rows in position order,
+ * each string the read's own — the rows state_profiles lends, owned
+ */
+typedef struct {
+    state_profile_entry_t *entries;         /* NULL when the read found zero rows */
+    size_t count;                           /* Rows in entries */
+} profiles_t;
+
+/**
  * State structure
  *
  * Maintains minimal in-memory cache for performance:
@@ -78,25 +87,35 @@ typedef enum {
  *   open takes its statement unchecked (state_statement)
  *
  * Row cache invariant:
- *   The cache is the materialized view of enabled_profiles, and it has one state:
- *   loaded. load_profile_entries() re-reads it whole at every boundary where
- *   the table becomes this handle's — the handle's open, a transaction taken,
- *   each shape mutation, a rollback — so every reader of it is a plain read of
- *   the table as this handle last saw it under its lock. Mutations re-read rather
- *   than patch the in-memory layout, so a rollback cannot leave the cache out
- *   of sync with the DB.
+ *   The cache is the enabled_profiles table as this handle last read it, and it
+ *   has one state: loaded. state_read_profiles() reads it whole where the table
+ *   becomes this handle's — the handle's open, a transaction taken — and again
+ *   after each of the handle's own writes to it; a read is whole before it replaces
+ *   anything, so one that fails leaves the cache as it was, and every reader of
+ *   the cache is a plain read. Writes re-read rather than patch the in-memory
+ *   layout: the table's rules — the position an UPSERT gives, the target it keeps
+ *   — are SQL's, spelled once.
+ *
+ *   A transaction keeps the rows it began with until it ends: its writes replace
+ *   the cache and leave them standing, its commit releases them, and its rollback
+ *   puts them back. The table a rollback returns to is the one the transaction
+ *   began with, which no other connection can move while the lock is held, so a
+ *   rollback reads nothing and has nothing to fail. The two slots share one read
+ *   until a write replaces the cache: "the transaction wrote the table" is the
+ *   two pointers differing, the one test that decides which read is released,
+ *   and it holds over a table of no rows, whose read is NULL in both.
  */
 struct state {
     /* Database connection */
     sqlite3 *db;                            /* NULL while nothing stands at db_path; state_begin publishes one */
     char *db_path;                          /* The store's dotta.db; owned, freed by state_free */
 
-    /* Transaction state */
-    bool in_transaction;                    /* BEGIN IMMEDIATE executed */
+    /* The transaction: a COMMIT or ROLLBACK owed, and the rows it began with */
+    bool in_transaction;                    /* The handle's BEGIN, until its COMMIT or ROLLBACK (state_locked) */
+    profiles_t begun;                       /* The rows it began with, its rollback's; none outside one */
 
-    /* The enabled_profiles rows, position-ordered (see the invariant above) */
-    state_profile_entry_t *profile_entries; /* NULL when the load found zero rows */
-    size_t profile_entry_count;             /* Rows in profile_entries */
+    /* The enabled_profiles rows (see the invariant above) */
+    profiles_t profiles;                    /* The table as this handle last read it */
 
     /* The prepared statements (see the cache above) */
     sqlite3_stmt *statements[STATEMENT_COUNT]; /* Indexed by statement_t */
@@ -622,44 +641,45 @@ static sqlite3_stmt *state_statement(state_t *state, statement_t statement) {
 }
 
 /**
- * Free the row cache
+ * Release one read of the rows
  *
- * Safe to call repeatedly. The first act of every load, and state_free's last:
- * nothing else frees the cache, because nothing else leaves it unloaded.
+ * Every row of the read's allocation, whether or not the read finished building
+ * it: the allocation is zeroed, so a row the read never reached frees two NULLs.
+ * Leaves the read empty, as a read of no rows is.
  */
-static void free_profile_entries(state_t *state) {
-    for (size_t i = 0; i < state->profile_entry_count; i++) {
-        free(state->profile_entries[i].name);
-        free(state->profile_entries[i].target);
+static void state_deinit_profiles(profiles_t *profiles) {
+    for (size_t i = 0; i < profiles->count; i++) {
+        free(profiles->entries[i].name);
+        free(profiles->entries[i].target);
     }
-    free(state->profile_entries);
-    state->profile_entries = NULL;
-    state->profile_entry_count = 0;
+    free(profiles->entries);
+    *profiles = (profiles_t){ 0 };
 }
 
 /**
  * Read the enabled_profiles rows into the cache
  *
- * One SELECT over enabled_profiles, every row (name, target) materialized, ordered
- * by position to match the user's precedence order. Called at every boundary
- * where the table becomes this handle's (the first is the admission, state_admit),
- * and answering every per-profile question thereafter as a linear peek over the
- * cache — no per-question SQL. A handle with no database has no boundary to read
- * at: its rows are the empty cache its load left, which is the answer for a store
- * never written (state_load).
+ * One SELECT over enabled_profiles, every row (name, target) copied out, ordered
+ * by position to match the user's precedence order. Called where the table becomes
+ * this handle's (the first is the admission, state_admit) and after each of its
+ * own writes, and answering every per-profile question thereafter as a linear
+ * search of the cache — no per-question SQL. A handle with no database has nothing
+ * to read: its rows are the empty cache its load left, which is the answer for
+ * a store never written (state_load).
  *
- * The cache is allocated at the statement's own count: the table's size rides
- * in the last column, counted by the statement that reads the rows it sizes, so
+ * The read is allocated at the statement's own count: the table's size rides in
+ * the last column, counted by the statement that reads the rows it sizes, so
  * the two are one snapshot and nothing another connection commits while this
  * one steps can make them disagree.
  *
- * A read that fails leaves the cache empty and says so to its caller.
+ * Read whole before it replaces anything: a read that fails releases its own,
+ * leaves the cache as it was, and says so to its caller. The rows it replaces
+ * are released, unless the open transaction began with them — those are its
+ * rollback's (state_rollback).
  */
-static error_t *load_profile_entries(state_t *state) {
+static error_t *state_read_profiles(state_t *state) {
     CHECK_NULL(state);
     CHECK_NULL(state->db);
-
-    free_profile_entries(state);
 
     /* Every row in position order, and the table's size beside each: the first
      * row sizes the allocation. */
@@ -674,12 +694,12 @@ static error_t *load_profile_entries(state_t *state) {
     }
 
     rc = sqlite3_step(stmt);
-    size_t row_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 2) : 0;
-
-    state_profile_entry_t *entries = NULL;
-    if (row_count > 0) {
-        entries = calloc(row_count, sizeof(*entries));
-        if (!entries) {
+    profiles_t rows = {
+        .count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 2) : 0,
+    };
+    if (rows.count > 0) {
+        rows.entries = calloc(rows.count, sizeof(*rows.entries));
+        if (!rows.entries) {
             sqlite3_finalize(stmt);
             return ERROR(ERR_MEMORY, "Failed to allocate profile row cache");
         }
@@ -687,26 +707,21 @@ static error_t *load_profile_entries(state_t *state) {
 
     error_t *err = NULL;
     size_t i = 0;
-    while (rc == SQLITE_ROW && i < row_count) {
-        const char *name_db = (const char *) sqlite3_column_text(stmt, 0);
-        const char *target_db = (const char *) sqlite3_column_text(stmt, 1);
+    while (rc == SQLITE_ROW && i < rows.count) {
+        /* The name is NOT NULL, so a NULL is its conversion failing to allocate.
+         * The target is asked its type before it is converted, the one moment
+         * SQLite answers it, so a NULL the conversion returns for a value is
+         * that failure too — never a row bound nowhere. */
+        const char *name = (const char *) sqlite3_column_text(stmt, 0);
+        int target_type = sqlite3_column_type(stmt, 1);
+        const char *target = (const char *) sqlite3_column_text(stmt, 1);
 
-        if (!name_db) {
-            err = ERROR(ERR_STATE_INVALID, "Profile name is NULL");
-            break;
-        }
-
-        /* Allocate the row's owned strings atomically. If either strdup fails,
-         * free whatever succeeded right here before breaking — the outer cleanup
-         * loop only walks rows [0, i), so a half-built row at index i would
-         * otherwise leak its successful allocations. */
-        state_profile_entry_t *row = &entries[i];
-        row->name = strdup(name_db);
-        row->target = target_db ? strdup(target_db) : NULL;
-
-        if (!row->name || (target_db && !row->target)) {
-            free(row->name);
-            free(row->target);
+        /* A copy that fails leaves its row half-built for the release below,
+         * which walks the whole allocation. */
+        state_profile_entry_t *row = &rows.entries[i];
+        row->name = name ? strdup(name) : NULL;
+        row->target = target ? strdup(target) : NULL;
+        if (!row->name || (target_type != SQLITE_NULL && !row->target)) {
             err = ERROR(ERR_MEMORY, "Failed to copy enabled profile row");
             break;
         }
@@ -722,16 +737,16 @@ static error_t *load_profile_entries(state_t *state) {
     }
 
     if (err) {
-        for (size_t j = 0; j < i; j++) {
-            free(entries[j].name);
-            free(entries[j].target);
-        }
-        free(entries);
+        state_deinit_profiles(&rows);
         return err;
     }
 
-    state->profile_entries = entries;
-    state->profile_entry_count = i;
+    /* The rows replaced are released, unless the open transaction began with
+     * them: those its rollback puts back. */
+    if (state->profiles.entries != state->begun.entries) {
+        state_deinit_profiles(&state->profiles);
+    }
+    state->profiles = (profiles_t){ .entries = rows.entries, .count = i };
 
     return NULL;
 }
@@ -742,13 +757,13 @@ static error_t *load_profile_entries(state_t *state) {
  * Row count is bounded by the user's enabled-profile list (typically < 10), so
  * the linear scan is faster than a hash lookup and fits comfortably in L1.
  */
-static const state_profile_entry_t *find_profile_entry(
+static const state_profile_entry_t *state_find_profile(
     const state_t *state,
     const char *profile
 ) {
-    for (size_t i = 0; i < state->profile_entry_count; i++) {
-        if (strcmp(state->profile_entries[i].name, profile) == 0) {
-            return &state->profile_entries[i];
+    for (size_t i = 0; i < state->profiles.count; i++) {
+        if (strcmp(state->profiles.entries[i].name, profile) == 0) {
+            return &state->profiles.entries[i];
         }
     }
     return NULL;
@@ -757,38 +772,38 @@ static const state_profile_entry_t *find_profile_entry(
 /**
  * The enabled_profiles rows, in position order
  */
-state_profiles_t state_peek_profiles(const state_t *state) {
+state_profiles_t state_profiles(const state_t *state) {
     if (!state) return (state_profiles_t){ 0 };
 
     return (state_profiles_t){
-        .entries = state->profile_entries,
-        .count = state->profile_entry_count,
+        .entries = state->profiles.entries,
+        .count = state->profiles.count,
     };
 }
 
 /**
- * Peek a single profile's deployment target
+ * A single profile's deployment target
  */
-const char *state_peek_profile_target(
+const char *state_target(
     const state_t *state,
     const char *profile
 ) {
     if (!state || !profile) return NULL;
 
-    const state_profile_entry_t *entry = find_profile_entry(state, profile);
+    const state_profile_entry_t *entry = state_find_profile(state, profile);
     return entry ? entry->target : NULL;
 }
 
 /**
- * Get enabled profiles
+ * The enabled profiles' names, copied
  *
- * Returns copy that caller must free. Built from the row cache.
+ * Built from the row cache; the copy is the caller's to free.
  *
  * @param state State (must not be NULL)
  * @param out Profile names (must not be NULL, caller must free)
  * @return Error or NULL on success
  */
-error_t *state_get_profiles(const state_t *state, string_array_t **out) {
+error_t *state_names(const state_t *state, string_array_t **out) {
     CHECK_NULL(state);
     CHECK_NULL(out);
 
@@ -797,8 +812,8 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
         return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
     }
 
-    for (size_t i = 0; i < state->profile_entry_count; i++) {
-        error_t *err = string_array_push(copy, state->profile_entries[i].name);
+    for (size_t i = 0; i < state->profiles.count; i++) {
+        error_t *err = string_array_push(copy, state->profiles.entries[i].name);
         if (err) {
             string_array_free(copy);
             return err;
@@ -820,12 +835,12 @@ error_t *state_get_profiles(const state_t *state, string_array_t **out) {
  * @param profile Profile name to check (must not be NULL)
  * @return true if profile is enabled, false otherwise
  */
-bool state_has_profile(const state_t *state, const char *profile) {
+bool state_enabled(const state_t *state, const char *profile) {
     if (!state || !profile) {
         return false;
     }
 
-    return find_profile_entry(state, profile) != NULL;
+    return state_find_profile(state, profile) != NULL;
 }
 
 /**
@@ -881,7 +896,7 @@ error_t *state_enable_profile(
         return sqlite_error(state->db, "Failed to enable profile");
     }
 
-    return load_profile_entries(state);
+    return state_read_profiles(state);
 }
 
 /**
@@ -913,7 +928,7 @@ error_t *state_disable_profile(
     }
 
     /* Not an error if profile wasn't enabled (DELETE with 0 rows affected is OK) */
-    return load_profile_entries(state);
+    return state_read_profiles(state);
 }
 
 /**
@@ -958,7 +973,7 @@ error_t *state_reorder_profiles(
      * the cache means the caller wants to add a profile — they should call
      * state_enable_profile first. */
     for (size_t i = 0; i < profiles->count; i++) {
-        if (!find_profile_entry(state, profiles->items[i])) {
+        if (!state_find_profile(state, profiles->items[i])) {
             return ERROR(
                 ERR_INVALID_ARG,
                 "state_reorder_profiles: profile '%s' is not currently enabled "
@@ -972,13 +987,12 @@ error_t *state_reorder_profiles(
      * given, so a shorter list would delete the rows it left out. Every name a
      * row, the counts equal, and UNIQUE(name) refusing a name twice at the
      * re-insert make the list the enabled set, permuted. */
-    if (profiles->count != state->profile_entry_count) {
+    if (profiles->count != state->profiles.count) {
         return ERROR(
             ERR_INVALID_ARG,
             "state_reorder_profiles: %zu names for %zu enabled profiles "
             "(reorder permutes the enabled set; use state_disable_profile to "
-            "remove a profile)",
-            profiles->count, state->profile_entry_count
+            "remove a profile)", profiles->count, state->profiles.count
         );
     }
 
@@ -1002,7 +1016,7 @@ error_t *state_reorder_profiles(
      * ten rows in practice. */
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
-        const state_profile_entry_t *preserved = find_profile_entry(state, name);
+        const state_profile_entry_t *preserved = state_find_profile(state, name);
 
         /* The precondition loop above guarantees preserved is non-NULL. No NULL
          * branch on target either: a profile with no deployment target (home/root)
@@ -1029,7 +1043,7 @@ error_t *state_reorder_profiles(
     }
 
     /* SQL now reflects the new order; re-read so the cache does too. */
-    return load_profile_entries(state);
+    return state_read_profiles(state);
 }
 
 /**
@@ -1096,7 +1110,7 @@ static error_t *state_admit(state_t *state) {
     err = state_prepare(state);
     if (err) goto fail;
 
-    err = load_profile_entries(state);
+    err = state_read_profiles(state);
     if (err) goto fail;
 
     return NULL;
@@ -1346,18 +1360,22 @@ error_t *state_begin(state_t *state) {
         return sqlite_error(state->db, "Failed to acquire write lock");
     }
 
-    state->in_transaction = true;
-
     /* Re-read inside the new lock: a handle open since before the lock was taken
      * holds rows another process may have committed since, and this transaction's
-     * readers must see its own snapshot. Unlike rollback's own read, this one
-     * has a channel — the transaction the caller never got is rolled back, and
-     * the failure is returned. */
-    error_t *err = load_profile_entries(state);
+     * readers must see its own snapshot. A read that fails releases the lock
+     * the caller never got, and is returned: the read replaced nothing, so the
+     * handle keeps the rows it held. */
+    error_t *err = state_read_profiles(state);
     if (err) {
-        state_rollback(state);
+        sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
         return err;
     }
+
+    /* The transaction is the handle's once its rows are read, and these are the
+     * rows it begins with: the table for as long as the lock is held, and what
+     * its rollback puts back. */
+    state->in_transaction = true;
+    state->begun = state->profiles;
 
     return NULL;
 }
@@ -1385,28 +1403,38 @@ error_t *state_commit(state_t *state) {
     }
 
     state->in_transaction = false;
+
+    /* The transaction's rows are the table's now: the ones it began with are
+     * released, where a write replaced them. */
+    if (state->begun.entries != state->profiles.entries) {
+        state_deinit_profiles(&state->begun);
+    }
+    state->begun = (profiles_t){ 0 };
+
     return NULL;
 }
 
 /**
  * Roll back a transaction started by state_begin()
- *
- * Re-reads the row cache from the rolled-back table: a mutation inside the
- * transaction left it holding rows the database no longer has. This is the one
- * read of that table with no channel to report on — rollback is void and its
- * callers are unwinding — so a read that fails leaves the cache empty, which is
- * what every caller here already has: none reads the state again.
  */
 void state_rollback(state_t *state) {
     if (!state || !state->db || !state->in_transaction) {
         return;
     }
 
+    /* The handle's account decides it, not SQLite's: after a transaction SQLite
+     * ended itself this ROLLBACK finds none, and what follows still runs. */
     sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
     state->in_transaction = false;
 
-    error_t *err = load_profile_entries(state);
-    if (err) error_free(err);
+    /* The rows go back with the table: a write inside the transaction replaced
+     * the ones it began with, and those are the table again (the invariant
+     * above). */
+    if (state->profiles.entries != state->begun.entries) {
+        state_deinit_profiles(&state->profiles);
+    }
+    state->profiles = state->begun;
+    state->begun = (profiles_t){ 0 };
 }
 
 /**
@@ -1429,11 +1457,9 @@ void state_free(state_t *state) {
         return;
     }
 
-    /* Rollback if transaction still active (error path cleanup) */
-    if (state->in_transaction && state->db) {
-        sqlite3_exec(state->db, "ROLLBACK;", NULL, NULL, NULL);
-        state->in_transaction = false;
-    }
+    /* A transaction still open (error path cleanup) is rolled back as any other
+     * is, its rows going back with it, so the one read left is the handle's */
+    state_rollback(state);
 
     /* Finalize prepared statements */
     state_finalize(state);
@@ -1449,7 +1475,7 @@ void state_free(state_t *state) {
     }
 
     free(state->db_path);
-    free_profile_entries(state);
+    state_deinit_profiles(&state->profiles);
     free(state);
 }
 
@@ -1459,7 +1485,7 @@ void state_free(state_t *state) {
  * One full-table SELECT — a local prepare+finalize: a single-pass scan run once
  * per command gains nothing from a cached statement — whose last column is the
  * table's size, so the arena allocation is exact and the count and the rows are
- * one snapshot (load_profile_entries).
+ * one snapshot (state_read_profiles).
  */
 error_t *state_records(
     const state_t *state,

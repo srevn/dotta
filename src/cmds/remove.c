@@ -1400,7 +1400,7 @@ static error_t *delete_profile_branch(
      * deletion is Git-only). Failure is non-fatal — warn and decide over what
      * was read; what this run cannot settle, the next apply reads as orphans
      * and releases. */
-    bool profile_was_enabled = state_has_profile(state, opts->profile);
+    bool profile_was_enabled = state_enabled(state, opts->profile);
     state_record_t *records = NULL;
     size_t record_count = 0;
     size_t deployed_count = 0;

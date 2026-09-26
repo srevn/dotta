@@ -231,7 +231,7 @@ static error_t *list_profiles(
     for (size_t i = 0; i < branches->count; i++) {
         const char *profile = branches->items[i];
 
-        bool is_enabled = state && state_has_profile(state, profile);
+        bool is_enabled = state && state_enabled(state, profile);
         const char *indicator = is_enabled ? "* " : "  ";
 
         /* Simple mode: Just name with enabled indicator */

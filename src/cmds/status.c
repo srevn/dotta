@@ -75,7 +75,7 @@ static void status_print_profiles(
 
         /* Format profile name, and the binding when the row has one */
         output_styled(out, OUTPUT_NORMAL, "  {cyan}%s{reset}", profile);
-        const char *target = state_peek_profile_target(state, profile);
+        const char *target = state_target(state, profile);
         if (target) {
             char shown[PATH_MAX];
             output_format_path(target, identity()->home, shown, sizeof(shown));

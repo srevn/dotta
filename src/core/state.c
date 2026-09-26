@@ -38,7 +38,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "26"
+#define STATE_SCHEMA_VERSION "27"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -234,6 +234,12 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  * commits — and a failure leaves the transaction open, and state_create discards
  * the file whole.
  *
+ * A CHECK runs at every write of its row, so a set of words is spelled with `=`
+ * and never `IN (…)`: SQLite compiles a constant list in a CHECK into a table
+ * it builds anew at every evaluation, where a statement's own list is built once.
+ * Measured at 0.152.3: 60,000 record writes in one transaction took 355 ms with
+ * the kind a list and 196 ms with it three comparisons.
+ *
  * - the header: dotta's id and the schema's number (STATE_APPLICATION_ID,
  *   STATE_SCHEMA_VERSION)
  * - enabled_profiles: User's profile management (position, name, target)
@@ -266,7 +272,7 @@ static error_t *state_initialize(sqlite3 *db) {
          *     no reader meets a spelling no binder wrote, and the row cache is
          *     the table with no rule of its own. Named, so the refusal a hand
          *     meets reads "CHECK constraint failed: target_spelling"; the record's
-         *     `kind IN (…)` below is unnamed because its expression is its own
+         *     kind check below is unnamed because its expression is its own
          *     sentence. */
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
@@ -321,7 +327,7 @@ static error_t *state_initialize(sqlite3 *db) {
         "        " FOLDED_SPELLING("filesystem_path") ","
         "    storage_path TEXT NOT NULL,"
         "    profile TEXT NOT NULL,"
-        "    kind TEXT NOT NULL CHECK(kind IN ('file', 'symlink', 'directory')),"
+        "    kind TEXT NOT NULL CHECK(kind = 'file' OR kind = 'symlink' OR kind = 'directory'),"
         "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
         "    owner TEXT,"
         "    \"group\" TEXT,"

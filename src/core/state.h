@@ -50,6 +50,11 @@
  *   — and refuses any other where a hand makes the edit (key_spelling). The shape
  *   and never the length: a key longer than PATH_MAX is the kernel's to refuse,
  *   at the call that meets it
+ * - Every name the store keeps is held the same way to what its readers assume
+ *   of it: a storage name stands under its label (storage_spelling), as label_of
+ *   and label_tail assert of every record's; a profile's name is never empty
+ *   (profile_spelling); and an owner or a group is whole — so no reader meets a
+ *   name that would abort it, print as no one, or read as another
  * - A path-keyed table is stored sorted by its key and read in key order: the
  *   key is TEXT under BINARY — memcmp over UTF-8 — and holds no NUL (key_spelling),
  *   which is where BINARY and strcmp meet, so a read comes back in strcmp order:
@@ -188,7 +193,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation and at every ownership event (apply deploy, adoption,
- *     acknowledgement, add, update); a learning keeps the one it read.
+ *     acknowledgement, add, update); a learning keeps the one it read. A storage
+ *     name in the grammar and a profile never empty, each whole (schema-enforced).
  *   - the content (kind, blob_oid, stat): the node the record describes — a regular
  *     file, a link or a directory, in a look's own words (fs_occupant_t) — and
  *     the blob dotta last verified it holds, with the stat of that moment. The
@@ -208,7 +214,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     on, the row's since (a learning of the claim). It is the base a claim Git
  *     moved is measured from (core/workspace.h workspace_claims_moved), and an
  *     orphan's reference on disk. A link claims no mode: its column is NULL,
- *     and every other node's is permission bits, 0000–0777 (both schema-enforced).
+ *     and every other node's is permission bits, 0000–0777; an owner and a group
+ *     are whole, NULL where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers.
  *     deployed_at advances to now on every ownership event and a learning keeps
  *     it, 0 = dotta never put this here. ordered_at is when remove --delete-files
@@ -562,11 +569,14 @@ void state_free(state_t *state);
  * is state_disable_profile. The callers validate a target before it reaches this
  * write (mount_validate_target, at the binders), and the schema refuses what
  * they would not have written (the target_spelling constraint), an empty string
- * among them: NULL is the one spelling of no target.
+ * among them: NULL is the one spelling of no target. The name is one Git's branch
+ * rule admitted — a branch the caller listed or asked for (sys/gitops.h
+ * gitops_branch_refname) — and the schema refuses the names no reader of the
+ * row could read (the profile_spelling constraint), the empty one among them.
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)
- *   - profile MUST NOT be NULL or empty
+ *   - profile MUST NOT be NULL
  *
  * Postconditions:
  *   - Profile added to enabled_profiles or existing entry updated

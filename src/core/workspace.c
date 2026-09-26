@@ -3411,11 +3411,6 @@ bool workspace_item_tags(
         return false;
     }
 
-    /* Validate item has a profile name (critical for metadata formatting) */
-    if (!item->profile || item->profile[0] == '\0') {
-        return false;
-    }
-
     size_t tag_count = 0;
     *color_out = OUTPUT_COLOR_YELLOW;  /* Default color for most states */
 

@@ -38,7 +38,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "27"
+#define STATE_SCHEMA_VERSION "28"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -225,6 +225,38 @@ static fs_occupant_t state_kind_from_text(const char *text) {
     column " NOT GLOB '*/..' AND " column " NOT GLOB '*/..[/]*')))"
 
 /**
+ * The spelling every storage name the store keeps is held to: a name in the grammar
+ * — a label's word alone, or the word, its separator and a tail whose every
+ * component is a name, never empty, "." or "..", with no separator trailing —
+ * the rule infra/label.h label_validate_storage holds in C where a tree, a sheet
+ * or an argument becomes a name, and whole. A record's name is read back by readers
+ * that assert it stands under a label (label_of, label_tail: an orphan's absent
+ * claim, cleanup's exclude), so one standing under none would abort the load
+ * that met it. The words are label_words', spelled once more in the store's
+ * language; storage_spelling composes it, and tests/test-state.c drives label_words
+ * and one list of shapes through it and through the grammar's own check.
+ */
+#define STORAGE_SPELLING(column) \
+    "(instr(" column ", char(0)) = 0 AND (" column " = 'home' OR " column " = 'root' OR " \
+    column " = 'custom' OR ((" column " GLOB 'home/?*' OR " column " GLOB 'root/?*' OR " \
+    column " GLOB 'custom/?*') AND " column " NOT GLOB '*/[/]*' AND " column " NOT GLOB '*/' AND " \
+    column " NOT GLOB '*/.' AND " column " NOT GLOB '*/.[/]*' AND " \
+    column " NOT GLOB '*/..' AND " column " NOT GLOB '*/..[/]*')))"
+
+/**
+ * The spelling every profile's name the store keeps is held to: never empty,
+ * and whole. The rest of a branch name's rule is Git's (sys/gitops.h
+ * gitops_branch_refname), asked of every name the store keeps where it meets
+ * Git — the view's build, an orphan's probe — and refused there by the name.
+ * The store keeps out the two spellings no reader meets as Git's refusal: a NUL,
+ * which C reads past, so two names UNIQUE holds apart would be one to the row
+ * cache; and the empty name, which every screen prints as no one. profile_spelling
+ * composes it, on the enabled set's name and on the record's profile.
+ */
+#define PROFILE_SPELLING(column) \
+    "(" column " != '' AND instr(" column ", char(0)) = 0)"
+
+/**
  * Write the schema into a new database, whole
  *
  * The database is state_create's private file, which no other process can open
@@ -238,7 +270,10 @@ static fs_occupant_t state_kind_from_text(const char *text) {
  * and never `IN (…)`: SQLite compiles a constant list in a CHECK into a table
  * it builds anew at every evaluation, where a statement's own list is built once.
  * Measured at 0.152.3: 60,000 record writes in one transaction took 355 ms with
- * the kind a list and 196 ms with it three comparisons.
+ * the kind a list and 196 ms with it three comparisons. And a CHECK a macro
+ * composes is named, so the refusal a hand meets names its rule ("CHECK constraint
+ * failed: key_spelling"), where one whose expression is its own sentence — the
+ * record's kind, its mode — is not.
  *
  * - the header: dotta's id and the schema's number (STATE_APPLICATION_ID,
  *   STATE_SCHEMA_VERSION)
@@ -264,19 +299,20 @@ static error_t *state_initialize(sqlite3 *db) {
         /* Enabled profiles table (authority: profile commands).
          *
          * Held by the schema:
+         *   - a name is never empty, and whole (profile_spelling: PROFILE_SPELLING
+         *     above): UNIQUE holds apart exactly the names the row cache reads
+         *     apart, and no row's name prints as no one
          *   - a target is NULL — bound nowhere — or a spelling FOLDED_SPELLING
          *     admits: the rule the binders validate before they write
          *     (infra/mount.h mount_validate_target) and the mount table takes
          *     as its precondition (mount_table_build), spelled once more in the
          *     store's own language so a hand edit is refused where it is made:
          *     no reader meets a spelling no binder wrote, and the row cache is
-         *     the table with no rule of its own. Named, so the refusal a hand
-         *     meets reads "CHECK constraint failed: target_spelling"; the record's
-         *     kind check below is unnamed because its expression is its own
-         *     sentence. */
+         *     the table with no rule of its own. */
         "CREATE TABLE enabled_profiles ("
         "    position INTEGER PRIMARY KEY,"
-        "    name TEXT NOT NULL UNIQUE,"
+        "    name TEXT NOT NULL UNIQUE CONSTRAINT profile_spelling CHECK "
+        "        " PROFILE_SPELLING("name") ","
         "    target TEXT CONSTRAINT target_spelling CHECK ("
         "        target IS NULL OR " FOLDED_SPELLING("target") ")"
         ") STRICT;"
@@ -320,17 +356,27 @@ static error_t *state_initialize(sqlite3 *db) {
          *     first NUL, so a key holding one would be another key's string to
          *     C: two rows, one key. With BINARY's memcmp over UTF-8, this is
          *     what makes a read in key order strcmp order (core/state.h)
+         *   - the binding is one a writer spells, and C reads whole: the storage
+         *     name one in the grammar (storage_spelling: STORAGE_SPELLING above
+         *     — the precondition label_of and label_tail assert of every name
+         *     they are handed), the profile never empty (profile_spelling, the
+         *     enabled set's name's)
+         *   - an owner or a group is whole, so the name C reads is the name the
+         *     claim stored; NULL is no claim, and an empty name stands as the
+         *     claim sheet wrote it (core/metadata.c metadata_from_json)
          *   - the table is stored sorted by its key (WITHOUT ROWID): a read in
          *     key order walks the table, with no sort step and no index between */
         "CREATE TABLE path_records ("
         "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
         "        " FOLDED_SPELLING("filesystem_path") ","
-        "    storage_path TEXT NOT NULL,"
-        "    profile TEXT NOT NULL,"
+        "    storage_path TEXT NOT NULL CONSTRAINT storage_spelling CHECK "
+        "        " STORAGE_SPELLING("storage_path") ","
+        "    profile TEXT NOT NULL CONSTRAINT profile_spelling CHECK "
+        "        " PROFILE_SPELLING("profile") ","
         "    kind TEXT NOT NULL CHECK(kind = 'file' OR kind = 'symlink' OR kind = 'directory'),"
         "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
-        "    owner TEXT,"
-        "    \"group\" TEXT,"
+        "    owner TEXT CHECK(instr(owner, char(0)) = 0),"
+        "    \"group\" TEXT CHECK(instr(\"group\", char(0)) = 0),"
         "    "
         "    blob_oid BLOB CHECK(blob_oid IS NULL"
         "        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"
@@ -797,16 +843,14 @@ error_t *state_enable_profile(
     CHECK_NULL(profile);
     CHECK_NULL(state->db);
 
-    if (profile[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
-    }
-
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_ENABLE_PROFILE);
 
-    /* 1. the name  2. the target as given — a NULL pointer binds NULL, which keeps
-     * the row's, and a string is the column's to admit or refuse (target_spelling),
-     * an empty one among them. A bind SQLite refuses ends the enable before its
-     * step, which would run with that parameter NULL: a new row unbound. */
+    /* 1. the name, the column's to admit or refuse (profile_spelling), an empty
+     * one among them  2. the target as given — a NULL pointer binds NULL, which
+     * keeps the row's, and a string is the column's to admit or refuse
+     * (target_spelling), an empty one among them. A bind SQLite refuses ends
+     * the enable before its step, which would run with that parameter NULL: a
+     * new row unbound. */
     int rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, target, -1, SQLITE_TRANSIENT);
     if (rc == SQLITE_OK) rc = sqlite3_step(stmt);

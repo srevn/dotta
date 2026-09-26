@@ -17,13 +17,16 @@
  * sheet writes, an argument a user types — becomes a name here and nowhere else.
  * label_validate_storage is that boundary: traversal is refused at it and trusted
  * below (infra/mount.h), and its four tree-and-sheet readers are the whole reason
- * every verb beneath may join a tail onto a root's spelling without looking.
- * The bytes of a name are the cipher's associated data (crypto/cipher.h), so
- * the shape rule refuses a malformed name and folds nothing, and the one
- * recognition reads a prefix and validates nothing, its domain being any string
- * with NULL in it. No wrapper for a name is stored anywhere: the bytes are the
- * wire form and the authenticated one both, so a split is a value on the stack
- * for one call, refspec_t's shape, never a member.
+ * every verb beneath may join a tail onto a root's spelling without looking. A
+ * name dotta wrote returns from outside too — a record's, read back from the
+ * store — and the store refuses to keep one the rule refuses, the rule spelled
+ * once more in SQL (core/state.c STORAGE_SPELLING). The bytes of a name are the
+ * cipher's associated data (crypto/cipher.h), so the shape rule refuses a malformed
+ * name and folds nothing, and the one recognition reads a prefix and validates
+ * nothing, its domain being any string with NULL in it. No wrapper for a name
+ * is stored anywhere: the bytes are the wire form and the authenticated one both,
+ * so a split is a value on the stack for one call, refspec_t's shape, never a
+ * member.
  *
  * Three verbs pay for that decision. A name is a string of a particular shape
  * and C cannot say so, so label_of, label_tail and label_compose assert what
@@ -51,8 +54,10 @@
  *
  * A fourth label is an enumerator here, an entry in label_words, one more slot
  * in every array sized by LABEL_COUNT, a decision at every reader that derives
- * a consequence from one — and a hand edit to label_validate_storage's sentence,
- * which spells the three words as prose and is the one spelling no array reaches.
+ * a consequence from one — and two hand edits no array reaches:
+ * label_validate_storage's sentence, which spells the three words as prose, and
+ * the store's schema, which spells them in SQL (core/state.c STORAGE_SPELLING)
+ * and moves with its version (tests/test-state.c walks label_words through it).
  */
 typedef enum {
     LABEL_HOME,    /* home/...   -> $HOME/... */
@@ -179,8 +184,9 @@ bool label_prefixes(const char *s);
  *
  * `storage_path` stands under a label (label_prefixes) — the whole precondition,
  * and every reader holds a path that does: a name the namer composed beneath a
- * root's label (core/manifest.h manifest_name), a row's or a record's, validated
- * where the branch or the sheet was read (label_validate_storage), or an argument
+ * root's label (core/manifest.h manifest_name), a row's, validated where the
+ * branch or the sheet was read (label_validate_storage), a record's, which the
+ * store refuses to keep otherwise (core/state.c STORAGE_SPELLING), or an argument
  * the resolver's first arm dispatched on that very test (infra/path.c
  * path_input_resolve). Asserted, never answered: a path under no label is a
  * caller's bug, and no label may stand in for it — least of all LABEL_ROOT in
@@ -213,12 +219,13 @@ label_t label_of(const char *storage_path);
  * Readers: every surface a pattern is evaluated on — the enumeration
  * core/ignore.h's "The subject" describes without naming. The two walks ask of
  * what they found (cmds/add.c is_excluded, core/workspace.c
- * scan_directory_for_untracked), the scope of a row for --exclude (core/scope.c
- * scope_is_excluded), the policy of a name for auto_encrypt (core/policy.c
- * encryption_policy_matches_auto_patterns), and `ignore --test` twice, of its
- * argument and of the name the view gave it (cmds/ignore.c test_path_ignore).
- * One reader counts rather than matches: the climb, whose rungs are the separators
- * in the tail (core/metadata.c metadata_capture_ancestors).
+ * scan_directory_for_untracked), the scope of a name for --exclude, a row's or
+ * an orphan's (core/scope.c scope_is_excluded), the policy of a name for
+ * auto_encrypt (core/policy.c encryption_policy_matches_auto_patterns), and `ignore
+ * --test` twice, of its argument and of the name the view gave it (cmds/ignore.c
+ * test_path_ignore). One reader counts rather than matches: the climb, whose
+ * rungs are the separators in the tail (core/metadata.c
+ * metadata_capture_ancestors).
  *
  * @param storage_path Storage path, under a label
  * @return Pointer past the label; "" for the word alone, and for a label spelled
@@ -249,7 +256,9 @@ const char *label_tail(const char *storage_path);
  * listing (core/profiles.c tree_entry_content_path), the sheet's keys
  * (core/metadata.c metadata_from_json), export's walk (cmds/export.c
  * collect_tree_callback) — and the resolver's storage arm, where the name is
- * one the user typed (infra/path.c path_input_resolve).
+ * one the user typed (infra/path.c path_input_resolve). The store holds a record's
+ * name to the same checks in its own language (core/state.c STORAGE_SPELLING),
+ * and tests/test-state.c drives one list of shapes through both.
  *
  * @param storage_path Path to validate (must not be NULL)
  * @return Error or NULL when valid

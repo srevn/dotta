@@ -540,9 +540,10 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * it is to disk — and workspace_stale below, the boolean reading of it. A reader
  * not on this list is a bug.
  *
- * Not this: workspace_compare_orphan's fast path, whose reference IS the record's
- * pair. Nothing stands on the other side there, so a stat that matches is CMP_EQUAL
- * by identity and no comparison is owed.
+ * Not this: core/workspace.c workspace_compare_base's stat — the second question's
+ * and an orphan's — whose reference IS the record's pair. Nothing stands on the
+ * other side there, so a stat that matches is CMP_EQUAL by identity and no
+ * comparison is owed.
  */
 static inline compare_result_t workspace_compare_confirmed(
     const manifest_row_t *row, const state_record_t *record

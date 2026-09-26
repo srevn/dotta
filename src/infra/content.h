@@ -360,13 +360,13 @@ error_t *content_rebind(
  * read refused with the version pair — and what that read answers is the reference
  * the disk copy is judged against (infra/compare.h's pair).
  *
- * Why the bytes, and why no proxy: both callers compare against the *record's*
- * blob (core/state.h state_record_t), which carries no encryption stamp. The
- * view row's flag in scope is another blob's, and routing the base question on
- * it once miscategorised staleness across an encryption-policy flip in both
- * directions (the two are recorded at core/workspace.c workspace_analyze_file).
- * The row's own comparison keeps the id form and opens nothing, and that asymmetry
- * is principled rather than overlooked: the row's flag is that blob's own, made
+ * Why the bytes, and why no proxy: the blob compared is the *record's*
+ * (core/state.h state_record_t), which carries no encryption stamp. The view
+ * row's flag in scope is another blob's, and routing the base question on it
+ * once miscategorised staleness across an encryption-policy flip in both directions
+ * (the two are recorded at core/workspace.c workspace_compare_base). The row's
+ * own comparison keeps the id form and opens nothing, and that asymmetry is
+ * principled rather than overlooked: the row's flag is that blob's own, made
  * byte-true at the write boundary (content_capture_file), where the record's
  * blob has no boundary at which it could have been stamped.
  *
@@ -382,14 +382,15 @@ error_t *content_rebind(
  *
  * The seam reads; it does not look. What the read answers is judged by
  * infra/compare.h's pair, whose one look is the caller's own, so the stat is
- * forwarded and required here for the same reason it is required there. Both
- * readers ask the blob's kind of that look first and call only where it stands
- * (core/workspace.h workspace_type_occupant), so no blob is opened, and no key
- * asked, to learn what the look already tells.
+ * forwarded and required here for the same reason it is required there. The reader
+ * asks the record's kind of that look first and calls only where it stands —
+ * the record's kind being a look's word already (core/state.h state_record_t) —
+ * so no blob is opened, and no key asked, to learn what the look already tells.
  *
- * Readers: `core/workspace.c workspace_analyze_file` (the second question, ours
- * against the base) and `core/workspace.c workspace_compare_orphan` (an orphan
- * against the record dotta keeps of it). A reader not on this list is a bug.
+ * Reader: `core/workspace.c workspace_compare_base`, the one question a record
+ * asks of a look — put by the file analysis's second question (ours against the
+ * base) and by an orphan's comparison (its copy against the record dotta keeps
+ * of it). A reader not on this list is a bug.
  *
  * @param cache The run's reader: its repository and its key manager (must not
  *          be NULL). The memo is neither read nor written here.

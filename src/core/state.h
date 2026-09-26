@@ -243,12 +243,12 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *   - the blob a record carries is the blob of the row its binding names. An
  *     encrypted blob is readable under no other binding (infra/content) — so
  *     the record's own binding, not the row's, is what a later load decrypts
- *     its base with (core/workspace.c workspace_analyze_file,
- *     workspace_compare_orphan). Kept where the record is built, since the store
- *     writes what it is handed: a first observation and an ownership event take
- *     the binding and the blob from one row, and a learning, which keeps the
- *     binding it read, learns a blob only where the row is that binding's claim
- *     (core/workspace.c workspace_analyze_file, the content's note).
+ *     its base with (core/workspace.c workspace_compare_base). Kept where the
+ *     record is built, since the store writes what it is handed: a first
+ *     observation and an ownership event take the binding and the blob from one
+ *     row, and a learning, which keeps the binding it read, learns a blob only
+ *     where the row is that binding's claim (core/workspace.c
+ *     workspace_analyze_file, the content's note).
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is its reference on disk, and the binding
@@ -308,9 +308,9 @@ typedef struct state_record {
  * Whether there is a stat to ask about is the asker's question, not this one's.
  *
  * Readers: core/workspace.c workspace_analyze_file, of the base, and
- * workspace_compare_orphan, of the orphan's record — the two fast paths, which
- * must not disagree about what a stat proves, and cannot: each hands in a record
- * whole, and the triple is never asked under a kind not its own.
+ * workspace_compare_base, of the base or an orphan's record — the two fast paths,
+ * which must not disagree about what a stat proves, and cannot: each hands in a
+ * record whole, and the triple is never asked under a kind not its own.
  */
 static inline bool state_stat_matches(const state_record_t *record, const struct stat *st) {
     return record->stat.mtime != 0

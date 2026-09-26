@@ -605,6 +605,81 @@ static void workspace_analyze_claim(workspace_item_t *item) {
 }
 
 /**
+ * Is disk the record's own pair? — the one question a record asks of the look
+ * it meets
+ *
+ * Asked by the file analysis's second question (ours against the base) and by
+ * an orphan's comparison (its copy against its record), of one record under one
+ * look, so the two cannot answer it apart — they have before, on the kind (the
+ * second question once read the base under the row's) and on the order of the
+ * rungs. Every rung is put to the record's own kind, bytes and binding, never
+ * the row's.
+ *
+ * The verdict is the ladder's (infra/compare.h): CMP_EQUAL where disk is the
+ * pair, CMP_DIFFERENT where other content of the record's kind stands,
+ * CMP_TYPE_DIFF where another kind does, CMP_MISSING where the path left between
+ * the look and the read. A read that fails is the error, and what a failure to
+ * look means is each caller's: the active item's base vouches for nothing, the
+ * orphan reads unverified.
+ *
+ * @param ws Workspace (its content reader)
+ * @param item The item whose record is asked (must not be NULL): the record carries
+ *             a confirmed blob — both callers' gate — and the look found something
+ *             standing there
+ * @param out The verdict, set wherever NULL is returned
+ * @return The read's error, or NULL
+ */
+static error_t *workspace_compare_base(
+    workspace_t *ws,
+    const workspace_item_t *item,
+    compare_result_t *out
+) {
+    const state_record_t *base = item->record;
+
+    /* The stat: a look of the record's kind standing behind the triple taken at
+     * its last confirmation is the node dotta confirmed, unwritten since — disk
+     * is the pair, nothing loaded and nothing hashed (core/state.h
+     * state_stat_matches). The file analysis's fast path has found it wanting
+     * already, and asks it again here for a few integer compares, so the question
+     * stays whole. */
+    if (state_stat_matches(base, &item->st)) {
+        *out = CMP_EQUAL;
+        return NULL;
+    }
+
+    /* The kind, off the look before any read — the ladder's first rung: another
+     * kind than the record's stands, which no byte can change, so no blob is
+     * opened and no key asked to learn what the look already tells
+     * (core/workspace.h workspace_type_occupant). Read first, a sealed base would
+     * read [locked] without the key where the look finds another node. */
+    if (item->occupant != workspace_type_occupant(base->type)) {
+        *out = CMP_TYPE_DIFF;
+        return NULL;
+    }
+
+    /* One read of the record's blob, as the entry its own type names, under its
+     * own binding — the pair its blob opens under (core/state.h state_record_t)
+     * — judged against the caller's look, which is forwarded: the seam reads,
+     * the pair judges, and neither takes a look of its own (infra/content.h
+     * content_compare_blob_to_disk). The kind and the reference both come off
+     * the blob whose comparison this is, never a stamp: the record carries none,
+     * and the blob dotta confirmed may sit on the other side of an
+     * encryption-policy flip from what Git holds now. Routed on the row's stamp,
+     * a sealed base read as plaintext never matched, and a plaintext base read
+     * as sealed was refused. */
+    return content_compare_blob_to_disk(
+        ws->content_cache,
+        &base->blob_oid,
+        item->filesystem_path,
+        path_type_to_git_filemode(base->type),
+        &item->st,
+        base->storage_path,
+        base->profile,
+        out
+    );
+}
+
+/**
  * Analyze divergence for a single active file row
  *
  * All expected state (blob_oid, type, mode, etc.) is in the view row — no database
@@ -965,60 +1040,25 @@ static void workspace_analyze_file(
          * without a base there is no second question, and a base equal to theirs
          * deduces the answer from the first.
          *
-         * Route the base comparison by the base blob's own kind and its own bytes
+         * Put to the base's own kind and its own bytes (workspace_compare_base)
          * — each question is put to the side it compares against, where the first
          * is put under the row's. The kind is what makes the two verdicts one:
          * a base the row has since retyped is a link where a file now stands,
          * and reading disk as the row's kind hashes a regular file the user wrote
          * against the link's target — Git hashes a target exactly as it hashes
-         * content — and calls it exactly what dotta deployed. One place asks
-         * it, because two askers of one fact can disagree, and the kind is where
-         * these two did.
-         *
-         * And the base's kind is asked of the look before anything is read, as
-         * the first question asks the row's (the ladder's first rung,
-         * core/workspace.h workspace_type_occupant): a node of neither kind is
-         * not the pair dotta confirmed whatever its bytes, so reading the base
-         * — a decrypt, for a sealed one — would only say what the look already
-         * says, and disk_at_base keeps the answer it holds.
-         *
-         * The latent bug class the bytes avoid: routing on row->encrypted silently
-         * miscategorised the staleness check across encryption-policy transitions.
-         * Both directions failed:
-         *   - encrypted base / plaintext current → compare_oid_to_disk hashed
-         *     plaintext disk against an encrypted-blob OID, never equal, STALE
-         *     never set.
-         *   - plaintext base / encrypted current → content_cache called with
-         *     expected_encrypted=true on a plaintext blob, the old cross-check
-         *     raised ERR_STATE_INVALID, swallowed below.
-         *
-         * content_compare_blob_to_disk reads the base once, as the entry the
-         * record's own type names, so the kind and the reference both come off
-         * the blob whose comparison this is. There is no stamp for a record's
-         * blob that could be read instead.
+         * content — and calls it exactly what dotta deployed. A node of neither
+         * kind is not the pair dotta confirmed whatever its bytes, and answers
+         * as another kind with nothing read.
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT), the conservative answer — STALE still holds,
          * because git_moved is a fact about two OIDs. */
-        if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF) &&
-            item->occupant == workspace_type_occupant(base->type)) {
+        if (git_moved && (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF)) {
             compare_result_t at_base;
-            error_t *verify_err = content_compare_blob_to_disk(
-                ws->content_cache,
-                &base->blob_oid,
-                filesystem_path,
-                path_type_to_git_filemode(base->type),
-                &item->st,
-                base->storage_path,
-                base->profile,
-                &at_base
-            );
+            error_t *verify_err = workspace_compare_base(ws, item, &at_base);
 
-            if (verify_err) {
-                error_free(verify_err);
-            } else {
-                disk_at_base = (at_base == CMP_EQUAL);
-            }
+            disk_at_base = !verify_err && at_base == CMP_EQUAL;
+            error_free(verify_err);
         }
     }
 
@@ -1109,13 +1149,10 @@ static void workspace_analyze_file(
  *
  * Architecture:
  * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
- * - The record's stat as the fast path, the one the file analysis relies on: a
- *   match means the exact node dotta wrote, no hashing
- * - Past it, the node's kind off the look, which needs no read (the ladder's
- *   first rung, as the file analysis asks it)
- * - Past that, one read of the record's blob answers its kind and the reference
- *   together, and the plaintext ends with the judgment (infra/content.h
- *   content_compare_blob_to_disk)
+ * - The content against the record's own pair, the question the file analysis's
+ *   second question asks too (workspace_compare_base): the stat — a match means
+ *   the exact node dotta wrote, no hashing — else the node's kind off the look,
+ *   which needs no read, else one read of the record's blob
  * - The claim checked against the record's: the full-bit mode, the ownership
  *   beside it
  * - Single-stat-per-file (the caller's look, which nothing below retakes)
@@ -1137,78 +1174,29 @@ static void workspace_analyze_file(
  */
 static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item) {
     const state_record_t *record = item->record;
-    const char *filesystem_path = item->filesystem_path;
-    const char *storage_path = item->storage_path;
-    const char *profile = item->profile;
 
-    /* Step 1: The reference blob
+    /* Step 1: Content and type comparison
      *
-     * The record's — the blob dotta last confirmed disk against. state.c's read
-     * path already rejects wrong-sized BLOB columns, and the caller guarantees
-     * a non-zero one, so by the time we get here the OID is well-formed.
+     * The record's own pair under the caller's look (workspace_compare_base):
+     * the stat first, so the exact node dotta wrote is recognised without loading
+     * or hashing anything — and the claim below is asked of that node, never of
+     * another kind's — then the kind off the look, then one read of the record's
+     * blob, the one dotta last confirmed disk against. The caller guarantees a
+     * non-zero blob, and the store holds none of another size (CHECK).
      */
-    const git_oid *reference = &record->blob_oid;
-
-    /* Step 2: The record's own filemode
-     *
-     * The kind the read below is put under, mapped from the record's type by
-     * the shared helper, for one mapping across modules. The claim's mode check
-     * reads the record's mode, never this.
-     */
-    git_filemode_t expected_filemode = path_type_to_git_filemode(record->type);
-
     compare_result_t cmp_result;
-
-    /* Step 3: Content and type comparison.
-     *
-     * The record's fast path first: a live look of the record's kind that still
-     * stands behind the triple captured at the last confirmation proves disk
-     * still equals record.blob_oid (core/state.h state_stat_matches), so the
-     * exact node dotta wrote is recognised without loading or hashing anything
-     * — and the claim below is asked of that node, never of another kind's.
-     *
-     * Then the ladder's first rung, off the look before any read, as the file
-     * analysis asks it (workspace_analyze_file): another kind than the record's
-     * stands, which no byte can change — so no blob is opened and no key asked
-     * to learn what the look already tells.
-     *
-     * Otherwise content_compare_blob_to_disk reads the record's blob once, as
-     * the entry the record's own type names, and judges the look against what
-     * it answers. The kind comes off that blob and nothing else, so the orphan
-     * walker cannot route a different blob's state by a cached flag by accident
-     * — the record carries no encrypted flag, and the blob dotta deployed may
-     * sit on the other side of an encryption-policy flip from what Git holds
-     * now. The caller's look is forwarded: the seam reads, the pair judges, and
-     * neither takes a look of its own. */
-    if (state_stat_matches(record, &item->st)) {
-        /* the look stands behind the stat ⟹ disk == record.blob_oid */
-        cmp_result = CMP_EQUAL;
-    } else if (item->occupant != workspace_type_occupant(record->type)) {
-        cmp_result = CMP_TYPE_DIFF;
-    } else {
-        error_t *err = content_compare_blob_to_disk(
-            ws->content_cache,
-            reference,
-            filesystem_path,
-            expected_filemode,
-            &item->st,
-            storage_path,
-            profile,
-            &cmp_result
-        );
-
-        if (err) {
-            /* Cannot classify, load, decrypt, or compare — no key in reach, a
-             * blob a held key refuses, an unsupported cipher version, an I/O
-             * error, a blob missing from the repository. Handed back whole: the
-             * caller folds its class onto the item and the orphan reads unverified,
-             * which is what the file analysis does with the same causes at the
-             * same step (workspace_analyze_file). */
-            return err;
-        }
+    error_t *err = workspace_compare_base(ws, item, &cmp_result);
+    if (err) {
+        /* Cannot classify, load, decrypt, or compare — no key in reach, a blob
+         * a held key refuses, an unsupported cipher version, an I/O error, a
+         * blob missing from the repository. Handed back whole: the caller folds
+         * its class onto the item and the orphan reads unverified, which is what
+         * the file analysis does with the same causes at the same step
+         * (workspace_analyze_file). */
+        return err;
     }
 
-    /* Step 4: Interpret comparison result
+    /* Step 2: Interpret comparison result
      *
      * Use switch statement (not if-else) for exhaustive handling.
      */
@@ -1251,7 +1239,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
             break;
     }
 
-    /* Step 5: Claim checking (if the path still stands)
+    /* Step 3: Claim checking (if the path still stands)
      *
      * Only when the content phase ruled neither absence nor another kind — a
      * mode question over what is not there, or is not that, answers nothing.

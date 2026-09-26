@@ -929,6 +929,7 @@ static error_t *update_write_record(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
     bool in_transaction = false;
+    size_t synced = 0, removed = 0, fallbacks = 0;   /* The split, said once the commit lands */
 
     /* Initialize output */
     *out_updated = false;
@@ -954,7 +955,6 @@ static error_t *update_write_record(
      * confirmation for a deleted path, and a fallback's disk content is what
      * this profile's blob was, not the fallback blob. */
     time_t now = time(NULL);
-    size_t synced = 0, removed = 0, fallbacks = 0;
 
     for (size_t c = 0; c < commit_count; c++) {
         const update_commit_t *commit = &commits[c];
@@ -1022,15 +1022,6 @@ static error_t *update_write_record(
         }
     }
 
-    /* Verbose summary (emit before commit so failure diagnostics still have it) */
-    if (synced > 0 || removed > 0 || fallbacks > 0) {
-        output_info(
-            out, OUTPUT_VERBOSE,
-            "Record synced: %zu staged, %zu removed, %zu fallback%s",
-            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
-        );
-    }
-
 commit:
     err = state_commit(state);
     if (err) {
@@ -1040,6 +1031,17 @@ commit:
     in_transaction = false;
 
     *out_updated = true;
+
+    /* The split of the "Record updated" line cmd_update says, said once the commit
+     * landed: a count said before it would stand above a COMMIT the store refused
+     * (core/state.h state_commit) */
+    if (synced > 0 || removed > 0 || fallbacks > 0) {
+        output_info(
+            out, OUTPUT_VERBOSE,
+            "Record synced: %zu staged, %zu removed, %zu fallback%s",
+            synced, removed, fallbacks, fallbacks == 1 ? "" : "s"
+        );
+    }
 
 cleanup:
     /* Leave state handle clean for the caller by rolling back any uncommitted

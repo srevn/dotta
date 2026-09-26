@@ -389,6 +389,8 @@ error_t *state_open(git_repository *repo, state_t **out);
  * state_begin() or state_resume() started after an earlier save. All modifications
  * made since the transaction began are atomically committed; a handle with no
  * open transaction by its own account (state_locked) saves nothing and succeeds.
+ * A refused save is state_commit's, and so is what its callers owe it: nothing
+ * said of the writes before it returns.
  *
  * A command whose writes have two lifetimes saves at the boundary between them
  * and takes the lock back (state_resume): apply commits the present — the
@@ -450,6 +452,13 @@ error_t *state_begin(state_t *state);
  * fails the commit and leaves the transaction the caller's, as a row cache that
  * cannot be read fails the begin: a boundary establishes what it keeps, or is
  * not crossed.
+ *
+ * The COMMIT is itself a write the store can refuse, apart from every statement
+ * before it: in WAL mode the transaction's pages reach the log here, so a full
+ * disk refuses the COMMIT and never the statements. What a caller says of its
+ * transaction's writes is therefore said once this has returned, never before
+ * it: a line above a refused COMMIT names writes the rollback took back
+ * (tests/test-runtime.sh refuses one through a file-size limit).
  *
  * @param state State (must not be NULL, must be in transaction)
  * @return Error or NULL on success

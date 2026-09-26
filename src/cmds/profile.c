@@ -40,7 +40,7 @@
  * values. The diff reads no disk; what is deployed and what is not is status's
  * to say.
  */
-static void print_manifest_enable_stats(
+static void profile_print_enable_stats(
     output_t *out,
     const char *profile,
     const manifest_diff_stats_t *stats
@@ -90,7 +90,7 @@ static void print_manifest_enable_stats(
  * record is not counted: nothing was ever seen at the path, so nothing pends
  * for apply.
  */
-static void print_manifest_disable_stats(
+static void profile_print_disable_stats(
     output_t *out,
     const char *profile,
     const manifest_diff_stats_t *stats
@@ -630,9 +630,9 @@ cleanup:
  *      that differs from its row's is not a skip: it re-enters the validated
  *      set as a retarget, and `retarget` remembers which one (at most one — the
  *      --target-single-profile rule above).
- *   2. Commit scope to state — state_enable_profile per target. The one call
- *      serves both kinds: a fresh enable inserts the row, a retarget runs the
- *      UPSERT arm state.h documents (the target moves, the position stays).
+ *   2. Write scope to state — state_enable_profile per target. The one call serves
+ *      both kinds: a fresh enable inserts the row, a retarget runs the UPSERT
+ *      arm state.h documents (the target moves, the position stays).
  *      enabled_profiles membership and order are now authoritative. Nothing else
  *      is written: the view is computed, never stored. `before` borrows nothing
  *      from the row cache the mutation replaces.
@@ -641,8 +641,9 @@ cleanup:
  *      stats (claimed / added / updated) land in the right slot per profile.
  *      A retarget reads as its claims materializing at the new target (staged);
  *      what departs at the old one is apply's to relocate.
- *   4. Per-profile feedback — iterate the validated targets to preserve per-profile
- *      output (the retarget's line says so), then state_save.
+ *   4. The save, then per-profile feedback — state_save, and only once it lands
+ *      the lines that say what it made true: iterate the validated targets to
+ *      preserve per-profile output (the retarget's line says so).
  */
 static error_t *profile_enable(
     const dotta_ctx_t *ctx,
@@ -943,7 +944,7 @@ static error_t *profile_enable(
      * explicit; the transaction opened by state_open then rolls back via state_free
      * on the no-op exit. */
     if (to_enable_validated->count > 0) {
-        /* Phase 2: Commit scope to state */
+        /* Phase 2: Write scope to state */
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *profile = to_enable_validated->items[i];
 
@@ -986,7 +987,17 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        /* Phase 4: Per-profile feedback — the retarget's line names its verb. */
+        /* Phase 4: The save, then per-profile feedback — the retarget's line
+         * names its verb. Each line says what the save made true, so none is
+         * said before it: the COMMIT is a write the store can refuse on its own,
+         * where a full disk meets the transaction (core/state.h state_commit),
+         * and a line above it would stand over the refusal. */
+        err = state_save(state);
+        if (err) {
+            err = error_wrap(err, "Failed to save state");
+            goto cleanup;
+        }
+
         for (size_t i = 0; i < to_enable_validated->count; i++) {
             const char *name = to_enable_validated->items[i];
             if (retarget && strcmp(name, retarget) == 0) {
@@ -999,19 +1010,13 @@ static error_t *profile_enable(
                     out, OUTPUT_NORMAL, "  {green}✓{reset} Enabled %s\n", name
                 );
             }
-            print_manifest_enable_stats(out, name, &stats[i]);
-        }
-
-        err = state_save(state);
-        if (err) {
-            err = error_wrap(err, "Failed to save state");
-            goto cleanup;
+            profile_print_enable_stats(out, name, &stats[i]);
         }
     }
 
-    /* Live summary — only runs on non-dry-run, non-error completion. Any Phase
-     * 2-3 failure sets err and jumps to cleanup, skipping the summary; dry-run
-     * owns its own messaging above. */
+    /* Live summary — only runs on non-dry-run, non-error completion. Any failure
+     * in Phases 2-4, the save's included, sets err and jumps to cleanup, skipping
+     * the summary; dry-run owns its own messaging above. */
     output_gap(out, OUTPUT_NORMAL);
 
     {
@@ -1088,7 +1093,7 @@ cleanup:
  *   2. The view before — manifest_build over the enabled set as it stands. It
  *      feeds the receipt only: a set that will not build is warned about and
  *      the disable lands without one.
- *   3. Commit scope to state — state_disable_profile per validated target;
+ *   3. Write scope to state — state_disable_profile per validated target;
  *      enabled_profiles is now authoritative for the target set, the line gone
  *      whole, target included. Nothing else is written: what the next apply prunes
  *      or releases is derivable — the disabled profile's records are no longer
@@ -1096,9 +1101,11 @@ cleanup:
  *   4. The view after — manifest_build over the post-disable set; manifest_diff
  *      attributes the transition to the disabled profiles, so loss-side stats
  *      (reassigned / orphans.owned / orphans.observed) land in the right slot.
- *   5. Per-profile feedback — iterate the validated targets to preserve the
- *      existing per-profile UX; a forgotten target is named with the way back,
- *      so `disable --all` then `enable --all` is a copy-paste per line.
+ *   5. The save, then per-profile feedback — state_save, and only once it lands
+ *      the lines that say what it made true: iterate the validated targets to
+ *      preserve the existing per-profile UX; a forgotten target is named with
+ *      the way back, so `disable --all` then `enable --all` is a copy-paste per
+ *      line.
  */
 static error_t *profile_disable(
     const dotta_ctx_t *ctx,
@@ -1284,7 +1291,7 @@ static error_t *profile_disable(
             err = NULL;
         }
 
-        /* Phase 3: Commit scope to state */
+        /* Phase 3: Write scope to state */
         for (size_t i = 0; i < to_disable_validated->count; i++) {
             err = state_disable_profile(state, to_disable_validated->items[i]);
             if (err) {
@@ -1328,15 +1335,22 @@ static error_t *profile_disable(
             }
         }
 
-        /* Phase 5: Per-profile feedback (no stats when the receipt was skipped).
-         * The target the row carried went with it; the line says so and names
-         * the command that puts it back. */
+        /* Phase 5: The save, then per-profile feedback (no stats when the receipt
+         * was skipped) — each line said once the save made it true, as enable's
+         * are. The target the row carried went with it; the line says so and
+         * names the command that puts it back. */
+        err = state_save(state);
+        if (err) {
+            err = error_wrap(err, "Failed to save state");
+            goto cleanup;
+        }
+
         for (size_t i = 0; i < to_disable_validated->count; i++) {
             const char *name = to_disable_validated->items[i];
             output_styled(
                 out, OUTPUT_NORMAL, "  {green}✓{reset} Disabled %s\n", name
             );
-            print_manifest_disable_stats(out, name, stats ? &stats[i] : NULL);
+            profile_print_disable_stats(out, name, stats ? &stats[i] : NULL);
             if (forgotten[i]) {
                 output_print(
                     out, OUTPUT_NORMAL,
@@ -1344,12 +1358,6 @@ static error_t *profile_disable(
                     "restores it)\n", forgotten[i], name, forgotten[i]
                 );
             }
-        }
-
-        err = state_save(state);
-        if (err) {
-            err = error_wrap(err, "Failed to save state");
-            goto cleanup;
         }
     }
 

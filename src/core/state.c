@@ -9,8 +9,8 @@
  * - WAL mode for concurrent access
  * - Enabled-profile rows cached in memory (tiny, read frequently)
  * - The record read in one pass per run (state_get_all_anchors)
- * - Each path-keyed table stored sorted by its key: a read in key order walks
- *   the table (core/state.h)
+ * - The record stored sorted by its key: a read in key order walks the table
+ *   (core/state.h)
  */
 
 #include "core/state.h"
@@ -39,7 +39,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "23"
+#define STATE_SCHEMA_VERSION "24"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -59,17 +59,13 @@ typedef enum {
     STATEMENT_RETIRE,          /* DELETE FROM path_anchors (the record, and the order it carries) */
     STATEMENT_ORDER_PRUNE,     /* UPDATE path_anchors SET ordered_at (the order, stamped) */
     STATEMENT_VOID_PRUNE,      /* UPDATE path_anchors SET ordered_at = 0 … RETURNING (the void, CAS) */
-
-    /* The released copy's */
-    STATEMENT_RELEASE,         /* INSERT OR REPLACE released_copies from the record */
-    STATEMENT_FORGET_RELEASED, /* DELETE FROM released_copies */
 } statement_t;
 
 /* The statements' arity, for the handle's array and the two walks over it. A
  * macro, not an enumerator, for the reason LABEL_COUNT is one (infra/label.h):
  * the type holds no sentinel, so every statement_t subscripts the array in range
  * and state_sql's switch is total over the type as it stands. */
-#define STATEMENT_COUNT (STATEMENT_FORGET_RELEASED + 1)
+#define STATEMENT_COUNT (STATEMENT_VOID_PRUNE + 1)
 
 /**
  * State structure
@@ -199,7 +195,6 @@ static path_type_t path_type_from_sql_text(const char *s) {
  *   STATE_SCHEMA_VERSION)
  * - enabled_profiles: User's profile management (position, name, target)
  * - path_anchors: The record dotta keeps of every managed path
- * - released_copies: The one fact keyed beside it
  *
  * @param db Connection to the private file (must not be NULL)
  * @return Error or NULL on success
@@ -290,29 +285,6 @@ static error_t *state_initialize(sqlite3 *db) {
         "    CHECK (deployed_at = 0 OR type = 'directory' OR blob_oid IS NOT NULL)"
         ") STRICT, WITHOUT ROWID;"
 
-        /* The content-proof half of a retired record (its binding and its content),
-         * claim-free: what dotta had last confirmed at the path when its record
-         * retired. File kinds only — a directory has no content confirmation to
-         * outlive its record (blob IS NOT NULL is the write guard's filter; the
-         * CHECKs are the schema's own restatement). A row lives from the retire
-         * that wrote it until its path's next ownership event or content
-         * confirmation deletes it in the same breath (state_retire_anchor,
-         * state_anchor, state_confirm — explicit siblings, per the rule above):
-         * the write that gives the path a newer base. Disk never ends it — the
-         * read measures disk against it, and trusts it for nothing more. The
-         * key's constraint and the table's storage are the record's (above). */
-        "CREATE TABLE released_copies ("
-        "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
-        "        " FOLDED_SPELLING("filesystem_path") ","
-        "    storage_path TEXT NOT NULL,"
-        "    profile TEXT NOT NULL,"
-        "    type TEXT NOT NULL CHECK(type IN ('file', 'symlink', 'executable')),"
-        "    blob_oid BLOB NOT NULL CHECK(length(blob_oid) = 20 AND blob_oid != zeroblob(20)),"
-        "    stat_mtime INTEGER NOT NULL,"
-        "    stat_size  INTEGER NOT NULL,"
-        "    stat_ino   INTEGER NOT NULL"
-        ") STRICT, WITHOUT ROWID;"
-
         "COMMIT;";
 
     /* Execute schema SQL */
@@ -394,10 +366,7 @@ static error_t *state_verify(sqlite3 *db) {
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
  * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
- * cascades — records leave only through explicit retires. released_copies keeps
- * the rule: its coupling to the record is sibling statements — the release in
- * state_retire_anchor, the forget in state_anchor and state_confirm — never a
- * constraint.
+ * cascades — records leave only through explicit retires.
  *
  * @param db Database connection (must not be NULL)
  * @return Error or NULL on success
@@ -582,27 +551,6 @@ static const char *state_sql(statement_t statement) {
                 "UPDATE path_anchors SET ordered_at = 0 "
                 "WHERE filesystem_path = ?1 AND ordered_at = ?2 "
                 "RETURNING filesystem_path;";
-
-        /* Release, the INSERT arm of every retire: the record's content-proof
-         * half — the path's base — copied verbatim before the record goes. The
-         * blob filter is the guard — a directory or never-confirmed record has
-         * no base to keep, so nothing is inserted and an older copy at the path
-         * stands. OR REPLACE keeps the latest base where a proof-bearing retire
-         * lands on a path retired before. */
-        case STATEMENT_RELEASE:
-            return
-                "INSERT OR REPLACE INTO released_copies "
-                "(filesystem_path, storage_path, profile, type, blob_oid, "
-                " stat_mtime, stat_size, stat_ino) "
-                "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
-                "       stat_mtime, stat_size, stat_ino "
-                "FROM path_anchors WHERE filesystem_path = ?1 AND blob_oid IS NOT NULL;";
-
-        /* Forget released: the fact's one end — the sibling of its path's next
-         * ownership event or content confirmation, which gives the path a newer
-         * base (forget_released). */
-        case STATEMENT_FORGET_RELEASED:
-            return "DELETE FROM released_copies WHERE filesystem_path = ?1;";
     }
 
     /* Unreachable once every enum value is handled */
@@ -1740,26 +1688,6 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
 }
 
 /**
- * Forget the released copy at a path, in the breath of the write that ends it
- *
- * The copy's one end (state.h): a newer base at its path — the ownership event
- * (state_anchor) or the content confirmation (state_confirm) that gives the path
- * one, each calling this only where its own statement wrote. DELETE by
- * filesystem_path; a path with no copy is success.
- */
-static error_t *forget_released(state_t *state, const char *filesystem_path) {
-    sqlite3_stmt *stmt = state_statement(state, STATEMENT_FORGET_RELEASED);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to forget released copy");
-    }
-
-    return NULL;
-}
-
-/**
  * Observe an active path: record its first observation on disk
  *
  * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on STATEMENT_OBSERVE
@@ -1875,8 +1803,7 @@ error_t *state_confirm(
 
     /* Matched nothing: another writer moved the record since the caller read it
      * — another binding, a newer blob, a fresher proof — and the fact is about
-     * a record no longer there. Nothing is written, nothing forgotten, and *anchor
-     * stays as read. */
+     * a record no longer there. Nothing is written, and *anchor stays as read. */
     if (rc == SQLITE_DONE) return NULL;
 
     /* Wrote: the one row back drains to DONE; anything else is the statement's
@@ -1885,10 +1812,6 @@ error_t *state_confirm(
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to confirm path");
     }
-
-    /* The record carries the path's base now, a newer one than the released copy
-     * there — which dies in the same breath. */
-    RETURN_IF_ERROR(forget_released(state, row->filesystem_path));
 
     /* The caller's copy follows, on the three columns the statement names and
      * no other — last, so a failure above leaves it as read. */
@@ -1948,8 +1871,7 @@ error_t *state_confirm_claim(
 
     /* The caller's copy follows, on the three columns the statement names, as a
      * load reads them back — a link's NULL mode as 0 — and the strings borrowed
-     * as state_observe and state_anchor borrow the row's. No released copy dies
-     * here: a claim gives the path no newer base. */
+     * as state_observe and state_anchor borrow the row's. */
     anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
     anchor->owner = owner;
     anchor->group = group;
@@ -1965,8 +1887,7 @@ error_t *state_confirm_claim(
  *   - deployed_at = now.
  *   - stat is always written (zeros when NULL), and read before anything is: it
  *     may be the caller's record's own triple.
- *   - the path's released copy dies with it, either kind (a second statement).
- *   - *anchor follows both, last.
+ *   - *anchor follows the statement, last.
  *
  * The statement names every column the record carries, so the post-write record
  * is what the caller handed in: the mirror is the inputs, with nothing read back.
@@ -2026,11 +1947,6 @@ error_t *state_anchor(
         return sqlite_error(state->db, "Failed to anchor path");
     }
 
-    /* An ownership event says what stands at the path — the row's blob, or a
-     * directory — so the path has a newer base than a released copy there, which
-     * dies in the same breath. */
-    RETURN_IF_ERROR(forget_released(state, row->filesystem_path));
-
     /* The caller's record follows, whole — last, so a failure above leaves it
      * as read: the columns the statement names, the strings borrowed from the
      * row, and every other field the zero its column defaults to — no order among
@@ -2054,33 +1970,23 @@ error_t *state_anchor(
 }
 
 /**
- * Retire a managed path's record, keeping its base
+ * Retire a managed path's record
  *
- * Two statements, and their order is the function: the INSERT arm reads the record
- * the DELETE takes (see the header contract).
+ * DELETE of the record, and with it the order it carries (see the SQL comment
+ * on STATEMENT_RETIRE and the header contract); a missing record matches nothing
+ * and is success.
  */
 error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
 
-    /* The base first, while the record is there to copy it from: its binding
-     * and its content, where it carries a blob — the statement's own filter, so
-     * a directory or a record never confirmed keeps nothing, and an older copy
-     * at the path stands. */
-    sqlite3_stmt *stmt = state_statement(state, STATEMENT_RELEASE);
+    sqlite3_stmt *stmt = state_statement(state, STATEMENT_RETIRE);
+
+    /* 1. the record's key */
     sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
 
     int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to keep the record's base");
-    }
-
-    /* Then the record, and the order it carries: a column of the row. */
-    stmt = state_statement(state, STATEMENT_RETIRE);
-    sqlite3_bind_text(stmt, 1, filesystem_path, -1, SQLITE_TRANSIENT);
-
-    rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return sqlite_error(state->db, "Failed to retire anchor");
     }
@@ -2154,126 +2060,4 @@ error_t *state_void_prune(state_t *state, anchor_t *anchor) {
     anchor->ordered_at = 0;
 
     return NULL;
-}
-
-/**
- * Get every released copy, in filesystem_path order
- *
- * The released_copies read, the shape of state_get_all_anchors: one SELECT that
- * carries the table's size, the allocation exact, the rows hydrated into the
- * caller's arena.
- */
-error_t *state_get_released_copies(
-    const state_t *state,
-    arena_t *arena,
-    released_copy_t **out,
-    size_t *count
-) {
-    CHECK_NULL(state);
-    CHECK_NULL(arena);
-    CHECK_NULL(out);
-    CHECK_NULL(count);
-
-    *out = NULL;
-    *count = 0;
-
-    /* Empty state (no DB file) — return empty results */
-    if (!state->db) return NULL;
-
-    /* Column layout, released_copy_t's groups:
-     *   0:    the key (filesystem_path)
-     *   1-2:  the binding (storage_path, profile)
-     *   3-7:  the content (type, blob_oid, stat_mtime, stat_size, stat_ino)
-     *   8:    the table's size (the first row sizes the allocation)
-     * Every column is NOT NULL by schema; the blob is 20 bytes by CHECK. */
-    const char *sql_released =
-        "SELECT filesystem_path, storage_path, profile, type, blob_oid, "
-        "stat_mtime, stat_size, stat_ino, (SELECT count(*) FROM released_copies) "
-        "FROM released_copies ORDER BY filesystem_path;";
-
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql_released, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare released query");
-    }
-
-    rc = sqlite3_step(stmt);
-    size_t released_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 8) : 0;
-
-    released_copy_t *rows = NULL;
-    if (released_count > 0) {
-        rows = arena_calloc(arena, released_count, sizeof(released_copy_t));
-        if (!rows) {
-            sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to allocate released copies array");
-        }
-    }
-
-    size_t i = 0;
-    while (rc == SQLITE_ROW && i < released_count) {
-        released_copy_t *row = &rows[i];
-
-        const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
-        const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
-        const char *profile = (const char *) sqlite3_column_text(stmt, 2);
-        const char *type_str = (const char *) sqlite3_column_text(stmt, 3);
-
-        if (!filesystem_path || !storage_path || !profile || !type_str) {
-            sqlite3_finalize(stmt);
-            return ERROR(
-                ERR_STATE_INVALID, "NULL value in required column at released copy %zu", i
-            );
-        }
-
-        row->filesystem_path = arena_strdup(arena, filesystem_path);
-        row->storage_path = arena_strdup(arena, storage_path);
-        row->profile = arena_strdup(arena, profile);
-        row->type = path_type_from_sql_text(type_str);
-        memcpy(row->blob_oid.id, sqlite3_column_blob(stmt, 4), GIT_OID_RAWSZ);
-        row->stat = (stat_cache_t){
-            .mtime = sqlite3_column_int64(stmt, 5),
-            .size = sqlite3_column_int64(stmt, 6),
-            .ino = (uint64_t) sqlite3_column_int64(stmt, 7),
-        };
-
-        if (!row->filesystem_path || !row->storage_path || !row->profile) {
-            sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy released copy strings");
-        }
-
-        i++;
-        rc = sqlite3_step(stmt);
-    }
-
-    sqlite3_finalize(stmt);
-
-    if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to query released copies");
-    }
-
-    *out = rows;
-    *count = i;
-
-    return NULL;
-}
-
-/* bsearch's: a key against a released copy's (strcmp — the read's own order) */
-static int compare_path_to_released_copy(const void *key, const void *elem) {
-    return strcmp(key, ((const released_copy_t *) elem)->filesystem_path);
-}
-
-/**
- * The released copy at a path, in a snapshot state_get_released_copies read —
- * or NULL
- */
-const released_copy_t *state_lookup_released_copy(
-    const released_copy_t *copies,
-    size_t count,
-    const char *filesystem_path
-) {
-    /* No search of nothing: bsearch's base must be valid even for zero elements
-     * (C11 7.22.5), and the empty snapshot's is NULL. */
-    if (count == 0 || !filesystem_path) return NULL;
-
-    return bsearch(filesystem_path, copies, count, sizeof(*copies), compare_path_to_released_copy);
 }

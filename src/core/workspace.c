@@ -113,22 +113,11 @@ struct workspace {
     size_t orphan_count;                         /* Number of orphans */
     size_t analyzed_count;                       /* orphans[0 .. analyzed_count): the ones the load analyzed */
 
-    /* The released copies, snapshot at load beside the record, unconditionally
-     * (workspace_partition), in the getter's strcmp order. One reader, by design:
-     * the base derivation in workspace_analyze_file, which searches it by path
-     * (state_lookup_released_copy), and only when the path's record carries no
-     * confirmed blob — a released copy is not a claim. Frozen at load: the database
-     * forgets a copy with its path's next ownership event or content confirmation
-     * (state_anchor, state_confirm), and nothing here follows, so a reader after
-     * the analysis would read copies the database no longer holds. */
-    released_copy_t *released;                   /* Arena snapshot from state_get_released_copies */
-    size_t released_count;                       /* Number of released copies */
-
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition — the record, which the items
-     * hold, and the released copies above — then written through by the four
-     * writers (the flush, workspace_observe_retyped, workspace_anchor,
-     * workspace_confirm), each advancing the record it persists. */
+     * hold — then written through by the four writers (the flush,
+     * workspace_observe_retyped, workspace_anchor, workspace_confirm), each
+     * advancing the record it persists. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -448,63 +437,6 @@ static error_t *workspace_add_untracked(
 }
 
 /**
- * Note that disk holds the row's content, for the record to learn
- *
- * The content half of the item's confirmation: the file analysis found disk to
- * be the row's pair — the slow path's CMP_EQUAL, or a released base's fast-path
- * hit — a pair the record does not hold, so the flush confirms it
- * (workspace_confirm), persisting the row's blob beside the look's triple: the
- * next run can both short-circuit via the fast-path stat and, if Git advances
- * the row's blob in the meantime, classify the file as stale from the fast path
- * instead of re-hashing. The claim's half has no gate and no proof, and its
- * analysis notes it itself (workspace_analyze_claim).
- *
- * The blob is the row's: the proof binds the stat to the blob the row expected
- * when disk was found equal to it, and state_confirm reads it from the row — a
- * stat triple without its blob is meaningless, and the row is the one the stat
- * was verified against. A path with no record yet is noted from this row like
- * any other: the flush observes it before it confirms, and the record the
- * observation makes is this row's.
- *
- * Callers: workspace_analyze_file's two content verdicts, each made where the
- * look stands at the row's kind.
- *
- * @param item The row's item, its look standing at the row's kind (must not be
- *             NULL); where the gate admits the content, its confirmation gains
- *             DIVERGENCE_CONTENT and its proof the look's triple
- */
-static void workspace_note_content(workspace_item_t *item) {
-    const manifest_row_t *row = item->row;
-    const anchor_t *anchor = item->anchor;
-
-    /* Only onto a record that is this row's content base. Bound to this row: an
-     * encrypted blob opens under one binding and no other, and state_confirm's
-     * statement refuses another at the write — asked of the record first, so a
-     * confirmation that cannot land never opens the flush's transaction; a row
-     * the binding does not name is one the record has yet to follow, which takes
-     * the slow path on every load until apply's acknowledgement moves the record
-     * onto it. And of this row's kind, the ladder's first rung (core/workspace.h
-     * workspace_compare_confirmed), never path_type_kind, whose taxonomy files
-     * a link beside the files: a record of another kind is a fact about a node
-     * that is gone, and a confirmation would carry the ownership stamp dotta
-     * earned for it onto a node dotta never wrote — a link the user made, a file
-     * where dotta's directory was — which apply adopts instead, as it adopts a
-     * row with no record (cmds/apply.c). */
-    if (anchor &&
-        (!manifest_is_claim(row, anchor->profile, anchor->storage_path) ||
-        workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF)) {
-        return;
-    }
-
-    /* The proof, distilled from the look where the comparison stood: whether
-     * its mtime second had closed is asked of the clock now, never of the flush's
-     * later one, which would take for proof a triple that a same-second rewrite
-     * after the read could stand behind (core/state.h stat_cache_from_stat). */
-    item->confirmation |= DIVERGENCE_CONTENT;
-    item->proof = stat_cache_from_stat(&item->st);
-}
-
-/**
  * The load's one look at an item's path, and the squatter it finds
  *
  * The one door for every look the load takes at a path it knows — the directory
@@ -602,8 +534,7 @@ static workspace_state_t classify_absent(
         return WORKSPACE_STATE_UNDEPLOYED;
     }
 
-    return anchor &&
-           workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF
+    return anchor && workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF
            ? WORKSPACE_STATE_DELETED
            : WORKSPACE_STATE_UNDEPLOYED;
 }
@@ -665,7 +596,7 @@ static void workspace_analyze_claim(workspace_item_t *item) {
      * as the user's, and an orphan is measured against the claim disk stood on.
      * As it comes, whichever row the record's binding names: a claim opens nothing,
      * where the content's confirmation is bound to the row's binding because an
-     * encrypted blob opens under one (workspace_note_content). And only onto a
+     * encrypted blob opens under one (workspace_analyze_file). And only onto a
      * base for it — no record, or one of another kind, is none, which
      * workspace_claims_moved has already asked. */
     item->confirmation |= moved & ~claims;
@@ -678,11 +609,10 @@ static void workspace_analyze_claim(workspace_item_t *item) {
  * queries, no Git; the record dotta keeps of the path is the item's, paired onto
  * it at the partition.
  *
- * The content's verdict is three-way, with dotta's last content confirmation as
- * base (see the content and type analysis below — the record's blob, or a released
- * fact's when the record carries none): DIVERGENCE_STALE says Git moved past
- * the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it. Each is
- * a verdict in its own right — STALE without CONTENT is apply-side work that
+ * The content's verdict is three-way, with the record's confirmed pair as base
+ * (see the content and type analysis below): DIVERGENCE_STALE says Git moved
+ * past the pair dotta last confirmed, DIVERGENCE_CONTENT says disk left it. Each
+ * is a verdict in its own right — STALE without CONTENT is apply-side work that
  * overwrites nothing of the user's; CONTENT without STALE is a local edit Git
  * has not raced; both together is a conflict.
  *
@@ -733,9 +663,8 @@ static void workspace_analyze_file(
     const char *profile = item->profile;
 
     /* The record dotta keeps of this path, if any. NULL means dotta has never
-     * seen the row's kind standing here in scope, or its record retired since:
-     * absence reads UNDEPLOYED, and a released copy is the only base there can
-     * be (below). */
+     * seen the row's kind standing here in scope, or has let the path go since,
+     * which forgets it: absence reads UNDEPLOYED, and there is no base (below). */
     const anchor_t *anchor = item->anchor;
 
     /* The row's verdict, opened with the blob bit (see the doc above): is the
@@ -846,62 +775,25 @@ static void workspace_analyze_file(
      * moved. Without a base there is no second question — any difference from
      * theirs is the user's.
      *
-     * Source of truth for the base: the record (the path_anchors row's blob)
-     * when it carries one; the released copy when it does not — a path re-claimed
-     * after its record retired, whose record is gone or is the window's blob-less
-     * observation. A path with neither has no base. Cross-process correct by
-     * construction — every invocation sees the same answer.
+     * Source of truth for the base: the record (the path_anchors row's blob). A
+     * path with no record, or one observed but never confirmed (zero blob), has
+     * no base. Cross-process correct by construction — every invocation sees
+     * the same answer.
      */
     compare_result_t cmp_result;
 
-    /* The base: dotta's last content confirmation at this path — the record's,
-     * when it carries one; the released copy's, when it does not (a path re-claimed
-     * after its record retired: the record is gone, or is the window's blob-less
-     * observation). The record's own questions — absence, reassignment, the item's
-     * record column — stay the anchor's alone: a released copy is no record,
-     * and never fabricates a record, a reassignment, or a DELETED absence. A
-     * base compares under its own recorded binding, whichever of the two it is:
-     * a blob opens under one (profile, storage path) pair and no other, and each
-     * of these facts carries the binding its blob was confirmed under
-     * (core/state.h). The row's pair is never a base's — a row the record's binding
-     * does not name is one the record has yet to follow, and reading the base
-     * under it authenticates a ciphertext against a tree path it was never sealed
-     * at.
-     *
-     * No base by default — the NULL blob is the no-base state; the row-derived
-     * type and pair beside it are never read as a base's (every base question
-     * below is gated on git_moved, which needs a base blob). */
-    const git_oid *base_blob = NULL;
-    const stat_cache_t *base_stat = NULL;
-    path_type_t base_type = row->type;
-    const char *base_storage = storage_path;
-    const char *base_profile = profile;
-
-    /* The record's, when it carries a confirmed blob */
-    if (anchor && !git_oid_is_zero(&anchor->blob_oid)) {
-        base_blob = &anchor->blob_oid;
-        base_stat = &anchor->stat;
-        base_type = anchor->type;
-        base_storage = anchor->storage_path;
-        base_profile = anchor->profile;
-    }
-
-    /* Where it carries none, the base the path's last retired record left, if
-     * the snapshot holds one */
-    const released_copy_t *released = base_blob ? NULL
-        : state_lookup_released_copy(ws->released, ws->released_count, filesystem_path);
-    if (released) {
-        base_blob = &released->blob_oid;
-        base_stat = &released->stat;
-        base_type = released->type;
-        base_storage = released->storage_path;
-        base_profile = released->profile;
-    }
+    /* The base: the record, where it carries a confirmed blob. It compares under
+     * its own binding, never the row's: a blob opens under one (profile, storage
+     * path) pair and no other, and the record carries the one its blob was
+     * confirmed under (core/state.h anchor_t) — a row the binding does not name
+     * is one the record has yet to follow, and reading the base under it
+     * authenticates a ciphertext against a tree path it was never sealed at. */
+    const anchor_t *base = anchor && !git_oid_is_zero(&anchor->blob_oid) ? anchor : NULL;
 
     /* The first question of the three-way frame is answered from the row and
      * the base alone; the second (disk_at_base — ours == base) is answered by
      * whichever path below settles it, and only when it can change the verdict. */
-    bool git_moved = base_blob && workspace_stale(row, base_type, base_blob);
+    bool git_moved = base && workspace_stale(row, base);
     bool disk_at_base = false;
 
     /* BASE FAST PATH (safety-grade)
@@ -918,34 +810,18 @@ static void workspace_analyze_file(
      * under an untouched copy therefore answers CMP_TYPE_DIFF here and STALE
      * below, the same as the slow path reaches by reading — where an answer off
      * git_moved alone would have called one state clean and its mirror a mode
-     * change. A path with no base has no triple to match. */
-    if (base_stat && stat_cache_matches(base_stat, base_type, &item->st)) {
+     * change. A path with no base has no triple to match.
+     *
+     * Nothing is noted for the record here: disk is the record's own pair under
+     * its own proof, which the record already holds. A note would buy nothing
+     * and cost two things: the flush's transaction on every clean load, and —
+     * where the deploy wrote the proof this very second — the proof itself, which
+     * a read in an open second demotes to none (core/state.h
+     * stat_cache_from_stat). */
+    if (base && stat_cache_matches(base, &item->st)) {
         /* the look stands behind the proof ⟹ disk == the base's pair */
         disk_at_base = true;
-        cmp_result = workspace_compare_confirmed(row, base_type, base_blob);
-
-        /* A verification that establishes a pair the record does not hold is
-         * noted as the record's own confirmation — which is exactly the
-         * released-base hit: the record is blob-less or absent. An anchored base
-         * IS the record's pair under its own proof, and noting it again would
-         * buy nothing and cost two things: the flush's transaction on every clean
-         * load, and — where the deploy wrote the proof this very second — the
-         * proof itself, which a read in an open second demotes to none
-         * (core/state.h stat_cache_from_stat). So the fast path stays write-free
-         * for it. The record gains the blob, and the confirmation that gives it
-         * one forgets the released row it subsumes in the same breath
-         * (state_confirm).
-         *
-         * The verdict is the whole gate: the proof held the look to the base's
-         * kind, and a released base the row has since retyped answers CMP_TYPE_DIFF
-         * above, so the pair state_confirm would write — the row's kind beside
-         * a triple taken of another — is never noted from here. What this notes
-         * stands on the row's kind, as the slow path's confirmation does by its
-         * first rung: a content confirmation is never of a node the row does
-         * not name. */
-        if (cmp_result == CMP_EQUAL && released) {
-            workspace_note_content(item);
-        }
+        cmp_result = workspace_compare_confirmed(row, base);
     } else {
         /* SLOW PATH: Full content comparison, ours vs theirs
          *
@@ -1035,11 +911,39 @@ static void workspace_analyze_file(
             return;
         }
 
-        /* Slow path found disk == expected blob — noted for the record, with
-         * the row's blob and the look the verdict was reached from, so the next
-         * run can short-circuit via the fast path above. */
-        if (cmp_result == CMP_EQUAL) {
-            workspace_note_content(item);
+        /* Slow path found disk == the row's pair: the content half of the item's
+         * confirmation, for the flush to write (workspace_confirm) — the claim's
+         * half is workspace_analyze_claim's, below. The row's blob, the one the
+         * look was found equal to, beside the look's triple, so the next run
+         * can short-circuit via the fast path above. A path with no record is
+         * noted like any other: the flush observes it before it confirms, and
+         * the observation is this row's.
+         *
+         * Only onto a record that is this row's content base. Bound to this row:
+         * an encrypted blob opens under one binding and no other, and
+         * state_confirm's statement refuses another at the write — asked of the
+         * record first, so a confirmation that cannot land never opens the flush's
+         * transaction; a row the binding does not name is one the record has
+         * yet to follow, which takes the slow path on every load until apply's
+         * acknowledgement moves the record onto it. And of this row's kind, the
+         * ladder's first rung (core/workspace.h workspace_compare_confirmed),
+         * never path_type_kind, whose taxonomy files a link beside the files: a
+         * record of another kind is a fact about a node that is gone, and a
+         * confirmation would carry the ownership stamp dotta earned for it onto
+         * a node dotta never wrote — a link the user made, a file where dotta's
+         * directory was — which apply adopts instead, as it adopts a row with
+         * no record (cmds/apply.c).
+         *
+         * The proof is distilled from the look here, where the comparison stood:
+         * whether its mtime second had closed is asked of the clock now, never
+         * of the flush's later one, which would take for proof a triple that a
+         * same-second rewrite after the read could stand behind (core/state.h
+         * stat_cache_from_stat). */
+        if (cmp_result == CMP_EQUAL &&
+            (!anchor || (manifest_is_claim(row, anchor->profile, anchor->storage_path) &&
+            workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF))) {
+            item->confirmation |= DIVERGENCE_CONTENT;
+            item->proof = stat_cache_from_stat(&item->st);
         }
 
         /* Second question — ours vs base — asked once, where it can change the
@@ -1084,21 +988,19 @@ static void workspace_analyze_file(
          *
          * A failed look answers nothing and leaves disk_at_base false: the edit
          * is taken as real (CONTENT), the conservative answer — STALE still holds,
-         * because git_moved is a fact about two OIDs. A failed look on a released
-         * base retires nothing — no look does: a copy dies only with its path's
-         * next ownership event or content confirmation (core/state.h). */
+         * because git_moved is a fact about two OIDs. */
         if (git_moved &&
             (cmp_result == CMP_DIFFERENT || cmp_result == CMP_TYPE_DIFF) &&
-            item->occupant == workspace_type_occupant(base_type)) {
+            item->occupant == workspace_type_occupant(base->type)) {
             compare_result_t at_base;
             error_t *verify_err = content_compare_blob_to_disk(
                 ws->content_cache,
-                base_blob,
+                &base->blob_oid,
                 filesystem_path,
-                path_type_to_git_filemode(base_type),
+                path_type_to_git_filemode(base->type),
                 &item->st,
-                base_storage,
-                base_profile,
+                base->storage_path,
+                base->profile,
                 &at_base
             );
 
@@ -1268,7 +1170,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * sit on the other side of an encryption-policy flip from what Git holds
      * now. The caller's look is forwarded: the seam reads, the pair judges, and
      * neither takes a look of its own. */
-    if (stat_cache_matches(&anchor->stat, anchor->type, &item->st)) {
+    if (stat_cache_matches(anchor, &item->st)) {
         /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
         cmp_result = CMP_EQUAL;
     } else if (item->occupant != workspace_type_occupant(anchor->type)) {
@@ -3030,8 +2932,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * each of its rows is made an item before anything is looked at, and the items
  * are sorted by kind (workspace_kind_order). The record is then read once and
  * walked once: a record an active item stands at is that item's, and a record
- * none stands at is an orphan, an item of its own. The released copies load beside
- * the record, unconditionally.
+ * none stands at is an orphan, an item of its own.
  *
  * The partition is the single source of truth for "is this row in scope?": a
  * path is active iff the view has a row for it, and a record is an orphan iff
@@ -3047,8 +2948,8 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * and none is read at count zero.
  *
  * Lifetime: every pointer (the items, their arrays, the record, the squatted
- * list, the copies) lives in ws->arena, beside the view's rows; the view's index
- * is the dispatcher's.
+ * list) lives in ws->arena, beside the view's rows; the view's index is the
+ * dispatcher's.
  *
  * Performance: O(M log M + A log M) — one sort, and a search per record; no Git,
  * no probes.
@@ -3148,16 +3049,6 @@ static error_t *workspace_partition(workspace_t *ws) {
     );
     if (!ws->squatted) {
         return ERROR(ERR_MEMORY, "Failed to allocate the squatted directory list");
-    }
-
-    /* The released copies, beside the record: almost always empty, and searched
-     * as read — the getter's strcmp order is the whole of what the base
-     * derivation's search needs (state_lookup_released_copy). */
-    err = state_get_released_copies(
-        ws->state, ws->arena, &ws->released, &ws->released_count
-    );
-    if (err) {
-        return error_wrap(err, "Failed to read released copies from state");
     }
 
     return NULL;
@@ -3933,13 +3824,11 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
         if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
         /* Over a record of another kind: that record's node is gone */
-        if (!anchor ||
-            workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF) {
+        if (!anchor || workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF) {
             continue;
         }
 
-        /* The record retires, its base kept, and the directory is observed in
-         * its place */
+        /* The record retires, and the directory is observed in its place */
         error_t *err = state_retire_anchor(ws->state, row->filesystem_path);
         if (!err) {
             err = state_observe(ws->state, row, (anchor_t *) anchor);

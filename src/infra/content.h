@@ -361,15 +361,14 @@ error_t *content_rebind(
  * the disk copy is judged against (infra/compare.h's pair).
  *
  * Why the bytes, and why no proxy: both callers compare against the *record's*
- * blob — core/state.h's anchor_t or released_copy_t — and neither carries an
- * encryption stamp. The view row's flag in scope is another blob's, and routing
- * the base question on it once miscategorised staleness across an encryption-policy
- * flip in both directions (the two are recorded at core/workspace.c
- * workspace_analyze_file). The row's own comparison keeps the id form and opens
- * nothing, and that asymmetry is principled rather than overlooked: the row's
- * flag is that blob's own, made byte-true at the write boundary
- * (content_capture_file), where the record's blob has no boundary at which it
- * could have been stamped.
+ * blob (core/state.h anchor_t), which carries no encryption stamp. The view row's
+ * flag in scope is another blob's, and routing the base question on it once
+ * miscategorised staleness across an encryption-policy flip in both directions
+ * (the two are recorded at core/workspace.c workspace_analyze_file). The row's
+ * own comparison keeps the id form and opens nothing, and that asymmetry is
+ * principled rather than overlooked: the row's flag is that blob's own, made
+ * byte-true at the write boundary (content_capture_file), where the record's
+ * blob has no boundary at which it could have been stamped.
  *
  * Why nothing is memoised: `cache` is handed in as the run's reader — its
  * repository and its key manager — and its memo is deliberately neither read

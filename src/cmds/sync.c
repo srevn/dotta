@@ -2282,7 +2282,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
             if (row->type == PATH_TYPE_DIRECTORY || anchor->deployed_at > 0) vouched++;
 
-            if (workspace_stale(row, anchor->type, &anchor->blob_oid) ||
+            if (workspace_stale(row, anchor) ||
                 workspace_claims_moved(row, anchor) != DIVERGENCE_NONE ||
                 workspace_reassigned(row, anchor, FS_OCCUPANT_UNKNOWN)) {
                 apply_pending = true;

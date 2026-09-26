@@ -1609,15 +1609,13 @@ static error_t *apply_write_record(
 
     /* The orphans first. Which outcomes settle is cleanup's rule, read off its
      * receipt and its verdicts (cleanup.h); the act is apply's, and it is one
-     * verb for every outcome: the record retires, and its base outlives it as
-     * the path's released copy (core/state.h state_retire_anchor). Neither kind,
-     * nor the reason the record ended, nor what stands at the path decides anything
-     * here: the copy is what dotta last confirmed there, and a later claim is
-     * measured against it whatever disk has done since. The flow for an orphan:
-     * the path leaves the view (profile disabled, branch moved, target changed)
-     * → the workspace reads its record as an orphan and asks Git why → the verdict
-     * → here → record retired, completing the cycle. Without it, orphaned records
-     * accumulate forever in the path_anchors table.
+     * verb for every outcome: the record retires, and the path is forgotten
+     * (core/state.h state_retire_anchor). Neither kind, nor the reason the record
+     * ended, nor what stands at the path decides anything here. The flow for an
+     * orphan: the path leaves the view (profile disabled, branch moved, target
+     * changed) → the workspace reads its record as an orphan and asks Git why →
+     * the verdict → here → record retired, completing the cycle. Without it,
+     * orphaned records accumulate forever in the path_anchors table.
      *
      * What the run found gone: pruned, or gone by the time it looked — the
      * receipt's, where the prune engine could start. */
@@ -2244,7 +2242,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A record of another kind than the row is no record for it either: it is a
      * fact about a node that is gone — Git retyped the name, and the row's own
      * kind stands there clean — so the load learned nothing into it
-     * (core/workspace.c workspace_note_content), and its ownership stamp vouches
+     * (core/workspace.c workspace_analyze_file), and its ownership stamp vouches
      * for a node dotta never wrote. The row is adopted as a row with no record
      * is, and the anchor rewrites the record whole. The kind is the ladder's
      * first rung (core/workspace.h workspace_compare_confirmed): a link beside
@@ -2305,7 +2303,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const anchor_t *anchor = item->anchor;
 
         bool adopt = !anchor || anchor->deployed_at == 0 ||
-            workspace_compare_confirmed(file, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF;
+            workspace_compare_confirmed(file, anchor) == CMP_TYPE_DIFF;
 
         /* A record dotta owns whose binding names another row than this — another
          * profile's, or another name of the same profile, whose path the view
@@ -2345,8 +2343,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * the snapshot itself; NULL advances the record blob-only, and the
              * next load's slow path confirms. */
             const stat_cache_t *stat =
-                (anchor && !workspace_stale(file, anchor->type, &anchor->blob_oid))
-                ? &anchor->stat : NULL;
+                (anchor && !workspace_stale(file, anchor)) ? &anchor->stat : NULL;
 
             err = workspace_anchor(ws, item, stat, now);
             if (err) {
@@ -2389,7 +2386,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * has observed the directory in its place already
          * (workspace_observe_retyped), and a preview reads it as the run will. */
         bool acknowledge = anchor && anchor->deployed_at > 0 &&
-            workspace_compare_confirmed(dir, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF &&
+            workspace_compare_confirmed(dir, anchor) != CMP_TYPE_DIFF &&
             !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
         if (!acknowledge) continue;
 
@@ -2999,12 +2996,12 @@ static const args_opt_t apply_opts[] = {
     ARGS_GROUP("Options:"),
     ARGS_APPEND(
         "p profile",        "<name>",
-        cmd_apply_options_t,profiles,           profile_count,
+        cmd_apply_options_t,profiles,         profile_count,
         "Filter deployment to profile(s) (repeatable)"
     ),
     ARGS_APPEND(
         "e exclude",        "<pattern>",
-        cmd_apply_options_t,exclude_patterns,   exclude_count,
+        cmd_apply_options_t,exclude_patterns, exclude_count,
         "Skip paths matching a .dottaignore-style pattern (repeatable)"
     ),
     ARGS_FLAG(
@@ -3038,11 +3035,11 @@ static const args_opt_t apply_opts[] = {
      * order. */
     ARGS_POSITIONAL(
         APPLY_CLASS_FILE,
-        cmd_apply_options_t,files,              file_count
+        cmd_apply_options_t,files,            file_count
     ),
     ARGS_POSITIONAL(
         APPLY_CLASS_PROFILE,
-        cmd_apply_options_t,profiles,           profile_count
+        cmd_apply_options_t,profiles,         profile_count
     ),
     ARGS_END,
 };

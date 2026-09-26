@@ -417,7 +417,7 @@ typedef enum {
  * content (DIVERGENCE_CONTENT) where the look found disk to be the row's pair
  * and the record is this row's content base, with `proof` beside it — the look's
  * triple, distilled where the comparison stood (workspace.c
- * workspace_note_content); and each claim Git moved that the look found disk
+ * workspace_analyze_file); and each claim Git moved that the look found disk
  * already standing on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP). The flush clears
  * it once written, so it is NONE on every item that owes the record nothing —
  * orphans and discoveries always.
@@ -475,7 +475,7 @@ typedef struct {
  * FS_OCCUPANT_UNKNOWN, FS_OCCUPANT_OTHER).
  *
  * The same division one layer down, over a stat: infra/compare.c mode_stands,
- * under a git filemode, and core/state.h stat_cache_matches, under the proof's
+ * under a git filemode, and core/state.h stat_cache_matches, under the record's
  * type. core/workspace.c claim_stands asks a coarser question of its own: a
  * directory or not.
  *
@@ -501,11 +501,11 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
 }
 
 /**
- * The row's content against a pair dotta confirmed — a verdict from no look
+ * The row's content against the pair the record confirmed — a verdict from no look
  *
- * infra/compare.h's ladder asked of a confirmation instead of a disk copy: the
- * kind, then the bytes. It answers in that module's words, minus the one only a
- * read can reach — nothing is opened here, so no absence can be met.
+ * infra/compare.h's ladder asked of the record's confirmation instead of a disk
+ * copy: the kind, then the bytes. It answers in that module's words, minus the
+ * one only a read can reach — nothing is opened here, so no absence can be met.
  *
  * The kind rung is what keeps one object from standing for two contents: Git
  * hashes a link's target exactly as it hashes a file's bytes, so a single id
@@ -514,17 +514,13 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * claims no content at all, so a blob row and a directory row are never one
  * another's, whatever their (zero) blobs say.
  *
- * The pair travels as values because it is one of two facts — the record's
- * (core/state.h anchor_t) or a released copy's (released_copy_t) — and each caller
- * holds one of them.
- *
  * Readers: core/workspace.c workspace_analyze_file's base fast path, which reaches
  * its row-against-disk verdict through this one — a live look standing behind
  * the pair's proof means disk IS the pair, so what the row is to the pair is
  * what it is to disk — and its kind rung alone, asked of the record. A record
  * of another kind than its row describes another node, so it is none of the row's:
  * no base for its claim (workspace_claims_moved below), no target for what the
- * load learns (core/workspace.c workspace_note_content), no witness to its deletion
+ * load learns (the same analysis's slow-path note), no witness to its deletion
  * (classify_absent), no record a directory's acknowledgement moves onto its row
  * (cmds/apply.c cmd_apply's acknowledgement). Whether that node still stands is
  * a look's to say. While it does, the row's deployment replaces dotta's own node
@@ -539,13 +535,13 @@ static inline fs_occupant_t workspace_type_occupant(path_type_t type) {
  * by identity and no comparison is owed.
  */
 static inline compare_result_t workspace_compare_confirmed(
-    const manifest_row_t *row, path_type_t type, const git_oid *blob
+    const manifest_row_t *row, const anchor_t *anchor
 ) {
-    if (workspace_type_occupant(type) != workspace_type_occupant(row->type)) {
+    if (workspace_type_occupant(anchor->type) != workspace_type_occupant(row->type)) {
         return CMP_TYPE_DIFF;
     }
 
-    return git_oid_equal(blob, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
+    return git_oid_equal(&anchor->blob_oid, &row->blob_oid) ? CMP_EQUAL : CMP_DIFFERENT;
 }
 
 /**
@@ -627,7 +623,7 @@ static inline bool workspace_reassigned(
     }
 
     /* Of the row's kind: the row's own node's history, whatever the look found */
-    if (workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) != CMP_TYPE_DIFF) {
+    if (workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF) {
         return true;
     }
 
@@ -655,10 +651,8 @@ static inline bool workspace_reassigned(
  * the row's content), cmds/sync.c cmd_sync's apply hint (the record still disagrees
  * with the view). A reader not on this list is a bug.
  */
-static inline bool workspace_stale(
-    const manifest_row_t *row, path_type_t type, const git_oid *blob
-) {
-    return workspace_compare_confirmed(row, type, blob) != CMP_EQUAL;
+static inline bool workspace_stale(const manifest_row_t *row, const anchor_t *anchor) {
+    return workspace_compare_confirmed(row, anchor) != CMP_EQUAL;
 }
 
 /**
@@ -695,7 +689,7 @@ static inline divergence_type_t workspace_claims_moved(
     const manifest_row_t *row, const anchor_t *anchor
 ) {
     if (!anchor || manifest_is_derived(row) ||
-        workspace_compare_confirmed(row, anchor->type, &anchor->blob_oid) == CMP_TYPE_DIFF) {
+        workspace_compare_confirmed(row, anchor) == CMP_TYPE_DIFF) {
         return DIVERGENCE_NONE;
     }
 
@@ -1286,14 +1280,13 @@ bool workspace_item_tags(
  * Left there, the record is no base for the directory's claim
  * (workspace_claims_moved), so a claim Git moves reads as the user's and update
  * commits disk's over it, and sync's hint reads the record stale with nothing
- * left for apply to do. Each such record retires, keeping its base as the path's
- * released copy (state_retire_anchor), and the directory is observed in its place
- * (state_observe), written into the same live record, so every reader in the
- * run reads the observation: the row's binding, kind and claim, never owned —
- * capture is a directory's ownership event, and a look never is. Both classes:
- * a derived rung is observed as a tracked directory is. A file row's record of
- * another kind is not this pass's: apply adopts the file, which writes the record
- * whole (cmds/apply.c cmd_apply).
+ * left for apply to do. Each such record retires (state_retire_anchor), and the
+ * directory is observed in its place (state_observe), written into the same live
+ * record, so every reader in the run reads the observation: the row's binding,
+ * kind and claim, never owned — capture is a directory's ownership event, and a
+ * look never is. Both classes: a derived rung is observed as a tracked directory
+ * is. A file row's record of another kind is not this pass's: apply adopts the
+ * file, which writes the record whole (cmds/apply.c cmd_apply).
  *
  * Apply's alone, after its flush and ahead of its plan, in the transaction its
  * load was read in: a retire is blind (state_retire_anchor), so it is taken only
@@ -1419,25 +1412,23 @@ error_t *workspace_confirm(
  *
  *   The confirmation — what the analyses established that the record lacks, by
  *   axis (workspace_item_t's confirmation), through workspace_confirm. The content
- *   of a file found equal to its row (the slow path's CMP_EQUAL, or a released
- *   base's triple vouching for the row's content), with the look's triple as
- *   its proof: persisting it beside the row's blob (state_confirm) lets subsequent
- *   runs short-circuit via the fast-path stat AND — if Git advances blob_oid in
- *   the meantime — classify the file as stale directly from the fast path instead
- *   of re-hashing. Only a row the record's binding names is ever noted a content
- *   confirmation (core/workspace.c workspace_note_content), where state_confirm
- *   would land no other: the blob a record carries is the blob of the row its
- *   binding names, so a path whose record is bound to another row takes the slow
- *   path on every load until an ownership event moves the record onto the standing
- *   one. And a claim Git moved that a look of either kind found disk already
- *   standing on (state_confirm_claim), whichever row's it is, since a claim opens
- *   nothing: the record follows every agreement, so the user's next move on that
- *   axis reads as the user's.
+ *   of a file found equal to its row (the slow path's CMP_EQUAL), with the look's
+ *   triple as its proof: persisting it beside the row's blob (state_confirm)
+ *   lets subsequent runs short-circuit via the fast-path stat AND — if Git advances
+ *   blob_oid in the meantime — classify the file as stale directly from the fast
+ *   path instead of re-hashing. Only a row the record's binding names is ever
+ *   noted a content confirmation (core/workspace.c workspace_analyze_file), where
+ *   state_confirm would land no other: the blob a record carries is the blob of
+ *   the row its binding names, so a path whose record is bound to another row
+ *   takes the slow path on every load until an ownership event moves the record
+ *   onto the standing one. And a claim Git moved that a look of either kind found
+ *   disk already standing on (state_confirm_claim), whichever row's it is, since
+ *   a claim opens nothing: the record follows every agreement, so the user's
+ *   next move on that axis reads as the user's.
  *
  *   The void — every order a record the load read carries, where the view has
  *   the path again: the order's view end (core/state.h's lifetime rule), here
- *   because the view is. A released copy has no end here: its one is its path's
- *   next ownership event or content confirmation.
+ *   because the view is.
  *
  * Nothing is owed from beneath a squatter, because nothing there is looked at
  * (workspace_displaced_t): a confirmation taken through one would advance the

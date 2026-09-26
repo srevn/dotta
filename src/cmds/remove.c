@@ -134,10 +134,10 @@ typedef struct {
  * Settle the candidates a removal let go — the one spelling of the fate rule
  *
  * For each candidate the subject is its record: one whose path the after-view
- * still provides is a fallback — kept, it reads [reassigned] until apply hands
- * it over; one the view no longer provides takes the fate the user chose —
- * --delete-files orders the copy pruned at the next apply, the default releases
- * (the record retires, its base kept past it as the released copy — core/state.h
+ * still provides is a fallback — kept, it reads [reassigned] until apply
+ * acknowledges it; one the view no longer provides takes the fate the user chose
+ * — --delete-files orders the copy pruned at the next apply, the default releases
+ * (the record retires, and the copy stays on disk — core/state.h
  * state_retire_anchor).
  *
  * The flag is the user's word about the paths the removal NAMED, and only those

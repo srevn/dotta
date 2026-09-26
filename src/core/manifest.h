@@ -195,11 +195,11 @@ typedef struct manifest_row {
  * Both halves, because within one profile a path is not an identity.
  *
  * Readers: add's anchor pass (cmds/add.c), update's capture loop (cmds/update.c),
- * the workspace's content note (core/workspace.c workspace_note_content) and
- * apply's two acknowledgement loops (cmds/apply.c), which are what moves a record
- * onto the claim standing at its path. The let-go loops ask the other direction
- * — whether any row still stands at the path — and are not readers of this. NULL
- * is no claim.
+ * the file analysis's content note (core/workspace.c workspace_analyze_file)
+ * and apply's two acknowledgement loops (cmds/apply.c), which are what moves a
+ * record onto the claim standing at its path. The let-go loops ask the other
+ * direction — whether any row still stands at the path — and are not readers of
+ * this. NULL is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path

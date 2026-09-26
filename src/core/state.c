@@ -4,8 +4,8 @@
  * Uses SQLite for performance and scalability.
  *
  * Key optimizations:
- * - Prepared statements kept for the connection's life: the writes a run repeats
- *   — the record's, per path, and the reorder's, per profile
+ * - Prepared statements kept for the connection's life: every write the store
+ *   binds a value into — the record's, per path, and the enabled set's
  * - WAL mode for concurrent access
  * - Enabled-profile rows cached in memory (tiny, read frequently)
  * - The record read in one pass per run (state_records)
@@ -44,10 +44,13 @@
 #define STATE_DB_NAME "dotta.db"
 
 /**
- * The prepared statements — the writes a run repeats, each declared here once:
- * its SQL is state_sql's case, its handle a slot of state->statements
+ * The prepared statements — every write the store binds a value into, each declared
+ * here once: its SQL is state_sql's case, its handle a slot of state->statements
  */
 typedef enum {
+    /* The enabled set's verbs */
+    STATEMENT_ENABLE_PROFILE,  /* INSERT … ON CONFLICT (name) DO UPDATE (the row, its target given or kept) */
+    STATEMENT_DISABLE_PROFILE, /* DELETE FROM enabled_profiles (the row, its target with it) */
     STATEMENT_INSERT_PROFILE,  /* INSERT INTO enabled_profiles (the reorder's, per profile) */
 
     /* The record's verbs */
@@ -449,6 +452,29 @@ static error_t *state_configure(sqlite3 *db) {
  */
 static const char *state_sql(statement_t statement) {
     switch (statement) {
+        /* Enable: an UPSERT. Position is `COALESCE(MAX(position) + 1, 0)`: on
+         * an empty table MAX returns NULL and the COALESCE drops to 0, matching
+         * the 0-based position assignment used by state_reorder_profiles. On
+         * conflict (the profile already enabled) the position is kept, and the
+         * target moves only when one is given — `COALESCE(?2, target)` keeps
+         * the row's own for a NULL, so no enable can unbind, and the one way a
+         * row loses its target is the disable's DELETE.
+         *
+         * Bind order (numbered placeholders): ?1 name  ?2 target — NULL keeps the
+         * row's */
+        case STATEMENT_ENABLE_PROFILE:
+            return
+                "INSERT INTO enabled_profiles (name, target, position) "
+                "VALUES (?1, ?2, "
+                "  (SELECT COALESCE(MAX(position) + 1, 0) FROM enabled_profiles)) "
+                "ON CONFLICT(name) DO UPDATE SET "
+                "  target = COALESCE(?2, target);";
+
+        /* Disable: the row goes, its target with it. A name with no row matches
+         * nothing — no error. */
+        case STATEMENT_DISABLE_PROFILE:
+            return "DELETE FROM enabled_profiles WHERE name = ?1;";
+
         /* Insert profile (used in state_reorder_profiles) */
         case STATEMENT_INSERT_PROFILE:
             return
@@ -744,41 +770,15 @@ error_t *state_enable_profile(
         return ERROR(ERR_INVALID_ARG, "Profile name cannot be empty");
     }
 
-    /* UPSERT: Insert or update on conflict.
-     *
-     * Position is `COALESCE(MAX(position) + 1, 0)`: on an empty table MAX returns
-     * NULL and the COALESCE drops to 0, matching the 0-based position assignment
-     * used by state_reorder_profiles. On UPSERT conflict (profile already enabled)
-     * the position is kept, and the target moves only when one is given —
-     * `COALESCE(?2, target)` keeps the row's own for a NULL, so no enable can
-     * unbind, and the one way a row loses its target is the DELETE in
-     * state_disable_profile. */
-    const char *sql =
-        "INSERT INTO enabled_profiles (name, target, position) "
-        "VALUES (?1, ?2, "
-        "  (SELECT COALESCE(MAX(position) + 1, 0) FROM enabled_profiles)) "
-        "ON CONFLICT(name) DO UPDATE SET "
-        "  target = COALESCE(?2, target)";
+    sqlite3_stmt *stmt = state_statement(state, STATEMENT_ENABLE_PROFILE);
 
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return state_error(state->db, "Failed to prepare enable profile statement");
-    }
-
-    /* Bind parameters: the target as given — NULL keeps the row's, and a string
-     * is the column's to admit or refuse (target_spelling), an empty one among
-     * them */
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
-    if (target) {
-        sqlite3_bind_text(stmt, 2, target, -1, SQLITE_STATIC);
-    } else {
-        sqlite3_bind_null(stmt, 2);
-    }
-
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
+    /* 1. the name  2. the target as given — a NULL pointer binds NULL, which keeps
+     * the row's, and a string is the column's to admit or refuse (target_spelling),
+     * an empty one among them. A bind SQLite refuses ends the enable before its
+     * step, which would run with that parameter NULL: a new row unbound. */
+    int rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, target, -1, SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return state_error(state->db, "Failed to enable profile");
     }
@@ -797,19 +797,12 @@ error_t *state_disable_profile(
     CHECK_NULL(profile);
     CHECK_NULL(state->db);
 
-    const char *sql = "DELETE FROM enabled_profiles WHERE name = ?1";
+    sqlite3_stmt *stmt = state_statement(state, STATEMENT_DISABLE_PROFILE);
 
-    sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
-    if (rc != SQLITE_OK) {
-        return state_error(state->db, "Failed to prepare disable profile statement");
-    }
-
-    sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
-
-    rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
+    /* 1. the name. A bind SQLite refuses ends the disable before its step, which
+     * would match no row and answer as a name never enabled. */
+    int rc = sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_TRANSIENT);
+    if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
         return state_error(state->db, "Failed to disable profile");
     }
@@ -905,25 +898,22 @@ error_t *state_reorder_profiles(
         const char *name = profiles->items[i];
         const state_profile_entry_t *preserved = state_find_profile(state, name);
 
-        /* The precondition loop above guarantees preserved is non-NULL. No NULL
-         * branch on target either: a profile with no deployment target (home/root)
-         * legitimately has preserved->target == NULL, which sqlite3_bind_null
-         * handles explicitly. */
+        /* The precondition loop above guarantees preserved is non-NULL. A profile
+         * with no deployment target (home/root) legitimately has preserved->target
+         * == NULL, which binds NULL. */
 
         sqlite3_stmt *stmt = state_statement(state, STATEMENT_INSERT_PROFILE);
 
-        /* Bind parameters: position, name, target.
-         * SQLITE_TRANSIENT: SQLite copies immediately; source lifetimes are
-         * ours. */
-        sqlite3_bind_int64(stmt, 1, (sqlite3_int64) i);
-        sqlite3_bind_text(stmt, 2, name, -1, SQLITE_TRANSIENT);
-        if (preserved->target) {
-            sqlite3_bind_text(stmt, 3, preserved->target, -1, SQLITE_TRANSIENT);
-        } else {
-            sqlite3_bind_null(stmt, 3);
+        /* Bind parameters: position, name, target. SQLITE_TRANSIENT: SQLite copies
+         * immediately; source lifetimes are ours. A bind SQLite refuses ends
+         * the reorder before its step, which would re-insert the row with that
+         * parameter NULL: a target lost. */
+        rc = sqlite3_bind_int64(stmt, 1, (sqlite3_int64) i);
+        if (rc == SQLITE_OK) rc = sqlite3_bind_text(stmt, 2, name, -1, SQLITE_TRANSIENT);
+        if (rc == SQLITE_OK) {
+            rc = sqlite3_bind_text(stmt, 3, preserved->target, -1, SQLITE_TRANSIENT);
         }
-
-        rc = sqlite3_step(stmt);
+        if (rc == SQLITE_OK) rc = sqlite3_step(stmt);
         if (rc != SQLITE_DONE) {
             return state_error(state->db, "Failed to insert profile");
         }

@@ -997,13 +997,10 @@ static error_t *profile_enable(
             goto cleanup;
         }
 
-        anchor_t *anchors = NULL;
-        size_t anchor_count = 0;
-        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
-        if (err) {
-            err = error_wrap(err, "Failed to read anchors");
-            goto cleanup;
-        }
+        state_record_t *records = NULL;
+        size_t record_count = 0;
+        err = state_records(state, ctx->arena, &records, &record_count);
+        if (err) goto cleanup;
 
         stats = calloc(to_enable_validated->count, sizeof(*stats));
         if (!stats) {
@@ -1012,7 +1009,7 @@ static error_t *profile_enable(
         }
 
         err = manifest_diff(
-            before, after, anchors, anchor_count, to_enable_validated, stats
+            before, after, records, record_count, to_enable_validated, stats
         );
         if (err) {
             err = error_wrap(err, "Failed to diff manifest across enable");
@@ -1358,13 +1355,10 @@ static error_t *profile_disable(
                 goto cleanup;
             }
 
-            anchor_t *anchors = NULL;
-            size_t anchor_count = 0;
-            err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
-            if (err) {
-                err = error_wrap(err, "Failed to read anchors");
-                goto cleanup;
-            }
+            state_record_t *records = NULL;
+            size_t record_count = 0;
+            err = state_records(state, ctx->arena, &records, &record_count);
+            if (err) goto cleanup;
 
             stats = calloc(to_disable_validated->count, sizeof(*stats));
             if (!stats) {
@@ -1373,7 +1367,7 @@ static error_t *profile_disable(
             }
 
             err = manifest_diff(
-                before, after, anchors, anchor_count, to_disable_validated, stats
+                before, after, records, record_count, to_disable_validated, stats
             );
             if (err) {
                 err = error_wrap(err, "Failed to diff manifest across disable");
@@ -1727,15 +1721,15 @@ static error_t *profile_validate(
 
     /* Check 2: The record references valid profiles
      *
-     * One read of the path_anchors table, walked once; each distinct profile is
+     * One read of the path_records table, walked once; each distinct profile is
      * asked of Git once (`probed` remembers the answer), so R records cost P
      * probes, where P is the distinct-profile count, typically < 10. `deleted`
      * keeps the missing profiles in first-seen order so the report is reproducible.
      * Nothing here is fixable in place: a record whose profile is gone is an
      * orphan the next apply reads, asks Git about, finds LOST, and releases. */
-    anchor_t *anchors = NULL;
-    size_t anchor_count = 0;
-    err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    err = state_records(state, ctx->arena, &records, &record_count);
     if (err) goto cleanup;
 
     deleted = string_array_new(0);
@@ -1745,8 +1739,8 @@ static error_t *profile_validate(
         goto cleanup;
     }
 
-    for (size_t i = 0; i < anchor_count; i++) {
-        const char *profile = anchors[i].profile;
+    for (size_t i = 0; i < record_count; i++) {
+        const char *profile = records[i].profile;
 
         void *known = hashmap_get(probed, profile);
         if (!known) {
@@ -1778,8 +1772,8 @@ static error_t *profile_validate(
 
         for (size_t i = 0; i < deleted->count; i++) {
             size_t n = 0;
-            for (size_t j = 0; j < anchor_count; j++) {
-                if (strcmp(anchors[j].profile, deleted->items[i]) == 0) n++;
+            for (size_t j = 0; j < record_count; j++) {
+                if (strcmp(records[j].profile, deleted->items[i]) == 0) n++;
             }
             output_print(
                 out, OUTPUT_NORMAL, "  • %zu entr%s from %s\n",

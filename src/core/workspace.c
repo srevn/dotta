@@ -9,7 +9,7 @@
  * (core/manifest.h) from the enabled profiles at HEAD — both kinds, one row per
  * path, precedence resolved — so an external commit, a pull, a revert or a scope
  * change is simply in the next view. Nothing repairs a cache because there is
- * none. The record dotta keeps of each path (the path_anchors table: what it
+ * none. The record dotta keeps of each path (the path_records table: what it
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
@@ -178,7 +178,7 @@ static int workspace_kind_order(const void *a, const void *b) {
 
 /* bsearch's: a path against an item's (strcmp) — the order of every array it
  * searches: each kind's active items by workspace_kind_order, the orphans by
- * the snapshot's own (core/state.h state_get_all_anchors) */
+ * the snapshot's own (core/state.h state_records) */
 static int workspace_path_order(const void *key, const void *elem) {
     const workspace_item_t *const *item = elem;
 
@@ -528,13 +528,13 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
  */
 static workspace_state_t classify_absent(
     const manifest_row_t *row,
-    const anchor_t *anchor
+    const state_record_t *record
 ) {
     if (manifest_is_derived(row)) {
         return WORKSPACE_STATE_UNDEPLOYED;
     }
 
-    return anchor && workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF
+    return record && workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF
            ? WORKSPACE_STATE_DELETED
            : WORKSPACE_STATE_UNDEPLOYED;
 }
@@ -562,7 +562,7 @@ static workspace_state_t classify_absent(
  */
 static void workspace_analyze_claim(workspace_item_t *item) {
     const manifest_row_t *row = item->row;
-    const anchor_t *anchor = item->anchor;
+    const state_record_t *record = item->record;
 
     /* The mode, where the kind carries one. The row's is total — the claim, or
      * the filemode floor manifest_build resolved absence into — so one full-bit
@@ -584,7 +584,7 @@ static void workspace_analyze_claim(workspace_item_t *item) {
      * and disk has not followed is Git's to bring — whoever else moved it, since
      * apply converges every claim, and update's capture would commit disk's over
      * Git's move. The bit rides beside the axis it attributes, never alone. */
-    divergence_type_t moved = workspace_claims_moved(row, anchor);
+    divergence_type_t moved = workspace_claims_moved(row, record);
     if (claims & moved) {
         claims |= DIVERGENCE_CLAIM_MOVED;
     }
@@ -665,7 +665,7 @@ static void workspace_analyze_file(
     /* The record dotta keeps of this path, if any. NULL means dotta has never
      * seen the row's kind standing here in scope, or has let the path go since,
      * which forgets it: absence reads UNDEPLOYED, and there is no base (below). */
-    const anchor_t *anchor = item->anchor;
+    const state_record_t *record = item->record;
 
     /* The row's verdict, opened with the blob bit (see the doc above): is the
      * blob Git holds for this row stored plaintext where the auto-encrypt policy
@@ -703,7 +703,7 @@ static void workspace_analyze_file(
          * of what is not there cannot be compared, and none has been written.
          * The blob bit rides — the blob and the policy are both still here to
          * disagree ([undeployed] [unencrypted] is exactly this row). */
-        item->state = classify_absent(row, anchor);
+        item->state = classify_absent(row, record);
         return;
     }
 
@@ -775,7 +775,7 @@ static void workspace_analyze_file(
      * moved. Without a base there is no second question — any difference from
      * theirs is the user's.
      *
-     * Source of truth for the base: the record (the path_anchors row's blob). A
+     * Source of truth for the base: the record (the path_records row's blob). A
      * path with no record, or one observed but never confirmed (zero blob), has
      * no base. Cross-process correct by construction — every invocation sees
      * the same answer.
@@ -785,10 +785,10 @@ static void workspace_analyze_file(
     /* The base: the record, where it carries a confirmed blob. It compares under
      * its own binding, never the row's: a blob opens under one (profile, storage
      * path) pair and no other, and the record carries the one its blob was
-     * confirmed under (core/state.h anchor_t) — a row the binding does not name
-     * is one the record has yet to follow, and reading the base under it
-     * authenticates a ciphertext against a tree path it was never sealed at. */
-    const anchor_t *base = anchor && !git_oid_is_zero(&anchor->blob_oid) ? anchor : NULL;
+     * confirmed under (core/state.h state_record_t) — a row the binding does
+     * not name is one the record has yet to follow, and reading the base under
+     * it authenticates a ciphertext against a tree path it was never sealed at. */
+    const state_record_t *base = record && !git_oid_is_zero(&record->blob_oid) ? record : NULL;
 
     /* The first question of the three-way frame is answered from the row and
      * the base alone; the second (disk_at_base — ours == base) is answered by
@@ -800,26 +800,26 @@ static void workspace_analyze_file(
      *
      * The base binds the blob dotta last confirmed on disk, the kind it was read
      * as, and the stat triple captured at that confirmation. A live look of that
-     * kind that still stands behind that triple is proof that disk is the base's
-     * pair — why it is proof and not a guess is the proof's own to say
-     * (core/state.h stat_cache_matches) — so no blob is loaded and nothing is
-     * hashed, and the second question is answered for free: ours == base. The
-     * first question is then the whole of the comparison, because disk IS the
-     * base: what the row is to the pair is what it is to disk, in the comparison's
-     * own words (core/workspace.h workspace_compare_confirmed). A kind Git moved
-     * under an untouched copy therefore answers CMP_TYPE_DIFF here and STALE
-     * below, the same as the slow path reaches by reading — where an answer off
-     * git_moved alone would have called one state clean and its mirror a mode
-     * change. A path with no base has no triple to match.
+     * kind that still stands behind that triple proves disk is the base's pair
+     * — why it proves rather than guesses is the stat's own to say (core/state.h
+     * state_stat_matches) — so no blob is loaded and nothing is hashed, and the
+     * second question is answered for free: ours == base. The first question is
+     * then the whole of the comparison, because disk IS the base: what the row
+     * is to the pair is what it is to disk, in the comparison's own words
+     * (core/workspace.h workspace_compare_confirmed). A kind Git moved under an
+     * untouched copy therefore answers CMP_TYPE_DIFF here and STALE below, the
+     * same as the slow path reaches by reading — where an answer off git_moved
+     * alone would have called one state clean and its mirror a mode change. A
+     * path with no base has no triple to match.
      *
      * Nothing is noted for the record here: disk is the record's own pair under
-     * its own proof, which the record already holds. A note would buy nothing
+     * its own stat, which the record already holds. A note would buy nothing
      * and cost two things: the flush's transaction on every clean load, and —
-     * where the deploy wrote the proof this very second — the proof itself, which
+     * where the deploy wrote the stat this very second — the stat itself, which
      * a read in an open second demotes to none (core/state.h
-     * stat_cache_from_stat). */
-    if (base && stat_cache_matches(base, &item->st)) {
-        /* the look stands behind the proof ⟹ disk == the base's pair */
+     * state_stat_from_read). */
+    if (base && state_stat_matches(base, &item->st)) {
+        /* the look stands behind the stat ⟹ disk == the base's pair */
         disk_at_base = true;
         cmp_result = workspace_compare_confirmed(row, base);
     } else {
@@ -934,16 +934,16 @@ static void workspace_analyze_file(
          * directory was — which apply adopts instead, as it adopts a row with
          * no record (cmds/apply.c).
          *
-         * The proof is distilled from the look here, where the comparison stood:
+         * The stat is distilled from the look here, where the comparison stood:
          * whether its mtime second had closed is asked of the clock now, never
-         * of the flush's later one, which would take for proof a triple that a
-         * same-second rewrite after the read could stand behind (core/state.h
-         * stat_cache_from_stat). */
+         * of the flush's later one, which would take for the record's stat a
+         * triple that a same-second rewrite after the read could stand behind
+         * (core/state.h state_stat_from_read). */
         if (cmp_result == CMP_EQUAL &&
-            (!anchor || (manifest_is_claim(row, anchor->profile, anchor->storage_path) &&
-            workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF))) {
+            (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
+            workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF))) {
             item->confirmation |= DIVERGENCE_CONTENT;
-            item->proof = stat_cache_from_stat(&item->st);
+            item->stat = state_stat_from_read(&item->st);
         }
 
         /* Second question — ours vs base — asked once, where it can change the
@@ -1057,7 +1057,7 @@ static void workspace_analyze_file(
              * meet a reused inode. Absence is then classified as the lstat's
              * is, above, and the claim is not asked. */
             item->occupant = FS_OCCUPANT_NONE;
-            item->state = classify_absent(row, anchor);
+            item->state = classify_absent(row, record);
             return;
     }
 
@@ -1078,12 +1078,12 @@ static void workspace_analyze_file(
  * filesystem state against what dotta last deployed.
  *
  * An orphan asks one question — is disk still what dotta put there? — so prune
- * safety is measured against the deployment anchor, never against a view blob:
- * Git may have moved on after the deployment and before the path left scope,
- * and that move is not the user's edit. The record is the honest reference on
- * every axis — its type, blob and stat for the content, its mode, owner and group
- * for the claim — the claim dotta last reconciled the path against, which follows
- * every agreement a load found or a fix made (core/state.h anchor_t), so a claim
+ * safety is measured against the record, never against a view blob: Git may have
+ * moved on after the deployment and before the path left scope, and that move
+ * is not the user's edit. The record is the honest reference on every axis —
+ * its type, blob and stat for the content, its mode, owner and group for the
+ * claim — the claim dotta last reconciled the path against, which follows every
+ * agreement a load found or a fix made (core/state.h state_record_t), so a claim
  * Git moved and disk followed while the path was active is measured as the one
  * disk stands on, not as an edit. Never what the row later came to claim, after
  * the path left scope. DIVERGENCE_STALE is therefore never written here, nor
@@ -1099,8 +1099,8 @@ static void workspace_analyze_file(
  *
  * Architecture:
  * - Uses the record alone (blob_oid, stat, type, mode, owner, group)
- * - Anchor stat triple as the fast path, the same proof the file analysis relies
- *   on: a match means the exact node dotta wrote, no hashing
+ * - The record's stat as the fast path, the one the file analysis relies on: a
+ *   match means the exact node dotta wrote, no hashing
  * - Past it, the node's kind off the look, which needs no read (the ladder's
  *   first rung, as the file analysis asks it)
  * - Past that, one read of the record's blob answers its kind and the reference
@@ -1126,7 +1126,7 @@ static void workspace_analyze_file(
  * @return The look's error when the compare could not be made; NULL otherwise
  */
 static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item) {
-    const anchor_t *anchor = item->anchor;
+    const state_record_t *record = item->record;
     const char *filesystem_path = item->filesystem_path;
     const char *storage_path = item->storage_path;
     const char *profile = item->profile;
@@ -1137,7 +1137,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * path already rejects wrong-sized BLOB columns, and the caller guarantees
      * a non-zero one, so by the time we get here the OID is well-formed.
      */
-    const git_oid *reference = &anchor->blob_oid;
+    const git_oid *reference = &record->blob_oid;
 
     /* Step 2: The record's own filemode
      *
@@ -1145,15 +1145,15 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * the shared helper, for one mapping across modules. The claim's mode check
      * reads the record's mode, never this.
      */
-    git_filemode_t expected_filemode = path_type_to_git_filemode(anchor->type);
+    git_filemode_t expected_filemode = path_type_to_git_filemode(record->type);
 
     compare_result_t cmp_result;
 
     /* Step 3: Content and type comparison.
      *
-     * Anchor fast path first: a live look of the record's kind that still stands
-     * behind the triple captured at the last confirmation is proof that disk
-     * still equals anchor.blob_oid (core/state.h stat_cache_matches), so the
+     * The record's fast path first: a live look of the record's kind that still
+     * stands behind the triple captured at the last confirmation proves disk
+     * still equals record.blob_oid (core/state.h state_stat_matches), so the
      * exact node dotta wrote is recognised without loading or hashing anything
      * — and the claim below is asked of that node, never of another kind's.
      *
@@ -1170,10 +1170,10 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * sit on the other side of an encryption-policy flip from what Git holds
      * now. The caller's look is forwarded: the seam reads, the pair judges, and
      * neither takes a look of its own. */
-    if (stat_cache_matches(anchor, &item->st)) {
-        /* the look stands behind the proof ⟹ disk == anchor.blob_oid */
+    if (state_stat_matches(record, &item->st)) {
+        /* the look stands behind the stat ⟹ disk == record.blob_oid */
         cmp_result = CMP_EQUAL;
-    } else if (item->occupant != workspace_type_occupant(anchor->type)) {
+    } else if (item->occupant != workspace_type_occupant(record->type)) {
         cmp_result = CMP_TYPE_DIFF;
     } else {
         error_t *err = content_compare_blob_to_disk(
@@ -1255,12 +1255,12 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
      * syscalls.
      */
     if (cmp_result != CMP_TYPE_DIFF && cmp_result != CMP_MISSING) {
-        if (anchor->type != PATH_TYPE_SYMLINK
-            && (item->st.st_mode & 0777) != anchor->mode) {
+        if (record->type != PATH_TYPE_SYMLINK
+            && (item->st.st_mode & 0777) != record->mode) {
             item->divergence |= DIVERGENCE_MODE;
         }
         if (ownership_diverges(
-            anchor->storage_path, anchor->owner, anchor->group, &item->st
+            record->storage_path, record->owner, record->group, &item->st
             )) {
             item->divergence |= DIVERGENCE_OWNERSHIP;
         }
@@ -1993,7 +1993,7 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
      * at the call that raised it, never carried. */
     for (size_t i = 0; i < ws->orphan_count; i++) {
         workspace_item_t *item = ws->orphans[i];
-        const anchor_t *anchor = item->anchor;
+        const state_record_t *record = item->record;
 
         /* Beneath a squatter of either authority — a record's memory reaches
          * the orphans, which this is (the reach rule, workspace_displaced_t) —
@@ -2051,8 +2051,8 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
          * (state.c: ownership implies confirmation) guarantees an owned file
          * record its blob, so for files this discriminates only when deployed_at
          * == 0 — a prune-ordered record dotta never deployed. */
-        if (anchor->ordered_at > 0 &&
-            (item->item_kind == PATH_KIND_DIRECTORY || !git_oid_is_zero(&anchor->blob_oid))) {
+        if (record->ordered_at > 0 &&
+            (item->item_kind == PATH_KIND_DIRECTORY || !git_oid_is_zero(&record->blob_oid))) {
             workspace_measure(ws, item);
             continue;
         }
@@ -2060,7 +2060,7 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
         /* The ownership gate: dotta never put this here. Released — the copy is
          * left alone and the record retires. A prune-ordered file with no confirmed
          * blob lands here too: there is nothing to measure the order against. */
-        if (anchor->deployed_at == 0) {
+        if (record->deployed_at == 0) {
             item->state = WORKSPACE_STATE_RELEASED;
             continue;
         }
@@ -2818,7 +2818,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
 
     /* The record dotta keeps of this path, if any — paired at the partition, as
      * the file analysis's is. */
-    const anchor_t *anchor = item->anchor;
+    const state_record_t *record = item->record;
 
     /* The load's one look at this row, into its item and kept for the phases
      * after (workspace_look) — or none, beneath a squatter: the file analysis's
@@ -2851,7 +2851,7 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
          * absent. The item is listed either way, its state not DEPLOYED
          * (workspace_list), and deploy's ancestors pass reads absence off its
          * occupant, not its state. */
-        item->state = classify_absent(row, anchor);
+        item->state = classify_absent(row, record);
         return;
     }
 
@@ -3000,24 +3000,22 @@ static error_t *workspace_partition(workspace_t *ws) {
      * are paired — a block sized to the record would pay an item for every paired
      * one — and the array holding them is sized to the bound: any record may be
      * an orphan. */
-    anchor_t *anchors = NULL;
-    size_t anchor_count = 0;
-    error_t *err = state_get_all_anchors(ws->state, ws->arena, &anchors, &anchor_count);
-    if (err) {
-        return error_wrap(err, "Failed to read anchors from state");
-    }
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    error_t *err = state_records(ws->state, ws->arena, &records, &record_count);
+    if (err) return err;
 
-    ws->orphans = arena_calloc(ws->arena, anchor_count, sizeof(*ws->orphans));
+    ws->orphans = arena_calloc(ws->arena, record_count, sizeof(*ws->orphans));
     if (!ws->orphans) {
         return ERROR(ERR_MEMORY, "Failed to allocate the orphans");
     }
 
-    for (size_t i = 0; i < anchor_count; i++) {
-        anchor_t *anchor = &anchors[i];
+    for (size_t i = 0; i < record_count; i++) {
+        state_record_t *record = &records[i];
 
-        workspace_item_t *active = workspace_find_active(ws, anchor->filesystem_path);
+        workspace_item_t *active = workspace_find_active(ws, record->filesystem_path);
         if (active) {
-            active->anchor = anchor;
+            active->record = record;
             continue;
         }
 
@@ -3027,11 +3025,11 @@ static error_t *workspace_partition(workspace_t *ws) {
         }
 
         *orphan = (workspace_item_t){
-            .anchor = anchor,
-            .filesystem_path = anchor->filesystem_path,
-            .storage_path = anchor->storage_path,
-            .profile = anchor->profile,
-            .item_kind = path_type_kind(anchor->type),
+            .record = record,
+            .filesystem_path = record->filesystem_path,
+            .storage_path = record->storage_path,
+            .profile = record->profile,
+            .item_kind = path_type_kind(record->type),
             .occupant = FS_OCCUPANT_UNKNOWN,
             .state = WORKSPACE_STATE_ORPHANED,
         };
@@ -3381,7 +3379,7 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_CAPTURE;
     }
 
-    return workspace_reassigned(item->row, item->anchor, item->occupant)
+    return workspace_reassigned(item->row, item->record, item->occupant)
            ? WORKSPACE_ROUTE_REASSIGNED
            : WORKSPACE_ROUTE_CLEAN;
 }
@@ -3456,13 +3454,13 @@ bool workspace_item_tags(
              * still names the profile that deployed the copy, and apply's redeploy
              * from the new owner is what acknowledges it — the same pair the
              * DEPLOYED arm prints. */
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+            if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
                 snprintf(
                     metadata_buf, metadata_size, "%s → %s",
-                    item->anchor->profile, item->profile
+                    item->record->profile, item->profile
                 );
             } else {
                 snprintf(metadata_buf, metadata_size, "from %s", item->profile);
@@ -3617,7 +3615,7 @@ bool workspace_item_tags(
              * Added after divergence tags as secondary information. Color only
              * set for pure reassignment (sole tag) to avoid overriding
              * severity-based colors from divergence. */
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+            if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 if (tag_count < WORKSPACE_ITEM_MAX_TAGS) {
                     tags_out[tag_count++] = "reassigned";
                 }
@@ -3627,7 +3625,7 @@ bool workspace_item_tags(
 
                 snprintf(
                     metadata_buf, metadata_size, "%s → %s",
-                    item->anchor->profile, item->profile
+                    item->record->profile, item->profile
                 );
             } else {
                 snprintf(
@@ -3816,7 +3814,7 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
     for (size_t i = 0; i < ws->dir_count; i++) {
         const workspace_item_t *item = ws->active[i];
         const manifest_row_t *row = item->row;
-        const anchor_t *anchor = item->anchor;
+        const state_record_t *record = item->record;
 
         /* A directory standing: the row's own kind, found by the load's look at
          * the path. A look withheld or failed saw nothing stand, and absence or
@@ -3824,14 +3822,14 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
         if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
 
         /* Over a record of another kind: that record's node is gone */
-        if (!anchor || workspace_compare_confirmed(row, anchor) != CMP_TYPE_DIFF) {
+        if (!record || workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF) {
             continue;
         }
 
         /* The record retires, and the directory is observed in its place */
-        error_t *err = state_retire_anchor(ws->state, row->filesystem_path);
+        error_t *err = state_retire(ws->state, row->filesystem_path);
         if (!err) {
-            err = state_observe(ws->state, row, (anchor_t *) anchor);
+            err = state_observe(ws->state, row, (state_record_t *) record);
         }
         if (err) {
             return error_wrap(
@@ -3850,12 +3848,12 @@ error_t *workspace_observe_retyped(workspace_t *ws) {
  * row and the record the item holds, or one the item gains. The statement is
  * the one specification of what an ownership event writes, and checks the row;
  * this function holds none of it and reads nothing of the row. Either arm leaves
- * item->anchor the live record.
+ * item->record the live record.
  */
 error_t *workspace_anchor(
     workspace_t *ws,
     const workspace_item_t *item,
-    const stat_cache_t *stat,
+    const state_stat_t *stat,
     time_t now
 ) {
     CHECK_NULL(ws);
@@ -3864,23 +3862,23 @@ error_t *workspace_anchor(
     /* The record the item holds, advanced in place: every holder of the item
      * reads the post-write record through the pointer it already holds. Const
      * to every reader, and cast here, where it is written (workspace_item_t). */
-    if (item->anchor) {
-        return state_anchor(ws->state, item->row, stat, now, (anchor_t *) item->anchor);
+    if (item->record) {
+        return state_anchor(ws->state, item->row, stat, now, (state_record_t *) item->record);
     }
 
     /* An item holding none: its record allocated before the statement, so a write
      * that landed is never followed by a failure to hold it, and the item's after
      * it — the item cast here, where it gains the record, as the record is where
      * it is advanced (workspace_item_t). */
-    anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
-    if (!anchor) {
-        return ERROR(ERR_MEMORY, "Failed to allocate anchor record");
+    state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
+    if (!record) {
+        return ERROR(ERR_MEMORY, "Failed to allocate record");
     }
 
-    error_t *err = state_anchor(ws->state, item->row, stat, now, anchor);
+    error_t *err = state_anchor(ws->state, item->row, stat, now, record);
     if (err) return err;
 
-    ((workspace_item_t *) item)->anchor = anchor;
+    ((workspace_item_t *) item)->record = record;
     return NULL;
 }
 
@@ -3908,15 +3906,15 @@ error_t *workspace_confirm(
     /* The item's record: the load's, or the one the flush's observation made.
      * Const to every reader, and cast here, where it is written
      * (workspace_item_t). */
-    anchor_t *anchor = (anchor_t *) item->anchor;
+    state_record_t *record = (state_record_t *) item->record;
 
     /* The content, under the row's binding (state_confirm), proven by the triple
-     * the load distilled where its comparison stood (workspace_item_t's proof).
+     * the load distilled where its comparison stood (workspace_item_t's stat).
      * Either statement may run first: each binds the record as the snapshot holds
      * it and advances the snapshot when it writes, so the type the content writes
      * within its kind is the type the claim's then binds. */
     if (axes & DIVERGENCE_CONTENT) {
-        error_t *err = state_confirm(ws->state, row, &item->proof, anchor);
+        error_t *err = state_confirm(ws->state, row, &item->stat, record);
         if (err) return err;
     }
 
@@ -3929,10 +3927,10 @@ error_t *workspace_confirm(
      * borrowed from the row as the other two writers borrow them. */
     return state_confirm_claim(
         ws->state,
-        (axes & DIVERGENCE_MODE) ? row->mode : anchor->mode,
-        (axes & DIVERGENCE_OWNERSHIP) ? row->owner : anchor->owner,
-        (axes & DIVERGENCE_OWNERSHIP) ? row->group : anchor->group,
-        anchor
+        (axes & DIVERGENCE_MODE) ? row->mode : record->mode,
+        (axes & DIVERGENCE_OWNERSHIP) ? row->owner : record->owner,
+        (axes & DIVERGENCE_OWNERSHIP) ? row->group : record->group,
+        record
     );
 }
 
@@ -3964,14 +3962,14 @@ error_t *workspace_flush(workspace_t *ws) {
          * beneath a squatter, failed, or retracted by a read that met absence).
          * A confirmation rides the observation: a content confirmation is noted
          * only where the row's kind stands (the ladder's first rung, and the
-         * proof's), and a claim is learned only onto a record
+         * stat's), and a claim is learned only onto a record
          * (workspace_claims_moved), so a path skipped here is owed no confirmation
          * either. */
-        if (item->anchor && item->confirmation == DIVERGENCE_NONE &&
-            item->anchor->ordered_at == 0) {
+        if (item->record && item->confirmation == DIVERGENCE_NONE &&
+            item->record->ordered_at == 0) {
             continue;
         }
-        if (!item->anchor && item->occupant != workspace_type_occupant(item->row->type)) {
+        if (!item->record && item->occupant != workspace_type_occupant(item->row->type)) {
             continue;
         }
 
@@ -4014,9 +4012,9 @@ error_t *workspace_flush(workspace_t *ws) {
          * test — and a record never owned answers as none does; a run of apply
          * cannot meet an ignored INSERT at all, its load and its flush sharing
          * one transaction. */
-        if (!item->anchor) {
-            anchor_t *anchor = arena_alloc(ws->arena, sizeof(*anchor));
-            err = anchor ? state_observe(ws->state, item->row, anchor)
+        if (!item->record) {
+            state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
+            err = record ? state_observe(ws->state, item->row, record)
                          : ERROR(ERR_MEMORY, "Failed to allocate observation record");
             if (err) {
                 err = error_wrap(
@@ -4024,7 +4022,7 @@ error_t *workspace_flush(workspace_t *ws) {
                 );
                 goto rollback;
             }
-            item->anchor = anchor;
+            item->record = record;
         }
 
         /* The confirmation, onto the record the look was made against — the load's,
@@ -4060,8 +4058,8 @@ error_t *workspace_flush(workspace_t *ws) {
          * and voiding it would undo the removal's intent — the compare-and-swap
          * leaves it standing. The record is the item's, const to every reader,
          * and cast here, where it is written (workspace_item_t). */
-        if (item->anchor->ordered_at > 0) {
-            err = state_void_prune(ws->state, (anchor_t *) item->anchor);
+        if (item->record->ordered_at > 0) {
+            err = state_void_prune(ws->state, (state_record_t *) item->record);
             if (err) {
                 err = error_wrap(
                     err, "Failed to void prune order for '%s'", item->filesystem_path

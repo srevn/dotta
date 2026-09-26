@@ -108,12 +108,12 @@ typedef struct {
  * its paths, so both leave the flag to the record's ownership (settle_let_go).
  *
  * The path is the filesystem one, as this profile deploys it; arena-backed, command
- * lifetime. The anchor borrows from the read the caller indexed.
+ * lifetime. The record borrows from the read the caller indexed.
  */
 typedef struct {
-    const char *path;         /* Filesystem path, as this profile deploys it */
-    const anchor_t *anchor;   /* The record at that path; names the removed profile */
-    bool named;               /* An argument's reach took it, so the flag speaks to it */
+    const char *path;             /* Filesystem path, as this profile deploys it */
+    const state_record_t *record; /* The record at that path; names the removed profile */
+    bool named;                   /* An argument's reach took it, so the flag speaks to it */
 } removal_candidate_t;
 
 /**
@@ -137,8 +137,7 @@ typedef struct {
  * still provides is a fallback — kept, it reads [reassigned] until apply
  * acknowledges it; one the view no longer provides takes the fate the user chose
  * — --delete-files orders the copy pruned at the next apply, the default releases
- * (the record retires, and the copy stays on disk — core/state.h
- * state_retire_anchor).
+ * (the record retires, and the copy stays on disk — core/state.h state_retire).
  *
  * The flag is the user's word about the paths the removal NAMED, and only those
  * — named by the resolver's reach, not the typed line: an argument takes the
@@ -181,12 +180,12 @@ static error_t *settle_let_go(
             continue;
         }
 
-        if (delete_files && (candidate->named || candidate->anchor->deployed_at > 0)) {
+        if (delete_files && (candidate->named || candidate->record->deployed_at > 0)) {
             error_t *err = state_order_prune(state, candidate->path, now);
             if (err) return err;
             settlement->ordered++;
         } else {
-            error_t *err = state_retire_anchor(state, candidate->path);
+            error_t *err = state_retire(state, candidate->path);
             if (err) return err;
             settlement->released++;
         }
@@ -1063,9 +1062,9 @@ static error_t *remove_files_from_profile(
      * dotta.db at first write intent (its contract, core/state.h), and a remove
      * with no record to settle must not grow a never-enabled repository a
      * database. */
-    anchor_t *anchors = NULL;
-    size_t anchor_count = 0;
-    record_err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
+    state_record_t *records = NULL;
+    size_t record_count = 0;
+    record_err = state_records(state, ctx->arena, &records, &record_count);
 
     /* The candidates, as this profile deploys them, each joined to its record —
      * a candidate exists only where one of this profile's records stands, so a
@@ -1079,7 +1078,7 @@ static error_t *remove_files_from_profile(
      * claim of the arguments and is placed here. */
     removal_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    if (!record_err && anchor_count > 0) {
+    if (!record_err && record_count > 0) {
         candidates = arena_alloc(
             ctx->arena,
             (claim_count + pruned_dirs.count) * sizeof(*candidates)
@@ -1090,14 +1089,15 @@ static error_t *remove_files_from_profile(
 
         /* The claims the arguments took: the user's word reaches all of them
          * (settle_let_go). Each joined to its record by a lookup in the read
-         * (state_lookup_anchor). */
+         * (state_find_record). */
         for (size_t i = 0; !record_err && i < claim_count; i++) {
             const char *filesystem_path = claims[i].filesystem_path;
             if (!filesystem_path) continue;
-            const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, filesystem_path);
-            if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
+            const state_record_t *record = state_find_record(records, record_count, filesystem_path)
+            ;
+            if (!record || strcmp(record->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
-                .path = filesystem_path, .anchor = anchor, .named = true
+                .path = filesystem_path, .record = record, .named = true
             };
         }
 
@@ -1115,10 +1115,11 @@ static error_t *remove_files_from_profile(
                 continue;
             }
             if (!filesystem_path) continue;
-            const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, filesystem_path);
-            if (!anchor || strcmp(anchor->profile, opts->profile) != 0) continue;
+            const state_record_t *record = state_find_record(records, record_count, filesystem_path)
+            ;
+            if (!record || strcmp(record->profile, opts->profile) != 0) continue;
             candidates[candidate_count++] = (removal_candidate_t){
-                .path = filesystem_path, .anchor = anchor, .named = false
+                .path = filesystem_path, .record = record, .named = false
             };
         }
     }
@@ -1400,13 +1401,13 @@ static error_t *delete_profile_branch(
      * was read; what this run cannot settle, the next apply reads as orphans
      * and releases. */
     bool profile_was_enabled = state_has_profile(state, opts->profile);
-    anchor_t *anchors = NULL;
-    size_t anchor_count = 0;
+    state_record_t *records = NULL;
+    size_t record_count = 0;
     size_t deployed_count = 0;
     removal_settlement_t settlement = { 0 };
     {
-        error_t *read_err = state_get_all_anchors(
-            state, ctx->arena, &anchors, &anchor_count
+        error_t *read_err = state_records(
+            state, ctx->arena, &records, &record_count
         );
         if (read_err) {
             output_warning(
@@ -1425,8 +1426,8 @@ static error_t *delete_profile_branch(
      * found rather than made — releases rather than prunes. */
     removal_candidate_t *candidates = NULL;
     size_t candidate_count = 0;
-    if (anchor_count > 0) {
-        candidates = arena_alloc(ctx->arena, anchor_count * sizeof(*candidates));
+    if (record_count > 0) {
+        candidates = arena_alloc(ctx->arena, record_count * sizeof(*candidates));
         if (!candidates) {
             output_warning(
                 out, OUTPUT_NORMAL,
@@ -1434,12 +1435,12 @@ static error_t *delete_profile_branch(
             );
         }
     }
-    for (size_t i = 0; candidates && i < anchor_count; i++) {
-        if (strcmp(anchors[i].profile, opts->profile) != 0) continue;
-        if (anchors[i].deployed_at > 0) deployed_count++;
+    for (size_t i = 0; candidates && i < record_count; i++) {
+        if (strcmp(records[i].profile, opts->profile) != 0) continue;
+        if (records[i].deployed_at > 0) deployed_count++;
         candidates[candidate_count++] = (removal_candidate_t){
-            .path = anchors[i].filesystem_path,
-            .anchor = &anchors[i],
+            .path = records[i].filesystem_path,
+            .record = &records[i],
             .named = false,
         };
     }

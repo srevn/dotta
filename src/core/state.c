@@ -8,7 +8,7 @@
  *   — the record's, per path, and the reorder's, per profile
  * - WAL mode for concurrent access
  * - Enabled-profile rows cached in memory (tiny, read frequently)
- * - The record read in one pass per run (state_get_all_anchors)
+ * - The record read in one pass per run (state_records)
  * - The record stored sorted by its key: a read in key order walks the table
  *   (core/state.h)
  */
@@ -39,7 +39,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "24"
+#define STATE_SCHEMA_VERSION "25"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -52,13 +52,13 @@ typedef enum {
     STATEMENT_INSERT_PROFILE,  /* INSERT INTO enabled_profiles (the reorder's, per profile) */
 
     /* The record's verbs */
-    STATEMENT_OBSERVE,         /* INSERT path_anchors … DO NOTHING on the key (presence only) */
-    STATEMENT_CONFIRM,         /* UPDATE path_anchors … RETURNING filesystem_path (content, CAS) */
-    STATEMENT_CONFIRM_CLAIM,   /* UPDATE path_anchors … RETURNING filesystem_path (claim, CAS) */
-    STATEMENT_ANCHOR,          /* INSERT OR REPLACE path_anchors (the ownership event: the record, whole) */
-    STATEMENT_RETIRE,          /* DELETE FROM path_anchors (the record, and the order it carries) */
-    STATEMENT_ORDER_PRUNE,     /* UPDATE path_anchors SET ordered_at (the order, stamped) */
-    STATEMENT_VOID_PRUNE,      /* UPDATE path_anchors SET ordered_at = 0 … RETURNING (the void, CAS) */
+    STATEMENT_OBSERVE,         /* INSERT path_records … DO NOTHING on the key (presence only) */
+    STATEMENT_CONFIRM,         /* UPDATE path_records … RETURNING filesystem_path (content, CAS) */
+    STATEMENT_CONFIRM_CLAIM,   /* UPDATE path_records … RETURNING filesystem_path (claim, CAS) */
+    STATEMENT_ANCHOR,          /* INSERT OR REPLACE path_records (the ownership event: the record, whole) */
+    STATEMENT_RETIRE,          /* DELETE FROM path_records (the record, and the order it carries) */
+    STATEMENT_ORDER_PRUNE,     /* UPDATE path_records SET ordered_at (the order, stamped) */
+    STATEMENT_VOID_PRUNE,      /* UPDATE path_records SET ordered_at = 0 … RETURNING (the void, CAS) */
 } statement_t;
 
 /* The statements' arity, for the handle's array and the two walks over it. A
@@ -194,7 +194,7 @@ static path_type_t path_type_from_sql_text(const char *s) {
  * - the header: dotta's id and the schema's number (STATE_APPLICATION_ID,
  *   STATE_SCHEMA_VERSION)
  * - enabled_profiles: User's profile management (position, name, target)
- * - path_anchors: The record dotta keeps of every managed path
+ * - path_records: The record dotta keeps of every managed path
  *
  * @param db Connection to the private file (must not be NULL)
  * @return Error or NULL on success
@@ -262,7 +262,7 @@ static error_t *state_initialize(sqlite3 *db) {
          *     what makes a read in key order strcmp order (core/state.h)
          *   - the table is stored sorted by its key (WITHOUT ROWID): a read in
          *     key order walks the table, with no sort step and no index between */
-        "CREATE TABLE path_anchors ("
+        "CREATE TABLE path_records ("
         "    filesystem_path TEXT PRIMARY KEY CONSTRAINT key_spelling CHECK "
         "        " FOLDED_SPELLING("filesystem_path") ","
         "    storage_path TEXT NOT NULL,"
@@ -365,7 +365,7 @@ static error_t *state_verify(sqlite3 *db) {
  * the mode the file carries.
  *
  * foreign_keys is deliberately absent: the schema declares no FK constraints
- * (path_anchors.profile outlives enabled_profiles rows by design), so nothing
+ * (path_records.profile outlives enabled_profiles rows by design), so nothing
  * cascades — records leave only through explicit retires.
  *
  * @param db Database connection (must not be NULL)
@@ -443,7 +443,7 @@ static const char *state_sql(statement_t statement) {
          *   ?5 mode  ?6 owner  ?7 group */
         case STATEMENT_OBSERVE:
             return
-                "INSERT INTO path_anchors "
+                "INSERT INTO path_records "
                 "(filesystem_path, storage_path, profile, type, mode, owner, \"group\") "
                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) "
                 "ON CONFLICT (filesystem_path) DO NOTHING;";
@@ -472,7 +472,7 @@ static const char *state_sql(statement_t statement) {
          * was one. */
         case STATEMENT_CONFIRM:
             return
-                "UPDATE path_anchors SET "
+                "UPDATE path_records SET "
                 "  type          = ?2, "
                 "  blob_oid      = ?3, "
                 "  stat_mtime    = ?4, "
@@ -502,7 +502,7 @@ static const char *state_sql(statement_t statement) {
          * content's. */
         case STATEMENT_CONFIRM_CLAIM:
             return
-                "UPDATE path_anchors SET "
+                "UPDATE path_records SET "
                 "  mode          = ?3, "
                 "  owner         = ?4, "
                 "  \"group\"     = ?5 "
@@ -525,7 +525,7 @@ static const char *state_sql(statement_t statement) {
          *   ?12 deployed_at — now */
         case STATEMENT_ANCHOR:
             return
-                "INSERT OR REPLACE INTO path_anchors "
+                "INSERT OR REPLACE INTO path_records "
                 "(filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
                 " blob_oid, stat_mtime, stat_size, stat_ino, deployed_at) "
                 "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);";
@@ -533,14 +533,14 @@ static const char *state_sql(statement_t statement) {
         /* Retire: the record goes, and the order it carries with it. Nothing
          * cascades — there is no parent. */
         case STATEMENT_RETIRE:
-            return "DELETE FROM path_anchors WHERE filesystem_path = ?1;";
+            return "DELETE FROM path_records WHERE filesystem_path = ?1;";
 
         /* Order prune: the one deferred intent (remove --delete-files), stamped
          * on the record. A missing record matches nothing — the documented no-op
          * — and a repeated order re-stamps: the order standing is the latest,
          * the one a void must name. */
         case STATEMENT_ORDER_PRUNE:
-            return "UPDATE path_anchors SET ordered_at = ?2 WHERE filesystem_path = ?1;";
+            return "UPDATE path_records SET ordered_at = ?2 WHERE filesystem_path = ?1;";
 
         /* Void prune: the order's view end (the flush's void), a compare-and-swap
          * on the stamp the caller read — an order placed again since matches
@@ -548,7 +548,7 @@ static const char *state_sql(statement_t statement) {
          * confirmations. */
         case STATEMENT_VOID_PRUNE:
             return
-                "UPDATE path_anchors SET ordered_at = 0 "
+                "UPDATE path_records SET ordered_at = 0 "
                 "WHERE filesystem_path = ?1 AND ordered_at = ?2 "
                 "RETURNING filesystem_path;";
     }
@@ -1469,17 +1469,17 @@ void state_free(state_t *state) {
 }
 
 /**
- * Get every anchor, in filesystem_path order
+ * Every record, in filesystem_path order
  *
  * One full-table SELECT — a local prepare+finalize: a single-pass scan run once
  * per command gains nothing from a cached statement — whose last column is the
  * table's size, so the arena allocation is exact and the count and the rows are
  * one snapshot (load_profile_entries).
  */
-error_t *state_get_all_anchors(
+error_t *state_records(
     const state_t *state,
     arena_t *arena,
-    anchor_t **out,
+    state_record_t **out,
     size_t *count
 ) {
     CHECK_NULL(state);
@@ -1496,28 +1496,28 @@ error_t *state_get_all_anchors(
     /* The one read (13 columns: the key, the binding, the kind, the claim, the
      * blob and its stat, the lifecycle), and the table's size in a 14th: the
      * first row sizes the allocation */
-    const char *sql_anchors =
+    const char *sql =
         "SELECT filesystem_path, storage_path, profile, type, mode, owner, \"group\", "
         "blob_oid, stat_mtime, stat_size, stat_ino, deployed_at, ordered_at, "
-        "(SELECT count(*) FROM path_anchors) "
-        "FROM path_anchors ORDER BY filesystem_path;";
+        "(SELECT count(*) FROM path_records) "
+        "FROM path_records ORDER BY filesystem_path;";
 
     sqlite3_stmt *stmt = NULL;
-    int rc = sqlite3_prepare_v2(state->db, sql_anchors, -1, &stmt, NULL);
+    int rc = sqlite3_prepare_v2(state->db, sql, -1, &stmt, NULL);
     if (rc != SQLITE_OK) {
-        return sqlite_error(state->db, "Failed to prepare anchors query");
+        return sqlite_error(state->db, "Failed to prepare the record's read");
     }
 
     rc = sqlite3_step(stmt);
-    size_t anchor_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 13) : 0;
+    size_t record_count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 13) : 0;
 
     /* Allocate array */
-    anchor_t *anchors = NULL;
-    if (anchor_count > 0) {
-        anchors = arena_calloc(arena, anchor_count, sizeof(anchor_t));
-        if (!anchors) {
+    state_record_t *records = NULL;
+    if (record_count > 0) {
+        records = arena_calloc(arena, record_count, sizeof(state_record_t));
+        if (!records) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to allocate anchors array");
+            return ERROR(ERR_MEMORY, "Failed to allocate the record");
         }
     }
 
@@ -1526,8 +1526,8 @@ error_t *state_get_all_anchors(
     #define DUP_OPT(s)  ((s) ? DUP(s) : NULL)
 
     size_t i = 0;
-    while (rc == SQLITE_ROW && i < anchor_count) {
-        /* Column layout matches sql_anchors:
+    while (rc == SQLITE_ROW && i < record_count) {
+        /* Column layout matches the SELECT above:
          *   0:     the key (filesystem_path)
          *   1-2:   the binding (storage_path, profile)
          *   3:     the content's kind (type)
@@ -1535,7 +1535,7 @@ error_t *state_get_all_anchors(
          *   7-10:  the content's blob and stat (blob_oid, stat_mtime, stat_size,
          *          stat_ino)
          *   11-12: the lifecycle (deployed_at, ordered_at) */
-        anchor_t *anchor = &anchors[i];
+        state_record_t *record = &records[i];
 
         const char *filesystem_path = (const char *) sqlite3_column_text(stmt, 0);
         const char *storage_path = (const char *) sqlite3_column_text(stmt, 1);
@@ -1555,35 +1555,35 @@ error_t *state_get_all_anchors(
         /* A NULL blob (a directory, or observed only) hydrates to the zero OID
          * calloc left; a stored blob is 20 bytes by CHECK. */
         if (sqlite3_column_type(stmt, 7) != SQLITE_NULL) {
-            memcpy(anchor->blob_oid.id, sqlite3_column_blob(stmt, 7), GIT_OID_RAWSZ);
+            memcpy(record->blob_oid.id, sqlite3_column_blob(stmt, 7), GIT_OID_RAWSZ);
         }
 
         /* Validate non-nullable string columns */
         if (!filesystem_path || !storage_path || !profile || !type_str) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_STATE_INVALID, "NULL value in required column at anchor %zu", i);
+            return ERROR(ERR_STATE_INVALID, "NULL value in required column at record %zu", i);
         }
 
         /* Copy strings into arena */
-        anchor->filesystem_path = DUP(filesystem_path);
-        anchor->storage_path = DUP(storage_path);
-        anchor->profile = DUP(profile);
-        anchor->type = path_type_from_sql_text(type_str);
-        anchor->mode = mode;
-        anchor->owner = DUP_OPT(owner);
-        anchor->group = DUP_OPT(group);
-        anchor->stat = (stat_cache_t){
+        record->filesystem_path = DUP(filesystem_path);
+        record->storage_path = DUP(storage_path);
+        record->profile = DUP(profile);
+        record->type = path_type_from_sql_text(type_str);
+        record->mode = mode;
+        record->owner = DUP_OPT(owner);
+        record->group = DUP_OPT(group);
+        record->stat = (state_stat_t){
             .mtime = sqlite3_column_int64(stmt, 8),
             .size = sqlite3_column_int64(stmt, 9),
             .ino = (uint64_t) sqlite3_column_int64(stmt, 10),
         };
-        anchor->deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
-        anchor->ordered_at = (time_t) sqlite3_column_int64(stmt, 12);
+        record->deployed_at = (time_t) sqlite3_column_int64(stmt, 11);
+        record->ordered_at = (time_t) sqlite3_column_int64(stmt, 12);
 
         /* Check allocation success */
-        if (!anchor->filesystem_path || !anchor->storage_path || !anchor->profile) {
+        if (!record->filesystem_path || !record->storage_path || !record->profile) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy anchor strings");
+            return ERROR(ERR_MEMORY, "Failed to copy the record's strings");
         }
 
         i++;
@@ -1593,28 +1593,28 @@ error_t *state_get_all_anchors(
     sqlite3_finalize(stmt);
 
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to query anchors");
+        return sqlite_error(state->db, "Failed to read the record");
     }
 
     #undef DUP
     #undef DUP_OPT
 
-    *out = anchors;
+    *out = records;
     *count = i;
 
     return NULL;
 }
 
 /* bsearch's: a key against a record's (strcmp — the read's own order) */
-static int compare_path_to_anchor(const void *key, const void *elem) {
-    return strcmp(key, ((const anchor_t *) elem)->filesystem_path);
+static int state_path_order(const void *key, const void *elem) {
+    return strcmp(key, ((const state_record_t *) elem)->filesystem_path);
 }
 
 /**
- * The record at a path, in a snapshot state_get_all_anchors read — or NULL
+ * The record at a path, in a snapshot state_records read — or NULL
  */
-const anchor_t *state_lookup_anchor(
-    const anchor_t *anchors,
+const state_record_t *state_find_record(
+    const state_record_t *records,
     size_t count,
     const char *filesystem_path
 ) {
@@ -1622,7 +1622,7 @@ const anchor_t *state_lookup_anchor(
      * (C11 7.22.5), and the empty snapshot's is NULL. */
     if (count == 0 || !filesystem_path) return NULL;
 
-    return bsearch(filesystem_path, anchors, count, sizeof(*anchors), compare_path_to_anchor);
+    return bsearch(filesystem_path, records, count, sizeof(*records), state_path_order);
 }
 
 /**
@@ -1693,13 +1693,13 @@ static void bind_row(sqlite3_stmt *stmt, const manifest_row_t *row) {
  * INSERT … ON CONFLICT DO NOTHING — see the SQL comment on STATEMENT_OBSERVE
  * and the header contract. Binds the row's key, binding, kind and claim; the
  * blob, stat and lifecycle columns take their NULL / zero defaults, an existing
- * row is left exactly as it was, and *anchor is the observation's record either
+ * row is left exactly as it was, and *record is the observation's record either
  * way.
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor) {
+error_t *state_observe(state_t *state, const manifest_row_t *row, state_record_t *record) {
     CHECK_NULL(state);
     CHECK_NULL(row);
-    CHECK_NULL(anchor);
+    CHECK_NULL(record);
     CHECK_NULL(state->db);
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_OBSERVE);
@@ -1708,14 +1708,14 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
 
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to record observation");
+        return sqlite_error(state->db, "Failed to observe path");
     }
 
     /* The caller's record is the observation's, whole — last, so a failure above
      * leaves it as it was, and whether the INSERT landed or not (state.h): the
      * columns the statement names, the strings borrowed from the row, and every
      * other field the zero its column defaults to. */
-    *anchor = (anchor_t){
+    *record = (state_record_t){
         .filesystem_path = row->filesystem_path,
         .storage_path = row->storage_path,
         .profile = row->profile,
@@ -1735,24 +1735,24 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  * STATEMENT_CONFIRM and the header contract. Writes the kind, the blob and the
  * stat the comparison established, and only onto that record under the row's
  * binding; the binding and claim columns are not named, a row that does not exist
- * is not created, and *anchor follows only what was written.
+ * is not created, and *record follows only what was written.
  */
 error_t *state_confirm(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat,
-    anchor_t *anchor
+    const state_stat_t *stat,
+    state_record_t *record
 ) {
     CHECK_NULL(state);
     CHECK_NULL(row);
     CHECK_NULL(stat);
-    CHECK_NULL(anchor);
+    CHECK_NULL(record);
     CHECK_NULL(state->db);
 
-    /* A directory has no content to confirm, and a zero blob_oid would record
-     * "never confirmed" for a path this call claims to have confirmed. Reject
-     * rather than silently poison — and name the bug, where the schema's CHECK
-     * would only refuse the zeroblob. */
+    /* A directory has no content to confirm, and a zero blob_oid would say "never
+     * confirmed" for a path this call claims to have confirmed. Reject rather
+     * than silently poison — and name the bug, where the schema's CHECK would
+     * only refuse the zeroblob. */
     if (row->type == PATH_TYPE_DIRECTORY) {
         return ERROR(
             ERR_STATE_INVALID,
@@ -1781,29 +1781,29 @@ error_t *state_confirm(
 
     /* 7-8. the binding the row's blob opens under — the row's, never the record's:
      * a blob is written only onto a record whose binding it decrypts under
-     * (anchor_t), so the invariant holds whoever noted this confirmation */
+     * (state_record_t), so the invariant holds whoever noted this confirmation */
     sqlite3_bind_text(stmt, 7, row->profile, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 8, row->storage_path, -1, SQLITE_TRANSIENT);
 
     /* 9-13. the content the confirmation replaces, as the caller read it — the
      * kind, the blob (NULL where none was ever confirmed, which IS matches) and
      * the triple */
-    sqlite3_bind_text(stmt, 9, path_type_to_sql_text(anchor->type), -1, SQLITE_STATIC);
-    if (git_oid_is_zero(&anchor->blob_oid)) {
+    sqlite3_bind_text(stmt, 9, path_type_to_sql_text(record->type), -1, SQLITE_STATIC);
+    if (git_oid_is_zero(&record->blob_oid)) {
         sqlite3_bind_null(stmt, 10);
     } else {
-        sqlite3_bind_blob(stmt, 10, anchor->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(stmt, 10, record->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
     }
-    sqlite3_bind_int64(stmt, 11, anchor->stat.mtime);
-    sqlite3_bind_int64(stmt, 12, anchor->stat.size);
-    sqlite3_bind_int64(stmt, 13, (sqlite3_int64) anchor->stat.ino);
+    sqlite3_bind_int64(stmt, 11, record->stat.mtime);
+    sqlite3_bind_int64(stmt, 12, record->stat.size);
+    sqlite3_bind_int64(stmt, 13, (sqlite3_int64) record->stat.ino);
 
     /* One row back iff the record matched and was written (STATEMENT_CONFIRM). */
     int rc = sqlite3_step(stmt);
 
     /* Matched nothing: another writer moved the record since the caller read it
-     * — another binding, a newer blob, a fresher proof — and the fact is about
-     * a record no longer there. Nothing is written, and *anchor stays as read. */
+     * — another binding, a newer blob, a fresher stat — and the fact is about a
+     * record no longer there. Nothing is written, and *record stays as read. */
     if (rc == SQLITE_DONE) return NULL;
 
     /* Wrote: the one row back drains to DONE; anything else is the statement's
@@ -1815,9 +1815,9 @@ error_t *state_confirm(
 
     /* The caller's copy follows, on the three columns the statement names and
      * no other — last, so a failure above leaves it as read. */
-    anchor->type = row->type;
-    anchor->blob_oid = row->blob_oid;
-    anchor->stat = *stat;
+    record->type = row->type;
+    record->blob_oid = row->blob_oid;
+    record->stat = *stat;
 
     return NULL;
 }
@@ -1828,7 +1828,7 @@ error_t *state_confirm(
  *
  * A compare-and-swap on the record the caller read — see the SQL comment on
  * STATEMENT_CONFIRM_CLAIM and the header contract. Writes the three claim columns
- * and nothing else, onto that record under the kind it was read as; *anchor follows
+ * and nothing else, onto that record under the kind it was read as; *record follows
  * only what was written.
  */
 error_t *state_confirm_claim(
@@ -1836,29 +1836,29 @@ error_t *state_confirm_claim(
     mode_t mode,
     const char *owner,
     const char *group,
-    anchor_t *anchor
+    state_record_t *record
 ) {
     CHECK_NULL(state);
-    CHECK_NULL(anchor);
+    CHECK_NULL(record);
     CHECK_NULL(state->db);
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_CONFIRM_CLAIM);
 
     /* 1-2. the record's key and the kind the claim was measured under */
-    sqlite3_bind_text(stmt, 1, anchor->filesystem_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, path_type_to_sql_text(anchor->type), -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, record->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, path_type_to_sql_text(record->type), -1, SQLITE_STATIC);
 
     /* 3-5. the claim established, and 6-8. the claim it replaces as read — both
      * by the record's kind, so a link's mode is NULL on both sides */
-    bind_claim(stmt, 3, anchor->type, mode, owner, group);
-    bind_claim(stmt, 6, anchor->type, anchor->mode, anchor->owner, anchor->group);
+    bind_claim(stmt, 3, record->type, mode, owner, group);
+    bind_claim(stmt, 6, record->type, record->mode, record->owner, record->group);
 
     /* One row back iff the record matched and was written (STATEMENT_CONFIRM_CLAIM). */
     int rc = sqlite3_step(stmt);
 
     /* Matched nothing: another writer moved the record since the caller read it
      * — an ownership event, another confirmation, a retype — and the claim was
-     * measured against a record no longer there. Nothing is written, and *anchor
+     * measured against a record no longer there. Nothing is written, and *record
      * stays as read. */
     if (rc == SQLITE_DONE) return NULL;
 
@@ -1872,22 +1872,22 @@ error_t *state_confirm_claim(
     /* The caller's copy follows, on the three columns the statement names, as a
      * load reads them back — a link's NULL mode as 0 — and the strings borrowed
      * as state_observe and state_anchor borrow the row's. */
-    anchor->mode = (anchor->type != PATH_TYPE_SYMLINK) ? mode : 0;
-    anchor->owner = owner;
-    anchor->group = group;
+    record->mode = (record->type != PATH_TYPE_SYMLINK) ? mode : 0;
+    record->owner = owner;
+    record->group = group;
 
     return NULL;
 }
 
 /**
- * Anchor an active path: record the row dotta reconciled it against
+ * Anchor an active path: write its record from the row dotta reconciled it against
  *
  * The ownership event. See state.h for the full contract. In brief:
  *   - row->blob_oid must be non-zero for a file row; a DIRECTORY row binds NULL.
  *   - deployed_at = now.
  *   - stat is always written (zeros when NULL), and read before anything is: it
  *     may be the caller's record's own triple.
- *   - *anchor follows the statement, last.
+ *   - *record follows the statement, last.
  *
  * The statement names every column the record carries, so the post-write record
  * is what the caller handed in: the mirror is the inputs, with nothing read back.
@@ -1895,9 +1895,9 @@ error_t *state_confirm_claim(
 error_t *state_anchor(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat,
+    const state_stat_t *stat,
     time_t now,
-    anchor_t *anchor
+    state_record_t *record
 ) {
     CHECK_NULL(state);
     CHECK_NULL(row);
@@ -1907,8 +1907,8 @@ error_t *state_anchor(
         return ERROR(ERR_INVALID_ARG, "Anchor timestamp must be > 0");
     }
 
-    /* A zero blob_oid on a file row would record "never confirmed" for a path
-     * this call claims to have confirmed, and strand it in the stale path. Reject
+    /* A zero blob_oid on a file row would say "never confirmed" for a path this
+     * call claims to have confirmed, and strand it in the stale path. Reject
      * rather than silently poison — and name the bug, where the schema's CHECK
      * would only refuse the zeroblob. */
     if (row->type != PATH_TYPE_DIRECTORY && git_oid_is_zero(&row->blob_oid)) {
@@ -1931,10 +1931,10 @@ error_t *state_anchor(
         sqlite3_bind_blob(stmt, 8, row->blob_oid.id, GIT_OID_RAWSZ, SQLITE_TRANSIENT);
     }
 
-    /* 9-11. stat triple (fast-path proof, bound to blob_oid; zeros when the caller
+    /* 9-11. the stat (the fast path's, bound to blob_oid; zeros when the caller
      * had none — the next read takes the slow path). Copied before anything is
      * written: it may be the caller's record's own (state.h). */
-    stat_cache_t triple = stat ? *stat : STAT_CACHE_UNSET;
+    state_stat_t triple = stat ? *stat : STATE_STAT_UNSET;
     sqlite3_bind_int64(stmt, 9, triple.mtime);
     sqlite3_bind_int64(stmt, 10, triple.size);
     sqlite3_bind_int64(stmt, 11, (sqlite3_int64) triple.ino);
@@ -1951,8 +1951,8 @@ error_t *state_anchor(
      * as read: the columns the statement names, the strings borrowed from the
      * row, and every other field the zero its column defaults to — no order among
      * them, the event having written it away. */
-    if (anchor) {
-        *anchor = (anchor_t){
+    if (record) {
+        *record = (state_record_t){
             .filesystem_path = row->filesystem_path,
             .storage_path = row->storage_path,
             .profile = row->profile,
@@ -1976,7 +1976,7 @@ error_t *state_anchor(
  * on STATEMENT_RETIRE and the header contract); a missing record matches nothing
  * and is success.
  */
-error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
+error_t *state_retire(state_t *state, const char *filesystem_path) {
     CHECK_NULL(state);
     CHECK_NULL(filesystem_path);
     CHECK_NULL(state->db);
@@ -1988,7 +1988,7 @@ error_t *state_retire_anchor(state_t *state, const char *filesystem_path) {
 
     int rc = sqlite3_step(stmt);
     if (rc != SQLITE_DONE) {
-        return sqlite_error(state->db, "Failed to retire anchor");
+        return sqlite_error(state->db, "Failed to retire record");
     }
 
     return NULL;
@@ -2028,25 +2028,25 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t n
  *
  * A compare-and-swap on the stamp the caller read — see the SQL comment on
  * STATEMENT_VOID_PRUNE and the header contract. Writes nothing where the order
- * is not the one read, and *anchor follows only what was written.
+ * is not the one read, and *record follows only what was written.
  */
-error_t *state_void_prune(state_t *state, anchor_t *anchor) {
+error_t *state_void_prune(state_t *state, state_record_t *record) {
     CHECK_NULL(state);
-    CHECK_NULL(anchor);
+    CHECK_NULL(record);
     CHECK_NULL(state->db);
 
     sqlite3_stmt *stmt = state_statement(state, STATEMENT_VOID_PRUNE);
 
     /* 1. the record's key  2. the order as the caller read it */
-    sqlite3_bind_text(stmt, 1, anchor->filesystem_path, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) anchor->ordered_at);
+    sqlite3_bind_text(stmt, 1, record->filesystem_path, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, (sqlite3_int64) record->ordered_at);
 
     /* One row back iff the order matched and was voided (STATEMENT_VOID_PRUNE). */
     int rc = sqlite3_step(stmt);
 
     /* Matched nothing: the order read is gone — placed again by a second removal,
      * written away by an ownership event, voided, or retired with its record —
-     * and nothing is written; *anchor stays as read. */
+     * and nothing is written; *record stays as read. */
     if (rc == SQLITE_DONE) return NULL;
 
     /* Wrote: the one row back drains to DONE; anything else is the statement's
@@ -2057,7 +2057,7 @@ error_t *state_void_prune(state_t *state, anchor_t *anchor) {
     }
 
     /* The caller's copy follows — last, so a failure above leaves it as read. */
-    anchor->ordered_at = 0;
+    record->ordered_at = 0;
 
     return NULL;
 }

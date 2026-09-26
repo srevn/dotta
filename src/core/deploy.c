@@ -1592,21 +1592,21 @@ cleanup:
  * @param run Run context (must not be NULL)
  * @param v Verdict for the row (must not be NULL; the row is borrowed from the
  *          workspace's view, read-only for deploy)
- * @param out_stat The proof the write authored, in the record's vocabulary (must
+ * @param out_stat The stat the write authored, in the record's vocabulary (must
  *          not be NULL): the regular arm distills the written descriptor's fstat
- *          (stat_cache_from_write — taken before the rename that publishes it,
+ *          (state_stat_from_write — taken before the rename that publishes it,
  *          so it describes exactly the bytes this run wrote); the symlink arm
  *          leaves the entry default standing. UNSET on every error return
  * @return Error or NULL on success
  */
 static error_t *deploy_file(
-    deploy_run_t *run, const deploy_verdict_t *v, stat_cache_t *out_stat
+    deploy_run_t *run, const deploy_verdict_t *v, state_stat_t *out_stat
 ) {
-    /* The proof's resting state: UNSET unless the regular arm's write lands and
+    /* The stat's resting state: UNSET unless the regular arm's write lands and
      * binds its own fstat below. The symlink arm never does — a link is made by
      * path (symlink(2) opens no descriptor to describe), and readlink is its
      * whole re-verification. */
-    *out_stat = STAT_CACHE_UNSET;
+    *out_stat = STATE_STAT_UNSET;
 
     const manifest_row_t *file = v->item->row;
 
@@ -1704,10 +1704,10 @@ static error_t *deploy_file(
         goto cleanup;
     }
 
-    /* The write's own proof, distilled where the write authority is in scope:
+    /* The write's own stat, distilled where the write authority is in scope:
      * authorship, not a read, vouches for the triple, so its own open second
-     * needs no smudge (stat_cache_from_write). */
-    *out_stat = stat_cache_from_write(&written);
+     * needs no smudge (state_stat_from_write). */
+    *out_stat = state_stat_from_write(&written);
 
 cleanup:
     free(target_str);
@@ -1839,7 +1839,7 @@ error_t *deploy_execute(
      * the UNSET triple), the failed bucket to both kinds together — every promised
      * row could fail. count gates what a consumer reads, so an untaken slot is
      * invisible and the receipt holds exactly what happened — for a landed file,
-     * with its own write's proof. */
+     * with its own write's stat. */
     result->deployed.entries = calloc(
         verdicts->files.count + 1, sizeof(*result->deployed.entries)
     );
@@ -1898,7 +1898,7 @@ error_t *deploy_execute(
     /* Every verdict is work the plan chose, by construction: the planner routed
      * the row through deploy_needs_work and past every reason to skip it, so
      * this loop applies no filter of its own. Clean in-scope rows with deployed_at
-     * == 0 are apply's adoption step, which stamps the anchor without
+     * == 0 are apply's adoption step, which stamps the path owned without
      * deploy_file. */
     for (size_t i = 0; i < verdicts->files.count; i++) {
         const deploy_verdict_t *v = &verdicts->files.entries[i];

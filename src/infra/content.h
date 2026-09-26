@@ -361,12 +361,12 @@ error_t *content_rebind(
  * the disk copy is judged against (infra/compare.h's pair).
  *
  * Why the bytes, and why no proxy: both callers compare against the *record's*
- * blob (core/state.h anchor_t), which carries no encryption stamp. The view row's
- * flag in scope is another blob's, and routing the base question on it once
- * miscategorised staleness across an encryption-policy flip in both directions
- * (the two are recorded at core/workspace.c workspace_analyze_file). The row's
- * own comparison keeps the id form and opens nothing, and that asymmetry is
- * principled rather than overlooked: the row's flag is that blob's own, made
+ * blob (core/state.h state_record_t), which carries no encryption stamp. The
+ * view row's flag in scope is another blob's, and routing the base question on
+ * it once miscategorised staleness across an encryption-policy flip in both
+ * directions (the two are recorded at core/workspace.c workspace_analyze_file).
+ * The row's own comparison keeps the id form and opens nothing, and that asymmetry
+ * is principled rather than overlooked: the row's flag is that blob's own, made
  * byte-true at the write boundary (content_capture_file), where the record's
  * blob has no boundary at which it could have been stamped.
  *
@@ -544,7 +544,7 @@ error_t *content_require_encryption(
  * the other three are values rather than resources, read by both callers past
  * it — the bytes go on the stage (bytes, mode), the claim is authored from the
  * look (core/metadata.h metadata_capture_from_file: st, encrypted) and the record
- * is bound to it (core/state.h stat_cache_from_stat: st). A free written to its
+ * is bound to it (core/state.h state_stat_from_read: st). A free written to its
  * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_free_diff
  * and gitops_blob_view_close are written — would leave both commands anchoring
  * a zero stat: a wrong record, with no crash.
@@ -645,7 +645,7 @@ error_t *content_capture_file(
  * One lstat names the occupant and is the stat the capture keeps; the target is
  * read after it. So the stat is the earlier look, which is the order the record
  * needs: a link that changes after it leaves a triple the next load cannot mistake
- * for the new one (core/state.h stat_cache_t). A second lstat then holds the
+ * for the new one (core/state.h state_stat_t). A second lstat then holds the
  * look and the read to one link — the same device and inode, and a ctime that
  * has not moved, since a new link at a freed inode carries its own — so the target,
  * the stat and the ownership a claim takes from it are one link's, as

@@ -2107,13 +2107,10 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         error_free(err);
         err = NULL;
     } else {
-        anchor_t *anchors = NULL;
-        size_t anchor_count = 0;
-        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
-        if (err) {
-            err = error_wrap(err, "Failed to read anchors");
-            goto cleanup;
-        }
+        state_record_t *records = NULL;
+        size_t record_count = 0;
+        err = state_records(state, ctx->arena, &records, &record_count);
+        if (err) goto cleanup;
 
         manifest_diff_stats_t *stats = arena_calloc(
             ctx->arena, enabled->count, sizeof(*stats)
@@ -2123,7 +2120,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
             goto cleanup;
         }
 
-        err = manifest_diff(before, after, anchors, anchor_count, enabled, stats);
+        err = manifest_diff(before, after, records, record_count, enabled, stats);
         if (err) {
             err = error_wrap(err, "Failed to diff manifest across sync");
             goto cleanup;
@@ -2237,16 +2234,16 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         /* The hint's standing half: what the record already disagreed with the
          * view about, whichever sync or scope change left it there. Read off
          * the view the Git phase produced and the record's own columns
-         * (core/state.h anchor_t) — no disk and no second workspace load, so
-         * the answer does not move with --force. Each arm claims apply has work,
-         * so each names the apply that takes the claim away: a record whose path
-         * the view lacks is an orphan apply prunes, releases or reclaims; one
-         * whose confirmed kind and content are not the row's is stale, and apply
-         * deploys the row — or, where the row's own kind already stands in place
-         * of the node the record describes, lets the record go: a directory is
-         * observed there (core/workspace.h workspace_observe_retyped), a file
-         * adopted; one whose claim Git moved past the one it reconciled is stale
-         * on that axis, and apply brings it (core/workspace.h
+         * (core/state.h state_record_t) — no disk and no second workspace load,
+         * so the answer does not move with --force. Each arm claims apply has
+         * work, so each names the apply that takes the claim away: a record whose
+         * path the view lacks is an orphan apply prunes, releases or reclaims;
+         * one whose confirmed kind and content are not the row's is stale, and
+         * apply deploys the row — or, where the row's own kind already stands
+         * in place of the node the record describes, lets the record go: a
+         * directory is observed there (core/workspace.h workspace_observe_retyped),
+         * a file adopted; one whose claim Git moved past the one it reconciled
+         * is stale on that axis, and apply brings it (core/workspace.h
          * workspace_claims_moved, whose rule keeps out a derived claim, which
          * apply never converges) — a claim disk already stands on included, since
          * no load runs after the pull: it hints until one learns it, the apply
@@ -2271,20 +2268,20 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */
         size_t vouched = 0;
-        for (size_t i = 0; i < anchor_count; i++) {
-            const anchor_t *anchor = &anchors[i];
-            const manifest_row_t *row = manifest_lookup(after, anchor->filesystem_path);
+        for (size_t i = 0; i < record_count; i++) {
+            const state_record_t *record = &records[i];
+            const manifest_row_t *row = manifest_lookup(after, record->filesystem_path);
 
             if (!row) {
                 apply_pending = true;
                 continue;
             }
 
-            if (row->type == PATH_TYPE_DIRECTORY || anchor->deployed_at > 0) vouched++;
+            if (row->type == PATH_TYPE_DIRECTORY || record->deployed_at > 0) vouched++;
 
-            if (workspace_stale(row, anchor) ||
-                workspace_claims_moved(row, anchor) != DIVERGENCE_NONE ||
-                workspace_reassigned(row, anchor, FS_OCCUPANT_UNKNOWN)) {
+            if (workspace_stale(row, record) ||
+                workspace_claims_moved(row, record) != DIVERGENCE_NONE ||
+                workspace_reassigned(row, record, FS_OCCUPANT_UNKNOWN)) {
                 apply_pending = true;
             }
         }

@@ -170,7 +170,7 @@ typedef struct {
  */
 typedef struct {
     const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
-    stat_cache_t stat;              /* The capture's triple; STAT_CACHE_UNSET for a directory */
+    state_stat_t stat;              /* The capture's triple; STATE_STAT_UNSET for a directory */
 } update_capture_t;
 
 /**
@@ -574,7 +574,7 @@ static error_t *update_profile(
 
                 commit->captured[commit->captured_count++] = (update_capture_t){
                     .item = item,
-                    .stat = stat_cache_from_stat(&capture.st)
+                    .stat = state_stat_from_read(&capture.st)
                 };
                 break;
             }
@@ -685,7 +685,7 @@ static error_t *update_profile(
                 updated_dir_count++;
                 commit->captured[commit->captured_count++] = (update_capture_t){
                     .item = item,
-                    .stat = STAT_CACHE_UNSET
+                    .stat = STATE_STAT_UNSET
                 };
                 break;
             }
@@ -950,9 +950,9 @@ static error_t *update_write_record(
     if (err) goto cleanup;
 
     /* One lookup per committed path, both kinds; the arms of the header doc. A
-     * path let go and a fallback receive no anchor: there is no disk confirmation
-     * for a deleted path, and a fallback's disk content is what this profile's
-     * blob was, not the fallback blob. */
+     * path let go and a fallback receive no ownership event: there is no disk
+     * confirmation for a deleted path, and a fallback's disk content is what
+     * this profile's blob was, not the fallback blob. */
     time_t now = time(NULL);
     size_t synced = 0, removed = 0, fallbacks = 0;
 
@@ -986,7 +986,7 @@ static error_t *update_write_record(
             const manifest_row_t *row = manifest_lookup(manifest, item->filesystem_path);
 
             if (!row) {
-                err = state_retire_anchor(state, item->filesystem_path);
+                err = state_retire(state, item->filesystem_path);
                 if (err) goto cleanup;
                 removed++;
             } else if (strcmp(row->profile, commit->profile) != 0) {
@@ -1012,7 +1012,7 @@ static error_t *update_write_record(
 
                 const manifest_row_t *row = manifest_lookup(manifest, filesystem_path);
                 if (!row) {
-                    err = state_retire_anchor(state, filesystem_path);
+                    err = state_retire(state, filesystem_path);
                     if (err) goto cleanup;
                     removed++;
                 } else if (strcmp(row->profile, commit->profile) != 0) {
@@ -1606,7 +1606,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * calls. Non-fatal on failure: update still proceeds on what the load read,
      * and a flush that fails rolls back what it wrote.
      *
-     * Files actually updated by this command get their anchor advanced separately
+     * Files actually updated by this command get their record written separately
      * inside update_write_record(); this flush covers the clean files the analysis
      * verified but didn't modify. */
     error_t *flush_err = workspace_flush(ws);

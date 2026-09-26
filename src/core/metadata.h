@@ -781,9 +781,9 @@ typedef enum {
  * answer and not the sheet's (core/deploy.c resolve_deployment_ownership,
  * sys/filesystem.h), so a silent sheet and an implied invoker land alike.
  *
- * A record is read under the name it was written with (core/state.h anchor_t),
- * which for the one reader that asks — the orphan compare — is the only name
- * there is: the path left the view, so there is no row to ask.
+ * A record is read under the name it was written with (core/state.h
+ * state_record_t), which for the one reader that asks — the orphan compare — is
+ * the only name there is: the path left the view, so there is no row to ask.
  *
  * @param storage_path The claim's key, for its label (must not be NULL, under a
  *                     label)

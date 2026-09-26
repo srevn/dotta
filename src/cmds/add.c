@@ -70,7 +70,7 @@ typedef struct {
     manifest_claim_t claim;       /* The name and kind it was listed under (arena) */
     fs_occupant_t occupant;       /* What the listing found there: chooses the capture */
     bool should_encrypt;          /* The decision pass's verdict; false but for a regular file */
-    stat_cache_t stat;            /* The capture's triple; STAT_CACHE_UNSET for a directory */
+    state_stat_t stat;            /* The capture's triple; STATE_STAT_UNSET for a directory */
 } add_path_t;
 
 /**
@@ -478,7 +478,7 @@ static error_t *list_path(
         occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE
     };
     path->occupant = occupant;
-    path->stat = STAT_CACHE_UNSET;
+    path->stat = STATE_STAT_UNSET;
 
     error_t *err = ptr_array_push(
         path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
@@ -1031,7 +1031,7 @@ static error_t *add_file_to_stage(
     if (err) {
         return err;
     }
-    path->stat = stat_cache_from_stat(&capture.st);
+    path->stat = state_stat_from_read(&capture.st);
 
     /* The claim from the capture's own look, sealed as the capture says: its
      * write-time invariant makes that verdict the byte truth (a plaintext that
@@ -1327,20 +1327,20 @@ static error_t *write_record(
     if (enabled) {
         /* The record as it stands first, read before the write that rewrites
          * it, so a takeover is known — looked up by path in the read
-         * (state_lookup_anchor). */
-        anchor_t *anchors = NULL;
-        size_t anchor_count = 0;
-        err = state_get_all_anchors(state, ctx->arena, &anchors, &anchor_count);
+         * (state_find_record). */
+        state_record_t *records = NULL;
+        size_t record_count = 0;
+        err = state_records(state, ctx->arena, &records, &record_count);
         if (err) goto cleanup;
 
         time_t now = time(NULL);
 
         /* Both lists, one rule and one count. The kind decides one thing — what
-         * the anchor binds: the capture's own stat triple for a file, and nothing
-         * for a directory, which has no content to confirm — so the two lists
-         * were two loops for one line of difference, and the accounting drifted
-         * apart in exactly that gap, the directory count the receipt printed
-         * being the sheet's, taken before the pass that could refuse it.
+         * the ownership event binds: the capture's own stat triple for a file,
+         * and nothing for a directory, which has no content to confirm — so the
+         * two lists were two loops for one line of difference, and the accounting
+         * drifted apart in exactly that gap, the directory count the receipt
+         * printed being the sheet's, taken before the pass that could refuse it.
          *
          * Both kinds earn one event. A path was captured from disk, so it is
          * dotta's to prune on scope exit — the ownership the gate asks for, which
@@ -1418,8 +1418,8 @@ static error_t *write_record(
                 if (err) goto cleanup;
                 receipt->anchored++;
 
-                const anchor_t *was = state_lookup_anchor(
-                    anchors, anchor_count, row->filesystem_path
+                const state_record_t *was = state_find_record(
+                    records, record_count, row->filesystem_path
                 );
                 if (was && was->deployed_at > 0 && strcmp(was->profile, profile) != 0) {
                     receipt->taken_over++;
@@ -1453,7 +1453,7 @@ static error_t *write_record(
         if (err) goto cleanup;
         if (!filesystem_path || manifest_lookup(manifest, filesystem_path)) continue;
 
-        err = state_retire_anchor(state, filesystem_path);
+        err = state_retire(state, filesystem_path);
         if (err) goto cleanup;
     }
 
@@ -2518,7 +2518,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * if already enabled).
      *
      * Both end in the same loop: one view build says which rows this profile
-     * won, and add's contribution is the anchor.
+     * won, and add's contribution is the ownership event.
      *
      * Non-fatal, and rendered in the tail with the counts: the phase's fate is
      * its error and a warning above the ✓ lines would read as a refusal of the
@@ -2526,11 +2526,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * to the screen that renders it, which frees it once below; the region between
      * holds no exit.
      */
-    record_receipt_t record = { 0 };
+    record_receipt_t receipt = { 0 };
 
     error_t *record_err = write_record(
         ctx, mounts, opts->profile, target, profile_created,
-        &walk.files, &walk.directories, &ancestry_retired, &record
+        &walk.files, &walk.directories, &ancestry_retired, &receipt
     );
 
     /* Execute post-add hook. The record phase settled its own transaction before
@@ -2592,7 +2592,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (profile_created) {
         output_success(
             out, OUTPUT_NORMAL,
-            record.enabled ? "Profile '%s' created and enabled"
+            receipt.enabled ? "Profile '%s' created and enabled"
                            : "Profile '%s' created",
             opts->profile
         );
@@ -2618,14 +2618,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             out, OUTPUT_NORMAL,
             "The record was not written - what it already held stands"
         );
-    } else if (record.enabled) {
+    } else if (receipt.enabled) {
         /* What the record took of what the capture listed. The unit is the path
          * — one row per managed path, both kinds — and the kinds are named where
          * they were captured, above. Never zero: every argument lists itself or
          * ends the command (cmd_add's loop), so the count line and the notes
          * below always have a capture to speak of. */
         const size_t captured = walk.files.count + walk.directories.count;
-        const bool whole = record.anchored == captured;
+        const bool whole = receipt.anchored == captured;
 
         if (whole) {
             output_info(
@@ -2636,7 +2636,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Record updated (%zu/%zu path%s marked as deployed)",
-                record.anchored, captured, captured == 1 ? "" : "s"
+                receipt.anchored, captured, captured == 1 ? "" : "s"
             );
 
             /* Each cause named by the count that checked it, never by the shortfall
@@ -2644,28 +2644,28 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
              * row of this one under another of its own names is an unused path,
              * and the health channel carries that one's repair on the status
              * screen. The two sum to the shortfall exactly. */
-            if (record.overridden > 0) {
+            if (receipt.overridden > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
                     "Note: %zu path%s overridden by higher-precedence profiles",
-                    record.overridden, record.overridden == 1 ? "" : "s"
+                    receipt.overridden, receipt.overridden == 1 ? "" : "s"
                 );
             }
-            if (record.unkept > 0) {
+            if (receipt.unkept > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
                     "Note: %zu path%s captured under an unused path; "
                     "'dotta status -v' names %s",
-                    record.unkept, record.unkept == 1 ? "" : "s",
-                    record.unkept == 1 ? "it" : "them"
+                    receipt.unkept, receipt.unkept == 1 ? "" : "s",
+                    receipt.unkept == 1 ? "it" : "them"
                 );
             }
         }
-        if (record.taken_over > 0) {
+        if (receipt.taken_over > 0) {
             output_info(
                 out, OUTPUT_NORMAL,
                 "Note: %zu path%s taken over from other profiles",
-                record.taken_over, record.taken_over == 1 ? "" : "s"
+                receipt.taken_over, receipt.taken_over == 1 ? "" : "s"
             );
         }
         /* Why nothing needs deploying: the bytes were read off disk, so the record
@@ -2692,7 +2692,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * again with --force over a branch that now holds the bytes: an apply re-earns
      * the event for the files it adopts and never for a directory, and an unowned
      * directory is released at scope exit where an owned one is pruned. */
-    if (!record.enabled) {
+    if (!receipt.enabled) {
         report_enable_hint(out, opts->profile, opts->target, view);
     } else if (record_err) {
         output_hint(

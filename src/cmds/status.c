@@ -98,9 +98,9 @@ static void status_print_profiles(
             if (item->item_kind == PATH_KIND_DIRECTORY) dir_count++;
             else file_count++;
 
-            if (item->anchor && strcmp(item->anchor->profile, profile) == 0 &&
-                item->anchor->deployed_at > profile_deploy_time) {
-                profile_deploy_time = item->anchor->deployed_at;
+            if (item->record && strcmp(item->record->profile, profile) == 0 &&
+                item->record->deployed_at > profile_deploy_time) {
+                profile_deploy_time = item->record->deployed_at;
             }
         }
 

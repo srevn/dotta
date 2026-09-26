@@ -112,7 +112,7 @@
  * reads the record (core/state.h) by pointer; both are named here and defined
  * there, as state.h names the row. */
 typedef struct state state_t;
-typedef struct anchor anchor_t;
+typedef struct state_record state_record_t;
 
 /**
  * Manifest row — what should stand at an active path, and from whom
@@ -120,8 +120,8 @@ typedef struct anchor anchor_t;
  * A row in the view means the path is active: the enabled set, in precedence
  * order, names exactly one profile for it, and that profile's tree (or, for a
  * directory, its metadata.json) says what the path is. Every field is Git-derived;
- * nothing here records what dotta did — the record dotta keeps of a path (anchor_t,
- * core/state.h) is written from one of these.
+ * nothing here records what dotta did — the record dotta keeps of a path
+ * (state_record_t, core/state.h) is written from one of these.
  *
  * Per kind:
  *   blob types  — blob_oid is the tree entry; mode is the metadata claim, or
@@ -191,12 +191,15 @@ typedef struct manifest_row {
  * so the row has to be that very claim: the winner standing at a path may be
  * another claim of the same profile — a branch that arrived from a machine whose
  * roots kept two names apart holds both — and its blob is neither what was captured
- * nor anything the record's own name can be read under (core/state.h anchor_t).
- * Both halves, because within one profile a path is not an identity.
+ * nor anything the record's own name can be read under (core/state.h
+ * state_record_t). Both halves, because within one profile a path is not an
+ * identity.
  *
- * Readers: add's anchor pass (cmds/add.c), update's capture loop (cmds/update.c),
- * the file analysis's content note (core/workspace.c workspace_analyze_file)
- * and apply's two acknowledgement loops (cmds/apply.c), which are what moves a
+ * Readers: add's anchor pass (cmds/add.c write_record), update's capture loop
+ * (cmds/update.c update_write_record), the file analysis's content note
+ * (core/workspace.c workspace_analyze_file), and apply's acknowledgements — the
+ * two loops over the clean items (cmds/apply.c cmd_apply) and the record phase's,
+ * of a directory fixed in place (apply_write_record) — which are what moves a
  * record onto the claim standing at its path. The let-go loops ask the other
  * direction — whether any row still stands at the path — and are not readers of
  * this. NULL is no claim.
@@ -1093,9 +1096,9 @@ typedef struct {
  *
  * @param before View before the transition (may be NULL = empty)
  * @param after View after the transition (must not be NULL)
- * @param anchors The record, as state_get_all_anchors returns it — in its order,
- *                which the search rests on (may be NULL when anchor_count is 0)
- * @param anchor_count Number of records
+ * @param records The record, as state_records returns it — in its order, which
+ *                the search rests on (may be NULL when record_count is 0)
+ * @param record_count Number of records
  * @param profiles Profiles to attribute to (must not be NULL)
  * @param out_stats Parallel array (length profiles->count; must not be NULL)
  * @return Error or NULL on success
@@ -1103,8 +1106,8 @@ typedef struct {
 error_t *manifest_diff(
     const manifest_t *before,
     const manifest_t *after,
-    const anchor_t *anchors,
-    size_t anchor_count,
+    const state_record_t *records,
+    size_t record_count,
     const string_array_t *profiles,
     manifest_diff_stats_t *out_stats
 );

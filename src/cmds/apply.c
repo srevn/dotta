@@ -482,9 +482,9 @@ static void apply_print_deploy_preview(
  * The item carries the path, its kind (the slash after a directory path) and
  * the new owner, the row's profile. The one fact it cannot carry is the old owner:
  * the run's ownership events (the adoption and acknowledgement loops' re-stamp,
- * the deployment's anchor) rewrite the record it is read from, so the writer
- * that names the reassignment reads it first. The record's strings outlive the
- * write (core/workspace.h workspace_item_t), and the item is the workspace's.
+ * a deployment's) rewrite the record it is read from, so the writer that names
+ * the reassignment reads it first. The record's strings outlive the write
+ * (core/workspace.h workspace_item_t), and the item is the workspace's.
  */
 typedef struct {
     const workspace_item_t *item;  /* The workspace's; the new owner is its profile */
@@ -1610,12 +1610,12 @@ static error_t *apply_write_record(
     /* The orphans first. Which outcomes settle is cleanup's rule, read off its
      * receipt and its verdicts (cleanup.h); the act is apply's, and it is one
      * verb for every outcome: the record retires, and the path is forgotten
-     * (core/state.h state_retire_anchor). Neither kind, nor the reason the record
-     * ended, nor what stands at the path decides anything here. The flow for an
-     * orphan: the path leaves the view (profile disabled, branch moved, target
-     * changed) → the workspace reads its record as an orphan and asks Git why →
-     * the verdict → here → record retired, completing the cycle. Without it,
-     * orphaned records accumulate forever in the path_anchors table.
+     * (core/state.h state_retire). Neither kind, nor the reason the record ended,
+     * nor what stands at the path decides anything here. The flow for an orphan:
+     * the path leaves the view (profile disabled, branch moved, target changed)
+     * → the workspace reads its record as an orphan and asks Git why → the verdict
+     * → here → record retired, completing the cycle. Without it, orphaned records
+     * accumulate forever in the path_records table.
      *
      * What the run found gone: pruned, or gone by the time it looked — the
      * receipt's, where the prune engine could start. */
@@ -1628,7 +1628,7 @@ static error_t *apply_write_record(
         };
         for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
             for (size_t i = 0; i < gone[b]->count; i++) {
-                err = state_retire_anchor(state, gone[b]->entries[i].item->filesystem_path);
+                err = state_retire(state, gone[b]->entries[i].item->filesystem_path);
                 if (err) goto cleanup;
             }
         }
@@ -1646,7 +1646,7 @@ static error_t *apply_write_record(
     };
     for (size_t b = 0; b < sizeof(decided) / sizeof(decided[0]); b++) {
         for (size_t i = 0; i < decided[b].count; i++) {
-            err = state_retire_anchor(state, decided[b].entries[i]->filesystem_path);
+            err = state_retire(state, decided[b].entries[i]->filesystem_path);
             if (err) goto cleanup;
         }
     }
@@ -1660,11 +1660,11 @@ static error_t *apply_write_record(
      *
      * The receipt is the whole of it, and the ownership rule is read off each
      * carried-out fate, never off a bucket topology:
-     *   deployed                  files written or linked — an owned anchor
-     *                             carrying the write's own proof: the receipt's
+     *   deployed                  files written or linked — an ownership event
+     *                             carrying the write's own stat: the receipt's
      *                             triple, distilled by the executor from the
      *                             fstat of the bytes it put there
-     *                             (stat_cache_from_write — authorship needs no
+     *                             (state_stat_from_write — authorship needs no
      *                             closed second). A symlink's is UNSET, the same
      *                             statement as NULL to state_anchor: a link is
      *                             made by path, no descriptor exists to describe
@@ -1672,7 +1672,8 @@ static error_t *apply_write_record(
      *   converged, made           a directory whose convergence is not a fix
      *   (a create or a replace)   (deploy_convergence) — dotta made it, where
      *                             nothing stood or in a squatter's place — an
-     *                             owned anchor; a directory has no blob and no stat
+     *                             ownership event; a directory has no blob and
+     *                             no stat
      *   converged in place        dotta did not make it, and it was present at
      *   (a fix)                   load, so the flush has already observed any
      *                             that had no record and learned each claim disk
@@ -1689,10 +1690,11 @@ static error_t *apply_write_record(
      *                             another profile's, a pending reassignment, or
      *                             another name of this one's — must not outlive
      *                             the run that converged the directory, so it
-     *                             takes the one anchor that moves it onto the
-     *                             row, by the acknowledgement loop's own test
+     *                             takes the one ownership event that moves it
+     *                             onto the row, by the acknowledgement loop's
+     *                             own test
      *   ancestors                 claimed parents made on the way, either
-     *                             class — dotta made them too, an owned anchor
+     *                             class — dotta made them too, an ownership event
      * Every other active directory present on disk was present at load too, and
      * has its record from the flush by the same argument; the load established
      * presence at the boundary, and nothing here walks the disk to establish it
@@ -1703,9 +1705,9 @@ static error_t *apply_write_record(
      * it, so each is counted before its write, and a write that lands nothing
      * counts nothing: a deployment the receipt names failed has no write here
      * at all. The clean ones the adoption and acknowledgement loops re-stamped
-     * were said where they were written. Ancestors' anchors stay uncounted: they
-     * are outside the plan, so no writer named them for the preview, and an
-     * acknowledgement that rides one heals the record silently. */
+     * were said where they were written. Ancestors' ownership events stay
+     * uncounted: they are outside the plan, so no writer named them for the
+     * preview, and an acknowledgement that rides one heals the record silently. */
     if (deploy_result) {
         deploy_outcomes_t deployed = deploy_result->deployed;
 
@@ -1715,7 +1717,7 @@ static error_t *apply_write_record(
 
             /* Counted before the write below rewrites the record the reassignment
              * is read from; a refusal ends the phase, and the count with it */
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+            if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 (*acknowledged)++;
             }
 
@@ -1730,7 +1732,7 @@ static error_t *apply_write_record(
 
             /* Counted before either write: both rewrite the record the reassignment
              * is read from. */
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+            if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 (*acknowledged)++;
             }
 
@@ -1741,9 +1743,9 @@ static error_t *apply_write_record(
              * flush has already observed away every record of another kind under
              * a standing directory (workspace_observe_retyped). The count above
              * is the binding's profile half, the one the screens name. */
-            const anchor_t *anchor = item->anchor;
-            bool follows = anchor && anchor->deployed_at > 0 &&
-                !manifest_is_claim(item->row, anchor->profile, anchor->storage_path);
+            const state_record_t *record = item->record;
+            bool follows = record && record->deployed_at > 0 &&
+                !manifest_is_claim(item->row, record->profile, record->storage_path);
 
             if (deploy_convergence(v->occupant) == DEPLOY_CONVERGE_FIX && !follows) {
                 /* A fix: the claims it set, which the record still lacks. It
@@ -1758,7 +1760,7 @@ static error_t *apply_write_record(
                     : DIVERGENCE_MODE;
 
                 err = workspace_confirm(
-                    ws, item, workspace_claims_moved(item->row, anchor) & landed
+                    ws, item, workspace_claims_moved(item->row, record) & landed
                 );
                 if (err) goto cleanup;
                 continue;
@@ -1922,16 +1924,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     err = workspace_flush(ws);
     if (err) {
         /* A run's flush writes into the transaction the run will commit, so a
-         * failure there poisons everything it has left to do. A preview holds
-         * no such transaction, and a reading it could not persist is one the
-         * next load establishes again — the stance the other four already take. */
-        if (opts->dry_run) {
-            error_free(err);
-            err = NULL;
-        } else {
-            err = error_wrap(err, "Failed to flush anchor updates");
-            goto cleanup;
-        }
+         * failure there poisons everything it has left to do, and ends the run
+         * in the flush's own words, which name the write and the path it failed
+         * at. A preview holds no such transaction, and a reading it could not
+         * persist is one the next load establishes again — the stance the other
+         * four already take. */
+        if (!opts->dry_run) goto cleanup;
+        error_free(err);
+        err = NULL;
     }
 
     /* The one observation the flush cannot make: a directory standing where its
@@ -2244,9 +2244,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * kind stands there clean — so the load learned nothing into it
      * (core/workspace.c workspace_analyze_file), and its ownership stamp vouches
      * for a node dotta never wrote. The row is adopted as a row with no record
-     * is, and the anchor rewrites the record whole. The kind is the ladder's
-     * first rung (core/workspace.h workspace_compare_confirmed): a link beside
-     * a file is another kind there, where path_type_kind would call both files.
+     * is, and the ownership event rewrites the record whole. The kind is the
+     * ladder's first rung (core/workspace.h workspace_compare_confirmed): a link
+     * beside a file is another kind there, where path_type_kind would call both
+     * files.
      *
      * A clean row whose record dotta owns under another profile, of the row's
      * own kind, is a reassignment: disk holds what A deployed, B owns the path
@@ -2268,7 +2269,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
-     * any anchor-writer. A run's writes land in the dispatch transaction, which
+     * workspace_anchor. A run's writes land in the dispatch transaction, which
      * the checkpoint below commits — on every path, the early exit included; a
      * preview writes nothing here at all, by the gate below.
      *
@@ -2292,29 +2293,28 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * — never in clean (core/workspace.h workspace_displaced_t, core/deploy.c
      * deploy_needs_work). Which is the answer these loops want: adopting a path
      * nobody looked at would set deployed_at on a stranger's file, and
-     * acknowledging one would re-stamp an owned record with a proof no look
-     * gave. */
+     * acknowledging one would re-stamp an owned record with a stat no look gave. */
     size_t adopted_count = 0;
     workspace_items_t clean_files = workspace_items(&deploy_plan->files.clean);
 
     for (size_t i = 0; i < clean_files.count; i++) {
         const workspace_item_t *item = clean_files.entries[i];
         const manifest_row_t *file = item->row;
-        const anchor_t *anchor = item->anchor;
+        const state_record_t *record = item->record;
 
-        bool adopt = !anchor || anchor->deployed_at == 0 ||
-            workspace_compare_confirmed(file, anchor) == CMP_TYPE_DIFF;
+        bool adopt = !record || record->deployed_at == 0 ||
+            workspace_compare_confirmed(file, record) == CMP_TYPE_DIFF;
 
         /* A record dotta owns whose binding names another row than this — another
          * profile's, or another name of the same profile, whose path the view
          * gave to this one — has yet to follow this row, and this loop is where
          * it does. The whole binding is the test because the whole binding is
          * what a record follows: the blob it carries is the blob of the row its
-         * binding names (core/state.h anchor_t), so a record left on a name no
-         * row stands at is never confirmed again — every load re-hashes the path,
-         * and its base drifts further from what is there. */
+         * binding names (core/state.h state_record_t), so a record left on a
+         * name no row stands at is never confirmed again — every load re-hashes
+         * the path, and its base drifts further from what is there. */
         bool acknowledge = !adopt &&
-            !manifest_is_claim(file, anchor->profile, anchor->storage_path);
+            !manifest_is_claim(file, record->profile, record->storage_path);
         if (!adopt && !acknowledge) continue;
 
         /* The reassignment this write acknowledges, named before the write below
@@ -2324,10 +2324,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
          * screen. Asked of the item's own look, so an adopted record never reads
          * as one: none, never owned, or another kind's — a node this clean item's
          * look found gone. */
-        if (workspace_reassigned(file, anchor, item->occupant)) {
+        if (workspace_reassigned(file, record, item->occupant)) {
             clean_reassignments[clean_reassignment_count++] = (reassignment_t){
                 .item = item,
-                .from = anchor->profile,
+                .from = record->profile,
             };
         }
 
@@ -2338,12 +2338,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * could not confirm under this row, which keeps the pair it had:
              * one bound to another row, or one of another kind, adopted above.
              * Content and not bytes: a pair whose kind the row has since left
-             * describes another node, and passing its triple would record a proof
-             * of the wrong one (core/workspace.h workspace_stale). The gate asks
-             * the snapshot itself; NULL advances the record blob-only, and the
-             * next load's slow path confirms. */
-            const stat_cache_t *stat =
-                (anchor && !workspace_stale(file, anchor)) ? &anchor->stat : NULL;
+             * describes another node, and passing its triple would hand the record
+             * the stat of the wrong one (core/workspace.h workspace_stale). The
+             * gate asks the snapshot itself; NULL advances the record blob-only,
+             * and the next load's slow path confirms. */
+            const state_stat_t *stat =
+                (record && !workspace_stale(file, record)) ? &record->stat : NULL;
 
             err = workspace_anchor(ws, item, stat, now);
             if (err) {
@@ -2378,24 +2378,24 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     for (size_t i = 0; i < clean_dirs.count; i++) {
         const workspace_item_t *item = clean_dirs.entries[i];
         const manifest_row_t *dir = item->row;
-        const anchor_t *anchor = item->anchor;
+        const state_record_t *record = item->record;
 
         /* A record this loop moves onto the directory's row: one dotta owns, of
          * the directory's kind, bound to another row. One of another kind is
          * another node's (core/workspace.h workspace_compare_confirmed): a run
          * has observed the directory in its place already
          * (workspace_observe_retyped), and a preview reads it as the run will. */
-        bool acknowledge = anchor && anchor->deployed_at > 0 &&
-            workspace_compare_confirmed(dir, anchor) != CMP_TYPE_DIFF &&
-            !manifest_is_claim(dir, anchor->profile, anchor->storage_path);
+        bool acknowledge = record && record->deployed_at > 0 &&
+            workspace_compare_confirmed(dir, record) != CMP_TYPE_DIFF &&
+            !manifest_is_claim(dir, record->profile, record->storage_path);
         if (!acknowledge) continue;
 
         /* The file loop's naming, by the same rule and for the same reason: the
          * write below rewrites the record it reads. */
-        if (workspace_reassigned(dir, anchor, item->occupant)) {
+        if (workspace_reassigned(dir, record, item->occupant)) {
             clean_reassignments[clean_reassignment_count++] = (reassignment_t){
                 .item = item,
-                .from = anchor->profile,
+                .from = record->profile,
             };
         }
 
@@ -2430,9 +2430,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * save closes nothing — but the reading is as true as a run's and is persisted
      * the same way, which is what status does with it too.
      *
-     * The record of the run's own effects — the anchors the deployment writes,
-     * the records cleanup retires — is the run's second transaction, begun past
-     * the early exit and ended by the record phase (apply_write_record). */
+     * The record of the run's own effects — the ownership events the deployment
+     * writes, the records cleanup retires — is the run's second transaction,
+     * begun past the early exit and ended by the record phase
+     * (apply_write_record). */
     err = state_save(state);
     if (err) {
         err = error_wrap(err, "Failed to commit state changes");
@@ -2639,10 +2640,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         for (size_t i = 0; i < kinds[k]->count; i++) {
             const workspace_item_t *item = kinds[k]->entries[i].item;
 
-            if (workspace_reassigned(item->row, item->anchor, item->occupant)) {
+            if (workspace_reassigned(item->row, item->record, item->occupant)) {
                 pending_reassignments[pending_reassignment_count++] = (reassignment_t){
                     .item = item,
-                    .from = item->anchor->profile,
+                    .from = item->record->profile,
                 };
             }
         }

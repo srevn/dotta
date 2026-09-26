@@ -36,7 +36,7 @@
  *   - the header: application_id marks the file dotta's, user_version names the
  *     schema it holds
  *   - enabled_profiles: User's profile management
- *   - path_anchors: The record — what dotta last reconciled each managed path
+ *   - path_records: The record — what dotta last reconciled each managed path
  *     against, and what it confirmed there (both kinds, one row per path), the
  *     prune order among its columns
  *
@@ -73,11 +73,11 @@
 typedef struct manifest_row manifest_row_t;
 
 /**
- * Stat cache — fast-path field of an anchor
+ * The stat — the record's fast path
  *
- * Field of an anchor_t: the (mtime, size, ino) triple captured at the moment
- * dotta confirmed disk content equals anchor.blob_oid. If a later live stat matches
- * all three fields, disk is still equal to anchor.blob_oid without re-hashing —
+ * Field of a state_record_t: the (mtime, size, ino) triple captured at the moment
+ * dotta confirmed disk content equals record.blob_oid. If a later live stat matches
+ * all three fields, disk is still equal to record.blob_oid without re-hashing —
  * the same approach Git uses with its index.
  *
  * Sentinel: All-zero state means unset — forces the slow path (safe default).
@@ -85,28 +85,41 @@ typedef struct manifest_row manifest_row_t;
  * never benefits from the fast path — correct, just not optimized.
  *
  * Lineage: this is Git's cache_entry stat data serving ce_match_stat, with the
- * same blind spot and the same cure. A triple whose mtime second had not closed
- * when the stat was taken cannot distinguish the bytes the caller verified from
- * a same-second, same-size, in-place rewrite — so the read-derived constructor
- * refuses to build that proof (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
+ * same cure for the same race. A triple whose mtime second had not closed when
+ * the stat was taken cannot distinguish the bytes the caller verified from a
+ * same-second, same-size, in-place rewrite — so the read-derived constructor
+ * refuses to build one (mtime >= now ⇒ UNSET, Git's "racily clean" smudge,
  * write-side); the record then advances blob-only and the next load's slow path
  * confirms once, in a closed second. A capture of a file edited this second
  * therefore defers its fast path one load. A triple born from the write itself
- * (stat_cache_from_write) is exempt: authorship, not a read, is its proof. And
- * as ce_match_stat reads the entry's mode beside its stat data, the kind is read
- * beside the triple, never stored in it: the record carries it already, the type
- * every writer of a triple writes with it (stat_cache_matches).
+ * (state_stat_from_write) is exempt: authorship, not a read, vouches for it.
+ * And as ce_match_stat reads the entry's mode beside its stat data, the kind is
+ * read beside the triple, never stored in it: the record carries it already,
+ * the type every writer of a triple writes with it (state_stat_matches).
+ *
+ * Narrower than Git's, and what that leaves, accepted: Git's stat data carries
+ * ctime, and these three fields do not. So a stat misses two same-size edits —
+ * one whose mtime is then restored to the recorded second (touch -r or -t, cp
+ * -p from a same-size source carrying that second: a deliberate act, since a
+ * restore from a copy of the deployed version brings its bytes too), and a rewrite
+ * inside the second of deploy's own write, which the write-derived constructor
+ * waives. ctime would close the first alone, at a price this model does not pay:
+ * deploy takes its fstat before the rename that publishes the file, and the rename
+ * moves ctime, so every deployed file's stat would miss; and chmod, extended
+ * attributes and hard links move it too, a read each on every load — which is
+ * why Git grew core.trustctime. Sub-second times close neither: a restore carries
+ * them, and they narrow deploy's second only to the filesystem clock's tick.
  */
 typedef struct {
     int64_t mtime;    /* st_mtime seconds at last known-good state (0 = unset) */
     int64_t size;     /* st_size at last known-good state */
     uint64_t ino;     /* st_ino at last known-good state */
-} stat_cache_t;
+} state_stat_t;
 
-#define STAT_CACHE_UNSET ((stat_cache_t){0})
+#define STATE_STAT_UNSET ((state_stat_t){0})
 
 /**
- * Populate stat cache from a struct stat the caller read
+ * Build a stat from a struct stat the caller read
  *
  * The read-derived constructor: a triple is born only from a struct stat the
  * caller already holds at the moment of its look — a post-commit capture's fstat,
@@ -117,17 +130,17 @@ typedef struct {
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
  * or carrying a future mtime) demotes to UNSET — a read can only infer the bytes
- * behind a stat, and no proof is built where a same-second, same-size, in-place
- * rewrite could stand behind it (the Lineage note above). Residue, accepted: a
- * rewrite landing between the caller's look and this call, with the call crossing
- * the second boundary in that sub-millisecond gap — the same order of window
- * Git accepts between hashing a file and writing its index entry.
+ * behind a stat, and none is built where a same-second, same-size, in-place rewrite
+ * could stand behind it (the Lineage note above). Residue, accepted: a rewrite
+ * landing between the caller's look and this call, with the call crossing the
+ * second boundary in that sub-millisecond gap — the same order of window Git
+ * accepts between hashing a file and writing its index entry.
  */
-static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
+static inline state_stat_t state_stat_from_read(const struct stat *st) {
     if ((int64_t) st->st_mtime >= (int64_t) time(NULL)) {
-        return STAT_CACHE_UNSET;
+        return STATE_STAT_UNSET;
     }
-    return (stat_cache_t){
+    return (state_stat_t){
         .mtime = (int64_t) st->st_mtime,
         .size = (int64_t) st->st_size,
         .ino = (uint64_t) st->st_ino,
@@ -135,7 +148,7 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
 }
 
 /**
- * Populate stat cache from the write that authored the bytes
+ * Build a stat from the write that authored the bytes
  *
  * The write-derived constructor: the caller holds the fstat of a descriptor it
  * wrote itself — deploy's executor, taken after the last byte and before the
@@ -148,12 +161,12 @@ static inline stat_cache_t stat_cache_from_stat(const struct stat *st) {
  * foreign same-second, same-size, in-place rewrite of the just-deployed file
  * reads clean until its stat moves — the race Git accepts for every file checkout
  * writes into its index. The alternative was worse than the race: a deploy could
- * never arm a proof, every deployed path paid one redundant content read on its
- * next load, and a deployed 0000 claim — whose read the mode itself forbids —
- * stood [unreadable] forever.
+ * never arm the fast path, every deployed path paid one redundant content read
+ * on its next load, and a deployed 0000 claim — whose read the mode itself forbids
+ * — stood [unreadable] forever.
  */
-static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
-    return (stat_cache_t){
+static inline state_stat_t state_stat_from_write(const struct stat *st) {
+    return (state_stat_t){
         .mtime = (int64_t) st->st_mtime,
         .size = (int64_t) st->st_size,
         .ino = (uint64_t) st->st_ino,
@@ -161,7 +174,7 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
 }
 
 /**
- * Anchor — the record dotta keeps of a managed path (path_anchors row)
+ * The record dotta keeps of a managed path (a path_records row)
  *
  * The row dotta last reconciled this path against — what it deployed, or, when
  * deployed_at is 0, what it was looking at when it first observed the path —
@@ -205,8 +218,8 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  * Invariants:
  *   - blob_oid is non-zero iff dotta has at some point confirmed disk content
  *     matched that blob. Zero means "never confirmed."
- *   - stat matching a live look of the record's kind is fast-path proof that
- *     disk still equals blob_oid (stat_cache_matches).
+ *   - a stat matching a live look of the record's kind proves, on the fast path,
+ *     that disk still equals blob_oid (state_stat_matches).
  *   - the confirmed pair (type, blob_oid) is not the manifest row's content iff
  *     the Git-expected value has advanced past the last disk confirmation — i.e.,
  *     stale. The pair, not the blob alone: Git hashes a link's target exactly
@@ -234,7 +247,7 @@ static inline stat_cache_t stat_cache_from_write(const struct stat *st) {
  * look finds the record's own node still standing (core/workspace.h
  * workspace_reassigned).
  */
-typedef struct anchor {
+typedef struct state_record {
     const char *filesystem_path; /* Deployed path (PRIMARY KEY), as spelled */
 
     /* The binding */
@@ -244,7 +257,7 @@ typedef struct anchor {
     /* The content */
     path_type_t type;         /* FILE, SYMLINK, EXECUTABLE or DIRECTORY */
     git_oid blob_oid;         /* Content-confirmed blob (zero = never confirmed: a directory, or observed only) */
-    stat_cache_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
+    state_stat_t stat;        /* Fast-path stat triple, bound to blob_oid (all-zero = unusable) */
 
     /* The claim */
     mode_t mode;              /* Meaningful iff type != SYMLINK */
@@ -254,10 +267,11 @@ typedef struct anchor {
     /* The lifecycle */
     time_t deployed_at;       /* Last ownership event (advances; 0 = never owned) */
     time_t ordered_at;        /* When remove --delete-files ordered the copy pruned (0 = no order standing) */
-} anchor_t;
+} state_record_t;
 
 /**
- * Does a live look still stand behind the proof? — the fast path, spelled once
+ * Does a live look still stand behind the record's stat? — the fast path, spelled
+ * once
  *
  * True iff the record's triple is set, the look is a node of the kind the triple
  * was taken of, and the look's own (mtime, size, ino) are the triple — safety-grade
@@ -269,30 +283,30 @@ typedef struct anchor {
  * confirmed, or the read-derived constructor's smudge) matches no look, which
  * is the slow path by default.
  *
- * The kind is the proof's own: the record's type, which every verb that writes
+ * The kind is the stat's own: the record's type, which every verb that writes
  * the triple writes with it, of the node the triple was taken of. A node's kind
  * is fixed for the life of its inode, and the inode is the filesystem's to hand
- * out again: a node of another kind reusing it at the proof's size within the
- * proof's second is not the node the proof was taken of, and taken for it, a
- * link the user made reads as dotta's file — clean, or pruned as an orphan. Git's
+ * out again: a node of another kind reusing it at the stat's size within the
+ * stat's second is not the node the stat was taken of, and taken for it, a link
+ * the user made reads as dotta's file — clean, or pruned as an orphan. Git's
  * ce_match_stat asks the entry's mode before its stat data for the same reason.
  * Asked in the ladder's division, a link for a link and a regular file for either
  * blob mode (core/workspace.h workspace_type_occupant); never of a directory,
- * which confirms no content and so carries no proof.
+ * which confirms no content and so carries no stat.
  *
- * Whether there is a proof to ask about is the asker's question, not this one's.
+ * Whether there is a stat to ask about is the asker's question, not this one's.
  *
  * Readers: core/workspace.c workspace_analyze_file, of the base, and
  * workspace_compare_orphan, of the orphan's record — the two fast paths, which
- * must not disagree about what a proof proves, and cannot: each hands in a record
+ * must not disagree about what a stat proves, and cannot: each hands in a record
  * whole, and the triple is never asked under a kind not its own.
  */
-static inline bool stat_cache_matches(const anchor_t *anchor, const struct stat *st) {
-    return anchor->stat.mtime != 0
-           && (anchor->type == PATH_TYPE_SYMLINK ? S_ISLNK(st->st_mode) : S_ISREG(st->st_mode))
-           && anchor->stat.mtime == (int64_t) st->st_mtime
-           && anchor->stat.size == (int64_t) st->st_size
-           && anchor->stat.ino == (uint64_t) st->st_ino;
+static inline bool state_stat_matches(const state_record_t *record, const struct stat *st) {
+    return record->stat.mtime != 0
+           && (record->type == PATH_TYPE_SYMLINK ? S_ISLNK(st->st_mode) : S_ISREG(st->st_mode))
+           && record->stat.mtime == (int64_t) st->st_mtime
+           && record->stat.size == (int64_t) st->st_size
+           && record->stat.ino == (uint64_t) st->st_ino;
 }
 
 /**
@@ -645,9 +659,9 @@ const char *state_peek_profile_target(
 );
 
 /**
- * Get every anchor, in filesystem_path order
+ * Every record, in filesystem_path order
  *
- * The one read of the path_anchors table. Allocates the array and every string
+ * The one read of the path_records table. Allocates the array and every string
  * field from the caller's arena; lifetime is tied to the arena. A NULL blob column
  * hydrates to a zero OID, a NULL mode to 0.
  *
@@ -664,7 +678,7 @@ const char *state_peek_profile_target(
  *     remove_files_from_profile (the settle's candidates), and core/manifest.c
  *     manifest_diff (a departed row's orphan split, handed the array by
  *     cmds/profile.c profile_enable, profile_disable and cmds/sync.c cmd_sync):
- *     by path, through state_lookup_anchor, which rests on strcmp order
+ *     by path, through state_find_record, which rests on strcmp order
  *   - cmds/remove.c delete_profile_branch (every record naming the profile) and
  *     cmds/sync.c cmd_sync's apply hint (every record against the view the Git
  *     phase produced, with no workspace and no disk): walks, key order unread
@@ -677,15 +691,15 @@ const char *state_peek_profile_target(
  * @param count Output count (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_get_all_anchors(
+error_t *state_records(
     const state_t *state,
     arena_t *arena,
-    anchor_t **out,
+    state_record_t **out,
     size_t *count
 );
 
 /**
- * The record at a path, in a snapshot state_get_all_anchors read — or NULL
+ * The record at a path, in a snapshot state_records read — or NULL
  *
  * A binary search by strcmp, which is the read's own order (the principle above):
  * the array must be the getter's, in the order it came back, and a hand-built
@@ -696,19 +710,19 @@ error_t *state_get_all_anchors(
  * remove_files_from_profile (the settle's candidates), core/manifest.c
  * manifest_diff (a departed row's orphan split).
  *
- * @param anchors The snapshot (NULL when count is 0)
+ * @param records The snapshot (NULL when count is 0)
  * @param count Records in it
  * @param filesystem_path The key (NULL returns NULL)
  * @return Borrowed record, or NULL where the snapshot holds none at the key
  */
-const anchor_t *state_lookup_anchor(
-    const anchor_t *anchors,
+const state_record_t *state_find_record(
+    const state_record_t *records,
     size_t count,
     const char *filesystem_path
 );
 
 /**
- * Observe an active path: record its first observation on disk
+ * Observe an active path: write the record of its first observation on disk
  *
  * Presence only, idempotent. One INSERT creates the record with the row's binding,
  * kind and claim — no blob, no stat, never owned — and never touches an existing
@@ -724,21 +738,21 @@ const anchor_t *state_lookup_anchor(
  * (workspace.c classify_absent): a path once observed that is now missing was
  * deleted, not never deployed.
  *
- * *anchor is the observation's record, written last, so a failure leaves it as
+ * *record is the observation's record, written last, so a failure leaves it as
  * it was: the row's binding, kind and claim (borrowed — the string pointers are
  * the row's), and nothing else. Written whether the INSERT landed or met a row
  * another writer made since the caller's read — still the INSERT's own values,
  * never that row, and never read back: a confirmation of the path binds this
- * record as the pair it replaces (state_confirm), so, blob-less and proof-less,
+ * record as the pair it replaces (state_confirm), so, with no blob and no stat,
  * it matches nothing but an identical observation, where landing is right. Read
  * back, it would lend the confirmation another writer's newer pair to overwrite.
  *
  * @param state State (must not be NULL, must have open database)
  * @param row Row the path was observed under (must not be NULL)
- * @param anchor The record the observation is written into (must not be NULL)
+ * @param record The record the observation is written into (must not be NULL)
  * @return Error or NULL on success
  */
-error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anchor);
+error_t *state_observe(state_t *state, const manifest_row_t *row, state_record_t *record);
 
 /**
  * Confirm an active path: advance its record to what the comparison established
@@ -749,24 +763,24 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  * event changes, nor its claim, which is state_confirm_claim's to confirm beside
  * it. The record must exist — one cannot confirm what one has not seen, and the
  * flush observes first. File rows only: a directory has no content to confirm,
- * and row->blob_oid must be non-zero (a zero blob would record "never confirmed"
+ * and row->blob_oid must be non-zero (a zero blob would say "never confirmed"
  * for a path this call claims to have confirmed — rejected here, where the schema's
  * CHECK would only refuse the zeroblob).
  *
  * One UPDATE, a compare-and-swap on the record the caller read: it matches iff
  * the database still holds the binding the row's blob opens under and the content
- * *anchor holds — its kind, blob and triple. What the fact depends on and what
+ * *record holds — its kind, blob and triple. What the fact depends on and what
  * it overwrites are bound, and nothing else, so an ownership event that moved
  * neither (an adoption's stamp) lets it land, while a record another writer moved
- * — another binding, a newer blob, a fresher proof — matches nothing, and nothing
- * is written. *anchor follows the statement: advanced on the three columns it
+ * — another binding, a newer blob, a fresher stat — matches nothing, and nothing
+ * is written. *record follows the statement: advanced on the three columns it
  * names when it wrote, and last, so a failure leaves it as read; left as read
  * when it did not — memory behind the database, the direction the next load
  * corrects.
  *
  * The binding bound is the row's, never the record's: a blob is written only
- * onto a record whose binding it opens under, so anchor_t's rule holds at the
- * write, whoever noted the confirmation. The one place a load notes a content
+ * onto a record whose binding it opens under, so state_record_t's rule holds at
+ * the write, whoever noted the confirmation. The one place a load notes a content
  * confirmation asks the same of its record first (core/workspace.c
  * workspace_analyze_file), so one that cannot land never opens the flush's
  * transaction. A row the record's binding does not name is one the record has
@@ -777,7 +791,7 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
  * @param row The row whose blob disk was found equal to (must not be NULL; a
  *            file row with a non-zero blob)
  * @param stat Stat triple captured by the comparison (must not be NULL)
- * @param anchor The path's record as the caller read it — the content this
+ * @param record The path's record as the caller read it — the content this
  *               confirmation replaces (must not be NULL; its binding is not read,
  *               the row's is the one bound); advanced iff the statement wrote
  * @return Error or NULL on success — a record moved since the read is no error
@@ -785,8 +799,8 @@ error_t *state_observe(state_t *state, const manifest_row_t *row, anchor_t *anch
 error_t *state_confirm(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat,
-    anchor_t *anchor
+    const state_stat_t *stat,
+    state_record_t *record
 );
 
 /**
@@ -795,13 +809,13 @@ error_t *state_confirm(
  *
  * The claim's confirmation, beside state_confirm's content: mode, owner and group
  * are the claim established — the row's on each axis the caller found or made
- * disk agree with, the record's own on the rest — and `anchor` is the record as
+ * disk agree with, the record's own on the rest — and `record` is the record as
  * the caller read it. One UPDATE, a compare-and-swap on the record's kind and
  * claim as read: it rewrites the three claim columns iff the database still holds
  * exactly those, so a record another writer moved since — an ownership event,
  * another confirmation — matches nothing and nothing is written. The kind is
  * bound because the claim was measured against one: a record another writer retyped
- * takes no claim measured under the other kind. *anchor follows the statement
+ * takes no claim measured under the other kind. *record follows the statement
  * on the three columns when it wrote, borrowing the caller's strings, and last,
  * so a failure leaves it as read.
  *
@@ -816,9 +830,9 @@ error_t *state_confirm(
  *
  * @param state State (must not be NULL, must have open database)
  * @param mode The mode established (read for a record that is no link)
- * @param owner The owner established, or NULL (borrowed by *anchor when written)
- * @param group The group established, or NULL (borrowed by *anchor when written)
- * @param anchor The path's record as the caller read it — the claim this
+ * @param owner The owner established, or NULL (borrowed by *record when written)
+ * @param group The group established, or NULL (borrowed by *record when written)
+ * @param record The path's record as the caller read it — the claim this
  *               confirmation replaces (must not be NULL); advanced iff the
  *               statement wrote
  * @return Error or NULL on success — a record moved since the read is no error
@@ -828,23 +842,23 @@ error_t *state_confirm_claim(
     mode_t mode,
     const char *owner,
     const char *group,
-    anchor_t *anchor
+    state_record_t *record
 );
 
 /**
- * Anchor an active path: record the row dotta reconciled it against
+ * Anchor an active path: write its record from the row dotta reconciled it against
  *
  * The ownership event — apply deploy, adoption, acknowledgement, add, update.
  * Call after confirming disk content matches row->blob_oid (or, for a DIRECTORY
  * row, after creating or confirming the directory). One statement, INSERT OR
- * REPLACE on path_anchors: the event writes the record whole — the row's binding,
+ * REPLACE on path_records: the event writes the record whole — the row's binding,
  * kind and claim, the blob and the stat of the confirmation, deployed_at = now
  * — and a column it does not name takes its default, so nothing of the record
  * before the event survives it.
  *
  * ROUTING INVARIANT — this is load-bearing:
- *   - If a workspace live for this transaction is read after the write, anchor
- *     writes MUST route through workspace_anchor (workspace.h). That wrapper
+ *   - If a workspace live for this transaction is read after the write, ownership
+ *     events MUST route through workspace_anchor (workspace.h). That wrapper
  *     hands this function the path's live record — or one it allocated for a
  *     path with none — which the statement's success advances, so every later
  *     reader in the run sees the record the statement wrote. Calling state_anchor
@@ -856,26 +870,26 @@ error_t *state_confirm_claim(
  *     workspace_load reads SQL fresh.
  *
  * Semantics (encoded in the SQL — single source of truth):
- *   - row->blob_oid must be non-zero for a file row: a zero blob would record
- *     "never confirmed" for a path this call claims to have confirmed. Rejected
- *     here, before the schema's CHECK would reject it. A DIRECTORY row binds
- *     NULL — a directory has no content confirmation.
+ *   - row->blob_oid must be non-zero for a file row: a zero blob would say "never
+ *     confirmed" for a path this call claims to have confirmed. Rejected here,
+ *     before the schema's CHECK would reject it. A DIRECTORY row binds NULL — a
+ *     directory has no content confirmation.
  *   - deployed_at = now: an ownership event, always. A confirmation is
  *     state_confirm's.
  *   - stat may be NULL or UNSET, which say the same thing here (a directory; a
  *     symlink deploy made by path, with no descriptor whose fstat could describe
  *     it; or a caller whose establishment did not reach a triple): the triple
  *     is written as zeros and the next read takes the slow path. A deployed file's
- *     is the write's own (stat_cache_from_write).
+ *     is the write's own (state_stat_from_write).
  *   - the path's order ends: an ownership event takes the path into the view,
  *     where no order stands (the column's default).
  *
- * *anchor follows the statement, last — so a failure leaves it as read, the rule
+ * *record follows the statement, last — so a failure leaves it as read, the rule
  * state_confirm and state_confirm_claim keep: the record the statement wrote,
  * whole — the row's binding, kind and claim (borrowed: the string pointers are
  * the row's, not copies), the blob, the triple, deployed_at = now, no order —
  * with no column the SQL's to decide, so the mirror is the inputs. `stat` may
- * be the record's own triple — apply's adoption hands &anchor->stat — and is
+ * be the record's own triple — apply's adoption hands &record->stat — and is
  * read before anything is written.
  *
  * @param state State (must not be NULL, must have open database)
@@ -884,7 +898,7 @@ error_t *state_confirm_claim(
  * @param stat Stat triple of the caller's establishing look (may be NULL; see
  *             semantics above)
  * @param now Timestamp of the write (must be > 0)
- * @param anchor The path's record to advance, or NULL where the caller keeps
+ * @param record The path's record to advance, or NULL where the caller keeps
  *               none (add's and update's capture loops); for a path with no record,
  *               one the caller allocated before the call
  * @return Error or NULL on success
@@ -892,9 +906,9 @@ error_t *state_confirm_claim(
 error_t *state_anchor(
     state_t *state,
     const manifest_row_t *row,
-    const stat_cache_t *stat,
+    const state_stat_t *stat,
     time_t now,
-    anchor_t *anchor
+    state_record_t *record
 );
 
 /**
@@ -920,7 +934,7 @@ error_t *state_anchor(
  * @param filesystem_path Path whose record retires (must not be NULL)
  * @return Error or NULL on success (not found is OK)
  */
-error_t *state_retire_anchor(state_t *state, const char *filesystem_path);
+error_t *state_retire(state_t *state, const char *filesystem_path);
 
 /**
  * Order a managed path's deployed copy pruned
@@ -955,17 +969,17 @@ error_t *state_order_prune(state_t *state, const char *filesystem_path, time_t n
  *
  * The order's view end: the flush's (core/workspace.c workspace_flush), for a
  * record the load read whose path the view holds again — the removal the order
- * answered was reverted. One UPDATE, a compare-and-swap on the stamp *anchor
+ * answered was reverted. One UPDATE, a compare-and-swap on the stamp *record
  * holds: it clears the order iff the database still holds that one, so an order
  * placed again since the read — a second removal, answering what the reader's
- * view predates — stands. *anchor follows the statement, last: ordered_at 0 when
+ * view predates — stands. *record follows the statement, last: ordered_at 0 when
  * it wrote, as read when it did not.
  *
  * @param state State (must not be NULL, must have active transaction)
- * @param anchor The record as the caller read it (must not be NULL); advanced
+ * @param record The record as the caller read it (must not be NULL); advanced
  *               iff the statement wrote
  * @return Error or NULL on success — an order moved since the read is no error
  */
-error_t *state_void_prune(state_t *state, anchor_t *anchor);
+error_t *state_void_prune(state_t *state, state_record_t *record);
 
 #endif /* DOTTA_STATE_H */

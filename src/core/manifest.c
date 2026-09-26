@@ -940,7 +940,7 @@ static int manifest_claim_blob(
      * contributes no row — nothing on this machine can place it — and is recorded
      * on the view (manifest_unbound) so the health consumers surface it; it is
      * never dropped in silence. Record-safe by construction: a record can only
-     * exist where a binding existed at write time, so no anchor ever joins a
+     * exist where a binding existed at write time, so no record ever joins a
      * skipped claim and no orphan can be manufactured here. Genuine errors
      * (malformed path, OOM) propagate via the err branch. */
     const char *filesystem_path = NULL;
@@ -1888,7 +1888,7 @@ void manifest_free(manifest_t *manifest) {
  *
  * Two passes — every row of `after` for the gain side, every row of `before`
  * for the loss side — over an index of profile → stats slot, and a search of
- * the record by path for the departure split (state_lookup_anchor). Nothing is
+ * the record by path for the departure split (state_find_record). Nothing is
  * written; the rule for what a departure means for apply is the record's presence
  * and ownership at the path, the same fact the workspace reads when it meets
  * the orphan.
@@ -1896,8 +1896,8 @@ void manifest_free(manifest_t *manifest) {
 error_t *manifest_diff(
     const manifest_t *before,
     const manifest_t *after,
-    const anchor_t *anchors,
-    size_t anchor_count,
+    const state_record_t *records,
+    size_t record_count,
     const string_array_t *profiles,
     manifest_diff_stats_t *out_stats
 ) {
@@ -1987,14 +1987,16 @@ error_t *manifest_diff(
             continue;
         }
 
-        /* The record, searched by path for the orphan split (state_lookup_anchor):
+        /* The record, searched by path for the orphan split (state_find_record):
          * a departed row with a record dotta owns leaves an orphan apply prunes
          * (or releases, if Git let go), one with a record dotta never owned leaves
          * one the ownership gate releases, one without leaves nothing for apply
          * to do. */
-        const anchor_t *anchor = state_lookup_anchor(anchors, anchor_count, old->filesystem_path);
-        if (!anchor) continue;
-        if (anchor->deployed_at > 0) {
+        const state_record_t *record = state_find_record(
+            records, record_count, old->filesystem_path
+        );
+        if (!record) continue;
+        if (record->deployed_at > 0) {
             slot->orphans.owned++;
         } else {
             slot->orphans.observed++;

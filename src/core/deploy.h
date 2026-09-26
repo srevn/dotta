@@ -85,7 +85,7 @@ typedef struct {
  * planned-absent arms and the skip's included (deploy_skip_t). Its row is the
  * fate's: the view holds one row per path, and an active path's item is that
  * row's own, so the row is read off the item (item->row) and never carried beside
- * it. An item's join facts (row, anchor, profile) are sound on every fate; a
+ * it. An item's join facts (row, record, profile) are sound on every fate; a
  * row beneath a squatter carries no look at all (core/workspace.h
  * workspace_displaced_t), which is why the fate's own occupant says what the
  * run will find. What a fate declines to consult it declines at the reader, never
@@ -461,17 +461,17 @@ typedef struct {
 } deploy_plan_t;
 
 /**
- * One verdict's outcome — the act's proof where it landed, the cause where it
+ * One verdict's outcome — the act's stat where it landed, the cause where it
  * did not
  *
- * The stat is the record's own triple (stat_cache_from_write), distilled by the
+ * The stat is the record's own triple (state_stat_from_write), distilled by the
  * executor from the fstat of the descriptor it wrote — taken after the last byte
  * and before the rename that publishes it, so it describes exactly what this
  * run wrote, never what a later look at the path would find. It is what lets
- * apply's record phase anchor a deployment with the write's own proof instead
- * of leaving the record blob-only.
+ * apply's record phase anchor a deployment with the write's own stat instead of
+ * leaving the record blob-only.
  *
- * UNSET where the act authored no proof — the executor's fact, not a consumer's
+ * UNSET where the act authored no stat — the executor's fact, not a consumer's
  * re-derivation: a symlink is made by path (symlink(2) opens no descriptor to
  * describe, and readlink is its whole re-verification), and a directory's write
  * is fchmod/fchown through its own descriptor, whose record carries no triple
@@ -491,7 +491,7 @@ typedef struct {
  */
 typedef struct {
     const deploy_verdict_t *verdict;    /* Borrowed (preflight-result lifetime) */
-    stat_cache_t stat;                  /* The act's proof; UNSET where it authored none */
+    state_stat_t stat;                  /* The write's stat; UNSET where it authored none */
     error_t *error;                     /* The failed bucket's cause; NULL elsewhere (owned) */
 } deploy_outcome_t;
 
@@ -549,7 +549,7 @@ typedef struct {
  * workspace_free — the outcomes borrow the verdicts, the verdicts the items.
  */
 typedef struct {
-    deploy_outcomes_t deployed;      /* Files written or linked, each with its write's proof */
+    deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
     deploy_outcomes_t converged;     /* Planned directories — the verb is the verdict's occupant */
     deploy_outcomes_t ancestors;     /* Claimed directories made on the way, each once */
     deploy_outcomes_t failed;        /* Rows that did not land — both kinds, each with its cause */
@@ -816,7 +816,7 @@ error_t *deploy_preflight(
  * record's to keep). The held directories are released on every exit.
  *
  * View rows are self-contained (blob_oid, type, storage path); the content cache
- * handles encryption transparently. The record (path_anchors, observations) is
+ * handles encryption transparently. The record (path_records, observations) is
  * the caller's to write, after deployment succeeds.
  *
  * @param repo Repository (must not be NULL)

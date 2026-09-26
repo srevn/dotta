@@ -512,9 +512,9 @@ typedef struct {
  * receipt holds exactly what happened, by construction. Nothing here can be
  * truncated by the run.
  *
- * Records that retire (core/state.h state_retire_anchor): pruned_* and reclaimed_*
- * (here), absent_* and released_* (the verdicts). Records that stay: skipped_dirs
- * and failed (here), skipped_* and refused_* (the verdicts).
+ * Records that retire (core/state.h state_retire): pruned_* and reclaimed_* (here),
+ * absent_* and released_* (the verdicts). Records that stay: skipped_dirs and
+ * failed (here), skipped_* and refused_* (the verdicts).
  *
  * Exit contract: `failed` alone reaches the exit code. Three columns, and the
  * two engines draw the line between them differently — deploy_skip_reason_t draws
@@ -554,7 +554,7 @@ typedef struct {
  * in the verdicts' prune order. Individual removal failures are non-fatal and
  * land in `failed` with their cause; the returned error is the run's infrastructure
  * alone — the receipt's own allocation failed, *out is unset, nothing ran and
- * there is nothing to record — deploy_execute's contract.
+ * the record phase has nothing to write — deploy_execute's contract.
  *
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
  * @param out Result (must not be NULL; caller frees with cleanup_result_free)

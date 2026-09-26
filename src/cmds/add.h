@@ -117,16 +117,16 @@ typedef struct {
  * the disk cannot move. The join still tests it, the test being the NULL-row
  * guard the record's counts rest on.
  *
- * **What the record records**: every capture is an ownership event — the path
- * was put there from disk, so the record binds the committed blob to the stat
- * the capture took and the next status takes its fast path. A capture whose path
+ * **What the record keeps**: every capture is an ownership event — the path was
+ * put there from disk, so the record binds the committed blob to the stat the
+ * capture took and the next status takes its fast path. A capture whose path
  * another profile's row wins, or another name of this profile's own, takes no
- * anchor and the receipt says which; a capture whose claim no longer stands where
- * it was read ends the phase, the topology having moved under the command. The
- * record phase is not the command: a failure leaves Git's commit standing, leaves
- * the record exactly as it was, says so, and names the retry — `--force`, over
- * a branch that now holds the name, because an apply re-earns the event for a
- * file it adopts and never for a directory.
+ * ownership event and the receipt says which; a capture whose claim no longer
+ * stands where it was read ends the phase, the topology having moved under the
+ * command. The record phase is not the command: a failure leaves Git's commit
+ * standing, leaves the record exactly as it was, says so, and names the retry —
+ * `--force`, over a branch that now holds the name, because an apply re-earns
+ * the event for a file it adopts and never for a directory.
  *
  * **-n previews the add and writes nothing of dotta's.** Every decision this
  * command makes runs and no capture does, so an add refused over a name is a

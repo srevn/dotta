@@ -498,11 +498,12 @@ void state_free(state_t *state);
  * Enable, or re-enable with a binding
  *
  * A new name appends a row at the end of the order; an enabled name keeps its
- * position (UPSERT). `target` binds the profile's custom/ tree here; NULL (or
- * empty) names no target and keeps the one the row has — the only way a row loses
- * its target is state_disable_profile. The callers validate a target before it
- * reaches this write (mount_validate_target, at the binders), and the schema
- * refuses what they would not have written (the target_spelling constraint).
+ * position (UPSERT). `target` binds the profile's custom/ tree here; NULL names
+ * no target and keeps the one the row has — the only way a row loses its target
+ * is state_disable_profile. The callers validate a target before it reaches this
+ * write (mount_validate_target, at the binders), and the schema refuses what
+ * they would not have written (the target_spelling constraint), an empty string
+ * among them: NULL is the one spelling of no target.
  *
  * Preconditions:
  *   - state MUST have active transaction (via state_open)

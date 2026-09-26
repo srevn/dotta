@@ -881,9 +881,11 @@ error_t *state_enable_profile(
         return sqlite_error(state->db, "Failed to prepare enable profile statement");
     }
 
-    /* Bind parameters */
+    /* Bind parameters: the target as given — NULL keeps the row's, and a string
+     * is the column's to admit or refuse (target_spelling), an empty one among
+     * them */
     sqlite3_bind_text(stmt, 1, profile, -1, SQLITE_STATIC);
-    if (target && target[0] != '\0') {
+    if (target) {
         sqlite3_bind_text(stmt, 2, target, -1, SQLITE_STATIC);
     } else {
         sqlite3_bind_null(stmt, 2);

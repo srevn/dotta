@@ -771,9 +771,9 @@ static void workspace_analyze_file(
      *
      * When ours ≠ theirs: CONTENT iff user_edited, STALE iff git_moved. STALE
      * without CONTENT means "overwrite loses nothing"; CONTENT without STALE
-     * means "Git has not moved since this was deployed"; both means both sides
-     * moved. Without a base there is no second question — any difference from
-     * theirs is the user's.
+     * means "Git has not moved since dotta last confirmed it"; both means both
+     * sides moved. Without a base there is no second question — any difference
+     * from theirs is the user's.
      *
      * Source of truth for the base: the record (the path_records row's blob). A
      * path with no record, or one observed but never confirmed (zero blob), has

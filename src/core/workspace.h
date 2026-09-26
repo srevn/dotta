@@ -106,7 +106,7 @@
 typedef enum {
     WORKSPACE_STATE_DEPLOYED,      /* The view claims the path and something stands there */
     WORKSPACE_STATE_UNDEPLOYED,    /* The view claims the path and nothing does: apply's to create */
-    WORKSPACE_STATE_DELETED,       /* Was deployed, removed from filesystem */
+    WORKSPACE_STATE_DELETED,       /* The view claims the path, dotta saw its node there, and nothing does */
     WORKSPACE_STATE_ORPHANED,      /* A record whose path the view lacks */
     WORKSPACE_STATE_UNTRACKED,     /* Beneath a tracked directory, in neither the view nor the record */
     WORKSPACE_STATE_RELEASED       /* An orphan dotta lets go: the path stays, the record retires */

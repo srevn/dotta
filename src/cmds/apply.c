@@ -2933,9 +2933,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     }
 
 cleanup:
-    /* Each engine's objects in reverse construction order: the receipt borrows
-     * the fates, and the fates and the plan borrow the workspace's items —
-     * everything before workspace_free. */
+    /* Each engine's objects in reverse construction order, deploy's receipt before
+     * the fates it borrows. None frees an item, so the workspace is freed in
+     * any order against them (core/deploy.h, core/cleanup.h). */
     if (deploy_result) deploy_result_free(deploy_result);
     if (deploy_verdicts) deploy_preflight_result_free(deploy_verdicts);
     if (deploy_plan) deploy_plan_free(deploy_plan);

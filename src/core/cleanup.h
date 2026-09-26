@@ -58,7 +58,8 @@
  * The plan's and the verdicts' buckets hold borrowed workspace_item_t pointers
  * (workspace lifetime — the items are arena-allocated, their addresses stable
  * by construction); project them with workspace_items. The receipt's outcomes
- * borrow the same items. Free plan, verdicts and result BEFORE workspace_free.
+ * borrow the same items. Each frees its own buffers and never an item, so the
+ * plan, the verdicts, the receipt and the workspace are freed in any order.
  *
  * Integration:
  * - workspace.h: orphan detection, the occupant, Git authority, divergence; the
@@ -95,8 +96,7 @@
  * prunes it.
  *
  * `directories` is sorted deepest-first here, once, so preflight predicts and
- * execute prunes in the same order. Free with cleanup_plan_free BEFORE
- * workspace_free.
+ * execute prunes in the same order. Free with cleanup_plan_free.
  */
 typedef struct {
     ptr_array_t files;         /* ORPHANED / RELEASED file items in scope */
@@ -445,7 +445,7 @@ error_t *cleanup_preflight(
     cleanup_preflight_result_t **out
 );
 
-/** Free verdicts. No-op on NULL. Call before workspace_free. */
+/** Free verdicts. No-op on NULL. */
 void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts);
 
 /* ── Outcomes ─────────────────────────────────────────────────────── */
@@ -566,8 +566,7 @@ error_t *cleanup_execute(
 );
 
 /**
- * Free a result — the failed causes, then the arrays. No-op on NULL. Call before
- * workspace_free.
+ * Free a result — the failed causes, then the arrays. No-op on NULL.
  */
 void cleanup_result_free(cleanup_result_t *result);
 

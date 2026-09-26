@@ -444,8 +444,7 @@ typedef struct {
 
 /**
  * Deployment plan — deploy's classification of the active items in scope, one
- * partition per kind. Free with deploy_plan_free BEFORE workspace_free (the same
- * ordering rule scope.h documents for scope_free).
+ * partition per kind. Free with deploy_plan_free.
  *
  * Both kinds' items arrive ordered by filesystem_path (workspace_directories,
  * workspace_files), so a tracked parent precedes its tracked children within
@@ -545,8 +544,8 @@ typedef struct {
  * so the caller's summary keeps them apart from the created count. A parent no
  * row claims has no receipt and no record.
  *
- * Free with deploy_result_free, before deploy_preflight_result_free and before
- * workspace_free — the outcomes borrow the verdicts, the verdicts the items.
+ * Free with deploy_result_free, before deploy_preflight_result_free — the outcomes
+ * borrow the verdicts.
  */
 typedef struct {
     deploy_outcomes_t deployed;      /* Files written or linked, each with its write's stat */
@@ -600,7 +599,7 @@ error_t *deploy_plan_build(
 );
 
 /**
- * Free a plan. No-op on NULL. Call before workspace_free.
+ * Free a plan. No-op on NULL.
  */
 void deploy_plan_free(deploy_plan_t *plan);
 
@@ -751,7 +750,7 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  * @param opts Deployment options (must not be NULL)
  * @param out Pre-flight results (must not be NULL; caller frees with
  *        deploy_preflight_result_free, after deploy_result_free — the receipt
- *        borrows the verdicts — and before workspace_free)
+ *        borrows the verdicts)
  * @return Error or NULL on success (a skip is not an error; a strict_ownership
  *         failure is)
  */

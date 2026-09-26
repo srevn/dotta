@@ -851,8 +851,8 @@ static void status_print_workspace(
         }
 
         /* Section 7: Undeployed changes — apply's work, both kinds: what Git
-         * has and disk does not, a path never deployed or a move of Git's disk
-         * has not followed ([stale]). Named as its twin, Uncommitted changes,
+         * has and disk does not, a path apply is to create or a move of Git's
+         * disk has not followed ([stale]). Named as its twin, Uncommitted changes,
          * is. */
         if (undeployed_count > 0) {
             output_list_t *list = output_list_create(

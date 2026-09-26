@@ -51,8 +51,10 @@ static bool deploy_needs_work(const workspace_item_t *item) {
     /* Decision tree: state (existence) determines baseline, then check divergence (quality) */
     switch (item->state) {
         case WORKSPACE_STATE_UNDEPLOYED:
-            /* File exists in Git but has never been deployed to filesystem. Needs
-             * initial deployment.
+            /* The view claims the path and nothing stands there, where dotta
+             * saw none of its node — no record of its kind — or the claim is an
+             * ancestor's, which asserts none (core/workspace.c classify_absent).
+             * Needs deploying.
              *
              * No path bit survives absence (properties of non-existent files
              * cannot be compared); the blob bit, ENCRYPTION, can ride on a missing
@@ -61,10 +63,11 @@ static bool deploy_needs_work(const workspace_item_t *item) {
             return true;
 
         case WORKSPACE_STATE_DELETED:
-            /* File exists in Git and was previously deployed (deployed_at > 0),
-             * but has been removed from filesystem. Needs restoration. Absence
-             * and the blob bit read as in the UNDEPLOYED arm: work by state
-             * alone. */
+            /* The view claims the path and nothing stands there, where a record
+             * of its kind says dotta saw its node — observed or put there: the
+             * record's existence decides, never its ownership (core/workspace.c
+             * classify_absent). Needs restoration. Absence and the blob bit read
+             * as in the UNDEPLOYED arm: work by state alone. */
             return true;
 
         case WORKSPACE_STATE_DEPLOYED:

@@ -798,7 +798,7 @@ const state_record_t *state_find_record(
  * record describes another kind of node, a record that call retires first so
  * the INSERT lands. The record's existence is what the absence classifier reads
  * (workspace.c classify_absent): a path once observed that is now missing was
- * deleted, not never deployed.
+ * deleted, not undeployed.
  *
  * *record is the observation's record, written last, so a failure leaves it as
  * it was: the row's binding, kind and claim (borrowed — the string pointers are

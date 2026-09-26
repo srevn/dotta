@@ -52,7 +52,8 @@
  * Design principles:
  * - Binary format (fast, compact)
  * - WAL mode (concurrent access, atomic commits)
- * - Prepared statements (100x faster for bulk operations)
+ * - Prepared statements kept for the connection's life, for the writes a run
+ *   repeats
  * - A path-keyed table holds keys alone — absolute and folded, the shape
  *   mount_resolve spells every key in (sys/filesystem.h fs_is_folded), and whole
  *   — and refuses any other where a hand makes the edit (key_spelling). The shape

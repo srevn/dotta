@@ -822,6 +822,10 @@ static void workspace_analyze_file(
         /* the look stands behind the stat ⟹ disk == the base's pair */
         disk_at_base = true;
         cmp_result = workspace_compare_confirmed(row, base);
+
+        /* Where the pair is the row's content, the stat stands behind disk being
+         * the row's (workspace_item_t's stat) */
+        if (cmp_result == CMP_EQUAL) item->stat = base->stat;
     } else {
         /* SLOW PATH: Full content comparison, ours vs theirs
          *
@@ -911,39 +915,43 @@ static void workspace_analyze_file(
             return;
         }
 
-        /* Slow path found disk == the row's pair: the content half of the item's
-         * confirmation, for the flush to write (workspace_confirm) — the claim's
-         * half is workspace_analyze_claim's, below. The row's blob, the one the
-         * look was found equal to, beside the look's triple, so the next run
-         * can short-circuit via the fast path above. A path with no record is
-         * noted like any other: the flush observes it before it confirms, and
-         * the observation is this row's.
-         *
-         * Only onto a record that is this row's content base. Bound to this row:
-         * an encrypted blob opens under one binding and no other, and
-         * state_confirm's statement refuses another at the write — asked of the
-         * record first, so a confirmation that cannot land never opens the flush's
-         * transaction; a row the binding does not name is one the record has
-         * yet to follow, which takes the slow path on every load until apply's
-         * acknowledgement moves the record onto it. And of this row's kind, the
-         * ladder's first rung (core/workspace.h workspace_compare_confirmed),
-         * never path_type_kind, whose taxonomy files a link beside the files: a
-         * record of another kind is a fact about a node that is gone, and a
-         * confirmation would carry the ownership stamp dotta earned for it onto
-         * a node dotta never wrote — a link the user made, a file where dotta's
-         * directory was — which apply adopts instead, as it adopts a row with
-         * no record (cmds/apply.c).
-         *
-         * The stat is distilled from the look here, where the comparison stood:
-         * whether its mtime second had closed is asked of the clock now, never
-         * of the flush's later one, which would take for the record's stat a
-         * triple that a same-second rewrite after the read could stand behind
-         * (core/state.h state_stat_from_read). */
-        if (cmp_result == CMP_EQUAL &&
-            (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
-            workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF))) {
-            item->confirmation |= DIVERGENCE_CONTENT;
+        /* Slow path found disk == the row's pair: the stat that stands behind
+         * it is the item's, whatever the record (workspace_item_t's stat). It
+         * is distilled from the look here, where the comparison stood: whether
+         * its mtime second had closed is asked of the clock now, never of a later
+         * writer's, which would take for the record's stat a triple that a
+         * same-second rewrite after the read could stand behind (core/state.h
+         * state_stat_from_read). */
+        if (cmp_result == CMP_EQUAL) {
             item->stat = state_stat_from_read(&item->st);
+
+            /* The content half of the item's confirmation, for the flush to write
+             * (workspace_confirm) — the claim's half is workspace_analyze_claim's,
+             * below. The row's blob, the one the look was found equal to, beside
+             * the stat above, so the next run can short-circuit via the fast
+             * path. A path with no record is noted like any other: the flush
+             * observes it before it confirms, and the observation is this row's.
+             *
+             * Only onto a record that is this row's content base. Bound to this
+             * row: an encrypted blob opens under one binding and no other, and
+             * state_confirm's statement refuses another at the write — asked of
+             * the record first, so a confirmation that cannot land never opens
+             * the flush's transaction; a row the binding does not name is one
+             * the record has yet to follow, which takes the slow path on every
+             * load until apply's acknowledgement moves the record onto it. And
+             * of this row's kind, the ladder's first rung (core/workspace.h
+             * workspace_compare_confirmed), never path_type_kind, whose taxonomy
+             * files a link beside the files: a record of another kind is a fact
+             * about a node that is gone, and a confirmation would carry the
+             * ownership stamp dotta earned for it onto a node dotta never wrote
+             * — a link the user made, a file where dotta's directory was — which
+             * apply adopts instead, as it adopts a row with no record
+             * (cmds/apply.c). Either way the stat above rides the ownership event
+             * that moves the record onto the row. */
+            if (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
+                workspace_compare_confirmed(row, record) != CMP_TYPE_DIFF)) {
+                item->confirmation |= DIVERGENCE_CONTENT;
+            }
         }
 
         /* Second question — ours vs base — asked once, where it can change the

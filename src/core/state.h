@@ -123,10 +123,10 @@ typedef struct {
  *
  * The read-derived constructor: a triple is born only from a struct stat the
  * caller already holds at the moment of its look — a post-commit capture's fstat,
- * or the slow-path CMP_EQUAL confirmation's lstat — so the triple and the bytes
- * the caller verified describe the same moment. There is deliberately no from-path
- * variant: a fresh look taken at record-write time would bind whatever stands
- * at the path then to a verdict from earlier.
+ * or the lstat of a slow path that found disk the row's content — so the triple
+ * and the bytes the caller verified describe the same moment. There is deliberately
+ * no from-path variant: a fresh look taken at record-write time would bind whatever
+ * stands at the path then to a verdict from earlier.
  *
  * A stat whose mtime second has not closed (mtime >= now: written this very second,
  * or carrying a future mtime) demotes to UNSET — a read can only infer the bytes

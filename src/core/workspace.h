@@ -414,15 +414,22 @@ typedef enum {
  * and symlinks alone (workspace.c workspace_analyze_untracked), which status's
  * New files label reads.
  *
+ * `stat` is what stands behind the content verdict where it found disk to be
+ * the row's pair (workspace.c workspace_analyze_file): the base's own stat where
+ * the fast path stood on it, the look's triple distilled from `st` where the
+ * slow path read. The row's content is on disk whatever the record says, so it
+ * is set whatever the record, and UNSET on every other item. Two writers carry
+ * it into the record: the flush's content confirmation, and apply's ownership
+ * events over the clean rows (cmds/apply.c cmd_apply), which also reach a record
+ * the load could confirm nothing onto — another row's, another kind's.
+ *
  * The confirmation is what the analyses established that the record lacks, by
  * axis, for the flush to write (workspace_flush) and nothing else to read: the
  * content (DIVERGENCE_CONTENT) where the look found disk to be the row's pair
- * and the record is this row's content base, with `stat` beside it — the look's
- * triple, distilled from `st` where the comparison stood (workspace.c
- * workspace_analyze_file); and each claim Git moved that the look found disk
- * already standing on (DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP). The flush clears
- * it once written, so it is NONE on every item that owes the record nothing —
- * orphans and discoveries always.
+ * and the record is this row's content base, written with `stat`; and each claim
+ * Git moved that the look found disk already standing on (DIVERGENCE_MODE,
+ * DIVERGENCE_OWNERSHIP). The flush clears it once written, so it is NONE on every
+ * item that owes the record nothing — orphans and discoveries always.
  *
  * `record` is const so a reader holding the item cannot write the record. The
  * workspace's writers cast where they write: the record, where they advance one
@@ -456,10 +463,10 @@ typedef struct {
     divergence_type_t divergence;        /* What's wrong with it (bit flags, can combine) */
     workspace_fault_t fault;             /* Whose remedy the failed look is; NONE unless UNVERIFIED */
     workspace_relocation_t relocation;   /* The rule of a relocated claim's namespace, or NONE */
+    state_stat_t stat;                   /* What stands behind disk being the row's content; UNSET elsewhere */
 
     /* The confirmation — its kind's analysis's; the flush clears it once written */
-    divergence_type_t confirmation;     /* The axes the look established that the record lacks */
-    state_stat_t stat;                  /* The content's, where the comparison stood; UNSET beside a claim */
+    divergence_type_t confirmation;      /* The axes the look established that the record lacks */
 } workspace_item_t;
 
 /**
@@ -651,10 +658,9 @@ static inline bool workspace_reassigned(
  * directory row has nothing to confirm and nothing has moved.
  *
  * Readers: core/workspace.c workspace_analyze_file (git_moved — the three-way
- * frame's first question, and the gate on its second), cmds/apply.c cmd_apply's
- * adoption gate (the record's stat is handed on only when the pair is the row's
- * content), cmds/sync.c cmd_sync's apply hint (the record still disagrees with
- * the view). A reader not on this list is a bug.
+ * frame's first question, and the gate on its second), cmds/sync.c cmd_sync's
+ * apply hint (the record still disagrees with the view). A reader not on this
+ * list is a bug.
  */
 static inline bool workspace_stale(const manifest_row_t *row, const state_record_t *record) {
     return workspace_compare_confirmed(row, record) != CMP_EQUAL;
@@ -1314,9 +1320,9 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  * statement sets to what it wrote, and points the item at it once the statement
  * landed — so item->record reads the post-write record. The record the item held
  * before the event is never written: a reader that took it earlier — apply's
- * reassignment names, the adoption's stat — reads what the load read, whenever
- * it reads. The statement is the one specification of what an ownership event
- * writes; this function holds none of it.
+ * reassignment names — reads what the load read, whenever it reads. The statement
+ * is the one specification of what an ownership event writes; this function holds
+ * none of it.
  *
  * The workspace-scope writer for ownership events — add and update write through
  * state_anchor directly (the header's exception: add loads no workspace, and
@@ -1342,9 +1348,9 @@ error_t *workspace_observe_retyped(workspace_t *ws);
  *             the record is this item's from the write on, its strings borrowed
  *             from the item's row, the view's own, for the workspace's lifetime
  * @param stat The stat of the moment the row's content was established on disk,
- *             taken by the code that established it: the analysis's own triple
- *             for an adoption or acknowledgement (the snapshot pair's, when the
- *             pair is the row's content); the deploy receipt's triple for a file
+ *             taken by the code that established it: the analysis's own for an
+ *             adoption or acknowledgement, the one its comparison stood on
+ *             (workspace_item_t's stat); the deploy receipt's triple for a file
  *             deployment — the executor's fstat of the bytes it wrote, distilled
  *             at the write (state_stat_from_write: authorship vouches for it,
  *             no closed second needed), UNSET for a symlink (made by path, no
@@ -1389,7 +1395,7 @@ error_t *workspace_anchor(
  *             a row's, whose record stands wherever axes is not NONE)
  * @param axes The axes established, named by their divergence bits (NONE writes
  *             nothing); DIVERGENCE_CONTENT only as the load noted it, its stat
- *             on the item (workspace_item_t's confirmation)
+ *             the item's (workspace_item_t's stat)
  * @return Error from either verb, or NULL on success — a record moved since the
  *         load is no error
  */

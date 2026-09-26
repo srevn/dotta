@@ -2238,9 +2238,10 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * it is how the user claims the in-scope set. Stamping here collapses the
      * "enable → apply on a pre-existing matching file" flow to a coherent (blob,
      * now, stat), so a later `rm file` is classified as [deleted] and `update`
-     * commits the deletion. The stat is the analysis's own — the snapshot pair,
-     * when it vouches for this row's content — never a fresh lstat, which would
-     * bind whatever stands at the path now to a verdict from two phases earlier.
+     * commits the deletion. The stat is the analysis's own — the one its comparison
+     * stood on (core/workspace.h workspace_item_t's stat) — never a fresh lstat,
+     * which would bind whatever stands at the path now to a verdict from two
+     * phases earlier.
      *
      * A record of another kind than the row is no record for it either: it is a
      * fact about a node that is gone — Git retyped the name, and the row's own
@@ -2263,12 +2264,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * Division of labor with the earlier flush: the proof of this run's match
      * is the item's own verdict, the one that filed it among the clean
      * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
-     * but the blob's), and workspace_flush above put the pair that proof rests
-     * on where this loop can read it — a slow-path CMP_EQUAL patched onto the
-     * snapshot record, a recordless clean row's record created by the observation
-     * and confirmed in the same flush. A confirmation rewrites neither deployed_at
-     * nor the record's profile, so both remain valid probes here; DB and in-memory
-     * views are kept coherent by workspace_anchor.
+     * but the blob's), and the stat it stood on is the item's too. What this
+     * loop reads of the flush's work is the record alone — a recordless clean
+     * row's, created by the observation in the same flush — and a confirmation
+     * rewrites neither deployed_at nor the record's profile, so both remain valid
+     * probes here; DB and in-memory views are kept coherent by workspace_anchor.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2335,20 +2335,14 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         }
 
         if (!opts->dry_run) {
-            /* The snapshot pair vouches for this row's content on every route a
-             * clean row can arrive by — fast-path hit, slow-path confirmation,
-             * record created and confirmed by the flush — save a record the load
-             * could not confirm under this row, which keeps the pair it had:
-             * one bound to another row, or one of another kind, adopted above.
-             * Content and not bytes: a pair whose kind the row has since left
-             * describes another node, and passing its triple would hand the record
-             * the stat of the wrong one (core/workspace.h workspace_stale). The
-             * gate asks the snapshot itself; NULL writes the record blob-only,
-             * and the next load's slow path confirms. */
-            const state_stat_t *stat =
-                (record && !workspace_stale(file, record)) ? &record->stat : NULL;
-
-            err = workspace_anchor(ws, item, stat, now);
+            /* The stat the load's comparison stood on, the item's
+             * (workspace_item_t's stat): the base's where the fast path matched
+             * it, the look's triple where the slow path read — whatever the record
+             * this write replaces, one the load could confirm nothing onto
+             * included: bound to another row, or of another kind. UNSET where
+             * the read met a second still open, and the next load's slow path
+             * confirms. */
+            err = workspace_anchor(ws, item, &item->stat, now);
             if (err) {
                 /* The present lands whole or ends the run, as the flush's writes
                  * do: the store refused this write before anything on disk moved,

@@ -21,6 +21,7 @@
 
 #define ARENA_DEFAULT_CAPACITY 4096
 #define ARENA_ALIGNMENT        8
+#define ARENA_GROW_MIN         8   /* the fewest entries a growth makes room for */
 
 /* --- Internal types ------------------------------------------------ */
 
@@ -43,6 +44,14 @@ static size_t arena_align(size_t size) {
     if (size > SIZE_MAX - (ARENA_ALIGNMENT - 1)) heap_die(size);
 
     return (size + ARENA_ALIGNMENT - 1) & ~((size_t) ARENA_ALIGNMENT - 1);
+}
+
+/* The bytes `count` entries of `size` take; a product no memory could hold is a
+ * request no allocation meets, and exhaustion. */
+static size_t arena_bytes(size_t count, size_t size) {
+    if (count != 0 && size > SIZE_MAX / count) heap_die(SIZE_MAX);
+
+    return count * size;
 }
 
 /**
@@ -100,10 +109,7 @@ void *arena_alloc(arena_t *arena, size_t size) {
 }
 
 void *arena_calloc(arena_t *arena, size_t count, size_t size) {
-    /* A product no memory could hold is a request no allocation meets. */
-    if (count != 0 && size > SIZE_MAX / count) heap_die(SIZE_MAX);
-
-    size_t total = count * size;
+    size_t total = arena_bytes(count, size);
     void *ptr = arena_alloc(arena, total);
     memset(ptr, 0, total);
     return ptr;
@@ -153,6 +159,27 @@ char *arena_str_format(arena_t *arena, const char *fmt, ...) {
     va_end(args);
 
     return buf;
+}
+
+void *arena_grow(
+    arena_t *arena, void *entries, size_t *capacity, size_t want, size_t size
+) {
+    CHECK_NULL(capacity);
+    if (want <= *capacity) return entries;
+
+    /* Twice the capacity, never fewer than the floor or than asked; a doubling
+     * past SIZE_MAX asks for what was wanted, and arena_bytes judges that. */
+    size_t grown = *capacity > SIZE_MAX / 2 ? want : *capacity * 2;
+    if (grown < want) grown = want;
+    if (grown < ARENA_GROW_MIN) grown = ARENA_GROW_MIN;
+
+    void *larger = arena_alloc(arena, arena_bytes(grown, size));
+    if (*capacity > 0) {
+        memcpy(larger, entries, *capacity * size);
+    }
+
+    *capacity = grown;
+    return larger;
 }
 
 void arena_reset(arena_t *arena) {

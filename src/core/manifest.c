@@ -294,8 +294,8 @@ static error_t *manifest_place(
  * contradicted the rest before either pass resolved anything. And within a pass
  * a name is its own: a tree holds one blob per path, a sheet one item per key.
  *
- * Growth is the spine's abandon-and-realloc idiom. Both strings must be
- * arena-backed by the caller; the entry borrows them for the view's lifetime.
+ * The slice grows in the arena (arena_grow). Both strings must be arena-backed
+ * by the caller; the entry borrows them for the view's lifetime.
  *
  * @param manifest Target view (must not be NULL)
  * @param profile Arena-backed profile name (must not be NULL)
@@ -311,23 +311,10 @@ static error_t *manifest_note_unbound(
     path_kind_t kind,
     arena_t *arena
 ) {
-    if (manifest->unbound_count >= manifest->unbound_capacity) {
-        size_t new_capacity =
-            manifest->unbound_capacity > 0 ? manifest->unbound_capacity * 2 : 8;
-
-        manifest_unbound_claim_t *grown = arena_calloc(
-            arena, new_capacity, sizeof(*grown)
-        );
-        if (!grown) {
-            return ERROR(ERR_MEMORY, "Failed to grow unbound claim list");
-        }
-        memcpy(
-            grown, manifest->unbound,
-            manifest->unbound_count * sizeof(*grown)
-        );
-        manifest->unbound = grown;
-        manifest->unbound_capacity = new_capacity;
-    }
+    manifest->unbound = arena_grow(
+        arena, manifest->unbound, &manifest->unbound_capacity,
+        manifest->unbound_count + 1, sizeof(*manifest->unbound)
+    );
 
     manifest->unbound[manifest->unbound_count++] = (manifest_unbound_claim_t){
         .profile = profile,
@@ -347,7 +334,7 @@ static error_t *manifest_note_unbound(
  * and the content-authority rule settles the one name they can both carry before
  * the contest sees it).
  *
- * Growth is the unbound slice's abandon-and-realloc idiom. Every string must be
+ * The slice grows in the arena, as the unbound one does. Every string must be
  * arena-backed by the caller; the entry borrows them for the view's lifetime.
  *
  * @param manifest Target view (must not be NULL)
@@ -364,20 +351,10 @@ static error_t *manifest_note_unkept(
     const char *kept,
     arena_t *arena
 ) {
-    if (manifest->unkept_count >= manifest->unkept_capacity) {
-        size_t new_capacity =
-            manifest->unkept_capacity > 0 ? manifest->unkept_capacity * 2 : 8;
-
-        manifest_unkept_claim_t *grown = arena_calloc(
-            arena, new_capacity, sizeof(*grown)
-        );
-        if (!grown) {
-            return ERROR(ERR_MEMORY, "Failed to grow unkept claim list");
-        }
-        memcpy(grown, manifest->unkept, manifest->unkept_count * sizeof(*grown));
-        manifest->unkept = grown;
-        manifest->unkept_capacity = new_capacity;
-    }
+    manifest->unkept = arena_grow(
+        arena, manifest->unkept, &manifest->unkept_capacity,
+        manifest->unkept_count + 1, sizeof(*manifest->unkept)
+    );
 
     manifest->unkept[manifest->unkept_count++] = (manifest_unkept_claim_t){
         .profile = profile,

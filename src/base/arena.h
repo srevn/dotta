@@ -83,6 +83,29 @@ char *arena_str_format(arena_t *arena, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
+ * Room for `want` entries in an array the arena holds
+ *
+ * A no-op while want <= *capacity. Otherwise a new array of twice the capacity
+ * — eight at least, and `want` where that is more — is allocated from the arena,
+ * and the old one's *capacity entries are copied into it: at a push the old array
+ * is full, so that is every entry it holds. An arena has no realloc, so the old
+ * array stays the arena's until the arena is freed. The one growth an array in
+ * an arena has: a push asks for count + 1, a reserve for the capacity it names.
+ * A byte count no memory could hold is exhaustion.
+ *
+ * @param arena    Arena the array lives in (must not be NULL)
+ * @param entries  The array: one this arena allocated, *capacity entries long, or
+ *                 NULL when *capacity is 0
+ * @param capacity The array's capacity in entries, updated (must not be NULL)
+ * @param want     The entries the array must hold
+ * @param size     One entry's size in bytes
+ * @return The array: `entries` itself where nothing grew; never NULL
+ */
+void *arena_grow(
+    arena_t *arena, void *entries, size_t *capacity, size_t want, size_t size
+);
+
+/**
  * Reset arena to empty, retaining only the initial block.
  *
  * Frees all expansion blocks and resets the initial block's bump

@@ -39,10 +39,6 @@
  * happens in size_t and the comparison against blob sizes stays warning-clean. */
 #define MAX_DOTTAIGNORE_SIZE ((size_t) 1024 * 1024)   /* 1 MB */
 
-/* Initial profile-cache capacity. Profile counts are almost always single-digit
- * so the cache rarely grows. */
-#define INITIAL_PROFILE_CAPACITY 4
-
 /**
  * Default baseline `.dottaignore` content.
  *
@@ -182,33 +178,6 @@ struct ignore_rules {
     size_t profile_count;
     size_t profile_capacity;
 };
-
-/**
- * Grow the profile cache array if we're at capacity.
- *
- * Arena allocators have no in-place realloc, so growth allocates a larger block
- * and copies. The old block is reclaimed on arena_free.
- */
-static error_t *profile_cache_ensure_capacity(ignore_rules_t *r) {
-    if (r->profile_count < r->profile_capacity) return NULL;
-
-    size_t new_cap = r->profile_capacity
-        ? r->profile_capacity * 2
-        : INITIAL_PROFILE_CAPACITY;
-
-    profile_entry_t *resized = arena_alloc(
-        r->arena, new_cap * sizeof(*resized)
-    );
-    if (!resized) {
-        return ERROR(ERR_MEMORY, "ignore: profile cache allocation failed");
-    }
-    if (r->profile_count > 0) {
-        memcpy(resized, r->profiles, r->profile_count * sizeof(*resized));
-    }
-    r->profiles = resized;
-    r->profile_capacity = new_cap;
-    return NULL;
-}
 
 /**
  * Build a fresh ruleset for `profile` in the builder's arena.
@@ -498,7 +467,10 @@ error_t *ignore_rules_for_profile(
     gitignore_ruleset_t *rs = NULL;
     RETURN_IF_ERROR(build_profile_ruleset(r, key, &rs));
 
-    RETURN_IF_ERROR(profile_cache_ensure_capacity(r));
+    r->profiles = arena_grow(
+        r->arena, r->profiles, &r->profile_capacity, r->profile_count + 1,
+        sizeof(*r->profiles)
+    );
 
     const char *name_copy = arena_strdup(r->arena, key);
     if (!name_copy) {

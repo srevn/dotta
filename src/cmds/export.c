@@ -175,30 +175,16 @@ typedef struct {
 } export_entry_list_t;
 
 /**
- * Append an entry, growing the arena-backed spine geometrically.
- *
- * Abandoned blocks stay in the arena until dispatch teardown — bounded waste,
- * same pattern as core/manifest's precedence view.
+ * Append an entry; the list grows in the arena (arena_grow).
  */
 static error_t *entry_list_append(
     export_entry_list_t *list,
     arena_t *arena,
     const export_entry_t *src
 ) {
-    if (list->count == list->capacity) {
-        size_t new_capacity = list->capacity ? list->capacity * 2 : 64;
-        export_entry_t *grown = arena_calloc(
-            arena, new_capacity, sizeof(*grown)
-        );
-        if (!grown) {
-            return ERROR(ERR_MEMORY, "Failed to grow export entry list");
-        }
-        if (list->count > 0) {
-            memcpy(grown, list->items, list->count * sizeof(*grown));
-        }
-        list->items = grown;
-        list->capacity = new_capacity;
-    }
+    list->items = arena_grow(
+        arena, list->items, &list->capacity, list->count + 1, sizeof(*list->items)
+    );
 
     list->items[list->count++] = *src;
     return NULL;

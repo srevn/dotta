@@ -88,7 +88,6 @@
 #define MAX_PATTERN_LENGTH 4096
 #define MAX_RULES          10000
 #define PATH_STACK_BUFFER  4096
-#define INITIAL_CAPACITY   16
 
 /* Rule flags — module-private. */
 #define GITIGNORE_FLAG_NEGATIVE  (1U << 0)
@@ -111,7 +110,7 @@ struct gitignore_rule {
 
 struct gitignore_ruleset {
     arena_t *arena;                   /* borrowed */
-    gitignore_rule_t *rules;          /* arena-allocated; grown by realloc+copy */
+    gitignore_rule_t *rules;          /* arena-allocated; grown by arena_grow */
     size_t count;
     size_t capacity;
 };
@@ -189,32 +188,18 @@ static size_t unescape_spaces(char *str) {
 
 /* The one way a rule enters a set: the cap, the growth, the copy, the tag. The
  * cap counts rules stored, never lines read — a blank or comment line at index
- * 10 000 must not falsely trip the limit. Arena allocators have no in-place
- * realloc, so growth allocates a larger block and copies; the old block is
- * reclaimed on arena_free. The rule comes by value: the caller's copy, taken
- * before any growth runs, so the block it was read from need not outlive the
- * push. */
+ * 10 000 must not falsely trip the limit. The rule comes by value: the caller's
+ * copy, taken before any growth runs, so the array it was read from — this set's
+ * own, when a set appends itself — need not outlive the push. */
 static error_t *push_rule(
     gitignore_ruleset_t *set, gitignore_rule_t rule, gitignore_origin_t origin
 ) {
     if (set->count >= MAX_RULES)
         return ERROR(ERR_VALIDATION, "gitignore: exceeds %d rules", MAX_RULES);
 
-    if (set->count == set->capacity) {
-        size_t new_cap = set->capacity ? set->capacity * 2 : INITIAL_CAPACITY;
-
-        gitignore_rule_t *resized = arena_alloc(
-            set->arena, new_cap * sizeof(*resized)
-        );
-        if (!resized)
-            return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
-
-        if (set->count > 0)
-            memcpy(resized, set->rules, set->count * sizeof(*resized));
-
-        set->rules = resized;
-        set->capacity = new_cap;
-    }
+    set->rules = arena_grow(
+        set->arena, set->rules, &set->capacity, set->count + 1, sizeof(*set->rules)
+    );
 
     rule.origin = origin;
     set->rules[set->count++] = rule;

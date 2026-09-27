@@ -5,7 +5,6 @@
 #include "sys/passphrase.h"
 
 #include <errno.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +13,7 @@
 
 #include "base/error.h"
 #include "base/secure.h"
+#include "base/terminal.h"
 
 /* Maximum passphrase length — a defensive cap against runaway stdin redirects.
  * Well beyond any human-typed passphrase; trips only on pathological input.
@@ -21,148 +21,12 @@
  * error if they exceed it. */
 #define MAX_PASSPHRASE_LENGTH 4096
 
-/* Signal-handler state (terminal restoration)
- *
- * During the echo-disabled window we catch the four terminating signals whose
- * default action would leave the terminal with echo off if they fired:
- *
- *   SIGINT  (ctrl-c)
- *   SIGTERM (kill)
- *   SIGHUP  (controlling terminal hangup)
- *   SIGQUIT (ctrl-\)
- *
- * Handler runs in an async-signal-safe context — sig_atomic_t loads/stores and
- * the narrow POSIX-defined async-safe syscalls (tcsetattr, signal, raise) are
- * permitted. We park the saved terminal attributes at file scope so the handler
- * can read them without a stack frame lookup; access is gated by a sig_atomic_t
- * flag that is set before the handler is installed and cleared before it is
- * uninstalled.
- *
- * Non-reentrant. A second caller in the same process would overwrite
- * saved_term_for_handler mid-window. Dotta is single-threaded and never prompts
- * twice concurrently, so this is a latent invariant rather than an active
- * constraint.
- */
-
-static struct termios saved_term_for_handler;
-static volatile sig_atomic_t saved_term_active = 0;
-
-/* Signals we catch for terminal restoration. All four default to
- * terminate-the-process, which is exactly the scenario where restoration
- * matters. */
-static const int HANDLED_SIGNALS[] = {
-    SIGINT, SIGTERM, SIGHUP, SIGQUIT,
-};
-#define HANDLED_SIGNALS_COUNT \
-    (sizeof(HANDLED_SIGNALS) / sizeof(HANDLED_SIGNALS[0]))
-
-/* Per-signal prior dispositions captured at install time. Parallel indexed with
- * HANDLED_SIGNALS. `handler_installed[i] == true` iff we actually installed our
- * handler for HANDLED_SIGNALS[i] (false means the parent had SIG_IGN set and we
- * respected that). */
-static struct sigaction saved_dispositions[HANDLED_SIGNALS_COUNT];
-static bool handler_installed[HANDLED_SIGNALS_COUNT];
-
-/**
- * Signal handler — restore the terminal and re-raise with default disposition.
- *
- * Must use only async-signal-safe operations. tcsetattr, signal, and raise are
- * listed as async-signal-safe by POSIX.1-2008.
- *
- * The flag gate handles the brief window between teardown "clear flag" and
- * "uninstall handlers": a signal there enters the handler, sees flag == 0, skips
- * the (already-done) restoration, and falls through to default-raise. Exit status
- * and terminal are both correct.
- */
-static void passphrase_cleanup_on_signal(int sig) {
-    if (saved_term_active) {
-        tcsetattr(STDIN_FILENO, TCSANOW, &saved_term_for_handler);
-        saved_term_active = 0;
-    }
-    /* Reinstall default disposition and re-raise. Using raise() preserves the
-     * standard "killed by signal N" exit status (128 + N) so parent processes
-     * see the true termination cause rather than a synthesized exit(0) or
-     * _exit(N). */
-    signal(sig, SIG_DFL);
-    raise(sig);
-}
-
-/**
- * Install the cleanup handler for each signal in HANDLED_SIGNALS.
- *
- * Skips any signal whose current disposition is SIG_IGN — the parent deliberately
- * chose to ignore it (backgrounded dotta, shell pipeline discipline), and we
- * must not start catching what they asked to be ignored.
- *
- * Preconditions (caller enforces):
- *   - saved_term_for_handler has been populated with the current
- *     (pre-echo-disabled) terminal attributes.
- *   - saved_term_active has already been set to 1, so the handler's flag check
- *     sees an armed state even if the signal fires mid-install.
- *
- * Any partial install (some handlers up, some not) is safe because
- * passphrase_restore_signal_handlers walks handler_installed[] and unwinds only
- * what we actually installed.
- */
-static void passphrase_install_signal_handlers(void) {
-    struct sigaction sa = { 0 };
-    sa.sa_handler = passphrase_cleanup_on_signal;
-    sigemptyset(&sa.sa_mask);
-    /* No SA_RESTART: non-terminating signals (SIGWINCH, SIGCHLD) interrupt fgets
-     * with EINTR, and the EINTR retry loop in passphrase_prompt takes over. The
-     * four signals we catch never return from fgets at all — they default-raise
-     * and terminate inside the handler. */
-    sa.sa_flags = 0;
-
-    for (size_t i = 0; i < HANDLED_SIGNALS_COUNT; i++) {
-        handler_installed[i] = false;
-        memset(&saved_dispositions[i], 0, sizeof(saved_dispositions[i]));
-
-        struct sigaction current;
-        if (sigaction(HANDLED_SIGNALS[i], NULL, &current) != 0) {
-            /* Query failed — leave this signal alone. Non-fatal: worst case, a
-             * fatal signal of this kind during the prompt leaves echo off, which
-             * is the pre-existing behavior we are improving but not guaranteeing
-             * in every edge case. */
-            continue;
-        }
-
-        /* Respect parent-set SIG_IGN. The POSIX-correct check is on sa_handler
-         * even for sa_sigaction-style handlers, because SIG_IGN is a sa_handler
-         * value defined to be mutually exclusive with sa_sigaction. */
-        if (current.sa_handler == SIG_IGN) {
-            continue;
-        }
-
-        if (sigaction(HANDLED_SIGNALS[i], &sa, &saved_dispositions[i]) == 0) {
-            handler_installed[i] = true;
-        }
-    }
-}
-
-/**
- * Restore the signal dispositions captured by passphrase_install_signal_handlers.
- *
- * Must be called AFTER saved_term_active has been cleared, so any straggler signal
- * between flag-clear and sigaction-restore is a handler no-op followed by
- * default-disposition re-raise (correct terminal state, correct exit status).
- */
-static void passphrase_restore_signal_handlers(void) {
-    for (size_t i = 0; i < HANDLED_SIGNALS_COUNT; i++) {
-        if (handler_installed[i]) {
-            sigaction(HANDLED_SIGNALS[i], &saved_dispositions[i], NULL);
-            handler_installed[i] = false;
-        }
-    }
-}
-
 /**
  * Read a passphrase from the user with terminal echo disabled.
  *
- * The contract is the header's. Setup order — save termios → set the flag → install
- * the handlers → disable echo — and teardown order — restore echo → clear the
- * flag → uninstall the handlers — are the signal-handler comment's at file scope:
- * the flag is what makes a signal in either window a no-op plus a default re-raise.
+ * The contract is the header's. Setup order — save termios → arm them → disable
+ * echo — and teardown order — restore echo → disarm — keep a terminating signal
+ * in either window harmless: armed, it puts back settings that are already back.
  */
 error_t *passphrase_prompt(
     const char *prompt,
@@ -177,26 +41,20 @@ error_t *passphrase_prompt(
     struct termios old_term, new_term;
     bool echo_disabled = false;
 
-    /* Arm the terminal-restoration machinery BEFORE disabling echo: save termios
-     * → set flag → install handlers → disable echo. */
+    /* The settings armed BEFORE echo goes off: a terminating signal from here
+     * puts them back (base/terminal.h terminal_arm, main.c's handler). */
     if (is_tty) {
         if (tcgetattr(STDIN_FILENO, &old_term) != 0) {
             return ERROR(ERR_FS, "Failed to get terminal attributes");
         }
 
-        memcpy(&saved_term_for_handler, &old_term, sizeof(old_term));
-        saved_term_active = 1;
-        passphrase_install_signal_handlers();
+        terminal_arm(&old_term);
 
         new_term = old_term;
         new_term.c_lflag &= ~ECHO;
 
         if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) {
-            /* Echo was never disabled. Disarm in teardown order (flag first,
-             * then handlers) so a racing signal during sigaction-restore is a
-             * no-op + default-raise. */
-            saved_term_active = 0;
-            passphrase_restore_signal_handlers();
+            terminal_disarm();   /* echo was never disabled */
             return ERROR(ERR_FS, "Failed to disable echo");
         }
 
@@ -219,16 +77,17 @@ error_t *passphrase_prompt(
     if (!passphrase) {
         if (echo_disabled) {
             tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
-            saved_term_active = 0;
-            passphrase_restore_signal_handlers();
+            terminal_disarm();
         }
         return ERROR(ERR_MEMORY, "Failed to map passphrase buffer");
     }
 
-    /* EINTR retry: non-terminating signals interrupt fgets because we deliberately
-     * did not set SA_RESTART. The stream's error indicator is sticky, so each
-     * attempt starts it clean and the indicator after the loop is the last
-     * attempt's. */
+    /* EINTR retry: a signal whose handler returns interrupts fgets, and the read
+     * is asked again. None does today — the terminating signals end the process
+     * in their handler, and the default-ignored ones (SIGWINCH, SIGCHLD) never
+     * interrupt — so the loop is the read's own robustness. The stream's error
+     * indicator is sticky, so each attempt starts it clean and the indicator
+     * after the loop is the last attempt's. */
     char *result = NULL;
     do {
         clearerr(stdin);
@@ -238,12 +97,11 @@ error_t *passphrase_prompt(
     const bool read_failed = ferror(stdin);
     const int read_errno = errno;  /* before the teardown's own calls move it */
 
-    /* Teardown order: restore echo → clear flag → uninstall handlers. */
+    /* Teardown order: restore echo → disarm. */
     if (echo_disabled) {
         tcsetattr(STDIN_FILENO, TCSANOW, &old_term);
         fprintf(stderr, "\n");  /* the Enter keypress echo was suppressed */
-        saved_term_active = 0;
-        passphrase_restore_signal_handlers();
+        terminal_disarm();
     }
 
     /* Nothing read: end of input (a closed stdin, a pipe that ran out of lines)

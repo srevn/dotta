@@ -7,6 +7,8 @@
 #include "base/terminal.h"
 
 #include <errno.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -87,8 +89,13 @@ error_t *terminal_init(terminal_t **out) {
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
 
+    /* Armed before raw mode goes on: a terminating signal from here puts the
+     * original settings back (terminal_arm). */
+    terminal_arm(&term->orig_termios);
+
     /* Apply raw mode settings */
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) {
+        terminal_disarm();
         free(term);
         return error_from_errno(errno, "failed to enable raw mode");
     }
@@ -103,16 +110,58 @@ void terminal_restore(terminal_t *term) {
         return;
     }
 
-    /* Restore original terminal settings */
+    /* Restore original terminal settings, and disarm them once they are back */
     if (term->raw_mode_enabled) {
         tcsetattr(STDIN_FILENO, TCSAFLUSH, &term->orig_termios);
         term->raw_mode_enabled = false;
+        terminal_disarm();
     }
 
     /* Show cursor in case it was hidden */
     terminal_cursor_show();
 
     free(term);
+}
+
+/* The Armed Settings */
+
+/* What a terminating signal puts back: the settings armed, and whether the cursor
+ * is hidden. Written by the code that changes the terminal and read by a signal
+ * handler, so every flag is a volatile sig_atomic_t and the settings are whole
+ * before the flag that says so (terminal_arm). */
+static struct termios armed_settings;
+static volatile sig_atomic_t armed = 0;
+static volatile sig_atomic_t cursor_hidden = 0;
+
+void terminal_arm(const struct termios *settings) {
+    /* The flag down while the copy is made, and up only once it is whole: a signal
+     * between the two finds nothing armed rather than half a copy. The fences
+     * keep the compiler from moving the copy across either store. */
+    armed = 0;
+    atomic_signal_fence(memory_order_seq_cst);
+    armed_settings = *settings;
+    atomic_signal_fence(memory_order_seq_cst);
+    armed = 1;
+}
+
+void terminal_disarm(void) {
+    armed = 0;
+}
+
+void terminal_restore_armed(void) {
+    /* TCSANOW, never a drain: a handler must not wait on output a stopped terminal
+     * may never take. */
+    if (armed) {
+        (void) tcsetattr(STDIN_FILENO, TCSANOW, &armed_settings);
+        armed = 0;
+    }
+
+    /* Straight to the descriptor: stdio is not async-signal-safe, and what it
+     * holds unflushed dies with the process anyway. */
+    if (cursor_hidden) {
+        (void) write(STDOUT_FILENO, ANSI_CURSOR_SHOW, sizeof(ANSI_CURSOR_SHOW) - 1);
+        cursor_hidden = 0;
+    }
 }
 
 /* Terminal Capabilities */
@@ -149,6 +198,9 @@ bool terminal_is_tty(void) {
 /* Cursor Control */
 
 void terminal_cursor_hide(void) {
+    /* Marked before it is hidden: a signal between the two shows a cursor that
+     * was never hidden, which is harmless. */
+    cursor_hidden = 1;
     fprintf(stdout, ANSI_CURSOR_HIDE);
     fflush(stdout);
 }
@@ -156,6 +208,7 @@ void terminal_cursor_hide(void) {
 void terminal_cursor_show(void) {
     fprintf(stdout, ANSI_CURSOR_SHOW);
     fflush(stdout);
+    cursor_hidden = 0;   /* after: a signal before it shows the cursor twice */
 }
 
 void terminal_cursor_move(int row, int col) {

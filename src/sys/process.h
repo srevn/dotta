@@ -27,20 +27,24 @@
  *   the parent on a broken sink.
  * - SIGCHLD: caller must NOT install a SIGCHLD handler. The implementation uses
  *   waitpid() with default disposition.
- * - The child resets SIGINT/SIGTERM/SIGPIPE/SIGALRM to SIG_DFL and clears its
- *   signal mask before exec — parent handlers do not leak into the new program
- *   image.
+ * - The child resets each terminating signal it finds caught
+ *   (PROCESS_TERMINATING_SIGNALS) to SIG_DFL — one the parent inherited ignored
+ *   stays ignored, as execve keeps it — resets SIGPIPE and SIGALRM, and clears
+ *   its signal mask before exec, so no handler of the parent's runs between fork
+ *   and exec.
  * - The child becomes the invoker for good before exec (identity_drop_child,
  *   sys/identity): under sudo a hook or a script never runs as root. A failure
  *   there is reported like an exec failure, errno over the self-pipe.
  * - Terminating-signal forwarding (PROCESS_PGRP_NEW only): the primitive publishes
  *   the child's pgid into the volatile sig_atomic_t global `active_child_pgid`
  *   (its own, defined in process.c) for the duration of the child's lifetime,
- *   and clears it on every exit path. The host program's SIGINT/SIGTERM handler
- *   must read this and forward via kill(-pgid, signum) before its own cleanup,
- *   so terminal Ctrl+C kills the parent and the spawned child group atomically.
- *   PROCESS_PGRP_SHARED children leave the global at zero — the kernel delivers
- *   terminal signals to the entire foreground process group directly.
+ *   and clears it on every exit path. The host program's handler for
+ *   PROCESS_TERMINATING_SIGNALS must read this and forward via kill(-pgid, signum)
+ *   before it re-raises, so terminal Ctrl+C kills the parent and the spawned
+ *   child group atomically — and a hangup or a kill does too, which the kernel
+ *   never delivers to a group of the child's own. PROCESS_PGRP_SHARED children
+ *   leave the global at zero — the kernel delivers terminal signals to the entire
+ *   foreground process group directly.
  */
 
 #ifndef DOTTA_PROCESS_H
@@ -53,13 +57,26 @@
 
 /**
  * Pgid of the currently running PROCESS_PGRP_NEW child, or 0 when no such child
- * is active. Defined in process.c and read by the host program's SIGINT/SIGTERM
+ * is active. Defined in process.c and read by the host program's terminating-signal
  * handler — see the "Threading and signal model" comment above for the contract.
  *
  * Volatile sig_atomic_t for async-signal-safe access from a handler (POSIX
  * requirement).
  */
 extern volatile sig_atomic_t active_child_pgid;
+
+/**
+ * The terminating signals: those whose default action ends dotta, which a hook
+ * must not outlive and a changed terminal must not survive
+ *
+ * An initializer for an int array. The host program catches each (main.c
+ * terminating_signal: the armed terminal put back, the signal forwarded to
+ * active_child_pgid's group, then re-raised), and the child resets each it finds
+ * caught before exec. A signal the host inherited ignored stays ignored in both
+ * — a backgrounded dotta, nohup. SIGSEGV and SIGBUS are not here: the debug build's
+ * AddressSanitizer reports them, and a handler of dotta's would swallow the report.
+ */
+#define PROCESS_TERMINATING_SIGNALS { SIGINT, SIGTERM, SIGHUP, SIGQUIT }
 
 /**
  * Stdin policy for the spawned child.

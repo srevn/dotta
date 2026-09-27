@@ -19,19 +19,15 @@
  * by secure_free — and is not the allocator's: callers MUST NOT free it.
  *
  * Terminal safety (passphrase_prompt only):
- *   During the echo-disabled window the function installs short-lived signal
- *   handlers for SIGINT, SIGTERM, SIGHUP, and SIGQUIT — the four terminating
- *   signals whose default action would leave the terminal with echo off if they
- *   fired while the prompt was active. The handler restores the saved terminal
- *   attributes and re-raises the signal with its default disposition, so the
- *   process terminates normally and the user's shell sees the standard 128+N
- *   exit status.
+ *   During the echo-disabled window the saved settings are armed (base/terminal.h
+ *   terminal_arm). A terminating signal — the ones whose default action would
+ *   leave the terminal with echo off (sys/process.h PROCESS_TERMINATING_SIGNALS)
+ *   — meets main.c's handler, which puts the armed settings back and re-raises
+ *   with the default disposition, so the process terminates normally and the
+ *   user's shell sees the standard 128+N exit status. A signal the parent process
+ *   set to SIG_IGN stays ignored.
  *
- *   Signals that the parent process had set to SIG_IGN are honored (not hooked).
- *   This preserves the "inherit parent's discipline" convention for backgrounded
- *   dotta and shell pipelines.
- *
- * Non-reentrant: the terminal-restoration state lives at file scope, so a single
+ * Non-reentrant: the armed settings are one slot (base/terminal), so a single
  * process must not call passphrase_prompt concurrently (from multiple threads
  * or recursively). Dotta is single-threaded.
  */
@@ -59,10 +55,9 @@
  *     A silent truncation would hand the caller a different passphrase than what
  *     the user intended to type.
  *
- * EINTR retry: fgets is retried on non-terminating signal interrupts (SIGWINCH
- * during terminal resize, SIGCHLD, etc.) so transient signals do not force the
- * user to re-enter. The terminating signals we install handlers for re-raise
- * with default disposition instead of returning.
+ * EINTR retry: fgets is retried when a signal whose handler returns interrupts
+ * it, so a transient signal never forces the user to re-enter. The terminating
+ * signals end the process instead of returning.
  *
  * The failure's line is the cause alone ("End of input", "Passphrase cannot be
  * empty", the errno's word), so the caller that folds it into its own sentence

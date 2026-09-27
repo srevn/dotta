@@ -98,6 +98,9 @@ typedef enum {
  * - Disable signals (Ctrl+C, Ctrl+Z)
  * - Read input byte-by-byte
  *
+ * The saved settings are armed before raw mode goes on (terminal_arm), so a
+ * terminating signal puts them back.
+ *
  * Always call terminal_restore() when done, even on errors.
  *
  * @param out Terminal state (must not be NULL, caller must free)
@@ -108,11 +111,41 @@ error_t *terminal_init(terminal_t **out);
 /**
  * Restore terminal to original state
  *
- * Restores settings saved by terminal_init(). Safe to call multiple times.
+ * Restores settings saved by terminal_init(), and disarms them once they are
+ * back. Safe to call multiple times.
  *
  * @param term Terminal state (can be NULL)
  */
 void terminal_restore(terminal_t *term);
+
+/**
+ * Arm the settings a terminating signal puts back
+ *
+ * Whoever changes the terminal's settings arms the ones to restore, before the
+ * change — the editor's raw mode (terminal_init) and the passphrase prompt's
+ * hidden echo (sys/passphrase.c passphrase_prompt) — and disarms once they are
+ * back. One slot: dotta changes one terminal at a time. Read by main.c's handler,
+ * terminating_signal, through terminal_restore_armed.
+ *
+ * @param settings The settings to put back (must not be NULL; copied)
+ */
+void terminal_arm(const struct termios *settings);
+
+/**
+ * Disarm the settings terminal_arm armed: they are back, and a terminating signal
+ * has nothing to restore
+ */
+void terminal_disarm(void);
+
+/**
+ * Put back what dotta changed of the terminal: the armed settings, and the cursor
+ * terminal_cursor_hide hid
+ *
+ * For a signal handler: tcsetattr(3) and write(2) alone, both async-signal-safe,
+ * and every flag it reads a volatile sig_atomic_t. Disarms, and forgets the cursor,
+ * so a second call is a no-op.
+ */
+void terminal_restore_armed(void);
 
 /**
  * Get terminal size
@@ -133,6 +166,9 @@ bool terminal_is_tty(void);
 
 /**
  * Hide cursor
+ *
+ * Until terminal_cursor_show, a terminating signal shows it again
+ * (terminal_restore_armed).
  */
 void terminal_cursor_hide(void);
 

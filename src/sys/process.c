@@ -55,11 +55,11 @@
 
 /* The pgid of the PROCESS_PGRP_NEW child process_run() is running, zero otherwise:
  * published before the parent's own setpgid and cleared on every exit path below.
- * The host program's SIGINT/SIGTERM handler reads it through the declaration in
- * process.h and forwards the signal to the group, so a Ctrl+C kills dotta and
- * the spawned hook atomically rather than orphaning the hook. PROCESS_PGRP_SHARED
- * children leave it at zero — the kernel already delivers terminal signals to
- * the whole foreground group. */
+ * The host program's terminating-signal handler reads it through the declaration
+ * in process.h and forwards the signal to the group, so a Ctrl+C kills dotta
+ * and the spawned hook atomically rather than orphaning the hook.
+ * PROCESS_PGRP_SHARED children leave it at zero — the kernel already delivers
+ * terminal signals to the whole foreground group. */
 volatile sig_atomic_t active_child_pgid = 0;
 
 /**
@@ -330,11 +330,19 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
          * exit) and _exit(126|127).
          */
 
-        /* Reset signal disposition so parent's SIGINT handler does not run between
-         * fork and exec. execve() itself resets non-ignored handlers to SIG_DFL,
-         * but we reset early to cover the fork→exec window. */
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTERM, SIG_DFL);
+        /* No handler of the parent's runs between fork and exec: execve() resets
+         * a caught signal to SIG_DFL itself, and this covers the window before
+         * it the way execve() would — a terminating signal the parent catches
+         * goes back to its default, and one it inherited ignored stays ignored.
+         * SIGPIPE is dotta's own ignore (main.c), never the child's. */
+        static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
+        for (size_t i = 0; i < sizeof(terminating) / sizeof(*terminating); i++) {
+            struct sigaction current;
+            if (sigaction(terminating[i], NULL, &current) == 0 &&
+                current.sa_handler != SIG_IGN) {
+                signal(terminating[i], SIG_DFL);
+            }
+        }
         signal(SIGPIPE, SIG_DFL);
         signal(SIGALRM, SIG_DFL);
         sigset_t empty;

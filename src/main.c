@@ -16,6 +16,7 @@
 #include "base/args.h"
 #include "base/error.h"
 #include "base/output.h"
+#include "base/terminal.h"
 #include "sys/gitops.h"
 #include "sys/identity.h"
 #include "sys/process.h"
@@ -424,12 +425,14 @@ static int run_spec(
 }
 
 /**
- * Signal handler for SIGINT/SIGTERM
+ * The handler of a terminating signal (sys/process.h PROCESS_TERMINATING_SIGNALS)
  *
- * Forwards the signal to any active child process group — sys/process.h's
- * active_child_pgid, published by process_run() while a PROCESS_PGRP_NEW child
- * is alive, so a hook dies atomically with dotta — and re-raises with the default
- * disposition so the kernel can terminate the process.
+ * Puts back what dotta changed of the terminal — the editor's raw mode, the
+ * passphrase prompt's hidden echo, a hidden cursor (base/terminal.h
+ * terminal_restore_armed) — forwards the signal to any active child process group
+ * — sys/process.h's active_child_pgid, published by process_run() while a
+ * PROCESS_PGRP_NEW child is alive, so a hook dies atomically with dotta — and
+ * re-raises with the default disposition so the kernel can terminate the process.
  *
  * No resource cleanup runs here by design. Signal handlers must stay AS-safe
  * per POSIX SUSv4 §2.4.3 — which rules out malloc/free (needed by libgit2 teardown)
@@ -440,12 +443,16 @@ static int run_spec(
  * and no ref (sys/stage), and SQLite WAL mode auto-rolls-back any in-flight
  * transaction.
  *
- * AS-safe primitives used: kill(2), signal(2), raise(3) per SUSv4 §2.4.3. Reading
- * volatile sig_atomic_t is atomic by definition.
+ * AS-safe primitives used: tcsetattr(3), write(2), kill(2), signal(2), raise(3)
+ * per SUSv4 §2.4.3. Reading volatile sig_atomic_t is atomic by definition.
  */
-static void signal_cleanup_handler(int signum) {
-    /* Forward first, so the child group starts dying even if the default
-     * disposition takes non-trivial time to kick in. */
+static void terminating_signal(int signum) {
+    /* The terminal first: whatever follows, the user's shell gets back the settings
+     * it lent, and a cursor it can see. */
+    terminal_restore_armed();
+
+    /* Forward next, so the child group starts dying even if the default disposition
+     * takes non-trivial time to kick in. */
     sig_atomic_t cpgid = active_child_pgid;
     if (cpgid > 0) {
         (void) kill(-(pid_t) cpgid, signum);
@@ -522,12 +529,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Install signal handlers so child process groups (spawned hooks) get forwarded
-     * terminal signals atomically with dotta. Keymgr teardown is command-scoped
-     * and happens via keymgr_free on the dispatch return path, not here — see
-     * signal_cleanup_handler. */
-    signal(SIGINT, signal_cleanup_handler);   /* Ctrl+C */
-    signal(SIGTERM, signal_cleanup_handler);  /* kill command */
+    /* Install the terminating signals' handler, so a changed terminal is put
+     * back and a child process group (a spawned hook) dies atomically with dotta.
+     * Keymgr teardown is command-scoped and happens via keymgr_free on the dispatch
+     * return path, not here — see terminating_signal. The handler runs once:
+     * every terminating signal waits while it does. */
+    static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
+    struct sigaction handler = { 0 };
+    handler.sa_handler = terminating_signal;
+    sigemptyset(&handler.sa_mask);
+    for (size_t i = 0; i < sizeof(terminating) / sizeof(*terminating); i++) {
+        sigaddset(&handler.sa_mask, terminating[i]);
+    }
+    for (size_t i = 0; i < sizeof(terminating) / sizeof(*terminating); i++) {
+        /* A signal the parent set to SIG_IGN stays ignored — a backgrounded dotta,
+         * nohup — as it does in a child (sys/process), and one whose disposition
+         * cannot be read is left as it stands. The check is on sa_handler even
+         * for a sa_sigaction-style disposition: SIG_IGN is a sa_handler value,
+         * exclusive of sa_sigaction. */
+        struct sigaction current;
+        if (sigaction(terminating[i], NULL, &current) != 0 ||
+            current.sa_handler == SIG_IGN) {
+            continue;
+        }
+        (void) sigaction(terminating[i], &handler, NULL);
+    }
 
     /* Ignore SIGPIPE so writes to broken pipes return EPIPE instead of killing
      * dotta. Required for any code path that streams output to a caller-controlled

@@ -10,8 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "base/error.h"
-
 bool str_equal(const char *a, const char *b) {
     return a == b || (a && b && strcmp(a, b) == 0);
 }
@@ -172,18 +170,4 @@ char *str_format(const char *fmt, ...) {
     va_end(args);
 
     return result;
-}
-
-error_t *str_dup(const char *str, char **out) {
-    CHECK_NULL(str);
-    CHECK_NULL(out);
-
-    *out = strdup(str);
-    if (!*out) {
-        return error_create(
-            ERR_MEMORY, "Failed to duplicate string"
-        );
-    }
-
-    return NULL;
 }

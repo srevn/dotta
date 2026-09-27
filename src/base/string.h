@@ -109,15 +109,6 @@ char *str_join(const char *const *strings, size_t count, const char *delimiter);
 char *str_format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /**
- * Duplicate string (like strdup but with error handling)
- *
- * @param str String to duplicate
- * @param out Output pointer for duplicated string
- * @return Error or NULL on success
- */
-error_t *str_dup(const char *str, char **out);
-
-/**
  * RAII cleanup for strings
  */
 static inline void cleanup_string(char **str) {

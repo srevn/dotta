@@ -161,15 +161,16 @@ void error_print(const error_t *err, FILE *stream);
 /**
  * End the run: the report flushed, the terminal given back, one line, abort(3)
  *
- * The one way dotta ends a run of itself, for what no caller could answer: a
- * contract broken (CHECK_ARG below: "BUG: <file>:<line>: <what>"). The line is
- * formatted on the stack and written with write(2), so nothing on the way to
- * the death allocates, and a line past 1 KiB is cut. It lands after what the
- * run printed — stdout is flushed first, and main.c line-buffers it — and on
- * the terminal the user lent: the settings dotta armed are put back first, and
- * a hidden cursor shown (base/terminal.h terminal_restore_armed). abort(3) raises
- * SIGABRT, a terminating signal (sys/process.h PROCESS_TERMINATING_SIGNALS), so
- * a hook dies with the run, and the run's status is 134.
+ * The one way dotta ends a run of itself, for what no caller could answer, and
+ * its two reporters each spell their own line: a contract broken (CHECK_ARG below)
+ * and exhaustion (base/heap.h heap_die). The line is formatted on the stack and
+ * written with write(2), so nothing on the way to the death allocates — exhaustion
+ * may be why the run is dying — and a line past 1 KiB is cut. It lands after
+ * what the run printed — stdout is flushed first, and main.c line-buffers it —
+ * and on the terminal the user lent: the settings dotta armed are put back first,
+ * and a hidden cursor shown (base/terminal.h terminal_restore_armed). abort(3)
+ * raises SIGABRT, a terminating signal (sys/process.h PROCESS_TERMINATING_SIGNALS),
+ * so a hook dies with the run, and the run's status is 134.
  *
  * @param fmt Format string (printf-style) for the line, without its newline
  * @param ... Format arguments

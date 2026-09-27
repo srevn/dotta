@@ -39,13 +39,11 @@
 /**
  * Error structure (opaque)
  *
- * Contains error code, message, source location, and optional cause.
+ * Contains error code, message, and optional cause.
  */
 struct error {
     error_code_t code;
     char *message;
-    const char *file;
-    int line;
     error_t *cause;  /* Wrapped error (can be NULL) */
 };
 
@@ -58,24 +56,6 @@ struct error {
  * @return Newly allocated error (must be freed with error_free)
  */
 error_t *error_create(error_code_t code, const char *fmt, ...);
-
-/**
- * Create error with source location
- *
- * @param code Error code
- * @param file Source file
- * @param line Line number
- * @param fmt Format string
- * @param ... Format arguments
- * @return Newly allocated error
- */
-error_t *error_create_with_location(
-    error_code_t code,
-    const char *file,
-    int line,
-    const char *fmt,
-    ...
-);
 
 /**
  * Wrap an existing error with additional context
@@ -182,9 +162,9 @@ void error_print(const error_t *err, FILE *stream);
  * Convenience macros
  */
 
-/* Create error with source location */
+/* Create error (error_create) */
 #define ERROR(code, ...) \
-    error_create_with_location(code, __FILE__, __LINE__, __VA_ARGS__)
+    error_create(code, __VA_ARGS__)
 
 /* Return if expression produces error */
 #define RETURN_IF_ERROR(expr) do { \

@@ -19,8 +19,6 @@
 static error_t oom_sentinel = {
     .code    = ERR_MEMORY,
     .message = (char *) "Out of memory",
-    .file    = NULL,
-    .line    = 0,
     .cause   = NULL
 };
 
@@ -29,8 +27,6 @@ static error_t oom_sentinel = {
  */
 static error_t *error_vcreate(
     error_code_t code,
-    const char *file,
-    int line,
     const char *fmt,
     va_list args
 ) {
@@ -40,8 +36,6 @@ static error_t *error_vcreate(
     }
 
     err->code = code;
-    err->file = file;
-    err->line = line;
     err->cause = NULL;
 
     /* Format message */
@@ -69,21 +63,7 @@ static error_t *error_vcreate(
 error_t *error_create(error_code_t code, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(code, NULL, 0, fmt, args);
-    va_end(args);
-    return err;
-}
-
-error_t *error_create_with_location(
-    error_code_t code,
-    const char *file,
-    int line,
-    const char *fmt,
-    ...
-) {
-    va_list args;
-    va_start(args, fmt);
-    error_t *err = error_vcreate(code, file, line, fmt, args);
+    error_t *err = error_vcreate(code, fmt, args);
     va_end(args);
     return err;
 }
@@ -95,7 +75,7 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(cause->code, NULL, 0, fmt, args);
+    error_t *err = error_vcreate(cause->code, fmt, args);
     va_end(args);
 
     if (err == &oom_sentinel) {
@@ -134,9 +114,7 @@ error_code_t error_code_from_errno(int errno_val) {
 error_t *error_from_errno(int errno_val, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    error_t *err = error_vcreate(
-        error_code_from_errno(errno_val), NULL, 0, fmt, args
-    );
+    error_t *err = error_vcreate(error_code_from_errno(errno_val), fmt, args);
     va_end(args);
 
     /* The sentinel is static and not ours to write. */

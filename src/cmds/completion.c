@@ -135,7 +135,9 @@ void completion_files(
 ) {
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
-    if (repo == NULL) return;
+    /* The view needs both, and a tolerant open (runtime.h) may leave either
+     * NULL: no store here, or a database that would not load. */
+    if (repo == NULL || state == NULL) return;
 
     /* The full view per request is priced and fine: ~10 ms end-to-end for the
      * whole `dotta __complete` invocation (process start included) on a 4-profile

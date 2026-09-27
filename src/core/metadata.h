@@ -739,13 +739,9 @@ error_t *metadata_load_from_tree(
  * no line to print.
  *
  * @param metadata Metadata to serialize (must not be NULL)
- * @param out JSON buffer (must not be NULL, caller must free with buffer_deinit)
- * @return Error or NULL on success
+ * @return The JSON document (the caller frees it with buffer_deinit)
  */
-error_t *metadata_to_json(
-    const metadata_t *metadata,
-    buffer_t *out
-);
+buffer_t metadata_to_json(const metadata_t *metadata);
 
 /**
  * Parse metadata from JSON string

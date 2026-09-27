@@ -4,17 +4,20 @@
  * Dotfile manager using git branches as profiles.
  */
 
+#include <cJSON.h>
 #include <git2.h>
 #include <runtime.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <tomlc17.h>
 #include <types.h>
 
 #include "base/arena.h"
 #include "base/args.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/terminal.h"
 #include "sys/gitops.h"
@@ -495,6 +498,20 @@ int main(int argc, char **argv) {
         case ARGS_ROOT_COMMAND:
             break;
     }
+
+    /* cJSON and tomlc17, compiled into dotta, allocate from its heap, which dies
+     * rather than answer NULL (base/heap.h): a NULL from either is then its input's
+     * — a malformed sheet, a malformed configuration — never exhaustion read as
+     * one, and core/metadata.c metadata_to_json checks no node it builds. libgit2
+     * and SQLite are linked, name their exhaustion in their own error class,
+     * and keep their allocators. Under a hook cJSON has no realloc, so a print
+     * grows by copying, geometrically; a sheet is small. Installed before the
+     * first parse: config_load below, the sheets under dispatch. */
+    cJSON_InitHooks(&(cJSON_Hooks){ .malloc_fn = heap_alloc, .free_fn = free });
+    toml_option_t toml_option = toml_default_option();
+    toml_option.mem_realloc = heap_realloc;
+    toml_option.mem_free = free;
+    toml_set_option(toml_option);
 
     /* The identity of the run, before anything reads HOME: libgit2 guesses its
      * global config path from $HOME at init, and the config path below is resolved

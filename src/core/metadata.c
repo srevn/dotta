@@ -951,44 +951,22 @@ static int item_key_cmp(const void *a, const void *b) {
  * One "items" array, key-ordered, each object carrying its "kind" discriminator
  * and then only what the item claims.
  */
-error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
+buffer_t metadata_to_json(const metadata_t *metadata) {
     CHECK_NULL(metadata);
-    CHECK_NULL(out);
 
-    *out = (buffer_t){ 0 };
-
-    error_t *err = NULL;
-    cJSON *root = NULL;
-    cJSON *items_array = NULL;
-    const metadata_item_t **sorted = NULL;
-    char *json_str = NULL;
-    buffer_t buf = BUFFER_INIT;
-
-    /* Create root object */
-    root = cJSON_CreateObject();
-    if (!root) {
-        err = ERROR(ERR_MEMORY, "Failed to create JSON root object");
-        goto cleanup;
-    }
-
-    /* Add version */
-    if (!cJSON_AddNumberToObject(root, "version", METADATA_VERSION)) {
-        err = ERROR(ERR_MEMORY, "Failed to add version to JSON");
-        goto cleanup;
-    }
-
-    /* Create items array */
-    items_array = cJSON_CreateArray();
-    if (!items_array) {
-        err = ERROR(ERR_MEMORY, "Failed to create items array");
-        goto cleanup;
-    }
+    /* Every node is cJSON's, and cJSON allocates from the heap that cannot fail
+     * (the hooks src/main.c main installs), so no node below is refused: an add
+     * refuses only a NULL argument, and none stands here. */
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "version", METADATA_VERSION);
+    cJSON *items_array = cJSON_CreateArray();
 
     /* Serialize in key order — a write-side norm only (the parser accepts any
      * order, so a hand-edit cannot brick on placement), buying byte-determinism
      * across machines: sync's merge then conflicts only on genuine same-path
      * edits, never on capture-order divergence. The sort is over a transient
      * copy of the spine; the collection's insertion order is untouched. */
+    const metadata_item_t **sorted = NULL;
     if (metadata->count > 0) {
         sorted = heap_calloc(metadata->count, sizeof(*sorted));
         memcpy(sorted, metadata->items, metadata->count * sizeof(*sorted));
@@ -997,66 +975,36 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
 
     for (size_t i = 0; i < metadata->count; i++) {
         const metadata_item_t *item = sorted[i];
-
-        /* Create item object */
         cJSON *item_obj = cJSON_CreateObject();
-        if (!item_obj) {
-            err = ERROR(ERR_MEMORY, "Failed to create item object");
-            goto cleanup;
-        }
 
         /* Add kind discriminator */
         const char *kind_str = item->kind == PATH_KIND_DIRECTORY ? "directory" : "file";
-        if (!cJSON_AddStringToObject(item_obj, "kind", kind_str)) {
-            cJSON_Delete(item_obj);
-            err = ERROR(ERR_MEMORY, "Failed to add kind to item object");
-            goto cleanup;
-        }
+        cJSON_AddStringToObject(item_obj, "kind", kind_str);
 
         /* Add key (storage_path for both files and directories) */
-        if (!cJSON_AddStringToObject(item_obj, "key", item->key)) {
-            cJSON_Delete(item_obj);
-            err = ERROR(ERR_MEMORY, "Failed to add key to item object");
-            goto cleanup;
-        }
+        cJSON_AddStringToObject(item_obj, "key", item->key);
 
         /* Add mode — a claimed one; an unclaimed one has no line to print */
         if (item->mode != MODE_UNCLAIMED) {
             char mode_str[8];
             snprintf(mode_str, sizeof(mode_str), "%04o", (unsigned) item->mode);
-            if (!cJSON_AddStringToObject(item_obj, "mode", mode_str)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add mode to item object");
-                goto cleanup;
-            }
+            cJSON_AddStringToObject(item_obj, "mode", mode_str);
         }
 
         /* Add optional owner (present iff the item claims one) */
         if (item->owner) {
-            if (!cJSON_AddStringToObject(item_obj, "owner", item->owner)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add owner to item object");
-                goto cleanup;
-            }
+            cJSON_AddStringToObject(item_obj, "owner", item->owner);
         }
 
         /* Add optional group (present iff the item claims one) */
         if (item->group) {
-            if (!cJSON_AddStringToObject(item_obj, "group", item->group)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add group to item object");
-                goto cleanup;
-            }
+            cJSON_AddStringToObject(item_obj, "group", item->group);
         }
 
         /* Add encrypted flag iff true — false for DIRECTORY by construction at
          * both boundaries, so no kind test stands here */
         if (item->encrypted) {
-            if (!cJSON_AddBoolToObject(item_obj, "encrypted", true)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add encrypted flag to item object");
-                goto cleanup;
-            }
+            cJSON_AddBoolToObject(item_obj, "encrypted", true);
         }
 
         /* And tracked, the other flag one kind carries: false for FILE by the
@@ -1064,51 +1012,30 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
          * only passes through it. The two are mutually exclusive, so they print
          * in one place. */
         if (item->tracked) {
-            if (!cJSON_AddBoolToObject(item_obj, "tracked", true)) {
-                cJSON_Delete(item_obj);
-                err = ERROR(ERR_MEMORY, "Failed to add tracked flag to item object");
-                goto cleanup;
-            }
+            cJSON_AddBoolToObject(item_obj, "tracked", true);
         }
 
-        /* Add item object to items array (ownership transferred to array). A
-         * NULL array or item is cJSON's only refusal here, and neither can stand,
-         * so there is nothing to check. */
+        /* Add item object to items array (ownership transferred to array) */
         cJSON_AddItemToArray(items_array, item_obj);
     }
-
-    /* Add items array to root (ownership transferred to root). This one duplicates
-     * the key, so unlike the array above it can refuse — and a dropped refusal
-     * would leak the array, print a claimless document, and report success: a
-     * sheet our own parser then refuses to read. */
-    if (!cJSON_AddItemToObject(root, "items", items_array)) {
-        err = ERROR(ERR_MEMORY, "Failed to add items array to JSON");
-        goto cleanup;
-    }
-    items_array = NULL;  /* Owned by root now */
-
-    /* Convert to formatted string */
-    json_str = cJSON_Print(root);
-    if (!json_str) {
-        err = ERROR(ERR_MEMORY, "Failed to print JSON");
-        goto cleanup;
-    }
-
-    /* Create buffer from string */
-    buffer_append_string(&buf, json_str);
-
-    /* Success - transfer to caller */
-    *out = buf;
-    buf = (buffer_t){ 0 };
-
-cleanup:
-    buffer_deinit(&buf);
     free(sorted);
-    if (json_str) cJSON_free(json_str);
-    if (items_array) cJSON_Delete(items_array);  /* Only if not added to root */
-    if (root) cJSON_Delete(root);
 
-    return err;
+    /* Add items array to root (ownership transferred to root) */
+    cJSON_AddItemToObject(root, "items", items_array);
+
+    /* The formatted document, copied into the buffer the caller owns. cJSON counts
+     * a document's bytes in an int, so a print past INT_MAX is the one refusal
+     * left to it: a count it cannot hold, exhaustion as a count that wraps is
+     * (base/heap.h heap_die). */
+    char *json_str = cJSON_Print(root);
+    if (!json_str) heap_die(SIZE_MAX);
+
+    buffer_t out = BUFFER_INIT;
+    buffer_append_string(&out, json_str);
+    cJSON_free(json_str);
+    cJSON_Delete(root);
+
+    return out;
 }
 
 /**
@@ -1509,13 +1436,9 @@ error_t *metadata_save_to_stage(
     CHECK_NULL(stage);
     CHECK_NULL(metadata);
 
-    buffer_t json = BUFFER_INIT;
-    error_t *err = metadata_to_json(metadata, &json);
-    if (err) {
-        return error_wrap(err, "Failed to convert metadata to JSON");
-    }
+    buffer_t json = metadata_to_json(metadata);
 
-    err = stage_put(
+    error_t *err = stage_put(
         stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB, NULL
     );
     buffer_deinit(&json);

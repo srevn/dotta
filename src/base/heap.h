@@ -10,7 +10,9 @@
  * allocation's.
  *
  * Beside base/arena.h, whose bytes go only with their arena: these are released
- * one by one, with free(3), by whoever holds them.
+ * one by one, with free(3), by whoever holds them. cJSON and tomlc17 allocate
+ * from here too (the hooks src/main.c main installs), so a NULL either answers
+ * is its input's, never exhaustion.
  */
 
 #ifndef DOTTA_HEAP_H
@@ -23,7 +25,9 @@
  *
  * "fatal: out of memory, malloc failed (tried to allocate <size> bytes)", through
  * base/error.h error_die. The one reporter of dotta's exhaustion: every allocator
- * here, and base/arena's blocks and its byte counts that cannot be represented.
+ * here, and every byte count no allocation meets, wherever it is counted — one
+ * that wraps, or one past what a library can count (core/metadata.c
+ * metadata_to_json's print).
  *
  * @param size The bytes that could not be allocated; SIZE_MAX for a count no
  *             size can hold

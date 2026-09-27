@@ -1676,11 +1676,9 @@ static error_t *apply_write_record(
      *                             no stat
      *   converged in place        dotta did not make it, and it was present at
      *   (a fix)                   load, so the flush has already observed any
-     *                             that had no record and learned each claim disk
-     *                             already stood on, and the pass after it observed
-     *                             any whose record described another kind of
-     *                             node in that record's place
-     *                             (workspace_observe_retyped): a learning of
+     *                             that had no record, or one of another kind of
+     *                             node, in that record's place, and learned each
+     *                             claim disk already stood on: a learning of
      *                             the claims the fix set that the record still
      *                             lacks, never an ownership event — anchoring
      *                             it as owned would set deployed_at on a directory
@@ -1740,9 +1738,8 @@ static error_t *apply_write_record(
             /* Whether the record follows the row: the acknowledgement loop's
              * own test, asked of the whole binding — a record dotta owns, bound
              * to another row, another profile's or another name of this one's.
-             * The loop's kind rung is a preview's: in a run, the pass after the
-             * flush has already observed away every record of another kind under
-             * a standing directory (workspace_observe_retyped). The count above
+             * A fix's record is of the directory's kind, the flush having written
+             * the observation in place of one of another kind. The count above
              * is the binding's profile half, the one the screens name. */
             const state_record_t *record = item->record;
             bool follows = record && record->deployed_at > 0 &&
@@ -1916,14 +1913,18 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         goto cleanup;
     }
 
-    /* What the load owes the record — its observations, its confirmations, the
-     * voids of orders the view took back (core/workspace.h workspace_flush). A
-     * run's land in its dispatch transaction, which the checkpoint below commits
-     * with the rest of the present; a preview holds none, so the flush takes
-     * and commits a scoped one of its own once it owes anything, exactly as it
-     * does for status, diff, sync and update (state_locked, in core/state.h).
-     * Each owed item holds the record the store holds once the flush has run,
-     * so downstream readers in this run see DB and memory agreeing.
+    /* What the load owes the record — its observations, a directory's or a file's
+     * in the place of a record whose node the look found gone among them, its
+     * confirmations, the voids of orders the view took back (core/workspace.h
+     * workspace_flush). A run's land in its dispatch transaction, which the
+     * checkpoint below commits with the rest of the present, and each owed item
+     * holds the record its write made from the flush's end — so no loop below
+     * meets a record of another kind under a clean item: the acknowledgement
+     * owns no directory the user made where dotta's file was, and a fix learns
+     * onto the observation. A preview holds none, so the flush takes and commits
+     * a scoped one of its own once it owes anything, exactly as it does for status,
+     * diff, sync and update (state_locked, in core/state.h), and one refused
+     * publishes nothing: every item holds what the load read.
      *
      * The failure goes with the transaction. A run's flush writes into the one
      * the run will commit, so a failure there poisons everything it has left to
@@ -1932,20 +1933,6 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * does. */
     err = workspace_flush(ws);
     if (err) goto cleanup;
-
-    /* The one observation the flush cannot make: a directory standing where its
-     * record describes another kind of node — a file, a link — whose record holds
-     * the place the observation would take. A run observes the directory over
-     * it, never owned (workspace_observe_retyped); a preview writes nothing,
-     * and the next run makes it. Ahead of the plan, so no loop below meets such
-     * a record in a run: the acknowledgement owns no directory the user made
-     * where dotta's file was, and a fix learns onto the observation. */
-    if (!opts->dry_run) {
-        err = workspace_observe_retyped(ws);
-        if (err) {
-            goto cleanup;
-        }
-    }
 
     /* Both kinds: a scope of tracked directories alone is a workspace, not an
      * empty one. */
@@ -2240,10 +2227,13 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      *
      * A record of another kind than the row is no record for it either: it is a
      * fact about a node that is gone — Git retyped the name, and the row's own
-     * kind stands there clean — so the load learned nothing into it
-     * (core/workspace.c workspace_analyze_file), and its ownership stamp vouches
-     * for a node dotta never wrote. The row is adopted as a row with no record
-     * is, and the ownership event rewrites the record whole. The kind is the
+     * kind stands there clean — and its ownership stamp vouches for a node dotta
+     * never wrote. The row is adopted as a row with no record is, and the ownership
+     * event rewrites the record whole. No run meets one here: a clean file is
+     * one whose content the load learned, so the flush has written the row's
+     * first observation in that record's place already (core/workspace.h
+     * workspace_flush), and the clause reads a preview whose flush was refused
+     * as the run will — "Would adopt" where the run adopts. The kind is the
      * ladder's first rung (core/workspace.h workspace_type_occupant): a link
      * beside a file is another kind there, where path_type_kind would call both
      * files.
@@ -2260,11 +2250,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * is the item's own verdict, the one that filed it among the clean
      * (core/deploy.c deploy_needs_work: DEPLOYED, no squatter above it, no bit
      * but the blob's), and the stat it stood on is the item's too. What this
-     * loop reads of the flush's work is the record alone — a recordless clean
-     * row's, created by the observation in the same flush — and a learning keeps
-     * the stamp, the node and the binding it read, so all three remain valid
-     * probes here; each writer points the item at the record it wrote, so the
-     * item holds what the store holds.
+     * loop reads of the flush's work is the record alone — the observation the
+     * same flush made at a clean row with no record, or in a gone node's record's
+     * place — and a learning keeps the stamp, the node and the binding it read,
+     * so all three remain valid probes here; each writer points the item at the
+     * record it wrote, so the item holds what the store holds.
      *
      * Placement rationale: MUST run before the nothing-to-do early exit below,
      * otherwise the canonical case (clean manifest, no orphans) never reaches
@@ -2335,9 +2325,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * (workspace_item_t's stat): the base's where the fast path matched
              * it, the look's triple where the slow path read — whatever the record
              * this write replaces, one the load could confirm nothing onto
-             * included: bound to another row, or of another kind. UNSET where
-             * the read met a second still open, and the next load's slow path
-             * confirms. */
+             * included: bound to another row. UNSET where the read met a second
+             * still open, and the next load's slow path confirms. */
             err = workspace_anchor(ws, item, item->stat, now);
             if (err) {
                 /* The present lands whole or ends the run, as the flush's writes
@@ -2362,8 +2351,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * A recordless clean directory stays the flush's observation, exactly as
      * before — and a directory record the workspace's guard released comes back
      * observed for the same reason, where an owned one was pruned. A record of
-     * another kind of node reaches this loop in no run: the directory standing
-     * in its place was observed there after the flush (workspace_observe_retyped),
+     * another kind of node reaches this loop in no run: the flush has written
+     * the directory's observation in its place (core/workspace.h workspace_flush),
      * so an owned file record never re-stamps a directory the user made. */
     workspace_items_t clean_dirs = workspace_items(&deploy_plan->directories.clean);
 
@@ -2372,13 +2361,12 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         const manifest_row_t *dir = item->row;
         const state_record_t *record = item->record;
 
-        /* A record this loop moves onto the directory's row: one dotta owns, of
-         * the directory's kind, bound to another row. One of another kind is
-         * another node's (core/workspace.h workspace_type_occupant): a run has
-         * observed the directory in its place already (workspace_observe_retyped),
-         * and a preview reads it as the run will. */
+        /* A record this loop moves onto the directory's row: one dotta owns,
+         * bound to another row. Its kind needs no asking: no run meets one of
+         * another kind here (above), and a preview whose flush was refused writes
+         * nothing and names nothing off one — the naming below finds its node
+         * gone (workspace_reassigned). */
         bool acknowledge = record && record->deployed_at > 0 &&
-            record->kind == FS_OCCUPANT_DIRECTORY &&
             !manifest_is_claim(dir, record->profile, record->storage_path);
         if (!acknowledge) continue;
 
@@ -2403,23 +2391,23 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Checkpoint: the run's reading of the present is complete, and recorded
      *
      * Everything written so far is a fact about the load — the flush's observations
-     * and confirmations, the directories observed where a record of another kind
-     * of node stood, and the ownership events above, which claim rows the analysis
-     * found clean — and it stays a fact whatever the rest of the run does. Each
-     * landed, or the run ended at the write the store refused, with nothing on
-     * disk moved. What follows can end without writing anything else: the
-     * nothing-to-do exit below, a strict_ownership error, a hook that refuses,
-     * a declined prompt. The dispatch transaction is committed here so that none
-     * of those exits rolls the present back, and before a line of it is said:
-     * "Adopted N files" and the reassignments the loops acknowledged are said
-     * below once the record says them too, or the next run adopts them again
-     * and the next status reads a path the load observed as never seen. The commit
-     * is itself a write the store can refuse — a full disk meets it here, where
-     * the transaction's pages reach the write-ahead log — and one it refuses
-     * ends the run with nothing of the present said. A preview has no dispatch
-     * transaction to commit — its flush took and committed its own, and this
-     * save closes nothing — but the reading is as true as a run's and is persisted
-     * the same way, which is what status does with it too.
+     * (in the place of a record of another kind of node too) and confirmations,
+     * and the ownership events above, which claim rows the analysis found clean
+     * — and it stays a fact whatever the rest of the run does. Each landed, or
+     * the run ended at the write the store refused, with nothing on disk moved.
+     * What follows can end without writing anything else: the nothing-to-do exit
+     * below, a strict_ownership error, a hook that refuses, a declined prompt.
+     * The dispatch transaction is committed here so that none of those exits
+     * rolls the present back, and before a line of it is said: "Adopted N files"
+     * and the reassignments the loops acknowledged are said below once the record
+     * says them too, or the next run adopts them again and the next status reads
+     * a path the load observed as never seen. The commit is itself a write the
+     * store can refuse — a full disk meets it here, where the transaction's pages
+     * reach the write-ahead log — and one it refuses ends the run with nothing
+     * of the present said. A preview has no dispatch transaction to commit —
+     * its flush took and committed its own, and this save closes nothing — but
+     * the reading is as true as a run's and is persisted the same way, which is
+     * what status does with it too.
      *
      * The record of the run's own effects — the ownership events the deployment
      * writes, the records cleanup retires — is the run's second transaction,

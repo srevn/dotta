@@ -194,18 +194,21 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  * the load read (core/workspace.c workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
- *     the first observation and at every ownership event (apply deploy, adoption,
- *     acknowledgement, add, update); a learning keeps the one it read. A storage
- *     name in the grammar and a profile never empty, each whole (schema-enforced).
+ *     the first observation — a gone node's record's replacement among them —
+ *     and at every ownership event (apply deploy, adoption, acknowledgement,
+ *     add, update); a learning keeps the one it read. A storage name in the grammar
+ *     and a profile never empty, each whole (schema-enforced).
  *   - the content (kind, blob_oid, stat): the node the record describes — a regular
  *     file, a link or a directory, in a look's own words (fs_occupant_t) — and
  *     the blob dotta last verified it holds, with the stat of that moment. The
  *     first observation writes the node alone, the row's; the blob and the stat
  *     advance only after disk-matches-blob verification — an ownership event,
  *     which writes all three from the row, and a learning of the content (the
- *     slow-path CMP_EQUAL), which keeps the node: it is noted only onto a record
- *     of the row's kind (core/workspace.c workspace_analyze_file), so a record
- *     of another node is a whole write, never a learning. No node is executable:
+ *     slow-path CMP_EQUAL), which keeps the node: it is made only onto a record
+ *     of the row's kind, since a record of another node, the look having found
+ *     the row's in its place, gives way to the row's first observation before
+ *     anything is learned onto it (core/workspace.c workspace_flush) — a whole
+ *     write, never a learning onto the gone node's record. No node is executable:
  *     the bit is the claim's mode, and Git's filemode the row's alone. Zero
  *     blob_oid is no content confirmation — a directory, whose whole confirmed-disk
  *     record is that it was observed (a directory has no content confirmation,
@@ -248,7 +251,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     observation and an ownership event take the binding and the blob from one
  *     row, and a learning, which keeps the binding it read, learns a blob only
  *     where the row is that binding's claim (core/workspace.c
- *     workspace_analyze_file, the content's note).
+ *     workspace_analyze_file, the content's note) — or onto the row's first
+ *     observation, whose binding is the row's (workspace_flush).
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is its reference on disk, and the binding
@@ -836,9 +840,9 @@ const state_record_t *state_find_record(
  * ROUTING INVARIANT — this is load-bearing:
  *   - Where a workspace live for this transaction is read after the write, its
  *     writes go through the workspace's writers — the flush, workspace_anchor,
- *     workspace_learn, workspace_observe_retyped (core/workspace.h) — each of
- *     which points the path's item at the record this wrote. Called directly
- *     there, the item goes on holding what the load read.
+ *     workspace_learn (core/workspace.h) — each of which points the path's item
+ *     at the record this wrote. Called directly there, the item goes on holding
+ *     what the load read.
  *   - Where no workspace is read after the write — add's record phase, which
  *     loads none, and update's, whose workspace nothing reads after it
  *     (core/workspace.h's exception) — this is the legitimate direct caller.

@@ -2241,28 +2241,29 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
          * path the view lacks is an orphan apply prunes, releases or reclaims;
          * one whose confirmed kind and content are not the row's is stale, and
          * apply deploys the row — or, where the row's own kind already stands
-         * in place of the node the record describes, lets the record go: a
-         * directory is observed there (core/workspace.h workspace_observe_retyped),
-         * a file adopted; one whose claim Git moved past the one it reconciled
-         * is stale on that axis, and apply brings it (core/workspace.h
-         * workspace_claims_moved, whose rule keeps out a derived claim, which
-         * apply never converges) — a claim disk already stands on included, since
-         * no load runs after the pull: it hints until one learns it, the apply
-         * it names or the next sync's own; an owned record naming a profile the
-         * row does not is a reassignment apply acknowledges (core/workspace.h's
-         * rule, which is also what keeps a derived claim out of it — asked with
-         * no look, which across kinds leaves the answer to the stale arm before
-         * it); and a row the record cannot vouch for is work apply has not done.
-         * Vouching differs by kind because apply's answer does — a file needs
-         * an OWNED record, since apply adopts a path it merely observed and says
-         * so; a directory needs only a record, since apply never adopts one: an
-         * absent or squatted row has none, and one standing as a directory is
-         * settled by any load's observation. A FILE ↔ EXECUTABLE move Git made
-         * under an untouched copy is not stale: the record keeps the node, and
-         * either blob mode stands as one (core/workspace.h workspace_stale); it
-         * moves the mode, where no sheet claim stands, and the claim arm hints
-         * it — where one stands, the row's mode is the claim's, not the filemode's,
-         * and nothing moved.
+         * in place of the node the record describes, lets the record go: its
+         * load's flush observes the row's node there — a directory's always, a
+         * file's wherever that record is no base the verdict reads
+         * (core/workspace.h workspace_flush) — and a file is adopted; one whose
+         * claim Git moved past the one it reconciled is stale on that axis, and
+         * apply brings it (core/workspace.h workspace_claims_moved, whose rule
+         * keeps out a derived claim, which apply never converges) — a claim disk
+         * already stands on included, since no load runs after the pull: it hints
+         * until one learns it, the apply it names or the next sync's own; an
+         * owned record naming a profile the row does not is a reassignment apply
+         * acknowledges (core/workspace.h's rule, which is also what keeps a derived
+         * claim out of it — asked with no look, which across kinds leaves the
+         * answer to the stale arm before it); and a row the record cannot vouch
+         * for is work apply has not done. Vouching differs by kind because apply's
+         * answer does — a file needs an OWNED record, since apply adopts a path
+         * it merely observed and says so; a directory needs only a record, since
+         * apply never adopts one: an absent or squatted row has none, and one
+         * standing as a directory is settled by any load's observation. A FILE
+         * ↔ EXECUTABLE move Git made under an untouched copy is not stale: the
+         * record keeps the node, and either blob mode stands as one
+         * (core/workspace.h workspace_stale); it moves the mode, where no sheet
+         * claim stands, and the claim arm hints it — where one stands, the row's
+         * mode is the claim's, not the filemode's, and nothing moved.
          *
          * The record's paths are unique and so are the view's, so the records
          * that vouch for a row count the rows that have one. */

@@ -13,13 +13,13 @@
  * deployed or observed there, when, with what stat) is loaded beside the view
  * and paired with it by path. It is dotta's own and nothing repairs it either:
  * the analyses read it as the base of every three-way question, and its writers
- * here (the flush, workspace_observe_retyped, workspace_anchor, workspace_learn)
- * write it only on disk's word — a live look there, or the run's own write —
- * all but the flush's void, which clears an order on the view's word: the path
- * is back in the view. Each writes a record whole and publishes it: the item at
- * the path holds the record the store holds, and the one it held before is never
- * written. A record whose path the view lacks is an orphan, and the orphan analysis
- * asks Git — the only authority that knows — why it is one.
+ * here (the flush, workspace_anchor, workspace_learn) write it only on disk's
+ * word — a live look there, or the run's own write — all but the flush's void,
+ * which clears an order on the view's word: the path is back in the view. Each
+ * writes a record whole and publishes it: the item at the path holds the record
+ * the store holds, and the one it held before is never written. A record whose
+ * path the view lacks is an orphan, and the orphan analysis asks Git — the only
+ * authority that knows — why it is one.
  *
  * Each path the join holds is an item (core/workspace.h workspace_item_t): one
  * per active path and one per record the view lacks, made at the partition with
@@ -117,9 +117,9 @@ struct workspace {
 
     /* The record's handle: the store's database, borrowed from the caller
      * (workspace_load). Read once at the partition — the record, which the items
-     * hold — then written through by the four writers (the flush,
-     * workspace_observe_retyped, workspace_anchor, workspace_learn), each
-     * publishing the record the store then holds. */
+     * hold — then written through by the three writers (the flush,
+     * workspace_anchor, workspace_learn), each publishing the record the store
+     * then holds. */
     state_t *state;                              /* The record's handle (borrowed from caller) */
 
     /* Content cache for encrypted blob reads during divergence analysis */
@@ -858,9 +858,11 @@ static void workspace_analyze_file(
 
     /* The path stands — the arms above returned for a look withheld, absence
      * and a failed look — and the verdict over what stands there follows. Where
-     * what stands is the row's own kind and dotta has no record, the path is
-     * owed its observation too, which the flush makes off this same look
-     * (workspace_flush).
+     * what stands is the row's own kind and dotta holds no record of it — none,
+     * or one of another kind, whose node the look found gone — the path is owed
+     * its observation too, which the flush makes off this same look, in the gone
+     * node's record's place wherever the verdict below reads nothing from that
+     * record (workspace_flush).
      *
      * CONTENT AND TYPE ANALYSIS: the verdict is a three-way comparison with dotta's
      * last content confirmation as base:
@@ -1044,26 +1046,30 @@ static void workspace_analyze_file(
              * the stat above, so the next run can short-circuit via the fast
              * path. A path with no record is noted like any other: the flush's
              * first observation of it carries the content, and the observation
-             * is this row's.
+             * is this row's. So is a path whose record is of another kind, the
+             * ladder's first rung (core/workspace.h workspace_type_occupant),
+             * never path_type_kind, whose taxonomy files a link beside the files:
+             * that record is a fact about a node the look found gone — a link
+             * the user replaced, a directory where the row's file now stands —
+             * and the flush writes the row's first observation in its place,
+             * the content with it, disk being the row's leaving that record's
+             * pair nothing to decide. Never onto the gone node's record itself:
+             * a confirmation there would carry the ownership stamp dotta earned
+             * for that node onto one it never wrote, where the observation is
+             * never owned, and apply adopts it as it adopts a row with no record
+             * (cmds/apply.c).
              *
-             * Only onto a record that is this row's content base. Bound to this
+             * Onto a record of this row's kind only where it is bound to this
              * row: an encrypted blob opens under one binding and no other, and
              * a learning keeps the binding it read, so this is where the blob a
              * record carries is kept the blob of the row its binding names
              * (core/state.h state_record_t) — the store writes what it is handed;
              * a row the binding does not name is one the record has yet to follow,
              * which takes the slow path on every load until apply's acknowledgement
-             * moves the record onto it. And of this row's kind, the ladder's
-             * first rung (core/workspace.h workspace_type_occupant), never
-             * path_type_kind, whose taxonomy files a link beside the files: a
-             * record of another kind is a fact about a node that is gone, and a
-             * confirmation would carry the ownership stamp dotta earned for it
-             * onto a node dotta never wrote — a link the user made, a file where
-             * dotta's directory was — which apply adopts instead, as it adopts
-             * a row with no record (cmds/apply.c). Either way the stat above
-             * rides the ownership event that moves the record onto the row. */
-            if (!record || (manifest_is_claim(row, record->profile, record->storage_path) &&
-                record->kind == workspace_type_occupant(row->type))) {
+             * moves the record onto it, the stat above riding that ownership
+             * event. */
+            if (!record || record->kind != workspace_type_occupant(row->type) ||
+                manifest_is_claim(row, record->profile, record->storage_path)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
             }
         }
@@ -2921,9 +2927,12 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
     }
 
     /* The directory stands, the row's own kind — the arms above having ruled on
-     * absence, a failed look and every other kind — so where dotta has no record
-     * the path is owed its observation, of either class, which the flush makes
-     * off this look (workspace_flush), as it does a file's.
+     * absence, a failed look and every other kind — so where dotta holds no record
+     * of a directory the path is owed its observation, of either class, which
+     * the flush makes off this look (workspace_flush), as it does a file's: where
+     * there is none, and in the place of one of another kind, whose node the
+     * look found gone — this analysis reads no base, so no verdict here is that
+     * record's.
      *
      * An ancestor claim is a creation template, not a convergence target, and
      * this is the line the profile's word about the path begins at. Every question
@@ -3836,11 +3845,12 @@ bool workspace_item_tags(
  * (DIVERGENCE_MODE) and the owner and group (DIVERGENCE_OWNERSHIP) are the row's
  * claim. Every other column is the base's own — the node and the binding it was
  * read under, the stamp — and the order none: the item is active, so the view
- * has taken the path back (the void). The node needs no word of the row's: the
- * content is noted only where the base is of the row's kind
- * (workspace_analyze_file), so the blob is confirmed as the node the base already
- * names. A file row's blob is Git's and never zero, so a learning of the content
- * always confirms one.
+ * has taken the path back (the void). The node needs no word of the row's: a
+ * learning of the content starts from a base of the row's kind, since a record
+ * of another kind gives way to the row's first observation before anything is
+ * learned onto it (workspace_flush), so the blob is confirmed as the node the
+ * base already names. A file row's blob is Git's and never zero, so a learning
+ * of the content always confirms one.
  *
  * Two callers, the load's learning and a fix's, which would otherwise drift apart:
  * workspace_flush, over what the analyses noted, and workspace_learn, over the
@@ -3867,44 +3877,6 @@ static state_record_t workspace_learning(
     base.ordered_at = 0;
 
     return base;
-}
-
-/**
- * Observe the directories standing where their records describe another kind of
- * node
- *
- * The rule is the header's. Here: the directory items are read, each with its
- * look and its record, and each record found wanting gives way to the directory's
- * observation, built before its write and held by the item once the write lands.
- */
-error_t *workspace_observe_retyped(workspace_t *ws) {
-    CHECK_NULL(ws);
-
-    for (size_t i = 0; i < ws->dir_count; i++) {
-        workspace_item_t *item = ws->active[i];
-        const state_record_t *record = item->record;
-
-        /* A directory standing: the row's own kind, found by the load's look at
-         * the path. A look withheld or failed saw nothing stand, and absence or
-         * another kind of node is not the row's. */
-        if (item->occupant != FS_OCCUPANT_DIRECTORY) continue;
-
-        /* Over a record of another kind: that record's node is gone */
-        if (!record || record->kind == FS_OCCUPANT_DIRECTORY) continue;
-
-        /* The directory's observation, written whole over it */
-        state_record_t *observation = arena_alloc(ws->arena, sizeof(*observation));
-        if (!observation) {
-            return ERROR(ERR_MEMORY, "Failed to allocate observation record");
-        }
-        *observation = workspace_observation(item->row);
-
-        error_t *err = state_write(ws->state, observation);
-        if (err) return err;
-        item->record = observation;
-    }
-
-    return NULL;
 }
 
 /**
@@ -4014,40 +3986,60 @@ error_t *workspace_flush(workspace_t *ws) {
         workspace_item_t *item = ws->active[i];
         const state_record_t *record = item->record;
 
-        /* What the write starts from — a value, not a verdict:
-         *   - the row's first observation, where the look found the row's own
-         *     node and dotta holds no record, file and directory rows alike and
-         *     either class of directory — the record answers whether dotta has
-         *     seen the path for an ancestor claim too (classify_absent). It closes
-         *     the "user created the path after scope entry" gap: the next absence
-         *     reads DELETED, not UNDEPLOYED, and update propagates the user's
-         *     removal. A node of another kind is no observation — the record
-         *     would name the row's kind, which classify_absent reads as the node
-         *     dotta saw here, and the user removing what they put in its place
-         *     would read as the claim's deletion — and neither is no look: withheld
-         *     beneath a squatter, failed, or retracted by a read that met absence;
-         *   - the record the load read, where the analyses noted an axis it lacks
-         *     (the item's confirmation), or where it stands on an order: an order
-         *     lives only while its path is out of the view, so one whose path
-         *     the view has is void — the removal it answered was reverted (a
-         *     revert, a sync pulling the path back, an enable providing it),
-         *     verified or not. Left standing, it would outlive the removal and
-         *     prune the copy at the next scope exit instead of the probe releasing
-         *     it; voided — the write carries no order — a later discovered
-         *     departure executes as a release, which is the stated policy for
-         *     every discovered departure;
-         *   - otherwise nothing is owed: a record the load learned nothing new
-         *     of, standing on no order, or no record and no node of the row's
-         *     to observe. A confirmation rides the observation: a content
-         *     confirmation is noted only where the row's kind stands (the ladder's
-         *     first rung, and the stat's), and a claim is learned only onto a
-         *     record (workspace_claims_moved), so a path skipped here owes none. */
+        /* What the write starts from — a value, not a verdict: the row's first
+         * observation, the record the load read, or nothing, where the load owes
+         * the record nothing */
+        const fs_occupant_t kind = workspace_type_occupant(item->row->type);
+
         state_record_t base;
-        if (!record && item->occupant == workspace_type_occupant(item->row->type)) {
+        if (item->occupant == kind && (!record || record->kind != kind) &&
+            (!record || kind == FS_OCCUPANT_DIRECTORY || git_oid_is_zero(&record->blob_oid) ||
+            (item->confirmation & DIVERGENCE_CONTENT))) {
+            /* The row's first observation: the look found the row's own node,
+             * and dotta holds no record of it — file and directory rows alike,
+             * either class of directory, the record answering whether dotta has
+             * seen the path for an ancestor claim too (classify_absent). It closes
+             * the "user created the path after scope entry" gap: the next absence
+             * reads DELETED, not UNDEPLOYED, and update propagates the user's
+             * removal. A node of another kind is no observation — the record
+             * would name the row's kind, which classify_absent reads as the node
+             * dotta saw here, and the user removing what they put in its place
+             * would read as the claim's deletion — and neither is no look: withheld
+             * beneath a squatter, failed, or retracted by a read that met absence.
+             *
+             * Written over a record of another kind too, whose node the look
+             * found gone — a link the user replaced with the row's file, a file
+             * where the row's directory now stands — wherever no verdict reads
+             * that record: under a directory row always, the directory analysis
+             * reading no base; under a file row where the record holds no confirmed
+             * pair, or where the load learned the row's content, which leaves
+             * its pair nothing to decide. Never owned: that record's stamp vouches
+             * for a node dotta never wrote here, and apply adopts a file as it
+             * adopts one with no record. A pair the load measured a difference
+             * from, or could not read past, stays: it is the base both sides of
+             * a conflict moved from, or the next readable load's
+             * (workspace_analyze_file). */
             base = workspace_observation(item->row);
         } else if (record && (item->confirmation != DIVERGENCE_NONE || record->ordered_at > 0)) {
+            /* The record the load read, where the analyses noted an axis it lacks
+             * (the item's confirmation), or where it stands on an order: an order
+             * lives only while its path is out of the view, so one whose path
+             * the view has is void — the removal it answered was reverted (a
+             * revert, a sync pulling the path back, an enable providing it),
+             * verified or not. Left standing, it would outlive the removal and
+             * prune the copy at the next scope exit instead of the probe releasing
+             * it; voided — the write carries no order — a later discovered
+             * departure executes as a release, which is the stated policy for
+             * every discovered departure. */
             base = *record;
         } else {
+            /* Nothing is owed: a record the load learned nothing new of, standing
+             * on no order — a gone node's pair the verdict reads among them —
+             * or no record and no node of the row's to observe. A confirmation
+             * rides the observation: a content confirmation is noted only where
+             * the row's kind stands (the ladder's first rung, and the stat's),
+             * and a claim is learned only onto a record of the row's kind
+             * (workspace_claims_moved), so a path skipped here owes none. */
             continue;
         }
 

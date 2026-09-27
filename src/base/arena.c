@@ -84,11 +84,9 @@ arena_t *arena_create(size_t initial_capacity) {
 void *arena_alloc(arena_t *arena, size_t size) {
     CHECK_NULL(arena);
 
-    /* Zero-byte request: a non-NULL pointer. It aliases the current block's data
-     * and must not be dereferenced. */
-    if (size == 0) return arena->current->data;
-
-    size_t aligned = arena_align(size);
+    /* A zero size takes one unit of the alignment, so its answer is a place of
+     * its own: never another allocation's, and never dereferenced. */
+    size_t aligned = arena_align(size ? size : 1);
     arena_block_t *block = arena->current;
 
     if (aligned > block->capacity - block->used) {

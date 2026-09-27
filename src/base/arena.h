@@ -32,7 +32,8 @@ arena_t *arena_create(size_t initial_capacity);
 /**
  * Bump-allocate aligned memory. NOT zeroed.
  *
- * Chains a new block if the current one is exhausted.
+ * Chains a new block if the current one is exhausted. A zero size is a place of
+ * its own, like any other: never another allocation's, and never dereferenced.
  *
  * @param arena Arena (must not be NULL)
  * @return 8-byte aligned pointer; never NULL.

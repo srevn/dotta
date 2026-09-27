@@ -262,7 +262,7 @@ static void transfer_commit_credential_decision(transfer_context_t *ctx) {
         error_free(commit_err);
     }
 
-    credential_url_dispose(&u);
+    credential_url_deinit(&u);
 }
 
 /**
@@ -528,7 +528,7 @@ int transfer_credentials_callback(
             error_t *fill_err = credential_helper_fill(
                 &u, username_from_url, &fresh_user, &fresh_pass
             );
-            credential_url_dispose(&u);
+            credential_url_deinit(&u);
 
             if (fill_err) {
                 /* Exec failure / timeout / malformed response — surface to the

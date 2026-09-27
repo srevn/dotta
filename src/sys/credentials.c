@@ -228,7 +228,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
     return NULL;
 }
 
-void credential_url_dispose(credential_url_t *u) {
+void credential_url_deinit(credential_url_t *u) {
     if (!u) {
         return;
     }
@@ -239,7 +239,7 @@ void credential_url_dispose(credential_url_t *u) {
 }
 
 /**
- * Build a git credential protocol request into `out`.
+ * Build a git credential protocol request.
  *
  *   protocol=<protocol>\n host=<hostname>\n [username=<username>\n]
  *   [password=<password>\n]
@@ -253,15 +253,17 @@ void credential_url_dispose(credential_url_t *u) {
  * passwords are scrubbed and freed by the caller; pre-sizing means the scrub
  * covers the complete lifetime of the password bytes — no freed-and-reused
  * intermediate heap pages escape zeroization.
+ *
+ * @return The request, the caller's to scrub and free
+ *         (credential_request_secure_free)
  */
-static error_t *build_credential_request(
-    buffer_t *out,
+static buffer_t build_credential_request(
     const char *protocol,
     const char *hostname,
     const char *username,
     const char *password
 ) {
-    *out = (buffer_t){ 0 };
+    buffer_t out = BUFFER_INIT;
 
     /* Upper bound: fixed keywords/newlines/terminator + field lengths. */
     size_t upper = 64
@@ -270,18 +272,18 @@ static error_t *build_credential_request(
         + (username ? strlen(username) : 0)
         + (password ? strlen(password) : 0);
 
-    error_t *err = buffer_reserve(out, upper);
-    if (err) return err;
-
-    if ((err = buffer_appendf(out, "protocol=%s\n", protocol))) return err;
-    if ((err = buffer_appendf(out, "host=%s\n", hostname))) return err;
+    buffer_reserve(&out, upper);
+    buffer_appendf(&out, "protocol=%s\n", protocol);
+    buffer_appendf(&out, "host=%s\n", hostname);
     if (username && *username) {
-        if ((err = buffer_appendf(out, "username=%s\n", username))) return err;
+        buffer_appendf(&out, "username=%s\n", username);
     }
     if (password && *password) {
-        if ((err = buffer_appendf(out, "password=%s\n", password))) return err;
+        buffer_appendf(&out, "password=%s\n", password);
     }
-    return buffer_append(out, "\n", 1);
+    buffer_append(&out, "\n", 1);
+
+    return out;
 }
 
 /**
@@ -335,13 +337,13 @@ static error_t *run_credential_helper(
  *
  * Request buffers may hold a password (approve/reject). The pre-size in
  * build_credential_request prevents realloc, so scrubbing the capacity before
- * buffer_free wipes every byte that ever held credential data.
+ * buffer_deinit wipes every byte that ever held credential data.
  */
 static void credential_request_secure_free(buffer_t *req) {
     if (req->data) {
         secure_wipe(req->data, req->capacity);
     }
-    buffer_free(req);
+    buffer_deinit(req);
 }
 
 /**
@@ -413,17 +415,12 @@ static error_t *credential_helper_commit(
         );
     }
 
-    buffer_t req = BUFFER_INIT;
-    error_t *err = build_credential_request(
-        &req, u->protocol, u->host, username, password
+    buffer_t req = build_credential_request(
+        u->protocol, u->host, username, password
     );
-    if (err) {
-        credential_request_secure_free(&req);
-        return err;
-    }
 
     process_result_t result = { 0 };
-    err = run_credential_helper(
+    error_t *err = run_credential_helper(
         subcommand, req.data, req.size, false, &result
     );
     credential_request_secure_free(&req);
@@ -431,7 +428,7 @@ static error_t *credential_helper_commit(
     if (!err) {
         err = helper_outcome_error(subcommand, &result);
     }
-    process_result_dispose(&result);
+    process_result_deinit(&result);
     return err;
 }
 
@@ -468,19 +465,14 @@ error_t *credential_helper_fill(
     /* Build the fill request. No password in fill requests; the username-from-URL
      * is optional and disambiguates multi-account configs (helper picks the
      * matching entry instead of the default for this host). */
-    buffer_t req = BUFFER_INIT;
-    error_t *err = build_credential_request(
-        &req, u->protocol, u->host,
+    buffer_t req = build_credential_request(
+        u->protocol, u->host,
         forward_user ? username_from_url : NULL,
         NULL
     );
-    if (err) {
-        credential_request_secure_free(&req);
-        return err;
-    }
 
     process_result_t result = { 0 };
-    err = run_credential_helper("fill", req.data, req.size, true, &result);
+    error_t *err = run_credential_helper("fill", req.data, req.size, true, &result);
 
     /* Request bytes (protocol, host, optionally username-from-URL) are
      * low-sensitivity, but scrub on the same path as approve/reject so the
@@ -488,17 +480,17 @@ error_t *credential_helper_fill(
      * field. */
     credential_request_secure_free(&req);
 
-    /* All process_result_dispose paths below scrub the capture buffer automatically
+    /* All process_result_deinit paths below scrub the capture buffer automatically
      * because run_credential_helper opted into secure_capture — no separate
      * per-exit scrub call needed. */
     if (err) {
-        process_result_dispose(&result);
+        process_result_deinit(&result);
         return err;
     }
 
     err = helper_outcome_error("fill", &result);
     if (err) {
-        process_result_dispose(&result);
+        process_result_deinit(&result);
         return err;
     }
 
@@ -506,14 +498,14 @@ error_t *credential_helper_fill(
      * not configured, public repo). Not an error; the caller falls through to
      * its anonymous / default path. */
     if (result.exit_code != 0 || !result.output) {
-        process_result_dispose(&result);
+        process_result_deinit(&result);
         return NULL;
     }
 
     /* Parse key=value\n lines from stdout. Helper stderr is merged into the same
      * capture stream; lines that don't match the key=value shape are skipped
      * (benign). The parse is destructive — it rewrites the output buffer — which
-     * is fine because the buffer is scrubbed and freed by process_result_dispose
+     * is fine because the buffer is scrubbed and freed by process_result_deinit
      * below.
      *
      * strdup'ing each value gives a right-sized heap allocation (no fixed-buffer
@@ -552,7 +544,7 @@ error_t *credential_helper_fill(
         p = line_end + 1;
     }
 
-    process_result_dispose(&result);
+    process_result_deinit(&result);
 
     if (parse_err) {
         if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);

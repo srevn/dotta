@@ -378,7 +378,7 @@ static error_t *show_file_diff_from_workspace(
         output_print_diff(out, OUTPUT_NORMAL, diff.diff_text);
     }
 
-    compare_free_diff(&diff);
+    compare_diff_deinit(&diff);
 
     return NULL;
 }
@@ -802,7 +802,7 @@ static error_t *compare_tree_files_to_filesystem(
             (*diff_count)++;
         }
 
-        compare_free_diff(&diff);
+        compare_diff_deinit(&diff);
     }
 
     return NULL;

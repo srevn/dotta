@@ -1287,7 +1287,7 @@ static error_t *materialize_entries(
                     e->dest_path, (const unsigned char *) bytes->data,
                     bytes->size, e->mode, (uid_t) -1, (gid_t) -1, NULL
                 );
-                buffer_free(&local);
+                buffer_deinit(&local);
                 if (err) {
                     return error_wrap(
                         err, "Failed to write '%s'", e->dest_path
@@ -1622,7 +1622,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
                 opts->profile, keymgr, &local
             );
             if (!err) err = write_bytes_stdout(&local);
-            buffer_free(&local);
+            buffer_deinit(&local);
         }
         goto cleanup;
     }
@@ -1639,7 +1639,7 @@ error_t *cmd_export(const dotta_ctx_t *ctx, const cmd_export_options_t *opts) {
 cleanup:
     for (size_t i = 0; i < list.count; i++) {
         if (list.items[i].content_held) {
-            buffer_free(&list.items[i].content);
+            buffer_deinit(&list.items[i].content);
         }
     }
     if (tree) git_tree_free(tree);

@@ -46,8 +46,8 @@ bool bootstrap_exists(git_repository *repo, const char *profile);
  * Read a profile's .bootstrap script into a buffer.
  *
  * On success, ownership of *out_content transfers to the caller, who must
- * buffer_free() it. On failure, *out_content is left in the zero-initialized
- * state (safe to buffer_free).
+ * buffer_deinit() it. On failure, *out_content is left in the zero-initialized
+ * state (safe to buffer_deinit).
  *
  * @param repo        Open Git repository (must not be NULL)
  * @param profile     Profile branch name (must not be NULL)

@@ -495,7 +495,7 @@ static error_t *show_diff_preview(
         &target_plaintext
     );
     if (err) {
-        buffer_free(&standing_plaintext);
+        buffer_deinit(&standing_plaintext);
         return error_wrap(err, "Failed to get target file content");
     }
 
@@ -513,8 +513,8 @@ static error_t *show_diff_preview(
     );
 
     if (ret < 0) {
-        buffer_free(&standing_plaintext);
-        buffer_free(&target_plaintext);
+        buffer_deinit(&standing_plaintext);
+        buffer_deinit(&target_plaintext);
         return error_from_git(ret);
     }
 
@@ -550,8 +550,8 @@ static error_t *show_diff_preview(
     git_patch_free(patch);
 
     /* Free plaintext buffers */
-    buffer_free(&standing_plaintext);
-    buffer_free(&target_plaintext);
+    buffer_deinit(&standing_plaintext);
+    buffer_deinit(&target_plaintext);
 
     return NULL;
 }
@@ -1283,7 +1283,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
 
 cleanup:
     if (msg) free(msg);
-    buffer_free(&rebound);
+    buffer_deinit(&rebound);
     if (restored_claim) metadata_item_free(restored_claim);
     if (standing_sheet) metadata_free(standing_sheet);
     if (target_sheet) metadata_free(target_sheet);

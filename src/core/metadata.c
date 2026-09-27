@@ -1174,15 +1174,14 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
     }
 
     /* Create buffer from string */
-    err = buffer_append_string(&buf, json_str);
-    if (err) goto cleanup;
+    buffer_append_string(&buf, json_str);
 
     /* Success - transfer to caller */
     *out = buf;
     buf = (buffer_t){ 0 };
 
 cleanup:
-    buffer_free(&buf);
+    buffer_deinit(&buf);
     free(sorted);
     if (json_str) cJSON_free(json_str);
     if (items_array) cJSON_Delete(items_array);  /* Only if not added to root */
@@ -1606,7 +1605,7 @@ error_t *metadata_save_to_stage(
     err = stage_put(
         stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB, NULL
     );
-    buffer_free(&json);
+    buffer_deinit(&json);
 
     return err;
 }

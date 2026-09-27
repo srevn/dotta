@@ -139,20 +139,14 @@ error_t *bootstrap_read(
     );
     if (err) goto cleanup;
 
-    if (size > 0) {
-        err = buffer_append(&buf, raw, size);
-        if (err) {
-            err = error_wrap(err, "Failed to buffer bootstrap content");
-            goto cleanup;
-        }
-    }
+    buffer_append(&buf, raw, size);
 
     /* Transfer ownership to caller; local clears to a safe empty state. */
     *out_content = buf;
     buf = (buffer_t){ 0 };
 
 cleanup:
-    buffer_free(&buf);
+    buffer_deinit(&buf);
     free(raw);
     if (tree) git_tree_free(tree);
     return err;

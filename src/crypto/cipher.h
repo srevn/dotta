@@ -167,7 +167,7 @@ error_t *cipher_read_header(
  * naming the epoch in the header.
  *
  * Output ownership: on success `*out_ciphertext` becomes the caller's (release
- * with `buffer_free`); on any error the in-progress buffer is wiped and freed
+ * with `buffer_deinit`); on any error the in-progress buffer is wiped and freed
  * before return.
  *
  * Subkey wiping: `mac_key` / `prf_key` are NOT wiped here. The caller (typically
@@ -181,7 +181,7 @@ error_t *cipher_read_header(
  *                       (non-NULL, NUL-terminated)
  * @param epoch_fp       Fingerprint of the epoch the subkeys derive under
  *                       (8 bytes; stamped into the authenticated header)
- * @param out_ciphertext Output buffer (caller frees with buffer_free)
+ * @param out_ciphertext Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success
  */
 error_t *cipher_encrypt(
@@ -203,7 +203,8 @@ error_t *cipher_encrypt(
  * the candidate is wiped before return and never surfaces.
  *
  * Output ownership: on success `*out_plaintext` becomes the caller's (release
- * with `buffer_free`); on any error the candidate is wiped and freed before return.
+ * with `buffer_deinit`); on any error the candidate is wiped and freed before
+ * return.
  *
  * SIV mismatch surfaces as a single generic "authentication failed" regardless
  * of which bound input was tampered. Parse-level errors carry specific messages
@@ -214,7 +215,7 @@ error_t *cipher_encrypt(
  * @param mac_key        SIV MAC subkey (32 bytes)
  * @param prf_key        SIV PRF subkey (32 bytes)
  * @param storage_path   Profile-relative path used at encryption
- * @param out_plaintext  Output buffer (caller frees with buffer_free)
+ * @param out_plaintext  Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success (ERR_CRYPTO on auth/parse failure)
  */
 error_t *cipher_decrypt(

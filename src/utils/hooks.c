@@ -313,7 +313,7 @@ static error_t *hook_execute(
     process_result_t result = { 0 };
     err = process_run(&spec, &result);
     if (err) {
-        process_result_dispose(&result);
+        process_result_deinit(&result);
         goto cleanup;
     }
 
@@ -354,7 +354,7 @@ static error_t *hook_execute(
         result.output = NULL;
     }
 
-    process_result_dispose(&result);
+    process_result_deinit(&result);
 
 cleanup:
     if (env) free_hook_env(env, env_count);
@@ -421,7 +421,7 @@ static void print_hook_output(
  * Stack-build a context from the invocation and execute the hook. `repo_dir` is
  * borrowed from the caller (ctx->run.repo_path in normal flow). The caller
  * stack-allocates `out_result` and is responsible for calling
- * process_result_dispose() on every path.
+ * process_result_deinit() on every path.
  */
 static error_t *hook_fire(
     const config_t *config,
@@ -459,10 +459,10 @@ error_t *hook_fire_pre(
 
     if (err) {
         print_hook_output(out, &result);
-        process_result_dispose(&result);
+        process_result_deinit(&result);
         return error_wrap(err, "Pre-%s hook failed", cmd_name(inv->cmd));
     }
-    process_result_dispose(&result);
+    process_result_deinit(&result);
     return NULL;
 }
 
@@ -488,5 +488,5 @@ void hook_fire_post(
         print_hook_output(out, &result);
         error_free(err);
     }
-    process_result_dispose(&result);
+    process_result_deinit(&result);
 }

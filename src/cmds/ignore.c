@@ -395,15 +395,12 @@ static error_t *edit_content_via_editor(
     unlink(tmpfile);
     free(tmpfile);
     if (err) {
-        buffer_free(&content);
+        buffer_deinit(&content);
         return err;
     }
 
     *out_size = content.size;
     *out_content = buffer_detach(&content);
-    if (!*out_content) {
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
-    }
     return NULL;
 }
 

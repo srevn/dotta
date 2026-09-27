@@ -150,10 +150,10 @@ static error_t *read_copy(
         char *target = NULL;
         RETURN_IF_ERROR(fs_read_symlink(disk_path, &target));
 
-        error_t *err = buffer_append_string(out, target);
+        buffer_append_string(out, target);
         free(target);
 
-        return err;
+        return NULL;
     }
 
     int fd = fs_open(disk_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0);
@@ -255,7 +255,7 @@ static error_t *compare_reference_to_disk(
      * secure_wipe answers a NULL pointer and a zero length itself, so the tail
      * is total without a guard. */
     secure_wipe(copy.data, copy.size);
-    buffer_free(&copy);
+    buffer_deinit(&copy);
 
     return err;
 }
@@ -324,31 +324,22 @@ static int diff_line_callback(
         return 0;
     }
 
-    error_t *err = NULL;
-
     /* Add origin character for context/addition/deletion */
     if (line->origin == GIT_DIFF_LINE_CONTEXT ||
         line->origin == GIT_DIFF_LINE_ADDITION ||
         line->origin == GIT_DIFF_LINE_DELETION) {
-        err = buffer_append(output, &line->origin, 1);
-        if (err) goto cleanup;
+        buffer_append(output, &line->origin, 1);
     }
 
     /* Add line content */
-    err = buffer_append(output, line->content, line->content_len);
-    if (err) goto cleanup;
+    buffer_append(output, line->content, line->content_len);
 
     /* Handle files without trailing newline like git diff does */
     if (line->content_len == 0 || line->content[line->content_len - 1] != '\n') {
-        err = buffer_append_string(output, "\n\\ No newline at end of file\n");
-        if (err) goto cleanup;
+        buffer_append_string(output, "\n\\ No newline at end of file\n");
     }
 
     return 0;
-
-cleanup:
-    error_free(err);
-    return -1;
 }
 
 /**
@@ -357,28 +348,24 @@ cleanup:
  * Helper for compare_generate_diff(). Generates a human-readable diff for symlink
  * target changes, from the two targets in hand — old side first, the order the
  * caller read off the direction.
+ *
+ * @return The text (caller frees)
  */
-static error_t *generate_symlink_diff(
+static char *generate_symlink_diff(
     const buffer_t *old_side,
-    const buffer_t *new_side,
-    char **diff_text
+    const buffer_t *new_side
 ) {
     buffer_t buf = BUFFER_INIT;
 
-    error_t *err = buffer_append_string(&buf, "Symlink target changed:\n");
-    if (!err) err = buffer_append_string(&buf, "- ");
-    if (!err) err = buffer_append(&buf, old_side->data, old_side->size);
-    if (!err) err = buffer_append_string(&buf, "\n+ ");
-    if (!err) err = buffer_append(&buf, new_side->data, new_side->size);
-    if (!err) err = buffer_append_string(&buf, "\n");
-    if (err) goto cleanup;
+    buffer_append_string(&buf, "Symlink target changed:\n");
+    buffer_append_string(&buf, "- ");
+    buffer_append(&buf, old_side->data, old_side->size);
+    buffer_append_string(&buf, "\n+ ");
+    buffer_append(&buf, new_side->data, new_side->size);
+    buffer_append_string(&buf, "\n");
 
-    /* Transfer ownership and free buffer structure */
-    *diff_text = buffer_detach(&buf);
-
-cleanup:
-    buffer_free(&buf);
-    return err;
+    /* Transfer ownership: the buffer's bytes are the text */
+    return buffer_detach(&buf);
 }
 
 /**
@@ -417,7 +404,7 @@ static error_t *generate_text_diff(
     );
 
     if (git_err < 0) {
-        buffer_free(&diff_output);
+        buffer_deinit(&diff_output);
         return error_from_git(git_err);
     }
 
@@ -426,7 +413,7 @@ static error_t *generate_text_diff(
         *diff_text = buffer_detach(&diff_output);
     } else {
         *diff_text = NULL;
-        buffer_free(&diff_output);
+        buffer_deinit(&diff_output);
     }
 
     return NULL;
@@ -503,10 +490,12 @@ error_t *compare_generate_diff(
             const buffer_t *old_side = direction == CMP_DIR_UPSTREAM ? &copy : content;
             const buffer_t *new_side = direction == CMP_DIR_UPSTREAM ? content : &copy;
 
-            err = mode == GIT_FILEMODE_LINK
-                ? generate_symlink_diff(old_side, new_side, &out->diff_text)
-                : generate_text_diff(old_side, new_side, path_label, &out->diff_text);
-            if (err) goto cleanup;
+            if (mode == GIT_FILEMODE_LINK) {
+                out->diff_text = generate_symlink_diff(old_side, new_side);
+            } else {
+                err = generate_text_diff(old_side, new_side, path_label, &out->diff_text);
+                if (err) goto cleanup;
+            }
 
             /* Binary files: libgit2 skips the line callback entirely when it
              * detects binary content, so generate_text_diff returns NULL. Provide
@@ -520,7 +509,7 @@ cleanup:
     /* The disk copy, wiped before it is freed — compare_reference_to_disk's rule:
      * for an encrypted row it is the plaintext. */
     secure_wipe(copy.data, copy.size);
-    buffer_free(&copy);
+    buffer_deinit(&copy);
 
     return err;
 }
@@ -528,7 +517,7 @@ cleanup:
 /**
  * Free a rendering's text and reset it
  */
-void compare_free_diff(file_diff_t *diff) {
+void compare_diff_deinit(file_diff_t *diff) {
     if (!diff) {
         return;
     }

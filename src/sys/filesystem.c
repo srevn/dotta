@@ -295,12 +295,7 @@ error_t *fs_read_fd(int fd, buffer_t *out) {
      * append path's geometric growth, which is the case the reserve cannot answer.
      * st_size of 0 is a regular file that will not say how long it is; one chunk
      * is the guess, and the appends take it from there. */
-    error_t *err = buffer_reserve(
-        out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE
-    );
-    if (err) {
-        return err;
-    }
+    buffer_reserve(out, st.st_size > 0 ? (size_t) st.st_size : IO_BUFFER_SIZE);
 
     /* Read in chunks from the descriptor's current offset */
     char chunk[IO_BUFFER_SIZE];
@@ -314,7 +309,7 @@ error_t *fs_read_fd(int fd, buffer_t *out) {
                 continue;  /* Interrupted by signal, retry */
             }
             int saved_errno = errno;
-            buffer_free(out);
+            buffer_deinit(out);
             return error_from_errno(saved_errno, "Read error");
         }
 
@@ -322,11 +317,7 @@ error_t *fs_read_fd(int fd, buffer_t *out) {
             break;  /* EOF */
         }
 
-        err = buffer_append(out, chunk, bytes_read);
-        if (err) {
-            buffer_free(out);
-            return err;
-        }
+        buffer_append(out, chunk, (size_t) bytes_read);
     }
 
     return NULL;
@@ -594,7 +585,7 @@ error_t *fs_copy_file(const char *src, const char *dst) {
     err = fs_write_file_raw(
         dst, (const unsigned char *) content.data, content.size, mode, -1, -1, NULL
     );
-    buffer_free(&content);
+    buffer_deinit(&content);
     if (err) {
         return error_wrap(err, "Failed to copy '%s' to '%s'", src, dst);
     }

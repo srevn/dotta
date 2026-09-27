@@ -456,7 +456,7 @@ static error_t *read_file(const char *path, config_t *config) {
     /* A read is capped at 256 MB, far below INT_MAX, and ends in the NUL the
      * parser checks for; the parse copies what it keeps. */
     toml_result_t result = toml_parse_named(text.data, (int) text.size, path);
-    buffer_free(&text);
+    buffer_deinit(&text);
 
     err = result.ok
         ? read_sections(result.toptab, config)

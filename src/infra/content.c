@@ -54,7 +54,7 @@ struct content_cache {
  *
  * @param ptr Buffer to free (cast from void* for hashmap_free compatibility)
  */
-static void buffer_destroy_secure(void *ptr) {
+static void content_secure_free(void *ptr) {
     buffer_t *buf = ptr;
     if (!buf) {
         return;
@@ -65,7 +65,7 @@ static void buffer_destroy_secure(void *ptr) {
         secure_wipe(buf->data, buf->size);
     }
 
-    buffer_destroy(buf);
+    buffer_free(buf);
 }
 
 /**
@@ -223,12 +223,7 @@ static error_t *get_plaintext_from_blob(
 
     switch (kind) {
         case CONTENT_PLAINTEXT: {
-            if (blob_size > 0) {
-                error_t *err = buffer_append(out_content, blob_data, blob_size);
-                if (err) {
-                    return error_wrap(err, "Failed to copy blob content");
-                }
-            }
+            buffer_append(out_content, blob_data, blob_size);
             return NULL;
         }
 
@@ -364,7 +359,7 @@ error_t *content_rebind(
     if (plaintext.data) {
         secure_wipe(plaintext.data, plaintext.size);
     }
-    buffer_free(&plaintext);
+    buffer_deinit(&plaintext);
 
     if (err) {
         return error_wrap(err, "Cannot encrypt '%s'", to_storage_path);
@@ -456,11 +451,7 @@ error_t *content_cache_get_from_blob_oid(
     }
 
     /* Heap-allocate buffer for cache storage */
-    buffer_t *content = buffer_new(0);
-    if (!content) {
-        gitops_blob_view_close(&view);
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
-    }
+    buffer_t *content = buffer_create(0);
 
     /* Get plaintext content (view bytes valid until close) */
     err = get_plaintext_from_blob(
@@ -470,7 +461,7 @@ error_t *content_cache_get_from_blob_oid(
     gitops_blob_view_close(&view);
 
     if (err) {
-        buffer_destroy(content);
+        buffer_free(content);
         return err;
     }
 
@@ -479,7 +470,7 @@ error_t *content_cache_get_from_blob_oid(
     if (err) {
         /* Fatal - cannot return borrowed reference if caching fails */
         /* Ownership contract requires cache to own the buffer */
-        buffer_destroy(content);
+        buffer_free(content);
         return error_wrap(err, "Failed to cache content for blob");
     }
 
@@ -533,7 +524,7 @@ error_t *content_compare_blob_to_disk(
     if (plaintext.data) {
         secure_wipe(plaintext.data, plaintext.size);
     }
-    buffer_free(&plaintext);
+    buffer_deinit(&plaintext);
 
     return err;
 }
@@ -544,11 +535,11 @@ void content_cache_free(content_cache_t *cache) {
     }
 
     /* Free all cached buffers with secure cleanup
-     * SECURITY: buffer_destroy_secure() zeroes plaintext memory before freeing.
+     * SECURITY: content_secure_free() zeroes plaintext memory before freeing.
      * The cache contains decrypted sensitive data that must not linger in
      * memory. */
     if (cache->cache_map) {
-        hashmap_free(cache->cache_map, buffer_destroy_secure);
+        hashmap_free(cache->cache_map, content_secure_free);
     }
 
     free(cache);
@@ -670,10 +661,10 @@ error_t *content_capture_file(
         if (bytes.data) {
             secure_wipe(bytes.data, bytes.size);
         }
-        buffer_free(&bytes);
+        buffer_deinit(&bytes);
 
         if (err) {
-            buffer_free(&sealed);
+            buffer_deinit(&sealed);
             return error_wrap(err, "Cannot encrypt '%s'", storage_path);
         }
 
@@ -683,7 +674,7 @@ error_t *content_capture_file(
         if (bytes.data) {
             secure_wipe(bytes.data, bytes.size);
         }
-        buffer_free(&bytes);
+        buffer_deinit(&bytes);
         return ERROR(
             ERR_VALIDATION,
             "Cannot capture '%s' as plaintext: its first bytes are dotta's "
@@ -739,12 +730,8 @@ error_t *content_capture_link(const char *filesystem_path, content_capture_t *ou
 
     /* The entry's bytes are the target, as read: never judged, never sealed. */
     buffer_t bytes = BUFFER_INIT;
-    error_t *err = buffer_append_string(&bytes, target);
+    buffer_append_string(&bytes, target);
     free(target);
-    if (err) {
-        buffer_free(&bytes);
-        return err;
-    }
 
     *out = (content_capture_t){
         .bytes = bytes, .mode = GIT_FILEMODE_LINK, .encrypted = false, .st = st
@@ -764,5 +751,5 @@ void content_capture_free(content_capture_t *capture) {
     if (capture->bytes.data) {
         secure_wipe(capture->bytes.data, capture->bytes.size);
     }
-    buffer_free(&capture->bytes);
+    buffer_deinit(&capture->bytes);
 }

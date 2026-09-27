@@ -174,7 +174,7 @@ typedef enum {
  *
  * The struct is the caller's — a stack local, cleared by compare_generate_diff
  * once its arguments are accepted — and one thing in it is owned: `diff_text`,
- * which compare_free_diff frees and resets. NULL there is a copy that matches;
+ * which compare_diff_deinit frees and resets. NULL there is a copy that matches;
  * every other verdict has a text, which a caller holding its own words for that
  * verdict may ignore.
  */
@@ -224,11 +224,11 @@ error_t *compare_generate_diff(
 /**
  * Free a rendering's text and reset it
  *
- * buffer_free's shape: the contents go, the struct stays the caller's and is
+ * buffer_deinit's shape: the contents go, the struct stays the caller's and is
  * left as if it had never been filled. Safe on a cleared struct, and safe twice.
  *
  * @param diff Rendering (can be NULL)
  */
-void compare_free_diff(file_diff_t *diff);
+void compare_diff_deinit(file_diff_t *diff);
 
 #endif /* DOTTA_COMPARE_H */

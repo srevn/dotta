@@ -740,7 +740,7 @@ error_t *metadata_load_from_tree(
  * no line to print.
  *
  * @param metadata Metadata to serialize (must not be NULL)
- * @param out JSON buffer (must not be NULL, caller must free with buffer_free)
+ * @param out JSON buffer (must not be NULL, caller must free with buffer_deinit)
  * @return Error or NULL on success
  */
 error_t *metadata_to_json(

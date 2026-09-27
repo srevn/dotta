@@ -157,36 +157,25 @@ static char *format_path_list(const char *const *paths, size_t count) {
 
     /* Show up to MAX_PATHS_DETAIL paths */
     size_t show_count = count < MAX_PATHS_DETAIL ? count : MAX_PATHS_DETAIL;
-    error_t *err = NULL;
 
     for (size_t i = 0; i < show_count; i++) {
-        err = buffer_append_string(&buf, "  - ");
-        if (!err) err = buffer_append_string(&buf, paths[i]);
-        if (!err && (i < show_count - 1 || count > MAX_PATHS_DETAIL)) {
-            err = buffer_append_string(&buf, "\n");
+        buffer_append_string(&buf, "  - ");
+        buffer_append_string(&buf, paths[i]);
+        if (i < show_count - 1 || count > MAX_PATHS_DETAIL) {
+            buffer_append_string(&buf, "\n");
         }
-        if (err) goto cleanup;
     }
 
     /* Add truncation notice if needed */
     if (count > MAX_PATHS_DETAIL) {
-        char truncate_msg[64];
-        snprintf(
-            truncate_msg, sizeof(truncate_msg),
-            "  ... and %zu more path%s",
+        buffer_appendf(
+            &buf, "  ... and %zu more path%s",
             count - MAX_PATHS_DETAIL, (count - MAX_PATHS_DETAIL) == 1 ? "" : "s"
         );
-        err = buffer_append_string(&buf, truncate_msg);
-        if (err) goto cleanup;
     }
 
     /* Transfer ownership from buffer to avoid copy */
     return buffer_detach(&buf);
-
-cleanup:
-    error_free(err);
-    buffer_free(&buf);
-    return NULL;
 }
 
 /**
@@ -199,7 +188,7 @@ cleanup:
  * @param template Template string with {variable} placeholders
  * @param vars The variables and their values, resolved once by the caller
  * @param var_count How many
- * @return Allocated string with substitutions, or NULL on error
+ * @return Allocated string with substitutions, or NULL for a NULL template
  */
 static char *substitute_template(
     const char *template, const template_t *vars, size_t var_count
@@ -209,7 +198,6 @@ static char *substitute_template(
     }
 
     buffer_t buf = BUFFER_INIT;
-    error_t *err = NULL;
 
     /* Process template character by character. Three cases, each leaving the
      * loop at its own line: what is not a variable, what is shaped like one and
@@ -221,8 +209,7 @@ static char *substitute_template(
          * that is not a brace at all. */
         const char *end = *p == '{' ? strchr(p, '}') : NULL;
         if (!end) {
-            err = buffer_append(&buf, p, 1);
-            if (err) goto cleanup;
+            buffer_append(&buf, p, 1);
             p++;
             continue;
         }
@@ -233,8 +220,7 @@ static char *substitute_template(
         char var_name[64];
 
         if (var_len >= sizeof(var_name)) {
-            err = buffer_append(&buf, p, (size_t) (end - p) + 1);
-            if (err) goto cleanup;
+            buffer_append(&buf, p, (size_t) (end - p) + 1);
             p = end + 1;
             continue;
         }
@@ -252,26 +238,17 @@ static char *substitute_template(
         }
 
         if (value) {
-            err = buffer_append_string(&buf, value);
+            buffer_append_string(&buf, value);
         } else {
             /* Unknown variable - keep as-is */
-            err = buffer_append(&buf, "{", 1);
-            if (!err) err = buffer_append_string(&buf, var_name);
-            if (!err) err = buffer_append(&buf, "}", 1);
+            buffer_appendf(&buf, "{%s}", var_name);
         }
-        if (err) goto cleanup;
 
         p = end + 1;
     }
 
     /* Transfer ownership from buffer to avoid copy */
     return buffer_detach(&buf);
-
-cleanup:
-    error_free(err);
-    buffer_free(&buf);
-
-    return NULL;
 }
 
 /**

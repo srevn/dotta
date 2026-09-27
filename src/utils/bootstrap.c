@@ -198,7 +198,7 @@ static error_t *run_live(
     err = script_error(&result);
 
 cleanup:
-    process_result_dispose(&result);
+    process_result_deinit(&result);
     env_free(env, env_count);
     if (temp_path) {
         unlink(temp_path);
@@ -215,14 +215,14 @@ static error_t *run_dry(git_repository *repo, const char *profile) {
     buffer_t content = BUFFER_INIT;
     error_t *err = bootstrap_read(repo, profile, &content);
     if (err) {
-        buffer_free(&content);
+        buffer_deinit(&content);
         return err;
     }
 
     err = bootstrap_validate(
         (const unsigned char *) content.data, content.size
     );
-    buffer_free(&content);
+    buffer_deinit(&content);
     return err;
 }
 

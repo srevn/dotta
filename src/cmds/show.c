@@ -189,7 +189,7 @@ static error_t *print_blob_content(
     /* The target line said everything a link has to say; binary content is not
      * dumped to the terminal. */
     if (is_link || is_binary) {
-        buffer_free(&content);
+        buffer_deinit(&content);
         return NULL;
     }
 
@@ -199,7 +199,7 @@ static error_t *print_blob_content(
 
     /* Write content to stdout (trailing newline normalized) */
     err = write_stdout(&content);
-    buffer_free(&content);
+    buffer_deinit(&content);
 
     return err;
 }

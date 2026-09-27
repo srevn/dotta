@@ -29,7 +29,7 @@
  *   buffer_t content = BUFFER_INIT;
  *   content_get_from_blob_oid(repo, &oid, mode, path, profile, keymgr, &content);
  *   // ... use content ...
- *   buffer_free(&content);  // Caller owns buffer
+ *   buffer_deinit(&content);  // Caller owns buffer
  *
  * Cached API (batch operations):
  *   content_cache_t *cache = content_cache_create(repo, keymgr);
@@ -261,7 +261,7 @@ typedef struct content_cache content_cache_t;
  * @param profile Profile name for key derivation (must not be NULL)
  * @param keymgr Key manager (can be NULL if file is known to be plaintext;
  *          required for ENCRYPTED blobs, returns ERR_LOCKED otherwise)
- * @param out_content Output buffer (CALLER OWNS - must free with buffer_free)
+ * @param out_content Output buffer (CALLER OWNS - must free with buffer_deinit)
  * @return Error or NULL on success
  *
  * Errors — a failed read is the ladder's shape (crypto/keymgr.h): the root names
@@ -326,7 +326,7 @@ error_t *content_get_from_blob_oid(
  * @param profile Profile name, for key derivation (must not be NULL)
  * @param keymgr Key manager (ERR_LOCKED without one — every blob in the domain
  *          is sealed)
- * @param out_bytes Output buffer (CALLER OWNS - must free with buffer_free)
+ * @param out_bytes Output buffer (CALLER OWNS - must free with buffer_deinit)
  * @return Error or NULL on success
  *
  * Errors:
@@ -546,7 +546,7 @@ error_t *content_require_encryption(
  * it — the bytes go on the stage (bytes, mode), the claim is authored from the
  * look (core/metadata.h metadata_capture_file: st, encrypted) and the record is
  * bound to it (core/state.h state_stat_from_read: st). A free written to its
- * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_free_diff
+ * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_diff_deinit
  * and gitops_blob_view_close are written — would leave both commands anchoring
  * a zero stat: a wrong record, with no crash.
  *

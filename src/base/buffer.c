@@ -1,128 +1,94 @@
 /**
  * buffer.c - Dynamic byte buffer implementation
  *
- * Stack-allocable, always null-terminated when non-empty.
+ * Stack-allocable, always null-terminated when non-empty. The bytes are the heap's,
+ * which dies rather than answer NULL (base/heap.h).
  */
 
 #include "base/buffer.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/secure.h"
 
 #define MIN_CAPACITY 64
 
 /**
- * Make room for at least alloc content bytes, geometrically.
+ * Make room for `len` more content bytes, geometrically.
  *
  * The append path's allocator, and only that: an append does not know the final
  * size, so each growth has to buy headroom or N appends cost N reallocations. A
  * caller who does know the size wants buffer_reserve — no null check here because
  * both callers are append paths that have already made it.
  */
-static error_t *buffer_grow(buffer_t *buf, size_t alloc) {
-    /* Account for null terminator */
-    size_t needed = alloc + 1;
-    if (needed == 0) {
-        return ERROR(
-            ERR_MEMORY,
-            "Buffer capacity overflow"
-        );
+static void buffer_grow(buffer_t *buf, size_t len) {
+    /* The content, the bytes after it and the terminator are one count, and one
+     * no memory could hold is exhaustion. */
+    if (len >= SIZE_MAX - buf->size) {
+        heap_die(SIZE_MAX);
     }
 
+    size_t needed = buf->size + len + 1;
     if (needed <= buf->capacity) {
-        return NULL;
+        return;
     }
 
     /* Growth strategy: double from current or MIN_CAPACITY, whichever is larger.
      * A reserve leaves behind an exact capacity that is no power of anything;
      * doubling from there is still amortised, so the append path never has to
-     * ask which policy sized the buffer it was handed. */
+     * ask which policy sized the buffer it was handed. A doubling past SIZE_MAX
+     * asks for what was needed, and the heap judges that. */
     size_t cap = buf->capacity ? buf->capacity : MIN_CAPACITY;
     while (cap < needed) {
-        if (cap > SIZE_MAX / 2) {
-            return ERROR(
-                ERR_MEMORY,
-                "Buffer capacity overflow"
-            );
-        }
-        cap *= 2;
+        cap = cap > SIZE_MAX / 2 ? needed : cap * 2;
     }
 
-    char *new_data = realloc(buf->data, cap);
-    if (!new_data) {
-        return ERROR(
-            ERR_MEMORY,
-            "Failed to grow buffer to %zu bytes", cap
-        );
-    }
-
-    buf->data = new_data;
+    buf->data = heap_realloc(buf->data, cap);
     buf->capacity = cap;
     buf->data[buf->size] = '\0';
-
-    return NULL;
 }
 
-error_t *buffer_reserve(buffer_t *buf, size_t alloc) {
+void buffer_reserve(buffer_t *buf, size_t alloc) {
     CHECK_NULL(buf);
 
     /* Account for null terminator. This byte is the whole cost of the invariant
      * when the allocation is exact; rounded up to the next power of two it is
-     * the cost of a second buffer. */
+     * the cost of a second buffer. A size the terminator would wrap is one no
+     * memory could hold: exhaustion. */
+    if (alloc == SIZE_MAX) {
+        heap_die(SIZE_MAX);
+    }
+
     size_t needed = alloc + 1;
-    if (needed == 0) {
-        return ERROR(
-            ERR_MEMORY,
-            "Buffer capacity overflow"
-        );
-    }
-
     if (needed <= buf->capacity) {
-        return NULL;
+        return;
     }
 
-    char *new_data = realloc(buf->data, needed);
-    if (!new_data) {
-        return ERROR(
-            ERR_MEMORY,
-            "Failed to reserve %zu bytes for buffer", needed
-        );
-    }
-
-    buf->data = new_data;
+    buf->data = heap_realloc(buf->data, needed);
     buf->capacity = needed;
 
     /* Restore the invariant at the new address. In bounds either way: a buffer
      * that held nothing has size 0 and at least one byte now, and one that held
      * something had size < old capacity < needed. */
     buf->data[buf->size] = '\0';
-
-    return NULL;
 }
 
-error_t *buffer_resize(buffer_t *buf, size_t size) {
+void buffer_resize(buffer_t *buf, size_t size) {
     CHECK_NULL(buf);
 
-    /* Reserve first: a refusal must leave the buffer holding exactly what it
-     * held, not a size pointing past its allocation. */
-    error_t *err = buffer_reserve(buf, size);
-    if (err) {
-        return err;
-    }
-
+    buffer_reserve(buf, size);
     buf->size = size;
     buf->data[size] = '\0';
-
-    return NULL;
 }
 
-void buffer_free(buffer_t *buf) {
+void buffer_deinit(buffer_t *buf) {
     if (!buf) {
         return;
     }
@@ -130,25 +96,17 @@ void buffer_free(buffer_t *buf) {
     *buf = (buffer_t){ 0 };
 }
 
-buffer_t *buffer_new(size_t capacity) {
-    buffer_t *buf = calloc(1, sizeof(*buf));
-    if (!buf) {
-        return NULL;
-    }
+buffer_t *buffer_create(size_t capacity) {
+    buffer_t *buf = heap_calloc(1, sizeof(*buf));
 
     if (capacity > 0) {
-        error_t *err = buffer_reserve(buf, capacity);
-        if (err) {
-            error_free(err);
-            free(buf);
-            return NULL;
-        }
+        buffer_reserve(buf, capacity);
     }
 
     return buf;
 }
 
-void buffer_destroy(void *ptr) {
+void buffer_free(void *ptr) {
     buffer_t *buf = ptr;
     if (!buf) {
         return;
@@ -157,22 +115,13 @@ void buffer_destroy(void *ptr) {
     free(buf);
 }
 
-error_t *buffer_append(buffer_t *buf, const void *data, size_t len) {
+void buffer_append(buffer_t *buf, const void *data, size_t len) {
     CHECK_NULL(buf);
 
     if (len == 0) {
-        return NULL;
+        return;
     }
     CHECK_NULL(data);
-
-    /* Overflow check */
-    size_t new_size = buf->size + len;
-    if (new_size < buf->size) {
-        return ERROR(
-            ERR_MEMORY,
-            "Buffer size overflow"
-        );
-    }
 
     /* Save offset if data points into this buffer */
     const char *src = data;
@@ -183,74 +132,48 @@ error_t *buffer_append(buffer_t *buf, const void *data, size_t len) {
         src_offset = (size_t) (src - buf->data);
     }
 
-    error_t *err = buffer_grow(buf, new_size);
-    if (err) {
-        return err;
-    }
+    buffer_grow(buf, len);
 
     if (self_ref) {
         src = buf->data + src_offset;
     }
 
     memmove(buf->data + buf->size, src, len);
-    buf->size = new_size;
+    buf->size += len;
     buf->data[buf->size] = '\0';
-
-    return NULL;
 }
 
-error_t *buffer_append_string(buffer_t *buf, const char *str) {
+void buffer_append_string(buffer_t *buf, const char *str) {
     CHECK_NULL(str);
 
-    return buffer_append(buf, str, strlen(str));
+    buffer_append(buf, str, strlen(str));
 }
 
-error_t *buffer_appendf(buffer_t *buf, const char *fmt, ...) {
+void buffer_appendf(buffer_t *buf, const char *fmt, ...) {
     CHECK_NULL(buf);
     CHECK_NULL(fmt);
 
     va_list args;
     va_start(args, fmt);
 
-    /* Measure required size */
+    /* Measure required size. The format is its writer's: one that cannot be
+     * formatted is a caller's bug. */
     va_list args_copy;
     va_copy(args_copy, args);
     int len = vsnprintf(NULL, 0, fmt, args_copy);
     va_end(args_copy);
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
 
-    if (len < 0) {
-        va_end(args);
-        return ERROR(
-            ERR_INVALID_ARG,
-            "Invalid format string"
-        );
-    }
-
-    /* Overflow check */
-    size_t new_size = buf->size + (size_t) len;
-    if (new_size < buf->size) {
-        va_end(args);
-        return ERROR(
-            ERR_MEMORY,
-            "Buffer size overflow"
-        );
-    }
-
-    error_t *err = buffer_grow(buf, new_size);
-    if (err) {
-        va_end(args);
-        return err;
-    }
+    buffer_grow(buf, (size_t) len);
 
     /* Format directly into buffer */
     vsnprintf(
         buf->data + buf->size,
         (size_t) len + 1, fmt, args
     );
-    buf->size = new_size;
+    buf->size += (size_t) len;
 
     va_end(args);
-    return NULL;
 }
 
 void buffer_clear(buffer_t *buf) {
@@ -268,11 +191,7 @@ char *buffer_detach(buffer_t *buf) {
         if (buf) {
             *buf = (buffer_t){ 0 };
         }
-        char *empty = malloc(1);
-        if (empty) {
-            empty[0] = '\0';
-        }
-        return empty;
+        return heap_strdup("");
     }
 
     /* data is already null-terminated by invariant */

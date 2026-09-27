@@ -51,7 +51,7 @@ typedef struct {
  *
  * @param url Remote URL (must be non-NULL and non-empty)
  * @param out Output struct (zero-initialize before calling; populated on success).
- *            Caller disposes via credential_url_dispose.
+ *            Caller releases it with credential_url_deinit.
  * @return Error or NULL on success. On failure, *out is left zero-initialized.
  */
 error_t *credential_url_parse(const char *url, credential_url_t *out);
@@ -62,7 +62,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out);
  * Idempotent; safe to call on a zero-initialized struct or twice in a row. Resets
  * the struct to its zero-initialized form.
  */
-void credential_url_dispose(credential_url_t *u);
+void credential_url_deinit(credential_url_t *u);
 
 /**
  * Try SSH-based credential acquisition (agent first, then on-disk key).

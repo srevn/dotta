@@ -233,8 +233,7 @@ error_t *cipher_encrypt(
      * their slots in place, so peak memory stays at `total_len` plus the one
      * byte the NUL invariant costs. Every claimed byte is written below — the
      * header by memcpy, the SIV by compute_siv, the body by the keystream XOR. */
-    err = buffer_resize(&output, total_len);
-    if (err) goto cleanup;
+    buffer_resize(&output, total_len);
 
     /* Layout: [header(14) | siv(32) | ciphertext(N)] */
     memcpy(output.data, header, CIPHER_HEADER_SIZE);
@@ -276,7 +275,7 @@ cleanup:
      * attacker. */
     if (output.data) {
         crypto_wipe(output.data, output.size);
-        buffer_free(&output);
+        buffer_deinit(&output);
     }
 
     return err;
@@ -349,8 +348,7 @@ error_t *cipher_decrypt(
     /* Claim the candidate plaintext at its final size; the keystream XOR writes
      * every byte of it in place, after which we recompute SIV over the
      * candidate. */
-    err = buffer_resize(&output, plaintext_len);
-    if (err) goto cleanup;
+    buffer_resize(&output, plaintext_len);
 
     /* Step 3: keystream seed from received SIV under prf_key. In SIV the IV
      * authenticates the plaintext — we must decrypt the candidate before we can
@@ -402,7 +400,7 @@ cleanup:
      * to the caller. */
     if (output.data) {
         crypto_wipe(output.data, output.size);
-        buffer_free(&output);
+        buffer_deinit(&output);
     }
 
     return err;

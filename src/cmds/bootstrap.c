@@ -264,7 +264,7 @@ cleanup:
         unlink(temp_path);
         free(temp_path);
     }
-    buffer_free(&content_buf);
+    buffer_deinit(&content_buf);
     free(commit_msg);
     stage_free(stage);
     return err;
@@ -305,7 +305,7 @@ static error_t *bootstrap_show(
         );
     }
 
-    buffer_free(&content);
+    buffer_deinit(&content);
     return NULL;
 }
 

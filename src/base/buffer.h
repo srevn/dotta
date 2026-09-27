@@ -4,7 +4,12 @@
  * Invariants:
  *   - When data is non-NULL: data[size] == '\0' (always a valid C string)
  *   - When data is NULL: size == 0 && capacity == 0 (zero-initialized state)
- *   - buffer_free() resets to zero state; safe to call multiple times
+ *   - buffer_deinit() resets to zero state; safe to call multiple times
+ *
+ * A buffer's bytes are the heap's, so room cannot fail: every append, reserve
+ * and resize succeeds or the run dies of exhaustion (base/heap.h), and none of
+ * them answers anything. A size no memory could hold — a length that wraps the
+ * content it would follow — is exhaustion too.
  *
  * Sizing — a buffer is made room for in one of two ways, and they are not the
  * same operation:
@@ -26,21 +31,21 @@
  * has them dropped rather than released.
  *
  * On success the caller owns the bytes. On failure it owns whatever the callee
- * left there — usually nothing, occasionally a partial write the callee could
- * not free itself, as a request half-built out of a password must reach the
- * caller's wiping free rather than a plain one. So freeing an out buffer is correct
- * and sufficient either way; reading one after a failure is neither.
+ * left there — usually nothing, but a callee may fail after writing, and what
+ * it wrote reaches the caller's free: a secret written before a failure must
+ * reach the caller's wiping free rather than a plain one. So freeing an out buffer
+ * is correct and sufficient either way; reading one after a failure is neither.
  *
  * Stack usage (common):
  *   buffer_t buf = BUFFER_INIT;
  *   buffer_append_string(&buf, "hello");
  *   printf("%s\n", buf.data);   // direct access, always null-terminated
- *   buffer_free(&buf);
+ *   buffer_deinit(&buf);
  *
  * Heap usage (for caches/collections):
- *   buffer_t *buf = buffer_new(0);
+ *   buffer_t *buf = buffer_create(0);
  *   buffer_append_string(buf, "hello");
- *   buffer_destroy(buf);        // frees data + struct
+ *   buffer_free(buf);           // frees data + struct
  */
 
 #ifndef DOTTA_BUFFER_H
@@ -55,29 +60,29 @@
  * Free buffer data and reset to zero state
  *
  * After this call, buf is equivalent to BUFFER_INIT. Safe to call on
- * zero-initialized or already-freed buffers.
+ * zero-initialized or already-released buffers.
  *
  * @param buf Buffer (can be NULL)
  */
-void buffer_free(buffer_t *buf);
+void buffer_deinit(buffer_t *buf);
 
 /**
  * Heap-allocate a buffer (for caches and collections)
  *
  * @param capacity Content bytes to reserve, read as buffer_reserve reads it (0
  *                 allocates nothing)
- * @return Heap-allocated buffer, or NULL on failure
+ * @return Heap-allocated buffer; never NULL
  */
-buffer_t *buffer_new(size_t capacity);
+buffer_t *buffer_create(size_t capacity);
 
 /**
  * Free buffer data and the struct itself
  *
  * Accepts void* for hashmap_free() compatibility.
  *
- * @param buf Buffer to destroy (can be NULL)
+ * @param ptr Buffer to free (can be NULL)
  */
-void buffer_destroy(void *ptr);
+void buffer_free(void *ptr);
 
 /**
  * Reserve room for alloc content bytes, allocated exactly
@@ -96,9 +101,8 @@ void buffer_destroy(void *ptr);
  *
  * @param buf Buffer (must not be NULL)
  * @param alloc Content bytes the buffer must accommodate
- * @return Error or NULL on success
  */
-error_t *buffer_reserve(buffer_t *buf, size_t alloc);
+void buffer_reserve(buffer_t *buf, size_t alloc);
 
 /**
  * Claim size content bytes for the caller to write
@@ -120,9 +124,8 @@ error_t *buffer_reserve(buffer_t *buf, size_t alloc);
  *
  * @param buf Buffer (must not be NULL)
  * @param size Content bytes the buffer is to hold
- * @return Error or NULL on success
  */
-error_t *buffer_resize(buffer_t *buf, size_t size);
+void buffer_resize(buffer_t *buf, size_t size);
 
 /**
  * Append raw bytes to buffer
@@ -130,27 +133,26 @@ error_t *buffer_resize(buffer_t *buf, size_t size);
  * @param buf  Buffer (must not be NULL)
  * @param data Data to append (must not be NULL when len > 0)
  * @param len  Number of bytes to append
- * @return Error or NULL on success
  */
-error_t *buffer_append(buffer_t *buf, const void *data, size_t len);
+void buffer_append(buffer_t *buf, const void *data, size_t len);
 
 /**
  * Append a null-terminated string (excluding its terminator)
  *
  * @param buf Buffer (must not be NULL)
  * @param str String to append (must not be NULL)
- * @return Error or NULL on success
  */
-error_t *buffer_append_string(buffer_t *buf, const char *str);
+void buffer_append_string(buffer_t *buf, const char *str);
 
 /**
  * Append a formatted string
  *
+ * The format is its writer's, so one that cannot be formatted is a caller's bug.
+ *
  * @param buf Buffer (must not be NULL)
  * @param fmt Format string
- * @return Error or NULL on success
  */
-error_t *buffer_appendf(buffer_t *buf, const char *fmt, ...)
+void buffer_appendf(buffer_t *buf, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
 
 /**
@@ -198,17 +200,17 @@ void buffer_secure_free(void *ptr, size_t len);
  * Transfer ownership of buffer data to caller
  *
  * Returns the internal data pointer (already null-terminated) and resets the
- * buffer to zero state. Caller must free() the returned pointer. Returns strdup("")
- * for empty/uninitialized buffers.
+ * buffer to zero state. Caller must free() the returned pointer. Returns a fresh
+ * "" for empty/uninitialized buffers.
  *
  * @param buf Buffer (reset to BUFFER_INIT after call)
- * @return Null-terminated string (caller must free), or NULL on allocation failure
+ * @return Null-terminated string (caller must free); never NULL
  */
 char *buffer_detach(buffer_t *buf);
 
 /** Cleanup function for __attribute__((cleanup)) on stack-allocated buffers */
 static inline void buffer_cleanup_fn(buffer_t *buf) {
-    buffer_free(buf);
+    buffer_deinit(buf);
 }
 
 /** RAII attribute: automatically frees buffer data when variable goes out of scope */

@@ -272,7 +272,7 @@ static error_t *open_witness(
     if (plaintext.data) {
         crypto_wipe(plaintext.data, plaintext.size);
     }
-    buffer_free(&plaintext);
+    buffer_deinit(&plaintext);
 
     return err;
 }

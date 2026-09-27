@@ -200,7 +200,7 @@ typedef struct {
  *     process_result_t result = {0};
  *     error_t *err = process_run(&spec, &result);
  *     // ... inspect result.exit_code / result.timed_out / result.output ...
- *     process_result_dispose(&result);
+ *     process_result_deinit(&result);
  *
  * Field semantics:
  * - exit_code      : WEXITSTATUS for normal termination, 128+signal_num
@@ -230,9 +230,9 @@ typedef struct {
  *                    and not kept — output holds the first PROCESS_CAPTURE_MAX
  *                    and the rest is gone. Zero for a capture that kept everything.
  * - secure         : mirrors spec.secure_capture. When true,
- *                    process_result_dispose scrubs the capture buffer before
- *                    free. Ownership-transfer (output = NULL before dispose)
- *                    bypasses this scrub — the caller then owns scrubbing.
+ *                    process_result_deinit scrubs the capture buffer before free.
+ *                    Ownership-transfer (output = NULL before dispose) bypasses
+ *                    this scrub — the caller then owns scrubbing.
  */
 typedef struct {
     int exit_code;
@@ -279,7 +279,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result);
  * Ownership-transfer (output = NULL before dispose) bypasses the scrub — the
  * caller owns it from that point on.
  */
-void process_result_dispose(process_result_t *result);
+void process_result_deinit(process_result_t *result);
 
 /**
  * Run a child in the foreground, and wait for it.

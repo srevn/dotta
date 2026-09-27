@@ -691,7 +691,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     }
 
     /* Transfer capture ownership into the result. The secure flag mirrors the
-     * spec so process_result_dispose can scrub before free without re-deriving
+     * spec so process_result_deinit can scrub before free without re-deriving
      * intent. */
     if (spec->capture) {
         result->output = capture;
@@ -736,7 +736,7 @@ cleanup:
     return err;
 }
 
-void process_result_dispose(process_result_t *result) {
+void process_result_deinit(process_result_t *result) {
     if (!result) {
         return;
     }

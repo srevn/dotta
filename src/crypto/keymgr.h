@@ -279,7 +279,7 @@ error_t *keymgr_create(
  * @param storage_path   File path (non-NULL; bound into SIV)
  * @param plaintext      Plaintext bytes (non-NULL when len > 0)
  * @param plaintext_len  Plaintext length (≤ CIPHER_MAX_CONTENT)
- * @param out_ciphertext Output buffer (caller frees with buffer_free)
+ * @param out_ciphertext Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success
  */
 error_t *keymgr_encrypt(
@@ -310,7 +310,7 @@ error_t *keymgr_encrypt(
  *                       at encryption — mismatch fails SIV verify)
  * @param ciphertext     Dotta-encrypted bytes including header (non-NULL)
  * @param ciphertext_len Ciphertext length (≥ CIPHER_OVERHEAD)
- * @param out_plaintext  Output buffer (caller frees with buffer_free)
+ * @param out_plaintext  Output buffer (caller frees with buffer_deinit)
  * @return Error or NULL on success: ERR_LOCKED when the run holds no usable master,
  *         ERR_CRYPTO when a held master does not open this blob or no master
  *         here ever could (the codes paragraph above)

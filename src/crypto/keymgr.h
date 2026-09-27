@@ -411,10 +411,6 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch);
  * `dotta key status` prints its pair. Borrowed; valid for the keymgr's lifetime
  * and until the next `keymgr_rekey`.
  *
- * The one entry point that dereferences `km` without a `CHECK_NULL`: it returns
- * a borrowed pointer, so it has nowhere to put a refusal, and the non-NULL is
- * the caller's to honour.
- *
  * @param km Key manager (non-NULL)
  * @return The epoch
  */

@@ -674,8 +674,8 @@ error_t *args_export_completion_fish(
  * Parse a bounded decimal long. Used internally by ARGS_KIND_INT and exposed
  * for post_parse hooks that need identical semantics.
  *
- * Fails on: NULL, empty, non-numeric trailing chars, value outside [min, max],
- * or ERANGE from strtol.
+ * Fails on: empty, non-numeric trailing chars, value outside [min, max], or ERANGE
+ * from strtol. `text` and `out` must not be NULL.
  *
  * @return NULL on success; `error_t *` (caller frees) on failure.
  */

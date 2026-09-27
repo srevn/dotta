@@ -131,8 +131,8 @@ error_t *path_input_filesystem_path(const char *input, arena_t *arena, const cha
 
     *out = NULL;
 
-    /* `input` is the normalizer's to refuse: a NULL one and an empty one earn
-     * the same sentence a frame deeper, so a guard here would spell it twice. */
+    /* `input` is the normalizer's to check: a NULL one is its contract and an
+     * empty one its refusal, so a guard here would spell either twice. */
     char *normalized = NULL;
     RETURN_IF_ERROR(path_input_normalize(input, &normalized));
 

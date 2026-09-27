@@ -464,6 +464,12 @@ typedef struct dotta_run {
  * exists when a real consumer exists. Single-threaded by design (no pthread, no
  * async I/O loop), so concurrent allocation is not a concern.
  *
+ * Every allocation dotta makes — its own code, and cJSON's and tomlc17's through
+ * the hooks main installs — succeeds or the process dies (`base/heap.h`,
+ * `base/arena.h`). A mapping sized by someone else's claim (`base/secure.h`), a
+ * linked library's exhaustion and a bound the design chose (`sys/filesystem.c
+ * FS_MAX_READ_SIZE`, `sys/process.h PROCESS_CAPTURE_MAX`) are refusals.
+ *
  * Exit-code override
  * ------------------
  * Dispatch returns `error_t *` — dotta's native failure channel. For native

@@ -38,8 +38,8 @@
  * every entry point either returns `error_t *` with the cleanup-on-error contract,
  * runs idempotently with no error surface (free, clear), or is a getter reporting
  * what the slot holds (witness, cached, epoch) — the getters are NULL-safe except
- * `keymgr_epoch`, which returns a borrowed pointer and so has nowhere to put a
- * refusal.
+ * `keymgr_epoch`, whose answer borrows from the key manager and so has none for
+ * a NULL one.
  */
 
 #include "crypto/keymgr.h"
@@ -435,8 +435,8 @@ fail:
  * A prompt that yielded nothing: no terminal, end of input, an empty line, a
  * line too long, a terminal that would not be set. The LOCKED root folds the
  * primitive's line and names the ways out — true at a terminal too, which is
- * where the last empty line lands. An allocation failure passes through as itself.
- * Takes ownership of `read_err`.
+ * where the last empty line lands. A mapping the prompt was refused (ERR_MEMORY,
+ * base/secure.h) passes through as itself. Takes ownership of `read_err`.
  */
 static error_t *nothing_read(error_t *read_err) {
     if (read_err->code == ERR_MEMORY) {
@@ -782,6 +782,8 @@ void keymgr_rekey(keymgr *km, const kdf_epoch_t *epoch) {
 }
 
 const kdf_epoch_t *keymgr_epoch(const keymgr *km) {
+    CHECK_NULL(km);
+
     return &km->epoch;
 }
 

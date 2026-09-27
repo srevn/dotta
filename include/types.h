@@ -56,7 +56,7 @@ typedef enum {
     ERR_STATE_INVALID,         /* Invalid state file */
     ERR_CONFLICT,              /* Conflict detected */
     ERR_VALIDATION,            /* Validation failed */
-    ERR_MEMORY,                /* Memory allocation failed */
+    ERR_MEMORY,                /* A mapping or a linked library could not get memory */
     ERR_CRYPTO,                /* Cryptographic operation failed */
     ERR_LOCKED,                /* No usable passphrase this run */
     ERR_INTERNAL               /* Internal error */

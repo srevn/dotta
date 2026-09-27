@@ -52,8 +52,8 @@ bool bootstrap_exists(git_repository *repo, const char *profile);
  * @param repo        Open Git repository (must not be NULL)
  * @param profile     Profile branch name (must not be NULL)
  * @param out_content Destination buffer (must not be NULL)
- * @return NULL on success; ERR_NOT_FOUND if the profile has no script; wrapped
- *         Git or allocation error otherwise
+ * @return NULL on success; ERR_NOT_FOUND if the profile has no script; a Git
+ *         error otherwise
  */
 error_t *bootstrap_read(
     git_repository *repo,
@@ -80,7 +80,7 @@ error_t *bootstrap_read(
  * @param profile       Profile branch name (must not be NULL)
  * @param out_temp_path Receives a heap-allocated path (must not be NULL)
  * @return NULL on success; ERR_NOT_FOUND if the profile has no script; wrapped
- *         error on validation, Git, allocation, or filesystem failure
+ *         error on validation, Git, or filesystem failure
  */
 error_t *bootstrap_extract_to_temp(
     git_repository *repo,

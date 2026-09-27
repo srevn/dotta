@@ -127,6 +127,7 @@ static bool is_valid_host(const char *host) {
 }
 
 error_t *credential_url_parse(const char *url, credential_url_t *out) {
+    CHECK_NULL(url);
     CHECK_NULL(out);
 
     /* Reset before any return so callers that forgot to zero-initialize still
@@ -135,7 +136,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
     out->protocol = NULL;
     out->host = NULL;
 
-    if (!url || !*url) {
+    if (!*url) {
         return ERROR(ERR_INVALID_ARG, "URL is empty");
     }
 
@@ -326,9 +327,7 @@ static error_t *run_credential_helper(
  * buffer_deinit wipes every byte that ever held credential data.
  */
 static void credential_request_secure_free(buffer_t *req) {
-    if (req->data) {
-        secure_wipe(req->data, req->capacity);
-    }
+    secure_wipe(req->data, req->capacity);
     buffer_deinit(req);
 }
 

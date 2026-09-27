@@ -126,7 +126,6 @@ error_t *bootstrap_read(
     git_tree *tree = NULL;
     const git_tree_entry *entry = NULL;
     void *raw = NULL;
-    buffer_t buf = BUFFER_INIT;
     error_t *err = NULL;
 
     err = load_bootstrap_entry(repo, profile, &tree, &entry);
@@ -139,14 +138,9 @@ error_t *bootstrap_read(
     );
     if (err) goto cleanup;
 
-    buffer_append(&buf, raw, size);
-
-    /* Transfer ownership to caller; local clears to a safe empty state. */
-    *out_content = buf;
-    buf = (buffer_t){ 0 };
+    buffer_append(out_content, raw, size);
 
 cleanup:
-    buffer_deinit(&buf);
     free(raw);
     if (tree) git_tree_free(tree);
     return err;
@@ -228,7 +222,9 @@ cleanup:
 }
 
 error_t *bootstrap_validate(const unsigned char *content, size_t size) {
-    if (size == 0 || !content) {
+    CHECK_ARG(content != NULL || size == 0, "content cannot be NULL with a size");
+
+    if (size == 0) {
         return ERROR(
             ERR_INVALID_ARG, "Bootstrap script is empty"
         );

@@ -257,8 +257,9 @@ static void record_error_from_err(
  * ══════════════════════════════════════════════════════════════════ */
 
 error_t *args_parse_long(const char *text, long min, long max, long *out) {
+    CHECK_NULL(text);
     CHECK_NULL(out);
-    if (text == NULL || *text == '\0') {
+    if (*text == '\0') {
         return ERROR(ERR_INVALID_ARG, "empty integer value");
     }
 

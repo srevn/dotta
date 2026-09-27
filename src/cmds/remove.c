@@ -1671,23 +1671,10 @@ static error_t *remove_profile(
 
         /* remote_url was resolved alongside remote_name above. NULL is legal —
          * unauthenticated paths still work, helper approve/reject become no-ops. */
-        transfer_context_t *del_xfer = NULL;
         transfer_options_t del_opts = { .output = out, .url = remote_url };
-        error_t *del_xfer_err = transfer_context_create(&del_opts, &del_xfer);
-
-        if (del_xfer_err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Failed to create transfer context: %s",
-                error_message(del_xfer_err)
-            );
-            error_free(del_xfer_err);
-            err = NULL;
-        } else {
-            err = gitops_delete_remote_branch(
-                repo, remote_name, opts->profile, del_xfer
-            );
-            transfer_context_free(del_xfer);
-        }
+        transfer_context_t *del_xfer = transfer_context_create(&del_opts);
+        err = gitops_delete_remote_branch(repo, remote_name, opts->profile, del_xfer);
+        transfer_context_free(del_xfer);
         if (err) {
             /* Non-fatal: the local branch is already deleted, so what failed is
              * the sync's half alone — warned, and the operation stands. */

@@ -1621,15 +1621,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      *
      * Built once per command and shared across the whole collection walk so the
      * discovered source-repo handle is reused for every file under the same source
-     * tree. A build that fails refuses the command, as the ignore rules above
-     * do; what degrades is a query — add_excluded reads one that fails as "not
+     * tree. What degrades is a query — add_excluded reads one that fails as "not
      * excluded", so an odd source repository never blocks a path the user named. */
     if (config && config->respect_gitignore) {
-        err = source_filter_create(&source_filter);
-        if (err) {
-            err = error_wrap(err, "Failed to build source .gitignore filter");
-            goto cleanup;
-        }
+        source_filter = source_filter_create();
     }
 
     /* Build hook invocation */

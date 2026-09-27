@@ -1163,61 +1163,49 @@ static error_t *status_print_remote(
             .url                = remote_url,
             .ephemeral_progress = true,
         };
-        transfer_context_t *xfer = NULL;
-        error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
+        transfer_context_t *xfer = transfer_context_create(&xfer_opts);
 
-        if (xfer_err) {
-            /* Non-fatal: skip the fetch and fall through to cached status display.
-             * Matches the "skip section on failure" pattern used earlier for
-             * remote detection. */
-            output_warning(
-                out, OUTPUT_NORMAL, "Skipping remote fetch: %s",
-                error_message(xfer_err)
+        if (verbose) {
+            /* Ephemeral fetch message (no newline — resolved after fetch). On
+             * TTY: progress overwrites via \r, then line is cleared. On pipe:
+             * falls back to inline " done.\n" resolution. */
+            output_print(
+                out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name
             );
-            error_free(xfer_err);
-        } else {
-            if (verbose) {
-                /* Ephemeral fetch message (no newline — resolved after fetch).
-                 * On TTY: progress overwrites via \r, then line is cleared. On
-                 * pipe: falls back to inline " done.\n" resolution. */
-                output_print(
-                    out, OUTPUT_VERBOSE, "Fetching from '%s'...", remote_name
-                );
-                fflush(out->stream);
-            }
-
-            /* Perform batched fetch — single network op for all branches */
-            error_t *fetch_err = gitops_fetch_branches(
-                repo, remote_name, check, xfer
-            );
-
-            /* Resolve the "Fetching from ..." preamble line (verbose only) */
-            if (verbose) {
-                if (output_is_tty(out)) {
-                    /* TTY: clear any remaining text. Handles all cases uniformly
-                     * (callback-finalized, mid-progress error, up-to-date). */
-                    transfer_progress_resolved(xfer);
-                    output_clear_line(out);
-                } else if (fetch_err) {
-                    /* Non-TTY + error: finish the line before the warning */
-                    output_endline(out, OUTPUT_VERBOSE);
-                } else {
-                    /* Non-TTY + success: inline resolution */
-                    output_print(out, OUTPUT_VERBOSE, " done.\n");
-                }
-            }
-
-            if (fetch_err) {
-                /* Non-fatal: warn and continue with status display */
-                output_warning(
-                    out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
-                    error_message(fetch_err)
-                );
-                error_free(fetch_err);
-            }
-
-            transfer_context_free(xfer);
+            fflush(out->stream);
         }
+
+        /* Perform batched fetch — single network op for all branches */
+        error_t *fetch_err = gitops_fetch_branches(
+            repo, remote_name, check, xfer
+        );
+
+        /* Resolve the "Fetching from ..." preamble line (verbose only) */
+        if (verbose) {
+            if (output_is_tty(out)) {
+                /* TTY: clear any remaining text. Handles all cases uniformly
+                 * (callback-finalized, mid-progress error, up-to-date). */
+                transfer_progress_resolved(xfer);
+                output_clear_line(out);
+            } else if (fetch_err) {
+                /* Non-TTY + error: finish the line before the warning */
+                output_endline(out, OUTPUT_VERBOSE);
+            } else {
+                /* Non-TTY + success: inline resolution */
+                output_print(out, OUTPUT_VERBOSE, " done.\n");
+            }
+        }
+
+        if (fetch_err) {
+            /* Non-fatal: warn and continue with status display */
+            output_warning(
+                out, OUTPUT_VERBOSE, "Failed to fetch branches: %s",
+                error_message(fetch_err)
+            );
+            error_free(fetch_err);
+        }
+
+        transfer_context_free(xfer);
     }
 
     /* Display remote sync status section */

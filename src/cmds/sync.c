@@ -1965,8 +1965,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         .url                = remote_url,
         .ephemeral_progress = true,
     };
-    err = transfer_context_create(&xfer_opts, &xfer);
-    if (err) goto cleanup;
+    xfer = transfer_context_create(&xfer_opts);
 
     /* Determine auto_pull setting: CLI --no-pull overrides config */
     bool auto_pull = opts->no_pull ? false : config->auto_pull;

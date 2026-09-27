@@ -240,10 +240,6 @@ static error_t *open_run(
         }
 
         run->content_cache = content_cache_create(run->repo, run->keymgr);
-        if (!run->content_cache) {
-            err = ERROR(ERR_MEMORY, "Failed to create content cache");
-            goto done;
-        }
     }
 
     /* The view over the enabled set as it stands. The builder's error is returned

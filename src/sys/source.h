@@ -43,10 +43,9 @@ typedef struct source_filter source_filter_t;
 /**
  * Create a source filter.
  *
- * @param out Output handle (must not be NULL)
- * @return Error or NULL on success
+ * @return The filter (caller frees via source_filter_free)
  */
-error_t *source_filter_create(source_filter_t **out);
+source_filter_t *source_filter_create(void);
 
 /**
  * Free a source filter, the directory it last answered for and the repository

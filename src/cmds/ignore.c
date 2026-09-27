@@ -933,11 +933,7 @@ static error_t *test_path_ignore(
     /* Source .gitignore filter (opt-in via config). Built once for the whole
      * invocation so the discovered repo handle is reused across the loop. */
     if (config && config->respect_gitignore) {
-        err = source_filter_create(&source_filter);
-        if (err) {
-            err = error_wrap(err, "Failed to build source .gitignore filter");
-            goto cleanup;
-        }
+        source_filter = source_filter_create();
     }
 
     /* Layered-rules builder — the baseline compiled once, each profile's ruleset

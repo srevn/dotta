@@ -85,12 +85,8 @@ static char *extract_commit_summary(const char *message) {
 /**
  * Create commit info from git commit
  */
-static error_t *create_commit_info(
-    git_commit *commit,
-    commit_info_t **out
-) {
+static commit_info_t *stats_create_commit_info(git_commit *commit) {
     CHECK_NULL(commit);
-    CHECK_NULL(out);
 
     commit_info_t *info = heap_calloc(1, sizeof(commit_info_t));
 
@@ -105,8 +101,7 @@ static error_t *create_commit_info(
     const git_signature *author = git_commit_author(commit);
     info->time = author->when.time;
 
-    *out = info;
-    return NULL;
+    return info;
 }
 
 /**
@@ -260,12 +255,7 @@ static error_t *walk_commits(
         }
 
         /* Create commit info for this commit */
-        current_commit_info = NULL;
-        err = create_commit_info(commit, &current_commit_info);
-        if (err) {
-            git_commit_free(commit);
-            goto cleanup;
-        }
+        current_commit_info = stats_create_commit_info(commit);
 
         /* Get commit tree */
         git_tree *tree = NULL;

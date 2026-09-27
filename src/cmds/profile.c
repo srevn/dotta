@@ -298,45 +298,37 @@ static error_t *profile_list(
                 .output = out,
                 .url    = remote_url,
             };
-            error_t *xfer_err = transfer_context_create(&xfer_opts, &xfer);
-            if (xfer_err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to create transfer context: %s",
-                    error_message(xfer_err)
-                );
-                error_free(xfer_err);
-            } else {
-                /*
-                 * Query remote server for available branches (network operation)
-                 * This contacts the remote server to get the current list of
-                 * profiles, ensuring we see newly added profiles that haven't
-                 * been fetched yet.
-                 */
-                remote_err = gitops_list_remote_branches(
-                    repo, remote_name, xfer, &remote_branches
-                );
-                if (remote_err) {
-                    output_warning(
-                        out, OUTPUT_NORMAL, "Could not query remote: %s",
-                        error_message(remote_err)
-                    );
-                    error_free(remote_err);
-                } else if (remote_branches->count > 0) {
-                    /* Filter out branches that already exist locally */
-                    remote_only = string_array_new(remote_branches->count);
-                    for (size_t ri = 0; ri < remote_branches->count; ri++) {
-                        if (!string_array_contains(all_branches, remote_branches->items[ri])) {
-                            string_array_push(remote_only, remote_branches->items[ri]);
-                        }
-                    }
+            xfer = transfer_context_create(&xfer_opts);
 
-                    if (remote_only->count > 0) {
-                        output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
-                        for (size_t i = 0; i < remote_only->count; i++) {
-                            output_print(
-                                out, OUTPUT_NORMAL, "  • %s\n", remote_only->items[i]
-                            );
-                        }
+            /*
+             * Query remote server for available branches (network operation)
+             * This contacts the remote server to get the current list of profiles,
+             * ensuring we see newly added profiles that haven't been fetched yet.
+             */
+            remote_err = gitops_list_remote_branches(
+                repo, remote_name, xfer, &remote_branches
+            );
+            if (remote_err) {
+                output_warning(
+                    out, OUTPUT_NORMAL, "Could not query remote: %s",
+                    error_message(remote_err)
+                );
+                error_free(remote_err);
+            } else if (remote_branches->count > 0) {
+                /* Filter out branches that already exist locally */
+                remote_only = string_array_new(remote_branches->count);
+                for (size_t ri = 0; ri < remote_branches->count; ri++) {
+                    if (!string_array_contains(all_branches, remote_branches->items[ri])) {
+                        string_array_push(remote_only, remote_branches->items[ri]);
+                    }
+                }
+
+                if (remote_only->count > 0) {
+                    output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
+                    for (size_t i = 0; i < remote_only->count; i++) {
+                        output_print(
+                            out, OUTPUT_NORMAL, "  • %s\n", remote_only->items[i]
+                        );
                     }
                 }
             }
@@ -393,10 +385,7 @@ static error_t *profile_fetch(
         .url                = remote_url,
         .ephemeral_progress = true,
     };
-    err = transfer_context_create(&xfer_opts, &xfer);
-    if (err) {
-        goto cleanup;
-    }
+    xfer = transfer_context_create(&xfer_opts);
 
     output_section(out, OUTPUT_NORMAL, "Fetching profiles");
 

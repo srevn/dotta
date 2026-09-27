@@ -370,9 +370,7 @@ error_t *content_rebind(
 }
 
 content_cache_t *content_cache_create(git_repository *repo, keymgr *keymgr) {
-    if (!repo) {
-        return NULL;
-    }
+    CHECK_NULL(repo);
 
     content_cache_t *cache = heap_calloc(1, sizeof(content_cache_t));
 

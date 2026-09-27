@@ -260,19 +260,17 @@ typedef struct {
     char stack[PATH_STACK_BUFFER];   /* where it fits, which is nearly always */
 } rungs_t;
 
-/* The copy, or false when it cannot be made: the ascent is then abandoned and
- * the answer stays the leaf's. Close in either case. */
-static bool rungs_open(rungs_t *r, const char *subject) {
+/* The copy, where it fits; rungs_close frees what the heap held. */
+static void rungs_open(rungs_t *r, const char *subject) {
     r->heap = NULL;
     r->rung = NULL;
     if (!subject) {
-        return true;
+        return;
     }
 
     size_t n = strlen(subject);
     r->rung = n < sizeof(r->stack) ? r->stack : (r->heap = heap_alloc(n + 1));
     memcpy(r->rung, subject, n + 1);
-    return true;
 }
 
 /* Up one rung. False past the last, and the subject is then spent — no rule reads
@@ -352,15 +350,11 @@ bool pathspec_matches(
     if (verdict != VERDICT_NONE) return verdict == VERDICT_IN;
 
     /* Up the rungs. The two subjects climb together — rung k of each is one
-     * directory as far as the tail goes — and both copies are made or neither:
-     * a vocabulary still climbing while the other could not would let a positive
-     * rule in one select what a negation in the other would have excluded. Each
-     * open is named on its own line, so neither is skipped by a short circuit
-     * and both are closed. */
+     * directory as far as the tail goes. */
     rungs_t l, s;
-    bool opened_l = rungs_open(&l, filesystem_path);
-    bool opened_s = rungs_open(&s, storage_path);
-    while (opened_l && opened_s && verdict == VERDICT_NONE) {
+    rungs_open(&l, filesystem_path);
+    rungs_open(&s, storage_path);
+    while (verdict == VERDICT_NONE) {
         bool up_l = rungs_up(&l);
         bool up_s = rungs_up(&s);
         if (!up_l && !up_s) {
@@ -410,11 +404,10 @@ bool pathspec_entry_matches_at(
     }
     bool matched = false;
     rungs_t rungs;
-    if (rungs_open(&rungs, subject)) {
-        while (!matched && rungs_up(&rungs)) {
-            const char *rung = rule_subject(e, rungs.rung);
-            matched = rung && gitignore_rule_matches(e->rule, rung, true);
-        }
+    rungs_open(&rungs, subject);
+    while (!matched && rungs_up(&rungs)) {
+        const char *rung = rule_subject(e, rungs.rung);
+        matched = rung && gitignore_rule_matches(e->rule, rung, true);
     }
     rungs_close(&rungs);
     return matched;

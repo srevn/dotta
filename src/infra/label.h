@@ -282,7 +282,7 @@ error_t *label_validate_storage(const char *storage_path);
  * @param arena Arena that owns the answer (must not be NULL)
  * @param label The namespace the name is in
  * @param tail  The name within it (must not be NULL; "" spells the word alone)
- * @return The name, the arena's; NULL on allocation failure
+ * @return The name, the arena's
  */
 const char *label_compose(arena_t *arena, label_t label, const char *tail);
 

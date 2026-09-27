@@ -345,8 +345,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         .output = out,
         .url    = opts->url,
     };
-    err = transfer_context_create(&xfer_opts, &xfer);
-    if (err) goto cleanup;
+    xfer = transfer_context_create(&xfer_opts);
 
     /* The place the clone lands must be absent or an empty directory. What stands
      * there is somebody's: a repository would be taken by the init below, and

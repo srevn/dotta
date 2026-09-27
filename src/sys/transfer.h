@@ -78,14 +78,9 @@ typedef struct {
  * Create a transfer context.
  *
  * @param opts Configuration (must not be NULL; opts->output required)
- * @param out  Receives the new context on success (caller frees via
- *             transfer_context_free)
- * @return Error or NULL on success. On failure, *out is unchanged.
+ * @return The context (caller frees via transfer_context_free)
  */
-error_t *transfer_context_create(
-    const transfer_options_t *opts,
-    transfer_context_t **out
-);
+transfer_context_t *transfer_context_create(const transfer_options_t *opts);
 
 /**
  * Free a transfer context.

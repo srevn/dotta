@@ -183,12 +183,8 @@ static void finalize_progress(transfer_context_t *ctx, const char *completion) {
     ctx->progress_active = false;
 }
 
-error_t *transfer_context_create(
-    const transfer_options_t *opts,
-    transfer_context_t **out
-) {
+transfer_context_t *transfer_context_create(const transfer_options_t *opts) {
     CHECK_NULL(opts);
-    CHECK_NULL(out);
     CHECK_NULL(opts->output);
 
     transfer_context_t *ctx = heap_calloc(1, sizeof(*ctx));
@@ -199,8 +195,7 @@ error_t *transfer_context_create(
     ctx->local_transport = url_is_local(ctx->url);
     /* All other fields zero-initialized by heap_calloc. */
 
-    *out = ctx;
-    return NULL;
+    return ctx;
 }
 
 /**

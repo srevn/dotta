@@ -2675,13 +2675,9 @@ static error_t *workspace_analyze_untracked(
 
     /* Source-tree .gitignore filter — built once for the whole scan so the
      * discovered source-repo handle is reused across every root. Driven by config;
-     * policy decision lives here, not in the ignore module. Fatal on failure:
-     * it can only fail on allocation (sys/source.c), and a scan that ran without
-     * the layer it was told to consult would offer what the source tree excludes.
-     * Unwrapped — the failure names its own subject. */
+     * policy decision lives here, not in the ignore module. */
     if (config && config->respect_gitignore) {
-        err = source_filter_create(&source_filter);
-        if (err) return err;
+        source_filter = source_filter_create();
     }
 
     /* Layered-rules builder — one per scan. The baseline is read and compiled

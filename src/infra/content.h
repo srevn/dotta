@@ -428,7 +428,7 @@ error_t *content_compare_blob_to_disk(
  *
  * @param repo Git repository (borrowed reference, must not be NULL)
  * @param keymgr Key manager (borrowed reference, can be NULL)
- * @return Content cache or NULL on allocation failure
+ * @return Content cache (caller frees via content_cache_free)
  */
 content_cache_t *content_cache_create(
     git_repository *repo,

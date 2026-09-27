@@ -76,13 +76,8 @@ static void forget(source_filter_t *f) {
     f->prefix = NULL;
 }
 
-error_t *source_filter_create(source_filter_t **out) {
-    CHECK_NULL(out);
-
-    source_filter_t *f = heap_calloc(1, sizeof(*f));
-
-    *out = f;
-    return NULL;
+source_filter_t *source_filter_create(void) {
+    return heap_calloc(1, sizeof(source_filter_t));
 }
 
 void source_filter_free(source_filter_t *f) {

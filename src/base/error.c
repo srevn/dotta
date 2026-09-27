@@ -10,20 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "base/heap.h"
 #include "base/terminal.h"
-
-/**
- * Static OOM sentinel - returned when error allocation itself fails.
- *
- * Without this, OOM during error creation returns NULL, which every caller
- * interprets as "no error" — silently swallowing the real failure. The sentinel
- * is pre-allocated in static storage, never freed.
- */
-static error_t oom_sentinel = {
-    .code    = ERR_MEMORY,
-    .message = (char *) "Out of memory",
-    .cause   = NULL
-};
 
 /**
  * Create error with variable arguments (internal helper)
@@ -33,32 +21,19 @@ static error_t *error_vcreate(
     const char *fmt,
     va_list args
 ) {
-    error_t *err = calloc(1, sizeof(error_t));
-    if (!err) {
-        return &oom_sentinel;
-    }
-
-    err->code = code;
-    err->cause = NULL;
-
-    /* Format message */
+    /* Size the message. The format is its writer's: one that cannot be formatted
+     * is a caller's bug, never an error to report. */
     va_list args_copy;
     va_copy(args_copy, args);
     int len = vsnprintf(NULL, 0, fmt, args_copy);
     va_end(args_copy);
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
 
-    if (len < 0) {
-        free(err);
-        return &oom_sentinel;
-    }
-
-    err->message = malloc(len + 1);
-    if (!err->message) {
-        free(err);
-        return &oom_sentinel;
-    }
-
-    vsnprintf(err->message, len + 1, fmt, args);
+    /* The error and its message, from the heap that cannot fail. */
+    error_t *err = heap_calloc(1, sizeof(error_t));
+    err->code = code;
+    err->message = heap_alloc((size_t) len + 1);
+    vsnprintf(err->message, (size_t) len + 1, fmt, args);
 
     return err;
 }
@@ -80,12 +55,6 @@ error_t *error_wrap(error_t *cause, const char *fmt, ...) {
     va_start(args, fmt);
     error_t *err = error_vcreate(cause->code, fmt, args);
     va_end(args);
-
-    if (err == &oom_sentinel) {
-        /* Can't allocate wrapper — return cause to preserve the error chain and
-         * avoid leaking the cause we took ownership of */
-        return cause;
-    }
 
     err->cause = cause;
     return err;
@@ -120,28 +89,18 @@ error_t *error_from_errno(int errno_val, const char *fmt, ...) {
     error_t *err = error_vcreate(error_code_from_errno(errno_val), fmt, args);
     va_end(args);
 
-    /* The sentinel is static and not ours to write. */
-    if (err == &oom_sentinel) {
-        return err;
-    }
-
+    /* The caller's prose, then ": " and strerror's word. */
     const char *why = strerror(errno_val);
     size_t len = strlen(err->message);
-    char *message = realloc(err->message, len + 2 + strlen(why) + 1);
-    if (!message) {
-        free(err->message);
-        free(err);
-        return &oom_sentinel;
-    }
-    memcpy(message + len, ": ", 2);
-    strcpy(message + len + 2, why);
-    err->message = message;
+    err->message = heap_realloc(err->message, len + 2 + strlen(why) + 1);
+    memcpy(err->message + len, ": ", 2);
+    strcpy(err->message + len + 2, why);
 
     return err;
 }
 
 void error_free(error_t *err) {
-    while (err && err != &oom_sentinel) {
+    while (err) {
         error_t *cause = err->cause;
         free(err->message);
         free(err);

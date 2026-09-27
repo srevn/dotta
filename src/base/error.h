@@ -50,25 +50,32 @@ struct error {
 /**
  * Create a new error with formatted message
  *
+ * An error is the heap's, so it is made or the run dies of exhaustion
+ * (base/heap.h): no answer here is NULL. The format is its writer's, checked by
+ * the compiler at every site, and one that still cannot be formatted is a caller's
+ * bug.
+ *
  * @param code Error code
  * @param fmt Format string (printf-style)
  * @param ... Format arguments
  * @return Newly allocated error (must be freed with error_free)
  */
-error_t *error_create(error_code_t code, const char *fmt, ...);
+error_t *error_create(error_code_t code, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Wrap an existing error with additional context
  *
- * Ownership of cause is always consumed: on success, cause becomes the new error's
- * cause chain; on OOM, cause is returned directly (no leak).
+ * Ownership of cause is consumed: it becomes the new error's cause, and the new
+ * error keeps its code.
  *
- * @param cause Original error (ownership transferred)
+ * @param cause Original error (ownership transferred; NULL wraps nothing)
  * @param fmt Context message format
  * @param ... Format arguments
- * @return New error wrapping the original, or cause itself on OOM
+ * @return New error wrapping the original, or NULL for a NULL cause
  */
-error_t *error_wrap(error_t *cause, const char *fmt, ...);
+error_t *error_wrap(error_t *cause, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Create error from libgit2 error
@@ -108,7 +115,8 @@ error_code_t error_code_from_errno(int errno_val);
  * @param ... Format arguments
  * @return Newly allocated error
  */
-error_t *error_from_errno(int errno_val, const char *fmt, ...);
+error_t *error_from_errno(int errno_val, const char *fmt, ...)
+__attribute__((format(printf, 2, 3)));
 
 /**
  * Free error and all chained causes

@@ -26,10 +26,8 @@
  * - Works with pipes and redirects
  */
 int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
-    if (!repo_path || !opts) {
-        fprintf(stderr, "Error: Internal error (NULL arguments)\n");
-        return 1;
-    }
+    CHECK_NULL(repo_path);
+    CHECK_NULL(opts);
 
     if (!opts->args || opts->arg_count == 0) {
         fprintf(stderr, "Error: No git command specified\n\n");

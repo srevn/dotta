@@ -177,7 +177,6 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * Errors:
  * - ERR_GIT: Failed to load blob (corruption, missing object)
  * - ERR_CRYPTO: out_epoch_fp requested but the encrypted header is truncated
- * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_classify(
     git_repository *repo,
@@ -271,7 +270,6 @@ typedef struct content_cache content_cache_t;
  * - ERR_CRYPTO: a held master does not open the blob (wrong key, corruption,
  *   path mismatch), a foreign epoch, or a version this build does not read
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
- * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_get_from_blob_oid(
     git_repository *repo,
@@ -410,7 +408,6 @@ error_t *content_rebind(
  *   epoch, or a version this build does not read
  * - ERR_NOT_FOUND / ERR_GIT: the blob could not be loaded
  * - ERR_IO / ERR_PERMISSION: the disk copy could not be read
- * - ERR_INVALID_ARG: Required arguments are NULL
  */
 error_t *content_compare_blob_to_disk(
     content_cache_t *cache,
@@ -622,7 +619,7 @@ typedef struct {
  * - ERR_LOCKED: Encryption requested with the feature off (no keymgr), or the
  *   keymgr obtained no usable master — under "Cannot encrypt '<path>'"
  * - ERR_CRYPTO: Encryption failed
- * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a regular file
+ * - ERR_INVALID_ARG: The path is not a regular file
  */
 error_t *content_capture_file(
     const char *filesystem_path,
@@ -665,7 +662,7 @@ error_t *content_capture_file(
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_INVALID_ARG: Required arguments are NULL, or the path is not a symlink
+ * - ERR_INVALID_ARG: The path is not a symlink
  * - ERR_CONFLICT: The link changed while it was read
  * - ERR_NOT_FOUND / ERR_PERMISSION / ERR_FS: The look or the read, by its errno
  *   (a target too long to read whole is ENAMETOOLONG)

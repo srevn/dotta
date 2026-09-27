@@ -120,7 +120,6 @@ typedef enum {
  * @return Error or NULL on success
  *
  * Errors:
- * - ERR_INVALID_ARG: Required arguments are NULL
  * - ERR_VALIDATION: --encrypt on a meta-file, or --no-encrypt over ciphertext
  */
 error_t *encryption_policy_should_encrypt(

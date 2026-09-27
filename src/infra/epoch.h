@@ -326,13 +326,13 @@ typedef enum {
  * licenses can make it worse.
  *
  * Fails closed by returning: a census that cannot finish is an error, never a
- * verdict, and it is the only error this call produces beyond a NULL argument.
- * Transport failure (connect / ls) still folds to EPOCH_RECONCILE_UNREACHABLE
- * so the caller can skip epoch reconciliation best-effort — the authoritative
- * "remote unreachable" diagnostic comes from the subsequent fetch phase — but a
- * census failure has no second reporter anywhere in sync, so its cause is returned
- * rather than freed. It is returned bare: this boundary knows the mechanism,
- * and the caller that renders it is the one that can name the subject.
+ * verdict, and it is the only error this call produces. Transport failure (connect
+ * / ls) still folds to EPOCH_RECONCILE_UNREACHABLE so the caller can skip epoch
+ * reconciliation best-effort — the authoritative "remote unreachable" diagnostic
+ * comes from the subsequent fetch phase — but a census failure has no second
+ * reporter anywhere in sync, so its cause is returned rather than freed. It is
+ * returned bare: this boundary knows the mechanism, and the caller that renders
+ * it is the one that can name the subject.
  *
  * This module owns only the *mechanism* of looking and classifying; the acts,
  * the CLI gating, and the rendering are policy and live in `cmd_sync`.
@@ -341,8 +341,8 @@ typedef enum {
  * @param remote_name  Remote name (must not be NULL, e.g. "origin")
  * @param xfer         Transfer context for credentials / progress (must not be NULL)
  * @param out_decision Output decision (must not be NULL)
- * @return Error on a NULL argument or on a census that could not finish; otherwise
- *         NULL with *out_decision set
+ * @return Error on a census that could not finish; otherwise NULL with
+ *         *out_decision set
  */
 error_t *epoch_resolve(
     git_repository *repo,

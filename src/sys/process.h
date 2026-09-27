@@ -255,7 +255,7 @@ typedef struct {
  *   - exec failed in the child (result->exec_failed + exec_errno).
  *
  * Returns a non-NULL error_t* only for failures the primitive itself encountered:
- *   - invalid spec (argv NULL, argv[0] missing, etc.)         → ERR_INVALID_ARG
+ *   - invalid spec (argv[0] missing or empty, etc.)           → ERR_INVALID_ARG
  *   - pipe(), fork(), or clock_gettime() failed                → ERR_FS
  *   - select()/read()/waitpid() returned an unrecoverable error → ERR_FS
  *   - "we tried to kill a timed-out child but it never reaped"  → ERR_FS

@@ -48,7 +48,8 @@
  *
  * @param repo Repository (must not be NULL)
  * @param remote_name Remote name (typically "origin")
- * @param profiles Array of profile names to make local
+ * @param profiles Array of profile names to make local (may be NULL when count
+ *                 is 0: the items of an empty listing, a remote with no branch)
  * @param count Number of profiles
  * @param out Output context for messages
  * @param landed_count Output: number made local (can be NULL)
@@ -65,7 +66,6 @@ static error_t *land_profiles(
     string_array_t *landed
 ) {
     CHECK_NULL(repo);
-    CHECK_NULL(profiles);
     CHECK_NULL(out);
 
     size_t local_count = 0;

@@ -181,7 +181,7 @@ Keybindings:
 Dotta automatically preserves file metadata across machines:
 
 - **Permissions** (mode) -- captured during `add`/`update`, restored during `apply`
-- **Ownership** (user:group) -- recorded for `root/` and `custom/` paths owned by someone other than you, and for all of them when you run as root; never for `home/`; no privileges are needed to read it
+- **Ownership** (user:group) -- recorded for any path owned by someone other than the user running `dotta`, and under a root login for the paths outside the home directory; a path with none recorded belongs to whoever runs `dotta`, on every machine; no privileges are needed to read it
 - Stored in `.dotta/metadata.json` within each profile branch
 
 ```bash

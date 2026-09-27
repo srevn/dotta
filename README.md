@@ -119,7 +119,7 @@ Key environment variables:
 
 Detailed guides are available in [`docs/`](docs/):
 
-- [**Concepts**](docs/concepts.md) -- How dotta works: the profile model, how files are stored, how directories are handled, the view and the record
+- [**Concepts**](docs/concepts.md) -- How dotta works: profiles, storage, directories, the view and the record
 - [**Profiles**](docs/profiles.md) -- Profile management, layering, hierarchical organization
 - [**Workflows**](docs/workflows.md) -- Common workflows: add/apply/update cycle, sync, diff, revert
 - [**Encryption**](docs/encryption.md) -- Transparent file encryption setup and usage

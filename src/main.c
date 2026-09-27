@@ -568,12 +568,6 @@ int main(int argc, char **argv) {
     /* Create output context once from config settings. All commands share this
      * context and may override verbosity via CLI flags. */
     output_t *out = output_create(stdout, config->verbosity, config->color);
-    if (!out) {
-        fprintf(stderr, "Failed to create output context\n");
-        config_free(config);
-        gitops_shutdown();
-        return 1;
-    }
 
     int ret = run_spec(spec, argc, argv, prog, config, out);
 

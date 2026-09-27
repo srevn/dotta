@@ -256,7 +256,6 @@ static void status_print_manifest(
         "every active path; [clean] where nothing diverged, [ancestor] where "
         "dotta only passes through"
     );
-    if (!list) return;
 
     /* Each kind's items are in filesystem_path order and share no path (one row
      * per path, one kind), so a two-finger merge walks the view as one path-ordered
@@ -558,31 +557,29 @@ static void status_print_workspace(
                 "when the kind matches, \"dotta remove\" to untrack"
             );
 
-            if (list) {
-                for (size_t i = 0; i < conflict_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < conflict_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        conflicts[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", conflicts[i]->filesystem_path,
-                            path_kind_suffix(conflicts[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    conflicts[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", conflicts[i]->filesystem_path,
+                        path_kind_suffix(conflicts[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 2: Squatted ancestors — a different kind stands at a directory
@@ -596,31 +593,29 @@ static void status_print_workspace(
                 "through; \"dotta update <dir>\" re-derives it"
             );
 
-            if (list) {
-                for (size_t i = 0; i < squatted_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < squatted_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        squatted[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", squatted[i]->filesystem_path,
-                            path_kind_suffix(squatted[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    squatted[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", squatted[i]->filesystem_path,
+                        path_kind_suffix(squatted[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 3: Displaced paths — beneath a squatter one of the two sections
@@ -642,31 +637,29 @@ static void status_print_workspace(
                 "it under Conflicts or Squatted ancestors)"
             );
 
-            if (list) {
-                for (size_t i = 0; i < displaced_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < displaced_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        displaced[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", displaced[i]->filesystem_path,
-                            path_kind_suffix(displaced[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    displaced[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", displaced[i]->filesystem_path,
+                        path_kind_suffix(displaced[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 4: Unverifiable paths — the other no-verb bucket: dotta could
@@ -684,100 +677,98 @@ static void status_print_workspace(
                 "dotta could not verify these paths"
             );
 
-            if (list) {
-                /* Keyed by the exact tags the line shows, the way Issues is keyed,
-                 * so the column below reads back against the one above. Three
-                 * classes (workspace_fault_t), and the policy bit before the
-                 * class and a pending reassignment after it can each ride on
-                 * the line ([unencrypted] [unreadable] [reassigned]), so twelve
-                 * keys bound the domain. */
-                struct { char tags[64]; const char *hint; } legend[12];
-                size_t legend_count = 0;
-                size_t legend_width = 0;
+            /* Keyed by the exact tags the line shows, the way Issues is keyed,
+             * so the column below reads back against the one above. Three classes
+             * (workspace_fault_t), and the policy bit before the class and a
+             * pending reassignment after it can each ride on the line
+             * ([unencrypted] [unreadable] [reassigned]), so twelve keys bound
+             * the domain. */
+            struct { char tags[64]; const char *hint; } legend[12];
+            size_t legend_count = 0;
+            size_t legend_width = 0;
 
-                for (size_t i = 0; i < unverifiable_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < unverifiable_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (!workspace_item_tags(
-                        unverifiable[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        continue;
-                    }
-                    snprintf(
-                        path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
-                        path_kind_suffix(unverifiable[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
+                if (!workspace_item_tags(
+                    unverifiable[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    continue;
+                }
+                snprintf(
+                    path, sizeof(path), "%s%s", unverifiable[i]->filesystem_path,
+                    path_kind_suffix(unverifiable[i]->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
 
-                    /* What the failed look was, then the way out of it: a key
-                     * for the locked rows, root for the unreadable ones and only
-                     * where the run holds none. The residual class has no remedy
-                     * to name — there is no one remedy for a foreign epoch, a
-                     * cipher this build does not read and an I/O error — so its
-                     * line names the verb that will print the cause instead. */
-                    const char *hint = NULL;
+                /* What the failed look was, then the way out of it: a key for
+                 * the locked rows, root for the unreadable ones and only where
+                 * the run holds none. The residual class has no remedy to name
+                 * — there is no one remedy for a foreign epoch, a cipher this
+                 * build does not read and an I/O error — so its line names the
+                 * verb that will print the cause instead. */
+                const char *hint = NULL;
 
-                    switch (unverifiable[i]->fault) {
-                        case WORKSPACE_FAULT_LOCKED:
-                            hint = "encrypted, and no key opened it; "
-                                "'dotta key set' unlocks it";
-                            break;
-                        case WORKSPACE_FAULT_UNREADABLE:
-                            hint = identity()->privileged
-                                ? "permissions refused the read"
-                                : "permissions refused the read; "
-                                "sudo would lift it";
-                            break;
-                        case WORKSPACE_FAULT_NONE:
-                        case WORKSPACE_FAULT_UNVERIFIED:
-                            hint = "no remedy dotta can name; the verb that "
-                                "meets it prints why";
-                            break;
-                    }
-
-                    /* Same bracketing and spacing the list gives the item line,
-                     * so the column below matches the one above */
-                    char key[64] = "";
-                    for (size_t t = 0; t < tag_count; t++) {
-                        size_t used = strlen(key);
-                        snprintf(
-                            key + used, sizeof(key) - used, "%s[%s]",
-                            t > 0 ? " " : "", tags[t]
-                        );
-                    }
-
-                    size_t slot = 0;
-                    while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                        slot++;
-                    }
-                    if (slot == legend_count &&
-                        legend_count < sizeof(legend) / sizeof(legend[0])) {
-                        size_t len = strlen(key);
-                        memcpy(legend[legend_count].tags, key, len + 1);
-                        legend[legend_count].hint = hint;
-                        legend_count++;
-                        if (len > legend_width) legend_width = len;
-                    }
+                switch (unverifiable[i]->fault) {
+                    case WORKSPACE_FAULT_LOCKED:
+                        hint = "encrypted, and no key opened it; "
+                            "'dotta key set' unlocks it";
+                        break;
+                    case WORKSPACE_FAULT_UNREADABLE:
+                        hint = identity()->privileged
+                            ? "permissions refused the read"
+                            : "permissions refused the read; "
+                            "sudo would lift it";
+                        break;
+                    case WORKSPACE_FAULT_NONE:
+                    case WORKSPACE_FAULT_UNVERIFIED:
+                        hint = "no remedy dotta can name; the verb that "
+                            "meets it prints why";
+                        break;
                 }
 
-                output_list_render(list);
-                output_list_free(list);
+                /* Same bracketing and spacing the list gives the item line, so
+                 * the column below matches the one above */
+                char key[64] = "";
+                for (size_t t = 0; t < tag_count; t++) {
+                    size_t used = strlen(key);
+                    snprintf(
+                        key + used, sizeof(key) - used, "%s[%s]",
+                        t > 0 ? " " : "", tags[t]
+                    );
+                }
 
-                if (legend_count > 0) {
-                    output_gap(out, OUTPUT_NORMAL);
-                    for (size_t i = 0; i < legend_count; i++) {
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  %-*s - %s",
-                            (int) legend_width, legend[i].tags, legend[i].hint
-                        );
-                    }
+                size_t slot = 0;
+                while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                    slot++;
+                }
+                if (slot == legend_count &&
+                    legend_count < sizeof(legend) / sizeof(legend[0])) {
+                    size_t len = strlen(key);
+                    memcpy(legend[legend_count].tags, key, len + 1);
+                    legend[legend_count].hint = hint;
+                    legend_count++;
+                    if (len > legend_width) legend_width = len;
+                }
+            }
+
+            output_list_render(list);
+            output_list_free(list);
+
+            if (legend_count > 0) {
+                output_gap(out, OUTPUT_NORMAL);
+                for (size_t i = 0; i < legend_count; i++) {
+                    output_hintline(
+                        out, OUTPUT_NORMAL, "  %-*s - %s",
+                        (int) legend_width, legend[i].tags, legend[i].hint
+                    );
                 }
             }
         }
@@ -789,31 +780,29 @@ static void status_print_workspace(
                 "use \"dotta update\" to commit these changes"
             );
 
-            if (list) {
-                for (size_t i = 0; i < uncommitted_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < uncommitted_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        uncommitted[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", uncommitted[i]->filesystem_path,
-                            path_kind_suffix(uncommitted[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    uncommitted[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", uncommitted[i]->filesystem_path,
+                        path_kind_suffix(uncommitted[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 6: Profile Reassignments */
@@ -823,31 +812,29 @@ static void status_print_workspace(
                 "run \"dotta apply\" to acknowledge"
             );
 
-            if (list) {
-                for (size_t i = 0; i < reassigned_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < reassigned_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        reassigned[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", reassigned[i]->filesystem_path,
-                            path_kind_suffix(reassigned[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    reassigned[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", reassigned[i]->filesystem_path,
+                        path_kind_suffix(reassigned[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 7: Undeployed changes — apply's work, both kinds: what Git
@@ -860,31 +847,29 @@ static void status_print_workspace(
                 "use \"dotta apply\" to deploy these changes"
             );
 
-            if (list) {
-                for (size_t i = 0; i < undeployed_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < undeployed_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        undeployed[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", undeployed[i]->filesystem_path,
-                            path_kind_suffix(undeployed[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    undeployed[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", undeployed[i]->filesystem_path,
+                        path_kind_suffix(undeployed[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 8: New Files */
@@ -894,31 +879,29 @@ static void status_print_workspace(
                 "use \"dotta update --include-new\" to track these files"
             );
 
-            if (list) {
-                for (size_t i = 0; i < new_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < new_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (workspace_item_tags(
-                        new_files[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        snprintf(
-                            path, sizeof(path), "%s%s", new_files[i]->filesystem_path,
-                            path_kind_suffix(new_files[i]->item_kind)
-                        );
-                        output_list_add(
-                            list, tags, tag_count, color, path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    new_files[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    snprintf(
+                        path, sizeof(path), "%s%s", new_files[i]->filesystem_path,
+                        path_kind_suffix(new_files[i]->item_kind)
+                    );
+                    output_list_add(
+                        list, tags, tag_count, color, path, metadata
+                    );
                 }
-
-                output_list_render(list);
-                output_list_free(list);
             }
+
+            output_list_render(list);
+            output_list_free(list);
         }
 
         /* Section 9: Issues (orphaned) */
@@ -928,189 +911,185 @@ static void status_print_workspace(
                 "run \"dotta apply\" to prune orphaned paths"
             );
 
-            if (list) {
-                /* The header promises a prune; a clean orphaned file gets one
-                 * and needs no more words. Every other hint is keyed below by
-                 * the exact tags its line shows, once per distinct tag string,
-                 * so the key reads back against the list it follows. The verdict
-                 * is cleanup's (cleanup_verdict, the one producer the preview
-                 * reads too) — this only names it. PRUNABLE is the one verdict
-                 * status cannot finish — the remainder and the run's reach are
-                 * preflight's, from the disk — and the directory hint says so;
-                 * it shares the bare [orphaned] key with the files, so the sentence
-                 * is written to be true of both. */
-                struct { char tags[64]; const char *hint; } legend[16];
-                size_t legend_count = 0;
-                size_t legend_width = 0;
+            /* The header promises a prune; a clean orphaned file gets one and
+             * needs no more words. Every other hint is keyed below by the exact
+             * tags its line shows, once per distinct tag string, so the key reads
+             * back against the list it follows. The verdict is cleanup's
+             * (cleanup_verdict, the one producer the preview reads too) — this
+             * only names it. PRUNABLE is the one verdict status cannot finish —
+             * the remainder and the run's reach are preflight's, from the disk
+             * — and the directory hint says so; it shares the bare [orphaned]
+             * key with the files, so the sentence is written to be true of both. */
+            struct { char tags[64]; const char *hint; } legend[16];
+            size_t legend_count = 0;
+            size_t legend_width = 0;
 
-                /* One sentence for every [relocated] key, wherever the verdict
-                 * put the item — a pruned custom/ re-target and a skipped home
-                 * move share the tag string across kinds and fates, so the sentence
-                 * is written to be true of all of them, the way the bare [orphaned]
-                 * key's is. */
-                static const char relocated_hint[] =
-                    "the claim deploys elsewhere now (target or home moved); "
-                    "apply prunes the old copy — a moved home holds it "
-                    "behind --force";
+            /* One sentence for every [relocated] key, wherever the verdict put
+             * the item — a pruned custom/ re-target and a skipped home move share
+             * the tag string across kinds and fates, so the sentence is written
+             * to be true of all of them, the way the bare [orphaned] key's is. */
+            static const char relocated_hint[] =
+                "the claim deploys elsewhere now (target or home moved); "
+                "apply prunes the old copy — a moved home holds it "
+                "behind --force";
 
-                for (size_t i = 0; i < orphaned_count; i++) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
-                    char path[PATH_MAX + 2];
+            for (size_t i = 0; i < orphaned_count; i++) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
+                char path[PATH_MAX + 2];
 
-                    if (!workspace_item_tags(
-                        orphaned[i], tags, &tag_count,
-                        &color, metadata, sizeof(metadata)
-                        )) {
-                        continue;
-                    }
-                    snprintf(
-                        path, sizeof(path), "%s%s", orphaned[i]->filesystem_path,
-                        path_kind_suffix(orphaned[i]->item_kind)
-                    );
-                    output_list_add(
-                        list, tags, tag_count, color, path, metadata
-                    );
+                if (!workspace_item_tags(
+                    orphaned[i], tags, &tag_count,
+                    &color, metadata, sizeof(metadata)
+                    )) {
+                    continue;
+                }
+                snprintf(
+                    path, sizeof(path), "%s%s", orphaned[i]->filesystem_path,
+                    path_kind_suffix(orphaned[i]->item_kind)
+                );
+                output_list_add(
+                    list, tags, tag_count, color, path, metadata
+                );
 
-                    const char *hint = NULL;
-                    bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
+                const char *hint = NULL;
+                bool is_dir = (orphaned[i]->item_kind == PATH_KIND_DIRECTORY);
 
-                    switch (cleanup_verdict(orphaned[i], false)) {
-                        case CLEANUP_ABSENT:
-                            hint = "already gone from disk; apply reclaims its entry";
+                switch (cleanup_verdict(orphaned[i], false)) {
+                    case CLEANUP_ABSENT:
+                        hint = "already gone from disk; apply reclaims its entry";
+                        break;
+
+                    case CLEANUP_RELEASED:
+                        /* The displaced read comes first: such an item was never
+                         * looked at, so neither sibling sentence is true of it
+                         * — the same precedence the verdict's own arms take.
+                         * The last sentence is the bare [released] key's, which
+                         * a file and a directory share — the legend keeps the
+                         * first hint a key meets — so, like the bare [orphaned]
+                         * key's, it is written to be true of both and names no
+                         * kind. */
+                        hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
+                            ? "not looked at, beneath a squatted directory; "
+                            "apply releases its entry, the path stays"
+                            : (orphaned[i]->divergence & DIVERGENCE_TYPE)
+                            ? "what dotta put there is gone, another kind of "
+                            "path stands in its place; apply releases its "
+                            "entry, the path stays"
+                            : "its claim is no longer in Git, dotta never "
+                            "deployed it, or its record names it under another "
+                            "spelling of its path; apply releases its "
+                            "entry, the path stays";
+                        break;
+
+                    case CLEANUP_SKIPPED:
+                        if (is_dir) {
+                            /* The two ways a directory reaches SKIPPED here
+                             * (force=false): the workspace could not verify it,
+                             * or the relocation skip — so the tail is the
+                             * relocation, no third way existing. Unverified is
+                             * read first, which is the file table's order and
+                             * the inverse of cleanup_verdict's arms, deliberately:
+                             * --force lifts the relocation skip and never the
+                             * unverified bit, so on a directory carrying both
+                             * the failed look's wording is the one that stays
+                             * true. Worded by whose remedy it is; a directory
+                             * seals no content, so its failed look is never the
+                             * key's. */
+                            hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
+                                ? (orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
+                                   ? "cannot be read; apply skips it"
+                                   : "could not be verified; apply skips it")
+                                : relocated_hint;
                             break;
-
-                        case CLEANUP_RELEASED:
-                            /* The displaced read comes first: such an item was
-                             * never looked at, so neither sibling sentence is
-                             * true of it — the same precedence the verdict's
-                             * own arms take. The last sentence is the bare
-                             * [released] key's, which a file and a directory
-                             * share — the legend keeps the first hint a key meets
-                             * — so, like the bare [orphaned] key's, it is written
-                             * to be true of both and names no kind. */
-                            hint = orphaned[i]->displaced != WORKSPACE_DISPLACED_NONE
-                                ? "not looked at, beneath a squatted directory; "
-                                "apply releases its entry, the path stays"
-                                : (orphaned[i]->divergence & DIVERGENCE_TYPE)
-                                ? "what dotta put there is gone, another kind of "
-                                "path stands in its place; apply releases its "
-                                "entry, the path stays"
-                                : "its claim is no longer in Git, dotta never "
-                                "deployed it, or its record names it under another "
-                                "spelling of its path; apply releases its "
-                                "entry, the path stays";
-                            break;
-
-                        case CLEANUP_SKIPPED:
-                            if (is_dir) {
-                                /* The two ways a directory reaches SKIPPED here
-                                 * (force=false): the workspace could not verify
-                                 * it, or the relocation skip — so the tail is
-                                 * the relocation, no third way existing. Unverified
-                                 * is read first, which is the file table's order
-                                 * and the inverse of cleanup_verdict's arms,
-                                 * deliberately: --force lifts the relocation
-                                 * skip and never the unverified bit, so on a
-                                 * directory carrying both the failed look's wording
-                                 * is the one that stays true. Worded by whose
-                                 * remedy it is; a directory seals no content,
-                                 * so its failed look is never the key's. */
-                                hint = (orphaned[i]->divergence & DIVERGENCE_UNVERIFIED)
-                                    ? (orphaned[i]->fault == WORKSPACE_FAULT_UNREADABLE
-                                       ? "cannot be read; apply skips it"
-                                       : "could not be verified; apply skips it")
-                                    : relocated_hint;
+                        }
+                        switch (cleanup_skip_reason(orphaned[i])) {
+                            case CLEANUP_SKIP_UNVERIFIED:
+                                /* Worded by whose remedy the failed look is, so
+                                 * the hint and the tag it is keyed by say the
+                                 * same thing (workspace_fault_t). */
+                                switch (orphaned[i]->fault) {
+                                    case WORKSPACE_FAULT_LOCKED:
+                                        hint = "encrypted, and no key opened it "
+                                            "('dotta key set'); apply skips it, "
+                                            "--force prunes it";
+                                        break;
+                                    case WORKSPACE_FAULT_UNREADABLE:
+                                        hint = "cannot be read; "
+                                            "apply skips it, --force prunes it";
+                                        break;
+                                    case WORKSPACE_FAULT_NONE:
+                                    case WORKSPACE_FAULT_UNVERIFIED:
+                                        hint = "could not be verified; "
+                                            "apply skips it, --force prunes it";
+                                        break;
+                                }
                                 break;
-                            }
-                            switch (cleanup_skip_reason(orphaned[i])) {
-                                case CLEANUP_SKIP_UNVERIFIED:
-                                    /* Worded by whose remedy the failed look
-                                     * is, so the hint and the tag it is keyed
-                                     * by say the same thing (workspace_fault_t). */
-                                    switch (orphaned[i]->fault) {
-                                        case WORKSPACE_FAULT_LOCKED:
-                                            hint = "encrypted, and no key opened it "
-                                                "('dotta key set'); apply skips it, "
-                                                "--force prunes it";
-                                            break;
-                                        case WORKSPACE_FAULT_UNREADABLE:
-                                            hint = "cannot be read; "
-                                                "apply skips it, --force prunes it";
-                                            break;
-                                        case WORKSPACE_FAULT_NONE:
-                                        case WORKSPACE_FAULT_UNVERIFIED:
-                                            hint = "could not be verified; "
-                                                "apply skips it, --force prunes it";
-                                            break;
-                                    }
-                                    break;
-                                case CLEANUP_SKIP_RELOCATED:
-                                    hint = relocated_hint;
-                                    break;
-                                /* The key names what changed — [modified], [type],
-                                 * [mode], [ownership] — so the hint says only
-                                 * that it did. */
-                                case CLEANUP_SKIP_MODIFIED:
-                                case CLEANUP_SKIP_TYPE_CHANGED:
-                                case CLEANUP_SKIP_CLAIM_CHANGED:
-                                    hint = "changed since deployment; "
-                                        "apply skips it, --force prunes it";
-                                    break;
-                                case CLEANUP_SKIP_NONE:
-                                    break;
-                            }
-                            break;
-
-                        case CLEANUP_PRUNABLE:
-                            if (orphaned[i]->relocation != WORKSPACE_RELOCATION_NONE) {
+                            case CLEANUP_SKIP_RELOCATED:
                                 hint = relocated_hint;
-                            } else if (is_dir) {
-                                hint = "apply prunes it; a directory still holding "
-                                    "something not dotta's to remove is released "
-                                    "instead";
-                            }
-                            break;
-                    }
-                    if (!hint) continue;
+                                break;
+                            /* The key names what changed — [modified], [type],
+                             * [mode], [ownership] — so the hint says only that
+                             * it did. */
+                            case CLEANUP_SKIP_MODIFIED:
+                            case CLEANUP_SKIP_TYPE_CHANGED:
+                            case CLEANUP_SKIP_CLAIM_CHANGED:
+                                hint = "changed since deployment; "
+                                    "apply skips it, --force prunes it";
+                                break;
+                            case CLEANUP_SKIP_NONE:
+                                break;
+                        }
+                        break;
 
-                    /* Same bracketing and spacing the list gives the item line,
-                     * so the column below matches the one above */
-                    char key[64] = "";
-                    for (size_t t = 0; t < tag_count; t++) {
-                        size_t used = strlen(key);
-                        snprintf(
-                            key + used, sizeof(key) - used, "%s[%s]",
-                            t > 0 ? " " : "", tags[t]
-                        );
-                    }
+                    case CLEANUP_PRUNABLE:
+                        if (orphaned[i]->relocation != WORKSPACE_RELOCATION_NONE) {
+                            hint = relocated_hint;
+                        } else if (is_dir) {
+                            hint = "apply prunes it; a directory still holding "
+                                "something not dotta's to remove is released "
+                                "instead";
+                        }
+                        break;
+                }
+                if (!hint) continue;
 
-                    size_t slot = 0;
-                    while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
-                        slot++;
-                    }
-                    if (slot == legend_count && legend_count < 16) {
-                        size_t len = strlen(key);
-                        memcpy(legend[legend_count].tags, key, len + 1);
-                        legend[legend_count].hint = hint;
-                        legend_count++;
-                        if (len > legend_width) legend_width = len;
-                    }
+                /* Same bracketing and spacing the list gives the item line, so
+                 * the column below matches the one above */
+                char key[64] = "";
+                for (size_t t = 0; t < tag_count; t++) {
+                    size_t used = strlen(key);
+                    snprintf(
+                        key + used, sizeof(key) - used, "%s[%s]",
+                        t > 0 ? " " : "", tags[t]
+                    );
                 }
 
-                output_list_render(list);
-                output_list_free(list);
+                size_t slot = 0;
+                while (slot < legend_count && strcmp(legend[slot].tags, key) != 0) {
+                    slot++;
+                }
+                if (slot == legend_count && legend_count < 16) {
+                    size_t len = strlen(key);
+                    memcpy(legend[legend_count].tags, key, len + 1);
+                    legend[legend_count].hint = hint;
+                    legend_count++;
+                    if (len > legend_width) legend_width = len;
+                }
+            }
 
-                if (legend_count > 0) {
-                    output_gap(out, OUTPUT_NORMAL);
-                    for (size_t i = 0; i < legend_count; i++) {
-                        output_hintline(
-                            out, OUTPUT_NORMAL, "  %-*s - %s",
-                            (int) legend_width, legend[i].tags, legend[i].hint
-                        );
-                    }
+            output_list_render(list);
+            output_list_free(list);
+
+            if (legend_count > 0) {
+                output_gap(out, OUTPUT_NORMAL);
+                for (size_t i = 0; i < legend_count; i++) {
+                    output_hintline(
+                        out, OUTPUT_NORMAL, "  %-*s - %s",
+                        (int) legend_width, legend[i].tags, legend[i].hint
+                    );
                 }
             }
         }

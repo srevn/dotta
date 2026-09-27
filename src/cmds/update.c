@@ -1262,40 +1262,38 @@ static error_t *update_print_preview(
             "will be committed to their profiles"
         );
 
-        if (list) {
-            for (size_t i = 0; i < item_count; i++) {
-                const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
 
-                /* The counted set: a DEPLOYED file with a path bit. An
-                 * ENCRYPTION-only violator lists in the policy section below. */
-                if (item->item_kind != PATH_KIND_FILE ||
-                    item->state != WORKSPACE_STATE_DEPLOYED ||
-                    (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
-                    continue;
-                }
-
-                /* Extract tags using shared helper */
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char base_metadata[256];
-
-                if (!workspace_item_tags(
-                    item, tags, &tag_count, &color,
-                    base_metadata, sizeof(base_metadata)
-                    )) {
-                    continue;
-                }
-
-                output_list_add(
-                    list, tags, tag_count, color,
-                    item->filesystem_path, base_metadata
-                );
+            /* The counted set: a DEPLOYED file with a path bit. An ENCRYPTION-only
+             * violator lists in the policy section below. */
+            if (item->item_kind != PATH_KIND_FILE ||
+                item->state != WORKSPACE_STATE_DEPLOYED ||
+                (item->divergence & ~DIVERGENCE_ENCRYPTION) == DIVERGENCE_NONE) {
+                continue;
             }
 
-            output_list_render(list);
-            output_list_free(list);
+            /* Extract tags using shared helper */
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char base_metadata[256];
+
+            if (!workspace_item_tags(
+                item, tags, &tag_count, &color,
+                base_metadata, sizeof(base_metadata)
+                )) {
+                continue;
+            }
+
+            output_list_add(
+                list, tags, tag_count, color,
+                item->filesystem_path, base_metadata
+            );
         }
+
+        output_list_render(list);
+        output_list_free(list);
     }
 
     /* Display new files section */
@@ -1305,33 +1303,31 @@ static error_t *update_print_preview(
             "will be added to their profiles"
         );
 
-        if (list) {
-            for (size_t i = 0; i < item_count; i++) {
-                const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
 
-                if (item->item_kind == PATH_KIND_FILE &&
-                    item->state == WORKSPACE_STATE_UNTRACKED
-                ) {
-                    const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                    size_t tag_count;
-                    output_color_t color;
-                    char metadata[256];
+            if (item->item_kind == PATH_KIND_FILE &&
+                item->state == WORKSPACE_STATE_UNTRACKED
+            ) {
+                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+                size_t tag_count;
+                output_color_t color;
+                char metadata[256];
 
-                    if (workspace_item_tags(
-                        item, tags, &tag_count, &color,
-                        metadata, sizeof(metadata)
-                        )) {
-                        output_list_add(
-                            list, tags, tag_count, color,
-                            item->filesystem_path, metadata
-                        );
-                    }
+                if (workspace_item_tags(
+                    item, tags, &tag_count, &color,
+                    metadata, sizeof(metadata)
+                    )) {
+                    output_list_add(
+                        list, tags, tag_count, color,
+                        item->filesystem_path, metadata
+                    );
                 }
             }
-
-            output_list_render(list);
-            output_list_free(list);
         }
+
+        output_list_render(list);
+        output_list_free(list);
     }
 
     /* Display deleted paths section — one fate, both kinds: a deleted directory
@@ -1343,56 +1339,54 @@ static error_t *update_print_preview(
             "will be removed from their profiles"
         );
 
-        if (list) {
-            for (size_t i = 0; i < item_count; i++) {
-                const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
 
-                if (item->state != WORKSPACE_STATE_DELETED) {
-                    continue;
-                }
-
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char base_metadata[256];
-
-                if (!workspace_item_tags(
-                    item, tags, &tag_count, &color,
-                    base_metadata, sizeof(base_metadata)
-                    )) {
-                    continue;
-                }
-
-                /* Directory rows read as directories: trailing slash, kind named
-                 * — the same shape the claims section uses */
-                char path[PATH_MAX + 2];
-                snprintf(
-                    path, sizeof(path), "%s%s", item->filesystem_path,
-                    path_kind_suffix(item->item_kind)
-                );
-
-                if (item->item_kind == PATH_KIND_DIRECTORY) {
-                    char metadata[256];
-                    snprintf(
-                        metadata, sizeof(metadata), "directory %s",
-                        base_metadata
-                    );
-
-                    output_list_add(
-                        list, tags, tag_count, color,
-                        path, metadata
-                    );
-                } else {
-                    output_list_add(
-                        list, tags, tag_count, color,
-                        path, base_metadata
-                    );
-                }
+            if (item->state != WORKSPACE_STATE_DELETED) {
+                continue;
             }
 
-            output_list_render(list);
-            output_list_free(list);
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char base_metadata[256];
+
+            if (!workspace_item_tags(
+                item, tags, &tag_count, &color,
+                base_metadata, sizeof(base_metadata)
+                )) {
+                continue;
+            }
+
+            /* Directory rows read as directories: trailing slash, kind named —
+             * the same shape the claims section uses */
+            char path[PATH_MAX + 2];
+            snprintf(
+                path, sizeof(path), "%s%s", item->filesystem_path,
+                path_kind_suffix(item->item_kind)
+            );
+
+            if (item->item_kind == PATH_KIND_DIRECTORY) {
+                char metadata[256];
+                snprintf(
+                    metadata, sizeof(metadata), "directory %s",
+                    base_metadata
+                );
+
+                output_list_add(
+                    list, tags, tag_count, color,
+                    path, metadata
+                );
+            } else {
+                output_list_add(
+                    list, tags, tag_count, color,
+                    path, base_metadata
+                );
+            }
         }
+
+        output_list_render(list);
+        output_list_free(list);
     }
 
     /* Display modified directories section */
@@ -1402,49 +1396,47 @@ static error_t *update_print_preview(
             "directory metadata will be updated"
         );
 
-        if (list) {
-            for (size_t i = 0; i < item_count; i++) {
-                const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
 
-                if (item->item_kind != PATH_KIND_DIRECTORY ||
-                    item->state == WORKSPACE_STATE_DELETED) {
-                    continue;
-                }
-
-                /* Extract tags and metadata using helper */
-                const char *tags[WORKSPACE_ITEM_MAX_TAGS];
-                size_t tag_count;
-                output_color_t color;
-                char base_metadata[256];
-
-                if (workspace_item_tags(
-                    item, tags, &tag_count, &color,
-                    base_metadata, sizeof(base_metadata)
-                    )) {
-                    /* Build custom content with trailing slash for directories */
-                    char path[PATH_MAX + 2];
-                    snprintf(
-                        path, sizeof(path), "%s%s", item->filesystem_path,
-                        path_kind_suffix(item->item_kind)
-                    );
-
-                    /* Build custom metadata with explicit "directory" indicator */
-                    char metadata[256];
-                    snprintf(
-                        metadata, sizeof(metadata), "directory %s",
-                        base_metadata
-                    );
-
-                    output_list_add(
-                        list, tags, tag_count, color,
-                        path, metadata
-                    );
-                }
+            if (item->item_kind != PATH_KIND_DIRECTORY ||
+                item->state == WORKSPACE_STATE_DELETED) {
+                continue;
             }
 
-            output_list_render(list);
-            output_list_free(list);
+            /* Extract tags and metadata using helper */
+            const char *tags[WORKSPACE_ITEM_MAX_TAGS];
+            size_t tag_count;
+            output_color_t color;
+            char base_metadata[256];
+
+            if (workspace_item_tags(
+                item, tags, &tag_count, &color,
+                base_metadata, sizeof(base_metadata)
+                )) {
+                /* Build custom content with trailing slash for directories */
+                char path[PATH_MAX + 2];
+                snprintf(
+                    path, sizeof(path), "%s%s", item->filesystem_path,
+                    path_kind_suffix(item->item_kind)
+                );
+
+                /* Build custom metadata with explicit "directory" indicator */
+                char metadata[256];
+                snprintf(
+                    metadata, sizeof(metadata), "directory %s",
+                    base_metadata
+                );
+
+                output_list_add(
+                    list, tags, tag_count, color,
+                    path, metadata
+                );
+            }
         }
+
+        output_list_render(list);
+        output_list_free(list);
     }
 
     /* Display encryption policy violations section */
@@ -1454,36 +1446,34 @@ static error_t *update_print_preview(
             "match auto-encrypt patterns but are stored as plaintext"
         );
 
-        if (list) {
-            for (size_t i = 0; i < item_count; i++) {
-                const workspace_item_t *item = items[i];
+        for (size_t i = 0; i < item_count; i++) {
+            const workspace_item_t *item = items[i];
 
-                /* DEPLOYED violators only — the set the section's count gated
-                 * on: a deleted violator is in the deleted section, and its commit
-                 * resolves the violation by removing the plaintext. */
-                if (item->item_kind != PATH_KIND_FILE ||
-                    item->state != WORKSPACE_STATE_DEPLOYED ||
-                    !(item->divergence & DIVERGENCE_ENCRYPTION)) {
-                    continue;
-                }
-
-                char metadata[512];
-                snprintf(
-                    metadata, sizeof(metadata), "from %s, will be encrypted",
-                    item->profile
-                );
-
-                /* Single tag for policy violation */
-                const char *tags[] = { "plaintext" };
-                output_list_add(
-                    list, tags, 1, OUTPUT_COLOR_RED,
-                    item->filesystem_path, metadata
-                );
+            /* DEPLOYED violators only — the set the section's count gated on: a
+             * deleted violator is in the deleted section, and its commit resolves
+             * the violation by removing the plaintext. */
+            if (item->item_kind != PATH_KIND_FILE ||
+                item->state != WORKSPACE_STATE_DEPLOYED ||
+                !(item->divergence & DIVERGENCE_ENCRYPTION)) {
+                continue;
             }
 
-            output_list_render(list);
-            output_list_free(list);
+            char metadata[512];
+            snprintf(
+                metadata, sizeof(metadata), "from %s, will be encrypted",
+                item->profile
+            );
+
+            /* Single tag for policy violation */
+            const char *tags[] = { "plaintext" };
+            output_list_add(
+                list, tags, 1, OUTPUT_COLOR_RED,
+                item->filesystem_path, metadata
+            );
         }
+
+        output_list_render(list);
+        output_list_free(list);
 
         output_gap(out, OUTPUT_NORMAL);
         output_info(

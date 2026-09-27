@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 
 /* ═══════════════════════════════════════════════════════════════════
  * ANSI Escape Codes
@@ -95,45 +96,41 @@ static inline void style_buf_free(style_buf_t *sb) {
  * Ensure buffer has room for `need` more bytes
  *
  * On first overflow, copies stack to a heap allocation. Subsequent overflows
- * realloc the heap buffer. Returns false on OOM (data is preserved but truncated).
+ * realloc the heap buffer. Room cannot fail — exhaustion is the run's death
+ * (base/heap.h) — so nothing put is ever dropped.
  */
-static bool style_buf_grow(style_buf_t *sb, size_t need) {
+static void style_buf_grow(style_buf_t *sb, size_t need) {
     size_t required = sb->len + need;
     if (required < sb->cap)
-        return true;
+        return;
 
+    /* A capacity whose doubling wraps is one no memory could hold: exhaustion */
     size_t new_cap = sb->cap;
     while (new_cap <= required) {
         if (new_cap > SIZE_MAX / 2)
-            return false;
+            heap_die(SIZE_MAX);
         new_cap *= 2;
     }
 
     if (sb->data == sb->stack) {
-        char *heap = malloc(new_cap);
-        if (!heap) return false;
-        memcpy(heap, sb->stack, sb->len);
-        sb->data = heap;
+        sb->data = heap_alloc(new_cap);
+        memcpy(sb->data, sb->stack, sb->len);
     } else {
-        char *grown = realloc(sb->data, new_cap);
-        if (!grown) return false;
-        sb->data = grown;
+        sb->data = heap_realloc(sb->data, new_cap);
     }
 
     sb->cap = new_cap;
-    return true;
 }
 
 static inline void style_buf_putc(style_buf_t *sb, char ch) {
-    if (style_buf_grow(sb, 1))
-        sb->data[sb->len++] = ch;
+    style_buf_grow(sb, 1);
+    sb->data[sb->len++] = ch;
 }
 
 static inline void style_buf_puts(style_buf_t *sb, const char *s, size_t n) {
-    if (n > 0 && style_buf_grow(sb, n)) {
-        memcpy(sb->data + sb->len, s, n);
-        sb->len += n;
-    }
+    style_buf_grow(sb, n);
+    memcpy(sb->data + sb->len, s, n);
+    sb->len += n;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -397,10 +394,7 @@ static bool should_enable_colors(output_color_mode_t mode, FILE *stream) {
 output_t *output_create(
     FILE *stream, output_verbosity_t verbosity, output_color_mode_t color_mode
 ) {
-    output_t *ctx = calloc(1, sizeof(output_t));
-    if (!ctx) {
-        return NULL;
-    }
+    output_t *ctx = heap_calloc(1, sizeof(output_t));
 
     ctx->stream = stream ? stream : stdout;
     ctx->verbosity = verbosity;
@@ -1037,26 +1031,23 @@ static void free_list_item(list_item_t *item) {
 
     free(item->content);
     free(item->metadata);
-    memset(item, 0, sizeof(list_item_t));
 }
 
-static int list_ensure_capacity(output_list_t *list) {
-    if (list->count < list->capacity) return 0;
+static void list_ensure_capacity(output_list_t *list) {
+    if (list->count < list->capacity) return;
 
+    /* A capacity whose bytes wrap is one no memory could hold: exhaustion. The
+     * doubling itself cannot wrap first, since the capacity it doubles was
+     * allocated. */
     size_t new_capacity = list->capacity * 2;
-    list_item_t *new_items = realloc(
-        list->items, new_capacity * sizeof(list_item_t)
-    );
-    if (!new_items) return -1;
+    if (new_capacity > SIZE_MAX / sizeof(list_item_t)) heap_die(SIZE_MAX);
 
-    list->items = new_items;
+    list->items = heap_realloc(list->items, new_capacity * sizeof(list_item_t));
     list->capacity = new_capacity;
     memset(
         &list->items[list->count], 0,
         (new_capacity - list->count) * sizeof(list_item_t)
     );
-
-    return 0;
 }
 
 static void format_tags_with_brackets(
@@ -1081,83 +1072,44 @@ static void format_tags_with_brackets(
 output_list_t *output_list_create(
     output_t *ctx, const char *title, const char *hint
 ) {
-    if (!ctx || !title) return NULL;
+    CHECK_NULL(ctx);
+    CHECK_NULL(title);
 
-    output_list_t *list = calloc(1, sizeof(output_list_t));
-    if (!list) return NULL;
+    output_list_t *list = heap_calloc(1, sizeof(output_list_t));
 
     list->ctx = ctx;
-
-    list->title = strdup(title);
-    if (!list->title)
-        goto cleanup;
-
-    if (hint) {
-        list->hint = strdup(hint);
-        if (!list->hint)
-            goto cleanup;
-    }
-
+    list->title = heap_strdup(title);
+    list->hint = heap_strdup(hint);
     list->capacity = 16;
-    list->items = calloc(16, sizeof(list_item_t));
-    if (!list->items)
-        goto cleanup;
+    list->items = heap_calloc(16, sizeof(list_item_t));
 
     return list;
-
-cleanup:
-    free(list->hint);
-    free(list->title);
-    free(list);
-    return NULL;
 }
 
-int output_list_add(
+void output_list_add(
     output_list_t *list, const char **tags, size_t tag_count,
     output_color_t color, const char *content,
     const char *metadata
 ) {
-    if (!list) return -1;
-    if (tag_count > 0 && !tags) return -1;
-    if (list_ensure_capacity(list) != 0) return -1;
+    CHECK_NULL(list);
+    CHECK_ARG(tags != NULL || tag_count == 0, "tags cannot be NULL with a count");
+
+    list_ensure_capacity(list);
 
     list_item_t *item = &list->items[list->count];
 
     if (tag_count > 0) {
-        item->tags = calloc(tag_count, sizeof(char *));
-        if (!item->tags) return -1;
-
-        for (size_t i = 0; i < tag_count; i++) {
-            item->tags[i] = tags[i] ? strdup(tags[i]) : strdup("");
-            if (!item->tags[i]) {
-                for (size_t j = 0; j < i; j++)
-                    free(item->tags[j]);
-                free(item->tags);
-                item->tags = NULL;
-                goto error;
-            }
-        }
+        item->tags = heap_calloc(tag_count, sizeof(char *));
+        for (size_t i = 0; i < tag_count; i++)
+            item->tags[i] = heap_strdup(tags[i] ? tags[i] : "");
         item->tag_count = tag_count;
     }
 
     item->color = color;
-
-    item->content = content ? strdup(content) : strdup("");
-    if (!item->content)
-        goto error;
-
-    if (metadata) {
-        item->metadata = strdup(metadata);
-        if (!item->metadata)
-            goto error;
-    }
+    item->content = heap_strdup(content ? content : "");
+    item->metadata = heap_strdup(metadata);
 
     list->count++;
-    return 0;
-
-error:
-    free_list_item(item);
-    return -1;
 }
 
 void output_list_render(output_list_t *list) {

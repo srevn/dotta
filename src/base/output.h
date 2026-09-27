@@ -117,6 +117,8 @@ error_t *output_parse_color_mode(const char *word, output_color_mode_t *out);
 
 /**
  * Create output context
+ *
+ * @return Output context; never NULL
  */
 output_t *output_create(
     FILE *stream,
@@ -593,9 +595,9 @@ typedef struct output_list output_list_t;
  * a section header with item count and optional hint text.
  *
  * @param ctx Output context (must not be NULL, borrowed reference)
- * @param title Section title (e.g., "Uncommitted changes")
+ * @param title Section title (must not be NULL; e.g., "Uncommitted changes")
  * @param hint Optional hint text shown after title (NULL if none)
- * @return List builder or NULL on allocation failure
+ * @return List builder; never NULL
  */
 output_list_t *output_list_create(
     output_t *ctx,
@@ -617,9 +619,8 @@ output_list_t *output_list_create(
  * @param color Color for the tags
  * @param content Main content text (NULL treated as empty)
  * @param metadata Optional metadata shown dimmed in parentheses (NULL if none)
- * @return 0 on success, -1 on allocation failure
  */
-int output_list_add(
+void output_list_add(
     output_list_t *list,
     const char **tags,
     size_t tag_count,

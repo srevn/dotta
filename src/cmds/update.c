@@ -259,9 +259,8 @@ typedef struct {
  * @param partition Output, zeroed then filled; accepted.entries is heap-allocated
  *                  and the caller frees it with free((void *) entries) (must
  *                  not be NULL)
- * @return Error or NULL on success
  */
-static error_t *update_partition(
+static void update_partition(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const scope_t *scope,
@@ -344,13 +343,11 @@ static error_t *update_partition(
                 continue;
         }
 
-        RETURN_IF_ERROR(ptr_array_push(&accepted, item));
+        ptr_array_push(&accepted, item);
     }
 
     partition->accepted.entries = (const workspace_item_t *const *)
         ptr_array_steal(&accepted, &partition->accepted.count);
-
-    return NULL;
 }
 
 /**
@@ -468,10 +465,7 @@ static error_t *update_profile(
                     }
                     /* Remove metadata entry if it exists */
                     metadata_remove_item(metadata, item->storage_path);
-                    err = ptr_array_push(&commit->deleted, item);
-                    if (err) {
-                        goto cleanup;
-                    }
+                    ptr_array_push(&commit->deleted, item);
                     continue;
                 }
 
@@ -597,10 +591,7 @@ static error_t *update_profile(
                             out, OUTPUT_VERBOSE, "  Removed directory metadata: %s",
                             item->filesystem_path
                         );
-                        err = ptr_array_push(&commit->deleted, item);
-                        if (err) {
-                            goto cleanup;
-                        }
+                        ptr_array_push(&commit->deleted, item);
                     }
                     continue;
                 }
@@ -1140,10 +1131,7 @@ static error_t *update_execute(
         ptr_array_t group PTR_ARRAY_AUTO = { 0 };
         for (size_t i = 0; i < update_count; i++) {
             if (strcmp(update_items[i]->profile, profile) == 0) {
-                err = ptr_array_push(&group, update_items[i]);
-                if (err) {
-                    goto cleanup;
-                }
+                ptr_array_push(&group, update_items[i]);
             }
         }
 
@@ -1151,10 +1139,7 @@ static error_t *update_execute(
         ptr_array_t rows PTR_ARRAY_AUTO = { 0 };
         for (size_t i = 0; i < derive_count; i++) {
             if (strcmp(derive_rows[i]->profile, profile) == 0) {
-                err = ptr_array_push(&rows, derive_rows[i]);
-                if (err) {
-                    goto cleanup;
-                }
+                ptr_array_push(&rows, derive_rows[i]);
             }
         }
 
@@ -1641,11 +1626,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
-    err = update_partition(ws, opts, scope, config, out, &partition);
-    if (err) {
-        err = error_wrap(err, "Failed to filter items for update");
-        goto cleanup;
-    }
+    update_partition(ws, opts, scope, config, out, &partition);
 
     /* What the filter refused, said once — above the exit below, so a workspace
      * whose only divergence is stale explains itself, and above the prompt. One
@@ -1779,8 +1760,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
                 )) {
                 continue;
             }
-            err = ptr_array_push(&derive_rows, row);
-            if (err) goto cleanup;
+            ptr_array_push(&derive_rows, row);
         }
     }
 
@@ -1839,10 +1819,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * the pre-hook, but the capture stores execute-time bytes — a pre-hook that
      * edits a candidate still commits what it wrote. */
     profiles_str = string_array_join(scope_profiles(scope), " ");
-    if (!profiles_str) {
-        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
-        goto cleanup;
-    }
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_UPDATE,
         .profile    = profiles_str,

@@ -19,6 +19,10 @@
  * - Average O(1) insert, lookup, delete with excellent cache locality
  * - Automatic growth when load factor exceeds 75%
  * - No tombstones — backward-shift keeps the table clean
+ *
+ * A map is the heap's, so growth cannot fail: a create, a set or a put succeeds
+ * or the run dies of exhaustion (base/heap.h), and none of them answers anything
+ * — a table no memory could hold is exhaustion too.
  */
 
 #ifndef DOTTA_HASHMAP_H
@@ -30,7 +34,6 @@
 
 /* Forward declarations */
 typedef struct hashmap hashmap_t;
-typedef struct error error_t;
 
 /**
  * Value destructor callback
@@ -65,7 +68,7 @@ typedef struct hashmap_iter {
  *                 need in order to fit without a resize — more slots than entries,
  *                 since the table grows at its load factor rather than when full,
  *                 and rounded up to a power of two.
- * @return New hash map, or NULL on allocation failure
+ * @return New hash map; never NULL
  */
 hashmap_t *hashmap_create(size_t expected);
 
@@ -81,7 +84,7 @@ hashmap_t *hashmap_create(size_t expected);
  *
  * @param expected Entries the caller expects to hold, read exactly as
  *                 hashmap_create reads it.
- * @return New hash map, or NULL on allocation failure
+ * @return New hash map; never NULL
  */
 hashmap_t *hashmap_borrow(size_t expected);
 
@@ -112,9 +115,8 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn);
  * @param key Key string (duplicated in owning mode, stored directly in borrowing
  *            mode; must not be NULL)
  * @param value Value pointer (map does not take ownership)
- * @return NULL on success, error on allocation failure
  */
-error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
+void hashmap_set(hashmap_t *map, const char *key, void *value);
 
 /**
  * Insert or update, returning the previous value
@@ -127,9 +129,8 @@ error_t *hashmap_set(hashmap_t *map, const char *key, void *value);
  *            mode; must not be NULL)
  * @param value New value pointer
  * @param out_prev Receives the previous value, or NULL if key was new
- * @return NULL on success, error on allocation failure
  */
-error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev);
+void hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev);
 
 /**
  * Get value for key

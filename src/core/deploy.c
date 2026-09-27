@@ -176,14 +176,15 @@ static error_t *deploy_classify(
     skip_reason_t skip
 ) {
     if (!deploy_needs_work(item)) {
-        if (skip == SKIP_EXCLUDED) return NULL;   /* neither work nor apply's to own */
-        return ptr_array_push(&part->clean, item);
+        /* Excluded: neither work nor apply's to own */
+        if (skip != SKIP_EXCLUDED) ptr_array_push(&part->clean, item);
+        return NULL;
     }
 
     switch (skip) {
-        case SKIP_NONE:     return ptr_array_push(&part->pending, item);
-        case SKIP_EXCLUDED: return ptr_array_push(&part->excluded, item);
-        case SKIP_EXISTING: return ptr_array_push(&part->skipped_existing, item);
+        case SKIP_NONE:     ptr_array_push(&part->pending, item); return NULL;
+        case SKIP_EXCLUDED: ptr_array_push(&part->excluded, item); return NULL;
+        case SKIP_EXISTING: ptr_array_push(&part->skipped_existing, item); return NULL;
     }
 
     /* Unreachable once every enum value is handled */
@@ -816,11 +817,7 @@ static error_t *resolve_deployment_ownership(
         return ERROR(ERR_MEMORY, "Failed to format ownership warning");
     }
 
-    err = string_array_push_owned(warnings, warning);
-    if (err) {
-        free(warning);
-        return err;
-    }
+    string_array_push_owned(warnings, warning);
 
     /* No change, not a guess: a claim that cannot be honoured is not applied by
      * halves — not the half that resolved, and not the invoker for the half that
@@ -945,11 +942,6 @@ error_t *deploy_preflight(
     }
 
     result->warnings = string_array_new(0);
-
-    if (!result->warnings) {
-        deploy_preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate result arrays");
-    }
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
@@ -1311,11 +1303,7 @@ static error_t *hold_directory(deploy_run_t *run, const char *path, mode_t mode)
     held->path = path;
     held->mode = mode;
 
-    error_t *err = ptr_array_push(&run->held, held);
-    if (err) {
-        free(held);
-        return err;
-    }
+    ptr_array_push(&run->held, held);
     return NULL;
 }
 

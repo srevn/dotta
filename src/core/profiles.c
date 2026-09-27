@@ -63,9 +63,8 @@ error_t *profile_require(git_repository *repo, const char *name) {
  * @param available Available branch names to match against
  * @param prefix Prefix to match (e.g., "darwin", "hosts/myhost")
  * @param out Output array to append matches to
- * @return Error or NULL on success
  */
-static error_t *match_hierarchical_profiles(
+static void match_hierarchical_profiles(
     const string_array_t *available,
     const char *prefix,
     string_array_t *out
@@ -81,25 +80,18 @@ static error_t *match_hierarchical_profiles(
         }
 
         const char *suffix = profile + prefix_len;
-        error_t *err = NULL;
 
         if (suffix[0] == '\0') {
             /* Exact match: base profile */
-            err = string_array_push(out, profile);
+            string_array_push(out, profile);
         } else if (suffix[0] == '/') {
             const char *variant = suffix + 1;
             /* One level deep only: non-empty variant with no further '/' */
             if (variant[0] != '\0' && strchr(variant, '/') == NULL) {
-                err = string_array_push(out, profile);
+                string_array_push(out, profile);
             }
         }
-
-        if (err) {
-            return err;
-        }
     }
-
-    return NULL;
 }
 
 /**
@@ -145,14 +137,10 @@ error_t *profile_detect(
     char *os_name = NULL;
 
     string_array_t *profiles = string_array_new(0);
-    if (!profiles) {
-        return ERROR(ERR_MEMORY, "Failed to allocate profiles array");
-    }
 
     /* 1. "global" — always first if present */
     if (string_array_contains(available_branches, "global")) {
-        err = string_array_push(profiles, "global");
-        if (err) goto cleanup;
+        string_array_push(profiles, "global");
     }
 
     /* 2. OS-specific profiles (darwin, linux, freebsd, ...) */
@@ -169,16 +157,7 @@ error_t *profile_detect(
             *p = (char) tolower((unsigned char) *p);
         }
 
-        err = match_hierarchical_profiles(
-            available_branches,
-            os_name,
-            profiles
-        );
-        if (err) {
-            /* Non-fatal: skip OS profiles if detection fails */
-            error_free(err);
-            err = NULL;
-        }
+        match_hierarchical_profiles(available_branches, os_name, profiles);
     }
     /* Non-fatal: skip OS profiles if uname() fails */
 
@@ -192,16 +171,7 @@ error_t *profile_detect(
             host_prefix, sizeof(host_prefix), "hosts/%s", hostname
         );
         if (ret >= 0 && (size_t) ret < sizeof(host_prefix)) {
-            err = match_hierarchical_profiles(
-                available_branches,
-                host_prefix,
-                profiles
-            );
-            if (err) {
-                /* Non-fatal: skip host profiles if detection fails */
-                error_free(err);
-                err = NULL;
-            }
+            match_hierarchical_profiles(available_branches, host_prefix, profiles);
         }
     }
     /* Non-fatal: continue if gethostname() fails */
@@ -256,10 +226,6 @@ error_t *profile_resolve_enabled(
     error_t *err = NULL;
     string_array_t *valid_profiles = string_array_new(0);
     string_array_t *missing_profiles = string_array_new(0);
-    if (!valid_profiles || !missing_profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile arrays");
-        goto cleanup;
-    }
 
     /* Validate: check which profiles still exist as local branches — one that
      * does not is warned about below and filtered out */
@@ -268,11 +234,11 @@ error_t *profile_resolve_enabled(
 
         bool exists = false;
         err = gitops_branch_exists(repo, profile, &exists);
-        if (!err) err = string_array_push(exists ? valid_profiles : missing_profiles, profile);
         if (err) {
             err = error_wrap(err, "Failed to validate state profiles");
             goto cleanup;
         }
+        string_array_push(exists ? valid_profiles : missing_profiles, profile);
     }
 
     /* Warn about missing profiles (diagnostic message)
@@ -466,11 +432,7 @@ static int tree_walk_callback(
     }
 
     /* Add to array */
-    error_t *err = string_array_push(data->paths, storage_path);
-    if (err) {
-        data->error = err;
-        return -1;  /* Stop walk */
-    }
+    string_array_push(data->paths, storage_path);
 
     return 0;
 }
@@ -489,10 +451,6 @@ error_t *profile_list_tree_files(
         .paths = string_array_new(0),
         .error = NULL
     };
-
-    if (!data.paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate paths array");
-    }
 
     error_t *err = gitops_tree_walk(tree, tree_walk_callback, &data);
     if (data.error) {
@@ -903,8 +861,8 @@ error_t *profile_build_filesystem_index(
         if (err) break;
 
         manifest_rows_t placed = manifest_rows(view);
-        for (size_t j = 0; j < placed.count && !err; j++) {
-            err = ptr_array_push(&rows, placed.entries[j]);
+        for (size_t j = 0; j < placed.count; j++) {
+            ptr_array_push(&rows, placed.entries[j]);
         }
         manifest_free(view);
     }
@@ -917,11 +875,8 @@ error_t *profile_build_filesystem_index(
     qsort(sorted, rows.count, sizeof(*sorted), index_order);
 
     hashmap_t *index = hashmap_borrow(rows.count);
-    if (!index) {
-        return ERROR(ERR_MEMORY, "Failed to create the filesystem path index");
-    }
 
-    for (size_t i = 0; i < rows.count && !err;) {
+    for (size_t i = 0; i < rows.count;) {
         const char *filesystem_path = sorted[i]->filesystem_path;
 
         size_t n = 0;
@@ -939,12 +894,8 @@ error_t *profile_build_filesystem_index(
 
         /* The key is the row's own string — hashmap_borrow keeps the pointer
          * and compares by content, and the row outlives the map. */
-        err = hashmap_set(index, filesystem_path, claims);
+        hashmap_set(index, filesystem_path, claims);
         i += n;
-    }
-    if (err) {
-        hashmap_free(index, NULL);
-        return err;
     }
 
     *out_index = index;

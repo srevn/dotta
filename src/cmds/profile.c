@@ -195,22 +195,11 @@ static error_t *profile_list(
 
     /* Separate into enabled and available */
     available = string_array_new(0);
-    if (!available) {
-        err = ERROR(ERR_MEMORY, "Failed to create array");
-        goto cleanup;
-    }
-
     for (size_t i = 0; i < all_branches->count; i++) {
         const char *profile = all_branches->items[i];
         if (state_enabled(state, profile)) continue;
 
-        err = string_array_push(available, profile);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to add profile to available list"
-            );
-            goto cleanup;
-        }
+        string_array_push(available, profile);
     }
 
     /* Print enabled profiles: the name, what the branch holds, and the binding
@@ -335,15 +324,13 @@ static error_t *profile_list(
                 } else if (remote_branches->count > 0) {
                     /* Filter out branches that already exist locally */
                     remote_only = string_array_new(remote_branches->count);
-                    if (remote_only) {
-                        for (size_t ri = 0; ri < remote_branches->count; ri++) {
-                            if (!string_array_contains(all_branches, remote_branches->items[ri])) {
-                                string_array_push(remote_only, remote_branches->items[ri]);
-                            }
+                    for (size_t ri = 0; ri < remote_branches->count; ri++) {
+                        if (!string_array_contains(all_branches, remote_branches->items[ri])) {
+                            string_array_push(remote_only, remote_branches->items[ri]);
                         }
                     }
 
-                    if (remote_only && remote_only->count > 0) {
+                    if (remote_only->count > 0) {
                         output_section(out, OUTPUT_NORMAL, "Remote (not fetched)");
                         for (size_t i = 0; i < remote_only->count; i++) {
                             output_print(
@@ -683,19 +670,11 @@ static error_t *profile_enable(
      * to_enable_validated (and, downstream, two "Enabled foo" lines with split
      * stats attribution). */
     seen_set = hashmap_borrow(0);
-    if (!seen_set) {
-        err = ERROR(ERR_MEMORY, "Failed to create membership set");
-        goto cleanup;
-    }
 
     /* Resolve the request set (--all → list of local branches; args → verbatim).
      * Both paths deposit into to_enable; Phase 1's filter loop decides which
      * ones are actually actionable. */
     to_enable = string_array_new(0);
-    if (!to_enable) {
-        err = ERROR(ERR_MEMORY, "Failed to create array");
-        goto cleanup;
-    }
 
     if (opts->all_profiles) {
         /* Enable every profile here, in the convention's order: a set the machine
@@ -710,11 +689,7 @@ static error_t *profile_enable(
         profile_order(all_branches);
 
         for (size_t i = 0; i < all_branches->count; i++) {
-            err = string_array_push(to_enable, all_branches->items[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to add profile to enable list");
-                goto cleanup;
-            }
+            string_array_push(to_enable, all_branches->items[i]);
         }
     } else {
         /* Enable specified profiles */
@@ -727,11 +702,7 @@ static error_t *profile_enable(
         }
 
         for (size_t i = 0; i < opts->profile_count; i++) {
-            err = string_array_push(to_enable, opts->profiles[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to add profile to enable list");
-                goto cleanup;
-            }
+            string_array_push(to_enable, opts->profiles[i]);
         }
     }
 
@@ -772,10 +743,6 @@ static error_t *profile_enable(
      * with a differing --target, which is a retarget and stays in the run's work.
      * The surviving set lands in to_enable_validated. */
     to_enable_validated = string_array_new(0);
-    if (!to_enable_validated) {
-        err = ERROR(ERR_MEMORY, "Failed to create validated list");
-        goto cleanup;
-    }
 
     for (size_t i = 0; i < to_enable->count; i++) {
         const char *profile = to_enable->items[i];
@@ -783,11 +750,7 @@ static error_t *profile_enable(
         /* Silently dedupe duplicate args — we've already decided about this profile
          * earlier in this pass. */
         if (hashmap_has(seen_set, profile)) continue;
-        err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
-        if (err) {
-            err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
-            goto cleanup;
-        }
+        hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
 
         if (state_enabled(state, profile)) {
             /* --target on an enabled profile is a retarget: the binding is the
@@ -799,13 +762,7 @@ static error_t *profile_enable(
                 const char *current = state_target(state, profile);
                 if (!current || !mount_same_target(current, target)) {
                     retarget = profile;
-                    err = string_array_push(to_enable_validated, profile);
-                    if (err) {
-                        err = error_wrap(
-                            err, "Failed to add profile to validated list"
-                        );
-                        goto cleanup;
-                    }
+                    string_array_push(to_enable_validated, profile);
                     continue;
                 }
                 /* The row's own directory, spelled another way: the binding stands
@@ -870,11 +827,7 @@ static error_t *profile_enable(
             continue;
         }
 
-        err = string_array_push(to_enable_validated, profile);
-        if (err) {
-            err = error_wrap(err, "Failed to add profile to validated list");
-            goto cleanup;
-        }
+        string_array_push(to_enable_validated, profile);
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
@@ -1148,25 +1101,12 @@ static error_t *profile_disable(
      * and don't produce two rows in to_disable_validated. Only the explicit-args
      * path consults it; --all iterates the unique enabled set. */
     seen_set = hashmap_borrow(0);
-    if (!seen_set) {
-        err = ERROR(ERR_MEMORY, "Failed to create membership set");
-        goto cleanup;
-    }
-
     to_disable_validated = string_array_new(0);
-    if (!to_disable_validated) {
-        err = ERROR(ERR_MEMORY, "Failed to create array");
-        goto cleanup;
-    }
 
     if (opts->all_profiles) {
         /* --all: every currently enabled profile is, by definition, valid. */
         for (size_t i = 0; i < enabled_profiles.count; i++) {
-            err = string_array_push(to_disable_validated, enabled_profiles.entries[i].name);
-            if (err) {
-                err = error_wrap(err, "Failed to add profile to disable list");
-                goto cleanup;
-            }
+            string_array_push(to_disable_validated, enabled_profiles.entries[i].name);
         }
     } else {
         /* Disable specified profiles */
@@ -1184,18 +1124,10 @@ static error_t *profile_disable(
             /* Silently dedupe duplicate args — we've already decided about this
              * profile earlier in this pass. */
             if (hashmap_has(seen_set, profile)) continue;
-            err = hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
-            if (err) {
-                err = error_wrap(err, "Failed to mark profile '%s' as seen", profile);
-                goto cleanup;
-            }
+            hashmap_set(seen_set, profile, (void *) (uintptr_t) 1);
 
             if (state_enabled(state, profile)) {
-                err = string_array_push(to_disable_validated, profile);
-                if (err) {
-                    err = error_wrap(err, "Failed to add profile to disable list");
-                    goto cleanup;
-                }
+                string_array_push(to_disable_validated, profile);
             } else {
                 output_info(
                     out, OUTPUT_VERBOSE, "  %s was not enabled", profile
@@ -1582,10 +1514,6 @@ static error_t *profile_validate(
 
     /* Check 1: Enabled profiles exist as branches */
     missing = string_array_new(0);
-    if (!missing) {
-        err = ERROR(ERR_MEMORY, "Failed to create array");
-        goto cleanup;
-    }
 
     for (size_t i = 0; i < enabled_profiles.count; i++) {
         const char *profile = enabled_profiles.entries[i].name;
@@ -1594,11 +1522,7 @@ static error_t *profile_validate(
         err = gitops_branch_exists(repo, profile, &exists);
         if (err) goto cleanup;
         if (!exists) {
-            err = string_array_push(missing, profile);
-            if (err) {
-                err = error_wrap(err, "Failed to add profile to missing list");
-                goto cleanup;
-            }
+            string_array_push(missing, profile);
             has_issues = true;
         }
     }
@@ -1655,10 +1579,6 @@ static error_t *profile_validate(
 
     deleted = string_array_new(0);
     probed = hashmap_borrow(16);   /* profile → (void *) 1 exists, (void *) 2 deleted */
-    if (!deleted || !probed) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate probe set");
-        goto cleanup;
-    }
 
     for (size_t i = 0; i < record_count; i++) {
         const char *profile = records[i].profile;
@@ -1669,12 +1589,8 @@ static error_t *profile_validate(
             err = gitops_branch_exists(repo, profile, &exists);
             if (err) goto cleanup;
             known = exists ? (void *) 1 : (void *) 2;
-            err = hashmap_set(probed, profile, known);
-            if (!err && known == (void *) 2) err = string_array_push(deleted, profile);
-            if (err) {
-                err = error_wrap(err, "Failed to record probe for '%s'", profile);
-                goto cleanup;
-            }
+            hashmap_set(probed, profile, known);
+            if (known == (void *) 2) string_array_push(deleted, profile);
         }
 
         if (known == (void *) 2) {

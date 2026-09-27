@@ -9,16 +9,19 @@
  *   key == NULL  →  empty
  *
  * Hash: FNV-1a (64-bit compute, XOR-folded to 32-bit for compact slots). Capacity:
- * always a power of two for fast masking.
+ * always a power of two for fast masking. The slots and every owned key are the
+ * heap's, which dies rather than answer NULL (base/heap.h).
  */
 
 #include "base/hashmap.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 
 /* Default initial capacity (must be power of 2 for fast modulo) */
 #define HASHMAP_DEFAULT_CAPACITY    16
@@ -111,23 +114,11 @@ static void insert_for_resize(
     }
 }
 
-/* Internal: grow */
-static error_t *hashmap_grow(hashmap_t *map) {
+/* Internal: grow. The capacity's slots stand in memory, so its double cannot
+ * wrap; the double's bytes can, and the heap judges them. */
+static void hashmap_grow(hashmap_t *map) {
     size_t new_cap = map->capacity * 2;
-    if (new_cap <= map->capacity) {
-        return ERROR(
-            ERR_MEMORY,
-            "Hash map capacity overflow"
-        );
-    }
-
-    hashmap_slot_t *new_slots = calloc(new_cap, sizeof(hashmap_slot_t));
-    if (!new_slots) {
-        return ERROR(
-            ERR_MEMORY,
-            "Failed to allocate hash map slots for resize"
-        );
-    }
+    hashmap_slot_t *new_slots = heap_calloc(new_cap, sizeof(hashmap_slot_t));
 
     hashmap_slot_t *old_slots = map->slots;
     size_t old_cap = map->capacity;
@@ -150,8 +141,6 @@ static error_t *hashmap_grow(hashmap_t *map) {
 
     free(old_slots);
     map->mod_count++;
-
-    return NULL;
 }
 
 /**
@@ -162,9 +151,8 @@ static error_t *hashmap_grow(hashmap_t *map) {
  * @param value     Value to store
  * @param out_prev  If non-NULL, receives the previous value when updating
  *                  an existing key (set to NULL when inserting a new key).
- * @return NULL on success, error on OOM
  */
-static error_t *hashmap_insert(
+static void hashmap_insert(
     hashmap_t *map,
     const char *key,
     void *value,
@@ -174,28 +162,7 @@ static error_t *hashmap_insert(
 
     /* Grow before insert so there is always at least one empty slot */
     if (map->count >= map->grow_at) {
-        error_t *err = hashmap_grow(map);
-        if (err) {
-            if (map->count >= map->capacity) {
-                /* Table completely full — probe loop would never terminate */
-                return error_wrap(
-                    err, "Hash map at capacity, cannot insert"
-                );
-            }
-            /*
-             * Non-fatal: current load < 100%.  At 75% threshold with
-             * power-of-2 capacity we still have ≥25% empty slots.
-             */
-            fprintf(
-                stderr, "warning: hash map resize failed (%s)\n",
-                error_message(err)
-            );
-            fprintf(
-                stderr, "         %zu entries in %zu slots\n",
-                map->count, map->capacity
-            );
-            error_free(err);
-        }
+        hashmap_grow(map);
     }
 
     uint32_t h = hash_key(key);
@@ -214,24 +181,14 @@ static error_t *hashmap_insert(
         /* Empty slot — insert */
         if (!slot->key) {
             if (!carry_key) {
-                if (map->borrow_keys) {
-                    carry_key = (char *) key;
-                } else {
-                    carry_key = strdup(key);
-                    if (!carry_key) {
-                        return ERROR(
-                            ERR_MEMORY,
-                            "Failed to allocate hash map key"
-                        );
-                    }
-                }
+                carry_key = map->borrow_keys ? (char *) key : heap_strdup(key);
             }
             slot->key = carry_key;
             slot->value = carry_val;
             slot->hash = carry_h;
             map->count++;
             map->mod_count++;
-            return NULL;
+            return;
         }
 
         /* Exact match — update value */
@@ -239,24 +196,14 @@ static error_t *hashmap_insert(
             if (out_prev) *out_prev = slot->value;
             slot->value = value;
             /* No mod_count bump: value-only update is not structural */
-            return NULL;
+            return;
         }
 
         /* Robin Hood: displace richer entries */
         size_t existing = probe_dist(pos, slot->hash, mask);
         if (dist > existing) {
             if (!carry_key) {
-                if (map->borrow_keys) {
-                    carry_key = (char *) key;
-                } else {
-                    carry_key = strdup(key);
-                    if (!carry_key) {
-                        return ERROR(
-                            ERR_MEMORY,
-                            "Failed to allocate hash map key"
-                        );
-                    }
-                }
+                carry_key = map->borrow_keys ? (char *) key : heap_strdup(key);
             }
 
             /* Swap our entry into this slot, carry the displaced one */
@@ -311,11 +258,11 @@ static const hashmap_slot_t *hashmap_find(
     }
 }
 
-/* Capacity helper */
+/* Capacity helper: a power of two no size can hold is a table no memory could */
 static size_t next_power_of_two(size_t n) {
     size_t p = 1;
     while (p < n) {
-        if (p > SIZE_MAX / 2) return 0;   /* Overflow */
+        if (p > SIZE_MAX / 2) heap_die(SIZE_MAX);
         p *= 2;
     }
 
@@ -336,19 +283,18 @@ static size_t slots_for(size_t expected) {
         return HASHMAP_DEFAULT_CAPACITY;
     }
 
-    /* Guard the multiply and its rounding term. No allocator would serve a table
-     * this size either, but the arithmetic must refuse rather than wrap into a
-     * small capacity: a mask that does not cover the slots loses entries in
-     * silence. */
+    /* Guard the multiply and its rounding term. A count that wraps them is a
+     * table no memory could hold — exhaustion, never a small capacity: a mask
+     * that does not cover the slots loses entries in silence. */
     if (expected > (SIZE_MAX - (HASHMAP_LOAD_PERCENT - 1)) / 100) {
-        return 0;
+        heap_die(SIZE_MAX);
     }
 
     size_t needed = (expected * 100 + HASHMAP_LOAD_PERCENT - 1)
         / HASHMAP_LOAD_PERCENT;
 
     size_t cap = next_power_of_two(needed);
-    if (cap != 0 && cap < HASHMAP_MIN_CAPACITY) {
+    if (cap < HASHMAP_MIN_CAPACITY) {
         cap = HASHMAP_MIN_CAPACITY;
     }
 
@@ -358,17 +304,9 @@ static size_t slots_for(size_t expected) {
 /* Create new hash map */
 hashmap_t *hashmap_create(size_t expected) {
     size_t cap = slots_for(expected);
-    if (cap == 0) return NULL;
 
-    hashmap_t *map = calloc(1, sizeof(hashmap_t));
-    if (!map) return NULL;
-
-    map->slots = calloc(cap, sizeof(hashmap_slot_t));
-    if (!map->slots) {
-        free(map);
-        return NULL;
-    }
-
+    hashmap_t *map = heap_calloc(1, sizeof(hashmap_t));
+    map->slots = heap_calloc(cap, sizeof(hashmap_slot_t));
     map->capacity = cap;
     map->grow_at = cap * HASHMAP_LOAD_PERCENT / 100;
 
@@ -378,7 +316,7 @@ hashmap_t *hashmap_create(size_t expected) {
 /* Create hash map with borrowed keys (caller must ensure key lifetimes) */
 hashmap_t *hashmap_borrow(size_t expected) {
     hashmap_t *map = hashmap_create(expected);
-    if (map) map->borrow_keys = true;
+    map->borrow_keys = true;
 
     return map;
 }
@@ -411,20 +349,20 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn) {
 }
 
 /* Insert or update a key-value pair */
-error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
+void hashmap_set(hashmap_t *map, const char *key, void *value) {
     CHECK_NULL(map);
     CHECK_NULL(key);
 
-    return hashmap_insert(map, key, value, NULL);
+    hashmap_insert(map, key, value, NULL);
 }
 
 /* Insert or update, returning the previous value */
-error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) {
+void hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) {
     CHECK_NULL(map);
     CHECK_NULL(key);
     CHECK_NULL(out_prev);
 
-    return hashmap_insert(map, key, value, out_prev);
+    hashmap_insert(map, key, value, out_prev);
 }
 
 /** Get value for key */

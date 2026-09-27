@@ -435,7 +435,7 @@ static const workspace_squatted_t *workspace_squatter_above(
  * @param occupant What the scan's lstat found at the path (workspace.h)
  * @param st The scan's lstat of the path (must not be NULL)
  */
-static error_t *workspace_add_untracked(
+static void workspace_add_untracked(
     workspace_t *ws,
     const char *filesystem_path,
     const char *storage_path,
@@ -459,12 +459,7 @@ static error_t *workspace_add_untracked(
         .state = WORKSPACE_STATE_UNTRACKED,
     };
 
-    error_t *err = ptr_array_push(&ws->diverged, item);
-    if (err) {
-        return error_wrap(err, "Failed to append untracked item");
-    }
-
-    return NULL;
+    ptr_array_push(&ws->diverged, item);
 }
 
 /**
@@ -1404,13 +1399,7 @@ static orphan_authority_t compute_orphan_authority(
             return ORPHAN_AUTHORITY_UNVERIFIED;
         }
         cached->exists = exists;
-
-        err = hashmap_set(cache, profile, cached);
-        if (err) {
-            error_free(err);
-            authority_cache_free(cached);
-            return ORPHAN_AUTHORITY_UNVERIFIED;
-        }
+        hashmap_set(cache, profile, cached);
     }
 
     if (!cached->exists) {
@@ -1994,17 +1983,14 @@ static void workspace_measure(workspace_t *ws, workspace_item_t *item) {
  * is listed here: the diverged items list the orphans once the walk is done
  * (workspace_list), up to the bound it writes last (analyzed_count).
  */
-static error_t *workspace_analyze_orphans(workspace_t *ws) {
+static void workspace_analyze_orphans(workspace_t *ws) {
     if (ws->orphan_count == 0) {
-        return NULL;
+        return;
     }
 
     /* profile → authority_cache_t for this pass. Keys borrow the records'
      * arena-backed profile strings, which outlive it. */
     hashmap_t *authority_cache = hashmap_borrow(8);
-    if (!authority_cache) {
-        return ERROR(ERR_MEMORY, "Failed to create authority cache");
-    }
 
     /* The walk cannot fail: a folded error is not the walk's — the probe's failures
      * are the orphan's hold and the measure's are its bit, and each is consumed
@@ -2179,7 +2165,6 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
     /* Every orphan analyzed, by a walk that cannot fail: the diverged items list
      * them from here (workspace_list). */
     ws->analyzed_count = ws->orphan_count;
-    return NULL;
 }
 
 /**
@@ -2596,9 +2581,12 @@ static error_t *scan_directory_for_untracked(
         }
         if (ignored) continue;
 
-        /* Settled, so the descent is one statement. */
-        err = is_dir ? scan_directory_for_untracked(scan, child, depth + 1)
-                     : workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
+        /* Settled: a directory is descended, and anything else offered. */
+        if (!is_dir) {
+            workspace_add_untracked(ws, child, name, scan->profile, occupant, &st);
+            continue;
+        }
+        err = scan_directory_for_untracked(scan, child, depth + 1);
         if (err) goto cleanup;
     }
 
@@ -3061,9 +3049,8 @@ static error_t *workspace_partition(workspace_t *ws) {
  * items', then the orphans', then the discoveries' — the order every screen prints.
  *
  * @param ws Workspace (must not be NULL)
- * @return ERR_MEMORY where the list could not grow, NULL otherwise
  */
-static error_t *workspace_list(workspace_t *ws) {
+static void workspace_list(workspace_t *ws) {
     for (size_t i = 0; i < ws->dir_count + ws->file_count; i++) {
         workspace_item_t *item = ws->active[i];
 
@@ -3072,18 +3059,14 @@ static error_t *workspace_list(workspace_t *ws) {
             continue;
         }
 
-        error_t *err = ptr_array_push(&ws->diverged, item);
-        if (err) return err;
+        ptr_array_push(&ws->diverged, item);
     }
 
     /* The analyzed prefix, which is every orphan or none: a load that declined
      * the orphan analysis lists none, whatever it looked at (analyzed_count) */
     for (size_t i = 0; i < ws->analyzed_count; i++) {
-        error_t *err = ptr_array_push(&ws->diverged, ws->orphans[i]);
-        if (err) return err;
+        ptr_array_push(&ws->diverged, ws->orphans[i]);
     }
-
-    return NULL;
 }
 
 /**
@@ -3185,21 +3168,13 @@ error_t *workspace_load(
     /* Optional: the orphans analyzed (records of either kind the view lacks) —
      * on the looks taken above, against the index built from them */
     if (opts->analyze_orphans) {
-        err = workspace_analyze_orphans(ws);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to analyze orphans");
-        }
+        workspace_analyze_orphans(ws);
     }
 
     /* The diverged items, derived once every verdict is in: after the orphan
      * analysis, whose bound says which orphans they hold, and before the scan,
      * whose discoveries follow them */
-    err = workspace_list(ws);
-    if (err) {
-        workspace_free(ws);
-        return error_wrap(err, "Failed to list the diverged items");
-    }
+    workspace_list(ws);
 
     /* Optional: new files beneath the tracked directories */
     if (opts->analyze_untracked) {

@@ -320,7 +320,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
                     listed = strchr(listed, '/') + 1;
                 }
                 if (!string_array_contains(walk->names, listed)) {
-                    err = string_array_push(walk->names, listed);
+                    string_array_push(walk->names, listed);
                 }
                 git_reference_free(ref);
                 break;
@@ -375,10 +375,6 @@ error_t *gitops_list_refs(
         return error_from_git(rc);
     }
     string_array_t *names = string_array_new(0);
-    if (!names) {
-        git_reference_iterator_free(iter);
-        return ERROR(ERR_MEMORY, "Failed to allocate the ref listing");
-    }
 
     error_t *err = NULL;
     for (;;) {
@@ -393,10 +389,7 @@ error_t *gitops_list_refs(
             err = error_from_git(rc);
             break;
         }
-        err = string_array_push(names, refname + strlen(namespace) + 1);
-        if (err) {
-            break;
-        }
+        string_array_push(names, refname + strlen(namespace) + 1);
     }
     git_reference_iterator_free(iter);
 
@@ -983,9 +976,6 @@ error_t *gitops_list_remote_branches(
 
     git_remote *remote = NULL;
     string_array_t *branches = string_array_new(0);
-    if (!branches) {
-        return ERROR(ERR_MEMORY, "Failed to allocate branch list");
-    }
 
     int git_err = git_remote_lookup(&remote, repo, remote_name);
     if (git_err < 0) {
@@ -1037,13 +1027,7 @@ error_t *gitops_list_remote_branches(
             continue;
         }
 
-        error_t *push_err = string_array_push(branches, branch_name);
-        if (push_err) {
-            git_remote_disconnect(remote);
-            git_remote_free(remote);
-            string_array_free(branches);
-            return push_err;
-        }
+        string_array_push(branches, branch_name);
     }
 
     git_remote_disconnect(remote);

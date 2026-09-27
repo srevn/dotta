@@ -134,13 +134,6 @@ static error_t *land_all_profiles(
 
     /* Create array for the profiles made local */
     string_array_t *successful = string_array_new(0);
-    if (!successful) {
-        string_array_free(all_branches);
-        return ERROR(
-            ERR_MEMORY,
-            "Failed to create fetched profiles array"
-        );
-    }
 
     /* Create local branches */
     size_t fetched_count = 0;
@@ -473,10 +466,6 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
     /* Determine which profiles to fetch */
     fetched_profiles = string_array_new(0);
-    if (!fetched_profiles) {
-        err = ERROR(ERR_MEMORY, "Failed to create profile array");
-        goto cleanup;
-    }
 
     if (opts->profiles && opts->profile_count > 0) {
         /* Explicit profile management */
@@ -628,8 +617,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             );
             continue;
         }
-        err = string_array_push(&to_enable, profile);
-        if (err) goto cleanup;
+        string_array_push(&to_enable, profile);
     }
 
     if (fetched_profiles->count == 0) {
@@ -674,13 +662,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         for (size_t i = 0; i < fetched_profiles->count; i++) {
             const char *profile = fetched_profiles->items[i];
             if (!bootstrap_exists(repo, profile)) continue;
-            err = string_array_push(&bootstrap_found, profile);
-            if (err) {
-                err = error_wrap(
-                    err, "Failed to collect bootstrap profiles"
-                );
-                goto cleanup;
-            }
+            string_array_push(&bootstrap_found, profile);
         }
 
         bootstrap_available = (bootstrap_found.count > 0);

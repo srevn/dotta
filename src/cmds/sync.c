@@ -1966,10 +1966,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * heap-allocated and freed at cleanup; sync_extras is a stack literal whose
      * lifetime is cmd_sync's frame — covers both fire sites. */
     profiles_str = string_array_join(scope_profiles(scope), " ");
-    if (!profiles_str) {
-        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook env");
-        goto cleanup;
-    }
 
     remote_env = str_format("DOTTA_REMOTE=%s", remote_name);
     if (!remote_env) {

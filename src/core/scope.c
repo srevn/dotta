@@ -60,9 +60,6 @@ static error_t *resolve_enabled_lenient(
 
     error_free(err);
     *out_enabled = string_array_new(0);
-    if (!*out_enabled) {
-        return ERROR(ERR_MEMORY, "Failed to allocate empty enabled array");
-    }
 
     return NULL;
 }
@@ -99,10 +96,6 @@ error_t *scope_build(
      *    the branch is here and the fact is that it is not enabled. */
     if (in->profile_count > 0) {
         s->filter = string_array_new(in->profile_count);
-        if (!s->filter) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate filter profiles");
-            goto fail;
-        }
 
         for (size_t i = 0; i < in->profile_count; i++) {
             const char *name = in->profiles[i];
@@ -116,8 +109,7 @@ error_t *scope_build(
                 }
                 goto fail;
             }
-            err = string_array_push(s->filter, name);
-            if (err) goto fail;
+            string_array_push(s->filter, name);
         }
     }
 

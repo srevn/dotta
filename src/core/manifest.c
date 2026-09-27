@@ -238,25 +238,18 @@ static void manifest_apply_claim(
  * @param placed The step's list of every row placed (must not be NULL)
  * @param filesystem_path Arena-backed path the row is keyed by (must not be NULL)
  * @param arena Arena for the row (must not be NULL)
- * @param out The placed row, zero but for filesystem_path (must not be NULL)
- * @return Error or NULL on success
+ * @return The placed row, zero but for filesystem_path
  */
-static error_t *manifest_place(
+static manifest_row_t *manifest_place(
     ptr_array_t *placed,
     const char *filesystem_path,
-    arena_t *arena,
-    manifest_row_t **out
+    arena_t *arena
 ) {
     manifest_row_t *row = arena_calloc(arena, 1, sizeof(*row));
     row->filesystem_path = filesystem_path;
+    ptr_array_push(placed, row);
 
-    error_t *err = ptr_array_push(placed, row);
-    if (err) {
-        return error_wrap(err, "Failed to grow the placed list");
-    }
-
-    *out = row;
-    return NULL;
+    return row;
 }
 
 /**
@@ -694,9 +687,6 @@ static error_t *manifest_settle(
      * a contribution with no contender never has one, and the readers test the
      * pointer rather than a count. */
     c->contested = hashmap_borrow(8);
-    if (!c->contested) {
-        return ERROR(ERR_MEMORY, "Failed to create the contested index");
-    }
 
     /* What every question below is asked under: this contribution, and no claim
      * beyond it — the settle reads the branch as it arrived. */
@@ -733,19 +723,13 @@ static error_t *manifest_settle(
         error_t *err = manifest_decide(&n, filesystem_path, group, &kept);
         if (err) return err;
 
-        err = hashmap_set(c->index, filesystem_path, kept);
-        if (err) {
-            return error_wrap(err, "Failed to index a settled row");
-        }
+        hashmap_set(c->index, filesystem_path, kept);
 
         /* The group, kept against the path it contended for. Indexed after the
          * winner is in place, so a deeper group's ascent — which reaches this
          * rung by path order, parents first — reads a settled state whichever
          * way it looks. */
-        err = hashmap_set(c->contested, filesystem_path, group);
-        if (err) {
-            return error_wrap(err, "Failed to index a contested filesystem path");
-        }
+        hashmap_set(c->contested, filesystem_path, group);
 
         for (size_t g = 0; group[g]; g++) {
             if (group[g] == kept) continue;
@@ -853,14 +837,7 @@ static int manifest_claim_blob(
      * states it rather than repairs it. */
     const metadata_item_t *claim = metadata_lookup(ctx->metadata, storage_path);
     if (claim && claim->kind == PATH_KIND_DIRECTORY) {
-        err = hashmap_set(ctx->contradicted, storage_path, NULL);
-        if (err) {
-            ctx->error = error_wrap(
-                err, "Failed to record the stale claim '%s' of profile '%s'",
-                storage_path, ctx->profile
-            );
-            return -1;
-        }
+        hashmap_set(ctx->contradicted, storage_path, NULL);
         claim = NULL;
     }
 
@@ -903,12 +880,7 @@ static int manifest_claim_blob(
      * difference between precedence and a profile naming one place twice. */
     const manifest_row_t *held = hashmap_get(ctx->contribution->index, filesystem_path);
 
-    manifest_row_t *row = NULL;
-    err = manifest_place(ctx->placed, filesystem_path, ctx->arena, &row);
-    if (err) {
-        ctx->error = err;
-        return -1;
-    }
+    manifest_row_t *row = manifest_place(ctx->placed, filesystem_path, ctx->arena);
 
     /* The row borrows ctx->profile, the arena-backed name the step duplicated. */
     row->storage_path = storage_path;
@@ -938,14 +910,10 @@ static int manifest_claim_blob(
      * claim like any other — the claim was read by the row's own name. */
     manifest_apply_claim(row, claim, ctx->arena);
 
-    err = !held || manifest_is_derived(held)
-        ? hashmap_set(ctx->contribution->index, filesystem_path, row)
-        : ptr_array_push(ctx->contenders, row);
-    if (err) {
-        ctx->error = error_wrap(
-            err, "Failed to place '%s' of profile '%s'", storage_path, ctx->profile
-        );
-        return -1;
+    if (!held || manifest_is_derived(held)) {
+        hashmap_set(ctx->contribution->index, filesystem_path, row);
+    } else {
+        ptr_array_push(ctx->contenders, row);
     }
 
     return 0;  /* Continue walk */
@@ -1002,9 +970,6 @@ static error_t *manifest_contribute(
 
     c->profile = arena_strdup(arena, profile);
     c->index = hashmap_borrow(128);
-    if (!c->index) {
-        return ERROR(ERR_MEMORY, "Failed to create contribution index");
-    }
     manifest->profiles[manifest->profile_count++] = c->profile;
 
     /* This profile's claim sheet, read from the tree already open rather than
@@ -1036,10 +1001,6 @@ static error_t *manifest_contribute(
     ptr_array_t contenders PTR_ARRAY_AUTO = { 0 };
 
     hashmap_t *contradicted = hashmap_borrow(8);
-    if (!contradicted) {
-        err = ERROR(ERR_MEMORY, "Failed to create contradiction index");
-        goto cleanup;
-    }
 
     /* The blobs, in one walk (manifest_claim_blob). The table is the view's,
      * and bindings are keyed by profile — which the callback feeds verbatim into
@@ -1142,9 +1103,7 @@ static error_t *manifest_contribute(
          * and a derived claim named nothing. */
         if (held && !item->tracked) continue;
 
-        manifest_row_t *row = NULL;
-        err = manifest_place(&placed, filesystem_path, arena, &row);
-        if (err) break;
+        manifest_row_t *row = manifest_place(&placed, filesystem_path, arena);
 
         /* A directory row is claimed from metadata alone: blob_oid stays zero
          * and encrypted false; owner, group and the class are the item's, and
@@ -1154,33 +1113,15 @@ static error_t *manifest_contribute(
         row->type = PATH_TYPE_DIRECTORY;
         row->tracked = item->tracked;
         row->mode = item->mode != MODE_UNCLAIMED ? item->mode : DIR_MODE_DEFAULT;
-        row->owner = item->owner ? arena_strdup(arena, item->owner) : NULL;
-        row->group = item->group ? arena_strdup(arena, item->group) : NULL;
-
-        /* The three are refused together, where every other allocation in this
-         * file is refused on the line that made it: the row above is one statement,
-         * and the only failure any of its copies has is the arena's — one
-         * exhaustion, named by the path and the profile that were being placed
-         * when it came. */
-        if (!row->storage_path ||
-            (item->owner && !row->owner) || (item->group && !row->group)) {
-            err = ERROR(
-                ERR_MEMORY, "Failed to copy directory row fields for '%s' in profile '%s'",
-                item->key, c->profile
-            );
-            break;
-        }
+        row->owner = arena_strdup(arena, item->owner);
+        row->group = arena_strdup(arena, item->group);
 
         /* The within-profile rule, as the blob pass states it: the row stands,
          * or it contends. */
-        err = !held || manifest_is_derived(held)
-            ? hashmap_set(c->index, filesystem_path, row)
-            : ptr_array_push(&contenders, row);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to place '%s' of profile '%s'", item->key, c->profile
-            );
-            break;
+        if (!held || manifest_is_derived(held)) {
+            hashmap_set(c->index, filesystem_path, row);
+        } else {
+            ptr_array_push(&contenders, row);
         }
     }
     if (err) goto cleanup;
@@ -1230,9 +1171,8 @@ cleanup:
  *
  * @param manifest The view whose contributions are all settled (must not be NULL)
  * @param arena Arena for the spine (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
+static void manifest_layer(manifest_t *manifest, arena_t *arena) {
     for (size_t i = 0; i < manifest->profile_count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
@@ -1243,13 +1183,12 @@ static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
             if (manifest_is_derived(row) &&
                 hashmap_has(manifest->index, row->filesystem_path)) continue;
 
-            error_t *err = hashmap_set(manifest->index, row->filesystem_path, row);
-            if (err) return error_wrap(err, "Failed to index manifest row");
+            hashmap_set(manifest->index, row->filesystem_path, row);
         }
     }
 
     size_t standing = hashmap_size(manifest->index);
-    if (standing == 0) return NULL;
+    if (standing == 0) return;
 
     manifest->rows = arena_calloc(arena, standing, sizeof(*manifest->rows));
     for (size_t i = 0; i < manifest->profile_count; i++) {
@@ -1261,8 +1200,6 @@ static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
             }
         }
     }
-
-    return NULL;
 }
 
 /**
@@ -1274,18 +1211,12 @@ static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
  * The index hashmap is heap-allocated (borrowed-key mode — keys live in the
  * caller's arena and survive the hashmap's lifetime). No spine is allocated here:
  * each is cut once, exactly, from the index that decides it.
- *
- * On error, the function returns ERR_MEMORY and *out is NULL; arena allocations
- * are abandoned to the arena and no heap allocation is outstanding.
  */
-static error_t *manifest_allocate(
+static manifest_t *manifest_allocate(
     arena_t *arena,
     size_t index_capacity,
-    size_t profile_capacity,
-    manifest_t **out
+    size_t profile_capacity
 ) {
-    *out = NULL;
-
     manifest_t *manifest = arena_calloc(arena, 1, sizeof(*manifest));
 
     if (profile_capacity > 0) {
@@ -1298,12 +1229,8 @@ static error_t *manifest_allocate(
     }
 
     manifest->index = hashmap_borrow(index_capacity);
-    if (!manifest->index) {
-        return ERROR(ERR_MEMORY, "Failed to create manifest index");
-    }
 
-    *out = manifest;
-    return NULL;
+    return manifest;
 }
 
 /**
@@ -1384,9 +1311,7 @@ error_t *manifest_build(
         return error_wrap(err, "Failed to build mount table");
     }
 
-    manifest_t *manifest = NULL;
-    err = manifest_allocate(arena, 128, profiles.count, &manifest);
-    if (err) return err;
+    manifest_t *manifest = manifest_allocate(arena, 128, profiles.count);
     manifest->mounts = mounts;
 
     /* One contribution per profile, in order; precedence runs over them once
@@ -1430,8 +1355,7 @@ error_t *manifest_build(
         if (err) goto cleanup;
     }
 
-    err = manifest_layer(manifest, arena);
-    if (err) goto cleanup;
+    manifest_layer(manifest, arena);
 
     *out = manifest;
     return NULL;
@@ -1463,9 +1387,7 @@ error_t *manifest_build_tree(
 
     *out = NULL;
 
-    manifest_t *manifest = NULL;
-    error_t *err = manifest_allocate(arena, 128, 1, &manifest);
-    if (err) return err;
+    manifest_t *manifest = manifest_allocate(arena, 128, 1);
 
     /* mounts borrows from a function parameter — it outlives the tree walk, and
      * the table outlives the view (manifest_mounts lends it). The sheet is the
@@ -1474,11 +1396,10 @@ error_t *manifest_build_tree(
 
     /* One contribution, settled and layered like any other, so a tree view answers
      * manifest_lookup_claim and manifest_name exactly as an enabled view does. */
-    err = manifest_contribute(manifest, repo, tree, profile, arena);
+    error_t *err = manifest_contribute(manifest, repo, tree, profile, arena);
     if (err) goto cleanup;
 
-    err = manifest_layer(manifest, arena);
-    if (err) goto cleanup;
+    manifest_layer(manifest, arena);
 
     *out = manifest;
     return NULL;
@@ -1805,9 +1726,6 @@ error_t *manifest_diff(
      * borrowed from profiles; the caller keeps it alive for the duration of this
      * call. */
     stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
-    if (!stats_map) {
-        return ERROR(ERR_MEMORY, "Failed to create stats attribution map");
-    }
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
 
@@ -1826,11 +1744,7 @@ error_t *manifest_diff(
 
         memset(&out_stats[i], 0, sizeof(out_stats[i]));
         out_stats[i].profile = name;
-        err = hashmap_set(stats_map, name, &out_stats[i]);
-        if (err) {
-            err = error_wrap(err, "Failed to populate stats attribution map");
-            goto cleanup;
-        }
+        hashmap_set(stats_map, name, &out_stats[i]);
     }
 
     /* Gain side: every row of `after`, attributed to its winner. What `before`

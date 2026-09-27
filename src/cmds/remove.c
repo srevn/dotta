@@ -1503,33 +1503,31 @@ static error_t *remove_profile(
      * a sheet has no directory claims; a sheet that will not load degrades to
      * the files-only universe — the deletion does not refuse over it. */
     hook_storage = string_array_new(0);
-    if (hook_storage) {
-        for (size_t i = 0; i < files->count; i++) {
-            string_array_push(hook_storage, files->items[i]);
-        }
+    for (size_t i = 0; i < files->count; i++) {
+        string_array_push(hook_storage, files->items[i]);
+    }
 
-        metadata_t *branch_metadata = NULL;
-        error_t *meta_err = metadata_load_from_branch(
-            repo, opts->profile, &branch_metadata
-        );
-        if (meta_err) {
-            error_free(meta_err);
-        } else {
-            size_t item_count = 0;
-            const metadata_item_t *const *items =
-                metadata_items(branch_metadata, &item_count);
-            for (size_t i = 0; i < item_count; i++) {
-                if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
-                bool held_as_blob = false;
-                for (size_t j = 0; j < files->count && !held_as_blob; j++) {
-                    held_as_blob = strcmp(files->items[j], items[i]->key) == 0;
-                }
-                if (!held_as_blob) {
-                    string_array_push(hook_storage, items[i]->key);
-                }
+    metadata_t *branch_metadata = NULL;
+    error_t *meta_err = metadata_load_from_branch(
+        repo, opts->profile, &branch_metadata
+    );
+    if (meta_err) {
+        error_free(meta_err);
+    } else {
+        size_t item_count = 0;
+        const metadata_item_t *const *items =
+            metadata_items(branch_metadata, &item_count);
+        for (size_t i = 0; i < item_count; i++) {
+            if (items[i]->kind != PATH_KIND_DIRECTORY) continue;
+            bool held_as_blob = false;
+            for (size_t j = 0; j < files->count && !held_as_blob; j++) {
+                held_as_blob = strcmp(files->items[j], items[i]->key) == 0;
             }
-            metadata_free(branch_metadata);
+            if (!held_as_blob) {
+                string_array_push(hook_storage, items[i]->key);
+            }
         }
+        metadata_free(branch_metadata);
     }
 
     /* Convert storage paths to filesystem paths for hook consistency. The file
@@ -1538,36 +1536,27 @@ static error_t *remove_profile(
      * Borrows the run's mount table. HOME and ROOT are always present, so home/
      * and root/ paths resolve unconditionally. CUSTOM paths resolve only when
      * the profile is enabled with a binding; otherwise, and on a resolve that
-     * fails (allocation failure or malformed input — non-fatal here), the loop
-     * substitutes the storage path so the hook sees a meaningful name. */
-    if (hook_storage) {
-        hook_filesystem = string_array_new(0);
-        if (hook_filesystem) {
-            for (size_t i = 0; i < hook_storage->count; i++) {
-                const char *filesystem_path = NULL;
-                error_t *conv_err = mount_resolve(
-                    mounts, opts->profile, hook_storage->items[i], ctx->arena, &filesystem_path
-                );
-                if (conv_err) error_free(conv_err);
-                string_array_push(
-                    hook_filesystem, filesystem_path ? filesystem_path : hook_storage->items[i]
-                );
-            }
-        }
+     * fails (malformed input — non-fatal here), the loop substitutes the storage
+     * path so the hook sees a meaningful name. */
+    hook_filesystem = string_array_new(0);
+    for (size_t i = 0; i < hook_storage->count; i++) {
+        const char *filesystem_path = NULL;
+        error_t *conv_err = mount_resolve(
+            mounts, opts->profile, hook_storage->items[i], ctx->arena, &filesystem_path
+        );
+        if (conv_err) error_free(conv_err);
+        string_array_push(
+            hook_filesystem, filesystem_path ? filesystem_path : hook_storage->items[i]
+        );
     }
 
-    /* Build hook invocation. Prefer filesystem paths (consistent with the
-     * file-removal subcommand); fall back to the storage-path universe — or,
-     * failing that too, the file list — if synthesis was skipped. The arrays
-     * live until cleanup. */
-    const string_array_t *hook_files = hook_filesystem ? hook_filesystem
-                                     : hook_storage ? hook_storage
-                                     : files;
+    /* Build hook invocation with the filesystem paths (consistent with the
+     * file-removal subcommand). The arrays live until cleanup. */
     const hook_invocation_t hook_inv = {
         .cmd        = HOOK_CMD_REMOVE,
         .profile    = opts->profile,
-        .files      = hook_files ? hook_files->items : NULL,
-        .file_count = hook_files ? hook_files->count : 0,
+        .files      = hook_filesystem->items,
+        .file_count = hook_filesystem->count,
         .dry_run    = opts->dry_run,
     };
 
@@ -1756,8 +1745,8 @@ cleanup:
      * post-deletion transaction on an error path. */
     state_rollback(state);
 
-    if (hook_filesystem) string_array_free(hook_filesystem);
-    if (hook_storage) string_array_free(hook_storage);
+    string_array_free(hook_filesystem);
+    string_array_free(hook_storage);
     if (files) string_array_free(files);
     if (all_profiles) string_array_free(all_profiles);
 

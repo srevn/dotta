@@ -394,15 +394,10 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
         /* Explicit profiles: each must be here — a script asked for by a name
          * that is not a profile is a typo, not a skip */
         profiles = string_array_new(opts->profile_count);
-        if (!profiles) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate profiles");
-            goto cleanup;
-        }
         for (size_t i = 0; i < opts->profile_count; i++) {
             err = profile_require(repo, opts->profiles[i]);
             if (err) goto cleanup;
-            err = string_array_push(profiles, opts->profiles[i]);
-            if (err) goto cleanup;
+            string_array_push(profiles, opts->profiles[i]);
         }
     } else if (opts->all_profiles) {
         /* Every profile here, run in the convention's order: a set the machine
@@ -467,11 +462,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
      * list and pass straight into bootstrap_fire — no double tree-walk. */
     for (size_t i = 0; i < profiles->count; i++) {
         if (bootstrap_exists(repo, profiles->items[i])) {
-            err = string_array_push(&found, profiles->items[i]);
-            if (err) {
-                err = error_wrap(err, "Failed to collect profiles");
-                goto cleanup;
-            }
+            string_array_push(&found, profiles->items[i]);
         }
     }
 

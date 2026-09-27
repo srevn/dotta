@@ -217,15 +217,8 @@ static error_t *build_items(
     /* Hash map for O(1) lookups. Store (i + 1) so index 0 doesn't collide with
      * the "not found" NULL return. */
     profile_map = hashmap_borrow(0);
-    if (!profile_map) {
-        err = error_create(ERR_MEMORY, "failed to create profile hashmap");
-        goto cleanup;
-    }
     for (size_t i = 0; i < all_profiles->count; i++) {
-        err = hashmap_set(
-            profile_map, all_profiles->items[i], (void *) (uintptr_t) (i + 1)
-        );
-        if (err) goto cleanup;
+        hashmap_set(profile_map, all_profiles->items[i], (void *) (uintptr_t) (i + 1));
     }
 
     used = calloc(all_profiles->count, sizeof(bool));
@@ -405,7 +398,7 @@ static inline void plan_cleanup(plan_t *p) {
 
 /* Phase: collect enabled rows in display order. Pure view sweep; no state
  * interaction. */
-static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
+static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
     if (view->item_count > 0) {
         plan->new_order_items = arena_calloc(
             arena, view->item_count, sizeof(*plan->new_order_items)
@@ -415,11 +408,9 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
     size_t k = 0;
     for (size_t i = 0; i < view->item_count; i++) {
         if (!view->items[i].enabled) continue;
-        error_t *err = string_array_push(&plan->new_order, view->items[i].name);
-        if (err) return err;
+        string_array_push(&plan->new_order, view->items[i].name);
         plan->new_order_items[k++] = &view->items[i];
     }
-    return NULL;
 }
 
 /* Phase: classify diff against the persisted set BEFORE any state mutation.
@@ -599,8 +590,7 @@ static error_t *save_order(
     git_repository *repo, state_t *deploy_state, arena_t *arena, view_t *view
 ) {
     plan_t plan PLAN_AUTO = { 0 };
-    error_t *err = plan_collect(arena, view, &plan);
-    if (err) return err;
+    plan_collect(arena, view, &plan);
 
     /* Refuse a save that would empty enabled_profiles. Checked here — after collect
      * — instead of via a cached counter on view: the items array is the single
@@ -610,7 +600,7 @@ static error_t *save_order(
         return error_create(ERR_INVALID_ARG, "no profiles enabled");
     }
 
-    err = state_begin(deploy_state);
+    error_t *err = state_begin(deploy_state);
     if (err) return err;
 
     err = plan_classify(arena, deploy_state, &plan);

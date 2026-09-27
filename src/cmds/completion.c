@@ -262,13 +262,7 @@ void completion_refspecs(
     string_array_t *branches = NULL;
     if (pinned) {
         branches = string_array_new(1);
-        if (!branches) return;
-        error_t *err = string_array_push(branches, pinned);
-        if (err) {
-            error_free(err);
-            string_array_free(branches);
-            return;
-        }
+        string_array_push(branches, pinned);
     } else {
         error_t *err = gitops_list_branches(repo, &branches);
         if (err) {

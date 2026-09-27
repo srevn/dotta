@@ -715,11 +715,7 @@ static int epoch_walk_cb(
     if (hashmap_has(walk->seen, key)) {
         return (type == GIT_OBJECT_TREE) ? 1 : 0;
     }
-    error_t *err = hashmap_set(walk->seen, key, NULL);
-    if (err) {
-        walk->error = err;
-        return -1;
-    }
+    hashmap_set(walk->seen, key, NULL);
 
     if (type == GIT_OBJECT_TREE) {
         return 0;  /* first visit: descend */
@@ -729,7 +725,7 @@ static int epoch_walk_cb(
      * ciphertext, whatever they begin with (infra/content.h). */
     content_kind_t kind;
     uint8_t fp[KDF_EPOCH_FP_SIZE];
-    err = content_classify(
+    error_t *err = content_classify(
         walk->repo, oid, git_tree_entry_filemode(entry), &kind, fp
     );
     if (err) {
@@ -795,12 +791,6 @@ static error_t *walk_ciphertext(
     }
 
     hashmap_t *seen = hashmap_create(0);
-    if (!seen) {
-        string_array_free(branches);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate the ciphertext walk's visited set"
-        );
-    }
 
     epoch_walk_t walk = {
         .repo = repo, .seen = seen, .fn = fn, .payload = payload,
@@ -863,11 +853,7 @@ static error_t *walk_ciphertext(
                 git_commit_free(commit);
                 continue;
             }
-            err = hashmap_set(seen, key, NULL);
-            if (err) {
-                git_commit_free(commit);
-                goto cleanup;
-            }
+            hashmap_set(seen, key, NULL);
 
             git_tree *tree = NULL;
             git_err = git_commit_tree(&tree, commit);

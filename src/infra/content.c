@@ -384,11 +384,6 @@ content_cache_t *content_cache_create(git_repository *repo, keymgr *keymgr) {
     /* Initial capacity: 64 entries */
     cache->cache_map = hashmap_create(64);
 
-    if (!cache->cache_map) {
-        free(cache);
-        return NULL;
-    }
-
     return cache;
 }
 
@@ -466,13 +461,7 @@ error_t *content_cache_get_from_blob_oid(
     }
 
     /* Store in cache (cache takes ownership) */
-    err = hashmap_set(cache->cache_map, key, content);
-    if (err) {
-        /* Fatal - cannot return borrowed reference if caching fails */
-        /* Ownership contract requires cache to own the buffer */
-        buffer_free(content);
-        return error_wrap(err, "Failed to cache content for blob");
-    }
+    hashmap_set(cache->cache_map, key, content);
 
     *out_content = content;
 

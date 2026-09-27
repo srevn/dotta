@@ -824,15 +824,14 @@ static error_t *collect_filesystem(
     const manifest_row_t *at = NULL;
     ptr_array_t beneath PTR_ARRAY_AUTO = { 0 };
     manifest_rows_t rows = manifest_rows(view);
-    for (size_t i = 0; i < rows.count && !err; i++) {
+    for (size_t i = 0; i < rows.count; i++) {
         const manifest_row_t *row = rows.entries[i];
         if (strcmp(row->filesystem_path, filesystem_path) == 0) {
             at = row;
         } else if (str_path_beneath(row->filesystem_path, base, base_len)) {
-            err = ptr_array_push(&beneath, row);
+            ptr_array_push(&beneath, row);
         }
     }
-    if (err) goto cleanup;
 
     if (!at && beneath.count == 0) {
         /* A claim this machine cannot place stands nowhere and is no row — the
@@ -926,16 +925,11 @@ cleanup:
  */
 static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) {
     hashmap_t *standing = hashmap_borrow(list->count);
-    if (!standing) {
-        return ERROR(ERR_MEMORY, "Failed to index the export entries");
+    for (size_t i = 0; i < list->count; i++) {
+        hashmap_set(standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1));
     }
 
     error_t *err = NULL;
-    for (size_t i = 0; i < list->count && !err; i++) {
-        err = hashmap_set(
-            standing, list->items[i].rel_path, (void *) (uintptr_t) (i + 1)
-        );
-    }
 
     size_t collected = list->count;
 
@@ -959,9 +953,7 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
                 e.mode = DIR_MODE_DEFAULT;
                 e.rel_path = arena_strdup(arena, rung);
                 entry_list_append(list, arena, &e);
-                err = hashmap_set(
-                    standing, e.rel_path, (void *) (uintptr_t) list->count
-                );
+                hashmap_set(standing, e.rel_path, (void *) (uintptr_t) list->count);
             } else if (list->items[held - 1].kind != EXPORT_ENTRY_DIRECTORY) {
                 /* Both subjects in the branch's own names, because the
                  * contradiction is the branch's and that is where it gets fixed.

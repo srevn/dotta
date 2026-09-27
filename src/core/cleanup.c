@@ -80,7 +80,6 @@ error_t *cleanup_plan_build(
         return NULL;
     }
 
-    error_t *err = NULL;
     workspace_items_t items = workspace_diverged(ws);
 
     for (size_t i = 0; i < items.count; i++) {
@@ -105,13 +104,12 @@ error_t *cleanup_plan_build(
 
         /* Exclude dimension: spared, reported by the caller, never touched. */
         if (scope_is_excluded(scope, item->storage_path, item->item_kind)) {
-            err = ptr_array_push(&plan->excluded, item);
+            ptr_array_push(&plan->excluded, item);
         } else if (item->item_kind == PATH_KIND_DIRECTORY) {
-            err = ptr_array_push(&plan->directories, item);
+            ptr_array_push(&plan->directories, item);
         } else {
-            err = ptr_array_push(&plan->files, item);
+            ptr_array_push(&plan->files, item);
         }
-        if (err) goto cleanup;
     }
 
     /* Prune order, established once. A child's path is its parent's path plus a
@@ -133,10 +131,6 @@ error_t *cleanup_plan_build(
 
     *out = plan;
     return NULL;
-
-cleanup:
-    cleanup_plan_free(plan);
-    return error_wrap(err, "Failed to build cleanup plan");
 }
 
 void cleanup_plan_free(cleanup_plan_t *plan) {
@@ -422,12 +416,6 @@ error_t *cleanup_preflight(
      * the values are fate_t, never NULL, so hashmap_get's NULL is "outside the
      * plan". */
     hashmap_t *fates = hashmap_borrow(plan->files.count + plan->directories.count);
-    if (!fates) {
-        cleanup_preflight_result_free(verdicts);
-        return ERROR(ERR_MEMORY, "Failed to allocate fate set");
-    }
-
-    error_t *err = NULL;
 
     /* One verdict per file, read off the item, then one probe for the ones it
      * cleared. An absent file joins neither the prune count nor the fate set:
@@ -440,16 +428,16 @@ error_t *cleanup_preflight(
 
         switch (cleanup_verdict(item, force)) {
             case CLEANUP_ABSENT:
-                err = ptr_array_push(&verdicts->absent_files, item);
+                ptr_array_push(&verdicts->absent_files, item);
                 break;
 
             case CLEANUP_RELEASED:
-                err = ptr_array_push(&verdicts->released_files, item);
+                ptr_array_push(&verdicts->released_files, item);
                 fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
-                err = ptr_array_push(&verdicts->skipped_files, item);
+                ptr_array_push(&verdicts->skipped_files, item);
                 fate = FATE_SKIPPED;
                 break;
 
@@ -457,18 +445,17 @@ error_t *cleanup_preflight(
                 /* Nothing of its own in the way; the run's reach is the last
                  * rung, and a refusal leaves the file exactly as a skip does. */
                 if (parent_accepts_removal(item->filesystem_path)) {
-                    err = ptr_array_push(&verdicts->prunable_files, item);
+                    ptr_array_push(&verdicts->prunable_files, item);
                     fate = FATE_GONE;
                 } else {
-                    err = ptr_array_push(&verdicts->refused_files, item);
+                    ptr_array_push(&verdicts->refused_files, item);
                     fate = FATE_SKIPPED;
                 }
                 break;
         }
-        if (!err && fate != FATE_UNPLANNED) {
-            err = hashmap_set(fates, item->filesystem_path, (void *) (uintptr_t) fate);
+        if (fate != FATE_UNPLANNED) {
+            hashmap_set(fates, item->filesystem_path, (void *) (uintptr_t) fate);
         }
-        if (err) goto cleanup;
     }
 
     /* A directory's verdict is the strongest class left in it once this run has
@@ -492,20 +479,20 @@ error_t *cleanup_preflight(
             case CLEANUP_ABSENT:
                 /* A pure state reclaim: no filesystem effect to preview, and no
                  * walk meets it. */
-                err = ptr_array_push(&verdicts->absent_dirs, item);
+                ptr_array_push(&verdicts->absent_dirs, item);
                 break;
 
             case CLEANUP_RELEASED:
                 /* Left alone — unprobed, because nothing about its contents changes
                  * the answer — and the record retires. */
-                err = ptr_array_push(&verdicts->released_dirs, item);
+                ptr_array_push(&verdicts->released_dirs, item);
                 fate = FATE_PERMANENT;
                 break;
 
             case CLEANUP_SKIPPED:
                 /* The workspace could not verify it; the directory above it waits
                  * with it. */
-                err = ptr_array_push(&verdicts->skipped_dirs, item);
+                ptr_array_push(&verdicts->skipped_dirs, item);
                 fate = FATE_SKIPPED;
                 break;
 
@@ -538,32 +525,26 @@ error_t *cleanup_preflight(
                      * Asked last, of what the run would otherwise remove, so a
                      * directory a permanent entry keeps is released whoever owns
                      * its parent. */
-                    err = ptr_array_push(&verdicts->refused_dirs, item);
+                    ptr_array_push(&verdicts->refused_dirs, item);
                     fate = FATE_SKIPPED;
                 } else {
                     ptr_array_t *bucket = (fate == FATE_GONE) ? &verdicts->prunable_dirs
                                         : (fate == FATE_SKIPPED) ? &verdicts->skipped_dirs
                                                               : &verdicts->released_dirs;
-                    err = ptr_array_push(bucket, item);
+                    ptr_array_push(bucket, item);
                 }
                 break;
         }
-        if (!err && fate != FATE_UNPLANNED) {
+        if (fate != FATE_UNPLANNED) {
             /* Its parent must read it when its own turn comes. */
-            err = hashmap_set(fates, path, (void *) (uintptr_t) fate);
+            hashmap_set(fates, path, (void *) (uintptr_t) fate);
         }
-        if (err) goto cleanup;
     }
 
     hashmap_free(fates, NULL);
 
     *out = verdicts;
     return NULL;
-
-cleanup:
-    hashmap_free(fates, NULL);
-    cleanup_preflight_result_free(verdicts);
-    return error_wrap(err, "Failed to decide cleanup verdicts");
 }
 
 void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {

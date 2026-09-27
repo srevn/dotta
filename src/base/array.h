@@ -8,6 +8,10 @@
  *
  * Both structs are transparent (direct field access is the intended usage) and
  * support stack and heap lifecycles via matching init/deinit and new/free pairs.
+ *
+ * Growth cannot fail: a push, a reserve or a clone succeeds or the run dies of
+ * exhaustion (base/heap.h), so none of them answers anything, and a count whose
+ * bytes no memory could hold is exhaustion too.
  */
 
 #ifndef DOTTA_ARRAY_H
@@ -26,9 +30,8 @@ void string_array_init(string_array_t *arr);
  *
  * @param arr Array to initialize
  * @param cap Desired initial capacity
- * @return Error on allocation failure
  */
-error_t *string_array_init_cap(string_array_t *arr, size_t cap);
+void string_array_init_cap(string_array_t *arr, size_t cap);
 
 /**
  * Release all owned memory (strings + backing array). Resets struct to zero state.
@@ -40,7 +43,7 @@ void string_array_deinit(string_array_t *arr);
  * Allocate and initialize a new array on the heap.
  *
  * @param cap Initial capacity (0 for no pre-allocation)
- * @return New array, or NULL on allocation failure
+ * @return New array; never NULL
  */
 string_array_t *string_array_new(size_t cap);
 
@@ -60,26 +63,21 @@ void string_array_free_cb(void *ptr);
  *
  * @param arr Array (must not be NULL)
  * @param str String to copy and append (must not be NULL)
- * @return Error on allocation failure
  */
-error_t *string_array_push(string_array_t *arr, const char *str);
+void string_array_push(string_array_t *arr, const char *str);
 
 /**
  * Append str to the array, transferring ownership. str must be heap-allocated.
- * On error, caller retains ownership.
  *
  * @param arr Array (must not be NULL)
  * @param str Heap-allocated string (must not be NULL, ownership transferred)
- * @return Error on allocation failure
  */
-error_t *string_array_push_owned(string_array_t *arr, char *str);
+void string_array_push_owned(string_array_t *arr, char *str);
 
 /**
  * Ensure capacity for at least cap elements without reallocation.
- *
- * @return Error on allocation failure
  */
-error_t *string_array_reserve(string_array_t *arr, size_t cap);
+void string_array_reserve(string_array_t *arr, size_t cap);
 
 /**
  * Remove element at index, shifting subsequent elements left. O(n). No-op if
@@ -123,16 +121,15 @@ void string_array_sort(string_array_t *arr);
  *
  * @param src Source array (must not be NULL)
  * @param dst Destination (must not be NULL, overwritten)
- * @return Error on allocation failure (dst left in clean zero state)
  */
-error_t *string_array_clone(const string_array_t *src, string_array_t *dst);
+void string_array_clone(const string_array_t *src, string_array_t *dst);
 
 /**
  * Join array elements into a single delimiter-separated string.
  *
- * @param arr Array (NULL or empty returns strdup(""))
+ * @param arr Array (NULL or empty joins to "")
  * @param delimiter Separator between elements (NULL treated as empty)
- * @return Heap-allocated string, or NULL on allocation failure
+ * @return Heap-allocated string; never NULL
  */
 char *string_array_join(const string_array_t *arr, const char *delimiter);
 
@@ -170,9 +167,8 @@ void ptr_array_init(ptr_array_t *arr);
  *
  * @param arr Array to initialize
  * @param cap Desired initial capacity
- * @return Error on allocation failure
  */
-error_t *ptr_array_init_cap(ptr_array_t *arr, size_t cap);
+void ptr_array_init_cap(ptr_array_t *arr, size_t cap);
 
 /**
  * Release the backing buffer and reset to zero state.
@@ -186,7 +182,7 @@ void ptr_array_deinit(ptr_array_t *arr);
  * Allocate and initialize a new array on the heap.
  *
  * @param cap Initial capacity (0 for no pre-allocation)
- * @return New array, or NULL on allocation failure
+ * @return New array; never NULL
  */
 ptr_array_t *ptr_array_new(size_t cap);
 
@@ -208,16 +204,13 @@ void ptr_array_free_cb(void *ptr);
  *
  * @param arr Array (must not be NULL)
  * @param p   Pointer to store (may be NULL)
- * @return Error on allocation failure
  */
-error_t *ptr_array_push(ptr_array_t *arr, const void *p);
+void ptr_array_push(ptr_array_t *arr, const void *p);
 
 /**
  * Ensure capacity for at least cap elements without reallocation.
- *
- * @return Error on allocation failure
  */
-error_t *ptr_array_reserve(ptr_array_t *arr, size_t cap);
+void ptr_array_reserve(ptr_array_t *arr, size_t cap);
 
 /**
  * Reset count to 0 without freeing the backing buffer. No-op on NULL.

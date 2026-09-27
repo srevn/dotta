@@ -1199,13 +1199,6 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
     }
 
     string_array_t *entries = string_array_new(0);
-    if (!entries) {
-        closedir(dir);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate directory listing for '%s'",
-            path
-        );
-    }
 
     struct dirent *entry;
     errno = 0;
@@ -1217,15 +1210,7 @@ error_t *fs_list_dir(const char *path, string_array_t **out) {
             continue;
         }
 
-        error_t *err = string_array_push(entries, entry->d_name);
-        if (err) {
-            closedir(dir);
-            string_array_free(entries);
-            return error_wrap(
-                err, "Failed to build directory listing for '%s'",
-                path
-            );
-        }
+        string_array_push(entries, entry->d_name);
         errno = 0;
     }
 

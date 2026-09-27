@@ -71,11 +71,6 @@ error_t *metadata_create_empty(metadata_t **out) {
 
     /* Create unified hashmap for O(1) lookups */
     metadata->index = hashmap_borrow(INITIAL_CAPACITY);
-    if (!metadata->index) {
-        free(metadata->items);
-        free(metadata);
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata index");
-    }
 
     metadata->count = 0;
     metadata->capacity = INITIAL_CAPACITY;
@@ -360,18 +355,14 @@ error_t *metadata_add_item(
 
     /* APPEND NEW ITEM
      *
-     * Both refusals come first: a spine that cannot grow, and an index that cannot
-     * take the key. Neither has published anything, so the caller keeps the item
-     * and the collection is untouched. */
+     * The refusal comes first: a spine that cannot grow has published nothing,
+     * so the caller keeps the item and the collection is untouched. */
     error_t *err = ensure_capacity(metadata);
     if (err) {
         return err;
     }
 
-    err = hashmap_set(metadata->index, incoming->key, incoming);
-    if (err) {
-        return error_wrap(err, "Failed to index metadata item");
-    }
+    hashmap_set(metadata->index, incoming->key, incoming);
 
     metadata->items[metadata->count++] = incoming;
     *item = NULL;
@@ -582,10 +573,7 @@ error_t *metadata_prune_ancestors(
         /* And the other half: the one path a tree cannot hold. */
         if (tracked_beneath(items, item_count, dir->key)) continue;
 
-        error_t *err = string_array_push(pruned, dir->key);
-        if (err) {
-            return error_wrap(err, "Failed to record redundant directory");
-        }
+        string_array_push(pruned, dir->key);
     }
 
     /* Every key here was read off an item the walk above just saw, so each names
@@ -907,9 +895,10 @@ static error_t *capture_ancestor(
      * was there at capture time never authored a claim to drop; this is the same
      * consent, one command later. */
     if (occupant != FS_OCCUPANT_DIRECTORY) {
-        return metadata_remove_item(metadata, storage_path)
-                   ? string_array_push(retired, storage_path)
-                   : NULL;
+        if (metadata_remove_item(metadata, storage_path)) {
+            string_array_push(retired, storage_path);
+        }
+        return NULL;
     }
 
     metadata_item_t *item = NULL;

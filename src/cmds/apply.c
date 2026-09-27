@@ -1908,14 +1908,8 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
         );
     }
 
-    /* The hooks' profile list, joined beside the scope it reads: the one allocation
-     * on the way to the hooks fails here, before the previews are on screen,
-     * rather than under a consent text the run then abandons. */
+    /* The hooks' profile list, joined beside the scope it reads */
     profiles_str = string_array_join(scope_profiles(scope), " ");
-    if (!profiles_str) {
-        err = ERROR(ERR_MEMORY, "Failed to join profile names for hook");
-        goto cleanup;
-    }
 
     /* Load workspace (partitions the view's rows and runs divergence analysis)
      *

@@ -164,15 +164,10 @@ static int populate_tree_paths_callback(
     memcpy(path + root_len, name, name_len);
     path[path_len] = '\0';
 
-    error_t *err = hashmap_set(data->map, path, NULL);
+    hashmap_set(data->map, path, NULL);
 
     if (path != stack_buf) {
         free(path);
-    }
-
-    if (err) {
-        data->error = err;
-        return -1;
     }
 
     data->file_count++;
@@ -385,15 +380,7 @@ static error_t *walk_commits(
                 info->time = current_commit_info->time;
 
                 /* Add to map */
-                err = hashmap_set(ctx->map, path, info);
-                if (err) {
-                    stats_free_commit_info(info);
-                    git_diff_free(diff);
-                    stats_free_commit_info(current_commit_info);
-                    current_commit_info = NULL;
-                    git_commit_free(commit);
-                    goto cleanup;
-                }
+                hashmap_set(ctx->map, path, info);
 
                 ctx->files_found++;
             }
@@ -559,10 +546,6 @@ error_t *stats_build_file_commit_map(
 
     /* Create hashmap */
     map->map = hashmap_create(HASHMAP_INITIAL_SIZE);
-    if (!map->map) {
-        free(map);
-        return ERROR(ERR_MEMORY, "Failed to create hashmap");
-    }
 
     /* Pre-populate map with all current-tree file paths (NULL values). This ensures
      * the commit walker only maps files that actually exist in the current tree,

@@ -239,16 +239,13 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
      * loudly. */
     CHECK_ARG(out->stream == stdout, "out must route to stdout");
 
-    error_t *err = NULL;
-
     /* Single-pass filter: keep only profiles that have a script, in order.
      * STRING_ARRAY_AUTO ensures the list is freed on every exit path. */
     string_array_t found STRING_ARRAY_AUTO = { 0 };
     for (size_t i = 0; i < spec->profiles->count; i++) {
         const char *p = spec->profiles->items[i];
         if (bootstrap_exists(spec->repo, p)) {
-            err = string_array_push(&found, p);
-            if (err) return error_wrap(err, "Failed to collect profiles");
+            string_array_push(&found, p);
         }
     }
 
@@ -265,15 +262,9 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
      * numbering and avoids misleading scripts about peers that aren't
      * participating. */
     char *all_profiles = string_array_join(&found, " ");
-    if (!all_profiles) {
-        return ERROR(ERR_MEMORY, "Failed to join profile names");
-    }
 
-    /* Failure tracking: fail_count is authoritative (advances even if recording
-     * the profile name OOMs); `failed` holds the names we successfully recorded
-     * for the end-of-run summary. */
+    /* The failed profiles' names, for the end-of-run summary */
     string_array_t failed STRING_ARRAY_AUTO = { 0 };
-    size_t fail_count = 0;
 
     for (size_t i = 0; i < found.count; i++) {
         const char *profile = found.items[i];
@@ -316,23 +307,19 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
         }
 
         /* Continue-on-error: remember for the summary, then free the per-step
-         * error (the details are already on screen). An OOM while pushing the
-         * profile name is not fatal — we still advance fail_count so the final
-         * summary is accurate. */
-        fail_count++;
-        error_t *push_err = string_array_push(&failed, profile);
-        if (push_err) error_free(push_err);
+         * error (the details are already on screen). */
+        string_array_push(&failed, profile);
         error_free(step_err);
     }
 
     free(all_profiles);
 
-    if (fail_count == 0) return NULL;
+    if (failed.count == 0) return NULL;
 
     output_gap(out, OUTPUT_NORMAL);
     output_warning(
         out, OUTPUT_NORMAL, "%zu bootstrap script%s failed:",
-        fail_count, fail_count == 1 ? "" : "s"
+        failed.count, failed.count == 1 ? "" : "s"
     );
     for (size_t i = 0; i < failed.count; i++) {
         output_print(out, OUTPUT_NORMAL, "  - %s\n", failed.items[i]);
@@ -340,6 +327,6 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
 
     return ERROR(
         ERR_INTERNAL, "%zu of %zu bootstrap script%s failed",
-        fail_count, found.count, fail_count == 1 ? "" : "s"
+        failed.count, found.count, failed.count == 1 ? "" : "s"
     );
 }

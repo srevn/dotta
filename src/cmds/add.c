@@ -436,13 +436,8 @@ static bool add_excluded(
  * and the occupant the capture is chosen by are one fact. The kind chooses the
  * bucket: the walk is the sole source of directory tracking, and every phase
  * after reads the two lists apart.
- *
- * Both fallible steps are checked. The listing is what this command promises to
- * capture, so an entry lost to a failed push and captured anyway would break
- * the selection model; a failure here aborts the command, and nothing reads the
- * listing after one.
  */
-static error_t *add_list(
+static void add_list(
     walk_t *walk, const char *filesystem_path, const char *storage_path,
     fs_occupant_t occupant
 ) {
@@ -454,13 +449,11 @@ static error_t *add_list(
     };
     path->occupant = occupant;
 
-    error_t *err = ptr_array_push(
+    ptr_array_push(
         path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
         path
     );
-    if (err) return err;
-
-    return hashmap_set(walk->listing, filesystem_path, &path->claim);
+    hashmap_set(walk->listing, filesystem_path, &path->claim);
 }
 
 /**
@@ -693,8 +686,7 @@ static error_t *add_collect(
             continue;
         }
 
-        err = add_list(walk, child_fs, child_storage, occupant);
-        if (err) goto cleanup;
+        add_list(walk, child_fs, child_storage, occupant);
 
         /* Settled, so the descent is one statement. */
         if (kind == PATH_KIND_DIRECTORY) {
@@ -1727,10 +1719,6 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     walk.admission = admission;
     walk.sheet = metadata;
     walk.listing = hashmap_borrow(0);
-    if (!walk.listing) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate the walk's listing");
-        goto cleanup;
-    }
 
     /* Process each input path. Two parsing heads — a storage shape and a filesystem
      * shape — and one ladder beneath them: what stands at the path, this command's
@@ -2021,8 +2009,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
-        err = add_list(&walk, filesystem_path, storage_path, occupant);
-        if (err) goto cleanup;
+        add_list(&walk, filesystem_path, storage_path, occupant);
 
         if (kind == PATH_KIND_DIRECTORY) {
             err = add_collect(&walk, filesystem_path, 0);

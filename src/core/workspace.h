@@ -1512,12 +1512,11 @@ error_t *workspace_learn(
  * The failure goes with the transaction. A failure of the writes into the caller's
  * transaction is the caller's: the flush returns it, and the run it poisons ends
  * (cmds/apply.c cmd_apply). A flush that writes for itself keeps every failure
- * of its own — a record it could not build, another process's commit since the
- * load or its lock held past the busy timeout, a write or a commit the store
- * refuses — rolls back what it wrote, and what the load owed, the next load owes
- * again, reading the record anew. So a read command renders what its load read
- * whatever the flush met, and every caller takes what the flush returns as its
- * own failure.
+ * of its own — another process's commit since the load or its lock held past
+ * the busy timeout, a write or a commit the store refuses — rolls back what it
+ * wrote, and what the load owed, the next load owes again, reading the record
+ * anew. So a read command renders what its load read whatever the flush met,
+ * and every caller takes what the flush returns as its own failure.
  *
  * Self-healing: the first status/apply after profile enable verifies all files
  * via the slow path and seeds the record. The second call hits the fast path

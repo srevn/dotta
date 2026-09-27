@@ -591,33 +591,32 @@ cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
     cleanup_result_t *result = heap_calloc(1, sizeof(*result));
 
     /* The receipt is sized to the promise up front — one slot per prunable item,
-     * zeroed, filled in act order as each removal is attempted (a zero count
-     * allocates one slot rather than nothing, so every array is an array), the
-     * failed bucket to both kinds together — every promised item could fail.
-     * count gates what a consumer reads, so an untaken slot is invisible and
-     * the receipt holds exactly what happened. */
+     * zeroed, filled in act order as each removal is attempted, the failed bucket
+     * to both kinds together — every promised item could fail. count gates what
+     * a consumer reads, so an untaken slot is invisible and the receipt holds
+     * exactly what happened. */
     result->pruned_files.entries = heap_calloc(
-        verdicts->prunable_files.count + 1,
+        verdicts->prunable_files.count,
         sizeof(*result->pruned_files.entries)
     );
     result->reclaimed_files.entries = heap_calloc(
-        verdicts->prunable_files.count + 1,
+        verdicts->prunable_files.count,
         sizeof(*result->reclaimed_files.entries)
     );
     result->pruned_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count + 1,
+        verdicts->prunable_dirs.count,
         sizeof(*result->pruned_dirs.entries)
     );
     result->reclaimed_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count + 1,
+        verdicts->prunable_dirs.count,
         sizeof(*result->reclaimed_dirs.entries)
     );
     result->skipped_dirs.entries = heap_calloc(
-        verdicts->prunable_dirs.count + 1,
+        verdicts->prunable_dirs.count,
         sizeof(*result->skipped_dirs.entries)
     );
     result->failed.entries = heap_calloc(
-        verdicts->prunable_files.count + verdicts->prunable_dirs.count + 1,
+        verdicts->prunable_files.count + verdicts->prunable_dirs.count,
         sizeof(*result->failed.entries)
     );
 

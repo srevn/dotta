@@ -70,10 +70,6 @@ static const char *hook_type_name(hook_type_t type) {
  * Check whether the given hook type is enabled in config.
  */
 static bool hook_is_enabled(const config_t *config, hook_type_t type) {
-    if (!config) {
-        return false;
-    }
-
     switch (type) {
         case HOOK_PRE_ADD:     return config->pre_add;
         case HOOK_POST_ADD:    return config->post_add;
@@ -445,7 +441,9 @@ void hook_fire_post(
     const char *repo_dir,
     const hook_invocation_t *inv
 ) {
-    if (!config || !inv) return;
+    CHECK_NULL(config);
+    CHECK_NULL(inv);
+
     if (inv->dry_run) return;
 
     process_result_t result = { 0 };

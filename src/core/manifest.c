@@ -1715,13 +1715,12 @@ error_t *manifest_diff(
     CHECK_NULL(out_stats);
 
     error_t *err = NULL;
-    hashmap_t *stats_map = NULL;
 
     /* Stats attribution index. Maps profile name → its out_stats slot (the caller's
      * array, sized before the map is built — the pointers are stable). Keys are
      * borrowed from profiles; the caller keeps it alive for the duration of this
      * call. */
-    stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
+    hashmap_t *stats_map = hashmap_borrow(profiles->count > 0 ? profiles->count * 2 : 16);
     for (size_t i = 0; i < profiles->count; i++) {
         const char *name = profiles->items[i];
 
@@ -1806,6 +1805,6 @@ error_t *manifest_diff(
     }
 
 cleanup:
-    if (stats_map) hashmap_free(stats_map, NULL);
+    hashmap_free(stats_map, NULL);
     return err;
 }

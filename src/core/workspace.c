@@ -3784,10 +3784,9 @@ error_t *workspace_anchor(
     CHECK_NULL(ws);
     CHECK_NULL(item);
 
-    /* The record the event writes, built before the statement, so a write that
-     * landed is never followed by a failure to hold it: the row's observation
-     * with its content — the row's blob, zero for a directory, under the stat
-     * the event stands on — and the event's stamp */
+    /* The record the event writes, built before the statement: the row's
+     * observation with its content — the row's blob, zero for a directory, under
+     * the stat the event stands on — and the event's stamp */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
     *record = workspace_observation(item->row);
     record->blob_oid = item->row->blob_oid;
@@ -3860,8 +3859,8 @@ error_t *workspace_flush(workspace_t *ws) {
 
     /* 1. What the load owes: the record each owed item's write makes — a learning
      *    — held beside the item by its place among the active items, NULL where
-     *    it owes nothing, and built before any statement, so a write that landed
-     *    is never followed by a failure to hold it. The table is taken at the
+     *    it owes nothing, and built before any statement: the writes take the
+     *    lock only once something is owed (below). The table is taken at the
      *    first owed item, so a load that owes nothing allocates nothing. */
     const state_record_t **learnings = NULL;
 

@@ -531,10 +531,10 @@ typedef struct {
  * — every promised row accounted for, however the rows fared. The ancestors stay
  * outside it, as they stand outside the plan.
  *
- * Each landed array is sized to its verdict array at entry (calloc, count + 1),
- * `failed` to both kinds together (every promised row could fail), and all fill
- * in verdict order; count gates every read, so an untaken slot is invisible and
- * the receipt holds exactly what happened, by construction.
+ * Each landed array is sized to its verdict array at entry (calloc), `failed`
+ * to both kinds together (every promised row could fail), and all fill in verdict
+ * order; count gates every read, so an untaken slot is invisible and the receipt
+ * holds exactly what happened, by construction.
  *
  * The derived verb is also the ownership gate apply's record phase reads: a
  * converged directory whose convergence is not a fix was made by dotta and anchors

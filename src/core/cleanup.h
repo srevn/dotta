@@ -501,12 +501,11 @@ typedef struct {
  * is still the screen's word for it, so no cause rides on it. failed is both
  * kinds in act order, each with its cause.
  *
- * Each array is sized to its promise at entry (calloc, count + 1, so every array
- * is an array; the failed bucket to both kinds together — every promised item
- * could fail) and fills in act order: files, then the directories in the verdicts'
- * prune order. count gates every read, so an untaken slot is invisible and the
- * receipt holds exactly what happened, by construction. Nothing here can be
- * truncated by the run.
+ * Each array is sized to its promise at entry (calloc; the failed bucket to both
+ * kinds together — every promised item could fail) and fills in act order: files,
+ * then the directories in the verdicts' prune order. count gates every read, so
+ * an untaken slot is invisible and the receipt holds exactly what happened, by
+ * construction. Nothing here can be truncated by the run.
  *
  * Records that retire (core/state.h state_retire): pruned_* and reclaimed_* (here),
  * absent_* and released_* (the verdicts). Records that stay: skipped_dirs and

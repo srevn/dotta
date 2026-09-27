@@ -930,16 +930,15 @@ error_t *deploy_preflight(
 
     /* One slot per pending item — verdict or skip, so the skip array's bound is
      * both kinds together — and one per directory item for the ancestors (an
-     * upper bound; the count says how many were decided). A zero count allocates
-     * one slot rather than nothing, so every array is an array. */
+     * upper bound; the count says how many were decided). */
     workspace_items_t files = workspace_items(&plan->files.pending);
     workspace_items_t dirs = workspace_items(&plan->directories.pending);
     workspace_items_t all_dirs = workspace_directories(ws);
 
-    result->directories.entries = heap_calloc(dirs.count + 1, sizeof(deploy_verdict_t));
-    result->files.entries = heap_calloc(files.count + 1, sizeof(deploy_verdict_t));
-    result->ancestors.entries = heap_calloc(all_dirs.count + 1, sizeof(deploy_verdict_t));
-    result->skipped.entries = heap_calloc(files.count + dirs.count + 1, sizeof(deploy_skip_t));
+    result->directories.entries = heap_calloc(dirs.count, sizeof(deploy_verdict_t));
+    result->files.entries = heap_calloc(files.count, sizeof(deploy_verdict_t));
+    result->ancestors.entries = heap_calloc(all_dirs.count, sizeof(deploy_verdict_t));
+    result->skipped.entries = heap_calloc(files.count + dirs.count, sizeof(deploy_skip_t));
 
     error_t *err = NULL;
 
@@ -1392,12 +1391,11 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
 
         const manifest_row_t *dir = v->item->row;
 
-        error_t *err = fs_create_dir_exclusive(
+        RETURN_IF_ERROR(
+            fs_create_dir_exclusive(
             dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
+            )
         );
-        if (err) {
-            return err;
-        }
         hold_directory(run, dir->filesystem_path, dir->mode);
 
         /* On the receipt once — and bounds the sized array: a parent present at
@@ -1801,23 +1799,22 @@ error_t *deploy_execute(
     deploy_result_t *result = heap_calloc(1, sizeof(deploy_result_t));
 
     /* The receipt is sized to the verdicts up front — one slot per verdict, zeroed,
-     * filled in verdict order as each act lands (a zero count allocates one slot
-     * rather than nothing, so every array is an array; a zeroed slot's stat IS
-     * the UNSET triple), the failed bucket to both kinds together — every promised
+     * filled in verdict order as each act lands (a zeroed slot's stat IS the
+     * UNSET triple), the failed bucket to both kinds together — every promised
      * row could fail. count gates what a consumer reads, so an untaken slot is
      * invisible and the receipt holds exactly what happened — for a landed file,
      * with its own write's stat. */
     result->deployed.entries = heap_calloc(
-        verdicts->files.count + 1, sizeof(*result->deployed.entries)
+        verdicts->files.count, sizeof(*result->deployed.entries)
     );
     result->converged.entries = heap_calloc(
-        verdicts->directories.count + 1, sizeof(*result->converged.entries)
+        verdicts->directories.count, sizeof(*result->converged.entries)
     );
     result->ancestors.entries = heap_calloc(
-        verdicts->ancestors.count + 1, sizeof(*result->ancestors.entries)
+        verdicts->ancestors.count, sizeof(*result->ancestors.entries)
     );
     result->failed.entries = heap_calloc(
-        verdicts->directories.count + verdicts->files.count + 1,
+        verdicts->directories.count + verdicts->files.count,
         sizeof(*result->failed.entries)
     );
 

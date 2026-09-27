@@ -158,7 +158,8 @@ static error_t *print_blob_content(
 
     /* The entry's claims, by the projection's own rule: mode only where the type
      * can carry one and the entry claims one; ownership for every kind that holds
-     * it. */
+     * it, as chown(1) spells it — a half the entry does not name is no unknown,
+     * the owner being the invoker's and the group no change. */
     if (item) {
         if (!is_link && item->mode != MODE_UNCLAIMED) {
             output_styled(
@@ -168,9 +169,9 @@ static error_t *print_blob_content(
         }
         if (item->owner || item->group) {
             output_styled(
-                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s:%s\n",
-                item->owner ? item->owner : "?",
-                item->group ? item->group : "?"
+                out, OUTPUT_NORMAL, "{dim}# Owner:{reset}   %s%s%s\n",
+                item->owner ? item->owner : "", item->group ? ":" : "",
+                item->group ? item->group : ""
             );
         }
     }

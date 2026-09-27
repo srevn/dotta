@@ -542,18 +542,18 @@ static error_t *update_profile(
                     /* Say what the capture took before metadata_add_item takes
                      * it — the claim decides the shape. The fourth combination
                      * (no mode, no ownership) has no line: such an item does
-                     * not exist. The ownership-only shape carries no encrypted
-                     * suffix by construction: it is a link's entry, and the capture
-                     * never encrypts one. */
-                    if (meta_item->mode != MODE_UNCLAIMED &&
-                        (meta_item->owner || meta_item->group)) {
+                     * not exist. Ownership is both names or neither at the capture
+                     * (core/metadata.c metadata_capture_ownership), so the owner
+                     * alone is asked, as add asks it (cmds/add.c
+                     * add_print_capture). The ownership-only shape carries no
+                     * encrypted suffix by construction: it is a link's entry,
+                     * and the capture never encrypts one. */
+                    if (meta_item->mode != MODE_UNCLAIMED && meta_item->owner) {
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "  Captured metadata: %s (mode: %04o, owner: %s:%s%s)",
-                            item->filesystem_path, meta_item->mode,
-                            meta_item->owner ? meta_item->owner : "?",
-                            meta_item->group ? meta_item->group : "?",
-                            meta_item->encrypted ? ", encrypted" : ""
+                            item->filesystem_path, meta_item->mode, meta_item->owner,
+                            meta_item->group, meta_item->encrypted ? ", encrypted" : ""
                         );
                     } else if (meta_item->mode != MODE_UNCLAIMED) {
                         output_info(
@@ -566,9 +566,7 @@ static error_t *update_profile(
                         output_info(
                             out, OUTPUT_VERBOSE,
                             "  Captured metadata: %s (owner: %s:%s)",
-                            item->filesystem_path,
-                            meta_item->owner ? meta_item->owner : "?",
-                            meta_item->group ? meta_item->group : "?"
+                            item->filesystem_path, meta_item->owner, meta_item->group
                         );
                     }
 
@@ -682,13 +680,12 @@ static error_t *update_profile(
                 }
 
                 /* Say what the capture took before metadata_add_item takes it */
-                if (meta_item->owner || meta_item->group) {
+                if (meta_item->owner) {
                     output_info(
                         out, OUTPUT_VERBOSE,
                         "  Updated directory metadata: %s (mode: %04o, owner: %s:%s)",
-                        item->filesystem_path, meta_item->mode,
-                        meta_item->owner ? meta_item->owner : "?",
-                        meta_item->group ? meta_item->group : "?"
+                        item->filesystem_path, meta_item->mode, meta_item->owner,
+                        meta_item->group
                     );
                 } else {
                     output_info(

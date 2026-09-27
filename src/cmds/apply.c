@@ -668,9 +668,12 @@ static void apply_print_withheld(
  *
  * Mode and ownership print as the row carries them — total by build, a 0000 claim
  * included: the receipt reports the row, and (mode: 0000) is the claim honoured,
- * not an anomaly. A symlink row records no mode by design and says so instead,
- * carrying its ownership when the row holds one — a link's entry exists to carry
- * exactly that, so the receipt is where the claim becomes visible.
+ * not an anomaly. Ownership is spelled as chown(1) spells it — owner, owner:group,
+ * or :group — since a half the claim does not name is not unknown: the owner is
+ * the invoker's, the group no change. A symlink row records no mode by design
+ * and says so instead, carrying its ownership when the row holds one — a link's
+ * entry exists to carry exactly that, so the receipt is where the claim becomes
+ * visible.
  *
  * Work the run skipped is not here: the plan decided it, apply_print_withheld
  * reports it, and it must be said even on runs that never execute. A failure IS
@@ -721,8 +724,9 @@ static void apply_print_deploy_results(
                 );
                 if (file->owner || file->group) {
                     output_print(
-                        out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                        file->owner ? file->owner : "?", file->group ? file->group : "?"
+                        out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                        file->owner ? file->owner : "", file->group ? ":" : "",
+                        file->group ? file->group : ""
                     );
                 }
                 output_print(out, OUTPUT_VERBOSE, ")\n");
@@ -735,8 +739,9 @@ static void apply_print_deploy_results(
             );
             if (file->owner || file->group) {
                 output_print(
-                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                    file->owner ? file->owner : "?", file->group ? file->group : "?"
+                    out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                    file->owner ? file->owner : "", file->group ? ":" : "",
+                    file->group ? file->group : ""
                 );
             }
             output_print(out, OUTPUT_VERBOSE, ")\n");
@@ -757,8 +762,9 @@ static void apply_print_deploy_results(
             );
             if (dir->owner || dir->group) {
                 output_print(
-                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                    out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                    dir->owner ? dir->owner : "", dir->group ? ":" : "",
+                    dir->group ? dir->group : ""
                 );
             }
             output_print(out, OUTPUT_VERBOSE, ")\n");
@@ -779,8 +785,9 @@ static void apply_print_deploy_results(
             );
             if (dir->owner || dir->group) {
                 output_print(
-                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                    out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                    dir->owner ? dir->owner : "", dir->group ? ":" : "",
+                    dir->group ? dir->group : ""
                 );
             }
             output_print(out, OUTPUT_VERBOSE, ")");
@@ -816,8 +823,9 @@ static void apply_print_deploy_results(
             );
             if (dir->owner || dir->group) {
                 output_print(
-                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                    out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                    dir->owner ? dir->owner : "", dir->group ? ":" : "",
+                    dir->group ? dir->group : ""
                 );
             }
             output_print(out, OUTPUT_VERBOSE, ")\n");
@@ -835,8 +843,9 @@ static void apply_print_deploy_results(
             );
             if (dir->owner || dir->group) {
                 output_print(
-                    out, OUTPUT_VERBOSE, ", owner: %s:%s",
-                    dir->owner ? dir->owner : "?", dir->group ? dir->group : "?"
+                    out, OUTPUT_VERBOSE, ", owner: %s%s%s",
+                    dir->owner ? dir->owner : "", dir->group ? ":" : "",
+                    dir->group ? dir->group : ""
                 );
             }
             output_print(out, OUTPUT_VERBOSE, ")\n");

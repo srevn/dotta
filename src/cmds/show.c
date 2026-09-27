@@ -280,7 +280,7 @@ static void show_provenance(output_t *out, const git_commit *commit) {
     const git_signature *author = git_commit_author(commit);
     time_t commit_time = (time_t) author->when.time;
     char time_str[64];
-    format_relative_time(commit_time, time_str, sizeof(time_str));
+    timeutil_relative(commit_time, time_str, sizeof(time_str));
 
     output_styled(
         out, OUTPUT_NORMAL, "{dim}# Commit:{reset}  {yellow}%s{reset}\n",
@@ -506,7 +506,7 @@ static error_t *show_commit(
     );
 
     char relative_buf[64];
-    format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
+    timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
 
     output_styled(
         out, OUTPUT_NORMAL, "{yellow}commit %s{reset} {cyan}(%s){reset}\n",

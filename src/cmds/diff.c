@@ -495,7 +495,7 @@ static void print_commit_header(
 
     /* Format relative time */
     char relative_buf[64];
-    format_relative_time(commit_time, relative_buf, sizeof(relative_buf));
+    timeutil_relative(commit_time, relative_buf, sizeof(relative_buf));
 
     /* Print header with colors */
     output_styled(

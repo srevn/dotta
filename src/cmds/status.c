@@ -124,7 +124,7 @@ static void status_print_profiles(
         /* Show per-profile last deployed timestamp */
         if (profile_deploy_time > 0) {
             char relative_buf[64];
-            format_relative_time(
+            timeutil_relative(
                 profile_deploy_time, relative_buf, sizeof(relative_buf)
             );
 
@@ -1351,7 +1351,7 @@ static error_t *status_print_remote(
                 git_time_t local_time = git_commit_time(local_commit);
 
                 char time_str[64];
-                format_relative_time(local_time, time_str, sizeof(time_str));
+                timeutil_relative(local_time, time_str, sizeof(time_str));
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Local commit:   %s %s (%s)\n",
@@ -1382,7 +1382,7 @@ static error_t *status_print_remote(
                 git_time_t remote_time = git_commit_time(remote_commit);
 
                 char time_str[64];
-                format_relative_time(remote_time, time_str, sizeof(time_str));
+                timeutil_relative(remote_time, time_str, sizeof(time_str));
 
                 output_print(
                     out, OUTPUT_VERBOSE, "  Remote commit:  %s %s (%s)\n",

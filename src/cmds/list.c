@@ -282,7 +282,7 @@ static error_t *list_profiles(
 
                     const git_signature *author = git_commit_author(last_commit);
                     char time_str[64];
-                    format_relative_time(author->when.time, time_str, sizeof(time_str));
+                    timeutil_relative(author->when.time, time_str, sizeof(time_str));
 
                     output_styled(
                         out, OUTPUT_VERBOSE, "  {yellow}%s{reset} %.*s {dim}(%s){reset}",
@@ -565,7 +565,7 @@ static error_t *list_files(
                         git_oid_tostr(oid_str, sizeof(oid_str), &commit_info->oid);
 
                         char time_str[64];
-                        format_relative_time(commit_info->time, time_str, sizeof(time_str));
+                        timeutil_relative(commit_info->time, time_str, sizeof(time_str));
 
                         size_t summary_len = strlen(commit_info->summary);
                         if (summary_len > 40) summary_len = 40;
@@ -836,7 +836,7 @@ static error_t *list_file_history(
             char date_buf[LIST_TIMESTAMP_BUFFER_SIZE];
             if (format_time(commit->time, date_buf, sizeof(date_buf))) {
                 char relative_str[64];
-                format_relative_time(commit->time, relative_str, sizeof(relative_str));
+                timeutil_relative(commit->time, relative_str, sizeof(relative_str));
 
                 output_styled(
                     out, OUTPUT_VERBOSE, "Date:   %s {dim}(%s){reset}\n",
@@ -852,7 +852,7 @@ static error_t *list_file_history(
             git_oid_tostr(oid_str, sizeof(oid_str), &commit->oid);
 
             char time_str[64];
-            format_relative_time(commit->time, time_str, sizeof(time_str));
+            timeutil_relative(commit->time, time_str, sizeof(time_str));
 
             output_styled(
                 out, OUTPUT_NORMAL, "  {yellow}%s{reset}  %-*s {dim}(%s){reset}\n",

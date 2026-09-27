@@ -9,6 +9,12 @@
  * (base/heap.h heap_die), so no answer here is NULL but the copy of a NULL string.
  * All allocations are 8-byte aligned.
  *
+ * Under AddressSanitizer an arena is as visible as the heap: an allocation's
+ * own bytes alone are addressable, a redzone follows each, and what a growth
+ * leaves behind or a reset drops is poisoned again — a write past an allocation,
+ * or through a pointer kept past its growth or its reset, traps as it would on
+ * the heap.
+ *
  * Typical usage:
  *   arena_t *a = arena_create(64 * 1024);
  *   char *s = arena_strdup(a, "hello");
@@ -89,8 +95,9 @@ __attribute__((format(printf, 2, 3)));
  * — eight at least, and `want` where that is more — is allocated from the arena,
  * and the old one's *capacity entries are copied into it: at a push the old array
  * is full, so that is every entry it holds. An arena has no realloc, so the old
- * array stays the arena's until the arena is freed. The one growth an array in
- * an arena has: a push asks for count + 1, a reserve for the capacity it names.
+ * array stays the arena's until the arena is freed — poisoned under
+ * AddressSanitizer, so a pointer still aimed at it traps. The one growth an array
+ * in an arena has: a push asks for count + 1, a reserve for the capacity it names.
  * A byte count no memory could hold is exhaustion.
  *
  * @param arena    Arena the array lives in (must not be NULL)

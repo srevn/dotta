@@ -21,6 +21,29 @@
 #include "base/error.h"
 #include "base/heap.h"
 
+/* AddressSanitizer sees into a block only as the arena tells it: every block is
+ * poisoned when made, each allocation unpoisoned as it is made — its own bytes,
+ * so the alignment's padding stays poisoned — and followed by a redzone, and
+ * what a growth leaves behind or a reset drops is poisoned again. Without the
+ * sanitizer the two are the header's no-ops, and there is no redzone. */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define ARENA_ASAN 1
+#endif
+#endif
+#if !defined(ARENA_ASAN) && defined(__SANITIZE_ADDRESS__)
+#define ARENA_ASAN 1
+#endif
+
+#ifdef ARENA_ASAN
+#include <sanitizer/asan_interface.h>
+#define ARENA_REDZONE 16
+#else
+#define ASAN_POISON_MEMORY_REGION(addr, size)   ((void) (addr), (void) (size))
+#define ASAN_UNPOISON_MEMORY_REGION(addr, size) ((void) (addr), (void) (size))
+#define ARENA_REDZONE 0
+#endif
+
 #define ARENA_DEFAULT_CAPACITY 4096
 #define ARENA_ALIGNMENT        8
 #define ARENA_GROW_MIN         8   /* the fewest entries a growth makes room for */
@@ -41,10 +64,10 @@ struct arena {
 
 /* --- Helpers ------------------------------------------------------- */
 
-/* A size rounded up to the alignment; one no rounding can represent is
- * exhaustion. */
+/* A size rounded up to the alignment; one no rounding and no redzone after it
+ * can represent is exhaustion. */
 static size_t arena_align(size_t size) {
-    if (size > SIZE_MAX - (ARENA_ALIGNMENT - 1)) heap_die(size);
+    if (size > SIZE_MAX - (ARENA_ALIGNMENT - 1) - ARENA_REDZONE) heap_die(size);
 
     return (size + ARENA_ALIGNMENT - 1) & ~((size_t) ARENA_ALIGNMENT - 1);
 }
@@ -78,6 +101,7 @@ static void arena_chain(arena_t *arena, size_t min_capacity) {
     block->base = current ? current->base + current->capacity : 0;
     block->capacity = capacity;
     block->used = 0;
+    ASAN_POISON_MEMORY_REGION(block->data, capacity);
     arena->current = block;
 }
 
@@ -99,7 +123,7 @@ void *arena_alloc(arena_t *arena, size_t size) {
 
     /* A zero size takes one unit of the alignment, so its answer is a place of
      * its own: never another allocation's, and never dereferenced. */
-    size_t aligned = arena_align(size ? size : 1);
+    size_t aligned = arena_align(size ? size : 1) + ARENA_REDZONE;
     arena_block_t *block = arena->current;
 
     if (aligned > block->capacity - block->used) {
@@ -109,6 +133,7 @@ void *arena_alloc(arena_t *arena, size_t size) {
 
     void *ptr = block->data + block->used;
     block->used += aligned;
+    ASAN_UNPOISON_MEMORY_REGION(ptr, size);
     return ptr;
 }
 
@@ -180,6 +205,7 @@ void *arena_grow(
     void *larger = arena_alloc(arena, arena_bytes(grown, size));
     if (*capacity > 0) {
         memcpy(larger, entries, *capacity * size);
+        ASAN_POISON_MEMORY_REGION(entries, *capacity * size);
     }
 
     *capacity = grown;
@@ -213,6 +239,7 @@ void arena_reset(arena_t *arena, arena_mark_t mark) {
      * position was dropped by an earlier reset to one below it. */
     size_t used = mark.position - b->base;
     CHECK_ARG(used <= b->used, "the mark is past the arena's position");
+    ASAN_POISON_MEMORY_REGION(b->data + used, b->used - used);
     b->used = used;
 }
 

@@ -747,16 +747,20 @@ cleanup:
 /**
  * The ownership a row's write applies
  *
- * No claim, under every label: the invoker's own. The pair is applied by a
- * privileged run alone — the invoker's own creation needs no correction, and
- * root's, a refused syscall's second try (sys/filesystem.h), is handed to the
- * invoker here. A claim: the sheet's word wherever it stands, resolved on this
- * host half by half (core/metadata.h metadata_ownership) — an absent owner the
- * invoker, an absent group no change; whether this run may set the pair is the
- * ownership rung's question, not this one's.
+ * The sheet's word, resolved on this host (core/metadata.h metadata_ownership):
+ * the claim's names where it names them, the invoker's own owner where it names
+ * none, no change where it names no group. Applied on every run, raised or not:
+ * on the invoker's own creation the owner restates what the kernel gave, and on
+ * a refused syscall's second try (sys/filesystem.h) it is the correction that
+ * hands root's node back — the pair is the same either way, so the primitive is
+ * never asked which. The group is left to the creation: dotta reproduces no
+ * kernel's rule for a new node's group. Whether this run may set the pair is
+ * the ownership rung's question, not this one's.
  *
- * Strict ownership mode (strict_ownership=true): an unknown user/group is a fatal
- * error, aborting deployment. Otherwise it is a warning, and no change.
+ * Strict ownership mode (strict_ownership=true): a name this host cannot resolve
+ * is a fatal error, aborting deployment. Otherwise it is a warning, and no change
+ * at all — the claim named someone, and a pair made up in its place would be
+ * another claim.
  *
  * Pure decision, taken at preflight — no filesystem mutation — so the
  * strict_ownership abort is met before the prompt and never mid-run. A warning
@@ -781,55 +785,47 @@ static error_t *resolve_deployment_ownership(
     CHECK_NULL(out_uid);
     CHECK_NULL(out_gid);
 
-    /* Initialize to "no change" */
-    *out_uid = (uid_t) -1;
-    *out_gid = (gid_t) -1;
-
-    if (!row->owner && !row->group) {
-        const identity_t *id = identity();
-        if (id->privileged) {
-            *out_uid = id->uid;
-            *out_gid = id->gid;
-        }
+    /* The word as this host's ids, the pair the write applies whatever the run
+     * holds */
+    error_t *err = metadata_ownership(row->owner, row->group, out_uid, out_gid);
+    if (!err) {
         return NULL;
     }
 
-    error_t *err = metadata_ownership(row->owner, row->group, out_uid, out_gid);
-    if (err) {
-        /* ERR_NOT_FOUND only: the user/group does not exist on this system.
-         * Fatal under strict_ownership (configuration/environment mismatch);
-         * otherwise a warning, and the deployment continues with default
-         * ownership. */
-        if (strict_ownership) {
-            return error_wrap(
-                err, "Ownership resolution failed for '%s' "
-                "(strict_ownership enabled)\nHint: Create the user/group "
-                "on this system, or disable strict_ownership", row->storage_path
-            );
-        }
-
-        char *warning = str_format(
-            "Could not resolve ownership for %s: %s",
-            row->storage_path, error_message(err)
+    /* ERR_NOT_FOUND only: a name this system does not know. Fatal under
+     * strict_ownership, a configuration or environment mismatch the user asked
+     * to be stopped by */
+    if (strict_ownership) {
+        return error_wrap(
+            err, "Ownership resolution failed for '%s' "
+            "(strict_ownership enabled)\nHint: Create the user/group "
+            "on this system, or disable strict_ownership", row->storage_path
         );
-        error_free(err);    /* its message just moved into the warning */
-
-        if (!warning) {
-            return ERROR(ERR_MEMORY, "Failed to format ownership warning");
-        }
-
-        err = string_array_push_owned(warnings, warning);
-        if (err) {
-            free(warning);
-            return err;
-        }
-
-        /* No change, not a guess: a claim that cannot be honoured is not applied
-         * by halves — not the half that resolved, and not the invoker for the
-         * half that did not. The resolver left the outs as they were, "no change"
-         * above. */
     }
 
+    /* Otherwise a warning, in the resolver's own words — which name it could
+     * not find — and the deployment continues */
+    char *warning = str_format(
+        "Could not resolve ownership for %s: %s",
+        row->storage_path, error_message(err)
+    );
+    error_free(err);    /* its message just moved into the warning */
+
+    if (!warning) {
+        return ERROR(ERR_MEMORY, "Failed to format ownership warning");
+    }
+
+    err = string_array_push_owned(warnings, warning);
+    if (err) {
+        free(warning);
+        return err;
+    }
+
+    /* No change, not a guess: a claim that cannot be honoured is not applied by
+     * halves — not the half that resolved, and not the invoker for the half that
+     * did not */
+    *out_uid = (uid_t) -1;
+    *out_gid = (gid_t) -1;
     return NULL;
 }
 
@@ -846,9 +842,9 @@ static error_t *resolve_deployment_ownership(
  * the path exists with the wrong owner. Whether it is this run's to set is the
  * identity's (identity_may_chown): a run that holds root sets anything, one that
  * does not may neither give a file away nor set a group it does not hold — an
- * OWNERSHIP skip, an incapacity whose remedy is sudo. A pair that resolved to
- * no change (no claim unprivileged, an unknown owner under a warning) is always
- * the run's to set.
+ * OWNERSHIP skip, an incapacity whose remedy is sudo. The pair a claimless row
+ * resolves to — the invoker's own owner, no group — is always the run's to set,
+ * and so is no change at all, an unknown owner under a warning.
  *
  * The mode is not decided here: the write reads it off the row, verbatim — total
  * for every kind that carries one (the claim, or the floor manifest_build resolved
@@ -1393,14 +1389,15 @@ static error_t *materialize_directory(
 /**
  * Materialize one absent ancestor whose own parent exists: a directory the view
  * claims (any profile, in scope or not, either class) with the metadata its
- * ancestor verdict carries, anything else DIR_MODE_DEFAULT as the running identity.
- * A claim is the only voice a directory's attributes have: a parent no row claims
- * is never chowned — an owner borrowed from the leaf beneath it would hand a
- * service user the system directories above its files — and an identity that
- * cannot create it meets the refusal an invention would have papered over. The
- * default is exact (fchmod), not umask-masked — dotta reproduces modes, it does
- * not negotiate them — and already carries the owner triad, so a parent no row
- * claims is never held.
+ * ancestor verdict carries, anything else with the word no claim makes — the
+ * mode DIR_MODE_DEFAULT, the invoker's own owner, no group (core/metadata.h
+ * metadata_ownership) — the pair a claimless row gets, so a directory the second
+ * try made root's is handed back like the leaf beneath it. Not a borrowing: the
+ * leaf's owner is never read, so a service user's claim below never reaches the
+ * system directories above it. An identity that cannot create it meets the refusal
+ * an invention would have papered over. The default is exact (fchmod), not
+ * umask-masked — dotta reproduces modes, it does not negotiate them — and already
+ * carries the owner triad, so a parent no row claims is never held.
  *
  * The verdicts are the authority for what is claimed here, not the view: a
  * directory row preflight did not foresee as absent (present then, gone since)
@@ -1451,7 +1448,16 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
         return NULL;
     }
 
-    return fs_create_dir_exclusive(path, DIR_MODE_DEFAULT, (uid_t) -1, (gid_t) -1);
+    /* A parent no row claims: the word no claim makes, asked of its one producer
+     * rather than spelled here a second time — two absences are no name to fail
+     * on, and the answer is checked all the same. Left root's, the next climb
+     * through this directory would claim it root's (metadata_capture_ancestors),
+     * and dotta's own artefact would enter the sheet as intent. */
+    uid_t uid;
+    gid_t gid;
+    RETURN_IF_ERROR(metadata_ownership(NULL, NULL, &uid, &gid));
+
+    return fs_create_dir_exclusive(path, DIR_MODE_DEFAULT, uid, gid);
 }
 
 /**

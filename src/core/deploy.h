@@ -98,10 +98,11 @@ typedef struct {
  *
  * The decided facts are exactly the ones not on the row: the occupant, and the
  * ownership the write applies (resolve_deployment_ownership: the claim resolved
- * on this host, or the invoker's pair where there is none and the run holds root;
- * (uid_t) -1 / (gid_t) -1 is no change). The mode the write applies is the row's,
- * read there — total for every kind that carries one (resolve_metadata carries
- * the rationale).
+ * on this host, half by half — the invoker where it names no owner, no change
+ * where it names no group — on every run; (uid_t) -1 is no change, and an owner
+ * is left unchanged only where the claim named one this host cannot resolve).
+ * The mode the write applies is the row's, read there — total for every kind
+ * that carries one (resolve_metadata carries the rationale).
  */
 typedef struct {
     const workspace_item_t *item;    /* Borrowed (workspace lifetime), never NULL; the row is item->row */
@@ -689,16 +690,16 @@ static inline size_t deploy_plan_item_count(const deploy_plan_t *plan) {
  *   nothing); mode, ownership and encryption divergence never skip.
  * - Ownership — the row's rung, last, asked of a row every path rung passed and
  *   the one rung a row planned absent takes: the pair the write applies
- *   (resolve_deployment_ownership: the row's claim resolved on this host; where
- *   there is none, the invoker's own pair when the run holds root and no change
- *   otherwise — the absent claim's meaning, metadata.h), and whether this run
- *   may set it (identity_may_chown) — a pair that is not the invoker's to set
- *   is skipped (OWNERSHIP), the incapacity sudo lifts. The mode the write applies
- *   is the row's, total by build, and is not decided here. Under strict_ownership
- *   an owner or group this system does not know is an error, returned here —
- *   before the prompt, never mid-run; otherwise it is a warning and no change.
- *   A skipped row is not consulted, so it can neither warn nor fail
- *   strict_ownership.
+ *   (resolve_deployment_ownership: the row's claim resolved on this host, half
+ *   by half — the invoker's own owner where it names none, no group where it
+ *   names none, on every run, core/metadata.h metadata_ownership), and whether
+ *   this run may set it (identity_may_chown) — a pair that is not the invoker's
+ *   to set is skipped (OWNERSHIP), the incapacity sudo lifts. The mode the write
+ *   applies is the row's, total by build, and is not decided here. Under
+ *   strict_ownership an owner or group this system does not know is an error,
+ *   returned here — before the prompt, never mid-run; otherwise it is a warning
+ *   and no change. A skipped row is not consulted, so it can neither warn nor
+ *   fail strict_ownership.
  *
  * Then the ancestors: every directory row the plan does not act on — an ancestor
  * claim, which the plan never holds, or a tracked row out of scope or skipped —
@@ -775,8 +776,9 @@ error_t *deploy_preflight(
  * Missing parents are the mechanics of landing a planned path, created top-down
  * as part of its write: a directory the view claims (any profile, in scope or
  * not, either class) with the mode and ownership its ancestor verdict carries,
- * anything else DIR_MODE_DEFAULT as the running identity — a claim is the only
- * voice for an ancestor's attributes, and where none speaks dotta invents none.
+ * anything else with the word no claim makes, DIR_MODE_DEFAULT and the invoker's
+ * own owner — what a claimless row gets, so a directory a raised mkdir made is
+ * handed back like the leaf beneath it, and no owner is borrowed from below.
  * Creation is all this pass may do: a parent the world made present after the
  * probe meets ERR_EXISTS rather than a convergence (fs_create_dir_exclusive),
  * since whatever now stands there is not this run's to fix. The claimed ones

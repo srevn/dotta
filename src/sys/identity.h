@@ -5,8 +5,8 @@
  * established first in main() — before libgit2 reads $HOME at its init, before
  * the config path is resolved — and read by every layer through identity(): the
  * mount table's HOME, tilde expansion, the session cache's path, owner and key,
- * the commit's user, the ownership a deploy applies where a claim is silent,
- * the bootstrap script's working directory.
+ * the commit's user, the owner a claim that names none resolves to and a capture
+ * leaves unnamed (core/metadata), the bootstrap script's working directory.
  *
  * A process fact, not a run member: it is read beneath the run (the mount table,
  * the session cache, the signature) and it is one for every run of the process,

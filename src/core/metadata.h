@@ -808,10 +808,11 @@ error_t *metadata_save_to_stage(
  * The one producer of the rule, asked whole by each reader, so what status accuses
  * and what apply sets cannot drift and an account this host knows by two names
  * satisfies both: the compare (core/workspace.c workspace_compare_ownership,
- * the pair against a look, id to id) and the landing (core/deploy.c
- * resolve_deployment_ownership, the pair a write applies). Whether the pair can
- * be applied is the applier's to ask (sys/identity.h identity_may_chown). A reader
- * not on this list is a bug.
+ * the pair against a look, id to id), the landing (core/deploy.c
+ * resolve_deployment_ownership, the pair a write applies) and a parent no row
+ * claims (core/deploy.c create_ancestor, the pair of no claim at all). Whether
+ * the pair can be applied is the applier's to ask (sys/identity.h
+ * identity_may_chown). A reader not on this list is a bug.
  *
  * @param owner The claimed owner, or NULL
  * @param group The claimed group, or NULL

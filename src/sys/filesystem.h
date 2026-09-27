@@ -21,11 +21,12 @@
  * call this module makes on a path is the invoker's first, and on a refusal —
  * EACCES, EPERM — the same call once more as root. So a path only root can reach
  * reads as present to a sudo'd run and as absent or refused to a plain one, and
- * what the second try creates is root's, as sudo would have made it; the claim's
- * fchown and the invoker's default (core/deploy) then say whose it becomes. Nothing
- * outside this module ever runs as root, and no second try spans a call into
- * libgit2, SQLite, the keymgr or a fork: it is one syscall wide, inside one
- * wrapper.
+ * what the second try creates is root's, as sudo would have made it; the write's
+ * fchown then says whose it becomes — the claim's names, the invoker where it
+ * names no owner, and the second try's own group where it names none (core/deploy).
+ * Nothing outside this module ever runs as root, and no second try spans a call
+ * into libgit2, SQLite, the keymgr or a fork: it is one syscall wide, inside
+ * one wrapper.
  *
  * The word: every error this module makes from a kernel refusal is
  * error_from_errno's — the site's prose, strerror's word, the errno's code — so

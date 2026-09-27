@@ -328,3 +328,7 @@ bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid) {
 
     return false;
 }
+
+bool identity_may_chmod(const identity_t *id, uid_t owner) {
+    return id->privileged || owner == id->uid;
+}

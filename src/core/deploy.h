@@ -213,13 +213,13 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  *   consent      dotta could act and did not, because nothing said to —
  *                TYPE, CONTENT. --force lifts them; the run kept its promise,
  *                so they do not reach the exit code.
- *   incapacity   dotta could not act — PERMISSION, ANCESTOR, OCCUPIED,
- *                UNREADABLE, OWNERSHIP. No flag lifts them (the posture cleanup
- *                takes towards a released file and a directory's UNVERIFIED);
- *                the run planned the row and did not deliver it, so the exit
- *                code says so. Two of them are the invoker's refusals and root's
- *                to lift — PERMISSION, OWNERSHIP — and a run that holds none
- *                closes its skips by naming it (apply's sudo line);
+ *   incapacity   dotta could not act — PERMISSION, FOREIGN, ANCESTOR,
+ *                OCCUPIED, UNREADABLE, OWNERSHIP. No flag lifts them (the posture
+ *                cleanup takes towards a released file and a directory's
+ *                UNVERIFIED); the run planned the row and did not deliver it,
+ *                so the exit code says so. Three of them are the invoker's refusals
+ *                and root's to lift — PERMISSION, FOREIGN, OWNERSHIP — and a run
+ *                that holds none closes its skips by naming it (apply's sudo line);
  *                one that holds root meets neither, save where root itself is
  *                refused (a read-only filesystem, an immutable flag).
  *
@@ -246,7 +246,11 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * path rung where its siblings (cleanup_skip_reason, workspace_item_route) rank
  * the same fact first: the landing check, when it has something to say, names
  * the ancestry that refused the look — the actionable half of the very same fact.
- * UNREADABLE is what is left when the landing had nothing to say. OWNERSHIP ranks
+ * UNREADABLE is what is left when the landing had nothing to say. FOREIGN is
+ * the landing's twin for a directory already there: a create or a replace lands
+ * a new entry through its parent, which PERMISSION asks, where a fix converges
+ * the node in place, which only its owner may do — so a row takes one question
+ * or the other, never both, and FOREIGN stands beside PERMISSION. OWNERSHIP ranks
  * last of all, an incapacity behind the consent reasons, because it is the row's
  * rung and not the path's: the ownership is resolved for a row every other rung
  * passed (a skipped row can neither warn nor fail strict_ownership —
@@ -256,10 +260,10 @@ static inline bool deploy_content_conflicts(const workspace_item_t *item) {
  * Each reason is a sentence about the row that carries it, read off that skip's
  * own fields (cmds/apply.c apply_print_deploy_skips): the ancestor it names
  * (PERMISSION, ANCESTOR, a TYPE that names one), its own occupant (TYPE, OCCUPIED),
- * its own item (CONTENT, UNREADABLE), its own claim (OWNERSHIP). So a row beneath
- * a skipped squatter takes the squatter's class and never its reason
- * (check_ancestry): the squatter's sentence is about the squatter, whatever reason
- * a later rung adds.
+ * its own item (CONTENT, UNREADABLE, and FOREIGN, the owner its look found),
+ * its own claim (OWNERSHIP). So a row beneath a skipped squatter takes the
+ * squatter's class and never its reason (check_ancestry): the squatter's sentence
+ * is about the squatter, whatever reason a later rung adds.
  *
  * Symlink rows need no arm of their own: a foreign kind at a link row's path is
  * TYPE (deploy.c occupant_conflicts), a retargeted link is CONTENT (the target
@@ -270,6 +274,7 @@ typedef enum {
     DEPLOY_SKIP_NONE = 0,     /* Not skipped — the row has a verdict */
     DEPLOY_SKIP_ANCESTOR,     /* A non-directory squats an ancestor this run does not converge */
     DEPLOY_SKIP_PERMISSION,   /* The landing refuses: an ancestor not ours, or none reachable */
+    DEPLOY_SKIP_FOREIGN,      /* A directory another owns stands at the path: only its owner converges it */
     DEPLOY_SKIP_OCCUPIED,     /* A directory holding untracked paths stands at the path */
     DEPLOY_SKIP_TYPE,         /* A different kind of path stands where the row lands (--force) */
     DEPLOY_SKIP_CONTENT,      /* Disk holds content dotta did not put there (--force) */
@@ -351,10 +356,10 @@ typedef enum {
  * item nothing looked at, occupant UNKNOWN and no path bit (the displaced class
  * every reader of an item reads, core/workspace.h workspace_displaced_t), never
  * a blanked pointer. So a reader consults the look only where the reason is a
- * sentence about it — a CONTENT skip's route, an UNREADABLE skip's fault: path
- * rungs, asked only where the ancestry did not answer. OWNERSHIP, the row's rung,
- * reads its claim off the row and never the item's look, which a row planned
- * absent does not have.
+ * sentence about it — a CONTENT skip's route, an UNREADABLE skip's fault, a FOREIGN
+ * skip's owner: path rungs, asked only where the ancestry did not answer.
+ * OWNERSHIP, the row's rung, reads its claim off the row and never the item's
+ * look, which a row planned absent does not have.
  *
  * Nothing here is owned: the item is borrowed (workspace lifetime), as every
  * item and row in this module is.

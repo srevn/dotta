@@ -7,6 +7,7 @@
 #include <config.h>
 #include <ctype.h>
 #include <git2.h>
+#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,23 +67,23 @@
  * hold it, and an unreadable-only run is offered neither a flag that will not
  * lift it nor a by-hand fix for a path dotta could not even read: it closes with
  * its own line, because dotta never writes on a guess. The refusals root lifts
- * — a landing the invoker cannot write, a pair it cannot set, and a look that
- * met EACCES on the path itself — close by naming sudo, and only for a run that
- * holds none: identity()->privileged, the one process fact this block asks. The
- * key's refusal closes the same way, naming the verb that lifts it; the two are
- * told apart by the field the label above reads. Neither line spells the command
- * that would: the user typed one, the verb the other names says the rest when
- * it is run, and what sudo does to their environment on the way is sudo's to
- * document, not dotta's. The consent remedy teaches both directions and names
- * its cost the way cleanup's does: --force keeps Git's and discards what stands
- * there, and a CONTENT skip adds the disk-wins verb, 'dotta update' — gated on
- * CONTENT and not on the class, because update refuses a retyped row (update.c's
- * retyped_skipped). It stops there: the 'dotta add --force' a Git-moved row needs
- * is what update's own refusal says at the moment the user meets it, and '-e'
- * is how to ignore a skip, not how to remedy one. The block sits between the
- * deploy preview and cleanup's, so each engine tells its story the same way —
- * what it will do, then what it will not and why. No total-count line: the exit
- * error's message is the count's one home.
+ * — a landing the invoker cannot write, a directory it does not own, a pair it
+ * cannot set, and a look that met EACCES on the path itself — close by naming
+ * sudo, and only for a run that holds none: identity()->privileged, the one process
+ * fact this block asks. The key's refusal closes the same way, naming the verb
+ * that lifts it; the two are told apart by the field the label above reads. Neither
+ * line spells the command that would: the user typed one, the verb the other
+ * names says the rest when it is run, and what sudo does to their environment
+ * on the way is sudo's to document, not dotta's. The consent remedy teaches both
+ * directions and names its cost the way cleanup's does: --force keeps Git's and
+ * discards what stands there, and a CONTENT skip adds the disk-wins verb, 'dotta
+ * update' — gated on CONTENT and not on the class, because update refuses a retyped
+ * row (update.c's retyped_skipped). It stops there: the 'dotta add --force' a
+ * Git-moved row needs is what update's own refusal says at the moment the user
+ * meets it, and '-e' is how to ignore a skip, not how to remedy one. The block
+ * sits between the deploy preview and cleanup's, so each engine tells its story
+ * the same way — what it will do, then what it will not and why. No total-count
+ * line: the exit error's message is the count's one home.
  */
 static void apply_print_deploy_skips(
     output_t *out, const deploy_preflight_result_t *verdicts
@@ -108,6 +109,26 @@ static void apply_print_deploy_skips(
                     output_styled(
                         out, OUTPUT_NORMAL, "  {red}✗{reset} %s (ancestry cannot be reached)\n",
                         path
+                    );
+                }
+                break;
+            }
+
+            case DEPLOY_SKIP_FOREIGN: {
+                /* Who holds the directory the run may not converge — a path rung's,
+                 * so the look was at this very path: by name where this host
+                 * has one, by number where it does not. A screen names what it
+                 * can. */
+                const struct passwd *pwd = getpwuid(s->item->st.st_uid);
+                if (pwd && pwd->pw_name) {
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by %s)\n",
+                        path, pwd->pw_name
+                    );
+                } else {
+                    output_styled(
+                        out, OUTPUT_NORMAL, "  {red}✗{reset} %s (owned by uid %u)\n",
+                        path, (unsigned) s->item->st.st_uid
                     );
                 }
                 break;
@@ -268,7 +289,8 @@ static void apply_print_deploy_skips(
     for (size_t i = 0; !identity()->privileged && i < verdicts->skipped.count; i++) {
         const deploy_skip_t *s = &verdicts->skipped.entries[i];
 
-        if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_OWNERSHIP ||
+        if (s->reason == DEPLOY_SKIP_PERMISSION || s->reason == DEPLOY_SKIP_FOREIGN ||
+            s->reason == DEPLOY_SKIP_OWNERSHIP ||
             (s->reason == DEPLOY_SKIP_UNREADABLE &&
             s->item->fault == WORKSPACE_FAULT_UNREADABLE)) {
             output_info(out, OUTPUT_NORMAL, "  Run under sudo to deploy them");

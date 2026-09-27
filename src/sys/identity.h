@@ -262,11 +262,36 @@ const char *identity_home(
  * so a "no" here can be a "yes" from the kernel — the refusal's remedy (sudo)
  * holds either way.
  *
+ * The pair half of the question; a node that already stands asks the other half
+ * too, whose it is (identity_may_chmod).
+ *
  * @param id The identity (must not be NULL)
  * @param uid The owner to set, or (uid_t) -1 for no change
  * @param gid The group to set, or (gid_t) -1 for no change
  * @return true iff the pair is the identity's to set
  */
 bool identity_may_chown(const identity_t *id, uid_t uid, gid_t gid);
+
+/**
+ * May this identity set the attributes of a node `owner` holds, without root?
+ *
+ * The kernel's rule for chmod(2), and for any chown(2) of a node that stands:
+ * the node's owner, or root. The node half of identity_may_chown's question —
+ * that one asks whether a pair is the identity's to give, this one whether the
+ * node is the identity's to change — so a node made new asks only the other,
+ * and a node converged where it stands asks both. As there, a "no" can be a
+ * kernel's "yes" (an ACL granting it) and the refusal's remedy, sudo, holds either
+ * way.
+ *
+ * Readers: core/deploy.c holdable_directory (a landing directory the run may
+ * hold at a working mode) and deploy_preflight's directory ladder (a planned
+ * directory converged in place, DEPLOY_SKIP_FOREIGN). A reader not on this list
+ * is a bug.
+ *
+ * @param id The identity (must not be NULL)
+ * @param owner The node's owner (its st_uid)
+ * @return true iff the node's attributes are the identity's to set
+ */
+bool identity_may_chmod(const identity_t *id, uid_t owner);
 
 #endif /* DOTTA_SYS_IDENTITY_H */

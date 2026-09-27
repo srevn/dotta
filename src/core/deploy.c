@@ -500,7 +500,8 @@ static bool nearest_ancestor(
  * one's — the alternative would make the reach depend on whether the user typed
  * the directory or a file inside it. Nothing else is ours to touch: a directory
  * no row names and that refuses is a permission error, and a claimed one we do
- * not own cannot be fchmod'd at all. Root owns everything for this purpose.
+ * not own cannot be fchmod'd at all (identity_may_chmod: the node's owner, or a
+ * run that holds root).
  *
  * @param st lstat of the directory (must not be NULL)
  */
@@ -512,7 +513,7 @@ static const manifest_row_t *holdable_directory(
     /* The view's claim, which an active item carries and an orphan's does not:
      * a directory only a record remembers is no claim to hold */
     if (item && item->row && item->item_kind == PATH_KIND_DIRECTORY
-        && (st->st_uid == identity()->uid || identity()->privileged)) {
+        && identity_may_chmod(identity(), st->st_uid)) {
         return item->row;
     }
     return NULL;
@@ -1012,15 +1013,18 @@ error_t *deploy_preflight(
         if (skip.reason == DEPLOY_SKIP_NONE && !absent) {
             occupant = item->occupant;
 
-            /* The rungs, first match wins — the enum's own order. A directory
-             * already there is converged in place: fchmod and fchown ask for
-             * ownership, not for a writable parent. Only a create or a replace
-             * lands a new entry. A row the workspace could not settle is asked
-             * too, and skipped on its own account only when the landing had nothing
-             * to say — as for a file. */
+            /* The rungs, first match wins — the enum's own order. A create or a
+             * replace lands a new entry, which asks the parent (the landing); a
+             * directory already there is converged in place, and fchmod and fchown
+             * ask for the node's owner instead, the owner the load's look found
+             * (FOREIGN). A row the workspace could not settle is asked too, and
+             * skipped on its own account only when the landing had nothing to
+             * say — as for a file. */
             if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
                 err = check_landing(ws, result, path, &skip);
                 if (err) goto cleanup;
+            } else if (!identity_may_chmod(identity(), item->st.st_uid)) {
+                skip.reason = DEPLOY_SKIP_FOREIGN;
             }
 
             /* A planned directory squatted by a non-directory (the link itself,
@@ -1189,9 +1193,9 @@ error_t *deploy_preflight(
      * Every gate reads the verdicts, not the plan: a skipped directory row flows
      * past the first into the candidate pool, and the later gates keep it out —
      * one skipped beneath a squatted ancestor that stays is not a parent this
-     * run can make (the rung's reason), a TYPE- or UNREADABLE-skipped row is
-     * not absent (present, as its item read), and a landing-skipped one has no
-     * deployable row beneath it (the invariant, deploy_preflight's doc). */
+     * run can make (the rung's reason), a TYPE-, FOREIGN- or UNREADABLE-skipped
+     * row is not absent (present, as its item read), and a landing-skipped one
+     * has no deployable row beneath it (the invariant, deploy_preflight's doc). */
     for (size_t i = 0; i < all_dirs.count; i++) {
         const workspace_item_t *item = all_dirs.entries[i];
         const char *path = item->filesystem_path;

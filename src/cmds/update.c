@@ -501,7 +501,7 @@ static error_t *update_profile(
                  * the byte truth, so the claim and every reader agree — and a
                  * link is never sealed. */
                 metadata_item_t *meta_item = NULL;
-                err = metadata_capture_from_file(
+                err = metadata_capture_file(
                     item->storage_path,
                     &capture.st,
                     capture.encrypted,
@@ -645,7 +645,7 @@ static error_t *update_profile(
                  * dotta does less with. */
                 const metadata_item_t *held = metadata_lookup(metadata, item->storage_path);
                 metadata_item_t *meta_item = NULL;
-                err = metadata_capture_from_directory(
+                err = metadata_capture_directory(
                     item->storage_path, &dir_stat, held && held->tracked, &meta_item
                 );
 

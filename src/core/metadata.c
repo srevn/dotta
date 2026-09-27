@@ -766,7 +766,7 @@ static error_t *capture_ownership(
  * — a link claims no mode, and when it has no ownership to claim either, no item
  * is authored.
  */
-error_t *metadata_capture_from_file(
+error_t *metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -827,7 +827,7 @@ error_t *metadata_capture_from_file(
 }
 
 /**
- * Capture metadata from filesystem directory
+ * Capture a directory's claim from stat data
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
  * rule as file capture (claims_ownership); the class is the caller's, carried
@@ -835,7 +835,7 @@ error_t *metadata_capture_from_file(
  *
  * This function creates a metadata_item_t with kind=DIRECTORY.
  */
-error_t *metadata_capture_from_directory(
+error_t *metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,
@@ -956,7 +956,7 @@ static error_t *capture_ancestor(
     }
 
     metadata_item_t *item = NULL;
-    error_t *err = metadata_capture_from_directory(storage_path, &st, false, &item);
+    error_t *err = metadata_capture_directory(storage_path, &st, false, &item);
     if (err) {
         /* A name this host cannot spell is the same silence as a path it cannot
          * see: a directory capture that fails loses a claim and nothing else,

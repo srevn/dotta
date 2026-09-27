@@ -544,8 +544,8 @@ error_t *content_require_encryption(
  * That free is the one in this tree that is not total, and the reason is that
  * the other three are values rather than resources, read by both callers past
  * it — the bytes go on the stage (bytes, mode), the claim is authored from the
- * look (core/metadata.h metadata_capture_from_file: st, encrypted) and the record
- * is bound to it (core/state.h state_stat_from_read: st). A free written to its
+ * look (core/metadata.h metadata_capture_file: st, encrypted) and the record is
+ * bound to it (core/state.h state_stat_from_read: st). A free written to its
  * siblings' shape — `*capture = (content_capture_t){ 0 }`, as compare_free_diff
  * and gitops_blob_view_close are written — would leave both commands anchoring
  * a zero stat: a wrong record, with no crash.

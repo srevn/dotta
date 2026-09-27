@@ -555,7 +555,7 @@ const metadata_item_t *const *metadata_items(
  *            Set to NULL if the capture claims nothing (not an error)
  * @return Error or NULL on success
  */
-error_t *metadata_capture_from_file(
+error_t *metadata_capture_file(
     const char *storage_path,
     const struct stat *st,
     bool encrypted,
@@ -563,7 +563,7 @@ error_t *metadata_capture_from_file(
 );
 
 /**
- * Capture metadata from filesystem directory
+ * Capture a directory's claim from stat data
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
  * rules as file capture — the unnameable UID among them — while the mode is always
@@ -590,7 +590,7 @@ error_t *metadata_capture_from_file(
  * @param out Item (must not be NULL, caller must free with metadata_item_free)
  * @return Error or NULL on success
  */
-error_t *metadata_capture_from_directory(
+error_t *metadata_capture_directory(
     const char *storage_path,
     const struct stat *st,
     bool tracked,

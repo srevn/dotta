@@ -1047,7 +1047,7 @@ static error_t *add_capture(
      * would read as ciphertext is refused there), so the claim and every reader
      * of the bytes agree — and a link is never sealed. */
     metadata_item_t *item = NULL;
-    err = metadata_capture_from_file(
+    err = metadata_capture_file(
         storage_path, &capture.st, capture.encrypted, &item
     );
     if (err) {
@@ -2377,8 +2377,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * this command listed is the *name* its walk composed beneath, so a claim
      * that does not land leaves the files captured under a name nothing authors
      * — and the listing, which add_refuse_moves reads as a promise of the commit,
-     * would be a wish (core/metadata.h metadata_capture_from_directory). Ahead
-     * of the file captures for the same reason: a directory that cannot be claimed
+     * would be a wish (core/metadata.h metadata_capture_directory). Ahead of
+     * the file captures for the same reason: a directory that cannot be claimed
      * is found before any source blob reaches the object database.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
@@ -2408,7 +2408,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * directory, so the claim is a tracked one: the profile tracks the path
          * itself, scans it for new files and converges its attributes. */
         metadata_item_t *dir_item = NULL;
-        err = metadata_capture_from_directory(storage_path, &dir_stat, true, &dir_item);
+        err = metadata_capture_directory(storage_path, &dir_stat, true, &dir_item);
         if (err) {
             err = error_wrap(
                 err, "Failed to capture directory '%s'", path->filesystem_path

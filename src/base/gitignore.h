@@ -106,7 +106,7 @@ gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
  * file's, not its first rule's; one anywhere else is pattern content. A final
  * line needs no terminator. Empty content is accepted (no rules appended). Returns
  * ERR_VALIDATION if any line exceeds 4096 bytes or the cumulative rule count
- * exceeds 10000; ERR_MEMORY on arena exhaustion.
+ * exceeds 10000.
  *
  * @param ruleset Ruleset to append into (must not be NULL)
  * @param content Gitignore source text (must not be NULL; may be empty)

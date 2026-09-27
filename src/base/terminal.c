@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 
 /* Terminal Initialization & Cleanup  */
 
@@ -39,12 +40,7 @@ error_t *terminal_init(terminal_t **out) {
     }
 
     /* Allocate terminal state */
-    terminal_t *term = calloc(1, sizeof(terminal_t));
-    if (!term) {
-        return error_create(
-            ERR_MEMORY, "failed to allocate terminal state"
-        );
-    }
+    terminal_t *term = heap_calloc(1, sizeof(terminal_t));
 
     /* Save original terminal settings */
     if (tcgetattr(STDIN_FILENO, &term->orig_termios) < 0) {

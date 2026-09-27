@@ -82,6 +82,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/wildmatch.h"
 
 /* Size limits — match the existing core/ignore.c conventions. */
@@ -590,19 +591,16 @@ void gitignore_eval(
      * place at each `/` and restores it, so the buffer holds the whole path at
      * every step; wildmatch reads until NUL, so no length tracking is needed.
      *
-     * Buffer strategy: stack covers the common case; longer paths borrow heap
-     * so the matcher never silently degrades. A heap-alloc failure on a single
-     * path-sized block means the system is in dire straits; we keep the never-fails
-     * contract by leaving out->decided = false (caller treats as not-ignored). */
+     * Buffer strategy: stack covers the common case, and a longer path is copied
+     * to the heap, which cannot fail (base/heap.h) — so every subject is judged
+     * whole, whatever its length. */
     char stack_buf[PATH_STACK_BUFFER];
     char *heap = NULL;
     char *p = stack_buf;
     size_t n = strlen(path);
 
     if (n >= sizeof(stack_buf)) {
-        heap = malloc(n + 1);
-        if (!heap)
-            return;
+        heap = heap_alloc(n + 1);
         p = heap;
     }
 
@@ -675,9 +673,7 @@ bool gitignore_is_selected(
     size_t n = strlen(path);
 
     if (n >= sizeof(stack_buf)) {
-        heap = malloc(n + 1);
-        if (!heap)
-            return false;
+        heap = heap_alloc(n + 1);
         p = heap;
     }
 

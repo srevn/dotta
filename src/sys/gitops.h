@@ -190,7 +190,8 @@ error_t *gitops_branch_exists(git_repository *repo, const char *name, bool *exis
  * Answers which existing branch stands in the way of `name`, so a caller can
  * refuse in its own vocabulary before doing any work. An exact match does not
  * block — that is `gitops_branch_exists`'s question, and its answer is a different
- * one.
+ * one. A name Git refuses is no candidate: the branch rule refuses it
+ * (gitops_branch_refname) before any branch is read.
  *
  * @param repo Repository (must not be NULL)
  * @param name Branch name to test (must not be NULL)
@@ -735,20 +736,24 @@ error_t *gitops_build_refname(
 /**
  * A branch name to its reference, or Git's refusal
  *
- * The one place a branch name becomes `refs/heads/<name>`. Git's branch rule
- * first (git_branch_name_is_valid: the reference rule on the joined name, plus
- * the two shapes only the branch rule refuses — a leading '-' and the word HEAD,
- * valid references git itself will not make branches of), then the join, sized
- * to the buffer by gitops_build_refname, whose own reference check the branch
- * rule subsumes. Every lookup, creator and mover of a branch builds its ref here,
+ * The one place a branch name becomes `refs/heads/<name>`. An empty name first,
+ * refused as empty; then Git's branch rule (git_branch_name_is_valid: the reference
+ * rule on the joined name, plus the two shapes only the branch rule refuses — a
+ * leading '-' and the word HEAD, valid references git itself will not make branches
+ * of), then the join, sized to the buffer by gitops_build_refname, whose own
+ * reference check the branch rule subsumes. Every lookup, creator and mover of
+ * a branch builds its ref here, and every transfer its refspec's branch half,
  * so a name Git refuses is refused wherever it first touches Git — add's prepare,
  * enable's loop, a filter's refusal path — and no branch git cannot name is ever
- * made (before this, `add -- -x` and `add HEAD` made two).
+ * made (before this, `add -- -x` and `add HEAD` made two). No verb refuses a
+ * name ahead of it, and no command either: a user's empty `-p ""` and an empty
+ * positional read this one refusal.
  *
  * @param buffer Output buffer for the reference name (must not be NULL)
  * @param buffer_size Size of output buffer
  * @param name Branch name (must not be NULL)
- * @return NULL, or ERR_INVALID_ARG naming the name; the builder's length refusal
+ * @return NULL, or ERR_INVALID_ARG naming the name ("Branch name cannot be empty"
+ *         for none); the builder's length refusal
  */
 error_t *gitops_branch_refname(
     char *buffer, size_t buffer_size, const char *name

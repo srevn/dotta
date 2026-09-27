@@ -177,10 +177,6 @@ typedef struct {
 static error_t *add_validate(const cmd_add_options_t *opts) {
     CHECK_NULL(opts);
 
-    if (!opts->profile || opts->profile[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Profile name is required");
-    }
-
     if (!opts->files || opts->file_count == 0) {
         return ERROR(ERR_INVALID_ARG, "At least one path is required");
     }

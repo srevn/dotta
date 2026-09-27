@@ -40,10 +40,6 @@
 static error_t *remove_validate(const cmd_remove_options_t *opts) {
     CHECK_NULL(opts);
 
-    if (!opts->profile || opts->profile[0] == '\0') {
-        return ERROR(ERR_INVALID_ARG, "Profile name is required");
-    }
-
     /* If deleting profile, paths are optional */
     if (opts->delete_profile) {
         if (opts->paths && opts->path_count > 0) {

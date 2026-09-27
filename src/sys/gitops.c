@@ -182,13 +182,9 @@ error_t *gitops_branch_exists(
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(exists);
-    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err = gitops_branch_refname(refname, sizeof(refname), name);
-    if (err) {
-        return err;
-    }
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
 
     return gitops_reference_exists(repo, refname, exists);
 }
@@ -199,9 +195,13 @@ error_t *gitops_branch_blocker(
     CHECK_NULL(repo);
     CHECK_NULL(name);
     CHECK_NULL(out_blocker);
-    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     *out_blocker = NULL;
+
+    /* Only a name Git accepts stands anywhere to be blocked: one it refuses is
+     * refused here, in the branch rule's words, and never scanned. */
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
 
     string_array_t *branches = NULL;
     error_t *err = gitops_list_branches(repo, &branches);
@@ -466,13 +466,9 @@ error_t *gitops_list_remote_tracking(
 error_t *gitops_delete_branch(git_repository *repo, const char *name) {
     CHECK_NULL(repo);
     CHECK_NULL(name);
-    CHECK_ARG(name[0] != '\0', "Branch name cannot be empty");
 
     char refname[DOTTA_REFNAME_MAX];
-    error_t *err_build = gitops_branch_refname(refname, sizeof(refname), name);
-    if (err_build) {
-        return err_build;
-    }
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
 
     git_reference *ref = NULL;
     int err = git_reference_lookup(&ref, repo, refname);
@@ -693,7 +689,10 @@ error_t *gitops_fetch_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
-    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+
+    /* The refspec's source is the branch's ref, spelled where every one is. */
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -709,8 +708,8 @@ error_t *gitops_fetch_branch(
 
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
-        refspec, sizeof(refspec), "refs/heads/%s:refs/remotes/%s/%s",
-        branch_name, remote_name, branch_name
+        refspec, sizeof(refspec), "%s:refs/remotes/%s/%s",
+        refname, remote_name, branch_name
     );
     if (err_build) {
         git_remote_free(remote);
@@ -762,18 +761,12 @@ error_t *gitops_fetch_branches(
     /* Construct refspecs for each branch */
     error_t *err_result = NULL;
     for (size_t i = 0; i < branches->count; i++) {
-        if (!branches->items[i]) {
-            err_result = ERROR(
-                ERR_INVALID_ARG, "branches[%zu] is NULL", i
-            );
-            goto cleanup;
-        }
-        if (branches->items[i][0] == '\0') {
-            err_result = ERROR(
-                ERR_INVALID_ARG, "branches[%zu] cannot be empty", i
-            );
-            goto cleanup;
-        }
+        /* Each refspec's source is its branch's ref, spelled where every one is. */
+        char refname[DOTTA_REFNAME_MAX];
+        err_result = gitops_branch_refname(
+            refname, sizeof(refname), branches->items[i]
+        );
+        if (err_result) goto cleanup;
 
         /* Allocate buffer for this refspec */
         refspecs[i] = malloc(DOTTA_REFSPEC_MAX);
@@ -784,8 +777,8 @@ error_t *gitops_fetch_branches(
 
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
         error_t *err_build = gitops_build_refname(
-            refspecs[i], DOTTA_REFSPEC_MAX, "refs/heads/%s:refs/remotes/%s/%s",
-            branches->items[i], remote_name, branches->items[i]
+            refspecs[i], DOTTA_REFSPEC_MAX, "%s:refs/remotes/%s/%s",
+            refname, remote_name, branches->items[i]
         );
         if (err_build) {
             err_result = error_wrap(
@@ -836,7 +829,10 @@ error_t *gitops_push_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
-    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+
+    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -852,8 +848,7 @@ error_t *gitops_push_branch(
 
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
-        refspec, sizeof(refspec), "refs/heads/%s:refs/heads/%s",
-        branch_name, branch_name
+        refspec, sizeof(refspec), "%s:%s", refname, refname
     );
     if (err_build) {
         git_remote_free(remote);
@@ -886,7 +881,10 @@ error_t *gitops_force_push_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
-    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+
+    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -903,8 +901,7 @@ error_t *gitops_force_push_branch(
     /* Force push refspec ('+' prefix accepts non-fast-forward update) */
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
-        refspec, sizeof(refspec), "+refs/heads/%s:refs/heads/%s",
-        branch_name, branch_name
+        refspec, sizeof(refspec), "+%s:%s", refname, refname
     );
     if (err_build) {
         git_remote_free(remote);
@@ -937,7 +934,10 @@ error_t *gitops_delete_remote_branch(
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
     CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
-    CHECK_ARG(branch_name[0] != '\0', "Branch name cannot be empty");
+
+    /* The refspec's halves are the branch's ref, spelled where every one is. */
+    char refname[DOTTA_REFNAME_MAX];
+    RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), branch_name));
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -954,7 +954,7 @@ error_t *gitops_delete_remote_branch(
     /* Delete remote branch using empty refspec: :refs/heads/branch */
     char refspec[DOTTA_REFSPEC_MAX];
     error_t *err_build = gitops_build_refname(
-        refspec, sizeof(refspec), ":refs/heads/%s", branch_name
+        refspec, sizeof(refspec), ":%s", refname
     );
     if (err_build) {
         git_remote_free(remote);
@@ -1865,6 +1865,13 @@ error_t *gitops_branch_refname(
 ) {
     CHECK_NULL(buffer);
     CHECK_NULL(name);
+
+    /* A name typed empty is refused in words of its own: Git's rule refuses it
+     * too, but as a name — "'' is not a valid branch name" — that leaves the
+     * reader to decode what was typed. */
+    if (name[0] == '\0') {
+        return ERROR(ERR_INVALID_ARG, "Branch name cannot be empty");
+    }
 
     int valid = 0;
     int ret = git_branch_name_is_valid(&valid, name);

@@ -18,6 +18,7 @@
 
 #include "base/arena.h"
 #include "base/array.h"
+#include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/heap.h"
@@ -47,7 +48,7 @@
 /* Worst static annotation: " (needs a target)" = 17 visible columns. */
 #define ROW_ANNOTATION_COLS   17
 
-/* Pre-allocated prompt buffer size; geometric realloc covers overflow. */
+/* The prompt's reserved bytes; an append past them grows as any buffer grows. */
 #define PROMPT_INITIAL_CAP    256
 
 /* --- Types --- */
@@ -61,9 +62,7 @@ typedef struct {
 } item_t;
 
 typedef struct {
-    char *buffer;          /* Owned, NUL-terminated input scratch */
-    size_t len;            /* Bytes in buffer, excluding NUL */
-    size_t cap;            /* Allocated capacity */
+    buffer_t buffer;       /* The input typed so far (owned; NUL-terminated) */
     size_t item_index;     /* Row anchor (view->items index) the prompt is over */
     bool active;           /* True while the prompt overlay is open */
     bool enable;           /* True iff opened by space on a row that needs a target (commit flips enabled) */
@@ -118,42 +117,7 @@ static void prompt_close(prompt_t *p) {
     p->active = false;
     p->enable = false;
     p->item_index = 0;
-    p->len = 0;
-    p->buffer[0] = '\0';
-}
-
-/* Append one byte; grow geometrically — a capacity whose double no size can hold
- * is exhaustion (base/heap.h). */
-static void prompt_push(prompt_t *p, char c) {
-    if (p->len + 1 >= p->cap) {
-        if (p->cap > SIZE_MAX / 2) heap_die(SIZE_MAX);
-        p->cap *= 2;
-        p->buffer = heap_realloc(p->buffer, p->cap);
-    }
-    p->buffer[p->len++] = c;
-    p->buffer[p->len] = '\0';
-}
-
-/* Replace the buffer with a copy of src (empty when src is NULL/empty), grown
- * as prompt_push grows it. */
-static void prompt_set(prompt_t *p, const char *src) {
-    if (!src || *src == '\0') {
-        p->len = 0;
-        p->buffer[0] = '\0';
-        return;
-    }
-    size_t src_len = strlen(src);
-    size_t need = src_len + 1;
-    if (need > p->cap) {
-        while (p->cap < need) {
-            if (p->cap > SIZE_MAX / 2) heap_die(SIZE_MAX);
-            p->cap *= 2;
-        }
-        p->buffer = heap_realloc(p->buffer, p->cap);
-    }
-    memcpy(p->buffer, src, src_len);
-    p->buffer[src_len] = '\0';
-    p->len = src_len;
+    buffer_clear(&p->buffer);
 }
 
 /* Opening helpers — mirror prompt_close so the input dispatcher never reaches
@@ -162,15 +126,15 @@ static void prompt_open_capture(prompt_t *p, size_t item_index) {
     p->active = true;
     p->enable = true;
     p->item_index = item_index;
-    /* Buffer is empty (prompt_close on prior cycle, calloc on first). */
+    /* Buffer is empty (prompt_close on the prior cycle, the reserve on the first). */
 }
 
 static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current) {
     p->active = true;
     p->enable = false;
     p->item_index = item_index;
-    /* Buffer holds the row's target (empty when it has none). */
-    prompt_set(p, current);
+    /* The empty buffer takes the row's target, and stays empty when it has none. */
+    if (current) buffer_append_string(&p->buffer, current);
 }
 
 /* --- View lifecycle --- */
@@ -287,7 +251,7 @@ static void view_free(view_t *view) {
         return;
     }
     free_items(view->items, view->item_count);
-    free(view->prompt.buffer);
+    buffer_deinit(&view->prompt.buffer);
     free(view);
 }
 
@@ -312,8 +276,7 @@ static error_t *view_create(
 
     /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
      * on the common typing path. */
-    view->prompt.cap = PROMPT_INITIAL_CAP;
-    view->prompt.buffer = heap_calloc(view->prompt.cap, sizeof(char));
+    buffer_reserve(&view->prompt.buffer, PROMPT_INITIAL_CAP);
 
     *out = view;
     return NULL;
@@ -615,7 +578,7 @@ static void row_render(const view_t *view, size_t i) {
          * while active). */
         fprintf(
             stdout, "  " UI_CURSOR "   " UI_BOLD "Target:" UI_RESET " %s_\r\n",
-            view->prompt.buffer
+            view->prompt.buffer.data
         );
         return;
     }
@@ -733,7 +696,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
 
     switch (key) {
         case TERM_KEY_ENTER: {
-            if (p->len == 0) {
+            if (p->buffer.size == 0) {
                 /* Empty Enter is a no-op; Esc is the cancel key. */
                 return INTERACTIVE_CONTINUE;
             }
@@ -743,10 +706,10 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * plan_validate to refuse at save with the message, the way it refuses
              * a bad path today. */
             char *captured = NULL;
-            error_t *err = path_input_normalize(p->buffer, &captured);
+            error_t *err = path_input_normalize(p->buffer.data, &captured);
             if (err) {
                 error_free(err);
-                captured = heap_strdup(p->buffer);
+                captured = heap_strdup(p->buffer.data);
             }
             item_t *it = &view->items[p->item_index];
             /* Replace whatever target was on the item (NULL for capture, the
@@ -769,8 +732,8 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
             return INTERACTIVE_CONTINUE;
 
         case TERM_KEY_BACKSPACE:
-            if (p->len > 0) {
-                p->buffer[--p->len] = '\0';
+            if (p->buffer.size > 0) {
+                buffer_resize(&p->buffer, p->buffer.size - 1);
             }
             return INTERACTIVE_CONTINUE;
 
@@ -780,7 +743,8 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * terminal layer maps both 0x7F and 0x08 to TERM_KEY_BACKSPACE, so
              * 0x7F should be unreachable. */
             if (key >= 0x20 && key <= 0xFF && key != 0x7F) {
-                prompt_push(p, (char) key);
+                const char byte = (char) key;
+                buffer_append(&p->buffer, &byte, 1);
             }
             return INTERACTIVE_CONTINUE;
     }

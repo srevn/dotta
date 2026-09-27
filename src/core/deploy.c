@@ -697,9 +697,8 @@ static void check_ancestry(
  * @param skip The row's skip in the making (must not be NULL): PERMISSION or
  *        ANCESTOR, the refusing ancestor's prefix length (0 where none could be
  *        named), and UNCLAIMED on the ANCESTOR refusal alone
- * @return Error or NULL on success (a skip is not an error)
  */
-static error_t *check_landing(
+static void check_landing(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts,
     const char *path, deploy_skip_t *skip
 ) {
@@ -737,7 +736,6 @@ static error_t *check_landing(
 
 cleanup:
     free(scratch);
-    return NULL;
 }
 
 /**
@@ -994,8 +992,7 @@ error_t *deploy_preflight(
              * skipped on its own account only when the landing had nothing to
              * say — as for a file. */
             if (deploy_convergence(occupant) != DEPLOY_CONVERGE_FIX) {
-                err = check_landing(ws, result, path, &skip);
-                if (err) goto cleanup;
+                check_landing(ws, result, path, &skip);
             } else if (!identity_may_chmod(identity(), item->st.st_uid)) {
                 skip.reason = DEPLOY_SKIP_FOREIGN;
             }
@@ -1068,8 +1065,7 @@ error_t *deploy_preflight(
              * row lands through its parent, whichever arm writes it and whether
              * or not something is already at the path — so one question covers
              * both, and it is never about the path itself. */
-            err = check_landing(ws, result, path, &skip);
-            if (err) goto cleanup;
+            check_landing(ws, result, path, &skip);
 
             if (skip.reason == DEPLOY_SKIP_NONE) {
                 if (occupant_conflicts(occupant, item->row->type)) {
@@ -1272,9 +1268,9 @@ static mode_t working_mode(mode_t mode) {
  * is recorded and nothing is done twice. `path` must outlive the run: callers
  * pass the directory row's own filesystem_path.
  */
-static error_t *hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
+static void hold_directory(deploy_run_t *run, const char *path, mode_t mode) {
     if (working_mode(mode) == mode) {
-        return NULL;
+        return;
     }
 
     held_directory_t *held = heap_alloc(sizeof(*held));
@@ -1282,7 +1278,6 @@ static error_t *hold_directory(deploy_run_t *run, const char *path, mode_t mode)
     held->mode = mode;
 
     ptr_array_push(&run->held, held);
-    return NULL;
 }
 
 /**
@@ -1346,14 +1341,14 @@ static error_t *materialize_directory(
 ) {
     const manifest_row_t *dir = v->item->row;
 
-    error_t *err = fs_create_dir_with_ownership(
+    RETURN_IF_ERROR(
+        fs_create_dir_with_ownership(
         dir->filesystem_path, working_mode(dir->mode), v->uid, v->gid
+        )
     );
-    if (err) {
-        return err;
-    }
+    hold_directory(run, dir->filesystem_path, dir->mode);
 
-    return hold_directory(run, dir->filesystem_path, dir->mode);
+    return NULL;
 }
 
 /**
@@ -1403,7 +1398,7 @@ static error_t *create_ancestor(deploy_run_t *run, const char *path) {
         if (err) {
             return err;
         }
-        RETURN_IF_ERROR(hold_directory(run, dir->filesystem_path, dir->mode));
+        hold_directory(run, dir->filesystem_path, dir->mode);
 
         /* On the receipt once — and bounds the sized array: a parent present at
          * an earlier row's write and removed since is re-made here, and without
@@ -1478,8 +1473,9 @@ static error_t *open_landing_directory(
             ancestor
         );
     }
+    hold_directory(run, dir->filesystem_path, current);
 
-    return hold_directory(run, dir->filesystem_path, current);
+    return NULL;
 }
 
 /**

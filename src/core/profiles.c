@@ -127,12 +127,8 @@ void profile_order(string_array_t *names) {
 /**
  * Detect matching profile names from a list of available branches
  */
-error_t *profile_detect(
-    const string_array_t *available_branches,
-    string_array_t **out_profiles
-) {
+string_array_t *profile_detect(const string_array_t *available_branches) {
     CHECK_NULL(available_branches);
-    CHECK_NULL(out_profiles);
 
     string_array_t *profiles = string_array_new(0);
 
@@ -177,9 +173,7 @@ error_t *profile_detect(
      * every --all runs over its own set. */
     profile_order(profiles);
 
-    *out_profiles = profiles;
-
-    return NULL;
+    return profiles;
 }
 
 /**

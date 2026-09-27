@@ -71,11 +71,9 @@ typedef struct {
  *
  * @param config Configuration holding the two templates (must not be NULL)
  * @param ctx Context with action, profile, paths (must not be NULL)
- * @return Allocated commit message string (caller must free), or NULL: every
- *         reachable failure is an allocation's, the callers' ERR_MEMORY being
- *         the whole truth about it
+ * @return Allocated commit message string (caller must free)
  */
-char *build_commit_message(const config_t *config, const commit_message_context_t *ctx);
+char *commit_message(const config_t *config, const commit_message_context_t *ctx);
 
 /**
  * Get action name in present tense

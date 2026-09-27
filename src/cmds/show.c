@@ -346,10 +346,7 @@ static error_t *show_file(
     error_t *err = metadata_load_from_tree(repo, tree, profile, &metadata);
     if (err) {
         error_free(err);
-        err = metadata_create_empty(&metadata);
-        if (err) {
-            return error_wrap(err, "Failed to create metadata");
-        }
+        metadata = metadata_create_empty();
     }
 
     profile_held_t held;

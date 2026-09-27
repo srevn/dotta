@@ -2374,8 +2374,8 @@ typedef struct {
  * under the winner's name, from a depth 0 of its own.
  *
  * What the filesystem refuses is said where it happens and the siblings go on,
- * absence is silent, and an allocation anywhere is the run failing. The lines
- * go to stderr, as the driver's do — core has no output handle.
+ * and absence is silent. The lines go to stderr, as the driver's do — core has
+ * no output handle.
  *
  * @param scan      What the walk runs under (must not be NULL)
  * @param directory The path this frame enumerates: a key the view holds no blob
@@ -2415,9 +2415,6 @@ static error_t *scan_directory_for_untracked(
     error_t *err = fs_list_dir(directory, &listing);
     if (err) {
         switch (error_code(err)) {
-            case ERR_MEMORY:     /* the run failing; error_wrap keeps the cause's code */
-                return err;
-
             case ERR_NOT_FOUND:  /* it left between the look that found it and this listing */
                 break;
 
@@ -2562,19 +2559,14 @@ static error_t *scan_directory_for_untracked(
          * That one reads the place and not the subject, so a root standing inside
          * a repository whose rules name it is not entered, which is the answer
          * the directory would get under any other name. The layer's own failure
-         * leaves no verdict, as today; its allocation failure is the run's. */
+         * leaves no verdict, as today. */
         gitignore_match_t match;
         gitignore_eval(scan->rules, label_tail(name), is_dir, &match);
         bool ignored = match.decided && match.ignored;
         if (!match.decided && scan->source_filter) {
-            error_t *layer = source_filter_is_excluded(
-                scan->source_filter, child, is_dir, &ignored
+            error_free(
+                source_filter_is_excluded(scan->source_filter, child, is_dir, &ignored)
             );
-            if (error_code(layer) == ERR_MEMORY) {
-                err = layer;
-                goto cleanup;
-            }
-            error_free(layer);
         }
         if (ignored) continue;
 

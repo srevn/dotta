@@ -316,7 +316,8 @@ static error_t *load_sheet(
     );
     error_free(err);
 
-    return metadata_create_empty(out);
+    *out = metadata_create_empty();
+    return NULL;
 }
 
 /**

@@ -74,14 +74,9 @@
  *
  * @param available_branches List of branch names to match against (must not be
  *                           NULL)
- * @param out_profiles Matched profile names in the convention's order (must not
- *                     be NULL, caller must free)
- * @return Error or NULL on success
+ * @return Matched profile names in the convention's order (caller frees)
  */
-error_t *profile_detect(
-    const string_array_t *available_branches,
-    string_array_t **out_profiles
-);
+string_array_t *profile_detect(const string_array_t *available_branches);
 
 /**
  * Order profile names by the layering convention — least specific first.

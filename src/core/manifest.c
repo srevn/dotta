@@ -848,8 +848,8 @@ static int manifest_claim_blob(
      * on the view (manifest_unbound) so the health consumers surface it; it is
      * never dropped in silence. Record-safe by construction: a record can only
      * exist where a binding existed at write time, so no record ever joins a
-     * skipped claim and no orphan can be manufactured here. Genuine errors
-     * (malformed path, OOM) propagate via the err branch. */
+     * skipped claim and no orphan can be manufactured here. A genuine error (a
+     * malformed path) propagates via the err branch. */
     const char *filesystem_path = NULL;
     err = mount_resolve(
         ctx->mounts, ctx->profile, storage_path, ctx->arena, &filesystem_path

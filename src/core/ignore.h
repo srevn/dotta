@@ -243,7 +243,7 @@ const char *ignore_origin_describe(ignore_origin_t origin);
  *   - Its tree has no `.dottaignore` at the root
  *   - The blob is empty
  *
- * Only I/O failures, malformed trees, OOM, or the 1 MB size cap produce an error.
+ * Only I/O failures, malformed trees, or the 1 MB size cap produce an error.
  *
  * On success with non-NULL content, `*out_content` is a heap-allocated
  * NUL-terminated buffer of `*out_size` bytes, which may hold a NUL of its own —

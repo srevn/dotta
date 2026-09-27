@@ -534,15 +534,7 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
 
         /* Name-based detection against remote branches */
         if (remote_branches) {
-            err = profile_detect(remote_branches, &detected_profiles);
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Failed to detect profiles: %s",
-                    error_message(err)
-                );
-                error_free(err);
-                err = NULL;
-            }
+            detected_profiles = profile_detect(remote_branches);
         }
 
         if (detected_profiles && detected_profiles->count > 0) {

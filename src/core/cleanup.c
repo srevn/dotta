@@ -58,15 +58,13 @@ static int compare_deepest_first(const void *a, const void *b) {
 /**
  * Build the cleanup plan
  */
-error_t *cleanup_plan_build(
+cleanup_plan_t *cleanup_plan_build(
     const workspace_t *ws,
     const scope_t *scope,
-    bool keep_orphans,
-    cleanup_plan_t **out
+    bool keep_orphans
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(scope);
-    CHECK_NULL(out);
 
     /* calloc zeroes the three ptr_array_t buckets — that IS their empty state */
     cleanup_plan_t *plan = heap_calloc(1, sizeof(*plan));
@@ -74,8 +72,7 @@ error_t *cleanup_plan_build(
     /* --keep-orphans: nothing is planned, by request. The empty plan is what
      * every later stage reads, so no stage re-encodes the flag. */
     if (keep_orphans) {
-        *out = plan;
-        return NULL;
+        return plan;
     }
 
     workspace_items_t items = workspace_diverged(ws);
@@ -127,8 +124,7 @@ error_t *cleanup_plan_build(
         );
     }
 
-    *out = plan;
-    return NULL;
+    return plan;
 }
 
 void cleanup_plan_free(cleanup_plan_t *plan) {
@@ -392,15 +388,13 @@ static bool parent_accepts_removal(const char *path) {
 /**
  * Decide the verdicts
  */
-error_t *cleanup_preflight(
+cleanup_preflight_result_t *cleanup_preflight(
     const workspace_t *ws,
     const cleanup_plan_t *plan,
-    bool force,
-    cleanup_preflight_result_t **out
+    bool force
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(plan);
-    CHECK_NULL(out);
 
     /* calloc zeroes the ten buckets — an empty answer needs no NULL guard
      * downstream */
@@ -538,8 +532,7 @@ error_t *cleanup_preflight(
 
     hashmap_free(fates, NULL);
 
-    *out = verdicts;
-    return NULL;
+    return verdicts;
 }
 
 void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
@@ -592,12 +585,8 @@ void cleanup_preflight_result_free(cleanup_preflight_result_t *verdicts) {
  * "skipped"). One fs_lstat_occupant each — the workspace's probe, so a path reads
  * the same way at load and at removal.
  */
-error_t *cleanup_execute(
-    const cleanup_preflight_result_t *verdicts,
-    cleanup_result_t **out
-) {
+cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts) {
     CHECK_NULL(verdicts);
-    CHECK_NULL(out);
 
     cleanup_result_t *result = heap_calloc(1, sizeof(*result));
 
@@ -717,8 +706,7 @@ error_t *cleanup_execute(
         o->error = remove_err;
     }
 
-    *out = result;
-    return NULL;
+    return result;
 }
 
 void cleanup_result_free(cleanup_result_t *result) {

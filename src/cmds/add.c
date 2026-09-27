@@ -1048,14 +1048,7 @@ static error_t *add_capture(
 
     add_print_capture(out, "metadata", filesystem_path, item);
 
-    err = metadata_add_item(metadata, &item);
-    if (err) {
-        metadata_item_free(item);
-        return error_wrap(
-            err, "Failed to add metadata item for '%s'",
-            filesystem_path
-        );
-    }
+    metadata_add_item(metadata, &item);
 
     return NULL;
 }
@@ -1114,10 +1107,7 @@ static error_t *add_commit(
         .target_commit = NULL
     };
 
-    char *message = build_commit_message(walk->ctx->config, &msg_ctx);
-    if (!message) {
-        return ERROR(ERR_MEMORY, "Failed to build commit message");
-    }
+    char *message = commit_message(walk->ctx->config, &msg_ctx);
 
     /* Create commit */
     error_t *err = stage_commit(stage, message, out_committed);
@@ -2358,14 +2348,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         add_print_capture(out, "directory metadata", path->filesystem_path, dir_item);
 
         /* Add directory to metadata */
-        err = metadata_add_item(metadata, &dir_item);
-        if (err) {
-            metadata_item_free(dir_item);
-            err = error_wrap(
-                err, "Failed to track directory '%s'", path->filesystem_path
-            );
-            goto cleanup;
-        }
+        metadata_add_item(metadata, &dir_item);
         output_info(
             out, OUTPUT_VERBOSE, "Tracked directory: %s -> %s", path->filesystem_path,
             storage_path

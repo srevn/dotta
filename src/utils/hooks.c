@@ -123,18 +123,11 @@ static error_t *hook_get_path(
  *
  * Creates environment array with DOTTA_* variables and filtered system environment.
  * Caller must free with free_hook_env().
- *
- * Returns NULL on allocation failure, with env_count set to 0.
  */
 static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
-    if (!context) {
-        *env_count = 0;
-        return NULL;
-    }
+    CHECK_NULL(context);
 
-    /* Initialize output */
     extern char **environ;
-    *env_count = 0;
 
     /* Single-walk build with realloc-grow. */
     size_t cap = 64;
@@ -276,10 +269,6 @@ static error_t *hook_execute(
     }
 
     env = build_hook_env(context, &env_count);
-    if (!env) {
-        err = ERROR(ERR_MEMORY, "Failed to build environment for hook");
-        goto cleanup;
-    }
 
     char *argv[] = { hook_path, NULL };
     process_spec_t spec = {

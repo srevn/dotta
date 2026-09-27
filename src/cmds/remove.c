@@ -1087,11 +1087,7 @@ static error_t *remove_paths(
         .custom_msg    = opts->message,
         .target_commit = NULL
     };
-    message = build_commit_message(config, &msg_ctx);
-    if (!message) {
-        err = ERROR(ERR_MEMORY, "Failed to build commit message");
-        goto cleanup;
-    }
+    message = commit_message(config, &msg_ctx);
     err = stage_commit(stage, message, NULL);
     if (err) {
         err = error_wrap(err, "Failed to create commit");

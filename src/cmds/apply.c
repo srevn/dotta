@@ -1610,8 +1610,7 @@ static void apply_print_cleanup_refused(
  *            the run's transaction)
  * @param ws Workspace (must not be NULL): the items every fate carries are its own
  * @param cleanup_verdicts Cleanup's verdicts (must not be NULL)
- * @param cleanup_result Cleanup's receipt, or NULL where the prune engine could
- *                       not start
+ * @param cleanup_result Cleanup's receipt (must not be NULL)
  * @param deploy_result Deploy's receipt, or NULL where the run deployed nothing
  * @param now Timestamp of the run's ownership events (must be > 0)
  * @param acknowledged The pending reassignments the record acknowledged (must
@@ -1631,6 +1630,7 @@ static error_t *apply_write_record(
     CHECK_NULL(ctx);
     CHECK_NULL(ws);
     CHECK_NULL(cleanup_verdicts);
+    CHECK_NULL(cleanup_result);
     CHECK_NULL(acknowledged);
 
     state_t *state = ctx->run.state;   /* Borrowed from dispatcher (WRITE) */
@@ -1649,26 +1649,22 @@ static error_t *apply_write_record(
      * accumulate forever in the path_records table.
      *
      * What the run found gone: pruned, or gone by the time it looked — the
-     * receipt's, where the prune engine could start. */
-    if (cleanup_result) {
-        const cleanup_outcomes_t *gone[] = {
-            &cleanup_result->pruned_files,
-            &cleanup_result->reclaimed_files,
-            &cleanup_result->pruned_dirs,
-            &cleanup_result->reclaimed_dirs,
-        };
-        for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
-            for (size_t i = 0; i < gone[b]->count; i++) {
-                err = state_retire(state, gone[b]->entries[i].item->filesystem_path);
-                if (err) goto cleanup;
-            }
+     * receipt's. */
+    const cleanup_outcomes_t *gone[] = {
+        &cleanup_result->pruned_files,
+        &cleanup_result->reclaimed_files,
+        &cleanup_result->pruned_dirs,
+        &cleanup_result->reclaimed_dirs,
+    };
+    for (size_t b = 0; b < sizeof(gone) / sizeof(gone[0]); b++) {
+        for (size_t i = 0; i < gone[b]->count; i++) {
+            err = state_retire(state, gone[b]->entries[i].item->filesystem_path);
+            if (err) goto cleanup;
         }
     }
 
-    /* The verdicts' own, settled whether or not the prune engine could start:
-     * neither needed an effect — what was gone before the run began, and what
-     * the run let go. The receipt's printer told them when it could; on the one
-     * run whose warning said nothing ran, they settle unreported. */
+    /* The verdicts' own: neither needed an effect — what was gone before the
+     * run began, and what the run let go. The receipt's printer told them. */
     const workspace_items_t decided[] = {
         workspace_items(&cleanup_verdicts->absent_files),
         workspace_items(&cleanup_verdicts->absent_dirs),
@@ -2146,11 +2142,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     output_gap(out, OUTPUT_VERBOSE);
     output_print(out, OUTPUT_VERBOSE, "Planning cleanup...\n");
 
-    err = cleanup_plan_build(ws, scope, opts->keep_orphans, &cleanup_plan);
-    if (err) {
-        err = error_wrap(err, "Failed to plan cleanup");
-        goto cleanup;
-    }
+    cleanup_plan = cleanup_plan_build(ws, scope, opts->keep_orphans);
 
     if (opts->keep_orphans) {
         output_print(out, OUTPUT_VERBOSE, "  Orphans kept (--keep-orphans)\n");
@@ -2613,11 +2605,7 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
     /* Decide cleanup's verdicts from the plan. An empty plan (--keep-orphans,
      * no orphans in scope) yields empty verdicts and a silent preview — no gate
      * needed anywhere. */
-    err = cleanup_preflight(ws, cleanup_plan, opts->force, &cleanup_verdicts);
-    if (err) {
-        err = error_wrap(err, "Cleanup preflight checks failed");
-        goto cleanup;
-    }
+    cleanup_verdicts = cleanup_preflight(ws, cleanup_plan, opts->force);
 
     /* What the record phase acknowledges behind the run's own writes, for the
      * tail: each pending reassignment it writes, or none where it failed
@@ -2784,26 +2772,17 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
              * workspace divergence analysis; deploy's fetches hit it. */
             err = deploy_execute(repo, ws, deploy_verdicts, content_cache, &deploy_result);
 
-            if (deploy_result) {
-                apply_print_deploy_results(out, deploy_result);
-            }
+            apply_print_deploy_results(out, deploy_result);
             if (err) {
                 /* Infrastructure, never a row — a row's own failure is in the
                  * receipt's failed bucket, and the run goes on to record what
-                 * landed. Which infrastructure, the receipt's presence tells:
-                 * without one its allocation failed and nothing ran — nothing
-                 * to record, the run ends. With one every row ran and only the
-                 * release of held modes failed: the directory stands at its working
-                 * mode, wider by the owner's own bits alone, and the next load
-                 * reads the mode divergence and converges it — while the writes
-                 * that landed must still be recorded, or the record loses them
-                 * and a later scope exit releases what it should prune. Warned
-                 * like the cleanup failure below: the exit fold reads receipts,
-                 * never errors. */
-                if (!deploy_result) {
-                    err = error_wrap(err, "Deployment failed");
-                    goto cleanup;
-                }
+                 * landed. Every row ran and only the release of held modes failed:
+                 * the directory stands at its working mode, wider by the owner's
+                 * own bits alone, and the next load reads the mode divergence
+                 * and converges it — while the writes that landed must still be
+                 * recorded, or the record loses them and a later scope exit
+                 * releases what it should prune. Warned: the exit fold reads
+                 * receipts, never errors. */
                 output_warning(
                     out, OUTPUT_NORMAL, "%s; the next apply converges it",
                     error_message(err)
@@ -2817,24 +2796,9 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
 
         /* Prune the orphans the verdicts cleared. cleanup_execute changes the
          * filesystem only; apply, as the transaction owner, settles the records
-         * behind what went and what was let go (apply_write_record, below).
-         *
-         * Non-fatal: the deployment's landed writes are recorded whatever the
-         * prune did. The engine's one error is its receipt's allocation — nothing
-         * ran, nothing to record — and the next apply re-reads the prunable
-         * orphans. */
-        error_t *prune_err = cleanup_execute(cleanup_verdicts, &cleanup_result);
-        if (prune_err) {
-            output_warning(
-                out, OUTPUT_NORMAL, "Orphan cleanup failed: %s",
-                error_message(prune_err)
-            );
-            error_free(prune_err);
-        }
-
-        if (cleanup_result) {
-            apply_print_cleanup_results(out, cleanup_verdicts, cleanup_result);
-        }
+         * behind what went and what was let go (apply_write_record, below). */
+        cleanup_result = cleanup_execute(cleanup_verdicts);
+        apply_print_cleanup_results(out, cleanup_verdicts, cleanup_result);
 
         /* The record of what the run did — the orphans it settled, the paths it
          * wrote — whole or not at all (apply_write_record). A record the store

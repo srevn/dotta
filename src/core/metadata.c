@@ -55,9 +55,7 @@ struct metadata {
 /**
  * Create empty metadata collection
  */
-error_t *metadata_create_empty(metadata_t **out) {
-    CHECK_NULL(out);
-
+metadata_t *metadata_create_empty(void) {
     metadata_t *metadata = heap_calloc(1, sizeof(metadata_t));
 
     /* Allocate the item spine */
@@ -69,8 +67,7 @@ error_t *metadata_create_empty(metadata_t **out) {
     metadata->count = 0;
     metadata->capacity = INITIAL_CAPACITY;
 
-    *out = metadata;
-    return NULL;
+    return metadata;
 }
 
 /**
@@ -181,14 +178,12 @@ error_t *metadata_item_create_directory(
 /**
  * Clone a claim under the name it is being written to
  */
-error_t *metadata_item_clone(
+metadata_item_t *metadata_item_clone(
     const metadata_item_t *source,
-    const char *storage_path,
-    metadata_item_t **out
+    const char *storage_path
 ) {
     CHECK_NULL(source);
     CHECK_NULL(storage_path);
-    CHECK_NULL(out);
 
     metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
@@ -201,8 +196,7 @@ error_t *metadata_item_clone(
     item->owner = heap_strdup(source->owner);
     item->group = heap_strdup(source->group);
 
-    *out = item;
-    return NULL;
+    return item;
 }
 
 /**
@@ -237,13 +231,12 @@ void metadata_item_claim(
  * at stay where they were created — so the index needs no maintenance here.
  *
  * @param metadata Metadata structure (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *ensure_capacity(metadata_t *metadata) {
+static void metadata_ensure_capacity(metadata_t *metadata) {
     CHECK_NULL(metadata);
 
     if (metadata->count < metadata->capacity) {
-        return NULL; /* No need to grow */
+        return; /* No need to grow */
     }
 
     /* The spine's bytes stand in memory, so its double cannot wrap; the double's
@@ -258,8 +251,6 @@ static error_t *ensure_capacity(metadata_t *metadata) {
         new_capacity * sizeof(*metadata->items)
     );
     metadata->capacity = new_capacity;
-
-    return NULL;
 }
 
 /**
@@ -277,7 +268,7 @@ static error_t *ensure_capacity(metadata_t *metadata) {
  * mutates the field afterwards. Re-checking it here would be a second boundary
  * for a fact this function does not own.
  */
-error_t *metadata_add_item(
+void metadata_add_item(
     metadata_t *metadata,
     metadata_item_t **item
 ) {
@@ -298,7 +289,7 @@ error_t *metadata_add_item(
          * so nothing reads a pointer that has been freed. Everything else the
          * slot held is freed and replaced wholesale, the kind and every field
          * only one kind reads included, so a kind change leaves no residue of
-         * the old one. Nothing here can fail. */
+         * the old one. */
         free(incoming->key);
         incoming->key = existing->key;
 
@@ -309,21 +300,16 @@ error_t *metadata_add_item(
         free(incoming);
         *item = NULL;
 
-        return NULL;
+        return;
     }
 
     /* APPEND NEW ITEM */
-    error_t *err = ensure_capacity(metadata);
-    if (err) {
-        return err;
-    }
+    metadata_ensure_capacity(metadata);
 
     hashmap_set(metadata->index, incoming->key, incoming);
 
     metadata->items[metadata->count++] = incoming;
     *item = NULL;
-
-    return NULL;
 }
 
 /**
@@ -874,11 +860,7 @@ static error_t *capture_ancestor(
         return NULL;
     }
 
-    err = metadata_add_item(metadata, &item);
-    if (err) {
-        metadata_item_free(item);
-        return err;
-    }
+    metadata_add_item(metadata, &item);
 
     (*captured)++;
 
@@ -1145,10 +1127,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     }
 
     /* Create metadata collection */
-    err = metadata_create_empty(&metadata);
-    if (err) {
-        goto cleanup;
-    }
+    metadata = metadata_create_empty();
 
     /* Parse each item in the unified array */
     cJSON *item_obj = NULL;
@@ -1308,14 +1287,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
 
         /* Hand the item to the collection; it takes it, and leaves the loop's
          * scratch pointer NULL for the next iteration and the tail. */
-        err = metadata_add_item(metadata, &item);
-        if (err) {
-            err = error_wrap(
-                err, "Failed to add item to metadata: %s",
-                key_obj->valuestring
-            );
-            goto cleanup;
-        }
+        metadata_add_item(metadata, &item);
     }
 
     /* Success - transfer to caller */
@@ -1388,7 +1360,8 @@ error_t *metadata_load_from_tree(
      * only a lookup that failed to look is an error. */
     int git_err = git_tree_entry_bypath(&entry, tree, METADATA_FILE_PATH);
     if (git_err == GIT_ENOTFOUND) {
-        return metadata_create_empty(out);
+        *out = metadata_create_empty();
+        return NULL;
     }
     if (git_err < 0) {
         err = error_from_git(git_err);

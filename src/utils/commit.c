@@ -183,17 +183,15 @@ static char *format_path_list(const char *const *paths, size_t count) {
  * has no row for is left as the template spelled it, braces and all, so a typo
  * empties no line and prose survives a stray brace.
  *
- * @param template Template string with {variable} placeholders
+ * @param template Template string with {variable} placeholders (must not be NULL)
  * @param vars The variables and their values, resolved once by the caller
  * @param var_count How many
- * @return Allocated string with substitutions, or NULL for a NULL template
+ * @return Allocated string with substitutions
  */
 static char *substitute_template(
     const char *template, const template_t *vars, size_t var_count
 ) {
-    if (!template) {
-        return NULL;
-    }
+    CHECK_NULL(template);
 
     buffer_t buf = BUFFER_INIT;
 
@@ -269,26 +267,22 @@ static char *build_full_message(const char *title, const char *body) {
 /**
  * Build commit message from context
  */
-char *build_commit_message(
-    const config_t *config, const commit_message_context_t *ctx
-) {
-    /* Validate input */
-    if (!ctx || !ctx->profile) {
-        return NULL;
-    }
+char *commit_message(const config_t *config, const commit_message_context_t *ctx) {
+    CHECK_NULL(config);
+    CHECK_NULL(ctx);
+    CHECK_NULL(ctx->profile);
 
     /* If custom message provided, use it directly */
     if (ctx->custom_msg) {
         return heap_strdup(ctx->custom_msg);
     }
 
-    /* Get components, each freed at the one exit below */
+    /* Get components, each freed once the message is built */
     char *hostname = get_hostname();
     char *username = get_username();
     char *date = get_date_local();
     char *datetime = get_datetime_local();
     char *path_list = format_path_list(ctx->paths, ctx->path_count);
-    char *title = NULL, *body = NULL, *message = NULL;
 
     /* The values this message is made of, resolved once for both templates. The
      * count is rendered here and not in the reader, which is what keeps it the
@@ -311,16 +305,12 @@ char *build_commit_message(
     const size_t var_count = sizeof(vars) / sizeof(vars[0]);
 
     /* Build title and body from their templates */
-    title = substitute_template(config->commit_title, vars, var_count);
-    if (!title) goto cleanup;
-
-    body = substitute_template(config->commit_body, vars, var_count);
-    if (!body) goto cleanup;
+    char *title = substitute_template(config->commit_title, vars, var_count);
+    char *body = substitute_template(config->commit_body, vars, var_count);
 
     /* Build full message */
-    message = build_full_message(title, body);
+    char *message = build_full_message(title, body);
 
-cleanup:
     free(hostname);
     free(username);
     free(date);

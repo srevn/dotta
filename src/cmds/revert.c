@@ -568,8 +568,7 @@ static error_t *show_diff_preview(
  * @param file_path File path (must not be NULL)
  * @param target_commit_oid Target commit OID (must not be NULL)
  * @param custom_message Custom message (can be NULL for template generation)
- * @return Allocated message string (caller must free), or NULL on allocation
- *         failure
+ * @return Allocated message string (caller must free)
  */
 static char *build_revert_commit_message(
     const config_t *config,
@@ -598,7 +597,7 @@ static char *build_revert_commit_message(
         .target_commit = oid_str
     };
 
-    return build_commit_message(config, &msg_ctx);
+    return commit_message(config, &msg_ctx);
 }
 
 /**
@@ -660,7 +659,8 @@ static error_t *claim_to_restore(
         if (!recorded) {
             return NULL;
         }
-        return metadata_item_clone(recorded, restored_name, out_claim);
+        *out_claim = metadata_item_clone(recorded, restored_name);
+        return NULL;
     }
 
     /* The encrypted bit revert writes must be true of the blob it restores: it
@@ -675,7 +675,7 @@ static error_t *claim_to_restore(
         /* Found metadata entry - clone it. Mode and ownership have no byte source,
          * so the entry is their authority; the encrypted bit is the blob's
          * (above). */
-        RETURN_IF_ERROR(metadata_item_clone(recorded, restored_name, out_claim));
+        *out_claim = metadata_item_clone(recorded, restored_name);
         (*out_claim)->encrypted = encrypted;
         return NULL;
     }
@@ -1232,11 +1232,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * none for a link, the standing item is the reverted-away state's — retire
      * it. */
     if (restored_claim) {
-        err = metadata_add_item(standing_sheet, &restored_claim);
-        if (err) {
-            err = error_wrap(err, "Failed to update metadata");
-            goto cleanup;
-        }
+        metadata_add_item(standing_sheet, &restored_claim);
     } else {
         metadata_remove_item(standing_sheet, restored_name);
     }
@@ -1250,10 +1246,6 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
     msg = build_revert_commit_message(
         config, profile, restored_name, git_commit_id(target_commit), opts->message
     );
-    if (!msg) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
-        goto cleanup;
-    }
 
     err = stage_commit(stage, msg, NULL);
     if (err) goto cleanup;

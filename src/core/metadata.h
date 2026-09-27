@@ -226,11 +226,9 @@ typedef struct metadata metadata_t;
 /**
  * Create empty metadata collection
  *
- * @param out Metadata structure (must not be NULL, caller must free with
- *            metadata_free)
- * @return Error or NULL on success
+ * @return The collection (caller frees with metadata_free)
  */
-error_t *metadata_create_empty(metadata_t **out);
+metadata_t *metadata_create_empty(void);
 
 /**
  * Free metadata structure
@@ -298,14 +296,11 @@ void metadata_item_free(metadata_item_t *item);
  *
  * @param source Source item to clone (must not be NULL)
  * @param storage_path The key the copy carries (must not be NULL)
- * @param out Cloned item (must not be NULL, caller must free with
- *            metadata_item_free)
- * @return Error or NULL on success
+ * @return The copy (caller frees with metadata_item_free)
  */
-error_t *metadata_item_clone(
+metadata_item_t *metadata_item_clone(
     const metadata_item_t *source,
-    const char *storage_path,
-    metadata_item_t **out
+    const char *storage_path
 );
 
 /**
@@ -347,15 +342,13 @@ void metadata_item_claim(
  *
  * The collection TAKES the item it is handed rather than duplicating it: the
  * item keeps its place in memory, the collection keeps the pointer, and *item
- * is left NULL. On error nothing was published — the collection is exactly as
- * it was and the caller still owns the item.
+ * is left NULL.
  *
  * @param metadata Metadata collection (must not be NULL)
- * @param item Item to hand over (neither it nor *item may be NULL; *item is NULL
- *             on success, unchanged on error)
- * @return Error or NULL on success
+ * @param item Item to hand over (neither it nor *item may be NULL; *item is left
+ *             NULL)
  */
-error_t *metadata_add_item(
+void metadata_add_item(
     metadata_t *metadata,
     metadata_item_t **item
 );

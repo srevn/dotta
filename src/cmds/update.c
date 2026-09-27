@@ -558,12 +558,7 @@ static error_t *update_profile(
                     }
 
                     /* Add to metadata collection */
-                    err = metadata_add_item(metadata, &meta_item);
-                    if (err) {
-                        metadata_item_free(meta_item);
-                        err = error_wrap(err, "Failed to add metadata entry");
-                        goto cleanup;
-                    }
+                    metadata_add_item(metadata, &meta_item);
 
                     captured_file_count++;
                 } else {
@@ -676,15 +671,7 @@ static error_t *update_profile(
                 }
 
                 /* Add to metadata collection (upsert - updates if exists) */
-                err = metadata_add_item(metadata, &meta_item);
-                if (err) {
-                    metadata_item_free(meta_item);
-                    err = error_wrap(
-                        err, "Failed to update directory metadata for '%s'",
-                        item->filesystem_path
-                    );
-                    goto cleanup;
-                }
+                metadata_add_item(metadata, &meta_item);
 
                 updated_dir_count++;
                 commit->captured_count++;
@@ -826,11 +813,7 @@ static error_t *update_profile(
         .target_commit = NULL
     };
 
-    message = build_commit_message(ctx->config, &msg_ctx);
-    if (!message) {
-        err = ERROR(ERR_MEMORY, "Failed to build commit message");
-        goto cleanup;
-    }
+    message = commit_message(ctx->config, &msg_ctx);
 
     /* Create commit */
     err = stage_commit(stage, message, NULL);

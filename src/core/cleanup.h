@@ -115,14 +115,12 @@ typedef struct {
  * @param scope Operation scope (must not be NULL)
  * @param keep_orphans --keep-orphans: plan nothing. An empty plan is the answer
  *        every later stage reads — no stage re-encodes the flag.
- * @param out Plan (must not be NULL; caller frees with cleanup_plan_free)
- * @return Error or NULL on success
+ * @return The plan (caller frees with cleanup_plan_free)
  */
-error_t *cleanup_plan_build(
+cleanup_plan_t *cleanup_plan_build(
     const workspace_t *ws,
     const scope_t *scope,
-    bool keep_orphans,
-    cleanup_plan_t **out
+    bool keep_orphans
 );
 
 /**
@@ -435,15 +433,12 @@ typedef struct {
  * @param force --force: prune what would be skipped too; never a released file,
  *        never a directory's UNVERIFIED (cleanup_verdict), never a refusal (root
  *        is not a flag)
- * @param out Verdicts (must not be NULL; caller frees with
- *        cleanup_preflight_result_free)
- * @return Error on allocation failure, NULL otherwise
+ * @return The verdicts (caller frees with cleanup_preflight_result_free)
  */
-error_t *cleanup_preflight(
+cleanup_preflight_result_t *cleanup_preflight(
     const workspace_t *ws,
     const cleanup_plan_t *plan,
-    bool force,
-    cleanup_preflight_result_t **out
+    bool force
 );
 
 /** Free verdicts. No-op on NULL. */
@@ -552,19 +547,13 @@ typedef struct {
  *
  * Pure filesystem: no repo, no state — the caller settles the records from the
  * receipt and the verdicts. Files first (every prunable file), then directories
- * in the verdicts' prune order. Individual removal failures are non-fatal and
- * land in `failed` with their cause; the returned error is the run's infrastructure
- * alone — the receipt's own allocation failed, *out is unset, nothing ran and
- * the record phase has nothing to write — deploy_execute's contract.
+ * in the verdicts' prune order. A removal that fails is the item's own outcome:
+ * it lands in `failed` with its cause, and the run goes on.
  *
  * @param verdicts Verdicts from cleanup_preflight (must not be NULL)
- * @param out Result (must not be NULL; caller frees with cleanup_result_free)
- * @return Error or NULL on success
+ * @return The receipt (caller frees with cleanup_result_free)
  */
-error_t *cleanup_execute(
-    const cleanup_preflight_result_t *verdicts,
-    cleanup_result_t **out
-);
+cleanup_result_t *cleanup_execute(const cleanup_preflight_result_t *verdicts);
 
 /**
  * Free a result — the failed causes, then the arrays. No-op on NULL.

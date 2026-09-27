@@ -48,9 +48,8 @@ static void env_free(char **env, size_t count) {
  * filtered copy of the parent's environment (DOTTA_* stripped to prevent
  * shadowing).
  *
- * Returns a NULL-terminated `char **` suitable for execve, or NULL on allocation
- * failure. On success, *out_count is the number of non-NULL entries; the caller
- * frees via env_free().
+ * Returns a NULL-terminated `char **` suitable for execve; *out_count is the
+ * number of non-NULL entries, and the caller frees via env_free().
  *
  * All string inputs are required to be non-NULL — the helper is static and has
  * a single caller that validates upstream.
@@ -63,7 +62,6 @@ static char **env_build(
     size_t *out_count
 ) {
     extern char **environ;
-    *out_count = 0;
 
     /* Single-walk build with realloc-grow. */
     size_t cap = 64;
@@ -161,10 +159,6 @@ static error_t *run_live(
     env = env_build(
         repo_dir, profile, all_profiles, /*dry_run=*/ false, &env_count
     );
-    if (!env) {
-        err = ERROR(ERR_MEMORY, "Failed to build bootstrap environment");
-        goto cleanup;
-    }
 
     /* Run the script from the invoker's HOME (sys/identity — under sudo the user's,
      * not /root) so it behaves like a normal interactive shell session: relative

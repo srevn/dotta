@@ -12,13 +12,10 @@
 /**
  * Format timestamp as relative time string
  *
- * Converts a timestamp to a human-readable relative time like:
- * - "5 seconds ago"
- * - "2 hours ago"
- * - "3 days ago"
- * - "2 weeks ago"
- * - "6 months ago"
- * - "1 year ago"
+ * The time elapsed since `timestamp`, in the largest unit it has reached — seconds,
+ * minutes, hours, days, weeks, months of 30 days, years of 365 — counted in whole
+ * units and named in the number it agrees with: "1 second ago", "59 minutes ago",
+ * "2 weeks ago", "1 year ago". A timestamp past now reads "in the future".
  *
  * @param timestamp Unix timestamp to format
  * @param buf Output buffer

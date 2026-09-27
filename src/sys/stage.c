@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/gitops.h"
 
 struct stage {
@@ -50,16 +51,9 @@ struct stage_admission {
 static error_t *stage_seed(
     git_repository *repo, const char *refname, const git_oid *tip, stage_t **out
 ) {
-    stage_t *st = calloc(1, sizeof(*st));
-    if (!st) {
-        return ERROR(ERR_MEMORY, "Failed to allocate stage");
-    }
+    stage_t *st = heap_calloc(1, sizeof(*st));
     st->repo = repo;
-    st->refname = strdup(refname);
-    if (!st->refname) {
-        stage_free(st);
-        return ERROR(ERR_MEMORY, "Failed to copy reference name");
-    }
+    st->refname = heap_strdup(refname);
 
     int rc;
     if (tip) {
@@ -210,10 +204,7 @@ static error_t *admit_tree_path(git_index *index, const char *path) {
         );
     }
 
-    char *scratch = malloc(len + 1);
-    if (!scratch) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path scratch");
-    }
+    char *scratch = heap_alloc(len + 1);
     memcpy(scratch, path, len + 1);
 
     /* A file where a directory is needed: a proper prefix naming an entry. */
@@ -272,10 +263,7 @@ static error_t *put_entry(git_index *index, const git_index_entry *entry) {
     /* A directory where the file goes: any entry beneath the path. The index is
      * sorted, so one prefix probe answers. */
     size_t len = strlen(path);
-    char *beneath = malloc(len + 2);
-    if (!beneath) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path scratch");
-    }
+    char *beneath = heap_alloc(len + 2);
     memcpy(beneath, path, len);
     beneath[len] = '/';
     beneath[len + 1] = '\0';
@@ -324,10 +312,7 @@ error_t *stage_admission_create(const stage_t *st, stage_admission_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    stage_admission_t *adm = calloc(1, sizeof(*adm));
-    if (!adm) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the admission");
-    }
+    stage_admission_t *adm = heap_calloc(1, sizeof(*adm));
 
     /* Ownerless, for the reason the stage's own index is: the path rule runs at
      * every add, and the object check waits for a tree write that never comes.

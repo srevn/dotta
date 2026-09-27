@@ -16,6 +16,7 @@
 
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "sys/gitops.h"
 
 /* Configuration constants */
@@ -65,7 +66,7 @@ typedef struct {
  */
 static char *extract_commit_summary(const char *message) {
     if (!message) {
-        return strdup("");
+        return heap_strdup("");
     }
 
     /* Find first newline */
@@ -77,8 +78,8 @@ static char *extract_commit_summary(const char *message) {
         len--;
     }
 
-    /* Allocate and return (NULL on allocation failure) */
-    return strndup(message, len);
+    /* Allocate and return */
+    return heap_strndup(message, len);
 }
 
 /**
@@ -91,10 +92,7 @@ static error_t *create_commit_info(
     CHECK_NULL(commit);
     CHECK_NULL(out);
 
-    commit_info_t *info = calloc(1, sizeof(commit_info_t));
-    if (!info) {
-        return ERROR(ERR_MEMORY, "Failed to allocate commit info");
-    }
+    commit_info_t *info = heap_calloc(1, sizeof(commit_info_t));
 
     /* Copy OID */
     git_oid_cpy(&info->oid, git_commit_id(commit));
@@ -102,10 +100,6 @@ static error_t *create_commit_info(
     /* Extract summary */
     const char *message = git_commit_message(commit);
     info->summary = extract_commit_summary(message);
-    if (!info->summary) {
-        free(info);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit summary");
-    }
 
     /* Get timestamp (use libgit2 native type) */
     const git_signature *author = git_commit_author(commit);
@@ -121,7 +115,6 @@ static error_t *create_commit_info(
 struct tree_populate_data {
     hashmap_t *map;
     size_t file_count;
-    error_t *error;
 };
 
 /**
@@ -153,11 +146,7 @@ static int populate_tree_paths_callback(
     char *path = stack_buf;
 
     if (path_len >= sizeof(stack_buf)) {
-        path = malloc(path_len + 1);
-        if (!path) {
-            data->error = ERROR(ERR_MEMORY, "Failed to allocate path buffer");
-            return -1;
-        }
+        path = heap_alloc(path_len + 1);
     }
 
     memcpy(path, root, root_len);
@@ -191,21 +180,10 @@ static error_t *populate_tree_paths(
 
     struct tree_populate_data data = {
         .map        = map,
-        .file_count = 0,
-        .error      = NULL
+        .file_count = 0
     };
 
-    error_t *err = gitops_tree_walk(
-        tree, populate_tree_paths_callback, &data
-    );
-    if (err || data.error) {
-        /* Prefer callback error */
-        if (data.error) {
-            error_free(err);
-            return data.error;
-        }
-        return err;
-    }
+    RETURN_IF_ERROR(gitops_tree_walk(tree, populate_tree_paths_callback, &data));
 
     *out_count = data.file_count;
     return NULL;
@@ -356,27 +334,9 @@ static error_t *walk_commits(
                 }
 
                 /* Duplicate commit info for this file */
-                commit_info_t *info = calloc(1, sizeof(commit_info_t));
-                if (!info) {
-                    git_diff_free(diff);
-                    stats_free_commit_info(current_commit_info);
-                    current_commit_info = NULL;
-                    git_commit_free(commit);
-                    err = ERROR(ERR_MEMORY, "Failed to allocate commit info");
-                    goto cleanup;
-                }
-
+                commit_info_t *info = heap_calloc(1, sizeof(commit_info_t));
                 git_oid_cpy(&info->oid, &current_commit_info->oid);
-                info->summary = strdup(current_commit_info->summary);
-                if (!info->summary) {
-                    free(info);
-                    git_diff_free(diff);
-                    stats_free_commit_info(current_commit_info);
-                    current_commit_info = NULL;
-                    git_commit_free(commit);
-                    err = ERROR(ERR_MEMORY, "Failed to duplicate commit summary");
-                    goto cleanup;
-                }
+                info->summary = heap_strdup(current_commit_info->summary);
                 info->time = current_commit_info->time;
 
                 /* Add to map */
@@ -409,12 +369,9 @@ static error_t *walk_commits(
                     if (ctx->commits_capacity == 0) {
                         new_capacity = COMMITS_INITIAL_CAPACITY;
                     } else if (ctx->commits_capacity >= COMMITS_MAX_CAPACITY) {
-                        git_diff_free(diff);
-                        stats_free_commit_info(current_commit_info);
-                        current_commit_info = NULL;
-                        git_commit_free(commit);
-                        err = ERROR(ERR_INTERNAL, "File history too large");
-                        goto cleanup;
+                        /* Its double's bytes would wrap: no memory could hold
+                         * them, and that is exhaustion. */
+                        heap_die(SIZE_MAX);
                     } else {
                         new_capacity = ctx->commits_capacity * 2;
                         if (new_capacity > COMMITS_MAX_CAPACITY) {
@@ -422,32 +379,16 @@ static error_t *walk_commits(
                         }
                     }
 
-                    commit_info_t *new_commits =
-                        realloc(ctx->commits, new_capacity * sizeof(commit_info_t));
-                    if (!new_commits) {
-                        git_diff_free(diff);
-                        stats_free_commit_info(current_commit_info);
-                        current_commit_info = NULL;  /* Prevent double-free in cleanup */
-                        git_commit_free(commit);
-                        err = ERROR(ERR_MEMORY, "Failed to grow commits array");
-                        goto cleanup;
-                    }
-                    ctx->commits = new_commits;
+                    ctx->commits = heap_realloc(
+                        ctx->commits, new_capacity * sizeof(commit_info_t)
+                    );
                     ctx->commits_capacity = new_capacity;
                 }
 
                 /* Copy commit info to array */
                 commit_info_t *info = &ctx->commits[ctx->commits_count];
                 git_oid_cpy(&info->oid, &current_commit_info->oid);
-                info->summary = strdup(current_commit_info->summary);
-                if (!info->summary) {
-                    git_diff_free(diff);
-                    stats_free_commit_info(current_commit_info);
-                    current_commit_info = NULL;  /* Prevent double-free in cleanup */
-                    git_commit_free(commit);
-                    err = ERROR(ERR_MEMORY, "Failed to duplicate commit summary");
-                    goto cleanup;
-                }
+                info->summary = heap_strdup(current_commit_info->summary);
                 info->time = current_commit_info->time;
                 ctx->commits_count++;
             }
@@ -539,10 +480,7 @@ error_t *stats_build_file_commit_map(
     CHECK_NULL(out);
 
     /* Allocate map structure */
-    file_commit_map_t *map = calloc(1, sizeof(file_commit_map_t));
-    if (!map) {
-        return ERROR(ERR_MEMORY, "Failed to allocate file commit map");
-    }
+    file_commit_map_t *map = heap_calloc(1, sizeof(file_commit_map_t));
 
     /* Create hashmap */
     map->map = hashmap_create(HASHMAP_INITIAL_SIZE);
@@ -598,10 +536,7 @@ error_t *stats_get_file_history(
     CHECK_NULL(out);
 
     /* Allocate history */
-    file_history_t *history = calloc(1, sizeof(file_history_t));
-    if (!history) {
-        return ERROR(ERR_MEMORY, "Failed to allocate file history");
-    }
+    file_history_t *history = heap_calloc(1, sizeof(file_history_t));
 
     /* Initialize walk context */
     walk_ctx_t ctx = {

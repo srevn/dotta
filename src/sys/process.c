@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/secure.h"
 #include "sys/identity.h"
 
@@ -199,16 +200,12 @@ static size_t capture_next_capacity(size_t current, size_t needed) {
 }
 
 /**
- * Grow the capture buffer to fit `needed` bytes. Returns NULL on allocation
- * failure; otherwise returns the (possibly reallocated) buffer and updates
- * *capacity_inout.
+ * Grow the capture buffer to fit `needed` bytes. Returns the (possibly reallocated)
+ * buffer and updates *capacity_inout.
  */
 static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
     size_t cap = capture_next_capacity(*capacity_inout, needed);
-    char *grown = realloc(buf, cap);
-    if (!grown) {
-        return NULL;
-    }
+    char *grown = heap_realloc(buf, cap);
     *capacity_inout = cap;
     return grown;
 }
@@ -234,10 +231,7 @@ static char *capture_grow_secure(
     char *buf, size_t cur_len, size_t needed, size_t *capacity_inout
 ) {
     size_t cap = capture_next_capacity(*capacity_inout, needed);
-    char *grown = malloc(cap);
-    if (!grown) {
-        return NULL;
-    }
+    char *grown = heap_alloc(cap);
     if (buf) {
         memcpy(grown, buf, cur_len);
         secure_wipe(buf, *capacity_inout);
@@ -333,15 +327,10 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         set_pipe_cloexec(stdin_pipe);
     }
 
-    /* Pre-allocate capture buffer if requested. Failure here is surfaced as
-     * ERR_MEMORY rather than silently degrading. */
+    /* Pre-allocate capture buffer if requested. */
     if (spec->capture) {
         cap_capacity = PROCESS_CAPTURE_INITIAL;
-        capture = malloc(cap_capacity);
-        if (!capture) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate capture buffer");
-            goto cleanup;
-        }
+        capture = heap_alloc(cap_capacity);
     }
 
     pid = fork();
@@ -568,18 +557,9 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
 
             size_t need = cap_len + keep + 1;
             if (need > cap_capacity) {
-                char *grown = spec->secure_capture
+                capture = spec->secure_capture
                     ? capture_grow_secure(capture, cap_len, need, &cap_capacity)
                     : capture_grow(capture, need, &cap_capacity);
-                if (!grown) {
-                    err = ERROR(
-                        ERR_MEMORY,
-                        "Failed to grow capture buffer (need %zu bytes)",
-                        need
-                    );
-                    goto cleanup;
-                }
-                capture = grown;
             }
             memcpy(capture + cap_len, buf, keep);
             cap_len += keep;
@@ -596,7 +576,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
     }
 
-    if (spec->capture && capture) {
+    if (spec->capture) {
         capture[cap_len] = '\0';
     }
 

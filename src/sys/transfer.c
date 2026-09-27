@@ -12,6 +12,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "sys/credentials.h"
 
@@ -190,23 +191,13 @@ error_t *transfer_context_create(
     CHECK_NULL(out);
     CHECK_NULL(opts->output);
 
-    transfer_context_t *ctx = calloc(1, sizeof(*ctx));
-    if (!ctx) {
-        return ERROR(ERR_MEMORY, "Failed to allocate transfer context");
-    }
+    transfer_context_t *ctx = heap_calloc(1, sizeof(*ctx));
 
-    if (opts->url) {
-        ctx->url = strdup(opts->url);
-        if (!ctx->url) {
-            free(ctx);
-            return ERROR(ERR_MEMORY, "Failed to copy transfer URL");
-        }
-    }
-
+    ctx->url = heap_strdup(opts->url);
     ctx->output = opts->output;
     ctx->ephemeral = opts->ephemeral_progress;
     ctx->local_transport = url_is_local(ctx->url);
-    /* All other fields zero-initialized by calloc. */
+    /* All other fields zero-initialized by heap_calloc. */
 
     *out = ctx;
     return NULL;

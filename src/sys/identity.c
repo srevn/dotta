@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/filesystem.h"
 
 static identity_t self;
@@ -187,10 +188,7 @@ error_t *identity_init(void) {
     if (pw) {
         self.gid = pw->pw_gid;
         if (pw->pw_name && *pw->pw_name) {
-            self.name = strdup(pw->pw_name);
-            if (!self.name) {
-                return ERROR(ERR_MEMORY, "Failed to copy the user name");
-            }
+            self.name = heap_strdup(pw->pw_name);
         }
     } else {
         self.gid = getgid();
@@ -222,13 +220,15 @@ error_t *identity_init(void) {
     if (self.privileged && self.uid != 0) RETURN_IF_ERROR(drop_to_invoker());
 
     /* The kernel's supplementary list for this process. Sized by asking, never
-     * by NGROUPS_MAX; a list that cannot be read is an empty one, and
+     * by NGROUPS_MAX; a list getgroups cannot read is an empty one, and
      * identity_may_chown then answers no where the kernel might say yes. */
     int n = getgroups(0, NULL);
-    gid_t *groups = n > 0 ? calloc((size_t) n, sizeof(*groups)) : NULL;
-    self.ngroups = groups ? getgroups(n, groups) : 0;
-    if (self.ngroups < 0) self.ngroups = 0;
-    self.groups = groups;
+    if (n > 0) {
+        gid_t *groups = heap_calloc((size_t) n, sizeof(*groups));
+        self.ngroups = getgroups(n, groups);
+        if (self.ngroups < 0) self.ngroups = 0;
+        self.groups = groups;
+    }
 
     /* HOME as the kernel spells it — what getcwd hands back beneath a HOME reached
      * through a link — for the one reader that spells a working directory back
@@ -239,12 +239,7 @@ error_t *identity_init(void) {
      * not this module's question (the HOME rule). */
     char physical[PATH_MAX];
     if (fs_realpath(self.home, physical)) {
-        self.home_physical = strdup(physical);
-        if (!self.home_physical) {
-            return ERROR(
-                ERR_MEMORY, "Failed to copy the home directory's physical spelling"
-            );
-        }
+        self.home_physical = heap_strdup(physical);
     }
 
     /* The environment the identity implies, for libgit2 — which reads $HOME at

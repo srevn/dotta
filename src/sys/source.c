@@ -79,10 +79,7 @@ static void forget(source_filter_t *f) {
 error_t *source_filter_create(source_filter_t **out) {
     CHECK_NULL(out);
 
-    source_filter_t *f = calloc(1, sizeof(*f));
-    if (!f) {
-        return ERROR(ERR_MEMORY, "Failed to allocate source filter");
-    }
+    source_filter_t *f = heap_calloc(1, sizeof(*f));
 
     *out = f;
     return NULL;
@@ -188,10 +185,7 @@ static error_t *place(git_repository *repo, const char *directory, char **out) {
 static error_t *enter(
     source_filter_t *f, const char *path, size_t directory_len
 ) {
-    char *directory = strndup(path, directory_len);
-    if (!directory) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the source directory");
-    }
+    char *directory = heap_strndup(path, directory_len);
 
     free(f->directory);
     free(f->prefix);

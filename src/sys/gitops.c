@@ -205,10 +205,7 @@ error_t *gitops_branch_blocker(
     RETURN_IF_ERROR(gitops_branch_refname(refname, sizeof(refname), name));
 
     string_array_t *branches = NULL;
-    error_t *err = gitops_list_branches(repo, &branches);
-    if (err) {
-        return err;
-    }
+    RETURN_IF_ERROR(gitops_list_branches(repo, &branches));
 
     size_t len = strlen(name);
     for (size_t i = 0; i < branches->count; i++) {
@@ -224,16 +221,13 @@ error_t *gitops_branch_blocker(
             && (other_len > len ? other[len] : name[other_len]) == '/';
 
         if (nested) {
-            *out_blocker = strdup(other);
-            if (!*out_blocker) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate branch name");
-            }
+            *out_blocker = heap_strdup(other);
             break;
         }
     }
 
     string_array_free(branches);
-    return err;
+    return NULL;
 }
 
 /* What a walk of the loose store holds constant: the repository the lookups ask,
@@ -739,11 +733,7 @@ error_t *gitops_fetch_branches(
     }
 
     /* Build array of refspecs for all branches */
-    char **refspecs = calloc(branches->count, sizeof(char *));
-    if (!refspecs) {
-        git_remote_free(remote);
-        return ERROR(ERR_MEMORY, "Failed to allocate refspecs array");
-    }
+    char **refspecs = heap_calloc(branches->count, sizeof(char *));
 
     /* Construct refspecs for each branch */
     error_t *err_result = NULL;
@@ -756,11 +746,7 @@ error_t *gitops_fetch_branches(
         if (err_result) goto cleanup;
 
         /* Allocate buffer for this refspec */
-        refspecs[i] = malloc(DOTTA_REFSPEC_MAX);
-        if (!refspecs[i]) {
-            err_result = ERROR(ERR_MEMORY, "Failed to allocate refspec buffer");
-            goto cleanup;
-        }
+        refspecs[i] = heap_alloc(DOTTA_REFSPEC_MAX);
 
         /* Build refspec: refs/heads/branch:refs/remotes/origin/branch */
         error_t *err_build = gitops_build_refname(
@@ -796,12 +782,10 @@ error_t *gitops_fetch_branches(
 
 cleanup:
     /* Free refspecs array */
-    if (refspecs) {
-        for (size_t i = 0; i < branches->count; i++) {
-            free(refspecs[i]);
-        }
-        free(refspecs);
+    for (size_t i = 0; i < branches->count; i++) {
+        free(refspecs[i]);
     }
+    free(refspecs);
 
     git_remote_free(remote);
     return err_result;
@@ -1056,12 +1040,8 @@ error_t *gitops_get_remote_url(
         );
     }
 
-    *out_url = strdup(url);
+    *out_url = heap_strdup(url);
     git_remote_free(remote);
-
-    if (!*out_url) {
-        return ERROR(ERR_MEMORY, "Failed to duplicate remote URL");
-    }
 
     return NULL;
 }
@@ -1278,11 +1258,7 @@ error_t *gitops_read_blob_content(
         return err;
     }
 
-    void *content = malloc(view.size + 1);
-    if (!content) {
-        gitops_blob_view_close(&view);
-        return ERROR(ERR_MEMORY, "Failed to allocate blob content buffer");
-    }
+    void *content = heap_alloc(view.size + 1);
 
     if (view.size > 0) {
         memcpy(content, view.data, view.size);

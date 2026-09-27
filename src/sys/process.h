@@ -19,8 +19,7 @@
  *   127" — letting callers report the specific reason ("ENOEXEC: bad shebang")
  *   instead of a misleading proxy.
  * - Result struct is stack-allocated by the caller and populated on every code
- *   path. Allocation failure is always surfaced as an error_t, never silently
- *   dropped.
+ *   path.
  *
  * Threading and signal model:
  * - Single-threaded: must not be called concurrently from multiple threads. The
@@ -218,11 +217,11 @@ typedef struct {
  *                    exec_errno carries the errno from the failure.
  * - exec_errno     : errno value reported by the child via the
  *                    self-pipe. Zero when exec_failed is false.
- * - output         : capture buffer, NUL-terminated. Non-NULL only if
- *                    spec.capture was true AND something was read before failure.
- *                    Caller may take ownership by
- *                    setting result.output = NULL before dispose;
- *                    otherwise dispose frees it.
+ * - output         : capture buffer, NUL-terminated. Non-NULL whenever
+ *                    spec.capture was true and the run returned no error — ""
+ *                    for a child that wrote nothing. Caller may take ownership
+ *                    by setting result.output = NULL before dispose; otherwise
+ *                    dispose frees it.
  * - output_len     : number of bytes in output, excluding the
  *                    terminating NUL. Zero when output is NULL. At most
  *                    PROCESS_CAPTURE_MAX.
@@ -258,7 +257,6 @@ typedef struct {
  * Returns a non-NULL error_t* only for failures the primitive itself encountered:
  *   - invalid spec (argv NULL, argv[0] missing, etc.)         → ERR_INVALID_ARG
  *   - pipe(), fork(), or clock_gettime() failed                → ERR_FS
- *   - capture buffer allocation or growth failed               → ERR_MEMORY
  *   - select()/read()/waitpid() returned an unrecoverable error → ERR_FS
  *   - "we tried to kill a timed-out child but it never reaped"  → ERR_FS
  *

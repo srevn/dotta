@@ -19,6 +19,7 @@
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/identity.h"
 
 /* Buffer size for file I/O */
@@ -1259,10 +1260,7 @@ error_t *fs_working_directory(char **out) {
         cwd = physical;
     }
 
-    *out = strdup(cwd);
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to copy the working directory");
-    }
+    *out = heap_strdup(cwd);
 
     return NULL;
 }
@@ -1272,10 +1270,7 @@ error_t *fs_make_absolute(const char *path, char **out) {
     CHECK_NULL(out);
 
     if (path[0] == '/') {
-        *out = strdup(path);
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to duplicate path");
-        }
+        *out = heap_strdup(path);
         return NULL;
     }
 
@@ -1296,13 +1291,7 @@ error_t *fs_canonicalize_path(const char *path, char **out) {
         return error_from_errno(errno, "Failed to resolve path '%s'", path);
     }
 
-    *out = strdup(resolved);
-    if (!*out) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate canonical path for '%s'",
-            path
-        );
-    }
+    *out = heap_strdup(resolved);
 
     return NULL;
 }
@@ -1316,11 +1305,7 @@ error_t *fs_normalize_path(const char *path, char **out) {
 
     /* Component stack: pointers into original string */
     typedef struct { const char *s; size_t n; } comp_t;
-    comp_t *stack = malloc((len / 2 + 2) * sizeof *stack);
-    if (!stack)
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate path components"
-        );
+    comp_t *stack = heap_calloc(len / 2 + 2, sizeof *stack);
 
     /* Parse path and resolve . and ..  */
     size_t depth = 0;
@@ -1346,13 +1331,7 @@ error_t *fs_normalize_path(const char *path, char **out) {
     }
 
     /* Build result (normalization never lengthens) */
-    char *result = malloc(len + 2);
-    if (!result) {
-        free(stack);
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate normalized path"
-        );
-    }
+    char *result = heap_alloc(len + 2);
 
     char *w = result;
     if (is_absolute) *w++ = '/';
@@ -1404,10 +1383,7 @@ error_t *fs_get_parent_dir(const char *path, char **out) {
     }
 
     /* Make a copy without trailing slashes for processing */
-    char *clean_path = strndup(path, path_len);
-    if (!clean_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate clean path");
-    }
+    char *clean_path = heap_strndup(path, path_len);
 
     /* Find last slash in cleaned path */
     const char *last_slash = strrchr(clean_path, '/');
@@ -1415,34 +1391,21 @@ error_t *fs_get_parent_dir(const char *path, char **out) {
     if (!last_slash) {
         /* No slash - current directory */
         free(clean_path);
-        *out = strdup(".");
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to allocate parent path");
-        }
+        *out = heap_strdup(".");
         return NULL;
     }
 
     if (last_slash == clean_path) {
         /* Root directory */
         free(clean_path);
-        *out = strdup("/");
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to allocate parent path");
-        }
+        *out = heap_strdup("/");
         return NULL;
     }
 
     /* Extract parent */
     size_t len = last_slash - clean_path;
-    *out = strndup(clean_path, len);
+    *out = heap_strndup(clean_path, len);
     free(clean_path);
-
-    if (!*out) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate parent path for '%s'",
-            path
-        );
-    }
 
     return NULL;
 }
@@ -1474,10 +1437,7 @@ error_t *fs_path_join(const char *base, const char *component, char **out) {
     size_t total_len = base_len + comp_len + (needs_slash ? 1 : 0);
 
     /* Allocate */
-    char *result = malloc(total_len + 1);
-    if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate joined path");
-    }
+    char *result = heap_alloc(total_len + 1);
 
     /* Build path */
     char *ptr = result;
@@ -1500,20 +1460,14 @@ error_t *fs_expand_tilde(const char *path, char **out) {
     CHECK_NULL(out);
 
     if (path[0] != '~') {
-        *out = strdup(path);
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to duplicate path");
-        }
+        *out = heap_strdup(path);
         return NULL;
     }
 
     const char *home = identity()->home;
     const char *rest = path + 1;  /* skip ~ */
     if (rest[0] == '\0' || (rest[0] == '/' && rest[1] == '\0')) {
-        *out = strdup(home);
-        if (!*out) {
-            return ERROR(ERR_MEMORY, "Failed to duplicate path");
-        }
+        *out = heap_strdup(home);
         return NULL;
     }
     if (rest[0] != '/') {
@@ -1573,13 +1527,7 @@ error_t *fs_read_symlink(const char *linkpath, char **out) {
     }
 
     buf[len] = '\0';
-    *out = strdup(buf);
-    if (!*out) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate symlink target for '%s'",
-            linkpath
-        );
-    }
+    *out = heap_strdup(buf);
 
     return NULL;
 }
@@ -1677,10 +1625,7 @@ error_t *fs_ensure_parent_dirs(const char *path) {
     RETURN_IF_ERROR(validate_path(path));
 
     /* Get parent directory */
-    char *path_copy = strdup(path);
-    if (!path_copy) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path copy");
-    }
+    char *path_copy = heap_strdup(path);
 
     char *parent = dirname(path_copy);
     if (!parent || strcmp(parent, ".") == 0 || strcmp(parent, "/") == 0) {

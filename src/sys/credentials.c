@@ -6,13 +6,13 @@
 
 #include <fcntl.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/secure.h"
 #include "base/string.h"
 #include "sys/identity.h"
@@ -150,12 +150,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
         if (plen == 0) {
             return ERROR(ERR_INVALID_ARG, "URL has empty scheme: %s", url);
         }
-        protocol = malloc(plen + 1);
-        if (!protocol) {
-            return ERROR(ERR_MEMORY, "Failed to allocate URL protocol");
-        }
-        memcpy(protocol, url, plen);
-        protocol[plen] = '\0';
+        protocol = heap_strndup(url, plen);
         authority_start = scheme_sep + 3;
     } else {
         /* No "://" — only SCP-style user@host:path is accepted. A bare hostname
@@ -168,10 +163,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
                 ERR_INVALID_ARG, "URL has no scheme or SCP-style form: %s", url
             );
         }
-        protocol = strdup("ssh");
-        if (!protocol) {
-            return ERROR(ERR_MEMORY, "Failed to allocate URL protocol");
-        }
+        protocol = heap_strdup("ssh");
         is_scp = true;
         authority_start = url;
     }
@@ -209,13 +201,7 @@ error_t *credential_url_parse(const char *url, credential_url_t *out) {
     }
 
     size_t host_len = (size_t) (authority_end - host_start);
-    char *host = malloc(host_len + 1);
-    if (!host) {
-        free(protocol);
-        return ERROR(ERR_MEMORY, "Failed to allocate URL host");
-    }
-    memcpy(host, host_start, host_len);
-    host[host_len] = '\0';
+    char *host = heap_strndup(host_start, host_len);
 
     if (!is_valid_credential_field(protocol) || !is_valid_host(host)) {
         free(host);
@@ -508,13 +494,13 @@ error_t *credential_helper_fill(
      * is fine because the buffer is scrubbed and freed by process_result_deinit
      * below.
      *
-     * strdup'ing each value gives a right-sized heap allocation (no fixed-buffer
-     * truncation) that the caller scrubs and frees with buffer_secure_free. */
+     * Copying each value (heap_strdup) gives a right-sized heap allocation (no
+     * fixed-buffer truncation) that the caller scrubs and frees with
+     * buffer_secure_free. */
     char *user_buf = NULL;
     char *pass_buf = NULL;
-    error_t *parse_err = NULL;
 
-    for (char *p = result.output; p && *p && !parse_err;) {
+    for (char *p = result.output; p && *p;) {
         char *line_end = strchr(p, '\n');
         if (!line_end) break;
         *line_end = '\0';
@@ -526,31 +512,15 @@ error_t *credential_helper_fill(
             const char *value = eq + 1;
 
             if (strcmp(key, "username") == 0 && !user_buf) {
-                user_buf = strdup(value);
-                if (!user_buf) {
-                    parse_err = ERROR(
-                        ERR_MEMORY, "Failed to copy helper username"
-                    );
-                }
+                user_buf = heap_strdup(value);
             } else if (strcmp(key, "password") == 0 && !pass_buf) {
-                pass_buf = strdup(value);
-                if (!pass_buf) {
-                    parse_err = ERROR(
-                        ERR_MEMORY, "Failed to copy helper password"
-                    );
-                }
+                pass_buf = heap_strdup(value);
             }
         }
         p = line_end + 1;
     }
 
     process_result_deinit(&result);
-
-    if (parse_err) {
-        if (user_buf) buffer_secure_free(user_buf, strlen(user_buf) + 1);
-        if (pass_buf) buffer_secure_free(pass_buf, strlen(pass_buf) + 1);
-        return parse_err;
-    }
 
     /* Atomic both-or-neither: a partial response is treated as "no creds" so
      * the caller falls through cleanly. The git credential protocol contracts
@@ -608,13 +578,7 @@ static char *find_ssh_key(void) {
     };
 
     for (int i = 0; key_names[i] != NULL; i++) {
-        size_t path_len = strlen(home) + strlen(key_names[i]) + 2;
-        char *key_path = malloc(path_len);
-        if (!key_path) {
-            continue;
-        }
-
-        snprintf(key_path, path_len, "%s/%s", home, key_names[i]);
+        char *key_path = heap_str_format("%s/%s", home, key_names[i]);
 
         if (file_exists(key_path)) {
             return key_path;
@@ -654,22 +618,17 @@ int credential_try_ssh(
         return -1;
     }
 
-    size_t pub_key_len = strlen(ssh_key_path) + 5;
-    char *pub_key_path = malloc(pub_key_len);
-    int err = -1;
-    if (pub_key_path) {
-        snprintf(pub_key_path, pub_key_len, "%s.pub", ssh_key_path);
-        err = git_credential_ssh_key_new(
-            out,
-            username ? username : "git",
-            pub_key_path,
-            ssh_key_path,
-            NULL  /* empty passphrase — encrypted keys without an agent
-                   * are not supported; users hit ssh-add or fall back
-                   * to the helper path. */
-        );
-        free(pub_key_path);
-    }
+    char *pub_key_path = heap_str_format("%s.pub", ssh_key_path);
+    int err = git_credential_ssh_key_new(
+        out,
+        username ? username : "git",
+        pub_key_path,
+        ssh_key_path,
+        NULL  /* empty passphrase — encrypted keys without an agent
+               * are not supported; users hit ssh-add or fall back
+               * to the helper path. */
+    );
+    free(pub_key_path);
     free(ssh_key_path);
 
     return (err == 0) ? 0 : -1;

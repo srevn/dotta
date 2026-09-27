@@ -49,6 +49,7 @@
 
 #include "base/encoding.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "crypto/kdf.h"
 #include "crypto/mac.h"
 #include "sys/entropy.h"
@@ -135,20 +136,16 @@ _Static_assert(
 );
 
 /**
- * Resolve the epoch's session file path (~/.cache/dotta/session-<fingerprint>).
- * Caller frees.
+ * The epoch's session file path (~/.cache/dotta/session-<fingerprint>).
  *
  * Under the invoker's home (sys/identity) whatever the run's identity: a master
  * set without sudo lands under /home/user, and a later `sudo dotta apply` finds
  * it there rather than under /root.
  *
- * @param epoch    The epoch whose file to name
- * @param out_file File path (caller frees)
- * @return ERR_MEMORY on allocation failure
+ * @param epoch The epoch whose file to name
+ * @return File path (caller frees)
  */
-static error_t *resolve_cache_path(const kdf_epoch_t *epoch, char **out_file) {
-    *out_file = NULL;
-
+static char *session_path(const kdf_epoch_t *epoch) {
     uint8_t fp[KDF_EPOCH_FP_SIZE];
     kdf_epoch_fingerprint(epoch, fp);
 
@@ -157,16 +154,9 @@ static error_t *resolve_cache_path(const kdf_epoch_t *epoch, char **out_file) {
         snprintf(fp_hex + i * 2, 3, "%02x", fp[i]);
     }
 
-    char *file = NULL;
-    int n = asprintf(
-        &file, "%s/" SESSION_CACHE_DIR "/session-%s", identity()->home, fp_hex
+    return heap_str_format(
+        "%s/" SESSION_CACHE_DIR "/session-%s", identity()->home, fp_hex
     );
-    if (n < 0 || !file) {
-        return ERROR(ERR_MEMORY, "Failed to allocate session cache file path");
-    }
-
-    *out_file = file;
-    return NULL;
 }
 
 /**
@@ -207,26 +197,16 @@ error_t *session_save(
     CHECK_NULL(master_key);
     CHECK_NULL(epoch);
 
-    char *cache_path = NULL;
-    char *cache_dir = NULL;
+    char *cache_path = session_path(epoch);
+    char *cache_dir = heap_str_format("%s/" SESSION_CACHE_DIR, identity()->home);
     int fd = -1;
     struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
 
-    error_t *err = resolve_cache_path(epoch, &cache_path);
-    if (err) {
-        goto cleanup;
-    }
-
     /* The one caller that makes the directory. Always-call form: tightens a
      * pre-existing dir with a weaker mode to 0700 instead of leaving it alone.
      * The parent ~/.cache gets the default 0755. */
-    if (asprintf(&cache_dir, "%s/" SESSION_CACHE_DIR, identity()->home) < 0
-        || !cache_dir) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate session cache dir path");
-        goto cleanup;
-    }
-    err = fs_create_dir_with_mode(cache_dir, 0700, true);
+    error_t *err = fs_create_dir_with_mode(cache_dir, 0700, true);
     if (err) {
         err = error_wrap(err, "Failed to ensure session cache directory");
         goto cleanup;
@@ -334,7 +314,7 @@ error_t *session_load(
     CHECK_NULL(epoch);
     CHECK_NULL(out_expires_at);
 
-    char *cache_path = NULL;
+    char *cache_path = session_path(epoch);
     int fd = -1;
     struct session_cache_file cache = { 0 };
     uint8_t cache_key[CRYPTO_KEY_SIZE] = { 0 };
@@ -343,11 +323,7 @@ error_t *session_load(
      * place) from ERR_CRYPTO / expired ERR_NOT_FOUND (the file is unrecoverable
      * from this build's perspective — delete it so the next call starts fresh). */
     bool unlink_on_fail = false;
-
-    error_t *err = resolve_cache_path(epoch, &cache_path);
-    if (err) {
-        goto cleanup;
-    }
+    error_t *err = NULL;
 
     /* Open with O_NOFOLLOW so a symlink-swapped path returns ELOOP rather than
      * reading the unintended file. ENOENT is the "no cache yet" path — distinct
@@ -493,7 +469,7 @@ cleanup:
     if (fd >= 0) {
         close(fd);
     }
-    if (err != NULL && unlink_on_fail && cache_path != NULL) {
+    if (err != NULL && unlink_on_fail) {
         (void) unlink(cache_path);
     }
     crypto_wipe(&cache, sizeof(cache));
@@ -508,12 +484,7 @@ cleanup:
 }
 
 bool session_clear(const kdf_epoch_t *epoch) {
-    char *cache_path = NULL;
-    error_t *err = resolve_cache_path(epoch, &cache_path);
-    if (err) {
-        error_free(err);
-        return false;
-    }
+    char *cache_path = session_path(epoch);
 
     /* Open without O_TRUNC so the existing bytes can be overwritten with zeros
      * before the unlink; O_NOFOLLOW so a symlink swap cannot make this truncate

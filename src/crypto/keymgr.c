@@ -52,6 +52,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/secure.h"
 #include "crypto/cipher.h"
 #include "crypto/kdf.h"
@@ -90,9 +91,7 @@ struct keymgr {
      * with, re-issued by every resolve after. A NULL line means none stands.
      * The asker that met it got the error itself, causes and all — the chain
      * describes an event that happened once, at the row that met it — and what
-     * stands for the run is the one sentence that is true of the run. An allocation
-     * failure leaves no refusal standing rather than a wrong one: the next row
-     * walks the ladder again (bind_proof's fallback, same idiom). */
+     * stands for the run is the one sentence that is true of the run. */
     struct {
         error_code_t code;
         char *line;
@@ -127,19 +126,11 @@ static void wipe_proof(keymgr_proof_t *proof) {
 }
 
 /**
- * The proof takes the witness's binding. An allocation failure leaves the proof
- * unnamed rather than failing it: the binding is the receipt's line, not the
- * verification.
+ * The proof takes the witness's binding.
  */
 static void bind_proof(keymgr_proof_t *proof, const keymgr_witness_t *witness) {
-    proof->witness_profile = strdup(witness->profile);
-    proof->witness_path = strdup(witness->storage_path);
-    if (!proof->witness_profile || !proof->witness_path) {
-        free(proof->witness_profile);
-        free(proof->witness_path);
-        proof->witness_profile = NULL;
-        proof->witness_path = NULL;
-    }
+    proof->witness_profile = heap_strdup(witness->profile);
+    proof->witness_path = heap_strdup(witness->storage_path);
 }
 
 /**
@@ -194,7 +185,7 @@ static void bind_epoch(keymgr *km, const kdf_epoch_t *epoch) {
  */
 static error_t *refuse(keymgr *km, error_t *err) {
     free(km->refusal.line);
-    km->refusal.line = strdup(error_message(err));
+    km->refusal.line = heap_strdup(error_message(err));
     km->refusal.code = err->code;
 
     return err;
@@ -748,9 +739,9 @@ bool keymgr_witness(
     const char **out_storage_path
 ) {
     /* One test for the pair: the two strings are set together or not at all —
-     * `bind_proof` writes both or neither, `install_slot` moves them together.
-     * The profile therefore answers for the path, and the invariant is kept where
-     * it is established rather than re-tested here. */
+     * `bind_proof` writes both, `install_slot` moves them together. The profile
+     * therefore answers for the path, and the invariant is kept where it is
+     * established rather than re-tested here. */
     if (!km || !km->has_key || !km->witness_profile) {
         return false;
     }

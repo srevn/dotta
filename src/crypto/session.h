@@ -71,8 +71,8 @@
  * @param epoch      The epoch the master derives under: names the file and keys
  *                   the obfuscation (non-NULL)
  * @param expires_at Unix seconds after which the file refuses to load; 0 = never
- * @return NULL on success; ERR_FS on I/O failure; ERR_MEMORY on allocation failure;
- *         ERR_CRYPTO if the nonce cannot be drawn
+ * @return NULL on success; ERR_FS on I/O failure; ERR_CRYPTO if the nonce cannot
+ *         be drawn
  */
 error_t *session_save(
     const uint8_t master_key[KDF_KEY_SIZE],
@@ -117,9 +117,7 @@ error_t *session_load(
  * of the overwrite is silent. Nothing to do when there is no file.
  *
  * `false` is "this removed nothing", not "nothing was there": the file may have
- * been absent, or the path — the one allocation on the way in — may not have
- * been buildable. Telling those apart would cost the caller a signature it has
- * no use for on a run already out of memory.
+ * been absent, or its unlink refused.
  *
  * @param epoch The epoch whose file to remove (non-NULL)
  * @return true iff a file was there and is gone

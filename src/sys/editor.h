@@ -14,12 +14,13 @@
 /**
  * Get editor from environment with fallback chain
  *
- * Priority: DOTTA_EDITOR → VISUAL → EDITOR → default_editor
+ * Priority: DOTTA_EDITOR → VISUAL → EDITOR → vi. The fallback is this module's
+ * alone, so every command that opens an editor opens the one its help names
+ * (cmds/bootstrap.c, cmds/ignore.c).
  *
- * @param default_editor Default editor if no env vars set (e.g., "nano", "vi")
- * @return Editor command (never NULL, returns default_editor if nothing found)
+ * @return Editor command (never NULL; vi where no variable names one)
  */
-const char *editor_get_from_env(const char *default_editor);
+const char *editor_get_from_env(void);
 
 /**
  * Launch editor for a file, in the foreground
@@ -43,9 +44,8 @@ error_t *editor_launch(const char *editor, const char *file_path);
  * Convenience function that combines editor_get_from_env() and editor_launch().
  *
  * @param file_path Path to file to edit (must not be NULL)
- * @param default_editor Default editor if no env vars set
  * @return Error or NULL on success
  */
-error_t *editor_launch_with_env(const char *file_path, const char *default_editor);
+error_t *editor_launch_with_env(const char *file_path);
 
 #endif /* DOTTA_EDITOR_H */

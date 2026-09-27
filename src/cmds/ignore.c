@@ -361,7 +361,7 @@ static error_t *edit_content_via_editor(
     }
     close(fd);
 
-    error_t *err = editor_launch_with_env(tmpfile, "vi");
+    error_t *err = editor_launch_with_env(tmpfile);
     if (err) {
         unlink(tmpfile);
         free(tmpfile);

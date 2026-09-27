@@ -12,9 +12,9 @@
 /**
  * Get editor from environment with fallback chain
  *
- * Priority: DOTTA_EDITOR → VISUAL → EDITOR → default_editor
+ * Priority: DOTTA_EDITOR → VISUAL → EDITOR → vi
  */
-const char *editor_get_from_env(const char *default_editor) {
+const char *editor_get_from_env(void) {
     const char *editor = getenv("DOTTA_EDITOR");
     if (editor && *editor) {
         return editor;
@@ -30,7 +30,7 @@ const char *editor_get_from_env(const char *default_editor) {
         return editor;
     }
 
-    return default_editor ? default_editor : "vi";
+    return "vi";
 }
 
 /**
@@ -88,12 +88,8 @@ error_t *editor_launch(const char *editor, const char *file_path) {
  *
  * Convenience function that combines editor_get_from_env() and editor_launch().
  */
-error_t *editor_launch_with_env(
-    const char *file_path,
-    const char *default_editor
-) {
+error_t *editor_launch_with_env(const char *file_path) {
     CHECK_NULL(file_path);
 
-    const char *editor = editor_get_from_env(default_editor);
-    return editor_launch(editor, file_path);
+    return editor_launch(editor_get_from_env(), file_path);
 }

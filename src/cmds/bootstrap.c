@@ -173,8 +173,8 @@ static error_t *bootstrap_edit(
         return error_wrap(err, "Failed to extract bootstrap script");
     }
 
-    /* Priority: DOTTA_EDITOR, VISUAL, EDITOR, nano. */
-    err = editor_launch_with_env(temp_path, "nano");
+    /* The user's editor: DOTTA_EDITOR, VISUAL, EDITOR, then vi (sys/editor.h) */
+    err = editor_launch_with_env(temp_path);
     if (err) {
         err = error_wrap(err, "Failed to edit bootstrap script");
         goto cleanup;

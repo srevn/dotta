@@ -19,6 +19,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
@@ -433,11 +434,7 @@ static error_t *update_profile(
     /* The capture list can hold every item; the walk fills it with the ones that
      * landed. A rows-only call has nothing to capture and no list to size. */
     if (item_count > 0) {
-        commit->captured = calloc(item_count, sizeof(*commit->captured));
-        if (!commit->captured) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
-            goto cleanup;
-        }
+        commit->captured = heap_calloc(item_count, sizeof(*commit->captured));
     }
 
     size_t captured_file_count = 0;
@@ -804,11 +801,7 @@ static error_t *update_profile(
     size_t named_count = commit->captured_count + commit->deleted.count +
         commit->retired.count;
     if (named_count > 0) {
-        storage_paths = malloc(named_count * sizeof(*storage_paths));
-        if (!storage_paths) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate storage paths array");
-            goto cleanup;
-        }
+        storage_paths = heap_calloc(named_count, sizeof(*storage_paths));
 
         size_t named = 0;
         for (size_t i = 0; i < commit->captured_count; i++) {
@@ -1118,11 +1111,7 @@ static error_t *update_execute(
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one. */
-    commits = calloc(enabled->count, sizeof(commit_t));
-    if (!commits) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate commit bookkeeping");
-        goto cleanup;
-    }
+    commits = heap_calloc(enabled->count, sizeof(commit_t));
 
     for (size_t p = 0; p < enabled->count; p++) {
         const char *profile = enabled->items[p];

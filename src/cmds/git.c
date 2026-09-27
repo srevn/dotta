@@ -12,6 +12,7 @@
 
 #include "base/args.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/process.h"
 
 /**
@@ -46,11 +47,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 
     /* Build argv for execvp Format: "git" "-C" "<repo-path>" <user-args...> NULL */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
-    char **argv = malloc((size_t) total_args * sizeof(char *));
-    if (!argv) {
-        fprintf(stderr, "Error: Failed to allocate memory\n");
-        return 1;
-    }
+    char **argv = heap_calloc((size_t) total_args, sizeof(char *));
 
     argv[0] = "git";
     argv[1] = "-C";

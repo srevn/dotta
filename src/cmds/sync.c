@@ -69,17 +69,8 @@ typedef struct {
  * Create sync results
  */
 static sync_results_t *sync_results_create(size_t profile_count) {
-    sync_results_t *results = calloc(1, sizeof(sync_results_t));
-    if (!results) {
-        return NULL;
-    }
-
-    results->profiles = calloc(profile_count, sizeof(profile_sync_result_t));
-    if (!results->profiles) {
-        free(results);
-        return NULL;
-    }
-
+    sync_results_t *results = heap_calloc(1, sizeof(sync_results_t));
+    results->profiles = heap_calloc(profile_count, sizeof(profile_sync_result_t));
     results->profile_count = profile_count;
     return results;
 }
@@ -275,15 +266,7 @@ static error_t *sync_fetch_phase(
      * or Git's error (gitops_reference_exists): a ref this run cannot read is
      * not "never pushed", and read as that it left the profile out of the fetch
      * without a word. */
-    char **branch_names = malloc(profiles->count * sizeof(char *));
-    if (!branch_names) {
-        if (ephemeral) {
-            output_clear_line(out);
-        } else {
-            output_endline(out, OUTPUT_NORMAL);
-        }
-        return ERROR(ERR_MEMORY, "Failed to allocate branch names array");
-    }
+    char **branch_names = heap_calloc(profiles->count, sizeof(char *));
 
     error_t *err = NULL;
     size_t fetch_count = 0;
@@ -386,10 +369,7 @@ static error_t *sync_analyze_phase(
     for (size_t i = 0; i < profiles->count; i++) {
         profile_sync_result_t *result = &results->profiles[i];
 
-        result->profile = strdup(profiles->items[i]);
-        if (!result->profile) {
-            return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-        }
+        result->profile = heap_strdup(profiles->items[i]);
 
         /* Analyze state */
         upstream_info_t info;
@@ -1611,10 +1591,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
 
     /* Create results tracker */
     results = sync_results_create(scope_profiles(scope)->count);
-    if (!results) {
-        err = ERROR(ERR_MEMORY, "Failed to create results");
-        goto cleanup;
-    }
 
     /* Auto-detect remote early — fail fast before expensive workspace load. URL
      * is resolved alongside the name; the credential helper consumes it when

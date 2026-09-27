@@ -15,6 +15,7 @@
 #include "base/args.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "cmds/completion.h"
@@ -578,7 +579,7 @@ static char *build_revert_commit_message(
     const char *custom_message
 ) {
     if (custom_message && custom_message[0]) {
-        return strdup(custom_message);
+        return heap_strdup(custom_message);
     }
 
     /* Generate message using template system */

@@ -156,12 +156,7 @@ static error_t *add_patterns_to_content(
         max_size += strlen(patterns[i]) + 1; /* pattern + newline */
     }
 
-    char *result = malloc(max_size + 1);  /* +1 for null terminator */
-    if (!result) {
-        return ERROR(
-            ERR_MEMORY, "Failed to allocate content buffer"
-        );
-    }
+    char *result = heap_alloc(max_size + 1);  /* +1 for null terminator */
 
     /* Seed result with existing content, ended by a newline */
     memcpy(result, existing_content, existing_len);
@@ -238,15 +233,9 @@ static error_t *remove_patterns_from_content(
 
     /* The new content (the same size or smaller); each request's rule, its span
      * asked once and read on every line; and whether a line named it */
-    char *result = malloc(strlen(existing_content) + 1);
-    size_t *spans = calloc(pattern_count, sizeof(*spans));
-    bool *found = calloc(pattern_count, sizeof(*found));
-    if (!result || !spans || !found) {
-        free(result);
-        free(spans);
-        free(found);
-        return ERROR(ERR_MEMORY, "Failed to allocate content buffer");
-    }
+    char *result = heap_alloc(strlen(existing_content) + 1);
+    size_t *spans = heap_calloc(pattern_count, sizeof(*spans));
+    bool *found = heap_calloc(pattern_count, sizeof(*found));
     for (size_t i = 0; i < pattern_count; i++) {
         spans[i] = gitignore_rule_span(patterns[i], strlen(patterns[i]));
     }
@@ -554,10 +543,7 @@ static error_t *modify_dottaignore(
 
     /* Seed with default/template when file is absent and adds exist. */
     if (!owned && add_count > 0) {
-        owned = strdup(scope->default_seed);
-        if (!owned) {
-            return ERROR(ERR_MEMORY, "Failed to allocate default content");
-        }
+        owned = heap_strdup(scope->default_seed);
     }
 
     size_t total_added = 0;

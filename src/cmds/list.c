@@ -18,6 +18,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
@@ -184,11 +185,7 @@ static error_t *list_profiles(
     size_t max_counts_len = 0;
     size_t max_size_len = 0;
     if (verbose) {
-        lines = calloc(branches->count, sizeof(*lines));
-        if (!lines) {
-            string_array_free(branches);
-            return ERROR(ERR_MEMORY, "Failed to allocate profile lines");
-        }
+        lines = heap_calloc(branches->count, sizeof(*lines));
 
         for (size_t i = 0; i < branches->count; i++) {
             const char *bname = branches->items[i];

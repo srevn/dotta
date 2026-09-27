@@ -88,6 +88,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/string.h"
@@ -935,11 +936,7 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
 
     for (size_t i = 0; i < collected && !err; i++) {
         /* One copy spells every prefix of this entry in turn. */
-        char *rung = strdup(list->items[i].rel_path);
-        if (!rung) {
-            err = ERROR(ERR_MEMORY, "Failed to copy a path for the climb");
-            break;
-        }
+        char *rung = heap_strdup(list->items[i].rel_path);
 
         for (char *slash = strchr(rung, '/'); slash && !err;
             slash = strchr(slash + 1, '/')) {
@@ -1005,9 +1002,6 @@ static error_t *resolve_destinations(
         list->items[i].dest_path = export_path_join(
             arena, root, list->items[i].rel_path
         );
-        if (!list->items[i].dest_path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate destination path");
-        }
     }
 
     return NULL;

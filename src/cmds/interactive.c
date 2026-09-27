@@ -20,6 +20,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/terminal.h"
 #include "core/manifest.h"
@@ -121,50 +122,38 @@ static void prompt_close(prompt_t *p) {
     p->buffer[0] = '\0';
 }
 
-/* Append one byte; grow geometrically. Returns -1 on OOM. */
-static int prompt_push(prompt_t *p, char c) {
+/* Append one byte; grow geometrically — a capacity whose double no size can hold
+ * is exhaustion (base/heap.h). */
+static void prompt_push(prompt_t *p, char c) {
     if (p->len + 1 >= p->cap) {
-        size_t new_cap = p->cap * 2;
-        char *new_buf = realloc(p->buffer, new_cap);
-        if (!new_buf) {
-            return -1;
-        }
-        p->buffer = new_buf;
-        p->cap = new_cap;
+        if (p->cap > SIZE_MAX / 2) heap_die(SIZE_MAX);
+        p->cap *= 2;
+        p->buffer = heap_realloc(p->buffer, p->cap);
     }
     p->buffer[p->len++] = c;
     p->buffer[p->len] = '\0';
-    return 0;
 }
 
-/* Replace the buffer with a copy of src (empty when src is NULL/empty). On OOM
- * the buffer is left empty so the caller can fall back to a fresh prompt. */
-static int prompt_set(prompt_t *p, const char *src) {
+/* Replace the buffer with a copy of src (empty when src is NULL/empty), grown
+ * as prompt_push grows it. */
+static void prompt_set(prompt_t *p, const char *src) {
     if (!src || *src == '\0') {
         p->len = 0;
         p->buffer[0] = '\0';
-        return 0;
+        return;
     }
     size_t src_len = strlen(src);
     size_t need = src_len + 1;
     if (need > p->cap) {
-        size_t new_cap = p->cap;
-        while (new_cap < need) {
-            new_cap *= 2;
+        while (p->cap < need) {
+            if (p->cap > SIZE_MAX / 2) heap_die(SIZE_MAX);
+            p->cap *= 2;
         }
-        char *new_buf = realloc(p->buffer, new_cap);
-        if (!new_buf) {
-            p->len = 0;
-            p->buffer[0] = '\0';
-            return -1;
-        }
-        p->buffer = new_buf;
-        p->cap = new_cap;
+        p->buffer = heap_realloc(p->buffer, p->cap);
     }
     memcpy(p->buffer, src, src_len);
     p->buffer[src_len] = '\0';
     p->len = src_len;
-    return 0;
 }
 
 /* Opening helpers — mirror prompt_close so the input dispatcher never reaches
@@ -180,16 +169,13 @@ static void prompt_open_edit(prompt_t *p, size_t item_index, const char *current
     p->active = true;
     p->enable = false;
     p->item_index = item_index;
-    /* OOM here is acceptable: fall back to an empty buffer rather than refuse
-     * to open the prompt; the user can type a fresh path. */
-    (void) prompt_set(p, current);
+    /* Buffer holds the row's target (empty when it has none). */
+    prompt_set(p, current);
 }
 
 /* --- View lifecycle --- */
 
-/* Allocate view->items and populate name/enabled. On failure, item_count is set
- * to the populated prefix and view_free (via view_create's fail path) releases
- * what was allocated. */
+/* Allocate view->items and populate name/enabled. */
 static error_t *build_items(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
@@ -221,17 +207,8 @@ static error_t *build_items(
         hashmap_set(profile_map, all_profiles->items[i], (void *) (uintptr_t) (i + 1));
     }
 
-    used = calloc(all_profiles->count, sizeof(bool));
-    if (!used) {
-        err = error_create(ERR_MEMORY, "failed to allocate tracking array");
-        goto cleanup;
-    }
-
-    view->items = calloc(all_profiles->count, sizeof(item_t));
-    if (!view->items) {
-        err = error_create(ERR_MEMORY, "failed to allocate profile items");
-        goto cleanup;
-    }
+    used = heap_calloc(all_profiles->count, sizeof(bool));
+    view->items = heap_calloc(all_profiles->count, sizeof(item_t));
 
     /* Pass A: enabled profiles in their saved order. */
     for (size_t i = 0; i < enabled_profiles.count; i++) {
@@ -243,11 +220,7 @@ static error_t *build_items(
         }
         size_t idx = (size_t) (uintptr_t) idx_ptr - 1;
         used[idx] = true;
-        view->items[item_idx].name = strdup(name);
-        if (!view->items[item_idx].name) {
-            err = error_create(ERR_MEMORY, "failed to duplicate profile name");
-            goto cleanup;
-        }
+        view->items[item_idx].name = heap_strdup(name);
         view->items[item_idx].enabled = true;
         item_idx++;
     }
@@ -255,11 +228,7 @@ static error_t *build_items(
     /* Pass B: remaining profiles, disabled, in list order. */
     for (size_t i = 0; i < all_profiles->count; i++) {
         if (used[i]) continue;
-        view->items[item_idx].name = strdup(all_profiles->items[i]);
-        if (!view->items[item_idx].name) {
-            err = error_create(ERR_MEMORY, "failed to duplicate profile name");
-            goto cleanup;
-        }
+        view->items[item_idx].name = heap_strdup(all_profiles->items[i]);
         view->items[item_idx].enabled = false;
         item_idx++;
     }
@@ -301,12 +270,7 @@ static error_t *read_targets(
         const char *bound = it->enabled
             ? state_target(deploy_state, it->name) : NULL;
         if (bound) {
-            it->target = strdup(bound);
-            if (!it->target) {
-                return error_create(
-                    ERR_MEMORY, "failed to duplicate target for profile '%s'", it->name
-                );
-            }
+            it->target = heap_strdup(bound);
         }
 
         error_t *err = profile_needs_target(repo, it->name, &it->needs_target);
@@ -338,10 +302,7 @@ static inline void view_cleanup(view_t **v) {
 static error_t *view_create(
     git_repository *repo, state_t *deploy_state, view_t **out
 ) {
-    view_t *view = calloc(1, sizeof(view_t));
-    if (!view) {
-        return error_create(ERR_MEMORY, "failed to allocate interactive view");
-    }
+    view_t *view = heap_calloc(1, sizeof(view_t));
 
     error_t *err = build_items(repo, deploy_state, view);
     if (err) goto fail;
@@ -352,12 +313,7 @@ static error_t *view_create(
     /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
      * on the common typing path. */
     view->prompt.cap = PROMPT_INITIAL_CAP;
-    view->prompt.buffer = calloc(view->prompt.cap, sizeof(char));
-    if (!view->prompt.buffer) {
-        view->prompt.cap = 0;
-        err = error_create(ERR_MEMORY, "failed to allocate prompt buffer");
-        goto fail;
-    }
+    view->prompt.buffer = heap_calloc(view->prompt.cap, sizeof(char));
 
     *out = view;
     return NULL;
@@ -492,17 +448,11 @@ static error_t *plan_classify(
          * and seed the next prompt with it. It takes the row's instead. Not a
          * reconciliation with the store: what is put back is this save's own
          * decision, which is why a NULL (no offer) and an equal string (nothing
-         * declined) are both left alone. The copy is taken before the old string
-         * goes, so an allocation that fails leaves the item owning what it already
-         * owned and free_items frees it once; strdup and not the arena, because
-         * free_items frees these with free(). */
+         * declined) are both left alone. The copy is the heap's and not the
+         * arena's, because free_items frees these with free(). */
         if (!plan->needs_enable[i] && strcmp(it->target, persisted_target) != 0) {
-            char *kept = strdup(persisted_target);
-            if (!kept) {
-                return ERROR(ERR_MEMORY, "Failed to duplicate the row's target");
-            }
             free(it->target);
-            it->target = kept;
+            it->target = heap_strdup(persisted_target);
         }
     }
 
@@ -777,8 +727,7 @@ static int view_render(const view_t *view) {
 /* Prompt mode: every navigation/save/quit key loses its TUI meaning by key-set
  * shadowing — they are valid bytes in a path. Only Enter (commit),
  * Esc/Ctrl-C/Ctrl-D (cancel), Backspace, and printable bytes are honored. Effects
- * are in-memory and recoverable; OOM at commit keeps the prompt open so the user
- * can retry. */
+ * are in-memory and recoverable. */
 static interactive_result_t handle_key_prompt(view_t *view, int key) {
     prompt_t *p = &view->prompt;
 
@@ -797,10 +746,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
             error_t *err = path_input_normalize(p->buffer, &captured);
             if (err) {
                 error_free(err);
-                captured = strdup(p->buffer);
-            }
-            if (!captured) {
-                return INTERACTIVE_CONTINUE;
+                captured = heap_strdup(p->buffer);
             }
             item_t *it = &view->items[p->item_index];
             /* Replace whatever target was on the item (NULL for capture, the
@@ -834,7 +780,7 @@ static interactive_result_t handle_key_prompt(view_t *view, int key) {
              * terminal layer maps both 0x7F and 0x08 to TERM_KEY_BACKSPACE, so
              * 0x7F should be unreachable. */
             if (key >= 0x20 && key <= 0xFF && key != 0x7F) {
-                (void) prompt_push(p, (char) key);
+                prompt_push(p, (char) key);
             }
             return INTERACTIVE_CONTINUE;
     }

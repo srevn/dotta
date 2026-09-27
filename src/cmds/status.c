@@ -14,6 +14,7 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/timeutil.h"
 #include "cmds/completion.h"
@@ -422,16 +423,9 @@ static void status_print_workspace(
          * scoped_diverged slots, as many as a section can hold) Memory layout:
          * [conflicts][unverifiable][uncommitted][undeployed][new_files]
          * [orphaned][reassigned][squatted][displaced] This provides cache-friendly
-         * contiguous memory with single malloc/free. */
+         * contiguous memory with a single allocation and free. */
         const workspace_item_t **categorized =
-            malloc(scoped_diverged * 9 * sizeof(workspace_item_t *));
-        if (!categorized) {
-            output_error(
-                out, "Failed to allocate memory for status display (%zu items)",
-                scoped_diverged
-            );
-            return;
-        }
+            heap_calloc(scoped_diverged, 9 * sizeof(workspace_item_t *));
 
         /* Category arrays (pointer arithmetic into single allocation) */
         const workspace_item_t **conflicts = categorized;

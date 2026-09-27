@@ -51,11 +51,12 @@ void *arena_calloc(arena_t *arena, size_t count, size_t size);
 char *arena_strdup(arena_t *arena, const char *str);
 
 /**
- * Arena-backed strndup: copies up to `n` bytes from `str` and null-terminates.
+ * Arena-backed strndup: copies up to `n` bytes from `str`, stopping at a NUL,
+ * and null-terminates — strndup(3)'s sense, so the copy's strlen is its length.
  *
- * Never reads past `str + n`, even if no null byte is present in that range.
- * Returns NULL if `str` is NULL; a zero-length (but null-terminated) buffer when
- * `n == 0`.
+ * Never reads past `str + n`, even if no null byte is present in that range,
+ * and never past the NUL of a string shorter than `n`. Returns NULL if `str` is
+ * NULL; "" when `n == 0`.
  *
  * @return Arena-allocated copy, or NULL if str is NULL or OOM.
  */

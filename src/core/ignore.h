@@ -93,7 +93,7 @@ typedef struct gitignore_ruleset gitignore_ruleset_t;
  *
  * Lifetime: the arena's. The builder, its profile cache and every ruleset
  * `ignore_rules_for_profile` returns are allocated in the arena
- * `ignore_rules_create` borrows, and live until that arena is destroyed — nothing
+ * `ignore_rules_create` borrows, and live until that arena is freed — nothing
  * frees them one by one. Per-profile rulesets are memoised for the life of the
  * builder.
  *
@@ -155,7 +155,7 @@ error_t *ignore_excludes_compile(
  *   - `repo` is borrowed; the builder must not outlive the repo handle.
  *   - `arena` is borrowed; the builder allocates itself, the baseline's rules,
  *     the profile cache and per-profile rulesets into it, and every one of them
- *     lives until the arena is destroyed. In practice the arena is command-scoped
+ *     lives until the arena is freed. In practice the arena is command-scoped
  *     (`ctx->arena`).
  *   - `config->ignore_ruleset` is borrowed, and so are the strings its rules
  *     hold: config_load compiled the layer into the config's arena, which lives

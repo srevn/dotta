@@ -191,7 +191,7 @@ static size_t unescape_spaces(char *str) {
  * cap counts rules stored, never lines read — a blank or comment line at index
  * 10 000 must not falsely trip the limit. Arena allocators have no in-place
  * realloc, so growth allocates a larger block and copies; the old block is
- * reclaimed on arena_destroy. The rule comes by value: the caller's copy, taken
+ * reclaimed on arena_free. The rule comes by value: the caller's copy, taken
  * before any growth runs, so the block it was read from need not outlive the
  * push. */
 static error_t *push_rule(

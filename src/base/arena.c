@@ -3,15 +3,21 @@
  *
  * Singly-linked list of contiguous blocks. The first block is sized by the caller;
  * subsequent blocks double the previous capacity (or match
- * the request, whichever is larger).  Typical workloads fit in one block.
+ * the request, whichever is larger).  Typical workloads fit in one block. Every
+ * block is the heap's, which dies rather than answer NULL (base/heap.h), and so
+ * does a request whose size no block could hold.
  */
 
 #include "base/arena.h"
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "base/error.h"
+#include "base/heap.h"
 
 #define ARENA_DEFAULT_CAPACITY 4096
 #define ARENA_ALIGNMENT        8
@@ -31,29 +37,35 @@ struct arena {
 
 /* --- Helpers ------------------------------------------------------- */
 
-static inline size_t align_up(size_t n) {
-    return (n + ARENA_ALIGNMENT - 1) & ~((size_t) ARENA_ALIGNMENT - 1);
+/* A size rounded up to the alignment; one no rounding can represent is
+ * exhaustion. */
+static size_t arena_align(size_t size) {
+    if (size > SIZE_MAX - (ARENA_ALIGNMENT - 1)) heap_die(size);
+
+    return (size + ARENA_ALIGNMENT - 1) & ~((size_t) ARENA_ALIGNMENT - 1);
 }
 
 /**
- * Allocate a new block with at least min_cap usable bytes. Doubles prev_cap for
- * amortised growth; falls back to min_cap on overflow.
+ * Chain a new block of at least min_capacity usable bytes onto the arena, the
+ * current one. Doubles the current block's capacity for amortised growth; falls
+ * back to min_capacity on overflow.
  */
-static arena_block_t *block_new(size_t prev_cap, size_t min_cap) {
-    size_t cap = prev_cap * 2;
-    if (cap < prev_cap) cap = min_cap;      /* multiplication overflow */
-    if (cap < min_cap)  cap = min_cap;
+static void arena_chain(arena_t *arena, size_t min_capacity) {
+    arena_block_t *current = arena->current;
 
-    if (cap > SIZE_MAX - sizeof(arena_block_t))
-        return NULL;
+    size_t capacity = current ? current->capacity * 2 : 0;
+    if (current && capacity < current->capacity) capacity = min_capacity;   /* multiplication overflow */
+    if (capacity < min_capacity) capacity = min_capacity;
 
-    arena_block_t *b = malloc(sizeof(arena_block_t) + cap);
-    if (!b) return NULL;
+    /* The header and its bytes are one request, and one no size can hold is
+     * exhaustion. */
+    if (capacity > SIZE_MAX - sizeof(arena_block_t)) heap_die(SIZE_MAX);
 
-    b->next = NULL;
-    b->capacity = cap;
-    b->used = 0;
-    return b;
+    arena_block_t *block = heap_alloc(sizeof(arena_block_t) + capacity);
+    block->next = current;
+    block->capacity = capacity;
+    block->used = 0;
+    arena->current = block;
 }
 
 /* --- Public API ---------------------------------------------------- */
@@ -62,39 +74,26 @@ arena_t *arena_create(size_t initial_capacity) {
     if (initial_capacity == 0)
         initial_capacity = ARENA_DEFAULT_CAPACITY;
 
-    arena_t *arena = malloc(sizeof(*arena));
-    if (!arena) return NULL;
+    arena_t *arena = heap_alloc(sizeof(*arena));
+    arena->current = NULL;
+    arena_chain(arena, initial_capacity);
 
-    arena_block_t *block = block_new(0, initial_capacity);
-    if (!block) {
-        free(arena);
-        return NULL;
-    }
-
-    arena->current = block;
     return arena;
 }
 
 void *arena_alloc(arena_t *arena, size_t size) {
-    if (!arena) return NULL;
+    CHECK_NULL(arena);
 
-    /* Zero-byte request: return a non-NULL sentinel so callers can distinguish
-     * from OOM. The pointer aliases the current block's data and must not be
-     * dereferenced. */
+    /* Zero-byte request: a non-NULL pointer. It aliases the current block's data
+     * and must not be dereferenced. */
     if (size == 0) return arena->current->data;
 
-    size_t aligned = align_up(size);
-    if (aligned < size) return NULL;        /* alignment overflow */
-
+    size_t aligned = arena_align(size);
     arena_block_t *block = arena->current;
 
     if (aligned > block->capacity - block->used) {
-        arena_block_t *nb = block_new(block->capacity, aligned);
-        if (!nb) return NULL;
-
-        nb->next = block;
-        arena->current = nb;
-        block = nb;
+        arena_chain(arena, aligned);
+        block = arena->current;
     }
 
     void *ptr = block->data + block->used;
@@ -103,12 +102,12 @@ void *arena_alloc(arena_t *arena, size_t size) {
 }
 
 void *arena_calloc(arena_t *arena, size_t count, size_t size) {
-    if (count && size > SIZE_MAX / count)
-        return NULL;
+    /* A product no memory could hold is a request no allocation meets. */
+    if (count != 0 && size > SIZE_MAX / count) heap_die(SIZE_MAX);
 
     size_t total = count * size;
     void *ptr = arena_alloc(arena, total);
-    if (ptr) memset(ptr, 0, total);
+    memset(ptr, 0, total);
     return ptr;
 }
 
@@ -117,7 +116,7 @@ char *arena_strdup(arena_t *arena, const char *str) {
 
     size_t len = strlen(str) + 1;
     char *dst = arena_alloc(arena, len);
-    if (dst) memcpy(dst, str, len);
+    memcpy(dst, str, len);
     return dst;
 }
 
@@ -130,42 +129,30 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n) {
     size_t len = strnlen(str, n);
 
     char *dst = arena_alloc(arena, len + 1);
-    if (!dst) return NULL;
-
     memcpy(dst, str, len);
     dst[len] = '\0';
     return dst;
 }
 
 char *arena_str_format(arena_t *arena, const char *fmt, ...) {
-    if (!fmt) return NULL;
+    CHECK_NULL(fmt);
 
     va_list args;
     va_start(args, fmt);
 
-    /* Pass 1: size the buffer. */
+    /* Pass 1: size the buffer. A format that cannot be formatted is its writer's
+     * bug. */
     va_list args_copy;
     va_copy(args_copy, args);
     int len = vsnprintf(NULL, 0, fmt, args_copy);
     va_end(args_copy);
-
-    if (len < 0) {
-        va_end(args);
-        return NULL;
-    }
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
 
     /* Pass 2: allocate and format. The +1 is the null terminator; vsnprintf's
      * `len` excludes it but its `size` argument includes it. */
     char *buf = arena_alloc(arena, (size_t) len + 1);
-    if (!buf) {
-        va_end(args);
-        return NULL;
-    }
-
-    int written = vsnprintf(buf, (size_t) len + 1, fmt, args);
+    vsnprintf(buf, (size_t) len + 1, fmt, args);
     va_end(args);
-
-    if (written < 0) return NULL;
 
     return buf;
 }
@@ -185,7 +172,7 @@ void arena_reset(arena_t *arena) {
     arena->current = b;
 }
 
-void arena_destroy(arena_t *arena) {
+void arena_free(arena_t *arena) {
     if (!arena) return;
 
     arena_block_t *b = arena->current;

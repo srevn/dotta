@@ -74,7 +74,7 @@
  *   Cleanup chain          The engine is signal-safe and key-zero-safe: no
  *                          `exit()`, no libc-free in the error path, no
  *                          process-level state. The dispatcher owns the arena
- *                          and destroys it after dispatch returns.
+ *                          and frees it after dispatch returns.
  *
  * Picking a subcommand pattern
  * ----------------------------

@@ -57,7 +57,7 @@
  * Lifetime: every ruleset and rule is arena-backed, and there is no separate
  * free. A rule's strings live in the arena it was parsed into; a ruleset composed
  * from another holds copies of the records and borrows those strings, so every
- * arena a ruleset borrows from must outlive it — resetting or destroying one
+ * arena a ruleset borrows from must outlive it — resetting or freeing one
  * invalidates every ruleset that borrows it.
  *
  * Thread safety: concurrent readers of a ruleset are safe once every append to
@@ -164,7 +164,7 @@ error_t *gitignore_ruleset_append_pattern(
  * A compiled ruleset is not read again. The strings its records hold are borrowed,
  * not copied — whatever arena backs them must outlive `ruleset`, and transitively:
  * a ruleset that was itself composed lends strings it borrowed. Appending to
- * `from` later does not reach `ruleset`; resetting or destroying a backing arena
+ * `from` later does not reach `ruleset`; resetting or freeing a backing arena
  * invalidates it. `from` may be `ruleset` itself, and a NULL `from` is an absent
  * layer that appends nothing.
  *

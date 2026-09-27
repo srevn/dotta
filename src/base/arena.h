@@ -1,17 +1,19 @@
 /**
  * arena.h - Bump allocator with O(1) bulk deallocation
  *
- * Chained-block arena: allocations bump a pointer within the current
- * block; when exhausted, a new block is chained.  All memory is freed
- * in a single arena_destroy() call.
+ * Chained-block arena: an allocation bumps a pointer within the current block;
+ * one that does not fit chains a new block. Everything the arena holds is freed
+ * in a single arena_free() call.
  *
- * All allocations are 8-byte aligned.  Returns NULL only on OOM.
+ * An allocation cannot fail: it succeeds, or the run dies of exhaustion
+ * (base/heap.h heap_die), so no answer here is NULL but the copy of a NULL string.
+ * All allocations are 8-byte aligned.
  *
  * Typical usage:
  *   arena_t *a = arena_create(64 * 1024);
  *   char *s = arena_strdup(a, "hello");
  *   void *p = arena_alloc(a, 128);
- *   arena_destroy(a);   // frees everything in one shot
+ *   arena_free(a);   // frees everything in one shot
  */
 
 #ifndef DOTTA_ARENA_H
@@ -23,7 +25,7 @@
  * Create arena with initial block capacity.
  *
  * @param initial_capacity  Size hint in bytes (0 = default 4096).
- * @return Arena, or NULL on OOM.
+ * @return Arena; never NULL.
  */
 arena_t *arena_create(size_t initial_capacity);
 
@@ -32,21 +34,24 @@ arena_t *arena_create(size_t initial_capacity);
  *
  * Chains a new block if the current one is exhausted.
  *
- * @return 8-byte aligned pointer, or NULL on OOM.
+ * @param arena Arena (must not be NULL)
+ * @return 8-byte aligned pointer; never NULL.
  */
 void *arena_alloc(arena_t *arena, size_t size);
 
 /**
  * Bump-allocate zeroed memory (calloc semantics).
  *
- * @return Zeroed, 8-byte aligned pointer, or NULL on OOM.
+ * A count × size that wraps is a request no allocation meets: exhaustion.
+ *
+ * @return Zeroed, 8-byte aligned pointer; never NULL.
  */
 void *arena_calloc(arena_t *arena, size_t count, size_t size);
 
 /**
  * Arena-backed strdup. Returns NULL if str is NULL.
  *
- * @return Arena-allocated copy, or NULL if str is NULL or OOM.
+ * @return Arena-allocated copy, or NULL if str is NULL.
  */
 char *arena_strdup(arena_t *arena, const char *str);
 
@@ -58,7 +63,7 @@ char *arena_strdup(arena_t *arena, const char *str);
  * and never past the NUL of a string shorter than `n`. Returns NULL if `str` is
  * NULL; "" when `n == 0`.
  *
- * @return Arena-allocated copy, or NULL if str is NULL or OOM.
+ * @return Arena-allocated copy, or NULL if str is NULL.
  */
 char *arena_strndup(arena_t *arena, const char *str, size_t n);
 
@@ -67,10 +72,11 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n);
  *
  * Mirrors `str_format` from base/string but allocates the result from the arena
  * instead of the heap. Two-pass implementation: vsnprintf once to size the buffer,
- * allocate, vsnprintf again to fill. Never returns a partial string.
+ * allocate, vsnprintf again to fill. Never returns a partial string. The format
+ * is dotta's own, so one that cannot be formatted is its writer's bug.
  *
- * @return Arena-allocated formatted string, or NULL if `fmt` is NULL, on encoding
- *         error, or on OOM.
+ * @param fmt Format string (must not be NULL)
+ * @return Arena-allocated formatted string; never NULL.
  */
 char *arena_str_format(arena_t *arena, const char *fmt, ...)
 __attribute__((format(printf, 2, 3)));
@@ -88,8 +94,8 @@ void arena_reset(arena_t *arena);
 /**
  * Free all blocks and the arena struct itself.
  *
- * @param arena Arena to destroy (NULL is a no-op).
+ * @param arena Arena to free (NULL is a no-op).
  */
-void arena_destroy(arena_t *arena);
+void arena_free(arena_t *arena);
 
 #endif /* DOTTA_ARENA_H */

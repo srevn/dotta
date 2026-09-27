@@ -350,10 +350,10 @@ typedef struct manifest manifest_t;
  * Memory:
  *   - rows, per-row strings, the profile names (duplicated once per profile)
  *     and the mount table: arena-allocated; the caller's arena reclaims them at
- *     arena_destroy. The view borrows nothing from the row cache, so it stands
- *     across the enabled_profiles mutations that replace the cache — a `before`
- *     built ahead of a profile enable reads the same after it, and the view after
- *     is the builder called again.
+ *     arena_free. The view borrows nothing from the row cache, so it stands across
+ *     the enabled_profiles mutations that replace the cache — a `before` built
+ *     ahead of a profile enable reads the same after it, and the view after is
+ *     the builder called again.
  *   - index hashmap: heap-allocated; on success the caller releases it with
  *     manifest_free. On error, the hashmap (if allocated) is freed here and *out
  *     is NULL.

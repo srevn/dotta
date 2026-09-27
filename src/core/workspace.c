@@ -2633,7 +2633,7 @@ static error_t *scan_directory_for_untracked(
     }
 
 cleanup:
-    arena_destroy(scratch);
+    arena_free(scratch);
     string_array_free(listing);
 
     return err;
@@ -4116,7 +4116,7 @@ void workspace_free(workspace_t *ws) {
 
     /* The view is borrowed (the dispatcher's); the items, their arrays, the record
      * and the squatted list are arena-allocated and the caller's arena releases
-     * them when destroyed. ws->arena is borrowed — never destroyed here. */
+     * them when freed. ws->arena is borrowed — never freed here. */
 
     free(ws);
 }

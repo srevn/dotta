@@ -434,17 +434,17 @@ typedef struct dotta_run {
  *
  *   - Process-scope. `config->arena` holds the configuration — the struct, every
  *     value read into it and its two compiled pattern rulesets — made by
- *     config_create_default, read-only once config_load returns, and destroyed
- *     whole by config_free. Lives the whole process; outlives every dispatch.
+ *     config_create_default, read-only once config_load returns, and freed whole
+ *     by config_free. Lives the whole process; outlives every dispatch.
  *
  *   - Command-scope. `ctx->arena` is the dispatch-wide bump allocator, created
- *     and destroyed by `run_spec`. Handlers allocate into it directly or thread
- *     it as an `arena_t *` parameter; the parser uses the same arena since its
- *     outputs are read by the handler, and every derived member of the run (the
- *     mount table, the view's rows) lives in it. Handlers and every layer beneath
- *     borrow the pointer — never call `arena_destroy(ctx->arena)`.
+ *     and freed by `run_spec`. Handlers allocate into it directly or thread it
+ *     as an `arena_t *` parameter; the parser uses the same arena since its outputs
+ *     are read by the handler, and every derived member of the run (the mount
+ *     table, the view's rows) lives in it. Handlers and every layer beneath borrow
+ *     the pointer — never call `arena_free(ctx->arena)`.
  *
- *   - Frame-scope. An arena a function makes and destroys itself, whose pointer
+ *   - Frame-scope. An arena a function makes and frees itself, whose pointer
  *     never leaves it. Two instances. `core/workspace.c`'s untracked walk creates
  *     one per directory frame and resets it before each entry, because an entry
  *     that is named and then excluded is neither an offer nor a row, and its
@@ -484,7 +484,7 @@ typedef struct dotta_run {
  */
 typedef struct dotta_ctx {
     dotta_run_t run;                    /* By value: opened and closed in place by run_spec */
-    arena_t *arena;                     /* Command-scoped; created before the parse, destroyed after the close */
+    arena_t *arena;                     /* Command-scoped; created before the parse, freed after the close */
     const config_t *config;             /* Process-scoped, borrowed */
     output_t *out;
     int argc;                           /* Original process argc */

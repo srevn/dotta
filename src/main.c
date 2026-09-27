@@ -330,7 +330,7 @@ static const char *program_name(const char *argv0) {
 /**
  * Parse, dispatch, and cleanup for one spec-engine command.
  *
- * Owns a command-scoped arena (destroyed before return) and the run that is opened
+ * Owns a command-scoped arena (freed before return) and the run that is opened
  * into it. Follows the parse → open → dispatch → close sequence. Never calls
  * exit(); the caller's cleanup chain is preserved unchanged.
  */
@@ -343,7 +343,7 @@ static int run_spec(
     /* Command-scoped arena. Sized for the median command — parsing needs ~few
      * KB, but workspace/scope/manifest paths fit ~140 KB worst case in one or
      * two blocks at this initial size. Borrowed by handlers via ctx->arena and
-     * by every derived member of the run; destroyed below. */
+     * by every derived member of the run; freed below. */
     arena_t *arena = arena_create(32UL * 1024);
     if (arena == NULL) {
         fprintf(stderr, "Failed to allocate memory\n");
@@ -365,7 +365,7 @@ static int run_spec(
             opts = arena_calloc(arena, 1, cmd->opts_size);
             if (opts == NULL) {
                 fprintf(stderr, "Failed to allocate memory\n");
-                arena_destroy(arena);
+                arena_free(arena);
                 return 1;
             }
         }
@@ -380,13 +380,13 @@ static int run_spec(
         switch (outcome) {
             case ARGS_HELP_REQUESTED:
                 args_render_help(stdout, resolved, prog);
-                arena_destroy(arena);
+                arena_free(arena);
                 return 0;
             case ARGS_FAILED:
                 if (!resolved->silent_failure) {
                     args_render_errors(stderr, &errors, resolved, prog);
                 }
-                arena_destroy(arena);
+                arena_free(arena);
                 return 1;
             case ARGS_OK:
                 break;
@@ -410,7 +410,7 @@ static int run_spec(
     if (err == NULL) err = resolved->dispatch(&ctx, opts);
 
     close_run(&ctx.run);
-    arena_destroy(arena);
+    arena_free(arena);
 
     /* One line renders every failure — an open that refused and a handler that
      * did, under the same flag. */

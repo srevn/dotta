@@ -180,7 +180,7 @@ bool mount_same_target(const char *a, const char *b);
 /**
  * Opaque mount-table handle. Built by `mount_table_build`; lifetime tracks the
  * arena passed at build time, and nothing else — every string is the arena's.
- * There is no destructor — arena_destroy reclaims everything.
+ * There is no destructor — arena_free reclaims everything.
  */
 typedef struct mount_table mount_table_t;
 

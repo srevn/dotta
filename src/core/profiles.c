@@ -850,8 +850,8 @@ error_t *profile_needs_target(
     if (!err) err = manifest_build_branch(repo, profile, mounts, scratch, &view);
     if (!err) *needs_target = manifest_unbound(view).count > 0;
 
-    manifest_free(view);                 /* reads the arena: before the destroy */
-    arena_destroy(scratch);
+    manifest_free(view);                 /* reads the arena: before it is freed */
+    arena_free(scratch);
     return err;
 }
 

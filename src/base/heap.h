@@ -23,7 +23,7 @@
  *
  * "fatal: out of memory, malloc failed (tried to allocate <size> bytes)", through
  * base/error.h error_die. The one reporter of dotta's exhaustion: every allocator
- * here.
+ * here, and base/arena's blocks and its byte counts that cannot be represented.
  *
  * @param size The bytes that could not be allocated; SIZE_MAX for a count no
  *             size can hold

@@ -25,9 +25,9 @@
  * it post-free).
  *
  * `paths` and `excludes_ruleset` are arena-borrowed (typically from `ctx->arena`);
- * released by arena_destroy, not scope_free. The excludes are the -e layer
- * core/ignore compiles (ignore_excludes_compile) — the rules add's builder takes
- * as its top layer, asked alone here (scope_is_excluded).
+ * released by arena_free, not scope_free. The excludes are the -e layer core/ignore
+ * compiles (ignore_excludes_compile) — the rules add's builder takes as its top
+ * layer, asked alone here (scope_is_excluded).
  */
 struct scope {
     string_array_t *enabled;            /* Persistent enabled set; non-NULL, may be empty */

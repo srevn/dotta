@@ -214,7 +214,7 @@ config_t *config_create_default(void) {
     }
     config_t *config = arena_calloc(arena, 1, sizeof(*config));
     if (!config) {
-        arena_destroy(arena);
+        arena_free(arena);
         return NULL;
     }
     config->arena = arena;
@@ -272,9 +272,9 @@ config_t *config_create_default(void) {
 }
 
 void config_free(config_t *config) {
-    /* The struct is the arena's too: one destroy, and nothing freed by field. */
+    /* The struct is the arena's too: one free, and nothing freed by field. */
     if (config) {
-        arena_destroy(config->arena);
+        arena_free(config->arena);
     }
 }
 

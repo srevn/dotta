@@ -6,8 +6,8 @@
  * lifetime rules and for what that rule does and does not recognize.
  *
  * A partial parse that fails mid-way leaves a few unused bytes in the arena;
- * these are reclaimed when the arena is destroyed. No rollback is needed, so
- * the parse body is a straight sequence of returns.
+ * these are reclaimed when the arena is freed. No rollback is needed, so the
+ * parse body is a straight sequence of returns.
  */
 
 #include "base/refspec.h"

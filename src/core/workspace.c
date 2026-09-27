@@ -131,8 +131,9 @@ struct workspace {
     ptr_array_t diverged;                        /* workspace_item_t *: active, analyzed orphans, discoveries */
 
     /* The squatted directories: every path a claim names as a directory that
-     * the load's look found occupied by anything else, with the claim. Noted by
-     * the look that found one and asked before every look after it, which writes
+     * the load's look found occupied by anything else, and every orphan's path
+     * a link stands at with an orphan beneath it, with the claim. Noted by the
+     * look that found one and asked before every look after it, which writes
      * the answer onto the item it withholds the look from (workspace_look, squatted_ancestor);
      * lent whole to a caller holding a path (workspace_squatted_ancestor); paths
      * borrowed from the rows and the records. Almost always empty, which is what
@@ -218,6 +219,45 @@ static workspace_item_t *workspace_find_active(const workspace_t *ws, const char
     workspace_item_t *item = workspace_find_item(ws->active, ws->dir_count, path);
 
     return item ? item : workspace_find_item(ws->active + ws->dir_count, ws->file_count, path);
+}
+
+/**
+ * Does an orphan stand beneath `path`?
+ *
+ * The orphans are in strcmp order, and every key a path prefixes sorts after it
+ * in one block — the keys beneath it, the path and a separator, and the siblings
+ * it merely prefixes, "x.bak" before "x/y" and "x0" after, '/' being neither
+ * the least byte nor the greatest. So the first key at or past the path and a
+ * separator is beneath the path, or none is: one lower bound answers.
+ *
+ * Reader: workspace_look, of an orphan's path a link stands at — whether a record
+ * beneath it would be looked at through the link.
+ *
+ * @param ws Workspace (must not be NULL; its orphans made)
+ * @param path The orphan's key (must not be NULL)
+ */
+static bool workspace_orphan_beneath(const workspace_t *ws, const char *path) {
+    const size_t len = strlen(path);
+    size_t lo = 0;
+    size_t hi = ws->orphan_count;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        const char *key = ws->orphans[mid]->filesystem_path;
+
+        /* The key against the path and a separator: the prefix, then the byte
+         * after it, where a key the path is all of reads its terminator */
+        int order = strncmp(key, path, len);
+        if (order == 0) order = (unsigned char) key[len] - '/';
+
+        if (order < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return lo < ws->orphan_count && str_path_beneath(ws->orphans[lo]->filesystem_path, path, len);
 }
 
 /**
@@ -473,10 +513,21 @@ static void workspace_look(workspace_t *ws, workspace_item_t *item) {
     item->occupant = fs_lstat_occupant(item->filesystem_path, &item->st);
     item->lstat_errno = errno;
 
-    /* A squatter is a directory claim with another kind of node in its place.
-     * Absence squats nothing, and a look that failed proves nothing. */
-    if (item->item_kind != PATH_KIND_DIRECTORY || item->occupant == FS_OCCUPANT_DIRECTORY ||
-        item->occupant == FS_OCCUPANT_NONE || item->occupant == FS_OCCUPANT_UNKNOWN) {
+    /* Absence squats nothing, and a look that failed proves nothing */
+    if (item->occupant == FS_OCCUPANT_DIRECTORY || item->occupant == FS_OCCUPANT_NONE ||
+        item->occupant == FS_OCCUPANT_UNKNOWN) {
+        return;
+    }
+
+    /* A squatter is a directory claim with another kind of node in its place, a
+     * view row's or a record's. For the orphans alone, so is a link in the place
+     * of any other record with an orphan beneath it: a link is the one node a
+     * key beneath resolves through — a file or a device answers ENOTDIR, absence
+     * — and it is noted only where an orphan would be looked at so, since links
+     * are no rarity the way squatted directories are. */
+    if (item->item_kind != PATH_KIND_DIRECTORY &&
+        (item->row || item->occupant != FS_OCCUPANT_SYMLINK ||
+        !workspace_orphan_beneath(ws, item->filesystem_path))) {
         return;
     }
 
@@ -1729,15 +1780,17 @@ static bool claim_stands(fs_occupant_t occupant, path_kind_t kind) {
  * orphan asks it: beneath a squatter the view claims, or one a directory record
  * earlier in this very walk was found squatted, no look is taken — one there
  * would answer for the squatter's target and nothing it said would be this path's.
- * After each look, a directory record another kind of node stands at is a squatter
- * only a record remembers, noted while the look is in hand so the records beneath
- * it, later in this walk, are not looked at — on every load the index is built
- * for, sync's and update's too, or the scan would read an identity the squatter's
- * target lent a record beneath it. Only a link to a directory is a squatter a
+ * After each look, a squatter only a record remembers is noted while the look
+ * is in hand, so the records beneath it, later in this walk, are not looked at
+ * — on every load the index is built for, sync's and update's too, or the scan
+ * would read an identity the squatter's target lent a record beneath it: a
+ * directory record another kind of node stands at, and a link standing where
+ * any other record is, with a record beneath it. Only a link is a squatter a
  * key beneath it resolves *through*: a file or a device in its place answers
- * ENOTDIR, which fs_lstat_occupant reads as absence. A file record with a directory
- * in its place is retyped too (the orphan analysis's arm) and reaches nothing
- * beneath it, which is why the look notes a directory claim alone.
+ * ENOTDIR, which fs_lstat_occupant reads as absence — which is why a file's or
+ * a link's record is noted only for a link standing in its place. A file record
+ * with a directory in its place is retyped too (the orphan analysis's arm) and
+ * reaches nothing beneath it.
  *
  * The orphan analysis reads the same look for its own verdict — RELEASED with
  * [type] — and the two agree by construction: for a directory record they are
@@ -3023,9 +3076,9 @@ static error_t *workspace_partition(workspace_t *ws) {
     /* Room for every squatter the looks can note, taken here, where the load
      * can still fail whole: a note dropped later would cost a verdict — every
      * item beneath the squatter analyzed on a look that resolved through it. A
-     * squatter is a directory claim, a view row's or a record's, and each item
-     * is looked at once (workspace_look), so the directory items and the orphans
-     * bound the notes. */
+     * squatter is a directory claim, a view row's or a record's, or a link in
+     * the place of an orphan's record, and each item is looked at once
+     * (workspace_look), so the directory items and the orphans bound the notes. */
     ws->squatted = arena_calloc(
         ws->arena, ws->dir_count + ws->orphan_count, sizeof(*ws->squatted)
     );

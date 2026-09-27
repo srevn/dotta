@@ -826,12 +826,12 @@ static error_t *add_refuse_moves(const walk_t *walk) {
  * Say what a capture claimed — the claim decides the shape
  *
  * Three claim shapes exist, by the sheet's own existence rule (an item exists
- * iff it claims something): mode and ownership, mode alone, ownership alone — a
- * home/ symlink's entry, which a directory capture never produces since a directory
- * always claims its mode. The fourth combination has no line to print: such an
- * item does not exist, the capture returned NULL instead. Ownership is all-or-none
- * at the capture boundary (core/metadata's capture_ownership), so a present owner
- * implies a present group.
+ * iff it claims something): mode and ownership, mode alone, ownership alone —
+ * the entry of a link another owner holds, which a directory capture never produces
+ * since a directory always claims its mode. The fourth combination has no line
+ * to print: such an item does not exist, the capture returned NULL instead.
+ * Ownership is all-or-none at the capture boundary (core/metadata.c
+ * metadata_capture_ownership), so a present owner implies a present group.
  *
  * The one voice for the file capture and the directory capture, which had drifted
  * apart; update's sibling line is not this one — it speaks at the receipt's indent

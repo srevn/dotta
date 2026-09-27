@@ -750,11 +750,9 @@ cleanup:
  * No claim, under every label: the invoker's own. The pair is applied by a
  * privileged run alone — the invoker's own creation needs no correction, and
  * root's, a refused syscall's second try (sys/filesystem.h), is handed to the
- * invoker here. What the sheet reads into that absence does not enter
- * (core/metadata.h metadata_ownership): the correction is owed to the raise and
- * not to the namespace, so a silent sheet and an implied invoker land alike and
- * always will. A claim: the sheet's word wherever it stands, resolved on this
- * host (metadata_resolve_ownership); whether this run may set the pair is the
+ * invoker here. A claim: the sheet's word wherever it stands, resolved on this
+ * host half by half (core/metadata.h metadata_ownership) — an absent owner the
+ * invoker, an absent group no change; whether this run may set the pair is the
  * ownership rung's question, not this one's.
  *
  * Strict ownership mode (strict_ownership=true): an unknown user/group is a fatal
@@ -796,7 +794,7 @@ static error_t *resolve_deployment_ownership(
         return NULL;
     }
 
-    error_t *err = metadata_resolve_ownership(row->owner, row->group, out_uid, out_gid);
+    error_t *err = metadata_ownership(row->owner, row->group, out_uid, out_gid);
     if (err) {
         /* ERR_NOT_FOUND only: the user/group does not exist on this system.
          * Fatal under strict_ownership (configuration/environment mismatch);
@@ -826,10 +824,10 @@ static error_t *resolve_deployment_ownership(
             return err;
         }
 
-        /* Reset to "no change": a resolved owner must not survive its group's
-         * failure. */
-        *out_uid = (uid_t) -1;
-        *out_gid = (gid_t) -1;
+        /* No change, not a guess: a claim that cannot be honoured is not applied
+         * by halves — not the half that resolved, and not the invoker for the
+         * half that did not. The resolver left the outs as they were, "no change"
+         * above. */
     }
 
     return NULL;

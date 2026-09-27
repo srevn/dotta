@@ -193,10 +193,12 @@ bool label_prefixes(const char *s);
  * silence.
  *
  * Readers: the two that derive a consequence from the namespace, each an exhaustive
- * switch — what the sheet reads into an absent ownership claim (core/metadata.c
- * metadata_ownership) and which rule placed the root a relocated claim lands
- * under (core/workspace.c workspace_analyze_orphans) — and one that only indexes
- * by it, add's receipt counting names by their label (cmds/add.c add_print_labels).
+ * switch — whether a capture leaves the invoker's own path to absence, which
+ * home/ always does and root/ and custom/ do unless the invoker is root
+ * (core/metadata.c metadata_capture_ownership), and which rule placed the root
+ * a relocated claim lands under (core/workspace.c workspace_analyze_orphans) —
+ * and one that only indexes by it, add's receipt counting names by their label
+ * (cmds/add.c add_print_labels).
  */
 label_t label_of(const char *storage_path);
 

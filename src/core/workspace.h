@@ -406,9 +406,10 @@ typedef enum {
  * `st` is the look's stat, meaningful for a present occupant alone, and
  * `lstat_errno` lstat's errno on an UNKNOWN from a look that failed. The whole
  * struct stat, because state_stat_matches, content_compare_blob_to_disk and
- * ownership_diverges, which the analyses hand it to, each take one, and the entries
- * index and the scan's roots read its identity — where a narrowed look would
- * have to synthesize one back for all three. A discovery's is the scan's own lstat.
+ * workspace_compare_ownership, which the analyses hand it to, each take one,
+ * and the entries index and the scan's roots read its identity — where a narrowed
+ * look would have to synthesize one back for all three. A discovery's is the
+ * scan's own lstat.
  *
  * The identity is the source's strings, lent read-only: the row's for an active
  * item, the record's for an orphan, a discovery's own copies (profile: the view's

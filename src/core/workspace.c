@@ -41,9 +41,7 @@
 
 #include <config.h>
 #include <errno.h>
-#include <grp.h>
 #include <limits.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +63,6 @@
 #include "infra/label.h"
 #include "sys/filesystem.h"
 #include "sys/gitops.h"
-#include "sys/identity.h"
 #include "sys/source.h"
 
 /**
@@ -261,57 +258,46 @@ static bool workspace_orphan_beneath(const workspace_t *ws, const char *path) {
 }
 
 /**
- * Does disk ownership diverge from the claim?
+ * The ownership axis of a claim against a look
  *
- * The ownership half of every divergence check — one rule for a row's claim
- * (workspace_analyze_claim, both kinds) and a record's (workspace_compare_orphan).
- * What the sheet says here is the sheet's to say (core/metadata.h
- * metadata_ownership) and this function is the comparison alone, one per reading:
- * the names it claimed, and only those, are compared by name (NULL skips that
- * half), and a UID/GID the system cannot resolve to one reads as divergence —
- * unknown ≠ expected (security-first); silence the sheet reads as the invoker's
- * own compares the owner to the invoker; and silence it says nothing about compares
- * nothing. Whether this run could chown does not enter — the lstat needs no
- * privilege, and a claim the disk contradicts is a fact about the path whoever
- * reads it.
+ * The one compare for a row's claim (workspace_analyze_claim, both kinds) and a
+ * record's (workspace_compare_orphan): the pair the claim resolves to on this
+ * host (core/metadata.h metadata_ownership) against the node's, id to id.
+ * DIVERGENCE_OWNERSHIP where the owner differs, or a group the claim names, and
+ * where the claim names someone this host cannot resolve; NONE where the node
+ * stands on the pair. Whether this run could chown does not enter: the lstat
+ * needs no privilege, and a claim the disk contradicts is a fact about the path
+ * whoever looks.
  *
- * @param storage_path The claim's key, for its label (must not be NULL)
  * @param owner The claimed owner, or NULL
  * @param group The claimed group, or NULL
  * @param st The path's lstat (must not be NULL)
+ * @return DIVERGENCE_OWNERSHIP or DIVERGENCE_NONE
  */
-static bool ownership_diverges(
-    const char *storage_path,
+static divergence_type_t workspace_compare_ownership(
     const char *owner,
     const char *group,
     const struct stat *st
 ) {
-    /* The sheet's word first: an absent claim is answered by the namespace it
-     * stands in, a present one by the names below. */
-    switch (metadata_ownership(storage_path, owner, group)) {
-        case OWNERSHIP_SILENT:
-            return false;
-        case OWNERSHIP_INVOKER:
-            return st->st_uid != identity()->uid;
-        case OWNERSHIP_NAMED:
-            break;
+    /* The claim as this host's ids: its names, the invoker where it names no
+     * owner, no change where it names no group. A name this host cannot resolve
+     * is one no node here stands on — unknown is not expected — and the resolver's
+     * sentence is freed unread: which half failed is the landing's to say
+     * (core/deploy.c resolve_deployment_ownership), never a look's. */
+    uid_t uid;
+    gid_t gid;
+    error_t *err = metadata_ownership(owner, group, &uid, &gid);
+    if (err) {
+        error_free(err);
+        return DIVERGENCE_OWNERSHIP;
     }
 
-    if (owner) {
-        struct passwd *pwd = getpwuid(st->st_uid);
-        if (!pwd || !pwd->pw_name || strcmp(owner, pwd->pw_name) != 0) {
-            return true;
-        }
-    }
-
-    if (group) {
-        struct group *grp = getgrgid(st->st_gid);
-        if (!grp || !grp->gr_name || strcmp(group, grp->gr_name) != 0) {
-            return true;
-        }
-    }
-
-    return false;
+    /* Id to id, so an account this host knows by two names satisfies both and a
+     * node's uid with no name compares as the number it is; a group the claim
+     * does not name constrains nothing */
+    return st->st_uid != uid || (gid != (gid_t) -1 && st->st_gid != gid)
+           ? DIVERGENCE_OWNERSHIP
+           : DIVERGENCE_NONE;
 }
 
 /**
@@ -630,12 +616,10 @@ static void workspace_analyze_claim(workspace_item_t *item) {
         claims |= DIVERGENCE_MODE;
     }
 
-    /* The ownership, its own axis, links included: the sheet's word, compared
-     * by the rule the orphan analysis asks of the record too
-     * (ownership_diverges). */
-    if (ownership_diverges(row->storage_path, row->owner, row->group, &item->st)) {
-        claims |= DIVERGENCE_OWNERSHIP;
-    }
+    /* The ownership, its own axis, links included: the sheet's word as this host's
+     * ids against the look, by the rule the orphan analysis asks of the record
+     * too (workspace_compare_ownership). */
+    claims |= workspace_compare_ownership(row->owner, row->group, &item->st);
 
     /* Who moved it. An axis Git moved past the claim the record last reconciled
      * and disk has not followed is Git's to bring — whoever else moved it, since
@@ -1293,11 +1277,7 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
             && (item->st.st_mode & 0777) != record->mode) {
             item->divergence |= DIVERGENCE_MODE;
         }
-        if (ownership_diverges(
-            record->storage_path, record->owner, record->group, &item->st
-            )) {
-            item->divergence |= DIVERGENCE_OWNERSHIP;
-        }
+        item->divergence |= workspace_compare_ownership(record->owner, record->group, &item->st);
     }
 
     return NULL;

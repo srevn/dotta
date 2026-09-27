@@ -638,93 +638,65 @@ const metadata_item_t *const *metadata_items(
 }
 
 /**
- * What the sheet says about a path's owner
+ * The ownership half of a capture: the stat's owner and group by name, wherever
+ * absence would say someone else
  *
- * The read side of the rule claims_ownership writes by, and the pair is the whole
- * of it: a claim is authored where silence would not travel, and read as what
- * silence means where it was not (metadata.h).
- */
-ownership_t metadata_ownership(
-    const char *storage_path,
-    const char *owner,
-    const char *group
-) {
-    if (owner || group) {
-        return OWNERSHIP_NAMED;
-    }
-
-    /* Silence, read by the namespace: the one place the sheet's rule about an
-     * absent claim is spelled. */
-    switch (label_of(storage_path)) {
-        case LABEL_HOME:
-            return OWNERSHIP_SILENT;
-        case LABEL_ROOT:
-        case LABEL_CUSTOM:
-            return OWNERSHIP_INVOKER;
-    }
-
-    /* A label no enumerator names, which only a cast can produce: label_of asserts
-     * before it could reach here (infra/label.h), and a sanitizer does not — an
-     * exhaustive switch proves this tail unreachable and the check is elided,
-     * so the tail is a defined answer or a garbage register. The silent one,
-     * because it acts on nothing: the only posture an impossible state has
-     * earned. */
-    return OWNERSHIP_SILENT;
-}
-
-/**
- * Is this owner a system identity, or the invoker's own?
+ * Absence is the invoker on every machine (metadata_ownership), so it says the
+ * owner exactly where the capturing invoker owns the path and the next machine's
+ * invoker would own it too — everywhere but one place, root's own outside home/.
+ * Every other owner is named, under every label, so the claim a capture authors
+ * resolves, on the host it was captured on, to the node it was captured from.
+ * The group rides with the owner: the invoker's own file under another group is
+ * the invoker's to the capture, a group being as often a directory's inheritance
+ * (macOS's /tmp is wheel's) as an intent.
  *
- * A claim names a system identity, never the invoker's own: the invoker's own
- * is what every machine supplies by default, so it is the absence of a claim
- * (metadata.h). Root's own is a system fact wherever it is observed — a real
- * root run, whose invoker is root, records everything, since absence would then
- * mean root's here and the reader's own there. That clause is the whole of what
- * separates this from the reading it writes for (metadata_ownership's
- * OWNERSHIP_INVOKER, the same comparison without it): one rule asked from either
- * end, and where this one claims, the sheet holds a name and the reading is
- * OWNERSHIP_NAMED. The group rides with the owner: a file the invoker owns under
- * a system group (a web root's www-data) is the invoker's to the capture, since
- * a group is as often the directory's inheritance (macOS's /tmp is wheel's) as
- * an intent; a lone group claim written by hand is honoured by the read side
- * (metadata_resolve_ownership).
- *
- * @param st The stat whose owner is asked (must not be NULL)
- * @return true iff a capture authors the ownership half for it
- */
-static bool claims_ownership(const struct stat *st) {
-    const identity_t *id = identity();
-
-    return st->st_uid != id->uid || id->uid == 0;
-}
-
-/**
- * Capture ownership from stat data into metadata item
- *
- * Names the stat's UID and GID, both or neither. A capture states what it saw,
- * and half of what it saw is a different statement: the read boundary takes a
- * lone "group" as a deliberate chgrp-only intent (metadata_resolve_ownership
- * leaves the UID at -1) and a lone "owner" as "and the user's primary group",
- * so a name that merely failed to resolve becomes indistinguishable from a claim
- * the profile meant to make narrow. The claim this host cannot spell is an error
- * here, where the user is at the terminal and the path is still theirs to fix,
- * rather than a silence for deploy to act on a year later on another machine.
+ * Both names or neither. A capture states what it saw, and half of what it saw
+ * is a different statement: the read boundary takes a lone "group" as a narrow
+ * claim deliberately made, which the owner's resolution then fills with the
+ * invoker, so a name that merely failed to resolve would become indistinguishable
+ * from a claim the profile meant to make narrow. The claim this host cannot spell
+ * is an error here, where the user is at the terminal and the path is still theirs
+ * to fix, rather than a silence for deploy to act on a year later on another
+ * machine.
  *
  * On failure item fields may be partially set — the caller frees the item on
  * error either way, and the sheet only ever sees an item this function returned
  * success for.
  *
  * @param item Item to set ownership on (must not be NULL)
+ * @param storage_path The item's key, for the one clause its label decides (must
+ *                     not be NULL, under a label)
  * @param st Stat data with uid/gid (must not be NULL)
- * @return Error or NULL on success
+ * @return Error or NULL on success — NULL with nothing named where absence says it
  *
  * Errors:
  * - ERR_NOT_FOUND: the UID or the GID has no name on this system
  */
-static error_t *capture_ownership(
+static error_t *metadata_capture_ownership(
     metadata_item_t *item,
+    const char *storage_path,
     const struct stat *st
 ) {
+    const uid_t invoker = identity()->uid;
+
+    /* The invoker's own is absence, which every machine reads as its own invoker
+     * — under home/ whoever the invoker is, since home/ mounts at the invoker's
+     * home on every machine, and outside it save a root login's: root's own under
+     * root/ and custom/ is the system's, and the next machine's invoker is not
+     * root. The label enters ownership here, for that clause, and nowhere else. */
+    if (st->st_uid == invoker) {
+        switch (label_of(storage_path)) {
+            case LABEL_HOME:
+                return NULL;
+            case LABEL_ROOT:
+            case LABEL_CUSTOM:
+                if (invoker != 0) {
+                    return NULL;
+                }
+                break;
+        }
+    }
+
     /* Resolve UID to username. "Cannot resolve" rather than "does not exist": a
      * NULL answer is an absent entry or a lookup that failed (a directory service
      * down), and the claim is equally unmakeable either way. */
@@ -741,7 +713,7 @@ static error_t *capture_ownership(
         return ERROR(ERR_MEMORY, "Failed to allocate owner string");
     }
 
-    /* Resolve GID to groupname */
+    /* Resolve GID to groupname: the owner brings its group with it */
     struct group *grp = getgrgid(st->st_gid);
     if (!grp || !grp->gr_name) {
         return ERROR(
@@ -795,27 +767,21 @@ error_t *metadata_capture_file(
         return err;
     }
 
-    /* Ownership, where the sheet would read silence as the invoker's own and
-     * the owner is not (claims_ownership): a claim says what silence would
-     * misstate. Under home/ the sheet is silent and nothing is authored. The
-     * lstat needs no privilege, so the claim is authored by whoever can read
+    /* Ownership, where absence would misstate it (metadata_capture_ownership).
+     * The lstat needs no privilege, so the claim is authored by whoever can read
      * the path. */
-    if (metadata_ownership(storage_path, NULL, NULL) == OWNERSHIP_INVOKER
-        && claims_ownership(st)) {
-        err = capture_ownership(item, st);
-        if (err) {
-            metadata_item_free(item);
-            return err;
-        }
+    err = metadata_capture_ownership(item, storage_path, st);
+    if (err) {
+        metadata_item_free(item);
+        return err;
     }
 
     /* An item exists iff it claims something. Only a link reaches the branch —
      * a regular file always claims its mode — and only one kind of link: asked
      * after ownership resolution, which by now has either named both halves or
-     * failed, what falls out here is a link the capture had no ownership to take
-     * (a namespace whose silence says nothing, or the invoker's own link), never
-     * one whose owner this host could not spell. No empty entry is ever
-     * authored. */
+     * failed, what falls out here is a link absence already says — the invoker's
+     * own — never one whose owner this host could not spell. No empty entry is
+     * ever authored. */
     if (item->mode == MODE_UNCLAIMED && !item->owner && !item->group) {
         metadata_item_free(item);
         *out = NULL;
@@ -830,8 +796,8 @@ error_t *metadata_capture_file(
  * Capture a directory's claim from stat data
  *
  * Creates a directory metadata item from stat data. Follows the same ownership
- * rule as file capture (claims_ownership); the class is the caller's, carried
- * through unread.
+ * rule as file capture (metadata_capture_ownership); the class is the caller's,
+ * carried through unread.
  *
  * This function creates a metadata_item_t with kind=DIRECTORY.
  */
@@ -859,14 +825,11 @@ error_t *metadata_capture_directory(
         return err;
     }
 
-    /* Ownership, by the file capture's rule (metadata_ownership, claims_ownership). */
-    if (metadata_ownership(storage_path, NULL, NULL) == OWNERSHIP_INVOKER
-        && claims_ownership(st)) {
-        err = capture_ownership(item, st);
-        if (err) {
-            metadata_item_free(item);
-            return err;
-        }
+    /* Ownership, by the file capture's rule (metadata_capture_ownership) */
+    err = metadata_capture_ownership(item, storage_path, st);
+    if (err) {
+        metadata_item_free(item);
+        return err;
     }
 
     *out = item;
@@ -972,7 +935,8 @@ static error_t *capture_ancestor(
     /* A re-derivation that found nothing new authors nothing: the standing claim
      * keeps its place, so nothing is counted and the caller's commit gate never
      * fires on a chain that has not moved. Ownership is both names or neither
-     * (capture_ownership), so an absent one compares as the value it is. */
+     * (metadata_capture_ownership), so an absent one compares as the value it
+     * is. */
     if (held && held->mode == item->mode &&
         str_equal(held->owner, item->owner) &&
         str_equal(held->group, item->group)) {
@@ -1648,21 +1612,12 @@ error_t *metadata_save_to_stage(
 }
 
 /**
- * Resolve ownership from owner/group strings to UID/GID
+ * The sheet's word on a path's ownership, as this host's ids
  *
- * Converts owner and group names to UID/GID values. This is pure data
- * transformation - no filesystem operations, no privilege questions: whether
- * the resolved pair can be applied (chown needs root) is the applier's to ask.
- *
- * Rules:
- * - Validates that user/group exist on the system
- * - If owner is set but group is not, uses owner's primary group
- * - Returns uid=-1 or gid=-1 to indicate "don't change ownership"
- *
- * The caller is responsible for applying the resolved ownership using fchown()
- * or similar system calls.
+ * Each half by its own rule (metadata.h), written to the outs together, so a
+ * half that resolved never survives the other's failure.
  */
-error_t *metadata_resolve_ownership(
+error_t *metadata_ownership(
     const char *owner,
     const char *group,
     uid_t *out_uid,
@@ -1671,16 +1626,11 @@ error_t *metadata_resolve_ownership(
     CHECK_NULL(out_uid);
     CHECK_NULL(out_gid);
 
-    /* Initialize to "no change" */
-    *out_uid = (uid_t) -1;
-    *out_gid = (gid_t) -1;
+    /* The invoker where no owner is named, no change where no group is */
+    uid_t uid = identity()->uid;
+    gid_t gid = (gid_t) -1;
 
-    /* Skip if no ownership specified */
-    if (!owner && !group) {
-        return NULL;
-    }
-
-    /* Resolve owner to UID */
+    /* A named owner is its uid on this host, or no answer at all */
     if (owner) {
         struct passwd *pwd = getpwnam(owner);
         if (!pwd) {
@@ -1689,16 +1639,12 @@ error_t *metadata_resolve_ownership(
                 owner
             );
         }
-        *out_uid = pwd->pw_uid;
-
-        /* If no group specified, use user's primary group */
-        if (!group) {
-            *out_gid = pwd->pw_gid;
-        }
+        uid = pwd->pw_uid;
     }
 
-    /* Resolve group to GID (if specified and not already set from user) */
-    if (group && *out_gid == (gid_t) -1) {
+    /* And a named group its gid — never the owner's primary: a claim that names
+     * no group constrains none */
+    if (group) {
         struct group *grp = getgrnam(group);
         if (!grp) {
             return ERROR(
@@ -1706,8 +1652,10 @@ error_t *metadata_resolve_ownership(
                 group
             );
         }
-        *out_gid = grp->gr_gid;
+        gid = grp->gr_gid;
     }
 
+    *out_uid = uid;
+    *out_gid = gid;
     return NULL;
 }

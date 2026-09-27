@@ -132,6 +132,10 @@
 #include "infra/mount.h"
 #include "sys/stage.h"
 
+/* A capture's claim is written onto the record (metadata_item_claim), which is
+ * named here and defined there (core/state.h). */
+typedef struct state_record state_record_t;
+
 #define METADATA_VERSION 6
 #define METADATA_DIR ".dotta"
 #define METADATA_FILE_PATH METADATA_DIR "/metadata.json"
@@ -158,7 +162,9 @@
  * mode a user can mean. Absence therefore needs a value outside the domain, not
  * the domain's floor. Private to the claim sheet: the view resolves absence into
  * an answer at build (the filemode floor for blob rows, DIR_MODE_DEFAULT for
- * directory claims), so no row, record or verdict ever carries it.
+ * directory claims) and a capture's record into none (metadata_item_claim: a
+ * link's, the one capture that claims no mode), so no row, record or verdict
+ * ever carries it.
  */
 #define MODE_UNCLAIMED ((mode_t) -1)
 
@@ -300,6 +306,38 @@ error_t *metadata_item_clone(
     const metadata_item_t *source,
     const char *storage_path,
     metadata_item_t **out
+);
+
+/**
+ * The claim an item makes, as the record keeps it
+ *
+ * Onto `record`'s claim, the one the path is reconciled against from here on
+ * (core/state.h state_record_t): the item's mode, and its owner and group copied
+ * into `arena`. MODE_UNCLAIMED does not leave the sheet — the item that claims
+ * no mode is a link's, whose record reads none under its kind — so it lands as
+ * 0, the don't-care a read of the record gives back. No item claims nothing,
+ * and the record's claim is written empty — a link that claims no ownership either.
+ * The claim is all this writes: the record's other columns are the caller's.
+ *
+ * The names are copied, never borrowed: the sheet frees its items with itself,
+ * and the record a capture makes outlives the sheet it was made beside — update's
+ * sheet is one profile's walk, its record phase every profile's (cmds/update.c
+ * update_write_record).
+ *
+ * Readers: the captures that record what they committed — cmds/add.c add_capture
+ * and cmd_add's directory loop, cmds/update.c update_profile's two arms. A reader
+ * not on this list is a bug.
+ *
+ * @param item The claim a capture authored, or NULL where it authored none
+ * @param arena The arena the names are copied into (must not be NULL)
+ * @param record The record whose claim is written (must not be NULL; its other
+ *               columns are left as they are)
+ * @return Error or NULL on success
+ */
+error_t *metadata_item_claim(
+    const metadata_item_t *item,
+    arena_t *arena,
+    state_record_t *record
 );
 
 /**

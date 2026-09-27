@@ -27,7 +27,6 @@
 #include "core/metadata.h"
 #include "core/policy.h"
 #include "core/state.h"
-#include "core/workspace.h"
 #include "infra/content.h"
 #include "infra/label.h"
 #include "infra/mount.h"
@@ -62,16 +61,21 @@
  * name before any capture runs — false but for a regular file, since a link's
  * entry is its target and the policy is never asked about one.
  *
- * `stat` is the capture's own triple — the fstat beside a file's bytes, the lstat
- * before a link's target — so the record binds the committed blob to it. A
- * directory's stays unset, as apply records them.
+ * `record` is what the capture committed, as the record keeps it: the path, the
+ * name and the node the listing found — which the capture held to, refusing another
+ * — the blob the stage wrote, the triple its bytes were read with (the fstat
+ * beside a file's, the lstat before a link's target; none for a directory, which
+ * confirms no content), and the claim the sheet took. Set by the capture, empty
+ * until it lands, and written by the record phase wherever the claim still stands
+ * (add_write_record) — every column but the stamp the capture's, so the record
+ * says what dotta put there, never what a later tip of the branch says should be.
  */
 typedef struct {
     const char *filesystem_path;  /* Where the claim stands (arena) */
     manifest_claim_t claim;       /* The name and kind it was listed under (arena) */
     fs_occupant_t occupant;       /* What the listing found there: chooses the capture */
     bool should_encrypt;          /* The decision pass's verdict; false but for a regular file */
-    state_stat_t stat;            /* The capture's triple; STATE_STAT_UNSET for a directory */
+    state_record_t record;        /* What the capture committed; empty until it lands */
 } path_t;
 
 /**
@@ -139,27 +143,32 @@ typedef struct {
  * for — so the ownership event a capture earns is one event, and the kinds are
  * named where they were captured, above this line.
  *
- * The three counts partition the capture exactly: a claim whose own row took
- * the event, one a higher-precedence profile's row holds, and one another name
- * of this profile holds — a second name of one profile being a thing a branch
- * can hold and a sync can bring here (core/manifest.h manifest_unkept, whose
- * screen word is "unused path"), whose repair is the health channel's on the
- * same screen, not this receipt's. Nothing falls through: a capture whose claim
- * no longer stands at the path it was read at ends the phase instead of being
- * counted, which is what makes the sum total and each cause checked where the
- * row that says it is in hand rather than read off a difference.
+ * The four counts partition the capture exactly: a claim whose own row took the
+ * event, one a higher-precedence profile's row holds, one another name of this
+ * profile holds — a second name of one profile being a thing a branch can hold
+ * and a sync can bring here (core/manifest.h manifest_unkept, whose screen word
+ * is "unused path"), whose repair is the health channel's on the same screen,
+ * not this receipt's — and one whose name the profile no longer holds at the
+ * path at all. Nothing falls through, which is what makes the sum total and each
+ * cause checked where the row that says it is in hand rather than read off a
+ * difference.
  *
  * `unkept` is one thing only. This command cannot author a second name, and a
  * capture at a contested path lands on the name the next settle will keep —
  * add_refuse_moves is the last word on that — so a non-zero count is a typed
  * re-capture of a loser, deliberately made, which is exactly what "captured under
  * an unused path" says.
+ *
+ * `gone` is Git's, never this command's: the store's lock is not Git's, so another
+ * writer's commit can land between this add's and the view its record phase builds,
+ * and take the name away. The claim no longer stands, so nothing is written for it.
  */
 typedef struct {
     size_t anchored;       /* Captures whose own row took the ownership event */
     size_t taken_over;     /* Of the anchored, records taken from another profile */
     size_t overridden;     /* Captures a higher-precedence profile's row holds */
     size_t unkept;         /* Captures another name of this profile holds */
+    size_t gone;           /* Captures whose name the profile no longer holds at the path */
 } receipt_t;
 
 /**
@@ -477,7 +486,6 @@ static error_t *add_list(
         occupant == FS_OCCUPANT_DIRECTORY ? PATH_KIND_DIRECTORY : PATH_KIND_FILE
     };
     path->occupant = occupant;
-    path->stat = STATE_STAT_UNSET;
 
     error_t *err = ptr_array_push(
         path->claim.kind == PATH_KIND_DIRECTORY ? &walk->directories : &walk->files,
@@ -972,14 +980,16 @@ static void add_print_labels(const walk_t *walk) {
  * the decision pass reached for a regular file is read by a regular file's capture
  * alone. Sealed as that pass decided. The capture answers with the entry's bytes
  * and the look they were read with; this function places both — the entry on
- * the stage, the claim on the sheet — and the look is also the triple the record
- * binds (path->stat).
+ * the stage, the claim on the sheet — and keeps what it placed as the path's
+ * record (path->record): the blob the put wrote, the look's triple, the claim.
  *
  * @param ctx Dispatch context (must not be NULL; the key manager for a seal,
- *            and the output)
+ *            the arena the record's names are copied into, and the output)
  * @param stage The profile's stage (must not be NULL)
- * @param profile The profile, for the seal's key (must not be NULL)
- * @param path The listed path (must not be NULL; its stat is set on success)
+ * @param profile The profile, for the seal's key and the record's binding (must
+ *                not be NULL)
+ * @param path The listed path (must not be NULL; its record is the capture's
+ *             once the capture lands)
  * @param metadata The sheet the claim goes onto (must not be NULL)
  * @return Error or NULL on success
  */
@@ -1011,6 +1021,7 @@ static error_t *add_capture(
      * One tail past the door — the bytes are the stage's now, or nobody's, and
      * the look stays readable for the claim and the record below. */
     content_capture_t capture = { 0 };
+    git_oid blob;
     error_t *err = NULL;
     if (path->occupant == FS_OCCUPANT_SYMLINK) {
         err = content_capture_link(filesystem_path, &capture);
@@ -1023,14 +1034,13 @@ static error_t *add_capture(
     if (!err) {
         err = stage_put(
             stage, storage_path, capture.bytes.data, capture.bytes.size,
-            capture.mode, NULL
+            capture.mode, &blob
         );
     }
     content_capture_free(&capture);
     if (err) {
         return err;
     }
-    path->stat = state_stat_from_read(&capture.st);
 
     /* The claim from the capture's own look, sealed as the capture says: its
      * write-time invariant makes that verdict the byte truth (a plaintext that
@@ -1045,6 +1055,23 @@ static error_t *add_capture(
             err, "Failed to capture metadata for '%s'",
             filesystem_path
         );
+    }
+
+    /* What the capture committed, as the record keeps it: the node the listing
+     * found and the capture held to, the blob the put wrote under the look its
+     * bytes came off, and the claim — taken before the sheet takes the item */
+    path->record = (state_record_t){
+        .filesystem_path = filesystem_path,
+        .storage_path = storage_path,
+        .profile = profile,
+        .kind = path->occupant,
+        .blob_oid = blob,
+        .stat = state_stat_from_read(&capture.st),
+    };
+    err = metadata_item_claim(item, ctx->arena, &path->record);
+    if (err) {
+        metadata_item_free(item);
+        return err;
     }
 
     if (capture.encrypted) {
@@ -1160,11 +1187,12 @@ static error_t *add_commit(
  *
  * Called after Git commit succeeds, for a new profile and an existing one alike.
  * Anchors what this add captured: every path was captured FROM disk, so its record
- * is anchored to the just-committed blob with the stat the capture took and the
- * next status hits the fast path; a directory is anchored by the same rule and
- * binds no stat, having no content to confirm. The view is computed, so nothing
- * projects; one build over the enabled set says which of this add's own claims
- * won their paths.
+ * is what the capture committed (path_t's record) — the blob, under the stat
+ * the capture took, so the next status hits the fast path, and the node and the
+ * claim — stamped as an ownership event; a directory's carries no stat, having
+ * no content to confirm. The view is computed, so nothing projects; one build
+ * over the enabled set says which of this add's own claims still stand at their
+ * paths — whose each path is, and nothing the record says.
  *
  * Algorithm:
  *   1. Scope. A new profile is enabled here with its deployment target — creating
@@ -1172,8 +1200,9 @@ static error_t *add_commit(
  *      existing profile has rows in the view only if it is already enabled: not
  *      enabled skips the anchor pass (nothing to win) and the target UPSERT
  *      (enable's business), never the settle
- *   2. Build the view; anchor each captured claim's own row, standing at the
- *      path the walk read it at; settle what the commit let go
+ *   2. Build the view; anchor each capture where its own claim stands at the
+ *      path the walk read it at, its record the capture's; settle what the commit
+ *      let go
  *   3. Commit the transaction (state_save), and finish it either way
  *
  * CRITICAL ORDER: step 1 must precede step 2. The builder's own table is built
@@ -1210,9 +1239,6 @@ static error_t *add_commit(
  *     are one transaction and a database that refuses one write may have ended
  *     it, so every write past an unexamined refusal is a coin flip between "in
  *     the transaction" and "committed on its own"
- *   - A capture whose claim no longer stands where the walk read it ends the
- *     phase too: the table the whole command named under has moved, and every
- *     path of this run was named under it
  *
  * Postcondition, on every path: the transaction the dispatcher opened is finished
  * when this function returns — committed by state_save, or rolled back here.
@@ -1244,9 +1270,10 @@ static error_t *add_commit(
  *               new profile and an enabled one (the UPSERT keeps a row's own
  *               for a NULL)
  * @param profile_created This add created the profile's branch: enable it here
- * @param added_files The files the walk listed, each with the capture's stat
- *                    (must not be NULL)
- * @param added_dirs The directories the walk passed through (must not be NULL)
+ * @param added_files The files the walk listed, each with the record its capture
+ *                    made (must not be NULL)
+ * @param added_dirs The directories the walk passed through, each with the record
+ *                   its capture made (must not be NULL)
  * @param retired The ancestor claims the ancestry pass dropped, by key (must
  *                not be NULL)
  * @param receipt What the phase did, zeroed first (must not be NULL)
@@ -1331,13 +1358,11 @@ static error_t *add_write_record(
 
         time_t now = time(NULL);
 
-        /* Both lists, one rule and one count. The kind decides one thing — what
-         * the ownership event binds: the capture's own stat triple for a file,
-         * and nothing for a directory, which has no content to confirm and whose
-         * listing carries none — so the two lists were two loops for one line
-         * of difference, and the accounting drifted apart in exactly that gap,
-         * the directory count the receipt printed being the sheet's, taken before
-         * the pass that could refuse it.
+        /* Both lists, one rule and one count: each capture's record is what it
+         * committed, a directory's carrying no content because its capture set
+         * none, so nothing here asks the kind — and the accounting cannot drift
+         * apart between two loops, as it once did, the directory count the receipt
+         * printed being the sheet's, taken before the pass that could refuse it.
          *
          * Both kinds earn one event. A path was captured from disk, so it is
          * dotta's to prune on scope exit — the ownership the gate asks for, which
@@ -1346,36 +1371,39 @@ static error_t *add_write_record(
          * released where an owned one is pruned. Cleanup's emptiness rule guards
          * their contents.
          *
-         * The row anchored is the one standing at the path the walk read the
-         * path at, and only if it IS this claim, both halves (core/manifest.h's
+         * The view says whose the path is, and nothing the record says: the
+         * capture's record is written only where the row standing at the path
+         * the walk read IS the capture's claim, both halves (core/manifest.h's
          * manifest_is_claim). No round trip through the name: for every listing
          * mount_resolve of its own claim is that path (the key invariant,
          * cmds/add.h), and the table this view was built from is the table the
          * walk used — STEP 1 wrote the very binding it holds.
          *
-         * That premise is checked, never assumed, because a miss is two things
-         * and only one of them is a count. Either the claim lost the path — to
-         * a higher-precedence profile's row, or to another name of this very
-         * profile that the settle kept, which a machine whose roots held two
-         * names apart can commit and a sync can bring here. Either way the row
-         * is someone else's word and so is its record, and the capture's stat
-         * would certify a blob these bytes are not; the two are told apart here,
-         * where the row is in hand, so the receipt names the cause it checked
-         * rather than a difference. Or the claim is not here at all — which cannot
-         * happen: the KEY INVARIANT (cmds/add.h) says a name this profile committed
-         * resolves to the path it was listed at, and nothing moves a key under
-         * the command — the run holds the store's write lock, so the rows the
-         * view is built from are the rows the walk's table was, and a key is a
-         * string of those rows' own (infra/mount.h), which the disk cannot move.
-         * That arm ends the phase as the contract failure it is.
+         * What Git holds at the name is not the record's to say either. The key
+         * cannot move under the command — the run holds the store's write lock,
+         * so the rows the view is built from are the rows the walk's table was
+         * — but the lock is not Git's, and another writer's commit can land between
+         * this add's and this build: other bytes at the name, another claim,
+         * another kind, or no name. The first three leave the claim standing,
+         * and the record carries the capture as it was made, so the next load
+         * reads Git's move past it ([stale]) and never bytes dotta put there;
+         * the last is a miss.
+         *
+         * A miss is three things, each counted where the row that says it is in
+         * hand, so the receipt names the cause it checked rather than a difference:
+         * the claim lost the path — to a higher-precedence profile's row, or to
+         * another name of this very profile that the settle kept, which a machine
+         * whose roots held two names apart can commit and a sync can bring here
+         * — so the row is someone else's word, and so is the record at the path;
+         * or the profile no longer names the path by this name at all, a later
+         * commit having removed it.
          *
          * The profile's own contribution answers which, and answering it first
          * is what lets the arms below read the row without asking whether there
          * is one: a name this profile holds at a path has a row at that path,
          * the layering inserting every explicit row of every contribution
-         * (core/manifest.h manifest_holds_name). That is also why the impossible
-         * arm is an arm and not an assertion: it is the NULL-`row` guard the
-         * two counting arms rest on.
+         * (core/manifest.h manifest_holds_name). That is the gone arm's second
+         * job: it is the NULL-`row` guard the two counting arms rest on.
          *
          * A refused statement ends the pass. The phase's writes are one transaction
          * and a database that refuses one write may have ended it — SQLite rolls
@@ -1395,25 +1423,18 @@ static error_t *add_write_record(
                     if (!manifest_holds_name(
                         manifest, profile, path->filesystem_path, path->claim.storage_path
                         )) {
-                        err = ERROR(
-                            ERR_INTERNAL,
-                            "Profile '%s' committed '%s' but holds no claim of it at '%s'",
-                            profile, path->claim.storage_path, path->filesystem_path
-                        );
-                        goto cleanup;
+                        receipt->gone++;
+                    } else if (strcmp(row->profile, profile) != 0) {
+                        receipt->overridden++;
+                    } else {
+                        receipt->unkept++;
                     }
-                    if (strcmp(row->profile, profile) != 0) receipt->overridden++;
-                    else receipt->unkept++;
                     continue;
                 }
 
-                /* The ownership event's record, as a workspace writes one
-                 * (core/workspace.h workspace_anchor): the row's observation
-                 * with its content — the row's blob, under the capture's stat —
-                 * and the phase's stamp */
-                state_record_t record = workspace_observation(row);
-                record.blob_oid = row->blob_oid;
-                record.stat = path->stat;
+                /* The ownership event: what the capture committed, and the phase's
+                 * stamp */
+                state_record_t record = path->record;
                 record.deployed_at = now;
 
                 err = state_write(state, &record);
@@ -2361,7 +2382,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * is found before any source blob reaches the object database.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
-        const path_t *path = walk.directories.items[i];
+        path_t *path = walk.directories.items[i];
         const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
@@ -2395,6 +2416,21 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             goto cleanup;
         }
 
+        /* What the capture committed, as the record keeps it: the directory the
+         * guard above just held it to, and its claim — no content, which a
+         * directory never confirms — taken before the sheet takes the item */
+        path->record = (state_record_t){
+            .filesystem_path = path->filesystem_path,
+            .storage_path = storage_path,
+            .profile = opts->profile,
+            .kind = FS_OCCUPANT_DIRECTORY,
+        };
+        err = metadata_item_claim(dir_item, ctx->arena, &path->record);
+        if (err) {
+            metadata_item_free(dir_item);
+            goto cleanup;
+        }
+
         /* Verbose output before consuming the item */
         add_print_capture(out, "directory metadata", path->filesystem_path, dir_item);
 
@@ -2414,8 +2450,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Every file, as it was listed and as the decision pass sealed it
-     * (add_capture). Each capture's stat triple is kept on the path, for the
-     * record: it is the stat of the bytes committed, which a later lstat could
+     * (add_capture). Each capture's record is kept on the path: the blob the
+     * put wrote and the stat of the bytes committed, which a later lstat could
      * not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
         path_t *path = walk.files.items[i];
@@ -2507,10 +2543,11 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
      *
-     * Every path was captured from disk, so its record is anchored to the committed
-     * blob now rather than left for a later status to confirm — an ownership
-     * event whether or not Git moved, since the capture's stat is fresh either
-     * way. The view itself is computed at every load and needs no update.
+     * Every path was captured from disk, so its record — what the capture committed
+     * — is written now rather than left for a later status to confirm: an ownership
+     * event whether or not the commit moved the branch, since the capture's stat
+     * is fresh either way. The view itself is computed at every load and needs
+     * no update.
      *
      * For NEW profiles: Auto-enable provides intuitive UX (creating via 'add'
      * enables it). UX Decision: Creating a profile via 'add' should enable it
@@ -2643,9 +2680,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
             /* Each cause named by the count that checked it, never by the shortfall
              * (receipt_t): a row of another profile is an override, a row of
-             * this one under another of its own names is an unused path, and
-             * the health channel carries that one's repair on the status screen.
-             * The two sum to the shortfall exactly. */
+             * this one under another of its own names is an unused path, whose
+             * repair the health channel carries on the status screen, and a name
+             * the profile no longer holds is one a later commit removed. The
+             * three sum to the shortfall exactly. */
             if (receipt.overridden > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
@@ -2662,6 +2700,15 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     receipt.unkept == 1 ? "it" : "them"
                 );
             }
+            if (receipt.gone > 0) {
+                output_info(
+                    out, OUTPUT_NORMAL,
+                    "Note: %zu path%s no longer in profile '%s'; a later commit "
+                    "removed %s",
+                    receipt.gone, receipt.gone == 1 ? "" : "s", opts->profile,
+                    receipt.gone == 1 ? "it" : "them"
+                );
+            }
         }
         if (receipt.taken_over > 0) {
             output_info(
@@ -2671,9 +2718,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
         }
         /* Why nothing needs deploying: the bytes were read off disk, so the record
-         * names them deployed without an apply having run. Said only where it
-         * is true of every path on the line — a capture a row did not take is
-         * not standing at the winner's blob. */
+         * names them deployed without an apply having run — what this add captured;
+         * a commit another writer landed since is Git's move past it, the next
+         * status's to name. Said only where it is true of every path on the line
+         * — a capture a row did not take is not standing at the winner's blob. */
         if (whole) {
             output_hint(
                 out, OUTPUT_NORMAL, "Paths captured from filesystem (already deployed)"

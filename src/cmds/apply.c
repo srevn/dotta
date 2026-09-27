@@ -25,7 +25,6 @@
 #include "core/state.h"
 #include "core/workspace.h"
 #include "infra/path.h"
-#include "sys/filesystem.h"
 #include "sys/identity.h"
 #include "utils/hooks.h"
 

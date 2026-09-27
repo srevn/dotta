@@ -34,9 +34,11 @@
  *
  *   Exception: the verbs — add, remove, and update after its commit — write the
  *   record through state.h directly, against the post-commit view they build
- *   with manifest_build. add and remove load no workspace, and nothing reads
- *   update's after its record write, so there is no snapshot for the write to
- *   desync. profile enable / disable write only the enabled set, sync writes
+ *   with manifest_build: add and update what their captures committed, where
+ *   that view says the claim stands, and each the retirements — remove's orders
+ *   too — of what its commit let go. add and remove load no workspace, and nothing
+ *   reads update's after its record write, so there is no snapshot for the write
+ *   to desync. profile enable / disable write only the enabled set, sync writes
  *   nothing, and completion reads the dispatcher's view alone.
  *
  *   The workspace's products (rows, records, verdicts) are read through the
@@ -1302,9 +1304,8 @@ bool workspace_item_tags(
  * for as long as the view lives.
  *
  * Readers: core/workspace.c workspace_flush (a first observation, over no record
- * or one of another kind) and workspace_anchor (an ownership event's record);
- * cmds/add.c add_write_record and cmds/update.c update_write_record (the ownership
- * events of their captures). A reader not on this list is a bug.
+ * or one of another kind) and workspace_anchor (an ownership event's record). A
+ * reader not on this list is a bug.
  */
 static inline state_record_t workspace_observation(const manifest_row_t *row) {
     return (state_record_t){
@@ -1331,9 +1332,10 @@ static inline state_record_t workspace_observation(const manifest_row_t *row) {
  * names — reads what the load read, whenever it reads.
  *
  * The workspace-scope writer for ownership events — add and update build theirs
- * the same way and write it through state_write directly (the header's exception:
- * add loads no workspace, and nothing reads update's after its record write).
- * Its callers, in cmds/apply.c, each holding the item:
+ * from their captures, what each committed, and write it through state_write
+ * directly (the header's exception: add loads no workspace, and nothing reads
+ * update's after its record write). Its callers, in cmds/apply.c, each holding
+ * the item:
  *   - cmd_apply's adoption and acknowledgement loops, over the clean items (an
  *     ownership event on a file's first claim, and the acknowledgement of a clean
  *     row the record has yet to follow, a file's or a tracked directory's — the
@@ -1446,13 +1448,13 @@ error_t *workspace_learn(
  *   read, so a record of the row's kind is noted a content confirmation only
  *   where the row is its binding's (core/workspace.c workspace_analyze_file),
  *   and the one noted over no record or one of another kind lands on the
- *   observation, the row's own binding: the blob a record carries is the blob
- *   of the row its binding names, and a path whose record is bound to another
- *   row takes the slow path on every load until an ownership event moves the
- *   record onto the standing one. And a claim Git moved that a look of either
- *   kind found disk already standing on, whichever row's it is, since a claim
- *   opens nothing: the record follows every agreement, so the user's next move
- *   on that axis reads as the user's.
+ *   observation, the row's own binding: the blob a record carries was committed
+ *   under its binding (core/state.h state_record_t), and a path whose record is
+ *   bound to another row takes the slow path on every load until an ownership
+ *   event moves the record onto the standing one. And a claim Git moved that a
+ *   look of either kind found disk already standing on, whichever row's it is,
+ *   since a claim opens nothing: the record follows every agreement, so the user's
+ *   next move on that axis reads as the user's.
  *
  *   The void — every order a record the load read carries, where the view has
  *   the path again: the order's view end (core/state.h's lifetime rule), here

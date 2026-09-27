@@ -114,19 +114,26 @@ typedef struct {
  * by construction and nothing moves it: a run holds the store's write lock from
  * dispatch, so the rows its table was built from are the rows the record's view
  * is built from, and a key is a string of those rows' own (infra/mount.h), which
- * the disk cannot move. The join still tests it, the test being the NULL-row
- * guard the record's counts rest on.
+ * the disk cannot move. What can move is the name, which is Git's: the lock is
+ * the store's, and another writer's commit can land between this command's and
+ * its record phase.
  *
- * **What the record keeps**: every capture is an ownership event — the path was
- * put there from disk, so the record binds the committed blob to the stat the
- * capture took and the next status takes its fast path. A capture whose path
- * another profile's row wins, or another name of this profile's own, takes no
- * ownership event and the receipt says which; a capture whose claim no longer
- * stands where it was read ends the phase, the topology having moved under the
- * command. The record phase is not the command: a failure leaves Git's commit
- * standing, leaves the record exactly as it was, says so, and names the retry —
- * `--force`, over a branch that now holds the name, because an apply re-earns
- * the event for a file it adopts and never for a directory.
+ * **What the record keeps**: a capture's record is what the capture committed,
+ * and writing it is an ownership event — the path was put there from disk, so
+ * the record binds the blob the stage wrote to the stat the capture took (the
+ * next status takes its fast path), beside the node the capture read and the
+ * claim it authored. Every path the walk listed earns one, a directory included,
+ * whose record carries no content; the ancestry's rungs, claims the command only
+ * passes through, earn none. The view the record phase builds says whose each
+ * path is, and nothing the record says: a capture whose path another profile's
+ * row wins, or another name of this profile's own, takes no ownership event,
+ * and neither does one whose name another writer's commit removed since; the
+ * receipt says which. Bytes, a claim or a kind another writer committed since
+ * are Git's move past the capture, which the next load reads as [stale] — never
+ * as bytes dotta put there. The record phase is not the command: a failure leaves
+ * Git's commit standing, leaves the record exactly as it was, says so, and names
+ * the retry — `--force`, over a branch that now holds the name, because an apply
+ * re-earns the event for a file it adopts and never for a directory.
  *
  * **-n previews the add and writes nothing of dotta's.** Every decision this
  * command makes runs and no capture does, so an add refused over a name is a

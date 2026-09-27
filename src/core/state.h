@@ -189,9 +189,10 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *
  * Four groups of columns, one rule each. The store writes a record whole and
  * asks nothing of it (state_write), so each rule is kept where a record is built:
- * a first observation and an ownership event from the row the path is reconciled
- * against (core/workspace.h workspace_observation), a learning from the record
- * the load read (core/workspace.c workspace_learning).
+ * a first observation and apply's ownership events from the row the path is
+ * reconciled against (core/workspace.h workspace_observation), add's and update's
+ * from what their capture committed (cmds/add.c path_t, cmds/update.c commit_t),
+ * a learning from the record the load read (core/workspace.c workspace_learning).
  *   - the binding (profile, storage_path): the row the record follows — who
  *     deployed what — and the pair its blob was confirmed under. The row's at
  *     the first observation — a gone node's record's replacement among them —
@@ -203,24 +204,28 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     the blob dotta last verified it holds, with the stat of that moment. The
  *     first observation writes the node alone, the row's; the blob and the stat
  *     advance only after disk-matches-blob verification — an ownership event,
- *     which writes all three from the row, and a learning of the content (the
- *     slow-path CMP_EQUAL), which keeps the node: it is made only onto a record
- *     of the row's kind, since a record of another node, the look having found
- *     the row's in its place, gives way to the row's first observation before
- *     anything is learned onto it (core/workspace.c workspace_flush) — a whole
- *     write, never a learning onto the gone node's record. No node is executable:
- *     the bit is the claim's mode, and Git's filemode the row's alone. Zero
- *     blob_oid is no content confirmation — a directory, whose whole confirmed-disk
- *     record is that it was observed (a directory has no content confirmation,
- *     schema-enforced), or a file observed but never confirmed.
+ *     which writes all three from what it established (apply's from the row it
+ *     deployed or found standing, a capture's from what it read and committed:
+ *     the one blob the stage wrote, never a later tip's), and a learning of the
+ *     content (the slow-path CMP_EQUAL), which keeps the node: it is made only
+ *     onto a record of the row's kind, since a record of another node, the look
+ *     having found the row's in its place, gives way to the row's first observation
+ *     before anything is learned onto it (core/workspace.c workspace_flush) — a
+ *     whole write, never a learning onto the gone node's record. No node is
+ *     executable: the bit is the claim's mode, and Git's filemode the row's alone.
+ *     Zero blob_oid is no content confirmation — a directory, whose whole
+ *     confirmed-disk record is that it was observed (a directory has no content
+ *     confirmation, schema-enforced), or a file observed but never confirmed.
  *   - the claim (mode, owner, group): the claim dotta last reconciled the path
- *     against — the row's at the first observation and at every ownership event,
- *     and on each axis a look found disk standing on, or a fix made it stand
- *     on, the row's since (a learning of the claim). It is the base a claim Git
- *     moved is measured from (core/workspace.h workspace_claims_moved), and an
- *     orphan's reference on disk. A link claims no mode: its column is NULL,
- *     and every other node's is permission bits, 0000–0777; an owner and a group
- *     are whole, NULL where the claim names none (each schema-enforced).
+ *     against — the row's at the first observation and at apply's ownership events,
+ *     the one a capture authored at add's and update's (the claim its commit
+ *     carried, core/metadata.h metadata_item_claim), and on each axis a look
+ *     found disk standing on, or a fix made it stand on, the row's since (a
+ *     learning of the claim). It is the base a claim Git moved is measured from
+ *     (core/workspace.h workspace_claims_moved), and an orphan's reference on
+ *     disk. A link claims no mode: its column is NULL, and every other node's
+ *     is permission bits, 0000–0777; an owner and a group are whole, NULL where
+ *     the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
  *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
  *     ownership event and a learning keeps it, 0 = dotta never put this here.
@@ -243,16 +248,19 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *   - deployed_at > 0 on a file implies a non-zero blob_oid: the write that owned
  *     it confirmed it (schema-enforced). A row with a blob and deployed_at = 0
  *     is a confirmation, not a deployment.
- *   - the blob a record carries is the blob of the row its binding names. An
- *     encrypted blob is readable under no other binding (infra/content) — so
- *     the record's own binding, not the row's, is what a later load decrypts
+ *   - the blob a record carries was committed under its binding — the name, in
+ *     the profile, that the record keeps — whatever that binding's row holds
+ *     since. An encrypted blob is readable under no other binding (infra/content)
+ *     — so the record's own binding, not the row's, is what a later load decrypts
  *     its base with (core/workspace.c workspace_compare_base). Kept where the
  *     record is built, since the store writes what it is handed: a first
- *     observation and an ownership event take the binding and the blob from one
- *     row, and a learning, which keeps the binding it read, learns a blob only
- *     where the row is that binding's claim (core/workspace.c
- *     workspace_analyze_file, the content's note) — or onto the row's first
- *     observation, whose binding is the row's (workspace_flush).
+ *     observation and apply's ownership events take the binding and the blob
+ *     from one row, add's and update's from one capture — the name it committed
+ *     under and the blob the stage wrote there — and a learning, which keeps
+ *     the binding it read, learns a blob only where the row is that binding's
+ *     claim (core/workspace.c workspace_analyze_file, the content's note) — or
+ *     onto the row's first observation, whose binding is the row's
+ *     (workspace_flush).
  *
  * The binding and the claim are what an orphan (a record whose path the view
  * lacks) is measured against — the claim is its reference on disk, and the binding
@@ -824,11 +832,12 @@ const state_record_t *state_find_record(
  * path's. The store asks nothing of the record beyond what the schema holds (its
  * CHECKs, key_spelling): what the record says is its builder's, each rule kept
  * where the record is built (state_record_t). And the write is blind, decided
- * against the store it lands in: under the lock the run took before it read (a
- * run of apply, add), under a lock taken only where the store still stands as
+ * against the store it lands in: under a lock the writer holds while it reads
+ * what it decides from — the run's, taken at dispatch (apply, add), or one taken
+ * for the phase (update's record phase: its own captures, and the view it builds
+ * under the lock) — or under a lock taken only where the store still stands as
  * the caller's reads left it (state_resume: a read command's flush, apply's record
- * phase), or from nothing the store held (update's record phase, from its own
- * commit's rows).
+ * phase).
  *
  * The store's own spelling of a record, the one a read gives back (state_records):
  * a zero blob, an absent owner or group bind NULL, and so does a link's mode,

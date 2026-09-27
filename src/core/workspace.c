@@ -988,29 +988,19 @@ static void workspace_analyze_file(
             cmp_result = CMP_TYPE_DIFF;
         } else if (!row->encrypted) {
             err = compare_oid_to_disk(
-                &row->blob_oid,
-                filesystem_path,
-                expected_filemode,
-                &item->st,
+                &row->blob_oid, filesystem_path, expected_filemode, &item->st,
                 &cmp_result
             );
         } else {
             const buffer_t *expected_content = NULL;
             err = content_cache_get_from_blob_oid(
-                ws->content_cache,
-                &row->blob_oid,
-                expected_filemode,
-                storage_path,
-                profile,
-                &expected_content
+                ws->content_cache, &row->blob_oid, expected_filemode, storage_path,
+                profile, &expected_content
             );
 
             if (!err) {
                 err = compare_buffer_to_disk(
-                    expected_content,
-                    filesystem_path,
-                    expected_filemode,
-                    &item->st,
+                    expected_content, filesystem_path, expected_filemode, &item->st,
                     &cmp_result
                 );
             }
@@ -1065,13 +1055,13 @@ static void workspace_analyze_file(
              *
              * Onto a record of this row's kind only where it is bound to this
              * row: an encrypted blob opens under one binding and no other, and
-             * a learning keeps the binding it read, so this is where the blob a
-             * record carries is kept the blob of the row its binding names
-             * (core/state.h state_record_t) — the store writes what it is handed;
-             * a row the binding does not name is one the record has yet to follow,
-             * which takes the slow path on every load until apply's acknowledgement
-             * moves the record onto it, the stat above riding that ownership
-             * event. */
+             * a learning keeps the binding it read, so this is where a learned
+             * blob is kept one committed under the record's binding — the row's,
+             * which that binding names (core/state.h state_record_t): the store
+             * writes what it is handed; a row the binding does not name is one
+             * the record has yet to follow, which takes the slow path on every
+             * load until apply's acknowledgement moves the record onto it, the
+             * stat above riding that ownership event. */
             if (!record || record->kind != workspace_type_occupant(row->type) ||
                 manifest_is_claim(row, record->profile, record->storage_path)) {
                 item->confirmation |= DIVERGENCE_CONTENT;
@@ -2254,9 +2244,7 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
  * @return Error or NULL on success
  */
 static error_t *blob_over(
-    const manifest_t *view,
-    const char *directory,
-    arena_t *scratch,
+    const manifest_t *view, const char *directory, arena_t *scratch,
     const manifest_row_t **out
 ) {
     *out = NULL;

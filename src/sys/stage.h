@@ -261,6 +261,9 @@ void stage_admission_free(stage_admission_t *adm);
  *
  * The blob is answered to the caller that asks, and only once the entry stands:
  * a refused put answers none, whatever it left in the object database (the header).
+ * Readers: the captures that record what they committed, cmds/add.c add_capture
+ * and cmds/update.c update_profile — the id is their evidence of what the commit
+ * holds at the name, where the branch, read after it, is another writer's to move.
  *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)

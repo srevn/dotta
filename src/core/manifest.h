@@ -186,7 +186,7 @@ typedef struct manifest_row {
 /**
  * Is the row the claim (`profile`, `storage_path`)?
  *
- * The test a writer of the record makes before it advances one against a row. A
+ * The test a writer of the record makes before it writes one against a row. A
  * record binds what dotta confirmed — the blob, the stat — to the claim it names,
  * so the row has to be that very claim: the winner standing at a path may be
  * another claim of the same profile — a branch that arrived from a machine whose
@@ -195,14 +195,15 @@ typedef struct manifest_row {
  * state_record_t). Both halves, because within one profile a path is not an
  * identity.
  *
- * Readers: add's anchor pass (cmds/add.c add_write_record), update's capture
- * loop (cmds/update.c update_write_record), the file analysis's content note
- * (core/workspace.c workspace_analyze_file), and apply's acknowledgements — the
- * two loops over the clean items (cmds/apply.c cmd_apply) and the record phase's,
- * of a directory fixed in place (apply_write_record) — which are what moves a
- * record onto the claim standing at its path. The let-go loops ask the other
- * direction — whether any row still stands at the path — and are not readers of
- * this. NULL is no claim.
+ * Readers: add's anchor pass (cmds/add.c add_write_record) and update's capture
+ * loop (cmds/update.c update_write_record), each asking whether the claim a capture
+ * committed still stands at its path — whose the path is, the record's content
+ * being the capture's own; the file analysis's content note (core/workspace.c
+ * workspace_analyze_file); and apply's acknowledgements — the two loops over
+ * the clean items (cmds/apply.c cmd_apply) and the record phase's, of a directory
+ * fixed in place (apply_write_record) — which are what moves a record onto the
+ * claim standing at its path. The let-go loops ask the other direction — whether
+ * any row still stands at the path — and are not readers of this. NULL is no claim.
  */
 static inline bool manifest_is_claim(
     const manifest_row_t *row, const char *profile, const char *storage_path
@@ -845,8 +846,10 @@ const manifest_row_t *manifest_lookup_claim(
  * a profile names a path once — three clauses at each site, the row's own two
  * read where the row is in hand for the sentence, and this predicate the third.
  * A drift between them is a defect, which is why both are named here. The record
- * join asks the other question the predicate answers: whether a capture's claim
- * still stands where the walk read it, a table having been built twice.
+ * join asks the other question the predicate answers: whether a capture's name
+ * is still the profile's where the walk read it — the table cannot have moved
+ * under the command's lock, but Git's branch can, another writer's commit taking
+ * the name away since the capture's (cmds/add.c receipt_t's `gone`).
  *
  * @param manifest Manifest (NULL answers false)
  * @param profile The asker (NULL answers false)

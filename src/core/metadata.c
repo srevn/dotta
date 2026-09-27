@@ -14,11 +14,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "base/arena.h"
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
 #include "base/string.h"
+#include "core/state.h"
 #include "infra/label.h"
 #include "infra/mount.h"
 #include "sys/filesystem.h"
@@ -239,6 +241,37 @@ error_t *metadata_item_clone(
     }
 
     *out = item;
+    return NULL;
+}
+
+/**
+ * The claim an item makes, as the record keeps it
+ *
+ * The mode as the item claims it, 0 where it claims none (a link's); the names
+ * copied into the arena, one refusal for both.
+ */
+error_t *metadata_item_claim(
+    const metadata_item_t *item,
+    arena_t *arena,
+    state_record_t *record
+) {
+    CHECK_NULL(arena);
+    CHECK_NULL(record);
+
+    /* The empty claim first, what no item says: a link that claims nothing */
+    record->mode = 0;
+    record->owner = NULL;
+    record->group = NULL;
+    if (!item) return NULL;
+
+    if (item->mode != MODE_UNCLAIMED) record->mode = item->mode;
+    if (item->owner) record->owner = arena_strdup(arena, item->owner);
+    if (item->group) record->group = arena_strdup(arena, item->group);
+
+    if ((item->owner && !record->owner) || (item->group && !record->group)) {
+        return ERROR(ERR_MEMORY, "Failed to copy the claim of '%s'", item->key);
+    }
+
     return NULL;
 }
 

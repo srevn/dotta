@@ -160,20 +160,6 @@ typedef struct {
 } counts_t;
 
 /**
- * One path an update commit captured from disk
- *
- * A file's triple is the one the capture took from the bytes it committed
- * (content_capture_file's fstat of the fd it read), so the record binds the blob
- * to the stat that matched it — not to a later lstat that could see an edit made
- * since. A directory's is unset: a directory has no content confirmation, and
- * its record carries none.
- */
-typedef struct {
-    const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
-    state_stat_t stat;              /* The capture's triple; STATE_STAT_UNSET for a directory */
-} capture_t;
-
-/**
  * What one profile's update commit did, path by path
  *
  * Filled by the walk that does the work — one writer per item: the capture for
@@ -184,25 +170,32 @@ typedef struct {
  * an item the walk skipped (a directory the race guard refused) lands in no list,
  * is not named, and gets no record write.
  *
- * Items are borrowed (workspace lifetime); the pruned and retired keys are storage
- * paths their writers copy out, resolved through the mount table by the record
- * loop — the same route remove's record loop takes. The derivation's two outs
- * are shaped by what a reader can do with them (metadata.h): an authored claim
- * has no consequence beyond the sheet, so `claimed` is the count the commit gate
- * and the receipt read, while a dropped claim leaves the view by this commit
- * and only its key can settle the record it strands.
+ * A capture is kept as the record of what it committed — the node the capture
+ * held to, the blob the stage wrote, the triple its bytes were read with (a file's,
+ * the fstat of the descriptor it read; a link's, the lstat before its target;
+ * none for a directory, which confirms no content), and the claim the sheet took
+ * — so the record loop writes what this commit put there, never what a later
+ * tip of the branch says should be. Its names are the item's (workspace lifetime)
+ * and the arena's (the claim's, copied before the sheet that held them is freed).
+ * Deleted items are borrowed; the pruned and retired keys are storage paths their
+ * writers copy out, resolved through the mount table by the record loop — the
+ * same route remove's record loop takes. The derivation's two outs are shaped
+ * by what a reader can do with them (metadata.h): an authored claim has no
+ * consequence beyond the sheet, so `claimed` is the count the commit gate and
+ * the receipt read, while a dropped claim leaves the view by this commit and
+ * only its key can settle the record it strands.
  *
  * Memory: the caller zero-fills the struct; update_profile allocates `captured`
  * (sized to its item count, an upper bound); release with update_commits_free.
  */
 typedef struct {
-    const char *profile;     /* Borrowed from the item group */
-    capture_t *captured;     /* Files copied and directory claims captured */
+    const char *profile;      /* Borrowed from the item group */
+    state_record_t *captured; /* What each capture committed, as the record keeps it */
     size_t captured_count;
-    ptr_array_t deleted;     /* Items whose deletion the commit recorded (const workspace_item_t *) */
-    string_array_t pruned;   /* Directory entries dropped as redundant (storage paths) */
-    size_t claimed;          /* Ancestor claims the derivation authored or refreshed */
-    string_array_t retired;  /* Ancestor claims the derivation dropped (storage paths) */
+    ptr_array_t deleted;      /* Items whose deletion the commit recorded (const workspace_item_t *) */
+    string_array_t pruned;    /* Directory entries dropped as redundant (storage paths) */
+    size_t claimed;           /* Ancestor claims the derivation authored or refreshed */
+    string_array_t retired;   /* Ancestor claims the derivation dropped (storage paths) */
 } commit_t;
 
 /**
@@ -443,7 +436,7 @@ static error_t *update_profile(
     /* The capture list can hold every item; the walk fills it with the ones that
      * landed. A rows-only call has nothing to capture and no list to size. */
     if (item_count > 0) {
-        commit->captured = calloc(item_count, sizeof(capture_t));
+        commit->captured = calloc(item_count, sizeof(*commit->captured));
         if (!commit->captured) {
             err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
             goto cleanup;
@@ -489,11 +482,12 @@ static error_t *update_profile(
                  * the door: the bytes are released whichever step refused, and
                  * either refusal names the path the same way. */
                 content_capture_t capture = { 0 };
+                git_oid blob;
                 err = update_capture(ctx, stage, item, profile, &capture);
                 if (!err) {
                     err = stage_put(
                         stage, item->storage_path, capture.bytes.data,
-                        capture.bytes.size, capture.mode, NULL
+                        capture.bytes.size, capture.mode, &blob
                     );
                 }
                 content_capture_free(&capture);
@@ -518,6 +512,25 @@ static error_t *update_profile(
                         err, "Failed to capture metadata for: %s",
                         item->filesystem_path
                     );
+                    goto cleanup;
+                }
+
+                /* What the capture committed, as the record keeps it: the node
+                 * the load found and the capture held to, the blob the put wrote
+                 * under the look its bytes came off, and the claim — taken before
+                 * the sheet takes the item */
+                state_record_t *record = &commit->captured[commit->captured_count];
+                *record = (state_record_t){
+                    .filesystem_path = item->filesystem_path,
+                    .storage_path = item->storage_path,
+                    .profile = profile,
+                    .kind = item->occupant,
+                    .blob_oid = blob,
+                    .stat = state_stat_from_read(&capture.st),
+                };
+                err = metadata_item_claim(meta_item, ctx->arena, record);
+                if (err) {
+                    metadata_item_free(meta_item);
                     goto cleanup;
                 }
 
@@ -572,10 +585,7 @@ static error_t *update_profile(
                     metadata_remove_item(metadata, item->storage_path);
                 }
 
-                commit->captured[commit->captured_count++] = (capture_t){
-                    .item = item,
-                    .stat = state_stat_from_read(&capture.st)
-                };
+                commit->captured_count++;
                 break;
             }
 
@@ -654,6 +664,23 @@ static error_t *update_profile(
                     continue;
                 }
 
+                /* What the capture committed, as the record keeps it: the directory
+                 * the guard above just held it to, and its claim — no content,
+                 * which a directory never confirms — taken before the sheet takes
+                 * the item */
+                state_record_t *record = &commit->captured[commit->captured_count];
+                *record = (state_record_t){
+                    .filesystem_path = item->filesystem_path,
+                    .storage_path = item->storage_path,
+                    .profile = profile,
+                    .kind = FS_OCCUPANT_DIRECTORY,
+                };
+                err = metadata_item_claim(meta_item, ctx->arena, record);
+                if (err) {
+                    metadata_item_free(meta_item);
+                    goto cleanup;
+                }
+
                 /* Say what the capture took before metadata_add_item takes it */
                 if (meta_item->owner || meta_item->group) {
                     output_info(
@@ -683,10 +710,7 @@ static error_t *update_profile(
                 }
 
                 updated_dir_count++;
-                commit->captured[commit->captured_count++] = (capture_t){
-                    .item = item,
-                    .stat = STATE_STAT_UNSET
-                };
+                commit->captured_count++;
                 break;
             }
         }
@@ -703,11 +727,9 @@ static error_t *update_profile(
      * route's displaced arms), whichever profile's claim the squatter displaced,
      * so a chain that reaches here holds directories at every claimed rung. */
     for (size_t i = 0; i < commit->captured_count; i++) {
-        const workspace_item_t *item = commit->captured[i].item;
-
         err = metadata_capture_ancestors(
-            metadata, ctx->run.mounts, profile, item->storage_path, ctx->arena,
-            &commit->claimed, &commit->retired
+            metadata, ctx->run.mounts, profile, commit->captured[i].storage_path,
+            ctx->arena, &commit->claimed, &commit->retired
         );
         if (err) goto cleanup;
     }
@@ -810,7 +832,7 @@ static error_t *update_profile(
 
         size_t named = 0;
         for (size_t i = 0; i < commit->captured_count; i++) {
-            storage_paths[named++] = commit->captured[i].item->storage_path;
+            storage_paths[named++] = commit->captured[i].storage_path;
         }
         for (size_t i = 0; i < commit->deleted.count; i++) {
             const workspace_item_t *item = commit->deleted.items[i];
@@ -864,20 +886,23 @@ cleanup:
  * is the one thing only it knows about the paths it committed — read off each
  * commit's own bookkeeping (commit_t), so a path the walk skipped gets no record
  * write. A modified or new file was captured FROM disk, so where the capture's
- * own claim won its path in the post-commit view the record advances to the
- * just-committed blob with the stat the capture took (the next status takes the
- * fast path). A path the commit let go — a deleted item, a directory entry the
- * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
- * — left Git by this commit: with no row left at the path its record retires
- * (nothing backs it now); with a lower profile's row at the path it is a fallback
- * — the record stays and reads [reassigned] until apply deploys it. The rule
- * "anchor only the row that IS the captured claim" is the same one add applies
- * (core/manifest.h's manifest_is_claim): a row another profile won is its own,
- * and so is one a second claim of this very profile won. Both kinds: a directory's
- * claim (mode, ownership) is captured from disk exactly as add captures it, so
- * the capture owns the directory the same way — the ownership the orphan gate
- * asks for on scope exit — with no stat triple, a directory having no content
- * to confirm.
+ * own claim still stands at its path in the post-commit view the record is what
+ * the capture committed — its node, its blob under the stat the capture took
+ * (the next status takes the fast path), its claim — stamped as an ownership
+ * event. The view says whose the path is and nothing else: a commit another writer
+ * landed since moves what Git holds past the capture, which the next load reads
+ * as Git's move ([stale]), never as a capture of it. A path the commit let go —
+ * a deleted item, a directory entry the walk's prune dropped as redundant, or
+ * an ancestor claim the derivation dropped — left Git by this commit: with no
+ * row left at the path its record retires (nothing backs it now); with a lower
+ * profile's row at the path it is a fallback — the record stays and reads
+ * [reassigned] until apply deploys it. The rule "write only where the row IS
+ * the captured claim" is the same one add applies (core/manifest.h's
+ * manifest_is_claim): a row another profile won is its own, and so is one a second
+ * claim of this very profile won. Both kinds: a directory's claim (mode, ownership)
+ * is captured from disk exactly as add captures it, so the capture owns the
+ * directory the same way — the ownership the orphan gate asks for on scope exit
+ * — with no stat triple, a directory having no content to confirm.
  *
  * Algorithm:
  *   1. No commit landed: nothing to write, and no lock taken to write it
@@ -954,21 +979,13 @@ static error_t *update_write_record(
         const commit_t *commit = &commits[c];
 
         for (size_t i = 0; i < commit->captured_count; i++) {
-            const capture_t *capture = &commit->captured[i];
-            const manifest_row_t *row = manifest_lookup(
-                manifest, capture->item->filesystem_path
-            );
-            if (!manifest_is_claim(row, commit->profile, capture->item->storage_path)) {
+            /* What the capture committed, where its claim still stands, and the
+             * phase's stamp: the ownership event */
+            state_record_t record = commit->captured[i];
+            const manifest_row_t *row = manifest_lookup(manifest, record.filesystem_path);
+            if (!manifest_is_claim(row, commit->profile, record.storage_path)) {
                 continue;
             }
-
-            /* The ownership event's record, as a workspace writes one
-             * (core/workspace.h workspace_anchor): the row's observation with
-             * its content — the row's blob, under the capture's stat, which a
-             * directory's capture carries none of — and the phase's stamp */
-            state_record_t record = workspace_observation(row);
-            record.blob_oid = row->blob_oid;
-            record.stat = capture->stat;
             record.deployed_at = now;
 
             err = state_write(state, &record);
@@ -1910,12 +1927,12 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         /* Write the record — for the commits that landed, error or no
          *
-         * Captured files get their record advanced because UPDATE captures them
-         * FROM the filesystem (already at their target paths); the view itself
-         * is computed at every load and needs no update. A mid-sequence stop
-         * above changes nothing here: the landed commits are Git truth and the
-         * record follows them; the profiles that never committed have nothing
-         * to write.
+         * Captured files get their record written because UPDATE captures them
+         * FROM the filesystem (already at their target paths): what each capture
+         * committed, stamped as dotta's. The view itself is computed at every
+         * load and needs no update. A mid-sequence stop above changes nothing
+         * here: the landed commits are Git truth and the record follows them;
+         * the profiles that never committed have nothing to write.
          *
          * Non-fatal, and said in landed terms: its fate is the error, which lives
          * to the screens that read it — the stop's, and the summary's — and is

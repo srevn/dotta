@@ -880,10 +880,11 @@ cleanup:
  * to confirm.
  *
  * Algorithm:
- *   1. Begin write transaction on caller's handle
- *   2. Build the post-commit view once; one lookup per committed path
- *   3. Commit transaction
- *   4. Set *out_updated = true
+ *   1. No commit landed: nothing to write, and no lock taken to write it
+ *   2. Begin write transaction on caller's handle
+ *   3. Build the post-commit view once, under the lock; one lookup per committed
+ *      path
+ *   4. Commit transaction
  *
  * Preconditions:
  *   - Every entry in commits is a landed Git commit
@@ -893,12 +894,14 @@ cleanup:
  * Postconditions:
  *   - The record written for the committed paths as above
  *   - Transaction committed or rolled back atomically; state handle left clean
- *   - out_updated flag reflects whether the record was written
  *
  * Error Handling:
  *   - Non-fatal: Git commits succeeded and stand
- *   - On any error after begin_transaction, explicit rollback keeps state clean
- *     so the caller can continue to post-update hook and cleanup deterministically
+ *   - The store's refusals — the begin's, a write's, the commit's — are returned
+ *     in their own words (core/state.h), the one message the caller's warning
+ *     prints
+ *   - On any error after the begin, the rollback keeps state clean so the caller
+ *     can continue to post-update hook and cleanup deterministically
  *   - Caller should warn user
  *
  * Performance: one view build + O(N) point lookups, N = committed paths
@@ -909,41 +912,32 @@ cleanup:
  * @param commits One commit's bookkeeping per landed commit (may be NULL when
  *                count is 0)
  * @param commit_count Number of commits
- * @param out_updated Output flag: true if the record was written (must not be NULL)
  * @return Error or NULL on success
  */
 static error_t *update_write_record(
     const dotta_ctx_t *ctx,
     const commit_t *commits,
-    size_t commit_count,
-    bool *out_updated
+    size_t commit_count
 ) {
     CHECK_NULL(ctx);
-    CHECK_NULL(out_updated);
+
+    /* Nothing landed: nothing to write, and no lock to take for it */
+    if (commit_count == 0) {
+        return NULL;
+    }
 
     git_repository *repo = ctx->run.repo;
     state_t *state = ctx->run.state;
     const mount_table_t *mounts = ctx->run.mounts;
     output_t *out = ctx->out;
 
-    error_t *err = NULL;
     manifest_t *manifest = NULL;
-    bool in_transaction = false;
     size_t synced = 0, removed = 0, fallbacks = 0;   /* The split, said once the commit lands */
 
-    /* Initialize output */
-    *out_updated = false;
-
-    /* Begin write transaction on caller's handle */
-    err = state_begin(state);
+    /* The lock, and every decision below made under it (state_begin) */
+    error_t *err = state_begin(state);
     if (err) {
-        return error_wrap(err, "Failed to begin record update transaction");
-    }
-    in_transaction = true;
-
-    if (commit_count == 0) {
-        /* No commits to sync - commit the no-op transaction */
-        goto commit;
+        return err;
     }
 
     /* The post-commit view, once */
@@ -1027,15 +1021,8 @@ static error_t *update_write_record(
         }
     }
 
-commit:
     err = state_commit(state);
-    if (err) {
-        err = error_wrap(err, "Failed to save record updates");
-        goto cleanup;
-    }
-    in_transaction = false;
-
-    *out_updated = true;
+    if (err) goto cleanup;
 
     /* The split of the "Record updated" line cmd_update says, said once the commit
      * landed: a count said before it would stand above a COMMIT the store refused
@@ -1049,11 +1036,9 @@ commit:
     }
 
 cleanup:
-    /* Leave state handle clean for the caller by rolling back any uncommitted
-     * transaction. state_rollback is a no-op if already committed. */
-    if (in_transaction) {
-        state_rollback(state);
-    }
+    /* The transaction ends here either way: a refused one is rolled back, and a
+     * committed one has already ended (state_rollback finds none to end) */
+    state_rollback(state);
     manifest_free(manifest);
 
     return err;
@@ -1546,6 +1531,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     partition_t partition = { 0 };
     ptr_array_t derive_rows = { 0 };
     size_t total_updated = 0;
+    error_t *record_err = NULL;   /* The record phase's fate: non-fatal, read by the stop and the summary */
 
     /* CLI flags override config */
     if (opts->verbose) {
@@ -1913,7 +1899,6 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * summary below is its one sentence. */
     commit_t *commits = NULL;
     size_t commit_count = 0;
-    bool record_updated = false;
     if (!opts->dry_run) {
         err = update_execute(
             ctx, scope_enabled(scope),
@@ -1932,42 +1917,47 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
          * record follows them; the profiles that never committed have nothing
          * to write.
          *
-         * Non-fatal: if the record write fails, Git commits still succeeded;
-         * the next status re-confirms the captured files on its slow path.
-         */
-        error_t *record_err = update_write_record(
-            ctx, commits, commit_count, &record_updated
-        );
+         * Non-fatal, and said in landed terms: its fate is the error, which lives
+         * to the screens that read it — the stop's, and the summary's — and is
+         * freed with the run's resources. */
+        record_err = update_write_record(ctx, commits, commit_count);
 
         /* The bookkeeping has served the record */
         update_commits_free(commits, commit_count);
 
         if (record_err) {
-            /* Non-fatal: the landed commits are Git truth and the record write
-             * failed behind them. The next load reads the committed blobs from
-             * Git and re-confirms the captured files against disk. Said in landed
-             * terms — after a mid-sequence stop only some profiles committed,
-             * and this line must not claim more. */
+            /* The landed commits are Git truth and the record's write failed
+             * behind them, rolled back whole: the record is what it was. The
+             * next load confirms what it finds disk agrees with; a file new to
+             * the record is apply's to adopt, and the paths the commits let go
+             * are apply's to settle. A directory the commits re-captured keeps
+             * the ownership its record already held — apply earns none for a
+             * directory (cmds/add.c add_write_record) — which is the conservative
+             * side: an unowned directory is released at scope exit, never pruned.
+             * Said in landed terms — after a mid-sequence stop only some profiles
+             * committed, and this line must not claim more. */
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to update the record: %s",
                 error_message(record_err)
             );
-
             output_info(
                 out, OUTPUT_NORMAL,
-                "The commits that landed are in Git; the record follows on the next status"
+                "The commits that landed are in Git; the record was not written - "
+                "what it already held stands"
             );
-            error_free(record_err);
-            /* Continue to post-update hook and success output */
+            output_hint(
+                out, OUTPUT_NORMAL,
+                "Run 'dotta apply' to adopt the files they added and settle the paths "
+                "they let go"
+            );
+        } else if (err && commit_count > 0) {
+            /* The executor stopped mid-sequence, and the commits that landed
+             * are recorded (just above): said before the stop is reported, so
+             * the ✓ lines above are accounted for */
+            output_info(out, OUTPUT_NORMAL, "Record updated");
         }
 
         if (err) {
-            /* The executor stopped mid-sequence. The commits that landed are
-             * recorded (just above); say so before reporting the stop, so the ✓
-             * lines above are accounted for. */
-            if (record_updated && commit_count > 0) {
-                output_info(out, OUTPUT_NORMAL, "Record updated");
-            }
             goto cleanup;
         }
     }
@@ -2001,7 +1991,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
         /* Record feedback, plain: the per-path split is the verbose "Record synced"
          * line, and the failure case already said what happened (warning above) */
-        if (record_updated) {
+        if (!record_err) {
             output_info(out, OUTPUT_NORMAL, "Record updated");
             output_hint(
                 out, OUTPUT_NORMAL, "Run 'dotta status' to verify state"
@@ -2010,6 +2000,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
 cleanup:
+    error_free(record_err);
     free((void *) partition.accepted.entries); /* The array; the items are the workspace's */
     ptr_array_deinit(&derive_rows);            /* Rows are the view's */
     if (ws) workspace_free(ws);

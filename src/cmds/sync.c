@@ -2116,10 +2116,6 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
         manifest_diff_stats_t *stats = arena_calloc(
             ctx->arena, enabled->count, sizeof(*stats)
         );
-        if (!stats) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate manifest statistics");
-            goto cleanup;
-        }
 
         err = manifest_diff(before, after, records, record_count, enabled, stats);
         if (err) {

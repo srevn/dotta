@@ -2224,15 +2224,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * and describes the row's node, or a node of its own still standing
      * (core/workspace.h workspace_reassigned). */
     size_t clean_reassignment_count = 0;
-    reassignment_t *clean_reassignments = arena_alloc(
+    reassignment_t *clean_reassignments = arena_calloc(
         ctx->arena,
-        (deploy_plan->files.clean.count + deploy_plan->directories.clean.count) *
+        deploy_plan->files.clean.count + deploy_plan->directories.clean.count,
         sizeof(*clean_reassignments)
     );
-    if (!clean_reassignments) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile reassignments");
-        goto cleanup;
-    }
 
     /* One moment for everything this run records — the adoption loop below and
      * the post-deploy record after the plan — so a run's ownership events carry
@@ -2643,15 +2639,11 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * its join facts sound on every one. The ancestors are outside the plan and
      * stay uncounted, as the record phase leaves them. */
     size_t pending_reassignment_count = 0;
-    reassignment_t *pending_reassignments = arena_alloc(
+    reassignment_t *pending_reassignments = arena_calloc(
         ctx->arena,
-        (deploy_verdicts->files.count + deploy_verdicts->directories.count) *
+        deploy_verdicts->files.count + deploy_verdicts->directories.count,
         sizeof(*pending_reassignments)
     );
-    if (!pending_reassignments) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate profile reassignments");
-        goto cleanup;
-    }
 
     const deploy_verdicts_t *kinds[] = {
         &deploy_verdicts->files,

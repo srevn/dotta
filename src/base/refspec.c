@@ -86,9 +86,6 @@ error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
         size_t profile_len = (size_t) (colon - input);
         if (profile_len > 0) {
             rs.profile = arena_strndup(arena, input, profile_len);
-            if (!rs.profile) {
-                return ERROR(ERR_MEMORY, "Failed to allocate profile name");
-            }
         }
         remainder = colon + 1;
     }
@@ -102,20 +99,10 @@ error_t *parse_refspec(arena_t *arena, const char *input, refspec_t *out) {
         }
 
         rs.file = arena_strndup(arena, remainder, file_len);
-        if (!rs.file) {
-            return ERROR(ERR_MEMORY, "Failed to allocate file path");
-        }
-
         rs.commit = arena_strdup(arena, at + 1);
-        if (!rs.commit) {
-            return ERROR(ERR_MEMORY, "Failed to allocate commit reference");
-        }
     } else {
         /* No '@', empty suffix, or suffix isn't a git ref: whole remainder is the file. */
         rs.file = arena_strdup(arena, remainder);
-        if (!rs.file) {
-            return ERROR(ERR_MEMORY, "Failed to allocate file path");
-        }
     }
 
     *out = rs;

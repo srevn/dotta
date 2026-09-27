@@ -174,8 +174,7 @@ static error_t *read_patterns(
         );
     }
 
-    gitignore_ruleset_t *rules = NULL;
-    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &rules));
+    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena);
 
     for (int32_t i = 0; i < value.u.arr.size; i++) {
         toml_datum_t entry = value.u.arr.elem[i];
@@ -207,16 +206,9 @@ static error_t *read_patterns(
 config_t *config_create_default(void) {
     /* The configuration is its arena's: the struct, every value read into it
      * and both compiled rulesets, gone at once with config_free. A default is a
-     * literal, so nothing below can fail but the arena and the struct. */
+     * literal. */
     arena_t *arena = arena_create(0);
-    if (!arena) {
-        return NULL;
-    }
     config_t *config = arena_calloc(arena, 1, sizeof(*config));
-    if (!config) {
-        arena_free(arena);
-        return NULL;
-    }
     config->arena = arena;
 
     /* Set defaults */
@@ -475,10 +467,6 @@ error_t *config_load(config_t **out) {
 
     /* Start with defaults */
     config_t *config = config_create_default();
-    if (!config) {
-        free(path);
-        return ERROR(ERR_MEMORY, "Failed to create config");
-    }
 
     /* The file over the defaults: each key it names is checked as it is read
      * (read_key), so nothing is left to check after. */

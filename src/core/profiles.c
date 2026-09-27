@@ -840,9 +840,6 @@ error_t *profile_needs_target(
     *needs_target = false;
 
     arena_t *scratch = arena_create(0);
-    if (!scratch) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the branch's view");
-    }
 
     mount_table_t *mounts = NULL;
     manifest_t *view = NULL;
@@ -933,12 +930,6 @@ error_t *profile_build_filesystem_index(
 
         profile_claim_t *entries = arena_calloc(arena, n, sizeof(*entries));
         profile_claims_t *claims = arena_calloc(arena, 1, sizeof(*claims));
-        if (!entries || !claims) {
-            err = ERROR(
-                ERR_MEMORY, "Failed to allocate the claims at a filesystem path"
-            );
-            break;
-        }
         for (size_t g = 0; g < n; g++) {
             entries[g] = (profile_claim_t){
                 sorted[i + g]->profile, sorted[i + g]->storage_path
@@ -1101,10 +1092,6 @@ error_t *profile_discover_claims(
     profile_claim_t *claims = arena_calloc(
         arena, branches->count, sizeof(*claims)
     );
-    if (!claims) {
-        string_array_free(branches);
-        return ERROR(ERR_MEMORY, "Failed to allocate the claims");
-    }
 
     size_t count = 0;
     for (size_t i = 0; i < branches->count; i++) {
@@ -1125,12 +1112,7 @@ error_t *profile_discover_claims(
 
         /* The branch name outlives the list freed below; the claim's name is
          * the arena's already — the row's own, or the argument's. */
-        const char *owner = arena_strdup(arena, branch);
-        if (!owner) {
-            err = ERROR(ERR_MEMORY, "Failed to record a claim");
-            break;
-        }
-        claims[count++] = (profile_claim_t){ owner, storage_path };
+        claims[count++] = (profile_claim_t){ arena_strdup(arena, branch), storage_path };
     }
 
     string_array_free(branches);

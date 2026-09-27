@@ -528,11 +528,7 @@ static error_t *update_profile(
                     .blob_oid = blob,
                     .stat = state_stat_from_read(&capture.st),
                 };
-                err = metadata_item_claim(meta_item, ctx->arena, record);
-                if (err) {
-                    metadata_item_free(meta_item);
-                    goto cleanup;
-                }
+                metadata_item_claim(meta_item, ctx->arena, record);
 
                 /* meta_item is NULL for a link that claims nothing — no mode to
                  * take, no ownership tracked. A capture that claims nothing retires
@@ -673,11 +669,7 @@ static error_t *update_profile(
                     .profile = profile,
                     .kind = FS_OCCUPANT_DIRECTORY,
                 };
-                err = metadata_item_claim(meta_item, ctx->arena, record);
-                if (err) {
-                    metadata_item_free(meta_item);
-                    goto cleanup;
-                }
+                metadata_item_claim(meta_item, ctx->arena, record);
 
                 /* Say what the capture took before metadata_add_item takes it */
                 if (meta_item->owner) {
@@ -2053,9 +2045,6 @@ static error_t *update_post_parse(
 
     /* Worst case: every positional becomes a file. */
     char **files = arena_calloc(arena, o->positional_count, sizeof(char *));
-    if (files == NULL) {
-        return ERROR(ERR_MEMORY, "Failed to allocate file list");
-    }
     size_t file_count = 0;
 
     for (size_t i = 0; i < o->positional_count; i++) {
@@ -2067,9 +2056,6 @@ static error_t *update_post_parse(
             !path_input_announces_path(arg)) {
             /* Arena-backed 1-slot profile array for the positional. */
             char **profiles = arena_calloc(arena, 1, sizeof(char *));
-            if (profiles == NULL) {
-                return ERROR(ERR_MEMORY, "Failed to allocate profile list");
-            }
             profiles[0] = arg;
             o->profiles = profiles;
             o->profile_count = 1;

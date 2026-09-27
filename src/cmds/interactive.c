@@ -410,9 +410,6 @@ static error_t *plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
         plan->new_order_items = arena_calloc(
             arena, view->item_count, sizeof(*plan->new_order_items)
         );
-        if (!plan->new_order_items) {
-            return ERROR(ERR_MEMORY, "Failed to allocate item pointer scratch");
-        }
     }
 
     size_t k = 0;
@@ -442,17 +439,11 @@ static error_t *plan_classify(
         plan->needs_enable = arena_calloc(
             arena, plan->new_order.count, sizeof(*plan->needs_enable)
         );
-        if (!plan->needs_enable) {
-            return ERROR(ERR_MEMORY, "Failed to allocate enable flags");
-        }
     }
     if (persisted.count > 0) {
         plan->removal_names = arena_calloc(
             arena, persisted.count, sizeof(*plan->removal_names)
         );
-        if (!plan->removal_names) {
-            return ERROR(ERR_MEMORY, "Failed to allocate removal scratch");
-        }
     }
 
     /* Walk persisted; nested linear scan beats a hashmap on these tiny sets
@@ -468,11 +459,7 @@ static error_t *plan_classify(
         }
         if (retained) continue;
 
-        char *dup = arena_strdup(arena, p_name);
-        if (!dup) {
-            return ERROR(ERR_MEMORY, "Failed to duplicate removal name");
-        }
-        plan->removal_names[plan->removal_count++] = dup;
+        plan->removal_names[plan->removal_count++] = arena_strdup(arena, p_name);
     }
 
     /* Walk new_order; flag rows that must be re-written via

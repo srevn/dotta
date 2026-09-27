@@ -449,10 +449,6 @@ static error_t *workspace_add_untracked(
     CHECK_NULL(profile);
 
     workspace_item_t *item = arena_alloc(ws->arena, sizeof(*item));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate untracked item");
-    }
-
     *item = (workspace_item_t){
         .filesystem_path = arena_strdup(ws->arena, filesystem_path),
         .storage_path = arena_strdup(ws->arena, storage_path),
@@ -462,9 +458,6 @@ static error_t *workspace_add_untracked(
         .st = *st,
         .state = WORKSPACE_STATE_UNTRACKED,
     };
-    if (!item->filesystem_path || !item->storage_path) {
-        return ERROR(ERR_MEMORY, "Failed to copy untracked paths");
-    }
 
     error_t *err = ptr_array_push(&ws->diverged, item);
     if (err) {
@@ -1837,17 +1830,13 @@ static void workspace_look_orphans(workspace_t *ws) {
  * untracked scan's leaf probe).
  *
  * @param ws Workspace (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *index_entries(workspace_t *ws) {
+static void index_entries(workspace_t *ws) {
     size_t active_count = ws->dir_count + ws->file_count;
 
     ws->entries = arena_calloc(
         ws->arena, active_count + ws->orphan_count, sizeof(*ws->entries)
     );
-    if (!ws->entries) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the entries");
-    }
 
     for (size_t i = 0; i < active_count; i++) {
         const workspace_item_t *item = ws->active[i];
@@ -1866,8 +1855,6 @@ static error_t *index_entries(workspace_t *ws) {
     }
 
     qsort(ws->entries, ws->entry_count, sizeof(*ws->entries), entry_order);
-
-    return NULL;
 }
 
 /**
@@ -2234,19 +2221,12 @@ static error_t *workspace_analyze_orphans(workspace_t *ws) {
  * @param view      The precedence-resolved view (must not be NULL)
  * @param directory The directory's key (must not be NULL)
  * @param scratch   Arena the climb's copy is taken in (must not be NULL)
- * @param out       The blob standing over it, or NULL (must not be NULL)
- * @return Error or NULL on success
+ * @return The blob standing over it, or NULL
  */
-static error_t *blob_over(
-    const manifest_t *view, const char *directory, arena_t *scratch,
-    const manifest_row_t **out
+static const manifest_row_t *blob_over(
+    const manifest_t *view, const char *directory, arena_t *scratch
 ) {
-    *out = NULL;
-
     char *rung = arena_strdup(scratch, directory);
-    if (!rung) {
-        return ERROR(ERR_MEMORY, "Failed to copy path");
-    }
 
     /* The guard is on the truncation and not on the read, because the root
      * directory is its own parent (base/string.h str_path_parent_len): a climb
@@ -2254,10 +2234,7 @@ static error_t *blob_over(
      * after it would never leave. */
     for (;;) {
         const manifest_row_t *row = manifest_lookup(view, rung);
-        if (row && row->type != PATH_TYPE_DIRECTORY) {
-            *out = row;
-            return NULL;
-        }
+        if (row && row->type != PATH_TYPE_DIRECTORY) return row;
         if (!rung[1]) return NULL;
 
         rung[str_path_parent_len(rung)] = '\0';
@@ -2479,10 +2456,6 @@ static error_t *scan_directory_for_untracked(
      * in a scratch of its own, so this frame's `child` stands as that frame's
      * `directory` for the whole subtree (include/runtime.h). */
     arena_t *scratch = arena_create(0);
-    if (!scratch) {
-        string_array_free(listing);
-        return ERROR(ERR_MEMORY, "Failed to allocate the scan's scratch");
-    }
     const arena_mark_t empty = arena_mark(scratch);
 
     /* "/" is the one directory whose spelling ends in its separator, and a tracked
@@ -2500,10 +2473,6 @@ static error_t *scan_directory_for_untracked(
         const char *child = arena_str_format(
             scratch, "%s%s%s", directory, separator, listing->items[i]
         );
-        if (!child) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate path");
-            goto cleanup;
-        }
 
         /* The view's word at the child's own key, before any look. A claim that
          * names its own path settles the child whatever stands there: a blob
@@ -2691,9 +2660,6 @@ static error_t *workspace_analyze_untracked(
      * rule for a contested path (core/manifest.c manifest_layer), applied where
      * the keys differ — and within one profile the later row in path order. */
     scan_root_t *roots = arena_calloc(ws->arena, ws->dir_count, sizeof(*roots));
-    if (!roots) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the scan's roots");
-    }
     size_t root_count = 0;
 
     size_t profile_count = 0;
@@ -2764,10 +2730,7 @@ static error_t *workspace_analyze_untracked(
          * inherits this answer and climbs nothing of its own: it asks the view
          * at each child's own key, and every rung over that key is this one
          * (scan_directory_for_untracked). */
-        const manifest_row_t *blob = NULL;
-        err = blob_over(ws->manifest, root->directory, ws->arena, &blob);
-        if (err) goto cleanup;
-        if (blob) continue;
+        if (blob_over(ws->manifest, root->directory, ws->arena)) continue;
 
         /* The owner's ruleset (memoised in the builder). Fatal on failure: scanning
          * a profile without its ignore rules risks reporting genuinely ignored
@@ -2974,11 +2937,10 @@ static void workspace_analyze_directory(workspace_t *ws, workspace_item_t *item)
  * authority.
  *
  * Every array is allocated whatever its count: the arena answers a zero-byte
- * request with a pointer (NULL is OOM alone, base/arena.h), so no array is ever
- * NULL — qsort's and bsearch's base must be valid even for zero elements (C11
- * 7.22.5), and the file items', active + dir_count, is then a pointer on an empty
- * view too. On an empty view several of them are that one answer, the same address,
- * and none is read at count zero.
+ * request with a place of its own (base/arena.h), so no array is ever NULL —
+ * qsort's and bsearch's base must be valid even for zero elements (C11 7.22.5),
+ * and the file items', active + dir_count, is then a pointer on an empty view
+ * too. None is read at count zero.
  *
  * Lifetime: every pointer (the items, their arrays, the record, the squatted
  * list) lives in ws->arena, beside the view's rows; the view's index is the
@@ -2996,9 +2958,6 @@ static error_t *workspace_partition(workspace_t *ws) {
      * to say leaves standing, so none writes it. */
     workspace_item_t *items = arena_calloc(ws->arena, view.count, sizeof(*items));
     ws->active = arena_calloc(ws->arena, view.count, sizeof(*ws->active));
-    if (!items || !ws->active) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the active items");
-    }
 
     for (size_t i = 0; i < view.count; i++) {
         const manifest_row_t *row = view.entries[i];
@@ -3039,9 +2998,6 @@ static error_t *workspace_partition(workspace_t *ws) {
     if (err) return err;
 
     ws->orphans = arena_calloc(ws->arena, record_count, sizeof(*ws->orphans));
-    if (!ws->orphans) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the orphans");
-    }
 
     for (size_t i = 0; i < record_count; i++) {
         state_record_t *record = &records[i];
@@ -3053,10 +3009,6 @@ static error_t *workspace_partition(workspace_t *ws) {
         }
 
         workspace_item_t *orphan = arena_alloc(ws->arena, sizeof(*orphan));
-        if (!orphan) {
-            return ERROR(ERR_MEMORY, "Failed to allocate an orphan item");
-        }
-
         *orphan = (workspace_item_t){
             .record = record,
             .filesystem_path = record->filesystem_path,
@@ -3070,20 +3022,14 @@ static error_t *workspace_partition(workspace_t *ws) {
         ws->orphans[ws->orphan_count++] = orphan;
     }
 
-    /* Room for every squatter the looks can note, taken here, where the load
-     * can still fail whole: a note dropped later would cost a verdict — every
-     * item beneath the squatter analyzed on a look that resolved through it. A
-     * squatter is a directory claim, a view row's or a record's, or a link at
-     * any path the load looks at with an orphan beneath it — a file row's among
-     * them, and two such links, one beneath the other, can stand over one orphan
-     * — and each item is looked at once (workspace_look), so the items bound
-     * the notes. */
+    /* Room for every squatter the looks can note. A squatter is a directory claim,
+     * a view row's or a record's, or a link at any path the load looks at with
+     * an orphan beneath it — a file row's among them, and two such links, one
+     * beneath the other, can stand over one orphan — and each item is looked at
+     * once (workspace_look), so the items bound the notes. */
     ws->squatted = arena_calloc(
         ws->arena, view.count + ws->orphan_count, sizeof(*ws->squatted)
     );
-    if (!ws->squatted) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the squatted directory list");
-    }
 
     return NULL;
 }
@@ -3233,12 +3179,7 @@ error_t *workspace_load(
      * line. */
     if ((opts->analyze_orphans && ws->orphan_count > 0) || opts->analyze_untracked) {
         workspace_look_orphans(ws);
-
-        err = index_entries(ws);
-        if (err) {
-            workspace_free(ws);
-            return error_wrap(err, "Failed to index the entries");
-        }
+        index_entries(ws);
     }
 
     /* Optional: the orphans analyzed (records of either kind the view lacks) —
@@ -3891,9 +3832,6 @@ error_t *workspace_anchor(
      * with its content — the row's blob, zero for a directory, under the stat
      * the event stands on — and the event's stamp */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-    if (!record) {
-        return ERROR(ERR_MEMORY, "Failed to allocate record");
-    }
     *record = workspace_observation(item->row);
     record->blob_oid = item->row->blob_oid;
     record->stat = stat;
@@ -3930,9 +3868,6 @@ error_t *workspace_learn(
 
     /* The record the learning writes, built before the statement */
     state_record_t *record = arena_alloc(ws->arena, sizeof(*record));
-    if (!record) {
-        return ERROR(ERR_MEMORY, "Failed to allocate record");
-    }
     *record = workspace_learning(*item->record, item, axes);
 
     error_t *err = state_write(ws->state, record);
@@ -4036,16 +3971,8 @@ error_t *workspace_flush(workspace_t *ws) {
 
         if (!learnings) {
             learnings = arena_calloc(ws->arena, active_count, sizeof(*learnings));
-            if (!learnings) {
-                err = ERROR(ERR_MEMORY, "Failed to hold what the load owes");
-                goto rollback;
-            }
         }
         state_record_t *learning = arena_alloc(ws->arena, sizeof(*learning));
-        if (!learning) {
-            err = ERROR(ERR_MEMORY, "Failed to hold what the load owes");
-            goto rollback;
-        }
         *learning = workspace_learning(base, item, item->confirmation);
         learnings[i] = learning;
     }

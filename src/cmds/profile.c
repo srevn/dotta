@@ -974,10 +974,6 @@ static error_t *profile_enable(
         manifest_diff_stats_t *stats = arena_calloc(
             ctx->arena, to_enable_validated->count, sizeof(*stats)
         );
-        if (!stats) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate enable stats");
-            goto cleanup;
-        }
 
         err = manifest_diff(
             before, after, records, record_count, to_enable_validated, stats
@@ -1215,10 +1211,6 @@ static error_t *profile_disable(
     const char **forgotten = arena_calloc(
         ctx->arena, to_disable_validated->count, sizeof(*forgotten)
     );
-    if (!forgotten) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate the forgotten targets");
-        goto cleanup;
-    }
     for (size_t i = 0; i < to_disable_validated->count; i++) {
         const char *bound =
             state_target(state, to_disable_validated->items[i]);
@@ -1226,10 +1218,6 @@ static error_t *profile_disable(
         char shown[PATH_MAX];
         output_format_path(bound, identity()->home, shown, sizeof(shown));
         forgotten[i] = arena_strdup(ctx->arena, shown);
-        if (!forgotten[i]) {
-            err = ERROR(ERR_MEMORY, "Failed to copy a forgotten target");
-            goto cleanup;
-        }
     }
 
     /* Dry-run: preview what a live run would do, skip every state mutation. Dry-run
@@ -1321,10 +1309,6 @@ static error_t *profile_disable(
             if (err) goto cleanup;
 
             stats = arena_calloc(ctx->arena, to_disable_validated->count, sizeof(*stats));
-            if (!stats) {
-                err = ERROR(ERR_MEMORY, "Failed to allocate disable stats");
-                goto cleanup;
-            }
 
             err = manifest_diff(
                 before, after, records, record_count, to_disable_validated, stats

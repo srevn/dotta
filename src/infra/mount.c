@@ -198,9 +198,6 @@ error_t *mount_table_build(
      * the sentinel — a reservation, not a count, so the rows are read once. */
     mount_table_t *table = arena_calloc(arena, 1, sizeof(*table));
     mount_root_t *roots = arena_calloc(arena, mount_count + 2U, sizeof(*roots));
-    if (!table || !roots) {
-        return ERROR(ERR_MEMORY, "Failed to allocate mount table");
-    }
 
     /* Customs first (input order), then HOME, then the sentinel; no reader depends
      * on the order — mount_root_above breaks its ties on the binder and one label,
@@ -246,9 +243,6 @@ error_t *mount_table_build(
          * mount_root_above's. */
         const char *filesystem_path = arena_strdup(arena, raw);
         const char *profile = arena_strdup(arena, mounts[i].profile);
-        if (!filesystem_path || !profile) {
-            return ERROR(ERR_MEMORY, "Failed to copy a binding into the arena");
-        }
         roots[n++] = (mount_root_t){
             .label = LABEL_CUSTOM, .filesystem_path = filesystem_path, .profile = profile,
         };
@@ -259,9 +253,6 @@ error_t *mount_table_build(
      * and loses the naming tie to it. */
     const identity_t *id = identity();
     const char *home = arena_strdup(arena, id->home);
-    if (!home) {
-        return ERROR(ERR_MEMORY, "Failed to copy the home directory into the arena");
-    }
     roots[n++] = (mount_root_t){
         .label = LABEL_HOME, .filesystem_path = home, .profile = NULL,
     };
@@ -337,10 +328,6 @@ error_t *mount_resolve(
     *out_filesystem_path = *split.tail
         ? arena_str_format(arena, "%s/%s", join_prefix(root), split.tail)
         : arena_strdup(arena, root->filesystem_path);
-
-    if (!*out_filesystem_path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate filesystem path");
-    }
 
     return NULL;
 }

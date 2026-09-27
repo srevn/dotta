@@ -160,10 +160,6 @@ static error_t *open_run(
 
         run->repo_path = arena_strdup(arena, repo_path);
         free(repo_path);
-        if (!run->repo_path) {
-            err = ERROR(ERR_MEMORY, "Failed to copy repository path");
-            goto done;
-        }
     }
 
     /* State, in the shape the spec declares — narrowed where this invocation is
@@ -345,10 +341,6 @@ static int run_spec(
      * two blocks at this initial size. Borrowed by handlers via ctx->arena and
      * by every derived member of the run; freed below. */
     arena_t *arena = arena_create(32UL * 1024);
-    if (arena == NULL) {
-        fprintf(stderr, "Failed to allocate memory\n");
-        return 1;
-    }
 
     /* `resolved` tracks the leaf command after subcommand resolution. For a flat
      * command this stays equal to `cmd`; for a tree it is the matched child (so
@@ -363,11 +355,6 @@ static int run_spec(
     if (!cmd->passthrough) {
         if (cmd->opts_size > 0) {
             opts = arena_calloc(arena, 1, cmd->opts_size);
-            if (opts == NULL) {
-                fprintf(stderr, "Failed to allocate memory\n");
-                arena_free(arena);
-                return 1;
-            }
         }
 
         /* Parse. The engine resets `errors` in-place, so the uninitialized stack

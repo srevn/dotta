@@ -200,12 +200,9 @@ static error_t *remove_paths_candidates(
     RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
     if (record_count == 0) return NULL;
 
-    candidate_t *candidates = arena_alloc(
-        ctx->arena, (claim_count + pruned_dirs->count) * sizeof(*candidates)
+    candidate_t *candidates = arena_calloc(
+        ctx->arena, claim_count + pruned_dirs->count, sizeof(*candidates)
     );
-    if (!candidates) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the candidates");
-    }
     size_t count = 0;
 
     /* The claims the arguments took: the user's word reaches all of them
@@ -276,10 +273,7 @@ static error_t *remove_profile_candidates(
     RETURN_IF_ERROR(state_records(ctx->run.state, ctx->arena, &records, &record_count));
     if (record_count == 0) return NULL;
 
-    candidate_t *candidates = arena_alloc(ctx->arena, record_count * sizeof(*candidates));
-    if (!candidates) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the candidates");
-    }
+    candidate_t *candidates = arena_calloc(ctx->arena, record_count, sizeof(*candidates));
     size_t count = 0;
 
     for (size_t i = 0; i < record_count; i++) {
@@ -385,27 +379,18 @@ static error_t *remove_resolve(
     bool *taken = NULL;            /* beside claims[j]: an argument took it */
     size_t claim_count = 0;
     if (profile_files->count + dir_count > 0) {
-        claims = arena_alloc(
-            ctx->arena,
-            (profile_files->count + dir_count) * sizeof(claim_t)
+        claims = arena_calloc(
+            ctx->arena, profile_files->count + dir_count, sizeof(claim_t)
         );
         taken = arena_calloc(
             ctx->arena, profile_files->count + dir_count, sizeof(bool)
         );
-        if (!claims || !taken) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate claims array");
-            goto cleanup;
-        }
     }
 
     for (size_t i = 0; i < profile_files->count; i++) {
-        const char *copy = arena_strdup(ctx->arena, profile_files->items[i]);
-        if (!copy) {
-            err = ERROR(ERR_MEMORY, "Failed to copy claim path");
-            goto cleanup;
-        }
         claims[claim_count++] = (claim_t) {
-            .storage_path = copy, .kind = PATH_KIND_FILE
+            .storage_path = arena_strdup(ctx->arena, profile_files->items[i]),
+            .kind = PATH_KIND_FILE
         };
     }
 
@@ -423,13 +408,8 @@ static error_t *remove_resolve(
         }
         if (held_as_blob) continue;
 
-        const char *copy = arena_strdup(ctx->arena, key);
-        if (!copy) {
-            err = ERROR(ERR_MEMORY, "Failed to copy claim path");
-            goto cleanup;
-        }
         claims[claim_count++] = (claim_t) {
-            .storage_path = copy, .kind = PATH_KIND_DIRECTORY
+            .storage_path = arena_strdup(ctx->arena, key), .kind = PATH_KIND_DIRECTORY
         };
     }
 
@@ -629,11 +609,6 @@ static error_t *remove_overlaps(
     overlap_t *overlaps = arena_calloc(
         ctx->arena, claim_count, sizeof(*overlaps)
     );
-    if (!overlaps) {
-        manifest_free(view);
-        hashmap_free(index, NULL);
-        return ERROR(ERR_MEMORY, "Failed to allocate the overlaps");
-    }
 
     size_t count = 0;
     bool provided_by_other = false;
@@ -1014,11 +989,7 @@ static error_t *remove_paths(
      * remove_resolve). Reached only on non-dry-run: the dry-run branch above
      * early-cleanups before this point, so dry_run is always false here in practice
      * — still passed for honesty. */
-    char **hook_paths = arena_alloc(ctx->arena, claim_count * sizeof(char *));
-    if (!hook_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate hook path array");
-        goto cleanup;
-    }
+    char **hook_paths = arena_calloc(ctx->arena, claim_count, sizeof(char *));
     for (size_t i = 0; i < claim_count; i++) {
         /* Arena-backed and never written through; the cast bridges the hook
          * contract's char *const *. A claim this machine places nowhere has no
@@ -1055,10 +1026,6 @@ static error_t *remove_paths(
     const char **removed_paths = arena_calloc(
         ctx->arena, claim_count, sizeof(*removed_paths)
     );
-    if (!removed_paths) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate the removal's paths");
-        goto cleanup;
-    }
 
     for (size_t i = 0; i < claim_count; i++) {
         const claim_t *claim = &claims[i];

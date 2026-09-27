@@ -113,13 +113,10 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
 
         /* A wildcard in the first component leaves no head, and the first byte
          * says where the pattern is rooted — the guard above has already refused
-         * every byte but these two there. Only the arm that allocates can fail. */
+         * every byte but these two there. */
         const char *head = body[0] == '/' ? "/" : ".";
         if (head_len > 0) {
             head = arena_strndup(arena, body, head_len);
-            if (!head) {
-                return ERROR(ERR_MEMORY, "Failed to allocate the pattern's anchor");
-            }
         }
 
         /* The head is a filesystem spelling and nothing else can reach here:
@@ -134,9 +131,6 @@ static error_t *compile_rule(const char *input, arena_t *arena, entry_t *out) {
         }
 
         line = arena_str_format(arena, "%s/%s", negated ? "!" : "", tail);
-        if (!line) {
-            return ERROR(ERR_MEMORY, "Failed to allocate pattern");
-        }
         prefix_filesystem(out, filesystem_path);
     }
 
@@ -180,13 +174,7 @@ error_t *pathspec_create(
 
     /* Each input makes at most one entry, so the inputs bound the list. */
     pathspec_t *spec = arena_calloc(arena, 1, sizeof(*spec));
-    if (!spec) {
-        return ERROR(ERR_MEMORY, "Failed to allocate pathspec");
-    }
     spec->entries = arena_calloc(arena, count, sizeof(*spec->entries));
-    if (!spec->entries) {
-        return ERROR(ERR_MEMORY, "Failed to allocate pathspec entries");
-    }
 
     for (size_t i = 0; i < count; i++) {
         const char *input = inputs[i];
@@ -220,9 +208,6 @@ error_t *pathspec_create(
         }
 
         entry.text = arena_strdup(arena, input);
-        if (!entry.text) {
-            return ERROR(ERR_MEMORY, "Failed to copy the input");
-        }
         spec->entries[spec->count++] = entry;
     }
 

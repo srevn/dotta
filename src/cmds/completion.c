@@ -425,7 +425,6 @@ static void commits_emit(
      * may be a path): the enabled histories stand in. */
     state_profiles_t rows = state_profiles(state);
     const char **enabled = arena_calloc(ctx->arena, rows.count, sizeof(*enabled));
-    if (enabled == NULL) return;
     for (size_t i = 0; i < rows.count; i++) {
         enabled[i] = rows.entries[i].name;
     }
@@ -477,7 +476,6 @@ bool completion_commits_at(
     if (at == NULL) return false;
 
     char *prefix = arena_strndup(ctx->arena, current, (size_t) (at - current));
-    if (prefix == NULL) return true;
 
     const char *branch = pinned ? pinned : completion_profile_of(ctx, prefix);
     commits_emit(ctx, out, prefix, &branch, 1);
@@ -558,7 +556,6 @@ bool completion_paths_under(
     const char *dir = arena_str_format(
         ctx->arena, "%.*s/%.*s", (int) root_len, root, (int) dir_len, rel
     );
-    if (dir == NULL) return true;
 
     string_array_t *entries = NULL;
     err = fs_list_dir(dir, &entries);
@@ -573,7 +570,6 @@ bool completion_paths_under(
         if (entry[0] == '.' && name[0] != '.') continue;
 
         const char *path = arena_str_format(ctx->arena, "%s%s", dir, entry);
-        if (path == NULL) continue;
 
         fprintf(
             out, "%s%.*s%s%s\n", leading, (int) dir_len, rel, entry,
@@ -595,7 +591,6 @@ error_t *cmd_complete(const dotta_ctx_t *ctx, const cmd_complete_options_t *opts
      * Nothing to offer is an answer: never an error. */
     int argc = (int) opts->positional_count + 1;
     char **argv = arena_calloc(ctx->arena, (size_t) argc, sizeof(*argv));
-    if (argv == NULL) return NULL;
     argv[0] = ctx->argv[0];
     for (int i = 1; i < argc; i++) {
         argv[i] = opts->positional_args[i - 1];

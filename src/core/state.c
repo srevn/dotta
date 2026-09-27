@@ -1554,10 +1554,6 @@ error_t *state_records(
     state_record_t *records = NULL;
     if (record_count > 0) {
         records = arena_calloc(arena, record_count, sizeof(state_record_t));
-        if (!records) {
-            sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to allocate the record");
-        }
     }
 
     size_t i = 0;
@@ -1579,7 +1575,7 @@ error_t *state_records(
          * for a value is that failure too — never an owner the path has for none
          * — and so is no pointer for a stored blob. Each string is copied into
          * the arena as it comes, a NULL as NULL, and one arm takes every conversion
-         * and every copy that failed. */
+         * that failed: SQLite's own exhaustion, a refusal in its own words. */
         int owner_type = sqlite3_column_type(stmt, 5);
         int group_type = sqlite3_column_type(stmt, 6);
         int blob_type = sqlite3_column_type(stmt, 7);
@@ -1597,7 +1593,7 @@ error_t *state_records(
             (group_type != SQLITE_NULL && !record->group) ||
             (blob_type != SQLITE_NULL && !blob)) {
             sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to copy the record's columns");
+            return ERROR(ERR_MEMORY, "Failed to read the record's columns");
         }
 
         /* A NULL blob (a directory, or observed only) is the zero OID calloc

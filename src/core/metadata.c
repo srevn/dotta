@@ -248,9 +248,9 @@ error_t *metadata_item_clone(
  * The claim an item makes, as the record keeps it
  *
  * The mode as the item claims it, 0 where it claims none (a link's); the names
- * copied into the arena, one refusal for both.
+ * copied into the arena.
  */
-error_t *metadata_item_claim(
+void metadata_item_claim(
     const metadata_item_t *item,
     arena_t *arena,
     state_record_t *record
@@ -262,17 +262,11 @@ error_t *metadata_item_claim(
     record->mode = 0;
     record->owner = NULL;
     record->group = NULL;
-    if (!item) return NULL;
+    if (!item) return;
 
     if (item->mode != MODE_UNCLAIMED) record->mode = item->mode;
-    if (item->owner) record->owner = arena_strdup(arena, item->owner);
-    if (item->group) record->group = arena_strdup(arena, item->group);
-
-    if ((item->owner && !record->owner) || (item->group && !record->group)) {
-        return ERROR(ERR_MEMORY, "Failed to copy the claim of '%s'", item->key);
-    }
-
-    return NULL;
+    record->owner = arena_strdup(arena, item->owner);
+    record->group = arena_strdup(arena, item->group);
 }
 
 /**

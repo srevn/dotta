@@ -90,10 +90,9 @@ typedef struct {
  * Create an empty ruleset backed by the given arena.
  *
  * @param arena Arena providing storage (borrowed; must outlive ruleset)
- * @param out   Output ruleset pointer (must not be NULL)
- * @return Error or NULL on success
+ * @return The ruleset, the arena's; never NULL
  */
-error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out);
+gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena);
 
 /**
  * Parse `content` as a gitignore file and append the resulting rules, each tagged

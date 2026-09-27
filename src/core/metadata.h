@@ -332,9 +332,8 @@ error_t *metadata_item_clone(
  * @param arena The arena the names are copied into (must not be NULL)
  * @param record The record whose claim is written (must not be NULL; its other
  *               columns are left as they are)
- * @return Error or NULL on success
  */
-error_t *metadata_item_claim(
+void metadata_item_claim(
     const metadata_item_t *item,
     arena_t *arena,
     state_record_t *record

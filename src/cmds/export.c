@@ -177,7 +177,7 @@ typedef struct {
 /**
  * Append an entry; the list grows in the arena (arena_grow).
  */
-static error_t *entry_list_append(
+static void entry_list_append(
     export_entry_list_t *list,
     arena_t *arena,
     const export_entry_t *src
@@ -187,7 +187,6 @@ static error_t *entry_list_append(
     );
 
     list->items[list->count++] = *src;
-    return NULL;
 }
 
 /**
@@ -197,7 +196,7 @@ static error_t *entry_list_append(
  * there — a sheet item, a row — or NULL and false where nothing names it: a whole
  * profile, whose root is the destination and not a path of the branch.
  */
-static error_t *append_root(
+static void append_root(
     export_entry_list_t *list,
     arena_t *arena,
     const char *storage_path,
@@ -212,13 +211,13 @@ static error_t *append_root(
     e.mode = mode;
     e.claimed = claimed;
 
-    return entry_list_append(list, arena, &e);
+    entry_list_append(list, arena, &e);
 }
 
 /**
  * Join two path fragments into the arena ("" base yields rel verbatim).
  */
-static char *arena_join_path(
+static char *export_path_join(
     arena_t *arena,
     const char *base,
     const char *rel
@@ -234,7 +233,6 @@ static char *arena_join_path(
     char *joined = arena_alloc(
         arena, base_len + (needs_slash ? 1 : 0) + rel_len + 1
     );
-    if (!joined) return NULL;
 
     memcpy(joined, base, base_len);
     size_t at = base_len;
@@ -355,9 +353,6 @@ static error_t *dest_resolve(
 
     *out = arena_strdup(arena, final);
     free(final);
-    if (!*out) {
-        return ERROR(ERR_MEMORY, "Failed to allocate destination path");
-    }
     return NULL;
 }
 
@@ -395,11 +390,7 @@ static int collect_tree_callback(
     export_entry_t e;
     memset(&e, 0, sizeof(e));
     e.rel_path = arena_strdup(ctx->arena, rel);
-    e.storage_path = arena_join_path(ctx->arena, ctx->storage_base, rel);
-    if (!e.rel_path || !e.storage_path) {
-        ctx->error = ERROR(ERR_MEMORY, "Failed to allocate export entry");
-        return -1;
-    }
+    e.storage_path = export_path_join(ctx->arena, ctx->storage_base, rel);
 
     /* The content gate every walk over a branch asks (infra/label.h
      * label_prefixes), of trees as much as blobs: a name in the grammar is content,
@@ -464,11 +455,7 @@ static int collect_tree_callback(
             return -1;
     }
 
-    error_t *err = entry_list_append(ctx->list, ctx->arena, &e);
-    if (err) {
-        ctx->error = err;
-        return -1;
-    }
+    entry_list_append(ctx->list, ctx->arena, &e);
     return 0;
 }
 
@@ -541,16 +528,12 @@ static error_t *append_claim_dirs(
         e.kind = EXPORT_ENTRY_DIRECTORY;
         e.claimed = true;
         e.storage_path = arena_strdup(arena, key);
-        if (!e.storage_path) {
-            return ERROR(ERR_MEMORY, "Failed to allocate export entry");
-        }
         e.rel_path = e.storage_path + (rel - key);
         e.mode = export_entry_mode(
             items[i], PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
         );
 
-        error_t *err = entry_list_append(list, arena, &e);
-        if (err) return err;
+        entry_list_append(list, arena, &e);
     }
 
     return NULL;
@@ -584,8 +567,7 @@ static error_t *collect_profile(
      * (hosts/mbp -> mbp). */
     list->basename = path_basename(profile);
 
-    err = append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
-    if (err) goto cleanup;
+    append_root(list, arena, NULL, DIR_MODE_DEFAULT, false);
 
     struct collect_ctx cctx = {
         .metadata     = metadata,
@@ -679,11 +661,10 @@ static error_t *collect_storage(
             mode_t root_mode = export_entry_mode(
                 root_item, PATH_KIND_DIRECTORY, GIT_FILEMODE_TREE
             );
-            err = append_root(
+            append_root(
                 list, arena, name, root_mode,
                 root_item && root_item->kind == PATH_KIND_DIRECTORY
             );
-            if (err) goto cleanup;
 
             if (held.filemode == GIT_FILEMODE_TREE) {
                 int git_ret = git_tree_lookup(&subtree, ctx->run.repo, &held.oid);
@@ -728,7 +709,7 @@ static error_t *collect_storage(
                 e.encrypted = item && item->encrypted;
             }
 
-            err = entry_list_append(list, arena, &e);
+            entry_list_append(list, arena, &e);
             goto cleanup;
         }
 
@@ -892,23 +873,23 @@ static error_t *collect_filesystem(
 
         export_entry_t e = entry_from_row(at);
         e.rel_path = list->basename;
-        err = entry_list_append(list, arena, &e);
+        entry_list_append(list, arena, &e);
         goto cleanup;
     }
 
-    err = append_root(
+    append_root(
         list, arena, at ? at->storage_path : NULL,
         at ? at->mode : DIR_MODE_DEFAULT, at != NULL
     );
 
-    for (size_t i = 0; i < beneath.count && !err; i++) {
+    for (size_t i = 0; i < beneath.count; i++) {
         const manifest_row_t *row = beneath.items[i];
         export_entry_t e = entry_from_row(row);
         /* Past the base and its separator — borrowed from the row, whose string
          * is the arena's and outlives the view. For the filesystem root the base
          * is "" and the '+ 1' steps over the leading slash. */
         e.rel_path = row->filesystem_path + base_len + 1;
-        err = entry_list_append(list, arena, &e);
+        entry_list_append(list, arena, &e);
     }
 
 cleanup:
@@ -977,16 +958,10 @@ static error_t *complete_directories(export_entry_list_t *list, arena_t *arena) 
                 e.kind = EXPORT_ENTRY_DIRECTORY;
                 e.mode = DIR_MODE_DEFAULT;
                 e.rel_path = arena_strdup(arena, rung);
-                if (!e.rel_path) {
-                    err = ERROR(ERR_MEMORY, "Failed to allocate export entry");
-                } else {
-                    err = entry_list_append(list, arena, &e);
-                }
-                if (!err) {
-                    err = hashmap_set(
-                        standing, e.rel_path, (void *) (uintptr_t) list->count
-                    );
-                }
+                entry_list_append(list, arena, &e);
+                err = hashmap_set(
+                    standing, e.rel_path, (void *) (uintptr_t) list->count
+                );
             } else if (list->items[held - 1].kind != EXPORT_ENTRY_DIRECTORY) {
                 /* Both subjects in the branch's own names, because the
                  * contradiction is the branch's and that is where it gets fixed.
@@ -1035,7 +1010,7 @@ static error_t *resolve_destinations(
 
     const char *root = list->items[0].dest_path;
     for (size_t i = 1; i < list->count; i++) {
-        list->items[i].dest_path = arena_join_path(
+        list->items[i].dest_path = export_path_join(
             arena, root, list->items[i].rel_path
         );
         if (!list->items[i].dest_path) {

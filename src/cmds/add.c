@@ -211,23 +211,15 @@ typedef struct {
  * @param input      The argument as typed, absolute (must not be NULL)
  * @param target     The target as the row spells it (must not be NULL)
  * @param arena      Arena for the scratch
- * @param out_inside True iff a prefix of `input` is the target
- * @return Error or NULL on success
+ * @return True iff a prefix of `input` is the target
  */
-static error_t *add_inside(
-    const char *input, const char *target, arena_t *arena, bool *out_inside
-) {
-    *out_inside = false;
-
+static bool add_inside(const char *input, const char *target, arena_t *arena) {
     /* The folded prefix, grown one component at a time, with "." dropped and
      * ".." popping — the fold fs_normalize_path performs over a whole argument,
      * applied per prefix so the prefixes exist to be asked about. Folding never
      * grows a path, so the argument's own length plus a leading slash and a
      * terminator bounds it, absolute or not. */
     char *folded = arena_alloc(arena, strlen(input) + 2);
-    if (!folded) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the boundary scratch");
-    }
     folded[0] = '/';
     folded[1] = '\0';
     size_t len = 1;
@@ -238,7 +230,7 @@ static error_t *add_inside(
     const char *cursor = input;
     while (strcmp(folded, target) != 0) {
         while (*cursor == '/') cursor++;
-        if (!*cursor) return NULL;
+        if (!*cursor) return false;
 
         const char *component = cursor;
         while (*cursor && *cursor != '/') cursor++;
@@ -259,9 +251,7 @@ static error_t *add_inside(
         folded[len] = '\0';
     }
 
-    *out_inside = true;   /* The tail is unread: past here it is Git's */
-
-    return NULL;
+    return true;   /* The tail is unread: past here it is Git's */
 }
 
 /**
@@ -329,10 +319,7 @@ static error_t *add_spell(
      * below prints. */
     char *composed = NULL;
     if (target && input[0] != '~' && input[0] != '.' && input[0] != '\0') {
-        bool inside = false;
-        if (input[0] == '/') {
-            RETURN_IF_ERROR(add_inside(input, target, arena, &inside));
-        }
+        bool inside = input[0] == '/' && add_inside(input, target, arena);
         if (!inside) {
             RETURN_IF_ERROR(fs_path_join(target, input, &composed));
         }
@@ -460,9 +447,6 @@ static error_t *add_list(
     fs_occupant_t occupant
 ) {
     path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
-    if (!path) {
-        return ERROR(ERR_MEMORY, "Failed to allocate path entry");
-    }
     path->filesystem_path = filesystem_path;
     path->claim = (manifest_claim_t){
         storage_path,
@@ -594,10 +578,6 @@ static error_t *add_collect(
         const char *child_fs = arena_str_format(
             arena, "%s%s%s", directory, separator, entries->items[i]
         );
-        if (!child_fs) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate path");
-            goto cleanup;
-        }
 
         /* One lstat names what stands there, and the kind follows from it: a
          * symlink is never a directory here. Absence is a skip — the listing
@@ -1051,11 +1031,7 @@ static error_t *add_capture(
         .blob_oid = blob,
         .stat = state_stat_from_read(&capture.st),
     };
-    err = metadata_item_claim(item, ctx->arena, &path->record);
-    if (err) {
-        metadata_item_free(item);
-        return err;
-    }
+    metadata_item_claim(item, ctx->arena, &path->record);
 
     if (capture.encrypted) {
         output_info(
@@ -1127,9 +1103,6 @@ static error_t *add_commit(
     size_t count = walk->files.count + walk->directories.count;
 
     const char **paths = arena_calloc(walk->ctx->arena, count, sizeof(*paths));
-    if (!paths) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the commit's paths");
-    }
 
     size_t named = 0;
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
@@ -1562,14 +1535,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * receipt names this binding after both. `target` is the flag's alone, NULL
      * without it: re-rooting an argument is the flag's grammar (add_spell), never
      * a row's. */
-    const char *bound = state_target(state, opts->profile);
-    if (bound) {
-        bound = arena_strdup(ctx->arena, bound);
-        if (!bound) {
-            err = ERROR(ERR_MEMORY, "Failed to copy the profile's target");
-            goto cleanup;
-        }
-    }
+    const char *bound = arena_strdup(ctx->arena, state_target(state, opts->profile));
 
     /* The target, when the run brought one: a filesystem-shaped argument —
      * absolute, tilde, or relative to the working directory — resolved to the
@@ -1875,10 +1841,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * none. Only here, where the path ends the command. Nothing is
                  * re-rooted under a target that is not there. */
                 if (target && file[0] == '/') {
-                    bool inside = false;
-                    err = add_inside(file, target, ctx->arena, &inside);
-                    if (err) goto cleanup;
-                    if (!inside) {
+                    if (!add_inside(file, target, ctx->arena)) {
                         err = ERROR(
                             ERR_NOT_FOUND, "Path not found: %s\n"
                             "  --target is bound at %s, and an absolute path is "
@@ -2407,11 +2370,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             .profile = opts->profile,
             .kind = FS_OCCUPANT_DIRECTORY,
         };
-        err = metadata_item_claim(dir_item, ctx->arena, &path->record);
-        if (err) {
-            metadata_item_free(dir_item);
-            goto cleanup;
-        }
+        metadata_item_claim(dir_item, ctx->arena, &path->record);
 
         /* Verbose output before consuming the item */
         add_print_capture(out, "directory metadata", path->filesystem_path, dir_item);

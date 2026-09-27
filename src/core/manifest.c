@@ -183,48 +183,28 @@ struct claim_ctx {
  * the caller hands the claim a blob can take, or nothing.
  *
  * The row is fresh and unpublished — every row is, nothing being reset any more
- * — and a failure here aborts the build whole, so the fields are written as they
- * are read: there is no prior owner or group a half-done call could replace,
- * and a half-built row in a failed build is never read.
+ * — so the fields are written as they are read: there is no prior owner or group
+ * to replace.
  *
  * @param row   Target row (mutable)
  * @param claim This profile's claim over the row's name, NULL where it makes
  *              none (may be NULL)
  * @param arena Allocation arena for string copies (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *manifest_apply_claim(
+static void manifest_apply_claim(
     manifest_row_t *row,
     const metadata_item_t *claim,
     arena_t *arena
 ) {
     if (!claim) {
-        return NULL;
+        return;
     }
 
     /* owner/group apply to every blob row, links included: the ownership claim
-     * is true regardless of what the path became. arena_strdup returns NULL only
-     * on real failure (a NULL claim->owner/group bypasses the if-guard and leaves
-     * the field NULL). */
-    if (claim->owner) {
-        row->owner = arena_strdup(arena, claim->owner);
-        if (!row->owner) {
-            return ERROR(
-                ERR_MEMORY, "Failed to duplicate owner for '%s'",
-                row->storage_path
-            );
-        }
-    }
-
-    if (claim->group) {
-        row->group = arena_strdup(arena, claim->group);
-        if (!row->group) {
-            return ERROR(
-                ERR_MEMORY, "Failed to duplicate group for '%s'",
-                row->storage_path
-            );
-        }
-    }
+     * is true regardless of what the path became. A name the claim does not make
+     * copies to NULL, which is the row's own. */
+    row->owner = arena_strdup(arena, claim->owner);
+    row->group = arena_strdup(arena, claim->group);
 
     /* mode/encrypted apply only where a mode can stand — the tree's word
      * (row->type), never the claim's kind — and only the mode the claim makes:
@@ -235,8 +215,6 @@ static error_t *manifest_apply_claim(
         }
         row->encrypted = claim->encrypted;
     }
-
-    return NULL;
 }
 
 /**
@@ -270,9 +248,6 @@ static error_t *manifest_place(
     manifest_row_t **out
 ) {
     manifest_row_t *row = arena_calloc(arena, 1, sizeof(*row));
-    if (!row) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest row");
-    }
     row->filesystem_path = filesystem_path;
 
     error_t *err = ptr_array_push(placed, row);
@@ -302,9 +277,8 @@ static error_t *manifest_place(
  * @param storage_path Arena-backed storage path (must not be NULL)
  * @param kind The claim's kind (FILE for tree blobs, DIRECTORY for metadata items)
  * @param arena Arena for the array growth (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *manifest_note_unbound(
+static void manifest_note_unbound(
     manifest_t *manifest,
     const char *profile,
     const char *storage_path,
@@ -321,7 +295,6 @@ static error_t *manifest_note_unbound(
         .storage_path = storage_path,
         .kind = kind,
     };
-    return NULL;
 }
 
 /**
@@ -342,9 +315,8 @@ static error_t *manifest_note_unbound(
  * @param row The row whose name did not stand (must not be NULL)
  * @param kept The name that did (must not be NULL)
  * @param arena Arena for the array growth (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *manifest_note_unkept(
+static void manifest_note_unkept(
     manifest_t *manifest,
     const char *profile,
     const manifest_row_t *row,
@@ -363,7 +335,6 @@ static error_t *manifest_note_unkept(
         .kept = kept,
         .filesystem_path = row->filesystem_path,
     };
-    return NULL;
 }
 
 /**
@@ -611,9 +582,6 @@ static error_t *manifest_ascend(
     }
 
     char *rung = arena_strdup(n->arena, filesystem_path);
-    if (!rung) {
-        return ERROR(ERR_MEMORY, "Failed to copy the filesystem path");
-    }
     size_t len = strlen(rung);
     const size_t floor = strlen(root->filesystem_path);   /* the rung the root stands at */
 
@@ -639,9 +607,6 @@ static error_t *manifest_ascend(
         if (*past == '/') past++;
 
         *out_storage = arena_str_format(n->arena, "%s/%s", above, past);
-        if (!*out_storage) {
-            return ERROR(ERR_MEMORY, "Failed to compose the name");
-        }
         return NULL;
     }
 
@@ -760,9 +725,6 @@ static error_t *manifest_settle(
          * slot past them stays NULL — the group outlives this loop, and every
          * reader of it walks to the terminator. */
         manifest_row_t **group = arena_calloc(arena, count + 2, sizeof(*group));
-        if (!group) {
-            return ERROR(ERR_MEMORY, "Failed to allocate a contested group");
-        }
         group[0] = hashmap_get(c->index, filesystem_path);
         for (size_t g = 0; g < count; g++) group[g + 1] = rows[i + g];
         qsort(group, count + 1, sizeof(*group), name_order);
@@ -787,10 +749,9 @@ static error_t *manifest_settle(
 
         for (size_t g = 0; group[g]; g++) {
             if (group[g] == kept) continue;
-            err = manifest_note_unkept(
+            manifest_note_unkept(
                 manifest, c->profile, group[g], kept->storage_path, arena
             );
-            if (err) return err;
         }
 
         i += count;
@@ -842,10 +803,6 @@ static int manifest_claim_blob(
     size_t root_len = root ? strlen(root) : 0;
     size_t name_len = strlen(name);
     char *storage_path = arena_alloc(ctx->arena, root_len + name_len + 1);
-    if (!storage_path) {
-        ctx->error = ERROR(ERR_MEMORY, "Failed to allocate storage path");
-        return -1;
-    }
     if (root_len > 0) memcpy(storage_path, root, root_len);
     memcpy(storage_path + root_len, name, name_len + 1);
 
@@ -932,10 +889,10 @@ static int manifest_claim_blob(
         return -1;
     }
     if (!filesystem_path) {
-        ctx->error = manifest_note_unbound(
+        manifest_note_unbound(
             ctx->manifest, ctx->profile, storage_path, PATH_KIND_FILE, ctx->arena
         );
-        return ctx->error ? -1 : 0;
+        return 0;
     }
 
     /* Place the row, then say whether it stands. During this pass every row of
@@ -979,17 +936,7 @@ static int manifest_claim_blob(
      * set above are the floor; a claim may override mode and encrypted, and
      * contribute owner/group. A contender is a finished row and takes its own
      * claim like any other — the claim was read by the row's own name. */
-    err = manifest_apply_claim(row, claim, ctx->arena);
-    if (err) {
-        /* The caller's outer error path propagates without freeing the view's
-         * rows (spines + strings are arena-backed); a half-built row in a failed
-         * build is never read. */
-        ctx->error = error_wrap(
-            err, "Failed to apply metadata to '%s'",
-            row->storage_path
-        );
-        return -1;
-    }
+    manifest_apply_claim(row, claim, ctx->arena);
 
     err = !held || manifest_is_derived(held)
         ? hashmap_set(ctx->contribution->index, filesystem_path, row)
@@ -1054,9 +1001,6 @@ static error_t *manifest_contribute(
     contribution_t *c = &manifest->contributions[manifest->profile_count];
 
     c->profile = arena_strdup(arena, profile);
-    if (!c->profile) {
-        return ERROR(ERR_MEMORY, "Failed to duplicate profile name");
-    }
     c->index = hashmap_borrow(128);
     if (!c->index) {
         return ERROR(ERR_MEMORY, "Failed to create contribution index");
@@ -1165,18 +1109,10 @@ static error_t *manifest_contribute(
             /* The blob side's degrade contract, DIRECTORY kind: recorded, not
              * placed. The item's key is the metadata's, freed with it — the note
              * keeps an arena copy. */
-            char *key = arena_strdup(arena, item->key);
-            if (!key) {
-                err = ERROR(
-                    ERR_MEMORY, "Failed to duplicate storage path '%s' of profile '%s'",
-                    item->key, c->profile
-                );
-                break;
-            }
-            err = manifest_note_unbound(
-                manifest, c->profile, key, PATH_KIND_DIRECTORY, arena
+            manifest_note_unbound(
+                manifest, c->profile, arena_strdup(arena, item->key),
+                PATH_KIND_DIRECTORY, arena
             );
-            if (err) break;
             continue;
         }
 
@@ -1259,12 +1195,6 @@ static error_t *manifest_contribute(
     size_t standing = hashmap_size(c->index);
     if (standing > 0) {
         c->rows = arena_calloc(arena, standing, sizeof(*c->rows));
-        if (!c->rows) {
-            err = ERROR(
-                ERR_MEMORY, "Failed to allocate rows for profile '%s'", c->profile
-            );
-            goto cleanup;
-        }
         for (size_t j = 0; j < placed.count; j++) {
             manifest_row_t *row = placed.items[j];
             if (hashmap_get(c->index, row->filesystem_path) == row) {
@@ -1322,9 +1252,6 @@ static error_t *manifest_layer(manifest_t *manifest, arena_t *arena) {
     if (standing == 0) return NULL;
 
     manifest->rows = arena_calloc(arena, standing, sizeof(*manifest->rows));
-    if (!manifest->rows) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest spine");
-    }
     for (size_t i = 0; i < manifest->profile_count; i++) {
         const contribution_t *c = &manifest->contributions[i];
         for (size_t j = 0; j < c->count; j++) {
@@ -1360,9 +1287,6 @@ static error_t *manifest_allocate(
     *out = NULL;
 
     manifest_t *manifest = arena_calloc(arena, 1, sizeof(*manifest));
-    if (!manifest) {
-        return ERROR(ERR_MEMORY, "Failed to allocate manifest");
-    }
 
     if (profile_capacity > 0) {
         manifest->contributions = arena_calloc(
@@ -1371,9 +1295,6 @@ static error_t *manifest_allocate(
         manifest->profiles = arena_calloc(
             arena, profile_capacity, sizeof(*manifest->profiles)
         );
-        if (!manifest->contributions || !manifest->profiles) {
-            return ERROR(ERR_MEMORY, "Failed to allocate manifest contributions");
-        }
     }
 
     manifest->index = hashmap_borrow(index_capacity);
@@ -1415,9 +1336,6 @@ error_t *manifest_mount_table(
      * zero. The binding goes in first and its profile's row is skipped below,
      * so substituting for a row and adding where there is none are one arm. */
     mount_t *mounts = arena_calloc(arena, rows.count + 1, sizeof(*mounts));
-    if (!mounts) {
-        return ERROR(ERR_MEMORY, "Failed to allocate mounts");
-    }
 
     size_t count = 0;
     if (binding) {
@@ -1770,9 +1688,6 @@ error_t *manifest_name(
 
     if (here.storage_path) {
         *out_storage = arena_strdup(arena, here.storage_path);
-        if (!*out_storage) {
-            return ERROR(ERR_MEMORY, "Failed to copy the name");
-        }
         return NULL;
     }
 

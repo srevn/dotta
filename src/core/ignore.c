@@ -193,8 +193,7 @@ struct ignore_rules {
 static error_t *build_profile_ruleset(
     ignore_rules_t *r, const char *profile, gitignore_ruleset_t **out
 ) {
-    gitignore_ruleset_t *rs = NULL;
-    RETURN_IF_ERROR(gitignore_ruleset_create(r->arena, &rs));
+    gitignore_ruleset_t *rs = gitignore_ruleset_create(r->arena);
 
     /* 1. Baseline / builtin fallback (lowest precedence). */
     RETURN_IF_ERROR(
@@ -375,8 +374,7 @@ error_t *ignore_excludes_compile(
     *out = NULL;
     if (count == 0) return NULL;
 
-    gitignore_ruleset_t *rules = NULL;
-    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &rules));
+    gitignore_ruleset_t *rules = gitignore_ruleset_create(arena);
 
     for (size_t i = 0; i < count; i++) {
         error_t *err = gitignore_ruleset_append_pattern(
@@ -409,8 +407,7 @@ error_t *ignore_rules_create(
      * not text, must surface, not silently drop safety defaults. The rules hold
      * their own copies of every string, so the Git buffer is freed as soon as
      * they are made. */
-    gitignore_ruleset_t *baseline = NULL;
-    RETURN_IF_ERROR(gitignore_ruleset_create(arena, &baseline));
+    gitignore_ruleset_t *baseline = gitignore_ruleset_create(arena);
 
     char *blob = NULL;
     error_t *err = ignore_blob_text(repo, BASELINE_REF, &blob);
@@ -429,9 +426,6 @@ error_t *ignore_rules_create(
 
     /* The builder is published last, once every layer it holds is in hand. */
     ignore_rules_t *r = arena_calloc(arena, 1, sizeof(*r));
-    if (!r) {
-        return ERROR(ERR_MEMORY, "Failed to allocate ignore rules builder");
-    }
 
     r->arena = arena;
     r->repo = repo;
@@ -472,11 +466,7 @@ error_t *ignore_rules_for_profile(
         sizeof(*r->profiles)
     );
 
-    const char *name_copy = arena_strdup(r->arena, key);
-    if (!name_copy) {
-        return ERROR(ERR_MEMORY, "Failed to copy profile name");
-    }
-    r->profiles[r->profile_count].name = name_copy;
+    r->profiles[r->profile_count].name = arena_strdup(r->arena, key);
     r->profiles[r->profile_count].ruleset = rs;
     r->profile_count++;
 

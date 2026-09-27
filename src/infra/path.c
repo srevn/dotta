@@ -86,9 +86,6 @@ error_t *path_input_resolve(
         while (input[len - 1] == '/') len--;
 
         char *storage = arena_strndup(arena, input, len);
-        if (!storage) {
-            return ERROR(ERR_MEMORY, "Failed to allocate storage path");
-        }
         error_t *err = label_validate_storage(storage);
         if (err) {
             return error_wrap(err, "Invalid storage path '%s'", input);

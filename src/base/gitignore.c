@@ -256,16 +256,15 @@ static size_t rule_span(const char *line, size_t len) {
 /* One line into the rule it makes. A line that makes no rule — rule_span's zero,
  * and nothing else — leaves out_rule->pattern NULL: a file skips it, and a pattern
  * never arrives as one (validate_pattern refused it). The origin is not the line's:
- * the ruleset tags the rule after the parse, and a rule alone carries none. Returns
- * an error on arena exhaustion. */
-static error_t *parse_line(
+ * the ruleset tags the rule after the parse, and a rule alone carries none. */
+static void parse_line(
     arena_t *arena, const char *line, size_t line_len, gitignore_rule_t *out_rule
 ) {
     out_rule->pattern = NULL;
 
     size_t span = rule_span(line, line_len);
     if (span == 0)
-        return NULL;
+        return;
 
     unsigned int flags = 0;
     const char *pattern = line;
@@ -306,12 +305,7 @@ static error_t *parse_line(
     /* The rule as written — the `!` and the anchor slash included, what the span
      * left off the back excluded — kept for the verdict's report. */
     char *source = arena_strndup(arena, line, span);
-    if (!source)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
-
     char *copy = arena_strndup(arena, pattern, length);
-    if (!copy)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
 
     length = unescape_spaces(copy);
 
@@ -329,8 +323,6 @@ static error_t *parse_line(
     out_rule->flags = flags;
     out_rule->origin = 0;
     out_rule->source = source;
-
-    return NULL;
 }
 
 /* --- One pattern ---------------------------------------------------- */
@@ -367,7 +359,9 @@ static error_t *parse_rule(
 ) {
     size_t len = strlen(pattern);
     RETURN_IF_ERROR(validate_pattern(pattern, len));
-    return parse_line(arena, pattern, len, out);
+    parse_line(arena, pattern, len, out);
+
+    return NULL;
 }
 
 /* --- The match at one rung ------------------------------------------ */
@@ -502,19 +496,13 @@ static size_t copy_subject(char *dst, const char *path, bool *is_dir) {
 
 /* --- Public API ------------------------------------------------------ */
 
-error_t *gitignore_ruleset_create(arena_t *arena, gitignore_ruleset_t **out) {
+gitignore_ruleset_t *gitignore_ruleset_create(arena_t *arena) {
     CHECK_NULL(arena);
-    CHECK_NULL(out);
-
-    *out = NULL;
 
     gitignore_ruleset_t *set = arena_calloc(arena, 1, sizeof(*set));
-    if (!set)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
-
     set->arena = arena;
-    *out = set;
-    return NULL;
+
+    return set;
 }
 
 error_t *gitignore_ruleset_append_file(
@@ -536,7 +524,7 @@ error_t *gitignore_ruleset_append_file(
             );
 
         gitignore_rule_t rule = { 0 };
-        RETURN_IF_ERROR(parse_line(set->arena, line, len, &rule));
+        parse_line(set->arena, line, len, &rule);
         if (rule.pattern)
             RETURN_IF_ERROR(push_rule(set, rule, origin));
 
@@ -754,8 +742,6 @@ error_t *gitignore_rule_parse(
     RETURN_IF_ERROR(parse_rule(arena, pattern, &rule));
 
     gitignore_rule_t *copy = arena_alloc(arena, sizeof(*copy));
-    if (!copy)
-        return ERROR(ERR_MEMORY, "gitignore: arena exhausted");
     *copy = rule;
 
     *out = copy;

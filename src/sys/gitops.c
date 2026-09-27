@@ -1132,9 +1132,6 @@ error_t *gitops_resolve_default_remote(
 
     const char *name = arena_strdup(arena, selected);
     git_strarray_dispose(&remotes);
-    if (!name) {
-        return ERROR(ERR_MEMORY, "Failed to allocate remote name");
-    }
 
     /* URL is optional. A remote without URL is legal — credentialed transfer
      * tolerates a NULL URL — so leave *out_url = NULL on that branch instead of
@@ -1146,16 +1143,10 @@ error_t *gitops_resolve_default_remote(
             return error_from_git(lookup_err);
         }
 
-        const char *url = git_remote_url(remote);
-        if (url) {
-            *out_url = arena_strdup(arena, url);
-            git_remote_free(remote);
-            if (!*out_url) {
-                return ERROR(ERR_MEMORY, "Failed to allocate remote URL");
-            }
-        } else {
-            git_remote_free(remote);
-        }
+        /* Copied before the remote goes: the URL is the remote's, and NULL where
+         * it has none. */
+        *out_url = arena_strdup(arena, git_remote_url(remote));
+        git_remote_free(remote);
     }
 
     *out_name = name;

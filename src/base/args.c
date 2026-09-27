@@ -215,15 +215,16 @@ static void record_error_v(
     }
 
     /* Two-pass formatting: first pass sizes the buffer, second fills it.
-     * `vsnprintf(NULL, 0, ...)` is a standard C99 idiom. */
+     * `vsnprintf(NULL, 0, ...)` is a standard C99 idiom. The format is the engine's
+     * own: one that cannot be formatted is a bug, never a parse error dropped —
+     * a dropped one would let a refused line parse as accepted. */
     va_list ap_copy;
     va_copy(ap_copy, ap);
     int needed = vsnprintf(NULL, 0, fmt, ap_copy);
     va_end(ap_copy);
-    if (needed < 0) return;
+    CHECK_ARG(needed >= 0, "fmt cannot be formatted");
 
     char *msg = arena_alloc(arena, (size_t) needed + 1);
-    if (msg == NULL) return;
     (void) vsnprintf(msg, (size_t) needed + 1, fmt, ap);
 
     errors->items[errors->count] = (args_error_t) {
@@ -336,13 +337,12 @@ static size_t *count_field(void *opts, const args_opt_t *opt) {
  * Over-allocates the common case; the arena makes that cheap. Idempotent —
  * subsequent calls with a non-NULL slot are no-ops.
  */
-static char **ensure_array(
+static void ensure_array(
     char ***arr_ptr, arena_t *arena, int argc
 ) {
-    if (*arr_ptr != NULL) return *arr_ptr;
+    if (*arr_ptr != NULL) return;
     size_t cap = (size_t) (argc > 0 ? argc : 1);
     *arr_ptr = arena_calloc(arena, cap, sizeof(char *));
-    return *arr_ptr;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -404,10 +404,7 @@ static void apply_value_opt(
         case ARGS_KIND_APPEND: {
             char ***arr = array_field(opts, opt);
             size_t *cnt = count_field(opts, opt);
-            if (ensure_array(arr, arena, cur->argc) == NULL) {
-                record_error(errors, arena, tok_idx, opt, "out of memory");
-                return;
-            }
+            ensure_array(arr, arena, cur->argc);
             (*arr)[(*cnt)++] = v;
             break;
         }
@@ -640,10 +637,7 @@ static void apply_positional(
         return;
     }
 
-    if (ensure_array(arr, arena, argc) == NULL) {
-        record_error(errors, arena, tok_idx, NULL, "out of memory");
-        return;
-    }
+    ensure_array(arr, arena, argc);
     (*arr)[(*cnt)++] = tok;
 }
 
@@ -994,7 +988,6 @@ void args_complete_candidates(
     void *opts = NULL;
     if (command->opts_size > 0) {
         opts = arena_calloc(arena, 1, command->opts_size);
-        if (opts == NULL) return;
     }
 
     /* Consume the line as the parser would, to where it stops. A line the command

@@ -77,7 +77,7 @@ char *arena_strndup(arena_t *arena, const char *str, size_t n);
 /**
  * Arena-backed printf-style string formatter.
  *
- * Mirrors `str_format` from base/string but allocates the result from the arena
+ * Mirrors base/heap.h heap_str_format, but allocates the result from the arena
  * instead of the heap. Two-pass implementation: vsnprintf once to size the buffer,
  * allocate, vsnprintf again to fill. Never returns a partial string. The format
  * is dotta's own, so one that cannot be formatted is its writer's bug.

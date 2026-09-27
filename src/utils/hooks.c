@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
@@ -159,22 +160,22 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
 
     /* DOTTA_* surface — three optional, two always-on, then per-file. */
     if (context->repo_dir) {
-        APPEND(str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
+        APPEND(heap_str_format("DOTTA_REPO_DIR=%s", context->repo_dir));
     }
     if (context->command) {
-        APPEND(str_format("DOTTA_COMMAND=%s", context->command));
+        APPEND(heap_str_format("DOTTA_COMMAND=%s", context->command));
     }
     if (context->profile) {
-        APPEND(str_format("DOTTA_PROFILE=%s", context->profile));
+        APPEND(heap_str_format("DOTTA_PROFILE=%s", context->profile));
     }
 
-    APPEND(str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0"));
-    APPEND(str_format("DOTTA_FILE_COUNT=%zu", context->file_count));
+    APPEND(heap_str_format("DOTTA_DRY_RUN=%s", context->dry_run ? "1" : "0"));
+    APPEND(heap_str_format("DOTTA_FILE_COUNT=%zu", context->file_count));
 
     /* Indexed file variables: DOTTA_FILE_0, DOTTA_FILE_1, ... */
     if (context->files && context->file_count > 0) {
         for (size_t i = 0; i < context->file_count; i++) {
-            APPEND(str_format("DOTTA_FILE_%zu=%s", i, context->files[i]));
+            APPEND(heap_str_format("DOTTA_FILE_%zu=%s", i, context->files[i]));
         }
     }
 

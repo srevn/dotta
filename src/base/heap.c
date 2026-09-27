@@ -4,7 +4,9 @@
 
 #include "base/heap.h"
 
+#include <stdarg.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,4 +63,27 @@ char *heap_strndup(const char *str, size_t n) {
     copy[len] = '\0';
 
     return copy;
+}
+
+char *heap_str_format(const char *fmt, ...) {
+    CHECK_NULL(fmt);
+
+    va_list args;
+    va_start(args, fmt);
+
+    /* Pass 1: size the string. A format that cannot be formatted is its writer's
+     * bug. */
+    va_list args_copy;
+    va_copy(args_copy, args);
+    int len = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+    CHECK_ARG(len >= 0, "fmt cannot be formatted");
+
+    /* Pass 2: allocate and format. The +1 is the null terminator; vsnprintf's
+     * `len` excludes it but its `size` argument includes it. */
+    char *str = heap_alloc((size_t) len + 1);
+    vsnprintf(str, (size_t) len + 1, fmt, args);
+    va_end(args);
+
+    return str;
 }

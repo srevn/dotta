@@ -19,6 +19,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/state.h"
 #include "infra/label.h"
@@ -560,10 +561,7 @@ error_t *metadata_prune_ancestors(
          * without elevation carries no item, yet still anchors its parent — so
          * the index is the authority. It is sorted, so one prefix probe answers;
          * a failed look must not prune. */
-        char *prefix = str_format("%s/", dir->key);
-        if (!prefix) {
-            return ERROR(ERR_MEMORY, "Failed to build directory prefix");
-        }
+        char *prefix = heap_str_format("%s/", dir->key);
         size_t position;
         int rc = git_index_find_prefix(&position, index, prefix);
         free(prefix);

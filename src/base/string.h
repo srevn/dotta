@@ -92,21 +92,14 @@ char *str_trim(char *str);
 /**
  * Join array of strings with delimiter
  *
+ * A joined length no memory could hold is exhaustion (base/heap.h heap_die).
+ *
  * @param strings Array of strings
  * @param count Number of strings
  * @param delimiter Delimiter to insert between strings
- * @return Newly allocated joined string (must be freed)
+ * @return Newly allocated joined string (must be freed); never NULL
  */
 char *str_join(const char *const *strings, size_t count, const char *delimiter);
-
-/**
- * Format string (like sprintf but allocates)
- *
- * @param fmt Format string
- * @param ... Format arguments
- * @return Newly allocated formatted string (must be freed)
- */
-char *str_format(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /**
  * RAII cleanup for strings

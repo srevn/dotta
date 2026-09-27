@@ -17,6 +17,7 @@
 #include "base/arena.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "sys/filesystem.h"
 #include "sys/identity.h"
@@ -288,11 +289,7 @@ static error_t *walk_loose_refs(const loose_walk_t *walk, const char *dir) {
             continue;
         }
 
-        char *path = str_format("%s/%s", dir, name);
-        if (!path) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate a ref path");
-            break;
-        }
+        char *path = heap_str_format("%s/%s", dir, name);
 
         switch (fs_lstat_occupant(path, NULL)) {
             case FS_OCCUPANT_DIRECTORY:
@@ -1376,10 +1373,7 @@ error_t *gitops_resolve_commit_in_branch(
 
     if (str_starts_with(commit_ref, "HEAD~") ||
         str_starts_with(commit_ref, "HEAD^")) {
-        allocated_ref = str_format("%s%s", branch_name, commit_ref + 4);
-        if (!allocated_ref) {
-            return ERROR(ERR_MEMORY, "Failed to allocate ref string");
-        }
+        allocated_ref = heap_str_format("%s%s", branch_name, commit_ref + 4);
         resolve_ref = allocated_ref;
     }
 

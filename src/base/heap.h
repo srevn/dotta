@@ -70,4 +70,18 @@ char *heap_strdup(const char *str);
  */
 char *heap_strndup(const char *str, size_t n);
 
+/**
+ * A formatted string on the heap
+ *
+ * For a transient built and freed within one call where no arena is in reach,
+ * or a handle's own string, freed by its closer; everything else formats into
+ * an arena (base/arena.h arena_str_format). The format is dotta's own, so one
+ * that cannot be formatted is its writer's bug.
+ *
+ * @param fmt Format string (must not be NULL)
+ * @return The string; never NULL
+ */
+char *heap_str_format(const char *fmt, ...)
+__attribute__((format(printf, 1, 2)));
+
 #endif /* DOTTA_HEAP_H */

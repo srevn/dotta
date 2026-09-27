@@ -16,8 +16,8 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/heap.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
@@ -361,10 +361,7 @@ static error_t *edit_content_via_editor(
         tmpdir = "/tmp";
     }
 
-    char *tmpfile = str_format("%s/dotta-ignore-XXXXXX", tmpdir);
-    if (!tmpfile) {
-        return ERROR(ERR_MEMORY, "Failed to allocate temporary file path");
-    }
+    char *tmpfile = heap_str_format("%s/dotta-ignore-XXXXXX", tmpdir);
 
     int fd = mkstemp(tmpfile);
     if (fd < 0) {
@@ -488,13 +485,9 @@ static error_t *edit_dottaignore(
         return NULL;
     }
 
-    char *commit_msg = str_format(
+    char *commit_msg = heap_str_format(
         "Update %s .dottaignore", scope->display_label
     );
-    if (!commit_msg) {
-        free(new_content);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
-    }
 
     err = ignore_blob_write(
         repo, scope->refname, new_content, new_size, commit_msg
@@ -633,25 +626,20 @@ static error_t *modify_dottaignore(
 
     char *commit_msg = NULL;
     if (total_added > 0 && total_removed > 0) {
-        commit_msg = str_format(
+        commit_msg = heap_str_format(
             "Update %s .dottaignore (added %zu, removed %zu patterns)",
             scope->display_label, total_added, total_removed
         );
     } else if (total_added > 0) {
-        commit_msg = str_format(
+        commit_msg = heap_str_format(
             "Add %zu pattern%s to %s .dottaignore",
             total_added, total_added == 1 ? "" : "s", scope->display_label
         );
     } else {
-        commit_msg = str_format(
+        commit_msg = heap_str_format(
             "Remove %zu pattern%s from %s .dottaignore",
             total_removed, total_removed == 1 ? "" : "s", scope->display_label
         );
-    }
-
-    if (!commit_msg) {
-        free(owned);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
     }
 
     err = ignore_blob_write(
@@ -1188,10 +1176,7 @@ error_t *cmd_ignore(const dotta_ctx_t *ctx, const cmd_ignore_options_t *opts) {
         if (err) {
             return err;
         }
-        profile_label = str_format("profile '%s'", opts->profile);
-        if (!profile_label) {
-            return ERROR(ERR_MEMORY, "Failed to format scope label");
-        }
+        profile_label = heap_str_format("profile '%s'", opts->profile);
         scope = (dottaignore_scope_t){
             .refname = refname,
             .display_label = profile_label,

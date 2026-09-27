@@ -13,6 +13,7 @@
 
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/metadata.h"
 #include "core/scope.h"
@@ -807,15 +808,11 @@ static error_t *resolve_deployment_ownership(
 
     /* Otherwise a warning, in the resolver's own words — which name it could
      * not find — and the deployment continues */
-    char *warning = str_format(
+    char *warning = heap_str_format(
         "Could not resolve ownership for %s: %s",
         row->storage_path, error_message(err)
     );
     error_free(err);    /* its message just moved into the warning */
-
-    if (!warning) {
-        return ERROR(ERR_MEMORY, "Failed to format ownership warning");
-    }
 
     string_array_push_owned(warnings, warning);
 

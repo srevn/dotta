@@ -5,10 +5,10 @@
 #include "base/string.h"
 
 #include <ctype.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
+
+#include "base/heap.h"
 
 bool str_equal(const char *a, const char *b) {
     return a == b || (a && b && strcmp(a, b) == 0);
@@ -87,7 +87,7 @@ char *str_trim(char *str) {
 
 char *str_join(const char *const *strings, size_t count, const char *delimiter) {
     if (!strings || count == 0) {
-        return strdup("");
+        return heap_strdup("");
     }
 
     if (!delimiter) {
@@ -97,29 +97,27 @@ char *str_join(const char *const *strings, size_t count, const char *delimiter) 
     size_t delim_len = strlen(delimiter);
     bool has_delimiter = (delim_len > 0);
 
-    /* Calculate total length (with overflow checks) */
+    /* Calculate total length. The strings, the delimiters between them and the
+     * terminator are one count, and one no memory could hold is exhaustion. */
     size_t total_len = 0;
     for (size_t i = 0; i < count; i++) {
         if (strings[i]) {
             size_t slen = strlen(strings[i]);
-            if (total_len + slen < total_len) {
-                return NULL;  /* Overflow */
+            if (slen >= SIZE_MAX - total_len) {
+                heap_die(SIZE_MAX);
             }
             total_len += slen;
         }
         if (i < count - 1 && has_delimiter) {
-            if (total_len + delim_len < total_len) {
-                return NULL;  /* Overflow */
+            if (delim_len >= SIZE_MAX - total_len) {
+                heap_die(SIZE_MAX);
             }
             total_len += delim_len;
         }
     }
 
     /* Allocate result */
-    char *result = malloc(total_len + 1);
-    if (!result) {
-        return NULL;
-    }
+    char *result = heap_alloc(total_len + 1);
 
     /* Build result */
     char *ptr = result;
@@ -137,37 +135,5 @@ char *str_join(const char *const *strings, size_t count, const char *delimiter) 
     }
 
     *ptr = '\0';
-    return result;
-}
-
-char *str_format(const char *fmt, ...) {
-    if (!fmt) {
-        return NULL;
-    }
-
-    va_list args;
-    va_start(args, fmt);
-
-    /* Calculate required size */
-    va_list args_copy;
-    va_copy(args_copy, args);
-    int len = vsnprintf(NULL, 0, fmt, args_copy);
-    va_end(args_copy);
-
-    if (len < 0) {
-        va_end(args);
-        return NULL;
-    }
-
-    /* Allocate and format */
-    char *result = malloc(len + 1);
-    if (!result) {
-        va_end(args);
-        return NULL;
-    }
-
-    vsnprintf(result, len + 1, fmt, args);
-    va_end(args);
-
     return result;
 }

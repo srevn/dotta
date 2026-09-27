@@ -22,6 +22,7 @@
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
 #include "base/string.h"
 #include "sys/bootstrap.h"
@@ -84,10 +85,10 @@ static char **env_build(
         env[n++] = _v; \
     } while (0)
 
-    APPEND(str_format("DOTTA_REPO_DIR=%s", repo_dir));
-    APPEND(str_format("DOTTA_PROFILE=%s", profile));
-    APPEND(str_format("DOTTA_PROFILES=%s", all_profiles));
-    APPEND(str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0"));
+    APPEND(heap_str_format("DOTTA_REPO_DIR=%s", repo_dir));
+    APPEND(heap_str_format("DOTTA_PROFILE=%s", profile));
+    APPEND(heap_str_format("DOTTA_PROFILES=%s", all_profiles));
+    APPEND(heap_str_format("DOTTA_DRY_RUN=%s", dry_run ? "1" : "0"));
 
     /* Passthrough parent env, skipping DOTTA_* to preserve the invariant that
      * our four variables are the authoritative DOTTA_* surface visible to the

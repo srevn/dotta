@@ -41,6 +41,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "infra/label.h"
 #include "sys/filesystem.h"
@@ -184,13 +185,8 @@ static error_t *working_directory(char **out) {
     }
 
     /* The tail carries its own separator, and HOME's own directory has none. */
-    *out = str_format("%s%s", home, cwd + len);
+    *out = heap_str_format("%s%s", home, cwd + len);
     free(cwd);
-    if (!*out) {
-        return ERROR(
-            ERR_MEMORY, "Failed to spell the working directory under home"
-        );
-    }
 
     return NULL;
 }

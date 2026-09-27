@@ -15,8 +15,8 @@
 #include "base/array.h"
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/profiles.h"
 #include "sys/bootstrap.h"
@@ -108,11 +108,7 @@ static error_t *bootstrap_create_template(
     }
 
     /* Generate template content */
-    char *content = str_format(BOOTSTRAP_TEMPLATE, profile, profile, profile);
-    if (!content) {
-        stage_free(stage);
-        return ERROR(ERR_MEMORY, "Failed to generate bootstrap template");
-    }
+    char *content = heap_str_format(BOOTSTRAP_TEMPLATE, profile, profile, profile);
 
     err = stage_put(
         stage, BOOTSTRAP_SCRIPT_NAME, content, strlen(content),
@@ -124,13 +120,9 @@ static error_t *bootstrap_create_template(
         return err;
     }
 
-    char *commit_message = str_format(
+    char *commit_message = heap_str_format(
         "Add bootstrap script for %s profile", profile
     );
-    if (!commit_message) {
-        stage_free(stage);
-        return ERROR(ERR_MEMORY, "Failed to allocate commit message");
-    }
 
     err = stage_commit(stage, commit_message, NULL);
     free(commit_message);
@@ -210,13 +202,9 @@ static error_t *bootstrap_edit(
     }
 
     /* Auto-commit the changes */
-    commit_msg = str_format(
+    commit_msg = heap_str_format(
         "Update bootstrap script for %s profile", profile
     );
-    if (!commit_msg) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate commit message");
-        goto cleanup;
-    }
 
     /* The edited script onto the profile's stage; the stage commits only a tree
      * that differs from the branch's, and says which. */

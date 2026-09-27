@@ -13,8 +13,8 @@
  *     costs. At most one handle is held, whatever the walk's shape.
  *
  *   - What a directory costs: one discovery (~36 µs) and one `realpath` (~14
- *     µs). What an entry in it costs: one `str_format` and the libgit2 query. A
- *     walk that recurses inline re-enters the parent after every subdirectory
+ *     µs). What an entry in it costs: one `heap_str_format` and the libgit2 query.
+ *     A walk that recurses inline re-enters the parent after every subdirectory
  *     it leaves, so a tree pays about two transitions per directory — against a
  *     `realpath` per query that is a wash at seven entries per directory, a win
  *     above it, and a large win wherever no repository stands above at all: a
@@ -48,7 +48,7 @@
 #include <string.h>
 
 #include "base/error.h"
-#include "base/string.h"
+#include "base/heap.h"
 #include "sys/filesystem.h"
 
 struct source_filter {
@@ -168,16 +168,12 @@ static error_t *place(git_repository *repo, const char *directory, char **out) {
         }
     }
 
-    error_t *err = NULL;
     if (tail) {
-        *out = str_format("%s%s", tail, *tail ? "/" : "");
-        if (!*out) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate the source prefix");
-        }
+        *out = heap_str_format("%s%s", tail, *tail ? "/" : "");
     }
 
     free(canonical);
-    return err;
+    return NULL;
 }
 
 /**
@@ -239,12 +235,8 @@ error_t *source_filter_is_excluded(
     /* Where the name stands inside the workdir, spelled as libgit2 wants it: a
      * directory carries the trailing separator a directory-only pattern needs
      * (`node_modules/`), which the name can neither hold already nor be empty
-     * of. An allocation failure surfaces as ERR_MEMORY rather than silently falling
-     * back to an unsuffixed query, which would change the verdict. */
-    char *query = str_format("%s%s%s", f->prefix, name, is_dir ? "/" : "");
-    if (!query) {
-        return ERROR(ERR_MEMORY, "Failed to allocate the source query");
-    }
+     * of. */
+    char *query = heap_str_format("%s%s%s", f->prefix, name, is_dir ? "/" : "");
 
     int ignored = 0;
     int rc = git_ignore_path_is_ignored(&ignored, f->repo, query);

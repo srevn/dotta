@@ -17,7 +17,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
-#include "base/string.h"
+#include "base/heap.h"
 #include "sys/gitops.h"
 
 /**
@@ -187,11 +187,7 @@ error_t *bootstrap_extract_to_temp(
         goto cleanup;
     }
 
-    path = str_format("%s/dotta-bootstrap-XXXXXX", tmp_dir());
-    if (!path) {
-        err = ERROR(ERR_MEMORY, "Failed to allocate temp file path");
-        goto cleanup;
-    }
+    path = heap_str_format("%s/dotta-bootstrap-XXXXXX", tmp_dir());
 
     fd = mkstemp(path);
     if (fd < 0) {

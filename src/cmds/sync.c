@@ -15,8 +15,8 @@
 #include "base/args.h"
 #include "base/array.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/output.h"
-#include "base/string.h"
 #include "cmds/completion.h"
 #include "core/manifest.h"
 #include "core/scope.h"
@@ -1967,11 +1967,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
      * lifetime is cmd_sync's frame — covers both fire sites. */
     profiles_str = string_array_join(scope_profiles(scope), " ");
 
-    remote_env = str_format("DOTTA_REMOTE=%s", remote_name);
-    if (!remote_env) {
-        err = ERROR(ERR_MEMORY, "Failed to build DOTTA_REMOTE for hook env");
-        goto cleanup;
-    }
+    remote_env = heap_str_format("DOTTA_REMOTE=%s", remote_name);
 
     char *const sync_extras[] = { remote_env, NULL };
     const hook_invocation_t hook_inv = {

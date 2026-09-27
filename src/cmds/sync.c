@@ -349,9 +349,10 @@ static error_t *sync_fetch_phase(
  *
  * Operates on the scope's profiles (scope_profiles), matching sync_fetch_phase:
  * analyze only what the user asked for. results is sized from
- * scope_profiles(scope)->count by the caller; the two counts agree.
+ * scope_profiles(scope)->count by the caller; the two counts agree. A profile
+ * it cannot analyze fails in its own row (mark_result_failed).
  */
-static error_t *sync_analyze_phase(
+static void sync_analyze_phase(
     git_repository *repo,
     const char *remote_name,
     const scope_t *scope,
@@ -386,8 +387,6 @@ static error_t *sync_analyze_phase(
         result->ahead = info.ahead;
         result->behind = info.behind;
     }
-
-    return NULL;
 }
 
 /**
@@ -621,7 +620,7 @@ static error_t *resolve_and_push_divergence(
 /**
  * Handle SYNC_STRATEGY_OURS: force push local branch to remote
  */
-static error_t *handle_diverged_ours(
+static void handle_diverged_ours(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
@@ -638,7 +637,7 @@ static error_t *handle_diverged_ours(
     if (no_push) {
         output_info(out, OUTPUT_NORMAL, "    Force push skipped (--no-push)");
         result->outcome = SYNC_OUTCOME_DIVERGED;
-        return NULL;
+        return;
     }
 
     /* Get user confirmation for destructive operation */
@@ -653,7 +652,7 @@ static error_t *handle_diverged_ours(
         if (!output_confirm_or_default(out, prompt, false, false)) {
             output_info(out, OUTPUT_NORMAL, "    Operation cancelled by user");
             result->outcome = SYNC_OUTCOME_DIVERGED;
-            return NULL;
+            return;
         }
     }
 
@@ -666,7 +665,7 @@ static error_t *handle_diverged_ours(
             error_message(err)
         );
         mark_result_failed(result, err);
-        return NULL;
+        return;
     }
 
     output_styled(
@@ -674,14 +673,12 @@ static error_t *handle_diverged_ours(
         "    {green}✓{reset} Force pushed to remote (remote commits discarded)\n"
     );
     result->outcome = SYNC_OUTCOME_RESOLVED;
-
-    return NULL;
 }
 
 /**
  * Handle SYNC_STRATEGY_THEIRS: reset local branch to remote
  */
-static error_t *handle_diverged_theirs(
+static void handle_diverged_theirs(
     git_repository *repo,
     const char *remote_name,
     profile_sync_result_t *result,
@@ -707,7 +704,7 @@ static error_t *handle_diverged_theirs(
                 out, OUTPUT_NORMAL, "    Operation cancelled by user"
             );
             result->outcome = SYNC_OUTCOME_DIVERGED;
-            return NULL;
+            return;
         }
     }
 
@@ -723,7 +720,7 @@ static error_t *handle_diverged_theirs(
             error_message(err)
         );
         mark_result_failed(result, err);
-        return NULL;
+        return;
     }
 
     /* Resolve divergence (resets local branch to remote) */
@@ -735,7 +732,7 @@ static error_t *handle_diverged_theirs(
             error_message(err)
         );
         mark_result_failed(result, err);
-        return NULL;
+        return;
     }
 
     /* Verify reset succeeded
@@ -755,7 +752,7 @@ static error_t *handle_diverged_theirs(
             "    {yellow}⚠{reset} Local branch was reset but verification failed\n"
         );
         mark_result_failed(result, err);
-        return NULL;
+        return;
     }
 
     output_styled(
@@ -763,8 +760,6 @@ static error_t *handle_diverged_theirs(
         "    {green}✓{reset} Reset to remote (local commits discarded)\n"
     );
     result->outcome = SYNC_OUTCOME_RESOLVED;
-
-    return NULL;
 }
 
 /**
@@ -824,16 +819,18 @@ static error_t *handle_diverged(
         }
 
         case SYNC_STRATEGY_OURS: {
-            return handle_diverged_ours(
+            handle_diverged_ours(
                 repo, remote_name, result, out, confirm_destructive,
                 xfer, no_push
             );
+            break;
         }
 
         case SYNC_STRATEGY_THEIRS: {
-            return handle_diverged_theirs(
+            handle_diverged_theirs(
                 repo, remote_name, result, out, confirm_destructive
             );
+            break;
         }
     }
 
@@ -904,10 +901,9 @@ static error_t *sync_push_phase(
                         upstream_state_symbol(result->state),
                         result->profile, result->ahead, result->ahead == 1 ? "" : "s"
                     );
-                    error_t *err = handle_diverged_theirs(
+                    handle_diverged_theirs(
                         repo, remote_name, result, out, confirm_destructive
                     );
-                    if (err) return err;
                     break;
                 }
 
@@ -1000,12 +996,9 @@ static error_t *sync_push_phase(
                         "force push will overwrite newer remote commits\n"
                     );
 
-                    error_t *err = handle_diverged_ours(
+                    handle_diverged_ours(
                         repo, remote_name, result, out, confirm_destructive, xfer, no_push
                     );
-                    if (err) {
-                        return err;
-                    }
                     break;
                 }
                 handle_remote_ahead(
@@ -1983,12 +1976,7 @@ error_t *cmd_sync(const dotta_ctx_t *ctx, const cmd_sync_options_t *opts) {
     }
 
     /* Phase 2: Analyze branch states */
-    err = sync_analyze_phase(
-        repo, remote_name, scope, results, out
-    );
-    if (err) {
-        goto cleanup;
-    }
+    sync_analyze_phase(repo, remote_name, scope, results, out);
 
     /* Dry run: display analysis and exit without executing push/pull. The answer
      * still stands — a profile the analysis could not read is a question the

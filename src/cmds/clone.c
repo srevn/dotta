@@ -52,31 +52,28 @@
  *                 is 0: the items of an empty listing, a remote with no branch)
  * @param count Number of profiles
  * @param out Output context for messages
- * @param landed_count Output: number made local (can be NULL)
  * @param landed Optional: array to populate with the names made local (can be NULL)
- * @return Error or NULL on success
+ * @return Number made local
  */
-static error_t *land_profiles(
+static size_t land_profiles(
     git_repository *repo,
     const char *remote_name,
     char **profiles,
     size_t count,
     output_t *out,
-    size_t *landed_count,
     string_array_t *landed
 ) {
     CHECK_NULL(repo);
     CHECK_NULL(out);
 
     size_t local_count = 0;
-    error_t *err = NULL;
 
     for (size_t i = 0; i < count; i++) {
         const char *profile = profiles[i];
 
         /* The local branch: created at the remote's commit, or already here (the
          * same name given twice) and left where it stands */
-        err = upstream_ensure_tracking_branch(repo, remote_name, profile);
+        error_t *err = upstream_ensure_tracking_branch(repo, remote_name, profile);
         if (err) {
             output_warning(
                 out, OUTPUT_NORMAL, "Failed to create local branch '%s': %s",
@@ -93,11 +90,7 @@ static error_t *land_profiles(
         }
     }
 
-    if (landed_count) {
-        *landed_count = local_count;
-    }
-
-    return NULL;
+    return local_count;
 }
 
 /**
@@ -136,18 +129,11 @@ static error_t *land_all_profiles(
     string_array_t *successful = string_array_new(0);
 
     /* Create local branches */
-    size_t fetched_count = 0;
-    err = land_profiles(
-        repo, remote_name, all_branches->items, all_branches->count,
-        out, &fetched_count, successful
+    size_t fetched_count = land_profiles(
+        repo, remote_name, all_branches->items, all_branches->count, out, successful
     );
 
     string_array_free(all_branches);
-
-    if (err) {
-        string_array_free(successful);
-        return err;
-    }
 
     output_success(
         out, OUTPUT_NORMAL, "Fetched %zu profile%s",
@@ -470,21 +456,9 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
         /* Explicit profile management */
         output_section(out, OUTPUT_NORMAL, "Fetching specified profiles");
 
-        size_t fetched_count = 0;
-        err = land_profiles(
-            repo, "origin", opts->profiles, opts->profile_count,
-            out, &fetched_count, fetched_profiles
+        size_t fetched_count = land_profiles(
+            repo, "origin", opts->profiles, opts->profile_count, out, fetched_profiles
         );
-
-        if (err) {
-            output_error(
-                out, "Failed to fetch profiles: %s",
-                error_message(err)
-            );
-            /* Continue - some profiles may have been fetched */
-            error_free(err);
-            err = NULL;
-        }
 
         output_success(
             out, OUTPUT_NORMAL, "Fetched %zu of %zu specified profile%s",
@@ -545,19 +519,10 @@ error_t *cmd_clone(const dotta_ctx_t *ctx, const cmd_clone_options_t *opts) {
             output_gap(out, OUTPUT_NORMAL);
 
             /* Make the detected profiles local */
-            size_t fetched_count = 0;
-            err = land_profiles(
+            size_t fetched_count = land_profiles(
                 repo, "origin", detected_profiles->items, detected_profiles->count,
-                out, &fetched_count, fetched_profiles
+                out, fetched_profiles
             );
-            if (err) {
-                output_warning(
-                    out, OUTPUT_NORMAL, "Some profiles failed to fetch: %s",
-                    error_message(err)
-                );
-                error_free(err);
-                err = NULL;
-            }
 
             if (fetched_count > 0) {
                 output_success(

@@ -419,7 +419,7 @@ static error_t *remove_resolve(
      * and gets none — a miss the filesystem arm below reads as "not this claim".
      * Every path here is a validated storage path (the tree walk's own gate and
      * the sheet's parse both refuse anything else), so the only failure left is
-     * allocation, and that is nobody's to swallow. */
+     * a broken contract, and that is nobody's to swallow. */
     for (size_t j = 0; j < claim_count; j++) {
         err = mount_resolve(
             mounts, profile, claims[j].storage_path, ctx->arena,

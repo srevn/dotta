@@ -249,7 +249,6 @@ typedef struct {
  * Errors:
  *   - ERR_INVALID_ARG when a mount names no profile, or names a target that is
  *     not absolute and folded.
- *   - ERR_MEMORY on arena allocation failure.
  *
  * Two production readers. core/manifest.h's manifest_mount_table shapes the state's
  * rows — and a command's own binding, where the run brought one — into the array:
@@ -415,7 +414,6 @@ const mount_root_t *mount_root_of(
  *   - ERR_INTERNAL when `storage_path` lacks a known label (the input boundary
  *     is supposed to validate before reaching here; this guards against contract
  *     drift).
- *   - ERR_MEMORY on arena allocation failure.
  *
  * @param table        Mount table (must not be NULL)
  * @param profile      Owning profile (may be NULL for home/ and root/ paths)

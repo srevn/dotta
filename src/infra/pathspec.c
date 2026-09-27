@@ -10,6 +10,7 @@
 #include "base/arena.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "infra/label.h"
 #include "infra/path.h"
@@ -269,10 +270,7 @@ static bool rungs_open(rungs_t *r, const char *subject) {
     }
 
     size_t n = strlen(subject);
-    r->rung = n < sizeof(r->stack) ? r->stack : (r->heap = malloc(n + 1));
-    if (!r->rung) {
-        return false;
-    }
+    r->rung = n < sizeof(r->stack) ? r->stack : (r->heap = heap_alloc(n + 1));
     memcpy(r->rung, subject, n + 1);
     return true;
 }

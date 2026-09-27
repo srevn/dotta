@@ -98,7 +98,7 @@ static error_t *read_string(
     /* The parse's string, then the arena's copy of it: the parse is gone once
      * the file is read, and the configuration is not. */
     *out = arena_strdup(arena, *out);
-    return *out ? NULL : ERROR(ERR_MEMORY, "Failed to copy [%s] %s", section, key);
+    return NULL;
 }
 
 /* A path: a string, and not an empty one — leaving the key out is how the default

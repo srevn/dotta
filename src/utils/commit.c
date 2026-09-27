@@ -13,6 +13,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/identity.h"
 
 /* Maximum length for hostname */
@@ -42,36 +43,35 @@ typedef struct {
 } template_t;
 
 /**
- * Get current hostname Returns allocated string or NULL on error
+ * Get current hostname as an allocated string
  */
 static char *get_hostname(void) {
     char hostname[MAX_HOSTNAME];
 
     if (gethostname(hostname, sizeof(hostname)) != 0) {
         /* Fallback to "unknown" if gethostname fails */
-        return strdup("unknown");
+        return heap_strdup("unknown");
     }
 
     /* Ensure null termination */
     hostname[MAX_HOSTNAME - 1] = '\0';
 
-    return strdup(hostname);
+    return heap_strdup(hostname);
 }
 
 /**
- * Get current username Returns allocated string or NULL on error
+ * Get current username as an allocated string
  *
  * The invoker's (sys/identity): under sudo the user who typed the command, not
  * the root that $USER names there. "unknown" for a uid with no passwd entry.
  */
 static char *get_username(void) {
     const char *name = identity()->name;
-    return strdup(name ? name : "unknown");
+    return heap_strdup(name ? name : "unknown");
 }
 
 /**
- * Get current datetime in local timezone as ISO 8601 format Returns allocated
- * string or NULL on error
+ * Get current datetime in local timezone as an allocated ISO 8601 string
  */
 static char *get_datetime_local(void) {
     time_t now = time(NULL);
@@ -79,32 +79,31 @@ static char *get_datetime_local(void) {
 
     if (!tm_info) {
         /* Fallback if localtime fails */
-        return strdup("unknown");
+        return heap_strdup("unknown");
     }
 
     /* Format: 2025-01-09 14:23:45 +0300 (uses %z for timezone offset) */
     char buffer[64];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S %z", tm_info);
 
-    return strdup(buffer);
+    return heap_strdup(buffer);
 }
 
 /**
- * Get current date in ISO 8601 format (YYYY-MM-DD) Returns allocated string or
- * NULL on error
+ * Get current date as an allocated ISO 8601 string (YYYY-MM-DD)
  */
 static char *get_date_local(void) {
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now);
 
     if (!tm_info) {
-        return strdup("unknown");
+        return heap_strdup("unknown");
     }
 
     char buffer[16];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d", tm_info);
 
-    return strdup(buffer);
+    return heap_strdup(buffer);
 }
 
 /**
@@ -141,8 +140,7 @@ const char *commit_action_name_past(commit_action_t action) {
 }
 
 /**
- * Format path list as bullet points with truncation Returns allocated string or
- * NULL on error
+ * Format path list as bullet points with truncation, in an allocated string
  *
  * Both kinds, as the caller handed them over (utils/commit.h): the list says
  * "paths" of what it truncates and of what it has none of, because a commit that
@@ -150,7 +148,7 @@ const char *commit_action_name_past(commit_action_t action) {
  */
 static char *format_path_list(const char *const *paths, size_t count) {
     if (count == 0 || !paths) {
-        return strdup("  (no paths)");
+        return heap_strdup("  (no paths)");
     }
 
     buffer_t buf = BUFFER_INIT;
@@ -257,17 +255,12 @@ static char *substitute_template(
 static char *build_full_message(const char *title, const char *body) {
     /* Skip body if empty */
     if (body[0] == '\0') {
-        return strdup(title);
+        return heap_strdup(title);
     }
 
     /* Calculate size: title + "\n\n" + body + "\0" */
     size_t size = strlen(title) + 2 + strlen(body) + 1;
-    char *message = malloc(size);
-
-    if (!message) {
-        return NULL;
-    }
-
+    char *message = heap_alloc(size);
     snprintf(message, size, "%s\n\n%s", title, body);
 
     return message;
@@ -286,23 +279,16 @@ char *build_commit_message(
 
     /* If custom message provided, use it directly */
     if (ctx->custom_msg) {
-        return strdup(ctx->custom_msg);
+        return heap_strdup(ctx->custom_msg);
     }
 
-    /* Get components. Everything allocated here is freed at the one exit below,
-     * message and all: each step's failure is the same failure — there is no
-     * allocation this function can fail and carry on — so it is spelled once. */
+    /* Get components, each freed at the one exit below */
     char *hostname = get_hostname();
     char *username = get_username();
     char *date = get_date_local();
     char *datetime = get_datetime_local();
     char *path_list = format_path_list(ctx->paths, ctx->path_count);
     char *title = NULL, *body = NULL, *message = NULL;
-
-    /* Check allocations */
-    if (!hostname || !username || !date || !datetime || !path_list) {
-        goto cleanup;
-    }
 
     /* The values this message is made of, resolved once for both templates. The
      * count is rendered here and not in the reader, which is what keeps it the

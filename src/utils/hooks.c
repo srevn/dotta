@@ -138,24 +138,16 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
 
     /* Single-walk build with realloc-grow. */
     size_t cap = 64;
-    char **env = malloc(cap * sizeof(*env));
-    if (!env) {
-        return NULL;
-    }
+    char **env = heap_calloc(cap, sizeof(*env));
     size_t n = 0;
 
     /* Append `value` to env, growing the array on demand. */
     #define APPEND(value) do { \
-        char *_v = (value); \
-        if (!_v) goto cleanup; \
         if (n + 1 >= cap) { \
-            size_t _new_cap = cap * 2; \
-            char **_grown = realloc(env, _new_cap * sizeof(*env)); \
-            if (!_grown) { free(_v); goto cleanup; } \
-            env = _grown; \
-            cap = _new_cap; \
+            cap *= 2; \
+            env = heap_realloc(env, cap * sizeof(*env)); \
         } \
-        env[n++] = _v; \
+        env[n++] = (value); \
     } while (0)
 
     /* DOTTA_* surface — three optional, two always-on, then per-file. */
@@ -184,7 +176,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
      * with stale process-env values. */
     if (context->extras) {
         for (char *const *e = context->extras; *e; e++) {
-            APPEND(strdup(*e));
+            APPEND(heap_strdup(*e));
         }
     }
 
@@ -192,7 +184,7 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
      * so our authoritative surface above isn't shadowed. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
-        APPEND(strdup(*e));
+        APPEND(heap_strdup(*e));
     }
 
     #undef APPEND
@@ -202,15 +194,6 @@ static char **build_hook_env(const hook_context_t *context, size_t *env_count) {
     *env_count = n;
 
     return env;
-
-cleanup:
-    /* Free all allocated strings on failure */
-    for (size_t i = 0; i < n; i++) {
-        free(env[i]);
-    }
-    free(env);
-    *env_count = 0;
-    return NULL;
 }
 
 /**

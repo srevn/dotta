@@ -67,22 +67,16 @@ static char **env_build(
 
     /* Single-walk build with realloc-grow. */
     size_t cap = 64;
-    char **env = malloc(cap * sizeof(*env));
-    if (!env) return NULL;
+    char **env = heap_calloc(cap, sizeof(*env));
     size_t n = 0;
 
     /* Append `value` to env, growing the array on demand. */
     #define APPEND(value) do { \
-        char *_v = (value); \
-        if (!_v) goto cleanup; \
         if (n + 1 >= cap) { \
-            size_t _new_cap = cap * 2; \
-            char **_grown = realloc(env, _new_cap * sizeof(*env)); \
-            if (!_grown) { free(_v); goto cleanup; } \
-            env = _grown; \
-            cap = _new_cap; \
+            cap *= 2; \
+            env = heap_realloc(env, cap * sizeof(*env)); \
         } \
-        env[n++] = _v; \
+        env[n++] = (value); \
     } while (0)
 
     APPEND(heap_str_format("DOTTA_REPO_DIR=%s", repo_dir));
@@ -95,7 +89,7 @@ static char **env_build(
      * child. */
     for (char **e = environ; *e; e++) {
         if (str_starts_with(*e, "DOTTA_")) continue;
-        APPEND(strdup(*e));
+        APPEND(heap_strdup(*e));
     }
 
     #undef APPEND
@@ -103,10 +97,6 @@ static char **env_build(
     env[n] = NULL;
     *out_count = n;
     return env;
-
-cleanup:
-    env_free(env, n);
-    return NULL;
 }
 
 /**

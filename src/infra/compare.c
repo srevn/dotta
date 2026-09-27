@@ -13,6 +13,7 @@
 
 #include "base/buffer.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "base/secure.h"
 #include "sys/filesystem.h"
 
@@ -466,7 +467,7 @@ error_t *compare_generate_diff(
             break;
 
         case CMP_MISSING:
-            out->diff_text = strdup("File not deployed on disk");
+            out->diff_text = heap_strdup("File not deployed on disk");
             break;
 
         case CMP_TYPE_DIFF: {
@@ -500,7 +501,7 @@ error_t *compare_generate_diff(
             /* Binary files: libgit2 skips the line callback entirely when it
              * detects binary content, so generate_text_diff returns NULL. Provide
              * an explicit message rather than silent empty output. */
-            if (!out->diff_text) out->diff_text = strdup("Binary files differ");
+            if (!out->diff_text) out->diff_text = heap_strdup("Binary files differ");
             break;
         }
     }

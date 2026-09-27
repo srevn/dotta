@@ -17,6 +17,7 @@
 #include "base/buffer.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/secure.h"
 #include "crypto/cipher.h"
 #include "crypto/keymgr.h"
@@ -373,10 +374,7 @@ content_cache_t *content_cache_create(git_repository *repo, keymgr *keymgr) {
         return NULL;
     }
 
-    content_cache_t *cache = calloc(1, sizeof(content_cache_t));
-    if (!cache) {
-        return NULL;
-    }
+    content_cache_t *cache = heap_calloc(1, sizeof(content_cache_t));
 
     cache->repo = repo;
     cache->keymgr = keymgr;

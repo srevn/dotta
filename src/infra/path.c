@@ -139,8 +139,7 @@ error_t *path_input_filesystem_path(const char *input, arena_t *arena, const cha
     *out = arena_strdup(arena, normalized);
     free(normalized);
 
-    return *out ? NULL
-                : ERROR(ERR_MEMORY, "Failed to allocate the filesystem path");
+    return NULL;
 }
 
 /**

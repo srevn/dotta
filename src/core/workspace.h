@@ -134,17 +134,20 @@ typedef enum {
  * Who moved. On the content axis two bits split a difference by its mover: CONTENT
  * that disk left what dotta last confirmed there (any difference, where nothing
  * was), STALE that Git moved past it — both, a conflict. On a claim axis the
- * axis bit says what differs, and CLAIM_MOVED beside it that Git moved a claim
- * past the one the record last reconciled (workspace_claims_moved); without it
- * the difference is the user's. Only Git's side is asked of a claim: apply
- * converges every claim whoever moved it (core/deploy.h deploy_content_conflicts),
- * so the user's side would name a state no verb treats apart. One bit for both
- * claim axes, since no reader tells them apart, and set only beside an axis bit
- * it attributes (workspace_analyze_claim), so no screen shows it alone. Its
- * readers: workspace_item_route (the CONFLICT and STALE arms), workspace_item_tags
- * ([stale]), cmds/apply.c cmd_apply (the count of what Git moved) and
- * core/cleanup.c cleanup_skip_reason (a known flag no orphan carries); every
- * other surface reads the route. A reader not on this list is a bug.
+ * axis bit says what differs, and CLAIM_MOVED beside it that the claim is Git's
+ * to bring: Git moved it past the one the record last reconciled
+ * (workspace_claims_moved), or it names an owner this host cannot resolve, which
+ * no move of disk's can satisfy (core/workspace.c workspace_compare_ownership);
+ * without it the difference is the user's. Only Git's side is asked of a claim:
+ * apply converges every claim whoever moved it (core/deploy.h
+ * deploy_content_conflicts), so the user's side would name a state no verb treats
+ * apart. One bit for both claim axes, since no reader tells them apart, and set
+ * only beside an axis bit it attributes — by workspace_analyze_claim, and by
+ * workspace_compare_ownership in the one return it makes of both — so no screen
+ * shows it alone. Its readers: workspace_item_route (the CONFLICT and STALE arms),
+ * workspace_item_tags ([stale]), cmds/apply.c cmd_apply (the count of what Git
+ * moved) and core/cleanup.c cleanup_skip_reason (a known flag no orphan carries);
+ * every other surface reads the route. A reader not on this list is a bug.
  *
  * The words on screen: MODE is the mode and OWNERSHIP the ownership wherever a
  * screen names a claim axis that differs — the tags (workspace_item_tags), which
@@ -172,7 +175,7 @@ typedef enum {
     DIVERGENCE_TYPE        = 1 << 4,  /* Type changed (file/symlink/dir) */
     DIVERGENCE_UNVERIFIED  = 1 << 5,  /* The look failed; (workspace_fault_t) */
     DIVERGENCE_STALE       = 1 << 6,  /* Git moved past the pair dotta last confirmed */
-    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* Git moved a claim past the record's (beside its axis) */
+    DIVERGENCE_CLAIM_MOVED = 1 << 7   /* A claim Git's to bring: moved past the record's, or unresolvable here */
 } divergence_type_t;
 
 /**
@@ -867,6 +870,9 @@ typedef enum {
  *                            whatever claims of the user's ride beside it — a
  *                            claim is never an edit (deploy_content_conflicts),
  *                            and apply converges every claim whoever moved it.
+ *                            A claim naming an owner this host cannot resolve
+ *                            reads here too: no run here brings it, and apply
+ *                            is the verb that says why every time it is run.
  *   TYPE, non-capturable     KIND — a kind mismatch the copy cannot commit, on
  *                            a row a plan can hold: a tracked directory row's
  *                            type change (the walk's race guard refuses it — a

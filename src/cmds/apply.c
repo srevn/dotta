@@ -2447,12 +2447,15 @@ error_t *cmd_apply(const dotta_ctx_t *ctx, const cmd_apply_options_t *opts) {
      * bucket one kind. DIVERGENCE_STALE and DIVERGENCE_CLAIM_MOVED are the
      * workspace's verdict of that move — the content, another blob or the same
      * blob under another kind (core/workspace.h workspace_stale), or a claim
-     * (workspace_claims_moved) — a persistent signal that survives status→apply
-     * sequences and counts the same however the branch moved; work by definition
-     * (core/deploy.c deploy_needs_work), so only a pending item carries either.
-     * Every planned row counts, a row preflight will skip included — a Git move
-     * is the record against the view, and preflight's answer does not change it
-     * — and a row the plan skips (-e, --skip-existing) is in neither bucket. */
+     * (workspace_claims_moved), with a claim naming an owner this host cannot
+     * resolve counted beside them, Git's to bring though no run here can
+     * (core/workspace.h divergence_type_t) — a persistent signal that survives
+     * status→apply sequences and counts the same however the branch moved; work
+     * by definition (core/deploy.c deploy_needs_work), so only a pending item
+     * carries either. Every planned row counts, a row preflight will skip included
+     * — a Git move is the record against the view, and preflight's answer does
+     * not change it — and a row the plan skips (-e, --skip-existing) is in neither
+     * bucket. */
     size_t stale_files = 0;
     size_t stale_dirs = 0;
     workspace_items_t pending_files = workspace_items(&deploy_plan->files.pending);

@@ -263,16 +263,21 @@ static bool workspace_orphan_beneath(const workspace_t *ws, const char *path) {
  * The one compare for a row's claim (workspace_analyze_claim, both kinds) and a
  * record's (workspace_compare_orphan): the pair the claim resolves to on this
  * host (core/metadata.h metadata_ownership) against the node's, id to id.
- * DIVERGENCE_OWNERSHIP where the owner differs, or a group the claim names, and
- * where the claim names someone this host cannot resolve; NONE where the node
- * stands on the pair. Whether this run could chown does not enter: the lstat
- * needs no privilege, and a claim the disk contradicts is a fact about the path
- * whoever looks.
+ * DIVERGENCE_OWNERSHIP where the owner differs, or a group the claim names; NONE
+ * where the node stands on the pair. Whether this run could chown does not enter:
+ * the lstat needs no privilege, and a claim the disk contradicts is a fact about
+ * the path whoever looks.
+ *
+ * A claim naming someone this host cannot resolve is the one input no move of
+ * disk's can satisfy, so it is Git's to bring whatever the record says:
+ * DIVERGENCE_OWNERSHIP, with DIVERGENCE_CLAIM_MOVED beside it. A record has no
+ * Git side, so the orphan analysis keeps the axis alone.
  *
  * @param owner The claimed owner, or NULL
  * @param group The claimed group, or NULL
  * @param st The path's lstat (must not be NULL)
- * @return DIVERGENCE_OWNERSHIP or DIVERGENCE_NONE
+ * @return DIVERGENCE_OWNERSHIP — with DIVERGENCE_CLAIM_MOVED where the claim
+ *         names someone this host cannot resolve — or DIVERGENCE_NONE
  */
 static divergence_type_t workspace_compare_ownership(
     const char *owner,
@@ -281,15 +286,19 @@ static divergence_type_t workspace_compare_ownership(
 ) {
     /* The claim as this host's ids: its names, the invoker where it names no
      * owner, no change where it names no group. A name this host cannot resolve
-     * is one no node here stands on — unknown is not expected — and the resolver's
-     * sentence is freed unread: which half failed is the landing's to say
-     * (core/deploy.c resolve_deployment_ownership), never a look's. */
+     * is one no node here stands on — unknown is not expected — and one no move
+     * of the user's could make disk stand on, since no uid here is it: Git's to
+     * bring, so the route sends it to apply, which warns of the name, and never
+     * to update, whose capture of disk would put this host's want of the name
+     * in place of another machine's word. The resolver's sentence is freed unread:
+     * which half failed is the landing's to say (core/deploy.c
+     * resolve_deployment_ownership), never a look's. */
     uid_t uid;
     gid_t gid;
     error_t *err = metadata_ownership(owner, group, &uid, &gid);
     if (err) {
         error_free(err);
-        return DIVERGENCE_OWNERSHIP;
+        return DIVERGENCE_OWNERSHIP | DIVERGENCE_CLAIM_MOVED;
     }
 
     /* Id to id, so an account this host knows by two names satisfies both and a
@@ -588,11 +597,12 @@ static workspace_state_t classify_absent(
  *
  * Axis by axis — DIVERGENCE_MODE, DIVERGENCE_OWNERSHIP — where the look stands
  * off the row's claim, with DIVERGENCE_CLAIM_MOVED beside them where Git moved
- * one of those past the record's (workspace_claims_moved), all added to the item's
- * divergence; and each claim Git moved that the look already stands on, added
- * to its confirmation for the record to learn. Asked only of a look standing at
- * the row's kind, the one whose stat says anything of the row: each analysis
- * rules out absence and another kind before it asks.
+ * one of those past the record's (workspace_claims_moved) or the owner claimed
+ * is one this host cannot resolve (workspace_compare_ownership), all added to
+ * the item's divergence; and each claim Git moved that the look already stands
+ * on, added to its confirmation for the record to learn. Asked only of a look
+ * standing at the row's kind, the one whose stat says anything of the row: each
+ * analysis rules out absence and another kind before it asks.
  *
  * One rule for the two analyses of an active item (workspace_analyze_file,
  * workspace_analyze_directory). The orphan analysis asks the same compare of
@@ -618,7 +628,8 @@ static void workspace_analyze_claim(workspace_item_t *item) {
 
     /* The ownership, its own axis, links included: the sheet's word as this host's
      * ids against the look, by the rule the orphan analysis asks of the record
-     * too (workspace_compare_ownership). */
+     * too (workspace_compare_ownership) — Git's already where the claim names
+     * someone this host cannot resolve, whom no disk here stands on. */
     claims |= workspace_compare_ownership(row->owner, row->group, &item->st);
 
     /* Who moved it. An axis Git moved past the claim the record last reconciled
@@ -1277,7 +1288,10 @@ static error_t *workspace_compare_orphan(workspace_t *ws, workspace_item_t *item
             && (item->st.st_mode & 0777) != record->mode) {
             item->divergence |= DIVERGENCE_MODE;
         }
-        item->divergence |= workspace_compare_ownership(record->owner, record->group, &item->st);
+        /* The ownership axis alone: whose move a difference is gets asked of a
+         * row, and an orphan has none — a name its host cannot resolve included */
+        item->divergence |= workspace_compare_ownership(record->owner, record->group, &item->st)
+            & DIVERGENCE_OWNERSHIP;
     }
 
     return NULL;
@@ -3372,10 +3386,11 @@ workspace_route_t workspace_item_route(const workspace_item_t *item) {
         return WORKSPACE_ROUTE_UNVERIFIABLE;
     }
 
-    /* Git moved past what dotta last reconciled — the bytes (STALE) or a claim
-     * (CLAIM_MOVED) — and disk did not follow: a real edit beside it means both
-     * sides moved; alone — the user's own claims riding included, since a claim
-     * is never an edit — it is apply's to bring */
+    /* Git's side that disk did not follow — the bytes Git moved past what dotta
+     * last reconciled (STALE), a claim it moved past the record's or one this
+     * host cannot resolve (CLAIM_MOVED): a real edit beside it means both sides
+     * moved; alone — the user's own claims riding included, since a claim is
+     * never an edit — it is apply's to bring */
     if (divergence & (DIVERGENCE_STALE | DIVERGENCE_CLAIM_MOVED)) {
         return (divergence & DIVERGENCE_CONTENT) ? WORKSPACE_ROUTE_CONFLICT
                                                  : WORKSPACE_ROUTE_STALE;

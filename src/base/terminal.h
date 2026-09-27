@@ -139,7 +139,8 @@ void terminal_disarm(void);
 
 /**
  * Put back what dotta changed of the terminal: the armed settings, and the cursor
- * terminal_cursor_hide hid
+ * terminal_cursor_hide hid — on a line of its own, past the UI that hid it, as
+ * that UI's own exit leaves it
  *
  * For a signal handler: tcsetattr(3) and write(2) alone, both async-signal-safe,
  * and every flag it reads a volatile sig_atomic_t. Disarms, and forgets the cursor,

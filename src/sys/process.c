@@ -138,6 +138,34 @@ static void set_pipe_cloexec(int fds[2]) {
 }
 
 /**
+ * A child's signals, made its own before exec — both primitives' children
+ *
+ * No handler of the parent's runs between fork and exec: execve() resets a caught
+ * signal to SIG_DFL itself, and this covers the window before it the way execve()
+ * would — a terminating signal the parent catches goes back to its default, and
+ * one it inherited ignored stays ignored. SIGPIPE is dotta's own ignore (main.c),
+ * never the child's; SIGALRM goes back too, and the mask is cleared — the
+ * foreground child's parent blocks the keyboard's signals across the fork
+ * (process_foreground). Called in the child alone: no error_t, no malloc.
+ */
+static void process_child_signals(void) {
+    static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
+    for (size_t i = 0; i < sizeof(terminating) / sizeof(*terminating); i++) {
+        struct sigaction current;
+        if (sigaction(terminating[i], NULL, &current) == 0 &&
+            current.sa_handler != SIG_IGN) {
+            signal(terminating[i], SIG_DFL);
+        }
+    }
+    signal(SIGPIPE, SIG_DFL);
+    signal(SIGALRM, SIG_DFL);
+
+    sigset_t empty;
+    sigemptyset(&empty);
+    (void) sigprocmask(SIG_SETMASK, &empty, NULL);
+}
+
+/**
  * Compute remaining seconds until deadline. Returns 0 if the deadline has passed.
  * Returns -1 if no timeout is set.
  */
@@ -330,24 +358,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
          * exit) and _exit(126|127).
          */
 
-        /* No handler of the parent's runs between fork and exec: execve() resets
-         * a caught signal to SIG_DFL itself, and this covers the window before
-         * it the way execve() would — a terminating signal the parent catches
-         * goes back to its default, and one it inherited ignored stays ignored.
-         * SIGPIPE is dotta's own ignore (main.c), never the child's. */
-        static const int terminating[] = PROCESS_TERMINATING_SIGNALS;
-        for (size_t i = 0; i < sizeof(terminating) / sizeof(*terminating); i++) {
-            struct sigaction current;
-            if (sigaction(terminating[i], NULL, &current) == 0 &&
-                current.sa_handler != SIG_IGN) {
-                signal(terminating[i], SIG_DFL);
-            }
-        }
-        signal(SIGPIPE, SIG_DFL);
-        signal(SIGALRM, SIG_DFL);
-        sigset_t empty;
-        sigemptyset(&empty);
-        (void) sigprocmask(SIG_SETMASK, &empty, NULL);
+        /* The child's signals, its own before exec (process_child_signals). */
+        process_child_signals();
 
         /* Belt-and-suspenders: cancel any inherited alarm. */
         alarm(0);
@@ -733,4 +745,115 @@ void process_result_dispose(process_result_t *result) {
     }
     free(result->output);
     *result = (process_result_t) { 0 };
+}
+
+error_t *process_foreground(char *const argv[], process_result_t *result) {
+    CHECK_NULL(argv);
+    CHECK_NULL(argv[0]);
+    CHECK_NULL(result);
+
+    *result = (process_result_t) { 0 };
+
+    /* The exec's errno comes back over a self-pipe the exec closes, so a program
+     * that could not be run is told from one that exited 127. */
+    int errfd[2] = { -1, -1 };
+    if (pipe(errfd) != 0) {
+        return error_from_errno(errno, "Failed to create exec-errno pipe");
+    }
+    set_pipe_cloexec(errfd);
+
+    /* The keyboard's signals held across the fork, until the parent ignores them
+     * below: a Ctrl-C in between is neither dotta's death nor lost to the child,
+     * which clears its mask before exec and hears the terminal's own. */
+    sigset_t keyboard, before;
+    sigemptyset(&keyboard);
+    sigaddset(&keyboard, SIGINT);
+    sigaddset(&keyboard, SIGQUIT);
+    (void) sigprocmask(SIG_BLOCK, &keyboard, &before);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        int e = errno;
+        (void) sigprocmask(SIG_SETMASK, &before, NULL);
+        close(errfd[0]);
+        close(errfd[1]);
+        return error_from_errno(e, "Failed to fork");
+    }
+
+    if (pid == 0) {
+        /* ───── Child ─────────────────────────────────────────────
+         *
+         * As process_run's: no error_t / no malloc until exec, and a failure
+         * writes its errno to the self-pipe and exits. */
+        close(errfd[0]);
+        process_child_signals();
+
+        /* The invoker's child, for good (sys/identity), before the exec. */
+        if (identity_drop_child() != 0) {
+            int e = errno;
+            (void) write_full(errfd[1], &e, sizeof(e));
+            _exit(126);
+        }
+
+        execvp(argv[0], argv);
+
+        int e = errno;
+        (void) write_full(errfd[1], &e, sizeof(e));
+        _exit(127);
+    }
+
+    /* ───── Parent ──────────────────────────────────────────────── */
+
+    /* The keyboard's signals are the child's until it is reaped (the header):
+     * ignored here, and a pending one discarded with the ignore — it reached
+     * the child too. */
+    struct sigaction ignore = { 0 };
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    struct sigaction saved_int, saved_quit;
+    (void) sigaction(SIGINT, &ignore, &saved_int);
+    (void) sigaction(SIGQUIT, &ignore, &saved_quit);
+    (void) sigprocmask(SIG_SETMASK, &before, NULL);
+
+    /* End of file at the exec, the child's errno where it could not run. */
+    close(errfd[1]);
+    int exec_errno = 0;
+    ssize_t got;
+    do {
+        got = read(errfd[0], &exec_errno, sizeof(exec_errno));
+    } while (got < 0 && errno == EINTR);
+    close(errfd[0]);
+
+    /* Reaped whatever it is doing, however long it takes: no timeout, for the
+     * user is driving it. */
+    int status = 0;
+    pid_t reaped;
+    do {
+        reaped = waitpid(pid, &status, 0);
+    } while (reaped < 0 && errno == EINTR);
+    int wait_errno = errno;
+
+    /* dotta's own answer to the keyboard back, the child gone. */
+    (void) sigaction(SIGINT, &saved_int, NULL);
+    (void) sigaction(SIGQUIT, &saved_quit, NULL);
+
+    if (reaped < 0) {
+        return error_from_errno(wait_errno, "Failed to wait for '%s'", argv[0]);
+    }
+
+    /* The wait status decoded as process_run decodes it. */
+    if (got == (ssize_t) sizeof(exec_errno)) {
+        result->exec_failed = true;
+        result->exec_errno = exec_errno;
+    }
+    if (WIFEXITED(status)) {
+        result->exit_code = WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        result->signal_num = WTERMSIG(status);
+        result->exit_code = 128 + result->signal_num;
+    } else {
+        result->exit_code = 1;
+    }
+
+    return NULL;
 }

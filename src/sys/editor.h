@@ -1,8 +1,9 @@
 /**
  * editor.h - Editor invocation utilities
  *
- * Provides secure editor selection and invocation for interactive editing. Uses
- * fork()+execlp() pattern instead of system() for better security.
+ * Provides secure editor selection and invocation for interactive editing. The
+ * editor runs through sys/process's foreground primitive — fork and exec, no
+ * shell — instead of system(), for better security.
  */
 
 #ifndef DOTTA_EDITOR_H
@@ -21,14 +22,18 @@
 const char *editor_get_from_env(const char *default_editor);
 
 /**
- * Launch editor for a file using fork/exec pattern
+ * Launch editor for a file, in the foreground
  *
  * More secure than system() - no shell interpretation, better error handling.
- * Blocks until editor exits.
+ * Blocks until editor exits. The editor takes the terminal, and the keyboard's
+ * signals are its own while it runs (sys/process.h process_foreground): a Ctrl-C
+ * it answers never ends dotta underneath it, and one that kills it abandons the
+ * edit as any failure does, the caller's cleanup running.
  *
  * @param editor Editor command to launch (must not be NULL)
  * @param file_path Path to file to edit (must not be NULL)
- * @return Error or NULL on success
+ * @return Error or NULL on success: the program could not be run (ERR_NOT_FOUND
+ *         when no PATH entry holds it), it was killed, or it exited non-zero
  */
 error_t *editor_launch(const char *editor, const char *file_path);
 

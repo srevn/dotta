@@ -3,7 +3,10 @@
  *
  * One linear procedure for "fork, build env, capture or stream output, enforce
  * timeout, reap" — replacing the parallel implementations previously in
- * utils/hooks.c and sys/bootstrap.c.
+ * utils/hooks.c and sys/bootstrap.c — and its one sibling for a child in the
+ * foreground, which takes the terminal while dotta waits (process_foreground:
+ * the editor, `dotta git`). Both children make their signals their own the same
+ * way before exec, and report into one result.
  *
  * Design principles:
  * - Monotonic-clock timeout via select() — no SIGALRM mutation, no global
@@ -274,5 +277,34 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result);
  * caller owns it from that point on.
  */
 void process_result_dispose(process_result_t *result);
+
+/**
+ * Run a child in the foreground, and wait for it.
+ *
+ * The child takes the terminal: dotta's stdin, stdout and stderr, in dotta's
+ * process group — for a program the user drives, the editor (sys/editor) and
+ * `dotta git` with the pager git starts. argv[0] is looked up on PATH, the
+ * environment is dotta's own, and the child is the invoker's (sys/identity) with
+ * its signals made its own before exec, as process_run's child's are.
+ *
+ * The keyboard's signals are the child's to answer while it runs: a terminal
+ * sends SIGINT and SIGQUIT to dotta's whole group, so dotta ignores both until
+ * the child is reaped — an editor reads Ctrl-C as a key, a pager as "stop" —
+ * and never dies first with the child still holding the terminal. What a child
+ * that died of one means is the caller's to decide (git's rule: re-raise it, so
+ * the caller dies as its child did); a terminal's hangup and any other signal
+ * still end dotta, the child hearing the terminal's own.
+ *
+ * Populates *result on every path, as process_run does: exit_code and signal_num
+ * from the wait status, exec_failed and exec_errno when the program could not
+ * be run (the child's errno, over a self-pipe); no capture, no timeout. Returns
+ * non-NULL only for a failure of the primitive itself: the pipe, the fork or
+ * the wait.
+ *
+ * @param argv NULL-terminated; argv[0] a program name or path (must not be NULL)
+ * @param result Outcome (must not be NULL)
+ * @return Error or NULL on success
+ */
+error_t *process_foreground(char *const argv[], process_result_t *result);
 
 #endif /* DOTTA_PROCESS_H */

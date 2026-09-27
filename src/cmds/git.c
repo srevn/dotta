@@ -5,21 +5,23 @@
 #include "cmds/git.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/wait.h>
-#include <unistd.h>
+#include <string.h>
 
 #include "base/args.h"
-#include "sys/identity.h"
+#include "base/error.h"
+#include "sys/process.h"
 
 /**
  * Execute git command with passthrough
  *
- * Uses fork+exec for secure, full-featured passthrough:
+ * Runs git in the foreground (sys/process.h process_foreground) for a secure,
+ * full-featured passthrough:
  * - No shell injection vulnerabilities
  * - Preserves all stdio streams (including interactive mode)
- * - Returns git's actual exit code
+ * - Returns git's actual exit code, and dies of the keyboard signal git died of
  * - Works with pipes and redirects
  */
 int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
@@ -42,8 +44,7 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
         return 1;
     }
 
-    /* Build argv for execvp Format: "git" "-C" "<repo-path>" <user-args...> NULL
-     */
+    /* Build argv for execvp Format: "git" "-C" "<repo-path>" <user-args...> NULL */
     int total_args = 3 + opts->arg_count + 1;  /* git + -C + path + args + NULL */
     char **argv = malloc((size_t) total_args * sizeof(char *));
     if (!argv) {
@@ -61,56 +62,40 @@ int cmd_git(const char *repo_path, const cmd_git_options_t *opts) {
 
     argv[total_args - 1] = NULL;
 
-    /* Fork and execute */
-    pid_t pid = fork();
-
-    if (pid < 0) {
-        /* Fork failed */
-        perror("fork");
-        free(argv);
+    /* Git in the foreground: the terminal is its and its pager's, and so are
+     * the keyboard's signals while it runs; the child is the invoker's, so `sudo
+     * dotta git` runs git as the user on the user's repository. */
+    process_result_t result;
+    error_t *err = process_foreground(argv, &result);
+    free(argv);
+    if (err) {
+        fprintf(stderr, "Error: %s\n", error_message(err));
+        error_free(err);
         return 1;
     }
 
-    if (pid == 0) {
-        /* The invoker's git, for good (sys/identity): `sudo dotta git` runs git
-         * as the user on the user's repository. */
-        if (identity_drop_child() != 0) {
-            perror("dotta git: cannot run as the invoker");
-            _exit(126);
-        }
-
-        /* Child process: execute git argv is intentionally not freed - execvp
-         * replaces the process image, and _exit() bypasses cleanup on failure */
-        execvp("git", argv);
-
-        /* If we get here, exec failed Use _exit() to avoid flushing parent's
-         * stdio buffers and running parent's atexit handlers */
-        perror("execvp: git");
-        _exit(127);
+    /* A git that could not be run: its errno, and the status a shell gives a
+     * command it could not run — 127 for one no PATH entry holds, 126 for one
+     * it found and could not run. */
+    if (result.exec_failed) {
+        fprintf(stderr, "Error: Cannot run git: %s\n", strerror(result.exec_errno));
+        return result.exec_errno == ENOENT ? 127 : 126;
     }
 
-    /* Parent process: wait for git to complete */
-    free(argv);
-
-    int status;
-    while (waitpid(pid, &status, 0) == -1) {
-        if (errno != EINTR) {
-            perror("waitpid");
-            return 1;
-        }
-        /* EINTR: signal interrupted wait, retry */
+    /* Dead of the keyboard's signal: the terminal sent it to dotta too, which
+     * ignored it for git's sake, so dotta dies of it now — the status a shell
+     * reads is the one git's own death gives (git's rule, and a script's loop
+     * stops as it would for git). */
+    if (result.signal_num == SIGINT || result.signal_num == SIGQUIT) {
+        raise(result.signal_num);
     }
 
-    /* Return git's exit code */
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        /* Git was killed by signal */
-        fprintf(stderr, "git terminated by signal %d\n", WTERMSIG(status));
-        return 128 + WTERMSIG(status);  /* Standard convention */
+    /* Killed by anything else: said, and the standard convention's status. */
+    if (result.signal_num) {
+        fprintf(stderr, "git terminated by signal %d\n", result.signal_num);
     }
 
-    return 1;
+    return result.exit_code;
 }
 
 /* ══════════════════════════════════════════════════════════════════

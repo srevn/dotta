@@ -156,10 +156,13 @@ void terminal_restore_armed(void) {
         armed = 0;
     }
 
-    /* Straight to the descriptor: stdio is not async-signal-safe, and what it
-     * holds unflushed dies with the process anyway. */
+    /* A hidden cursor is an inline UI drawing (cmds/interactive.c): its line
+     * ended first, as the UI's own exit ends it, so the shell's prompt starts
+     * clear — then the cursor. Straight to the descriptor: stdio is not
+     * async-signal-safe, and what it holds unflushed dies with the process. */
     if (cursor_hidden) {
-        (void) write(STDOUT_FILENO, ANSI_CURSOR_SHOW, sizeof(ANSI_CURSOR_SHOW) - 1);
+        static const char back[] = "\r\n" ANSI_CURSOR_SHOW;
+        (void) write(STDOUT_FILENO, back, sizeof(back) - 1);
         cursor_hidden = 0;
     }
 }

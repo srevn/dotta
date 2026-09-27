@@ -223,7 +223,7 @@ cleanup:
  * over the post-mutation set — the door tests/test-claims.sh pins for `profile
  * disable`, and a strict seed would close it. The row says what the seed could
  * not, and is not gated: we do not know, so we do not prompt. */
-static error_t *read_targets(
+static void read_targets(
     git_repository *repo, state_t *deploy_state, view_t *view
 ) {
     for (size_t i = 0; i < view->item_count; i++) {
@@ -243,7 +243,6 @@ static error_t *read_targets(
             error_free(err);
         }
     }
-    return NULL;
 }
 
 static void view_free(view_t *view) {
@@ -269,10 +268,12 @@ static error_t *view_create(
     view_t *view = heap_calloc(1, sizeof(view_t));
 
     error_t *err = build_items(repo, deploy_state, view);
-    if (err) goto fail;
+    if (err) {
+        view_free(view);
+        return err;
+    }
 
-    err = read_targets(repo, deploy_state, view);
-    if (err) goto fail;
+    read_targets(repo, deploy_state, view);
 
     /* Pre-allocate the prompt buffer so the keystroke handler stays alloc-free
      * on the common typing path. */
@@ -280,10 +281,6 @@ static error_t *view_create(
 
     *out = view;
     return NULL;
-
-fail:
-    view_free(view);
-    return err;
 }
 
 /* --- Reorder --- */

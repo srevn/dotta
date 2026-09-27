@@ -502,7 +502,7 @@ error_t *profile_list_files(
  * ask — an enabled row with no binding is a lifecycle stage the health channel
  * names, not an inconsistency. add asks no producer: it holds a view over its
  * own opened tree under its own table and reads the slice on that (cmds/add.c
- * report_enable_hint).
+ * add_print_enable).
  *
  * Cost: one tree walk and one sheet load, in an arena of the call's own — the
  * product is a bool and nothing outlives the call (include/runtime.h, the

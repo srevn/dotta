@@ -144,7 +144,7 @@ bool path_input_announces_path(const char *input);
  * is none of the three is refused, because a caller's path slot may hold a profile
  * and the resolver cannot see whose does: add's grammar reads one as the jail's
  * or the working directory's and reads it through that same door (cmds/add.c
- * spell_argument).
+ * add_spell).
  *
  *   ~/.bashrc                 -> FILESYSTEM $HOME/.bashrc   (HOME as the identity spells it)
  *   ./config    (in /etc)     -> FILESYSTEM /etc/config
@@ -220,7 +220,7 @@ error_t *path_input_resolve(const char *input, arena_t *arena, path_input_t *out
  * bug:
  *
  *   - path_input_resolve's own filesystem arm: this is that arm.
- *   - add's argument grammar (cmds/add.c spell_argument) and `ignore --test`'s
+ *   - add's argument grammar (cmds/add.c add_spell) and `ignore --test`'s
  *     filesystem arm (cmds/ignore.c): both dispatched on the storage shape
  *     themselves, and both read a bare name as a path where the resolver will not.
  *   - the two binders' --target (cmds/add.c, cmds/profile.c) and the root the
@@ -278,7 +278,7 @@ error_t *path_input_filesystem_path(const char *input, arena_t *arena, const cha
  * "root/", "custom/") are not this function's — they are validated and placed
  * at the call site (infra/label.h label_validate_storage, infra/mount.h
  * mount_resolve). add's re-rooting under --target is add's own grammar, spelled
- * around the door (cmds/add.c, spell_argument).
+ * around the door (cmds/add.c, add_spell).
  *
  * The answer is malloc's, and one reader wants it that way: the interactive save's
  * per-edit target (cmds/interactive.c), replaced on every commit of the prompt

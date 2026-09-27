@@ -46,11 +46,11 @@
  *
  * The vocabulary's one currency: what a reader holds, passes, stores and loops
  * over. A label indexes — label_words at every word reader, a receipt's counts
- * at cmds/add.c report_labels — and costs nothing to keep. Its word is read from
- * label_words where a string is printed, written or matched, and read back into
- * a label where a tree or an argument is read (label_split, label_of). No reader
- * holds a label's word in a label's place: the word is `label_words[label]` at
- * the point of use.
+ * at cmds/add.c add_print_labels — and costs nothing to keep. Its word is read
+ * from label_words where a string is printed, written or matched, and read back
+ * into a label where a tree or an argument is read (label_split, label_of). No
+ * reader holds a label's word in a label's place: the word is `label_words[label]`
+ * at the point of use.
  *
  * A fourth label is an enumerator here, an entry in label_words, one more slot
  * in every array sized by LABEL_COUNT, a decision at every reader that derives
@@ -67,7 +67,7 @@ typedef enum {
 
 /**
  * The labels' arity, for a walk over them (the grammar's own, and cmds/add.c
- * report_labels) and for an array with one slot per label (label_words itself,
+ * add_print_labels) and for an array with one slot per label (label_words itself,
  * and that receipt's counts). A macro, not an enumerator, so the type holds no
  * sentinel: every label_t a reader holds subscripts label_words in range.
  */
@@ -81,7 +81,7 @@ typedef enum {
  * a label's ordinal — the sheet keys by name, the record by path, and the cipher
  * seals the name's own bytes — so the order here is free: a permutation moves
  * one screen, the receipt's label lines, which add prints in it (cmds/add.c
- * report_labels).
+ * add_print_labels).
  */
 extern const char *const label_words[LABEL_COUNT];
 
@@ -196,7 +196,7 @@ bool label_prefixes(const char *s);
  * switch — what the sheet reads into an absent ownership claim (core/metadata.c
  * metadata_ownership) and which rule placed the root a relocated claim lands
  * under (core/workspace.c workspace_analyze_orphans) — and one that only indexes
- * by it, add's receipt counting names by their label (cmds/add.c report_labels).
+ * by it, add's receipt counting names by their label (cmds/add.c add_print_labels).
  */
 label_t label_of(const char *storage_path);
 
@@ -218,7 +218,7 @@ label_t label_of(const char *storage_path);
  *
  * Readers: every surface a pattern is evaluated on — the enumeration
  * core/ignore.h's "The subject" describes without naming. The two walks ask of
- * what they found (cmds/add.c is_excluded, core/workspace.c
+ * what they found (cmds/add.c add_excluded, core/workspace.c
  * scan_directory_for_untracked), the scope of a name for --exclude, a row's or
  * an orphan's (core/scope.c scope_is_excluded), the policy of a name for
  * auto_encrypt (core/policy.c encryption_policy_matches_auto_patterns), and `ignore

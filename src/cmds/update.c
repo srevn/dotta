@@ -49,9 +49,9 @@
  * otherwise have this capture store a secret in the clear.
  *
  * Routed by what the load observed at the path, as add routes by what its listing
- * found there (cmds/add.c add_file_to_stage) — every item on this route carries
- * an occupant, a diverged file's from the join's look and an offer's from the
- * walk. No look is taken here: each capture takes its own and refuses the other's
+ * found there (cmds/add.c add_capture) — every item on this route carries an
+ * occupant, a diverged file's from the join's look and an offer's from the walk.
+ * No look is taken here: each capture takes its own and refuses the other's
  * occupant (infra/content.h), so a path whose kind changed since the load is
  * refused rather than read as what it has become, which is the refusal a second
  * look here would only have moved one frame earlier.
@@ -70,7 +70,7 @@
  * @param out The capture (must not be NULL; cleared here before the policy can
  *            refuse, so freeing it is correct on every path)
  */
-static error_t *capture_file(
+static error_t *update_capture(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const workspace_item_t *item,
@@ -157,7 +157,7 @@ typedef struct {
     size_t deleted;         /* DELETED paths, both kinds */
     size_t modified_dirs;   /* DEPLOYED directories: claim capture */
     size_t encryption;      /* DEPLOYED policy violators (a path bit beside it or alone) */
-} update_counts_t;
+} counts_t;
 
 /**
  * One path an update commit captured from disk
@@ -171,7 +171,7 @@ typedef struct {
 typedef struct {
     const workspace_item_t *item;   /* The captured item (borrowed, workspace lifetime) */
     state_stat_t stat;              /* The capture's triple; STATE_STAT_UNSET for a directory */
-} update_capture_t;
+} capture_t;
 
 /**
  * What one profile's update commit did, path by path
@@ -196,19 +196,19 @@ typedef struct {
  * (sized to its item count, an upper bound); release with update_commits_free.
  */
 typedef struct {
-    const char *profile;            /* Borrowed from the item group */
-    update_capture_t *captured;     /* Files copied and directory claims captured */
+    const char *profile;     /* Borrowed from the item group */
+    capture_t *captured;     /* Files copied and directory claims captured */
     size_t captured_count;
-    ptr_array_t deleted;            /* Items whose deletion the commit recorded (const workspace_item_t *) */
-    string_array_t pruned;          /* Directory entries dropped as redundant (storage paths) */
-    size_t claimed;                 /* Ancestor claims the derivation authored or refreshed */
-    string_array_t retired;         /* Ancestor claims the derivation dropped (storage paths) */
-} update_commit_t;
+    ptr_array_t deleted;     /* Items whose deletion the commit recorded (const workspace_item_t *) */
+    string_array_t pruned;   /* Directory entries dropped as redundant (storage paths) */
+    size_t claimed;          /* Ancestor claims the derivation authored or refreshed */
+    string_array_t retired;  /* Ancestor claims the derivation dropped (storage paths) */
+} commit_t;
 
 /**
  * Release an array of commits — the bookkeeping, never the items.
  */
-static void update_commits_free(update_commit_t *commits, size_t count) {
+static void update_commits_free(commit_t *commits, size_t count) {
     if (!commits) return;
     for (size_t i = 0; i < count; i++) {
         free(commits[i].captured);
@@ -246,7 +246,7 @@ typedef struct {
     workspace_items_t accepted;              /* The run's work; entries heap-owned, the caller frees */
     size_t refused[WORKSPACE_ROUTE_COUNT];   /* In scope, deployed, refused — by the route that refused it */
     size_t faults[WORKSPACE_FAULT_COUNT];    /* The UNVERIFIABLE arm again — by whose remedy the look is */
-} update_partition_t;
+} partition_t;
 
 /**
  * Partition the workspace's diverged items for update
@@ -255,7 +255,7 @@ typedef struct {
  * from the profiles they named — as three calls so the exclude arm keeps its
  * verbose log; the log is the pattern's, and fires for every in-scope item the
  * pattern hits whatever the state rule then says of it. Then the state rule under
- * the flags, and for a deployed item the route: the partition (update_partition_t).
+ * the flags, and for a deployed item the route: the partition (partition_t).
  *
  * @param ws Workspace (must not be NULL)
  * @param opts Update options (must not be NULL)
@@ -268,13 +268,13 @@ typedef struct {
  *                  not be NULL)
  * @return Error or NULL on success
  */
-static error_t *filter_items_for_update(
+static error_t *update_partition(
     const workspace_t *ws,
     const cmd_update_options_t *opts,
     const scope_t *scope,
     const config_t *config,
     output_t *out,
-    update_partition_t *partition
+    partition_t *partition
 ) {
     CHECK_NULL(ws);
     CHECK_NULL(opts);
@@ -282,7 +282,7 @@ static error_t *filter_items_for_update(
     CHECK_NULL(config);
     CHECK_NULL(partition);
 
-    *partition = (update_partition_t){ 0 };
+    *partition = (partition_t){ 0 };
 
     workspace_items_t all = workspace_diverged(ws);
     ptr_array_t accepted PTR_ARRAY_AUTO = { 0 };
@@ -407,7 +407,7 @@ static error_t *update_profile(
     const manifest_row_t **rows,
     size_t row_count,
     const cmd_update_options_t *opts,
-    update_commit_t *commit,
+    commit_t *commit,
     size_t *out_processed
 ) {
     CHECK_NULL(ctx);
@@ -443,7 +443,7 @@ static error_t *update_profile(
     /* The capture list can hold every item; the walk fills it with the ones that
      * landed. A rows-only call has nothing to capture and no list to size. */
     if (item_count > 0) {
-        commit->captured = calloc(item_count, sizeof(update_capture_t));
+        commit->captured = calloc(item_count, sizeof(capture_t));
         if (!commit->captured) {
             err = ERROR(ERR_MEMORY, "Failed to allocate capture list");
             goto cleanup;
@@ -489,7 +489,7 @@ static error_t *update_profile(
                  * the door: the bytes are released whichever step refused, and
                  * either refusal names the path the same way. */
                 content_capture_t capture = { 0 };
-                err = capture_file(ctx, stage, item, profile, &capture);
+                err = update_capture(ctx, stage, item, profile, &capture);
                 if (!err) {
                     err = stage_put(
                         stage, item->storage_path, capture.bytes.data,
@@ -572,7 +572,7 @@ static error_t *update_profile(
                     metadata_remove_item(metadata, item->storage_path);
                 }
 
-                commit->captured[commit->captured_count++] = (update_capture_t){
+                commit->captured[commit->captured_count++] = (capture_t){
                     .item = item,
                     .stat = state_stat_from_read(&capture.st)
                 };
@@ -683,7 +683,7 @@ static error_t *update_profile(
                 }
 
                 updated_dir_count++;
-                commit->captured[commit->captured_count++] = (update_capture_t){
+                commit->captured[commit->captured_count++] = (capture_t){
                     .item = item,
                     .stat = STATE_STAT_UNSET
                 };
@@ -862,21 +862,21 @@ cleanup:
  * invalidates nothing about an earlier profile's landed commit, so the record
  * follows each one. The view is computed, so nothing projects; what update writes
  * is the one thing only it knows about the paths it committed — read off each
- * commit's own bookkeeping (update_commit_t), so a path the walk skipped gets
- * no record write. A modified or new file was captured FROM disk, so where the
- * capture's own claim won its path in the post-commit view the record advances
- * to the just-committed blob with the stat the capture took (the next status
- * takes the fast path). A path the commit let go — a deleted item, a directory
- * entry the walk's prune dropped as redundant, or an ancestor claim the derivation
- * dropped — left Git by this commit: with no row left at the path its record
- * retires (nothing backs it now); with a lower profile's row at the path it is
- * a fallback — the record stays and reads [reassigned] until apply deploys it.
- * The rule "anchor only the row that IS the captured claim" is the same one add
- * applies (core/manifest.h's manifest_is_claim): a row another profile won is
- * its own, and so is one a second claim of this very profile won. Both kinds: a
- * directory's claim (mode, ownership) is captured from disk exactly as add captures
- * it, so the capture owns the directory the same way — the ownership the orphan
- * gate asks for on scope exit — with no stat triple, a directory having no content
+ * commit's own bookkeeping (commit_t), so a path the walk skipped gets no record
+ * write. A modified or new file was captured FROM disk, so where the capture's
+ * own claim won its path in the post-commit view the record advances to the
+ * just-committed blob with the stat the capture took (the next status takes the
+ * fast path). A path the commit let go — a deleted item, a directory entry the
+ * walk's prune dropped as redundant, or an ancestor claim the derivation dropped
+ * — left Git by this commit: with no row left at the path its record retires
+ * (nothing backs it now); with a lower profile's row at the path it is a fallback
+ * — the record stays and reads [reassigned] until apply deploys it. The rule
+ * "anchor only the row that IS the captured claim" is the same one add applies
+ * (core/manifest.h's manifest_is_claim): a row another profile won is its own,
+ * and so is one a second claim of this very profile won. Both kinds: a directory's
+ * claim (mode, ownership) is captured from disk exactly as add captures it, so
+ * the capture owns the directory the same way — the ownership the orphan gate
+ * asks for on scope exit — with no stat triple, a directory having no content
  * to confirm.
  *
  * Algorithm:
@@ -888,7 +888,7 @@ cleanup:
  * Preconditions:
  *   - Every entry in commits is a landed Git commit
  *   - the run's state is a live handle (DB open), borrowed from the dispatcher
- *   - commits is what update_execute_for_all_profiles returned
+ *   - commits is what update_execute returned
  *
  * Postconditions:
  *   - The record written for the committed paths as above
@@ -914,7 +914,7 @@ cleanup:
  */
 static error_t *update_write_record(
     const dotta_ctx_t *ctx,
-    const update_commit_t *commits,
+    const commit_t *commits,
     size_t commit_count,
     bool *out_updated
 ) {
@@ -957,10 +957,10 @@ static error_t *update_write_record(
     time_t now = time(NULL);
 
     for (size_t c = 0; c < commit_count; c++) {
-        const update_commit_t *commit = &commits[c];
+        const commit_t *commit = &commits[c];
 
         for (size_t i = 0; i < commit->captured_count; i++) {
-            const update_capture_t *capture = &commit->captured[i];
+            const capture_t *capture = &commit->captured[i];
             const manifest_row_t *row = manifest_lookup(
                 manifest, capture->item->filesystem_path
             );
@@ -1100,7 +1100,7 @@ cleanup:
  *                         NULL)
  * @return Error or NULL on success
  */
-static error_t *update_execute_for_all_profiles(
+static error_t *update_execute(
     const dotta_ctx_t *ctx,
     const string_array_t *enabled,
     const workspace_item_t **update_items,
@@ -1109,7 +1109,7 @@ static error_t *update_execute_for_all_profiles(
     size_t derive_count,
     const cmd_update_options_t *opts,
     size_t *total_updated,
-    update_commit_t **out_commits,
+    commit_t **out_commits,
     size_t *out_commit_count
 ) {
     CHECK_NULL(ctx);
@@ -1130,13 +1130,13 @@ static error_t *update_execute_for_all_profiles(
         return NULL;
     }
 
-    update_commit_t *commits = NULL;
+    commit_t *commits = NULL;
     size_t commit_count = 0;
     error_t *err = NULL;
 
     /* One bookkeeping slot per enabled profile — an upper bound; only landed
      * commits fill one. */
-    commits = calloc(enabled->count, sizeof(update_commit_t));
+    commits = calloc(enabled->count, sizeof(commit_t));
     if (!commits) {
         err = ERROR(ERR_MEMORY, "Failed to allocate commit bookkeeping");
         goto cleanup;
@@ -1191,7 +1191,7 @@ static error_t *update_execute_for_all_profiles(
         }
 
         /* Update this profile on its stage */
-        update_commit_t bookkeeping = { 0 };
+        commit_t bookkeeping = { 0 };
         size_t processed = 0;
         err = update_profile(
             ctx, stage, profile, (const workspace_item_t **) group.items,
@@ -1270,11 +1270,11 @@ cleanup:
  * @param counts The accepted items counted by fate (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *update_display_preview(
+static error_t *update_print_preview(
     output_t *out,
     const workspace_item_t **items,
     size_t item_count,
-    const update_counts_t *counts
+    const counts_t *counts
 ) {
     CHECK_NULL(out);
     CHECK_NULL(counts);
@@ -1543,7 +1543,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     workspace_t *ws = NULL;
     scope_t *scope = NULL;
     char *profiles_str = NULL;
-    update_partition_t partition = { 0 };
+    partition_t partition = { 0 };
     ptr_array_t derive_rows = { 0 };
     size_t total_updated = 0;
 
@@ -1557,7 +1557,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      *   scope_enabled  — the persistent enabled set, the CLI filter's bound.
      *   scope_profiles — update operation face (hook context string).
      *
-     *   scope_paths / scope_is_excluded — per-item gates in filter_items_for_update
+     *   scope_paths / scope_is_excluded — per-item gates in update_partition
      */
     scope_inputs_t scope_inputs = {
         .profiles         = opts->profiles,
@@ -1649,7 +1649,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* Partition the diverged items: the scope, the flags, and for a deployed
      * item the route table. */
-    err = filter_items_for_update(ws, opts, scope, config, out, &partition);
+    err = update_partition(ws, opts, scope, config, out, &partition);
     if (err) {
         err = error_wrap(err, "Failed to filter items for update");
         goto cleanup;
@@ -1809,7 +1809,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
 
     /* The plan's shape, counted once: the preview gates its sections on these
      * and the new-files prompt binds on new_files */
-    update_counts_t counts = { 0 };
+    counts_t counts = { 0 };
     for (size_t i = 0; i < partition.accepted.count; i++) {
         const workspace_item_t *item = partition.accepted.entries[i];
 
@@ -1834,7 +1834,7 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Preview: what this run will do, grouped by fate */
-    err = update_display_preview(
+    err = update_print_preview(
         out, (const workspace_item_t **) partition.accepted.entries,
         partition.accepted.count, &counts
     );
@@ -1911,11 +1911,11 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
      * ctx->run.keymgr is borrowed by the capture inside per-profile iteration.
      * A dry run executes nothing: the sections above are its preview, and the
      * summary below is its one sentence. */
-    update_commit_t *commits = NULL;
+    commit_t *commits = NULL;
     size_t commit_count = 0;
     bool record_updated = false;
     if (!opts->dry_run) {
-        err = update_execute_for_all_profiles(
+        err = update_execute(
             ctx, scope_enabled(scope),
             (const workspace_item_t **) partition.accepted.entries,
             partition.accepted.count,

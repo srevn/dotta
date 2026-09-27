@@ -552,7 +552,7 @@ error_t *fs_list_dir(const char *path, string_array_t **out);
  * status can reach. It bounds recursion and the per-frame resources a walk holds
  * while it enumerates; it is not a path-length limit and not a total memory bound.
  *
- * Read by cmds/add's collect_tree and by core/workspace's untracked scan, which
+ * Read by cmds/add's add_collect and by core/workspace's untracked scan, which
  * is where the arithmetic comes from. */
 #define FS_WALK_MAX_DEPTH 128
 
@@ -839,7 +839,7 @@ fs_occupant_t fs_lstat_occupant(const char *path, struct stat *st);
  * "regular file", "symlink", "directory", "FIFO", "socket", "character device",
  * "block device", "special file" — one spelling for the verbs that must name an
  * occupant they cannot take: infra/content.c content_capture_file and
- * content_capture_link (the capture's refusal), cmds/add.c collect_tree and cmd_add
+ * content_capture_link (the capture's refusal), cmds/add.c add_collect and cmd_add
  * (the walk's skip and the argument's) — or one that is not the kind a claim
  * expects (infra/compare.c compare_generate_diff, the type-mismatch line a diff
  * renders). The input is that look's own stat: an lstat's, or the fstat of the

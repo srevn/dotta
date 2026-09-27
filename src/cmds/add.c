@@ -56,7 +56,7 @@
  * a link's (content_capture_link) or a regular file's (content_capture_file),
  * each refusing the other's occupant, so a path is captured as the kind it was
  * listed as or not at all. The claim's kind is derived from it where the path
- * is listed (list_path), so the two cannot disagree.
+ * is listed (add_list), so the two cannot disagree.
  *
  * `should_encrypt` is the decision pass's verdict (cmd_add), reached with the
  * name before any capture runs — false but for a regular file, since a link's
@@ -72,14 +72,14 @@ typedef struct {
     fs_occupant_t occupant;       /* What the listing found there: chooses the capture */
     bool should_encrypt;          /* The decision pass's verdict; false but for a regular file */
     state_stat_t stat;            /* The capture's triple; STATE_STAT_UNSET for a directory */
-} add_path_t;
+} path_t;
 
 /**
  * The walk: what every frame reads, and the two lists it fills
  *
  * `listing` is this command's own claims, which is exactly the layer
  * manifest_name reads as `pending`: filesystem path -> &item->claim, one entry per
- * path this command settled and every entry a claim (list_path). So overlapping
+ * path this command settled and every entry a claim (add_list). So overlapping
  * CLI arguments (~/.config and ~/.config/fish) list each path once — a directory
  * already walked is skipped with its subtree, a file already listed is not listed
  * again — and every path beneath one already listed is named from its claim,
@@ -93,7 +93,7 @@ typedef struct {
  * alone, from the tree the stage opened at, under this command's table. Every
  * name comes from it (core/manifest.h manifest_name, over `listing`), the kind
  * question reads it (manifest_lookup_claim), and so does the one refusal the
- * completed selection owes (refuse_moved_name).
+ * completed selection owes (add_refuse_moves).
  *
  * `admission` and `sheet` are the two documents one commit carries, and the walk
  * asks both whether the commit has room for a name before a byte is read. The
@@ -114,9 +114,9 @@ typedef struct {
     stage_admission_t *admission;        /* The branch's tree, and every blob listed since */
     const metadata_t *sheet;             /* The branch's claims, asked with it */
     hashmap_t *listing;                  /* filesystem path -> &item->claim (borrowed both) */
-    ptr_array_t files;                   /* add_path_t *: every non-directory listed */
-    ptr_array_t directories;             /* add_path_t *: every directory walked into */
-} add_walk_t;
+    ptr_array_t files;                   /* path_t *: every non-directory listed */
+    ptr_array_t directories;             /* path_t *: every directory walked into */
+} walk_t;
 
 /**
  * What the record phase did, for the receipt
@@ -151,7 +151,7 @@ typedef struct {
  *
  * `unkept` is one thing only. This command cannot author a second name, and a
  * capture at a contested path lands on the name the next settle will keep —
- * refuse_moved_name is the last word on that — so a non-zero count is a typed
+ * add_refuse_moves is the last word on that — so a non-zero count is a typed
  * re-capture of a loser, deliberately made, which is exactly what "captured under
  * an unused path" says.
  */
@@ -160,12 +160,12 @@ typedef struct {
     size_t taken_over;     /* Of the anchored, records taken from another profile */
     size_t overridden;     /* Captures a higher-precedence profile's row holds */
     size_t unkept;         /* Captures another name of this profile holds */
-} record_receipt_t;
+} receipt_t;
 
 /**
  * Validate command options
  */
-static error_t *validate_options(const cmd_add_options_t *opts) {
+static error_t *add_validate(const cmd_add_options_t *opts) {
     CHECK_NULL(opts);
 
     if (!opts->profile || opts->profile[0] == '\0') {
@@ -207,14 +207,14 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * so neither can be the first answer.
  *
  * `input` is absolute: the caller's grammar decides who is asked at all, and a
- * bare relative path is the jail's without a question (spell_argument). The scratch
+ * bare relative path is the jail's without a question (add_spell). The scratch
  * is sized for one regardless — folding never grows a path — so the gate is a
  * rule about meaning, never about memory. Asked on the bytes as typed, before
  * the compose — unfolded, so a `..` beneath the target is inside here and walks
- * out at the fold, where the escape rule reads it (spell_argument) — and once
- * more where a re-rooted argument is not found, since the sentence owed there
- * turns on the answer (cmd_add). The scratch is the arena's and abandoned, the
- * module's idiom, so no path here has a free to get wrong.
+ * out at the fold, where the escape rule reads it (add_spell) — and once more
+ * where a re-rooted argument is not found, since the sentence owed there turns
+ * on the answer (cmd_add). The scratch is the arena's and abandoned, the module's
+ * idiom, so no path here has a free to get wrong.
  *
  * @param input      The argument as typed, absolute (must not be NULL)
  * @param target     The target as the row spells it (must not be NULL)
@@ -222,7 +222,7 @@ static error_t *validate_options(const cmd_add_options_t *opts) {
  * @param out_inside True iff a prefix of `input` is the target
  * @return Error or NULL on success
  */
-static error_t *inside_target(
+static error_t *add_inside(
     const char *input, const char *target, arena_t *arena, bool *out_inside
 ) {
     *out_inside = false;
@@ -305,7 +305,7 @@ static error_t *inside_target(
  * is not this rule's business — a link inside the target that reaches outside
  * is typed inside and admitted, named for where it lands. The target is one
  * spelling, the row's, and "inside" is a prefix of the argument being that spelling
- * (inside_target): a path typed through another spelling of the target's directory
+ * (add_inside): a path typed through another spelling of the target's directory
  * is outside by this rule and re-rooted, which the not-found arm says in words
  * (cmd_add).
  *
@@ -317,7 +317,7 @@ static error_t *inside_target(
  * @param out    Normalized absolute path, the arena's; NULL after an error
  * @return Error or NULL on success
  */
-static error_t *spell_argument(
+static error_t *add_spell(
     const char *input, const char *target, arena_t *arena, const char **out
 ) {
     *out = NULL;
@@ -339,7 +339,7 @@ static error_t *spell_argument(
     if (target && input[0] != '~' && input[0] != '.' && input[0] != '\0') {
         bool inside = false;
         if (input[0] == '/') {
-            RETURN_IF_ERROR(inside_target(input, target, arena, &inside));
+            RETURN_IF_ERROR(add_inside(input, target, arena, &inside));
         }
         if (!inside) {
             RETURN_IF_ERROR(fs_path_join(target, input, &composed));
@@ -409,8 +409,8 @@ static error_t *spell_argument(
  * a file they explicitly named. The gitignore evaluator never fails — its verdict
  * is applied directly.
  */
-static bool is_excluded(
-    const add_walk_t *walk, const char *filesystem_path, const char *storage_path,
+static bool add_excluded(
+    const walk_t *walk, const char *filesystem_path, const char *storage_path,
     path_kind_t kind, gitignore_match_t *out_match
 ) {
     /* Both layers ask for the directory bit, which is the kind read as the two
@@ -463,11 +463,11 @@ static bool is_excluded(
  * the selection model; a failure here aborts the command, and nothing reads the
  * listing after one.
  */
-static error_t *list_path(
-    add_walk_t *walk, const char *filesystem_path, const char *storage_path,
+static error_t *add_list(
+    walk_t *walk, const char *filesystem_path, const char *storage_path,
     fs_occupant_t occupant
 ) {
-    add_path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
+    path_t *path = arena_calloc(walk->ctx->arena, 1, sizeof(*path));
     if (!path) {
         return ERROR(ERR_MEMORY, "Failed to allocate path entry");
     }
@@ -509,8 +509,8 @@ static error_t *list_path(
  * it as an error, the walk prints it and skips the subtree. Anything else is
  * the run failing to decide, which is never a verdict about the path.
  */
-static error_t *admit_name(
-    const add_walk_t *walk, const char *storage_path, path_kind_t kind
+static error_t *add_admit(
+    const walk_t *walk, const char *storage_path, path_kind_t kind
 ) {
     if (kind == PATH_KIND_DIRECTORY) {
         return stage_admit_subtree(walk->admission, storage_path);
@@ -555,7 +555,7 @@ static error_t *admit_name(
  *
  * Two verdicts skip a child with its subtree, each with one line at NORMAL: a
  * kind the profile's own claim at the path contradicts, and a name the commit
- * has no room for, or one Git will not hold (admit_name). Neither may fail the
+ * has no room for, or one Git will not hold (add_admit). Neither may fail the
  * command — a stale claim deep inside $HOME must not fail `dotta add p ~`, and
  * the capture that would have refused it arrives too late to skip anything. `depth`
  * bounds the recursion at FS_WALK_MAX_DEPTH, and that is the one walked verdict
@@ -565,8 +565,8 @@ static error_t *admit_name(
  *
  * On error the lists keep what was collected; the caller's cleanup owns them.
  */
-static error_t *collect_tree(
-    add_walk_t *walk, const char *directory, size_t depth
+static error_t *add_collect(
+    walk_t *walk, const char *directory, size_t depth
 ) {
     CHECK_NULL(walk);
     CHECK_NULL(directory);
@@ -669,7 +669,7 @@ static error_t *collect_tree(
 
         /* Check exclude patterns */
         gitignore_match_t match;
-        if (is_excluded(walk, child_fs, child_storage, kind, &match)) {
+        if (add_excluded(walk, child_fs, child_storage, kind, &match)) {
             if (match.decided) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Excluded: %s (%s: '%s')", child_fs,
@@ -690,7 +690,7 @@ static error_t *collect_tree(
          * — it says the profile holds a subtree beneath the path, which a path
          * that became a file cannot carry — and it is the one reading that sees
          * a claim with nothing beneath it for either of the branch's documents
-         * to find, where admit_name below covers the rest, by the name. */
+         * to find, where add_admit below covers the rest, by the name. */
         const manifest_row_t *held = manifest_lookup_claim(
             walk->view, walk->profile, child_fs
         );
@@ -710,7 +710,7 @@ static error_t *collect_tree(
          * for, or one Git will not hold (sys/stage.h); a failure to decide is
          * the run failing, and publishing a selection past one would commit a
          * silently partial capture. */
-        err = admit_name(walk, child_storage, kind);
+        err = add_admit(walk, child_storage, kind);
         if (err) {
             if (error_code(err) != ERR_CONFLICT) goto cleanup;
             output_warning(
@@ -722,12 +722,12 @@ static error_t *collect_tree(
             continue;
         }
 
-        err = list_path(walk, child_fs, child_storage, occupant);
+        err = add_list(walk, child_fs, child_storage, occupant);
         if (err) goto cleanup;
 
         /* Settled, so the descent is one statement. */
         if (kind == PATH_KIND_DIRECTORY) {
-            err = collect_tree(walk, child_fs, depth + 1);
+            err = add_collect(walk, child_fs, depth + 1);
             if (err) goto cleanup;
         }
     }
@@ -768,7 +768,7 @@ cleanup:
  * Not liftable by --force: --force overwrites bytes under a name the profile
  * holds, which is not what abandoning a name is.
  */
-static error_t *refuse_moved_name(const add_walk_t *walk) {
+static error_t *add_refuse_moves(const walk_t *walk) {
     manifest_unkept_t unkept = manifest_unkept(walk->view);
 
     for (size_t i = 0; i < unkept.count; i++) {
@@ -834,7 +834,7 @@ static error_t *refuse_moved_name(const add_walk_t *walk) {
  * @param filesystem_path The captured path (must not be NULL)
  * @param item The capture's claim (must not be NULL)
  */
-static void report_capture(
+static void add_print_capture(
     output_t *out, const char *what, const char *filesystem_path,
     const metadata_item_t *item
 ) {
@@ -876,7 +876,7 @@ static void report_capture(
  * @param view    The branch as this command opened it, under its table (must
  *                not be NULL)
  */
-static void report_enable_hint(
+static void add_print_enable(
     output_t *out, const char *profile, const char *target, const manifest_t *view
 ) {
     if (target) {
@@ -924,7 +924,7 @@ static void report_enable_hint(
  * @param walk The selection, the table it named through, and the output (must
  *             not be NULL)
  */
-static void report_labels(const add_walk_t *walk) {
+static void add_print_labels(const walk_t *walk) {
     output_t *out = walk->ctx->out;
     const mount_table_t *mounts = manifest_mounts(walk->view);
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
@@ -934,7 +934,7 @@ static void report_labels(const add_walk_t *walk) {
     size_t count[LABEL_COUNT] = { 0 };
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const add_path_t *path = listed[b]->items[i];
+            const path_t *path = listed[b]->items[i];
             count[label_of(path->claim.storage_path)]++;
         }
     }
@@ -983,11 +983,11 @@ static void report_labels(const add_walk_t *walk) {
  * @param metadata The sheet the claim goes onto (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *add_file_to_stage(
+static error_t *add_capture(
     const dotta_ctx_t *ctx,
     stage_t *stage,
     const char *profile,
-    add_path_t *path,
+    path_t *path,
     metadata_t *metadata
 ) {
     CHECK_NULL(ctx);
@@ -1068,7 +1068,7 @@ static error_t *add_file_to_stage(
         return NULL;
     }
 
-    report_capture(out, "metadata", filesystem_path, item);
+    add_print_capture(out, "metadata", filesystem_path, item);
 
     err = metadata_add_item(metadata, &item);
     if (err) {
@@ -1098,8 +1098,8 @@ static error_t *add_file_to_stage(
  *                      already holds moves nothing (must not be NULL)
  * @return Error or NULL on success
  */
-static error_t *create_commit(
-    const add_walk_t *walk,
+static error_t *add_commit(
+    const walk_t *walk,
     stage_t *stage,
     const cmd_add_options_t *opts,
     bool *out_committed
@@ -1110,9 +1110,9 @@ static error_t *create_commit(
     CHECK_NULL(out_committed);
 
     /* The names this commit takes, borrowed from the claims the walk listed them
-     * under: every listed path has one (list_path). Both kinds, in the order
-     * every other reader of the two takes them. The message reads them once and
-     * the arena outlives the call, so nothing is copied. */
+     * under: every listed path has one (add_list). Both kinds, in the order every
+     * other reader of the two takes them. The message reads them once and the
+     * arena outlives the call, so nothing is copied. */
     const ptr_array_t *listed[] = { &walk->files, &walk->directories };
     size_t count = walk->files.count + walk->directories.count;
 
@@ -1124,7 +1124,7 @@ static error_t *create_commit(
     size_t named = 0;
     for (size_t b = 0; b < sizeof(listed) / sizeof(listed[0]); b++) {
         for (size_t i = 0; i < listed[b]->count; i++) {
-            const add_path_t *path = listed[b]->items[i];
+            const path_t *path = listed[b]->items[i];
             paths[named++] = path->claim.storage_path;
         }
     }
@@ -1252,7 +1252,7 @@ static error_t *create_commit(
  * @param receipt What the phase did, zeroed first (must not be NULL)
  * @return Error or NULL on success (non-fatal - caller treats as warning)
  */
-static error_t *write_record(
+static error_t *add_write_record(
     const dotta_ctx_t *ctx,
     const mount_table_t *mounts,
     const char *profile,
@@ -1261,7 +1261,7 @@ static error_t *write_record(
     const ptr_array_t *added_files,
     const ptr_array_t *added_dirs,
     const string_array_t *retired,
-    record_receipt_t *receipt
+    receipt_t *receipt
 ) {
     CHECK_NULL(ctx);
     CHECK_NULL(mounts);
@@ -1277,7 +1277,7 @@ static error_t *write_record(
     error_t *err = NULL;
     manifest_t *manifest = NULL;
 
-    *receipt = (record_receipt_t){ 0 };
+    *receipt = (receipt_t){ 0 };
 
     /* STEP 1: Scope.
      *
@@ -1388,7 +1388,7 @@ static error_t *write_record(
         const ptr_array_t *captured[] = { added_files, added_dirs };
         for (size_t b = 0; b < sizeof(captured) / sizeof(captured[0]); b++) {
             for (size_t i = 0; i < captured[b]->count; i++) {
-                const add_path_t *path = captured[b]->items[i];
+                const path_t *path = captured[b]->items[i];
 
                 const manifest_row_t *row = manifest_lookup(manifest, path->filesystem_path);
                 if (!manifest_is_claim(row, profile, path->claim.storage_path)) {
@@ -1493,7 +1493,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const config_t *config = ctx->config;
     output_t *out = ctx->out;
 
-    error_t *err = validate_options(opts);
+    error_t *err = add_validate(opts);
     if (err) return err;
 
     /* Initialize all resources to NULL for safe cleanup */
@@ -1502,10 +1502,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     source_filter_t *source_filter = NULL;
     stage_t *stage = NULL;
     stage_admission_t *admission = NULL; /* The tree as its names are chosen: see below */
-    manifest_t *view = NULL;             /* The branch as the stage opened it: see below */
-    add_walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
-    bool profile_exists = false;         /* The pre-flight's question, read by both modes */
-    bool profile_created = false;        /* The orphan open's answer, read below the commit */
+    manifest_t *view = NULL;         /* The branch as the stage opened it: see below */
+    walk_t walk = { .ctx = ctx };    /* Filled once the table and the rules are known */
+    bool profile_exists = false;     /* The pre-flight's question, read by both modes */
+    bool profile_created = false;    /* The orphan open's answer, read below the commit */
     bool committed = false;
     metadata_t *metadata = NULL;
     mount_table_t *mounts = NULL;         /* The command's table: see below */
@@ -1557,8 +1557,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * the borrow: the record phase's enable and its rollback each replace the
      * row cache state_target lends from (core/state.h, state_profiles), and the
      * receipt names this binding after both. `target` is the flag's alone, NULL
-     * without it: re-rooting an argument is the flag's grammar (spell_argument),
-     * never a row's. */
+     * without it: re-rooting an argument is the flag's grammar (add_spell), never
+     * a row's. */
     const char *bound = state_target(state, opts->profile);
     if (bound) {
         bound = arena_strdup(ctx->arena, bound);
@@ -1661,7 +1661,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Built once per command and shared across the whole collection walk so the
      * discovered source-repo handle is reused for every file under the same source
      * tree. A build that fails refuses the command, as the ignore rules above
-     * do; what degrades is a query — is_excluded reads one that fails as "not
+     * do; what degrades is a query — add_excluded reads one that fails as "not
      * excluded", so an odd source repository never blocks a path the user named. */
     if (config && config->respect_gitignore) {
         err = source_filter_create(&source_filter);
@@ -1719,7 +1719,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The profile's sheet, from the tree the stage opened at: the branch's own
      * bytes, an empty sheet for a new profile (the loader's contract). Read before
      * the walk, which asks it what the branch already claims beneath a name
-     * (admit_name). The decide phase gives up a claim a listed file takes the
+     * (add_admit). The decide phase gives up a claim a listed file takes the
      * place of, the captures write the rest, and it is saved once. A sheet that
      * will not load refuses the add here rather than after the arguments have
      * been diagnosed — the branch's own state is the earlier question.
@@ -1798,7 +1798,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                     /* The shape predicate above dispatched here, so the resolver
                      * answered one of the two storage keys and never this one:
                      * a filesystem spelling is add's own grammar and reaches
-                     * spell_argument instead. Said, as mount_resolve and
+                     * add_spell instead. Said, as mount_resolve and
                      * profile_discover_claims say theirs, so a fourth key is a
                      * decision at this head rather than a read of the member
                      * the tag does not name. */
@@ -1831,9 +1831,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             }
         } else {
             /* Regular filesystem path — as add reads it: the target's when one
-             * stands (spell_argument), the shell's when none does. The key the
-             * walk begins at, and everything it joins beneath is a key too. */
-            err = spell_argument(file, target, ctx->arena, &filesystem_path);
+             * stands (add_spell), the shell's when none does. The key the walk
+             * begins at, and everything it joins beneath is a key too. */
+            err = add_spell(file, target, ctx->arena, &filesystem_path);
             if (err) {
                 err = error_wrap(err, "Failed to resolve path '%s'", file);
                 goto cleanup;
@@ -1873,7 +1873,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                  * re-rooted under a target that is not there. */
                 if (target && file[0] == '/') {
                     bool inside = false;
-                    err = inside_target(file, target, ctx->arena, &inside);
+                    err = add_inside(file, target, ctx->arena, &inside);
                     if (err) goto cleanup;
                     if (!inside) {
                         err = ERROR(
@@ -1923,8 +1923,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * name is the one input that can disagree with what was settled, so it
          * is the only one the gate owes a sentence. One lookup answers both:
          * every path this command listed carries the claim it was listed under
-         * (list_path), a root's included, so an entry is a claim and there is
-         * no absent value to fold. */
+         * (add_list), a root's included, so an entry is a claim and there is no
+         * absent value to fold. */
         const manifest_claim_t *listed = hashmap_get(walk.listing, filesystem_path);
         if (listed) {
             if (typed && strcmp(listed->storage_path, typed) != 0) {
@@ -1970,7 +1970,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * rules name it is refused here as any ignored directory is; at "/" the
          * filter names no entry and asks nothing (sys/source.h). */
         gitignore_match_t match;
-        if (is_excluded(&walk, filesystem_path, storage_path, kind, &match)) {
+        if (add_excluded(&walk, filesystem_path, storage_path, kind, &match)) {
             if (match.decided) {
                 err = ERROR(
                     ERR_INVALID_ARG, "'%s' is ignored by %s: '%s'\n"
@@ -2049,17 +2049,17 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * entry answers with a skip is an error here: the user asked for this
          * path by name, and working around a claim they did not mention is not
          * this command's to do. */
-        err = admit_name(&walk, storage_path, kind);
+        err = add_admit(&walk, storage_path, kind);
         if (err) {
             err = error_wrap(err, "Cannot add '%s'", file);
             goto cleanup;
         }
 
-        err = list_path(&walk, filesystem_path, storage_path, occupant);
+        err = add_list(&walk, filesystem_path, storage_path, occupant);
         if (err) goto cleanup;
 
         if (kind == PATH_KIND_DIRECTORY) {
-            err = collect_tree(&walk, filesystem_path, 0);
+            err = add_collect(&walk, filesystem_path, 0);
             if (err) {
                 err = error_wrap(err, "Failed to collect from '%s'", file);
                 goto cleanup;
@@ -2086,7 +2086,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Given up here, with the selection complete, so that the sheet the sweep
      * below reads is the one the commit will carry. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        const add_path_t *path = walk.files.items[i];
+        const path_t *path = walk.files.items[i];
         const metadata_item_t *standing = metadata_lookup(
             metadata, path->claim.storage_path
         );
@@ -2101,7 +2101,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * leaves no room for a directory at its name or for anything beneath it.
      *
      * Every listing met both documents as the command stood when it was made
-     * (admit_name): the admission held the branch's entries and every blob listed
+     * (add_admit): the admission held the branch's entries and every blob listed
      * before, and the sheet held the branch's claims. Two readings remain, and
      * they are this pass's two loops:
      *   - the branch's own claims, against every name the tree will hold. A blob
@@ -2145,7 +2145,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
     }
     for (size_t i = 0; i < walk.directories.count; i++) {
-        const add_path_t *path = walk.directories.items[i];
+        const path_t *path = walk.directories.items[i];
 
         err = stage_admit_subtree(admission, path->claim.storage_path);
         if (err) {
@@ -2163,7 +2163,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
 
     /* The selection is complete, so the question of names its parts cannot answer
      * is asked here: does this command abandon a name it moves? */
-    err = refuse_moved_name(&walk);
+    err = add_refuse_moves(&walk);
     if (err) goto cleanup;
 
     /* What the branch already holds under a name this command chose. Asked over
@@ -2176,7 +2176,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * questions, one lookup each. */
     if (!opts->force) {
         for (size_t i = 0; i < walk.files.count; i++) {
-            const add_path_t *path = walk.files.items[i];
+            const path_t *path = walk.files.items[i];
             if (!git_index_get_bypath(
                 stage_index(stage), path->claim.storage_path, 0
                 )) {
@@ -2197,7 +2197,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * through the index the stage opened on, never by a claim, with no key and
      * no source file (infra/content.h content_classify) — so it is a decision
      * and is made with the others, before any capture runs. The capture is told
-     * (add_file_to_stage).
+     * (add_capture).
      *
      * A regular file alone: a link's entry is its target and carries no seal
      * (core/policy.h), so the policy is never asked about one; and the capture
@@ -2211,7 +2211,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * when this run can never seal — encryption turned off — rather than at a
      * capture the others would already have preceded into the object database. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        add_path_t *path = walk.files.items[i];
+        path_t *path = walk.files.items[i];
         if (path->occupant == FS_OCCUPANT_SYMLINK) continue;
 
         const char *storage_path = path->claim.storage_path;
@@ -2274,14 +2274,14 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
          * and sealed as the decision pass said. What a capture reads off its
          * source — the mode and the owner a claim takes — is the capture's. */
         for (size_t i = 0; i < walk.directories.count; i++) {
-            const add_path_t *path = walk.directories.items[i];
+            const path_t *path = walk.directories.items[i];
             output_info(
                 out, OUTPUT_VERBOSE, "Would track directory: %s -> %s",
                 path->filesystem_path, path->claim.storage_path
             );
         }
         for (size_t i = 0; i < walk.files.count; i++) {
-            const add_path_t *path = walk.files.items[i];
+            const path_t *path = walk.files.items[i];
             if (path->should_encrypt) {
                 output_info(
                     out, OUTPUT_VERBOSE, "Would encrypt: %s -> %s",
@@ -2318,7 +2318,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 opts->profile
             );
         }
-        report_labels(&walk);
+        add_print_labels(&walk);
         if (!profile_exists) {
             output_info(
                 out, OUTPUT_NORMAL, "Would create profile '%s' and enable it",
@@ -2337,7 +2337,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
                 out, OUTPUT_NORMAL,
                 "Profile not enabled - nothing would be marked as deployed"
             );
-            report_enable_hint(out, opts->profile, opts->target, view);
+            add_print_enable(out, opts->profile, opts->target, view);
             output_gap(out, OUTPUT_NORMAL);
         }
 
@@ -2355,13 +2355,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * Required, where update's sibling loop warns and carries on: a directory
      * this command listed is the *name* its walk composed beneath, so a claim
      * that does not land leaves the files captured under a name nothing authors
-     * — and the listing, which refuse_moved_name reads as a promise of the commit,
+     * — and the listing, which add_refuse_moves reads as a promise of the commit,
      * would be a wish (core/metadata.h metadata_capture_from_directory). Ahead
      * of the file captures for the same reason: a directory that cannot be claimed
      * is found before any source blob reaches the object database.
      */
     for (size_t i = 0; i < walk.directories.count; i++) {
-        const add_path_t *path = walk.directories.items[i];
+        const path_t *path = walk.directories.items[i];
         const char *storage_path = path->claim.storage_path;
 
         /* Stat directory to capture mode (and ownership if root/custom). lstat
@@ -2396,7 +2396,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
         }
 
         /* Verbose output before consuming the item */
-        report_capture(out, "directory metadata", path->filesystem_path, dir_item);
+        add_print_capture(out, "directory metadata", path->filesystem_path, dir_item);
 
         /* Add directory to metadata */
         err = metadata_add_item(metadata, &dir_item);
@@ -2414,13 +2414,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     }
 
     /* Every file, as it was listed and as the decision pass sealed it
-     * (add_file_to_stage). Each capture's stat triple is kept on the path, for
-     * the record: it is the stat of the bytes committed, which a later lstat
-     * could not promise. */
+     * (add_capture). Each capture's stat triple is kept on the path, for the
+     * record: it is the stat of the bytes committed, which a later lstat could
+     * not promise. */
     for (size_t i = 0; i < walk.files.count; i++) {
-        add_path_t *path = walk.files.items[i];
+        path_t *path = walk.files.items[i];
 
-        err = add_file_to_stage(ctx, stage, opts->profile, path, metadata);
+        err = add_capture(ctx, stage, opts->profile, path, metadata);
         if (err) {
             err = error_wrap(err, "Failed to add file '%s'", path->filesystem_path);
             goto cleanup;
@@ -2440,7 +2440,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     const ptr_array_t *chains[] = { &walk.files, &walk.directories };
     for (size_t b = 0; b < sizeof(chains) / sizeof(chains[0]); b++) {
         for (size_t i = 0; i < chains[b]->count; i++) {
-            const add_path_t *path = chains[b]->items[i];
+            const path_t *path = chains[b]->items[i];
 
             err = metadata_capture_ancestors(
                 metadata, mounts, opts->profile, path->claim.storage_path, ctx->arena,
@@ -2501,7 +2501,7 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* Create commit. A stage that holds the branch's own tree — every capture
      * as the profile already had it, a --force re-add of identical bytes — commits
      * nothing, and the summary says so. */
-    err = create_commit(&walk, stage, opts, &committed);
+    err = add_commit(&walk, stage, opts, &committed);
     if (err) goto cleanup;
 
     /* Write the record - auto-enable new profiles, anchor for enabled ones
@@ -2526,9 +2526,9 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * to the screen that renders it, which frees it once below; the region between
      * holds no exit.
      */
-    record_receipt_t receipt = { 0 };
+    receipt_t receipt = { 0 };
 
-    error_t *record_err = write_record(
+    error_t *record_err = add_write_record(
         ctx, mounts, opts->profile, target, profile_created,
         &walk.files, &walk.directories, &ancestry_retired, &receipt
     );
@@ -2583,13 +2583,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
      * keeps being its claim's and not the command line's. Under the binding this
      * command's table holds: the flag's when the run brought one, else the row's
      * the pre-flight copied. */
-    report_labels(&walk);
+    add_print_labels(&walk);
 
     /* The branch is Git's fact and stands whatever the record did; the enabling
      * is a row, which a failed phase can leave standing (a branch recreated over
      * a leftover row) and a successful one cannot invent. So the second clause
-     * keys on membership — the handle's rows, as the phase settled them
-     * (record_receipt_t) — not on the fate. */
+     * keys on membership — the handle's rows, as the phase settled them (receipt_t)
+     * — not on the fate. */
     if (profile_created) {
         output_success(
             out, OUTPUT_NORMAL,
@@ -2641,10 +2641,10 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
             );
 
             /* Each cause named by the count that checked it, never by the shortfall
-             * (record_receipt_t): a row of another profile is an override, a
-             * row of this one under another of its own names is an unused path,
-             * and the health channel carries that one's repair on the status
-             * screen. The two sum to the shortfall exactly. */
+             * (receipt_t): a row of another profile is an override, a row of
+             * this one under another of its own names is an unused path, and
+             * the health channel carries that one's repair on the status screen.
+             * The two sum to the shortfall exactly. */
             if (receipt.overridden > 0) {
                 output_info(
                     out, OUTPUT_NORMAL,
@@ -2688,13 +2688,13 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     /* The remedy the run leaves, keyed on the one fact that decides it. No row
      * holding this profile makes enable the first verb whichever fate brought
      * the run here — the tree is shaped and enable is what gives it a place
-     * (report_enable_hint, which the preview's screen reads too). A row that
-     * does hold it leaves only a failure to answer, and the retry is this add
-     * again with --force over a branch that now holds the bytes: an apply re-earns
+     * (add_print_enable, which the preview's screen reads too). A row that does
+     * hold it leaves only a failure to answer, and the retry is this add again
+     * with --force over a branch that now holds the bytes: an apply re-earns
      * the event for the files it adopts and never for a directory, and an unowned
      * directory is released at scope exit where an owned one is pruned. */
     if (!state_enabled(state, opts->profile)) {
-        report_enable_hint(out, opts->profile, opts->target, view);
+        add_print_enable(out, opts->profile, opts->target, view);
     } else if (record_err) {
         output_hint(
             out, OUTPUT_NORMAL, "Re-run this add with --force to record these paths"

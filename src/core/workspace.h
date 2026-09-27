@@ -918,9 +918,9 @@ typedef struct workspace workspace_t;
  *   cmds/status.c status_print_workspace (Issues).
  * - analyze_untracked — every regular file and symlink beneath a tracked directory
  *   that no enabled profile claims and dotta has no record of, at a readdir walk
- *   per tracked directory. Read by cmds/update.c filter_items_for_update,
- *   cmds/status.c status_print_workspace (New files) and cmds/sync.c cmd_sync
- *   (the clean-workspace guard). Declined for a second reason the orphan analysis
+ *   per tracked directory. Read by cmds/update.c update_partition, cmds/status.c
+ *   status_print_workspace (New files) and cmds/sync.c cmd_sync (the
+ *   clean-workspace guard). Declined for a second reason the orphan analysis
  *   has no equivalent of: auto_detect_new_files and --include-new are the user
  *   saying whether to look at all, so this one is a config read where the other
  *   is a per-command constant.
@@ -1303,7 +1303,7 @@ bool workspace_item_tags(
  *
  * Readers: core/workspace.c workspace_flush (a first observation, over no record
  * or one of another kind) and workspace_anchor (an ownership event's record);
- * cmds/add.c write_record and cmds/update.c update_write_record (the ownership
+ * cmds/add.c add_write_record and cmds/update.c update_write_record (the ownership
  * events of their captures). A reader not on this list is a bug.
  */
 static inline state_record_t workspace_observation(const manifest_row_t *row) {

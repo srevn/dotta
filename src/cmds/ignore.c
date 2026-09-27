@@ -738,7 +738,7 @@ static bool source_gitignore_matches(
  * The kind the rules are asked with: what stands where the argument stands.
  *
  * One lstat, the link itself and never its target — add's walk and the untracked
- * scan both classify this way and offer a symlink whole (cmds/add.c collect_tree,
+ * scan both classify this way and offer a symlink whole (cmds/add.c add_collect,
  * core/workspace.c scan_directory_for_untracked), so a `pointer/` rule that does
  * not decide there must not decide here. A stat would follow the link, and a
  * broken one would read as absent; both are answers about something other than
@@ -838,7 +838,7 @@ static bool stands_as_directory(
  * The path need not exist: a trailing slash on one that does not is the directory
  * hint, so directory-only patterns (`cache/`) can be tested. The rules are
  * evaluated on the mount-relative subject, exactly as the walk evaluates them
- * (cmds/add.c is_excluded); the source tree's `.gitignore` is asked on the path,
+ * (cmds/add.c add_excluded); the source tree's `.gitignore` is asked on the path,
  * when the asker has one, and only where no `.dottaignore` layer decided.
  *
  * The view is the named profile's branch at HEAD — which need not be enabled,

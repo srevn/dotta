@@ -489,10 +489,10 @@ bool completion_paths_under(
     const dotta_ctx_t *ctx, FILE *out, const char *profile, const char *target,
     const char *current
 ) {
-    /* Mirrors spell_argument (cmds/add.c): no flag, a tilde token, or a token
-     * spelled from here — the path is what the shell sees. A saved binding alone
-     * re-roots nothing: without the flag the command reads an argument where it
-     * was typed, so there is no root here either. */
+    /* Mirrors add_spell (cmds/add.c): no flag, a tilde token, or a token spelled
+     * from here — the path is what the shell sees. A saved binding alone re-roots
+     * nothing: without the flag the command reads an argument where it was typed,
+     * so there is no root here either. */
     if (target == NULL || target[0] == '\0' ||
         current[0] == '~' || current[0] == '.') {
         return false;
@@ -517,7 +517,7 @@ bool completion_paths_under(
      * cmd_add takes it before it reads an argument and says so in a line, so a
      * token the command reads is one spelled under the row's, and the flag's
      * spelling of that same directory is outside by string and re-rooted
-     * (inside_target). Bound elsewhere the command refuses the add and the offer
+     * (add_inside). Bound elsewhere the command refuses the add and the offer
      * is the flag's — what the user is looking at; bound nowhere, the flag is
      * the binding. The compare is the binders' own (mount_same_target): two stats
      * beside the process start, the repository open and the state load a keystroke
@@ -530,7 +530,7 @@ bool completion_paths_under(
     if (bound && mount_same_target(bound, root)) root = bound;
 
     /* At the root or beneath it the command reads the token as typed, so the
-     * path is the shell's: spell_argument's escape test over the same two strings,
+     * path is the shell's: add_spell's escape test over the same two strings,
      * positive. The root's own slash is its separator, so as a prefix it is ""
      * — the table's spelling of it (infra/mount.h) — every absolute token is
      * inside it and a relative one lists beneath it. */
@@ -551,7 +551,7 @@ bool completion_paths_under(
     size_t name_len = strlen(name);
 
     /* The listing's own paths are the arena's and abandoned, the module's idiom
-     * (cmds/add.c inside_target): the only thing freed here is what fs_list_dir
+     * (cmds/add.c add_inside): the only thing freed here is what fs_list_dir
      * allocated, and no candidate's path has a free to get wrong. */
     const char *dir = arena_str_format(
         ctx->arena, "%.*s/%.*s", (int) root_len, root, (int) dir_len, rel

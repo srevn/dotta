@@ -765,7 +765,7 @@ const char *state_target(
  *     print) rest on
  *   - cmds/profile.c profile_validate: the deleted profiles in first-seen order,
  *     so the report is reproducible
- *   - cmds/add.c write_record (the takeover note), cmds/remove.c
+ *   - cmds/add.c add_write_record (the takeover note), cmds/remove.c
  *     remove_paths_candidates (the settle's candidates, read before the lock
  *     and under it), and core/manifest.c manifest_diff (a departed row's orphan
  *     split, handed the array by cmds/profile.c profile_enable, profile_disable
@@ -799,7 +799,7 @@ error_t *state_records(
  * one in another order misses what it holds. The empty snapshot — NULL, count 0
  * — holds nothing.
  *
- * Readers: cmds/add.c write_record (the takeover note), cmds/remove.c
+ * Readers: cmds/add.c add_write_record (the takeover note), cmds/remove.c
  * remove_paths_candidates (the settle's candidates), core/manifest.c manifest_diff
  * (a departed row's orphan split).
  *

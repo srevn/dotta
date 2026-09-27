@@ -136,14 +136,14 @@ content_kind_t content_classify_bytes(const uint8_t *data, size_t size);
  * a schedule: the store's refusal of a plaintext that reads as ciphertext makes
  * the branch's stamp true for every file dotta seals, and a screen reads that
  * stamp instead (core/metadata.h metadata_item_t). Readers: `cmds/add.c cmd_add`
- * and `cmds/update.c capture_file` (policy priority 3, where a wrong answer commits
- * a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes, and
- * existence for every filemode), `infra/epoch.c epoch_walk_cb` (which blobs a
- * rotation must not orphan, where a false absence outlives the run). Every reader
- * is outside this module, and that is the shape rather than an accident: content's
- * own doors judge bytes they already hold (content_classify_bytes on a view,
- * classify_entry inside a read), so none of them pays a load to ask. A reader
- * not on this list is a bug.
+ * and `cmds/update.c update_capture` (policy priority 3, where a wrong answer
+ * commits a secret in the clear), `cmds/revert.c cmd_revert` (the stamp it writes,
+ * and existence for every filemode), `infra/epoch.c epoch_walk_cb` (which blobs
+ * a rotation must not orphan, where a false absence outlives the run). Every
+ * reader is outside this module, and that is the shape rather than an accident:
+ * content's own doors judge bytes they already hold (content_classify_bytes on
+ * a view, classify_entry inside a read), so none of them pays a load to ask. A
+ * reader not on this list is a bug.
  *
  * The price, measured rather than read off the docs: the blob is loaded whole
  * to reach six bytes, libgit2 offering no partial read of a packed object — and
@@ -550,7 +550,7 @@ error_t *content_require_encryption(
  * and gitops_blob_view_close are written — would leave both commands anchoring
  * a zero stat: a wrong record, with no crash.
  *
- * Readers: cmds/add.c add_file_to_stage, cmds/update.c update_profile.
+ * Readers: cmds/add.c add_capture, cmds/update.c update_profile.
  */
 typedef struct {
     buffer_t bytes;        /* What the entry holds: the bytes as read, sealed as told, a link's target */

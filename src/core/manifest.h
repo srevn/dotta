@@ -195,8 +195,8 @@ typedef struct manifest_row {
  * state_record_t). Both halves, because within one profile a path is not an
  * identity.
  *
- * Readers: add's anchor pass (cmds/add.c write_record), update's capture loop
- * (cmds/update.c update_write_record), the file analysis's content note
+ * Readers: add's anchor pass (cmds/add.c add_write_record), update's capture
+ * loop (cmds/update.c update_write_record), the file analysis's content note
  * (core/workspace.c workspace_analyze_file), and apply's acknowledgements — the
  * two loops over the clean items (cmds/apply.c cmd_apply) and the record phase's,
  * of a directory fixed in place (apply_write_record) — which are what moves a
@@ -892,7 +892,7 @@ bool manifest_holds_name(
  * for that profile's committed row at the same place and for no other profile's.
  *
  * A stored claim always names: every path the verb listed carries the claim it
- * listed it under, a root's included (cmds/add.c list_path), so an entry in such
+ * listed it under, a root's included (cmds/add.c add_list), so an entry in such
  * a map is a claim and one lookup answers both questions a reader has of it. A
  * NULL `storage_path` is nothing standing, and `kind` says nothing then.
  */

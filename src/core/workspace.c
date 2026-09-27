@@ -2508,7 +2508,7 @@ static error_t *scan_directory_for_untracked(
      * the driver walks it from a depth 0 of its own. Joined with none, then, or
      * every child would read "//etc" — a key the view holds no row at and the
      * namer composes as "root//etc". add's walk, whose frame 0 is a typed argument,
-     * reads the same rule (cmds/add.c collect_tree). */
+     * reads the same rule (cmds/add.c add_collect). */
     const char *separator = directory[1] ? "/" : "";
 
     for (size_t i = 0; i < listing->count; i++) {

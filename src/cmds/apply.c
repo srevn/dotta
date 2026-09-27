@@ -1568,7 +1568,7 @@ static void apply_print_cleanup_refused(
  * this phase wrote stands, and what the record held before the run is what it
  * still holds.
  *
- * Non-fatal to the command, as add's record phase is (cmds/add.c write_record):
+ * Non-fatal to the command, as add's record phase is (cmds/add.c add_write_record):
  * the run's writes on disk stand either way, the receipt and the exit code say
  * what landed there, and the next apply reads it back — a deployed file clean
  * and adopted, a pruned orphan's record reclaimed, a released one released again,

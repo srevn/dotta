@@ -163,7 +163,7 @@ git_index *stage_index(stage_t *st) {
 
 error_t *stage_put(
     stage_t *st, const char *path, const void *data, size_t size,
-    git_filemode_t mode
+    git_filemode_t mode, git_oid *out_blob
 ) {
     CHECK_NULL(st);
     CHECK_NULL(path);
@@ -179,7 +179,14 @@ error_t *stage_put(
         );
     }
 
-    return stage_put_blob(st, path, &blob, mode);
+    /* The id is answered once the entry stands: a refused put names no blob the
+     * tree holds */
+    RETURN_IF_ERROR(stage_put_blob(st, path, &blob, mode));
+    if (out_blob) {
+        git_oid_cpy(out_blob, &blob);
+    }
+
+    return NULL;
 }
 
 /**

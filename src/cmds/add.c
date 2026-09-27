@@ -1023,7 +1023,7 @@ static error_t *add_capture(
     if (!err) {
         err = stage_put(
             stage, storage_path, capture.bytes.data, capture.bytes.size,
-            capture.mode
+            capture.mode, NULL
         );
     }
     content_capture_free(&capture);
@@ -2465,7 +2465,8 @@ error_t *cmd_add(const dotta_ctx_t *ctx, const cmd_add_options_t *opts) {
     if (profile_created) {
         const char *template = ignore_profile_template();
         err = stage_put(
-            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB
+            stage, ".dottaignore", template, strlen(template), GIT_FILEMODE_BLOB,
+            NULL
         );
         if (err) {
             err = error_wrap(

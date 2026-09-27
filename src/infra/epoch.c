@@ -367,12 +367,13 @@ error_t *epoch_init(
     err = stage_orphan(repo, EPOCH_REF, &stage);
     if (!err) {
         err = stage_put(
-            stage, EPOCH_SALT_BLOB, out->salt, KDF_SALT_SIZE, GIT_FILEMODE_BLOB
+            stage, EPOCH_SALT_BLOB, out->salt, KDF_SALT_SIZE, GIT_FILEMODE_BLOB, NULL
         );
     }
     if (!err) {
         err = stage_put(
-            stage, EPOCH_PARAMS_BLOB, params, KDF_PARAMS_SIZE, GIT_FILEMODE_BLOB
+            stage, EPOCH_PARAMS_BLOB, params, KDF_PARAMS_SIZE, GIT_FILEMODE_BLOB,
+            NULL
         );
     }
     if (!err) {

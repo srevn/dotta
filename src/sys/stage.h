@@ -259,11 +259,16 @@ void stage_admission_free(stage_admission_t *adm);
  * is unchanged; a mode or a path shape outside the contract is refused
  * (ERR_INVALID_ARG).
  *
+ * The blob is answered to the caller that asks, and only once the entry stands:
+ * a refused put answers none, whatever it left in the object database (the header).
+ *
  * @param st Stage (must not be NULL)
  * @param path Tree path (must not be NULL; canonical, see the header)
  * @param data The bytes (may be NULL when size is 0)
  * @param size Byte count
  * @param mode The entry's filemode
+ * @param out_blob The blob's id, written once the entry stands (optional, can
+ *                 be NULL)
  * @return Error or NULL on success
  */
 error_t *stage_put(
@@ -271,7 +276,8 @@ error_t *stage_put(
     const char *path,
     const void *data,
     size_t size,
-    git_filemode_t mode
+    git_filemode_t mode,
+    git_oid *out_blob
 );
 
 /**

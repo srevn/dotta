@@ -493,7 +493,7 @@ static error_t *update_profile(
                 if (!err) {
                     err = stage_put(
                         stage, item->storage_path, capture.bytes.data,
-                        capture.bytes.size, capture.mode
+                        capture.bytes.size, capture.mode, NULL
                     );
                 }
                 content_capture_free(&capture);

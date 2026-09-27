@@ -116,7 +116,7 @@ static error_t *bootstrap_create_template(
 
     err = stage_put(
         stage, BOOTSTRAP_SCRIPT_NAME, content, strlen(content),
-        GIT_FILEMODE_BLOB_EXECUTABLE
+        GIT_FILEMODE_BLOB_EXECUTABLE, NULL
     );
     free(content);
     if (err) {
@@ -232,7 +232,7 @@ static error_t *bootstrap_edit(
 
     err = stage_put(
         stage, BOOTSTRAP_SCRIPT_NAME, content_buf.data, content_buf.size,
-        GIT_FILEMODE_BLOB_EXECUTABLE
+        GIT_FILEMODE_BLOB_EXECUTABLE, NULL
     );
     if (err) goto cleanup;
 

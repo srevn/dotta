@@ -1222,7 +1222,7 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * would leave a loose object behind every dry run. */
     if (rebound.data) {
         err = stage_put(
-            stage, restored_name, rebound.data, rebound.size, restored_mode
+            stage, restored_name, rebound.data, rebound.size, restored_mode, NULL
         );
         if (err) goto cleanup;
     }

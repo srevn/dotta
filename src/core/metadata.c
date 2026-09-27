@@ -1586,7 +1586,7 @@ error_t *metadata_save_to_stage(
     }
 
     err = stage_put(
-        stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB
+        stage, METADATA_FILE_PATH, json.data, json.size, GIT_FILEMODE_BLOB, NULL
     );
     buffer_free(&json);
 

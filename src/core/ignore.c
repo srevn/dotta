@@ -387,7 +387,7 @@ error_t *ignore_blob_write(
     RETURN_IF_ERROR(stage_open(repo, refname, &stage));
 
     error_t *err = stage_put(
-        stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB
+        stage, ".dottaignore", content, size, GIT_FILEMODE_BLOB, NULL
     );
     if (!err) {
         err = stage_commit(stage, commit_msg, NULL);
@@ -552,7 +552,7 @@ error_t *ignore_seed_baseline(git_repository *repo) {
     if (!err) {
         err = stage_put(
             stage, ".dottaignore", DEFAULT_DOTTAIGNORE,
-            strlen(DEFAULT_DOTTAIGNORE), GIT_FILEMODE_BLOB
+            strlen(DEFAULT_DOTTAIGNORE), GIT_FILEMODE_BLOB, NULL
         );
     }
     if (!err) {

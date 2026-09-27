@@ -16,21 +16,16 @@
 #include "base/secure.h"
 
 /* POSIX 2024 caps a single getentropy() call at 256 bytes; larger requests loop.
- * The two in-tree callers ask for 32 (the epoch's salt) and 24 (the session
- * file's nonce) — the loop is kept so the function honestly serves any future
- * caller without a hidden size ceiling. */
+ * The two in-tree callers ask for 32 (the epoch's salt) and 24 (the session file's
+ * nonce) — the loop is kept so the function honestly serves any future caller
+ * without a hidden size ceiling. */
 #define ENTROPY_CHUNK_MAX 256
 
 error_t *entropy_fill(uint8_t *out, size_t len) {
     if (len == 0) {
         return NULL;
     }
-    if (out == NULL) {
-        return ERROR(
-            ERR_INVALID_ARG,
-            "entropy_fill: output buffer cannot be NULL"
-        );
-    }
+    CHECK_NULL(out);
 
     size_t off = 0;
     while (off < len) {

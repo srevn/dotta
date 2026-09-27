@@ -7,7 +7,6 @@
 
 #include "infra/label.h"
 
-#include <assert.h>
 #include <string.h>
 
 #include "base/arena.h"
@@ -62,7 +61,7 @@ label_t label_of(const char *storage_path) {
 
     /* The precondition (infra/label.h): a path under no label is a caller's bug,
      * and no label may stand in for it. */
-    assert(split.tail);
+    CHECK_ARG(split.tail != NULL, "storage_path stands under no label");
 
     return split.label;
 }
@@ -71,7 +70,7 @@ const char *label_tail(const char *storage_path) {
     label_split_t split = label_split(storage_path);
 
     /* label_of's precondition, the same way. */
-    assert(split.tail);
+    CHECK_ARG(split.tail != NULL, "storage_path stands under no label");
 
     return split.tail;
 }
@@ -153,8 +152,8 @@ error_t *label_validate_storage(const char *storage_path) {
 const char *label_compose(arena_t *arena, label_t label, const char *tail) {
     /* The write side of the split's boundary, read from the other side: the
      * separator stands iff something stands past the word, and an empty tail
-     * spells the word alone. Asserted as the two projections assert theirs. */
-    assert(tail);
+     * spells the word alone. Checked as the two projections check theirs. */
+    CHECK_NULL(tail);
 
     return arena_str_format(
         arena, "%s%s%s", label_words[label], *tail ? "/" : "", tail

@@ -4,7 +4,6 @@
 
 #include "infra/pathspec.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -397,8 +396,8 @@ size_t pathspec_count(const pathspec_t *spec) {
 }
 
 pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i) {
-    assert(spec != NULL);
-    assert(i < spec->count);
+    CHECK_NULL(spec);
+    CHECK_ARG(i < spec->count, "i is past the pathspec's entries");
     const entry_t *e = &spec->entries[i];
     return (pathspec_entry_t){ .text = e->text, .glob = e->rule != NULL };
 }
@@ -411,7 +410,7 @@ bool pathspec_entry_matches_at(
     path_kind_t kind
 ) {
     if (!spec) return false;
-    assert(i < spec->count);
+    CHECK_ARG(i < spec->count, "i is past the pathspec's entries");
     const entry_t *e = &spec->entries[i];
     const char *subject = own_subject(e, filesystem_path, storage_path);
     if (!subject) return false;

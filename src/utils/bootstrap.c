@@ -14,7 +14,6 @@
 
 #include "utils/bootstrap.h"
 
-#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -238,7 +237,7 @@ error_t *bootstrap_fire(output_t *out, const bootstrap_spec_t *spec) {
      * `out`), so the orchestrator's progress lines and the child's output
      * interleave correctly only when `out` routes to stdout. Guard the invariant
      * loudly. */
-    assert(out->stream == stdout);
+    CHECK_ARG(out->stream == stdout, "out must route to stdout");
 
     error_t *err = NULL;
 

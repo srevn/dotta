@@ -159,6 +159,25 @@ const error_t *error_root(const error_t *err);
 void error_print(const error_t *err, FILE *stream);
 
 /**
+ * End the run: the report flushed, the terminal given back, one line, abort(3)
+ *
+ * The one way dotta ends a run of itself, for what no caller could answer: a
+ * contract broken (CHECK_ARG below: "BUG: <file>:<line>: <what>"). The line is
+ * formatted on the stack and written with write(2), so nothing on the way to
+ * the death allocates, and a line past 1 KiB is cut. It lands after what the
+ * run printed — stdout is flushed first, and main.c line-buffers it — and on
+ * the terminal the user lent: the settings dotta armed are put back first, and
+ * a hidden cursor shown (base/terminal.h terminal_restore_armed). abort(3) raises
+ * SIGABRT, a terminating signal (sys/process.h PROCESS_TERMINATING_SIGNALS), so
+ * a hook dies with the run, and the run's status is 134.
+ *
+ * @param fmt Format string (printf-style) for the line, without its newline
+ * @param ... Format arguments
+ */
+_Noreturn void error_die(const char *fmt, ...)
+__attribute__((format(printf, 1, 2)));
+
+/**
  * Convenience macros
  */
 
@@ -172,12 +191,19 @@ void error_print(const error_t *err, FILE *stream);
     if (_err != NULL) return _err; \
 } while(0)
 
-/* Check argument condition */
+/*
+ * A condition the caller owed, checked where it is relied on: broken, it is a
+ * bug, and the run dies at the check's site (error_die). What only a caller's
+ * bug can falsify — a pointer it handed, a shape it built — is checked here.
+ * What a user's word or data can falsify — a name typed, a file read, a
+ * configuration — is a refusal, returned as an error the user can act on, and
+ * never checked here: a contract a user can reach is a crash they can cause.
+ */
 #define CHECK_ARG(cond, msg) do { \
-    if (!(cond)) return ERROR(ERR_INVALID_ARG, msg); \
-} while(0)
+    if (!(cond)) error_die("BUG: %s:%d: %s", __FILE__, __LINE__, (msg)); \
+} while (0)
 
-/* Check for NULL pointer */
+/* A pointer the caller owed */
 #define CHECK_NULL(ptr) \
     CHECK_ARG((ptr) != NULL, #ptr " cannot be NULL")
 

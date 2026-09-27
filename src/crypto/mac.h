@@ -91,8 +91,8 @@ typedef struct crypto_mac_ctx {
  *
  * @param ctx    Caller-provided context (any uninitialized storage)
  * @param key    32-byte key
- * @param domain Valid `crypto_domain_t` value (out-of-range caught by assertion
- *               in mac.c)
+ * @param domain Valid `crypto_domain_t` value (one out of range is a caller's
+ *               bug, and the run dies of it in mac.c)
  */
 void crypto_mac_init(
     crypto_mac_ctx *ctx,

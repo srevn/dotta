@@ -29,11 +29,7 @@ struct terminal {
 };
 
 error_t *terminal_init(terminal_t **out) {
-    if (!out) {
-        return error_create(
-            ERR_INVALID_ARG, "out cannot be NULL"
-        );
-    }
+    CHECK_NULL(out);
 
     /* Check if stdin is a TTY */
     if (!isatty(STDIN_FILENO)) {
@@ -134,6 +130,8 @@ static volatile sig_atomic_t armed = 0;
 static volatile sig_atomic_t cursor_hidden = 0;
 
 void terminal_arm(const struct termios *settings) {
+    CHECK_ARG(!armed, "the terminal is armed already");
+
     /* The flag down while the copy is made, and up only once it is whole: a signal
      * between the two finds nothing armed rather than half a copy. The fences
      * keep the compiler from moving the copy across either store. */
@@ -170,11 +168,7 @@ void terminal_restore_armed(void) {
 /* Terminal Capabilities */
 
 error_t *terminal_get_size(terminal_size_t *out) {
-    if (!out) {
-        return error_create(
-            ERR_INVALID_ARG, "out cannot be NULL"
-        );
-    }
+    CHECK_NULL(out);
 
     struct winsize ws;
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) < 0) {

@@ -412,17 +412,17 @@ void hashmap_free(hashmap_t *map, hashmap_free_fn free_fn) {
 
 /* Insert or update a key-value pair */
 error_t *hashmap_set(hashmap_t *map, const char *key, void *value) {
-    if (!map) return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
-    if (!key) return ERROR(ERR_INVALID_ARG, "Key is NULL");
+    CHECK_NULL(map);
+    CHECK_NULL(key);
 
     return hashmap_insert(map, key, value, NULL);
 }
 
 /* Insert or update, returning the previous value */
 error_t *hashmap_put(hashmap_t *map, const char *key, void *value, void **out_prev) {
-    if (!map) return ERROR(ERR_INVALID_ARG, "Hash map is NULL");
-    if (!key) return ERROR(ERR_INVALID_ARG, "Key is NULL");
-    if (!out_prev) return ERROR(ERR_INVALID_ARG, "out_prev is NULL");
+    CHECK_NULL(map);
+    CHECK_NULL(key);
+    CHECK_NULL(out_prev);
 
     return hashmap_insert(map, key, value, out_prev);
 }

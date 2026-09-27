@@ -76,10 +76,13 @@ extern volatile sig_atomic_t active_child_pgid;
  * terminating_signal: the armed terminal put back, the signal forwarded to
  * active_child_pgid's group, then re-raised), and the child resets each it finds
  * caught before exec. A signal the host inherited ignored stays ignored in both
- * — a backgrounded dotta, nohup. SIGSEGV and SIGBUS are not here: the debug build's
- * AddressSanitizer reports them, and a handler of dotta's would swallow the report.
+ * — a backgrounded dotta, nohup. SIGABRT is one: the death's abort(3) raises it
+ * (base/error.h error_die), so a hook dies with a run that broke a contract as
+ * with one a user ended, and a sanitizer that aborts has said its report first.
+ * SIGSEGV and SIGBUS are not here: the debug build's AddressSanitizer reports
+ * them, and a handler of dotta's would swallow the report.
  */
-#define PROCESS_TERMINATING_SIGNALS { SIGINT, SIGTERM, SIGHUP, SIGQUIT }
+#define PROCESS_TERMINATING_SIGNALS { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGABRT }
 
 /**
  * Stdin policy for the spawned child.

@@ -124,8 +124,10 @@ void terminal_restore(terminal_t *term);
  * Whoever changes the terminal's settings arms the ones to restore, before the
  * change — the editor's raw mode (terminal_init) and the passphrase prompt's
  * hidden echo (sys/passphrase.c passphrase_prompt) — and disarms once they are
- * back. One slot: dotta changes one terminal at a time. Read by main.c's handler,
- * terminating_signal, through terminal_restore_armed.
+ * back. One slot: dotta changes one terminal at a time, and an arm while one is
+ * armed is a caller's bug (CHECK_ARG). Read by main.c's handler,
+ * terminating_signal, and by the death, base/error.c error_die, through
+ * terminal_restore_armed.
  *
  * @param settings The settings to put back (must not be NULL; copied)
  */
@@ -142,9 +144,10 @@ void terminal_disarm(void);
  * terminal_cursor_hide hid — on a line of its own, past the UI that hid it, as
  * that UI's own exit leaves it
  *
- * For a signal handler: tcsetattr(3) and write(2) alone, both async-signal-safe,
- * and every flag it reads a volatile sig_atomic_t. Disarms, and forgets the cursor,
- * so a second call is a no-op.
+ * For a signal handler and for the death (main.c terminating_signal, base/error.c
+ * error_die): tcsetattr(3) and write(2) alone, both async-signal-safe, and every
+ * flag it reads a volatile sig_atomic_t. Disarms, and forgets the cursor, so a
+ * second call is a no-op.
  */
 void terminal_restore_armed(void);
 

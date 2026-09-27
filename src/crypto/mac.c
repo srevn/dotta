@@ -16,12 +16,12 @@
 
 #include "crypto/mac.h"
 
-#include <assert.h>
 #include <monocypher.h>
 #include <stddef.h>
 #include <stdint.h>
 
 #include "base/encoding.h"
+#include "base/error.h"
 
 /* Each tag is exactly 8 bytes; the fixed width is what lets us absorb unframed
  * at MAC init. The trailing `\0` is a regular byte, not a string terminator (these
@@ -105,12 +105,15 @@ void crypto_mac_init(
     const uint8_t key[CRYPTO_KEY_SIZE],
     crypto_domain_t domain
 ) {
-    /* Defensive bound on the domain index. Compile-time uniqueness is enforced
-     * by DOMAIN_NEQ above, but a caller passing an out-of-range int cast (e.g.
-     * a deserialized field that bypassed validation) would read past the end of
-     * `domain_tags[]`. The `unsigned` cast makes negatives compare as huge unsigned
-     * and sidesteps -Wtype-limits on unsigned-enum platforms. */
-    assert((unsigned int) domain < (unsigned int) CRYPTO_DOMAIN_COUNT);
+    /* The bound on the domain index, a contract. Compile-time uniqueness is
+     * enforced by DOMAIN_NEQ above, but a caller passing an out-of-range int
+     * cast (e.g. a deserialized field that bypassed validation) would read past
+     * the end of `domain_tags[]`. The `unsigned` cast makes negatives compare
+     * as huge unsigned and sidesteps -Wtype-limits on unsigned-enum platforms. */
+    CHECK_ARG(
+        (unsigned int) domain < (unsigned int) CRYPTO_DOMAIN_COUNT,
+        "domain is not a crypto_domain_t"
+    );
 
     /* Output size is the BLAKE2b-256 default; key size is 32 (the keyed-BLAKE2b
      * standard for 32-byte tags). Both are constants cross-asserted against

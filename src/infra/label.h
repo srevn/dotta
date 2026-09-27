@@ -29,11 +29,11 @@
  * member.
  *
  * Three verbs pay for that decision. A name is a string of a particular shape
- * and C cannot say so, so label_of, label_tail and label_compose assert what
- * they cannot declare — the two projections where they take a name, the compose
- * where it makes one. A path under no label is a caller's bug, and one abort
- * per verb is what stands against it where a header sentence is all that otherwise
- * would.
+ * and C cannot say so, so label_of, label_tail and label_compose check what they
+ * cannot declare, as a contract (CHECK_ARG) — the two projections where they
+ * take a name, the compose where it makes one. A path under no label is a caller's
+ * bug, and one death per verb is what stands against it where a header sentence
+ * is all that otherwise would.
  */
 
 #ifndef DOTTA_LABEL_H
@@ -188,9 +188,8 @@ bool label_prefixes(const char *s);
  * branch or the sheet was read (label_validate_storage), a record's, which the
  * store refuses to keep otherwise (core/state.c STORAGE_SPELLING), or an argument
  * the resolver's first arm dispatched on that very test (infra/path.c
- * path_input_resolve). Asserted, never answered: a path under no label is a
- * caller's bug, and no label may stand in for it — least of all LABEL_ROOT in
- * silence.
+ * path_input_resolve). Checked, never answered: a path under no label is a caller's
+ * bug, and no label may stand in for it — least of all LABEL_ROOT in silence.
  *
  * Readers: the two that derive a consequence from the namespace, each an exhaustive
  * switch — whether a capture leaves the invoker's own path to absence, which
@@ -214,8 +213,8 @@ label_t label_of(const char *storage_path);
  * through the table (infra/mount.h); patterns are not.
  *
  * Zero allocation; the returned pointer aliases `storage_path` and shares its
- * lifetime. label_of's precondition, asserted the same way: every reader holds
- * a composed or a validated path, and a tail of something that stands under no
+ * lifetime. label_of's precondition, checked the same way: every reader holds a
+ * composed or a validated path, and a tail of something that stands under no
  * label is not an answer.
  *
  * Readers: every surface a pattern is evaluated on — the enumeration
@@ -273,8 +272,8 @@ error_t *label_validate_storage(const char *storage_path);
  * The write side of label_split's boundary, so the grammar owns both directions
  * of it and no consumer spells the join: the separator stands iff something stands
  * past the word, and an empty tail spells the word alone — the namespace's own
- * directory, a key like any name. `tail` must not be NULL, asserted as the two
- * projections assert the same rule read from the other side.
+ * directory, a key like any name. `tail` must not be NULL, checked as the two
+ * projections check the same rule read from the other side.
  *
  * Reader: the last rung of the namer's ascent, which is the one place in the
  * tree a filesystem path becomes a name (core/manifest.c manifest_ascend), over

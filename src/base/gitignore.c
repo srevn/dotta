@@ -77,7 +77,6 @@
 
 #include "base/gitignore.h"
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -743,8 +742,8 @@ size_t gitignore_ruleset_size(const gitignore_ruleset_t *set) {
 const char *gitignore_ruleset_source(
     const gitignore_ruleset_t *set, size_t index
 ) {
-    assert(set != NULL);
-    assert(index < set->count);
+    CHECK_NULL(set);
+    CHECK_ARG(index < set->count, "index is past the ruleset's rules");
 
     return set->rules[index].source;
 }

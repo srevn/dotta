@@ -84,7 +84,7 @@ typedef struct {
  *
  * Preconditions:
  *   - spec->repo, spec->repo_dir, spec->profiles are non-NULL.
- *   - out != NULL AND out->stream == stdout. A debug assert defends the second
+ *   - out != NULL AND out->stream == stdout. A contract check defends the second
  *     invariant: bootstrap script output bypasses `out` and writes directly to
  *     STDOUT_FILENO, so interleaving is correct only when `out` also routes to
  *     stdout.

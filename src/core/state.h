@@ -52,7 +52,7 @@
  *   at the call that meets it
  * - Every name the store keeps is held the same way to what its readers assume
  *   of it: a storage name stands under its label (storage_spelling), as label_of
- *   and label_tail assert of every record's; a profile's name is never empty
+ *   and label_tail check of every record's; a profile's name is never empty
  *   (profile_spelling); and an owner or a group is a name, whole and never empty
  *   — so no reader meets a name that would abort it, print as no one, or read
  *   as another

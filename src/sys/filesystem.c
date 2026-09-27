@@ -477,11 +477,7 @@ error_t *fs_write_file_raw(
     struct stat *out_st
 ) {
     RETURN_IF_ERROR(validate_path(path));
-    if (size > 0 && !data) {
-        return ERROR(
-            ERR_INVALID_ARG, "Data cannot be NULL when size > 0"
-        );
-    }
+    CHECK_ARG(data != NULL || size == 0, "data cannot be NULL with a size");
 
     /* Ensure parent directory exists */
     char *parent = NULL;

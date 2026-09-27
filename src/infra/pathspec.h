@@ -156,7 +156,7 @@ size_t pathspec_count(const pathspec_t *spec);
 /**
  * The entry at index `i`, in insertion order — the i-th input that made an entry,
  * exact duplicates collapsed into the first. `i` MUST be < pathspec_count(spec);
- * out-of-bounds is undefined behaviour (asserted in debug builds).
+ * an `i` out of bounds is a caller's bug, and the run dies of it (CHECK_ARG).
  */
 pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
 
@@ -168,8 +168,8 @@ pathspec_entry_t pathspec_entry_at(const pathspec_t *spec, size_t i);
  * as for pathspec_matches; a subject the caller has no name for is NULL, and an
  * entry of that vocabulary answers false.
  *
- * Returns false for a NULL pathspec. `i` MUST be < pathspec_count(spec);
- * out-of-bounds is undefined behaviour (asserted in debug builds).
+ * Returns false for a NULL pathspec. `i` MUST be < pathspec_count(spec); an `i`
+ * out of bounds is a caller's bug, and the run dies of it (CHECK_ARG).
  */
 bool pathspec_entry_matches_at(
     const pathspec_t *spec,

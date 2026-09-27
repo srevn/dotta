@@ -8,6 +8,9 @@
 #include <git2/errors.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+#include "base/terminal.h"
 
 /**
  * Static OOM sentinel - returned when error allocation itself fails.
@@ -189,4 +192,28 @@ void error_print(const error_t *err, FILE *stream) {
         );
         cause = cause->cause;
     }
+}
+
+_Noreturn void error_die(const char *fmt, ...) {
+    /* What the run printed, first: the bytes stdout still holds. */
+    fflush(stdout);
+
+    /* The terminal the user lent, before the line: raw mode would draw it as a
+     * staircase, and a cursor the editor hid would stay hidden past the run. */
+    terminal_restore_armed();
+
+    /* The line, formatted on the stack into all but the byte its newline takes:
+     * a death allocates nothing, and a line past the buffer is cut. A format
+     * that failed leaves the newline alone, which is still a death. */
+    char line[1024];
+    va_list args;
+    va_start(args, fmt);
+    int formatted = vsnprintf(line, sizeof(line) - 1, fmt, args);
+    va_end(args);
+
+    size_t len = formatted < 0 ? 0 : strlen(line);
+    line[len++] = '\n';
+    (void) write(STDERR_FILENO, line, len);
+
+    abort();
 }

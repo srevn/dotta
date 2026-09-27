@@ -811,23 +811,8 @@ static void workspace_analyze_file(
      * owed its observation too, which the flush makes off this same look
      * (workspace_flush).
      *
-     * CONTENT AND TYPE ANALYSIS: Buffer-based comparison for accurate divergence
-     * detection.
-     *
-     * Architecture:
-     * - Use the row's blob_oid for content loading
-     * - Extract expected mode from the row's type field
-     * - Compare directly to filesystem file (compare_buffer_to_disk)
-     *
-     * This provides:
-     * - Architectural consistency (blob_oid unification)
-     * - Accurate byte-level comparison with early exit
-     * - Transparent encryption handling via content cache
-     * - The look above handed in, and every question below asked off it
-     * - TOCTOU-aware (handles files deleted during analysis)
-     *
-     * The content verdict is a three-way comparison with dotta's last content
-     * confirmation as base:
+     * CONTENT AND TYPE ANALYSIS: the verdict is a three-way comparison with dotta's
+     * last content confirmation as base:
      *
      *   theirs = row->blob_oid          what Git expects now
      *   base   = the confirmed blob     what dotta last confirmed on disk

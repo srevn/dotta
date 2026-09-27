@@ -635,21 +635,16 @@ static char *build_revert_commit_message(
  * @param restored_name Storage path the claim is written under (must not be NULL)
  * @param restored_mode The admitted entry's filemode
  * @param target_kind The restored blob's own bytes (cmd_revert step 9)
- * @param out_claim The claim, or NULL where the target records none (must not
- *                  be NULL; caller frees with metadata_item_free)
- * @return Error or NULL on success
+ * @return The claim (caller frees with metadata_item_free), or NULL where the
+ *         target records none for a link
  */
-static error_t *claim_to_restore(
+static metadata_item_t *claim_to_restore(
     const metadata_item_t *recorded,
     const char *restored_name,
     git_filemode_t restored_mode,
-    content_kind_t target_kind,
-    metadata_item_t **out_claim
+    content_kind_t target_kind
 ) {
     CHECK_NULL(restored_name);
-    CHECK_NULL(out_claim);
-
-    *out_claim = NULL;
 
     if (restored_mode == GIT_FILEMODE_LINK) {
         /* A link's entry is a FILE item without a mode. Restore it as recorded
@@ -659,8 +654,7 @@ static error_t *claim_to_restore(
         if (!recorded) {
             return NULL;
         }
-        *out_claim = metadata_item_clone(recorded, restored_name);
-        return NULL;
+        return metadata_item_clone(recorded, restored_name);
     }
 
     /* The encrypted bit revert writes must be true of the blob it restores: it
@@ -675,17 +669,15 @@ static error_t *claim_to_restore(
         /* Found metadata entry - clone it. Mode and ownership have no byte source,
          * so the entry is their authority; the encrypted bit is the blob's
          * (above). */
-        *out_claim = metadata_item_clone(recorded, restored_name);
-        (*out_claim)->encrypted = encrypted;
-        return NULL;
+        metadata_item_t *claim = metadata_item_clone(recorded, restored_name);
+        claim->encrypted = encrypted;
+        return claim;
     }
 
     /* No metadata entry at target commit - mode falls back to the tree's filemode;
      * ownership is not recoverable. The caller announces it (cmd_revert step
      * 17). */
-    return metadata_item_create_file(
-        restored_name, restored_mode & 0777, encrypted, out_claim
-    );
+    return metadata_item_create_file(restored_name, restored_mode & 0777, encrypted);
 }
 
 /**
@@ -1037,10 +1029,9 @@ error_t *cmd_revert(const dotta_ctx_t *ctx, const cmd_revert_options_t *opts) {
      * not be announced. */
     const bool reconstructed = !recorded && restored_mode != GIT_FILEMODE_LINK;
 
-    err = claim_to_restore(
-        recorded, restored_name, restored_mode, target_kind, &restored_claim
+    restored_claim = claim_to_restore(
+        recorded, restored_name, restored_mode, target_kind
     );
-    if (err) goto cleanup;
 
     /* Step 15: nothing to do — the whole write, entry and claim, already stands */
     const metadata_item_t *standing_claim = metadata_lookup(

@@ -110,22 +110,15 @@ void metadata_free(metadata_t *metadata) {
 /**
  * Create file metadata item
  */
-error_t *metadata_item_create_file(
+metadata_item_t *metadata_item_create_file(
     const char *storage_path,
     mode_t mode,
-    bool encrypted,
-    metadata_item_t **out
+    bool encrypted
 ) {
     CHECK_NULL(storage_path);
-    CHECK_NULL(out);
 
     /* A mode is claimed bits or absence — nothing in between */
-    if (mode != MODE_UNCLAIMED && mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
+    CHECK_ARG(mode == MODE_UNCLAIMED || mode <= 0777, "mode past 0777");
 
     metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
@@ -137,29 +130,21 @@ error_t *metadata_item_create_file(
     item->encrypted = encrypted;
     item->tracked = false; /* A file is no directory to track */
 
-    *out = item;
-    return NULL;
+    return item;
 }
 
 /**
  * Create directory metadata item
  */
-error_t *metadata_item_create_directory(
+metadata_item_t *metadata_item_create_directory(
     const char *storage_path,
     mode_t mode,
-    bool tracked,
-    metadata_item_t **out
+    bool tracked
 ) {
     CHECK_NULL(storage_path);
-    CHECK_NULL(out);
 
     /* A mode is claimed bits or absence — nothing in between */
-    if (mode != MODE_UNCLAIMED && mode > 0777) {
-        return ERROR(
-            ERR_INVALID_ARG, "Invalid mode: %04o (must be <= 0777)",
-            mode
-        );
-    }
+    CHECK_ARG(mode == MODE_UNCLAIMED || mode <= 0777, "mode past 0777");
 
     metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
@@ -171,8 +156,7 @@ error_t *metadata_item_create_directory(
     item->encrypted = false; /* A directory has no blob to stamp */
     item->tracked = tracked;
 
-    *out = item;
-    return NULL;
+    return item;
 }
 
 /**
@@ -676,16 +660,12 @@ error_t *metadata_capture_file(
     /* A link claims no mode — symlink(2) takes none */
     mode_t mode = S_ISLNK(st->st_mode) ? MODE_UNCLAIMED : (st->st_mode & 0777);
 
-    metadata_item_t *item = NULL;
-    error_t *err = metadata_item_create_file(storage_path, mode, encrypted, &item);
-    if (err) {
-        return err;
-    }
+    metadata_item_t *item = metadata_item_create_file(storage_path, mode, encrypted);
 
     /* Ownership, where absence would misstate it (metadata_capture_ownership).
      * The lstat needs no privilege, so the claim is authored by whoever can read
      * the path. */
-    err = metadata_capture_ownership(item, storage_path, st);
+    error_t *err = metadata_capture_ownership(item, storage_path, st);
     if (err) {
         metadata_item_free(item);
         return err;
@@ -731,17 +711,12 @@ error_t *metadata_capture_directory(
         return ERROR(ERR_INVALID_ARG, "Path is not a directory: %s", storage_path);
     }
 
-    /* Create directory item via factory (handles allocation, key duplication,
-     * mode validation) */
+    /* Create directory item via factory, its mode the stat's permission bits */
     mode_t mode = st->st_mode & 0777;
-    metadata_item_t *item = NULL;
-    error_t *err = metadata_item_create_directory(storage_path, mode, tracked, &item);
-    if (err) {
-        return err;
-    }
+    metadata_item_t *item = metadata_item_create_directory(storage_path, mode, tracked);
 
     /* Ownership, by the file capture's rule (metadata_capture_ownership) */
-    err = metadata_capture_ownership(item, storage_path, st);
+    error_t *err = metadata_capture_ownership(item, storage_path, st);
     if (err) {
         metadata_item_free(item);
         return err;
@@ -1226,27 +1201,20 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         switch (kind) {
             case PATH_KIND_FILE: {
                 cJSON *encrypted_obj = cJSON_GetObjectItem(item_obj, "encrypted");
-                err = metadata_item_create_file(
+                item = metadata_item_create_file(
                     key_obj->valuestring, mode,
-                    encrypted_obj && cJSON_IsTrue(encrypted_obj), &item
+                    encrypted_obj && cJSON_IsTrue(encrypted_obj)
                 );
                 break;
             }
             case PATH_KIND_DIRECTORY: {
                 cJSON *tracked_obj = cJSON_GetObjectItem(item_obj, "tracked");
-                err = metadata_item_create_directory(
+                item = metadata_item_create_directory(
                     key_obj->valuestring, mode,
-                    tracked_obj && cJSON_IsTrue(tracked_obj), &item
+                    tracked_obj && cJSON_IsTrue(tracked_obj)
                 );
                 break;
             }
-        }
-        if (err) {
-            err = error_wrap(
-                err, "Failed to build item from metadata: %s",
-                key_obj->valuestring
-            );
-            goto cleanup;
         }
 
         /* Ownership is the overlay every producer stamps beside the factory,

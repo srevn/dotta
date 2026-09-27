@@ -242,17 +242,18 @@ void metadata_free(metadata_t *metadata);
 /**
  * Create file metadata item
  *
+ * A mode past 0777 is a caller's bug: every producer masks a stat's bits or parses
+ * a mode that refuses more.
+ *
  * @param storage_path Path in profile (must not be NULL)
  * @param mode Claimed permission bits (e.g., 0600, 0644), or MODE_UNCLAIMED
  * @param encrypted Encryption flag
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
- * @return Error or NULL on success
+ * @return The item (caller frees with metadata_item_free)
  */
-error_t *metadata_item_create_file(
+metadata_item_t *metadata_item_create_file(
     const char *storage_path,
     mode_t mode,
-    bool encrypted,
-    metadata_item_t **out
+    bool encrypted
 );
 
 /**
@@ -265,18 +266,18 @@ error_t *metadata_item_create_file(
  * Accepts MODE_UNCLAIMED for the parse path (a hand-sparse document may omit
  * the mode); the capture path always claims one from its stat.
  *
+ * A mode past 0777 is a caller's bug, as for a file.
+ *
  * @param storage_path Storage path in profile (must not be NULL, e.g.,
  *                     "home/.config/nvim")
  * @param mode Claimed permission bits (e.g., 0700, 0755), or MODE_UNCLAIMED
  * @param tracked The profile tracks the directory itself
- * @param out Item (must not be NULL, caller must free with metadata_item_free)
- * @return Error or NULL on success
+ * @return The item (caller frees with metadata_item_free)
  */
-error_t *metadata_item_create_directory(
+metadata_item_t *metadata_item_create_directory(
     const char *storage_path,
     mode_t mode,
-    bool tracked,
-    metadata_item_t **out
+    bool tracked
 );
 
 /**

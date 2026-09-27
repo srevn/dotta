@@ -53,8 +53,9 @@
  * - Every name the store keeps is held the same way to what its readers assume
  *   of it: a storage name stands under its label (storage_spelling), as label_of
  *   and label_tail assert of every record's; a profile's name is never empty
- *   (profile_spelling); and an owner or a group is whole — so no reader meets a
- *   name that would abort it, print as no one, or read as another
+ *   (profile_spelling); and an owner or a group is a name, whole and never empty
+ *   — so no reader meets a name that would abort it, print as no one, or read
+ *   as another
  * - A stamp is a moment or 0, never negative, so a reader asking `== 0` and one
  *   asking `> 0` ask one question
  * - A path-keyed table is stored sorted by its key and read in key order: the
@@ -224,8 +225,8 @@ static inline state_stat_t state_stat_from_write(const struct stat *st) {
  *     learning of the claim). It is the base a claim Git moved is measured from
  *     (core/workspace.h workspace_claims_moved), and an orphan's reference on
  *     disk. A link claims no mode: its column is NULL, and every other node's
- *     is permission bits, 0000–0777; an owner and a group are whole, NULL where
- *     the claim names none (each schema-enforced).
+ *     is permission bits, 0000–0777; an owner and a group are names, whole and
+ *     never empty, NULL where the claim names none (each schema-enforced).
  *   - the lifecycle (deployed_at, ordered_at): the two acts the record remembers,
  *     each a moment or 0 (schema-enforced). deployed_at advances to now on every
  *     ownership event and a learning keeps it, 0 = dotta never put this here.

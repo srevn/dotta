@@ -38,7 +38,7 @@
  * the integers. The id is a signed 32-bit field: a value at or above 0x80000000
  * is stored as 0, which no admission would take. */
 #define STATE_APPLICATION_ID "0x646f7474"
-#define STATE_SCHEMA_VERSION "29"
+#define STATE_SCHEMA_VERSION "30"
 
 /* Database file name */
 #define STATE_DB_NAME "dotta.db"
@@ -367,9 +367,11 @@ static error_t *state_initialize(sqlite3 *db) {
          *     — the precondition label_of and label_tail assert of every name
          *     they are handed), the profile never empty (profile_spelling, the
          *     enabled set's name's)
-         *   - an owner or a group is whole, so the name C reads is the name the
-         *     claim stored; NULL is no claim, and an empty name stands as the
-         *     claim sheet wrote it (core/metadata.c metadata_from_json)
+         *   - an owner or a group is a name, whole and never empty, so the name
+         *     C reads is the name the claim stored and one a resolver can ask
+         *     for; NULL is no claim, its one spelling — the claim sheet's parser
+         *     refuses the empty name too (core/metadata.c metadata_from_json),
+         *     so no writer is handed one
          *   - the table is stored sorted by its key (WITHOUT ROWID): a read in
          *     key order walks the table, with no sort step and no index between */
         "CREATE TABLE path_records ("
@@ -381,8 +383,8 @@ static error_t *state_initialize(sqlite3 *db) {
         "        " PROFILE_SPELLING("profile") ","
         "    kind TEXT NOT NULL CHECK(kind = 'file' OR kind = 'symlink' OR kind = 'directory'),"
         "    mode INTEGER CHECK(mode BETWEEN 0 AND 511),"
-        "    owner TEXT CHECK(instr(owner, char(0)) = 0),"
-        "    \"group\" TEXT CHECK(instr(\"group\", char(0)) = 0),"
+        "    owner TEXT CHECK(instr(owner, char(0)) = 0 AND owner <> ''),"
+        "    \"group\" TEXT CHECK(instr(\"group\", char(0)) = 0 AND \"group\" <> ''),"
         "    "
         "    blob_oid BLOB CHECK(blob_oid IS NULL"
         "        OR (length(blob_oid) = 20 AND blob_oid != zeroblob(20))),"

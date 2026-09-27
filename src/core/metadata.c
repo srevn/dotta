@@ -1267,7 +1267,8 @@ static error_t *parse_mode(const char *mode_str, mode_t *out) {
  * is not noise. Absence parses as itself: a missing mode is MODE_UNCLAIMED, missing
  * owner/group NULL, a missing "tracked" an ancestor claim, and an item that claims
  * nothing is accepted and inert — strictness lives where the fact is authored,
- * not here.
+ * not here. A present mode, owner or group is a value of its kind or a refusal
+ * all the same: a mode that parses, a name.
  */
 error_t *metadata_from_json(const char *json_str, metadata_t **out) {
     CHECK_NULL(json_str);
@@ -1459,12 +1460,24 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
         }
 
         /* Ownership is the overlay every producer stamps beside the factory,
-         * present iff the item claims it. What an absent one means is the label's
-         * and is decided where the claim is read (metadata_ownership), never
-         * enforced here: a claim standing under any label is parsed as it stands,
-         * which is what makes a hand-written one honoured on the read side. */
+         * present iff the item claims it — and a present half is a name, mode's
+         * own rule: a field that is here says something, so a non-string (a uid
+         * typed as a number, a null) or an empty name is refused as a field,
+         * never dropped and never kept for a resolver no host can answer. No
+         * producer writes one; a hand does, and the parser is where a hand is
+         * answered. What an absent half means is decided where the claim is read
+         * (metadata_ownership), never here: a claim standing under any label is
+         * parsed as it stands. */
         cJSON *owner_obj = cJSON_GetObjectItem(item_obj, "owner");
-        if (owner_obj && cJSON_IsString(owner_obj) && owner_obj->valuestring) {
+        if (owner_obj) {
+            if (!cJSON_IsString(owner_obj) || !owner_obj->valuestring ||
+                !*owner_obj->valuestring) {
+                err = ERROR(
+                    ERR_INVALID_ARG, "Invalid owner field (key: %s)",
+                    key_obj->valuestring
+                );
+                goto cleanup;
+            }
             item->owner = strdup(owner_obj->valuestring);
             if (!item->owner) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate owner string");
@@ -1472,9 +1485,17 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
             }
         }
 
-        /* Parse optional group, the other half of the same overlay */
+        /* The group, the other half of the same overlay, by the same rule */
         cJSON *group_obj = cJSON_GetObjectItem(item_obj, "group");
-        if (group_obj && cJSON_IsString(group_obj) && group_obj->valuestring) {
+        if (group_obj) {
+            if (!cJSON_IsString(group_obj) || !group_obj->valuestring ||
+                !*group_obj->valuestring) {
+                err = ERROR(
+                    ERR_INVALID_ARG, "Invalid group field (key: %s)",
+                    key_obj->valuestring
+                );
+                goto cleanup;
+            }
             item->group = strdup(group_obj->valuestring);
             if (!item->group) {
                 err = ERROR(ERR_MEMORY, "Failed to duplicate group string");

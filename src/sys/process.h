@@ -99,6 +99,18 @@ typedef enum {
 #define PROCESS_STDIN_BUFFER_MAX 4096
 
 /**
+ * The most a capture keeps of a child's output, stdout and stderr together.
+ *
+ * What a child writes is the child's to size, never the memory dotta holds for
+ * it: past the bound the capture keeps nothing more and counts what it drains
+ * (result.output_dropped), and the child runs to its own end, never killed for
+ * its volume. What a short capture means is the caller's to say — a credential
+ * response read in part is refused (sys/credentials), a failed hook's output is
+ * shown as far as it was kept (utils/hooks).
+ */
+#define PROCESS_CAPTURE_MAX ((size_t) 1024 * 1024)
+
+/**
  * Process-group policy for the spawned child.
  *
  * SHARED — child stays in the parent's process group. Ctrl+C from the controlling
@@ -148,7 +160,7 @@ typedef struct {
     process_stdin_t stdin_policy;
     const char *stdin_content;      /* non-NULL iff stdin_policy == BUFFER */
     size_t stdin_content_len;       /* bytes in stdin_content (≤ MAX) */
-    bool capture;                   /* true = collect stdout+stderr into result */
+    bool capture;                   /* true = collect stdout+stderr into result, up to the bound */
     bool secure_capture;            /* scrub the capture buffer before any allocator hand-back */
     int stream_fd;                  /* -1 = no streaming; else write each chunk */
     const char *work_dir;           /* NULL = inherit parent's CWD */
@@ -168,32 +180,36 @@ typedef struct {
  *     process_result_dispose(&result);
  *
  * Field semantics:
- * - exit_code   : WEXITSTATUS for normal termination, 128+signal_num
- *                 for signal termination. Reflects what the wait status actually
- *                 said — never overloaded with a timeout sentinel (use timed_out
- *                 for that).
- * - signal_num  : 0 if normal exit; signal that killed the child
- *                 otherwise. When a timeout fires, this is SIGTERM or SIGKILL
- *                 (whichever finally reaped the child).
- * - timed_out   : true if the primitive killed the child for
- *                 exceeding spec.timeout_seconds. Independent of
- *                 exit_code/signal_num — caller checks this first.
- * - exec_failed : true if the child reached execve() and execve returned, OR a
- *                 child-side setup step (dup2, chdir) failed before exec.
- *                 exec_errno carries the errno from the failure.
- * - exec_errno  : errno value reported by the child via the
- *                 self-pipe. Zero when exec_failed is false.
- * - output      : capture buffer, NUL-terminated. Non-NULL only if
- *                 spec.capture was true AND something was read before failure.
- *                 Caller may take ownership by
- *                 setting result.output = NULL before dispose;
- *                 otherwise dispose frees it.
- * - output_len  : number of bytes in output, excluding the
- *                 terminating NUL. Zero when output is NULL.
- * - secure      : mirrors spec.secure_capture. When true,
- *                 process_result_dispose scrubs the capture buffer before free.
- *                 Ownership-transfer (output = NULL before dispose) bypasses
- *                 this scrub — the caller then owns scrubbing.
+ * - exit_code      : WEXITSTATUS for normal termination, 128+signal_num
+ *                    for signal termination. Reflects what the wait status actually
+ *                    said — never overloaded with a timeout sentinel (use timed_out
+ *                    for that).
+ * - signal_num     : 0 if normal exit; signal that killed the child
+ *                    otherwise. When a timeout fires, this is SIGTERM or SIGKILL
+ *                    (whichever finally reaped the child).
+ * - timed_out      : true if the primitive killed the child for
+ *                    exceeding spec.timeout_seconds. Independent of
+ *                    exit_code/signal_num — caller checks this first.
+ * - exec_failed    : true if the child reached execve() and execve returned, OR a
+ *                    child-side setup step (dup2, chdir) failed before exec.
+ *                    exec_errno carries the errno from the failure.
+ * - exec_errno     : errno value reported by the child via the
+ *                    self-pipe. Zero when exec_failed is false.
+ * - output         : capture buffer, NUL-terminated. Non-NULL only if
+ *                    spec.capture was true AND something was read before failure.
+ *                    Caller may take ownership by
+ *                    setting result.output = NULL before dispose;
+ *                    otherwise dispose frees it.
+ * - output_len     : number of bytes in output, excluding the
+ *                    terminating NUL. Zero when output is NULL. At most
+ *                    PROCESS_CAPTURE_MAX.
+ * - output_dropped : bytes the child wrote past PROCESS_CAPTURE_MAX, drained
+ *                    and not kept — output holds the first PROCESS_CAPTURE_MAX
+ *                    and the rest is gone. Zero for a capture that kept everything.
+ * - secure         : mirrors spec.secure_capture. When true,
+ *                    process_result_dispose scrubs the capture buffer before
+ *                    free. Ownership-transfer (output = NULL before dispose)
+ *                    bypasses this scrub — the caller then owns scrubbing.
  */
 typedef struct {
     int exit_code;
@@ -203,6 +219,7 @@ typedef struct {
     int exec_errno;
     char *output;
     size_t output_len;
+    size_t output_dropped;
     bool secure;
 } process_result_t;
 

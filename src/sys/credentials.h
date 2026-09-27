@@ -119,8 +119,9 @@ int credential_make_default(git_credential **out);
  * heap-allocated, and free of \r/\n. On any other outcome both are left NULL
  * and the caller falls through to its anonymous / default path. Error_t is returned
  * only for unusual conditions worth surfacing to the user — exec failure, timeout,
- * OOM, malformed helper response. The common "helper has no creds for this URL"
- * outcome is signalled by NULL out-params and a NULL return value.
+ * OOM, malformed helper response, a response past the capture's bound (never
+ * read in part: PROCESS_CAPTURE_MAX). The common "helper has no creds for this
+ * URL" outcome is signalled by NULL out-params and a NULL return value.
  *
  * Caller frees `*out_user` / `*out_pass` with buffer_secure_free (using
  * `strlen(buf) + 1` as the length).

@@ -346,10 +346,11 @@ static void credential_request_secure_free(buffer_t *req) {
 
 /**
  * Inspect a process_result_t for primitive-level helper failures (exec failed /
- * timed out) and synthesize an error_t describing the cause. Returns NULL when
- * the process completed normally — even when the exit code is non-zero, since
- * many helpers signal "no creds for this URL" or "subcommand not implemented"
- * via non-zero exit, which the caller treats as a non-fatal outcome.
+ * timed out / a response past the capture's bound) and synthesize an error_t
+ * describing the cause. Returns NULL when the process completed normally — even
+ * when the exit code is non-zero, since many helpers signal "no creds for this
+ * URL" or "subcommand not implemented" via non-zero exit, which the caller treats
+ * as a non-fatal outcome.
  *
  * `subcommand` is woven into the message so the caller doesn't need to repeat
  * the context.
@@ -369,6 +370,15 @@ static error_t *helper_outcome_error(
             ERR_INTERNAL,
             "git credential %s timed out after %d seconds",
             subcommand, CRED_HELPER_TIMEOUT_SECONDS
+        );
+    }
+    /* The capture kept its first bytes and dropped the rest (sys/process.h): a
+     * response read in part is no response, whatever its first lines say. */
+    if (result->output_dropped > 0) {
+        return ERROR(
+            ERR_INTERNAL,
+            "git credential %s wrote more than %zu bytes, and a response is "
+            "never read in part", subcommand, PROCESS_CAPTURE_MAX
         );
     }
     return NULL;

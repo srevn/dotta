@@ -406,6 +406,14 @@ static void print_hook_output(
         output_print(
             out, OUTPUT_NORMAL, "Hook output:\n%s\n", result->output
         );
+        /* The capture kept the hook's first bytes (sys/process.h): what it dropped
+         * is counted, never shown. */
+        if (result->output_dropped > 0) {
+            output_print(
+                out, OUTPUT_NORMAL, "... and %zu more bytes\n",
+                result->output_dropped
+            );
+        }
     }
 }
 

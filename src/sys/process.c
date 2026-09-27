@@ -16,7 +16,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
@@ -28,7 +27,8 @@
 #include "base/secure.h"
 #include "sys/identity.h"
 
-/* Initial capture buffer size; doubles on demand up to SIZE_MAX/2. */
+/* Initial capture buffer size; doubles on demand up to the bound
+ * (PROCESS_CAPTURE_MAX, and its NUL). */
 #define PROCESS_CAPTURE_INITIAL 4096
 
 /* Read chunk size for draining the child's output pipe. */
@@ -158,30 +158,25 @@ static long process_remaining(
 /**
  * Compute the next capacity in the doubling schedule.
  *
- * Returns 0 on overflow, otherwise the smallest power-of-two-step capacity that
- * fits `needed`. Shared by both grow strategies so the size policy stays in one
- * place.
+ * The smallest power-of-two step that fits `needed`, and never more than the
+ * bound holds — PROCESS_CAPTURE_MAX and its NUL, which no `needed` exceeds, so
+ * the doubling cannot overflow. Shared by both grow strategies so the size policy
+ * stays in one place.
  */
 static size_t capture_next_capacity(size_t current, size_t needed) {
     while (current < needed) {
-        if (current > SIZE_MAX / 2) {
-            return 0;
-        }
         current *= 2;
     }
-    return current;
+    return current < PROCESS_CAPTURE_MAX + 1 ? current : PROCESS_CAPTURE_MAX + 1;
 }
 
 /**
- * Grow the capture buffer to fit `needed` bytes. Returns NULL on allocation failure
- * or arithmetic overflow; otherwise returns the (possibly reallocated) buffer
- * and updates *capacity_inout.
+ * Grow the capture buffer to fit `needed` bytes. Returns NULL on allocation
+ * failure; otherwise returns the (possibly reallocated) buffer and updates
+ * *capacity_inout.
  */
 static char *capture_grow(char *buf, size_t needed, size_t *capacity_inout) {
     size_t cap = capture_next_capacity(*capacity_inout, needed);
-    if (cap == 0) {
-        return NULL;
-    }
     char *grown = realloc(buf, cap);
     if (!grown) {
         return NULL;
@@ -211,9 +206,6 @@ static char *capture_grow_secure(
     char *buf, size_t cur_len, size_t needed, size_t *capacity_inout
 ) {
     size_t cap = capture_next_capacity(*capacity_inout, needed);
-    if (cap == 0) {
-        return NULL;
-    }
     char *grown = malloc(cap);
     if (!grown) {
         return NULL;
@@ -284,6 +276,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     char *capture = NULL;
     size_t cap_len = 0;
     size_t cap_capacity = 0;
+    size_t cap_dropped = 0;
     int status = 0;
     bool timed_out = false;
     error_t *err = NULL;
@@ -542,11 +535,18 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
         }
 
         if (spec->capture) {
-            size_t need = cap_len + (size_t) n + 1;
-            if (need < cap_len) {
-                err = ERROR(ERR_MEMORY, "Capture buffer size overflow");
-                goto cleanup;
+            /* The first PROCESS_CAPTURE_MAX bytes are kept, and the rest counted
+             * as the loop drains them: the child's volume never sizes the capture,
+             * and the child runs to its own end either way (the header). Kept
+             * or not, every chunk is read, so a child past the bound never blocks
+             * on a full pipe. */
+            size_t keep = (size_t) n;
+            if (keep > PROCESS_CAPTURE_MAX - cap_len) {
+                keep = PROCESS_CAPTURE_MAX - cap_len;
             }
+            cap_dropped += (size_t) n - keep;
+
+            size_t need = cap_len + keep + 1;
             if (need > cap_capacity) {
                 char *grown = spec->secure_capture
                     ? capture_grow_secure(capture, cap_len, need, &cap_capacity)
@@ -561,8 +561,8 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
                 }
                 capture = grown;
             }
-            memcpy(capture + cap_len, buf, (size_t) n);
-            cap_len += (size_t) n;
+            memcpy(capture + cap_len, buf, keep);
+            cap_len += keep;
         }
 
         if (spec->stream_fd >= 0 && !stream_broken) {
@@ -676,6 +676,7 @@ error_t *process_run(const process_spec_t *spec, process_result_t *result) {
     if (spec->capture) {
         result->output = capture;
         result->output_len = cap_len;
+        result->output_dropped = cap_dropped;
         result->secure = spec->secure_capture;
         capture = NULL;
     }

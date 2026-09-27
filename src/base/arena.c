@@ -5,7 +5,9 @@
  * subsequent blocks double the previous capacity (or match
  * the request, whichever is larger).  Typical workloads fit in one block. Every
  * block is the heap's, which dies rather than answer NULL (base/heap.h), and so
- * does a request whose size no block could hold.
+ * does a request whose size no block could hold. A block's base is every older
+ * block's capacity, so the arena's position — base and used — only grows while
+ * nothing is reset, and a mark is that number.
  */
 
 #include "base/arena.h"
@@ -27,6 +29,7 @@
 
 typedef struct arena_block {
     struct arena_block *next;       /* Older block (chain prepends; head=current) */
+    size_t base;                    /* the arena's position at data[0]: every older block's capacity */
     size_t capacity;                /* usable bytes in data[] */
     size_t used;                    /* bytes consumed so far  */
     char data[];                    /* flexible array member   */
@@ -72,6 +75,7 @@ static void arena_chain(arena_t *arena, size_t min_capacity) {
 
     arena_block_t *block = heap_alloc(sizeof(arena_block_t) + capacity);
     block->next = current;
+    block->base = current ? current->base + current->capacity : 0;
     block->capacity = capacity;
     block->used = 0;
     arena->current = block;
@@ -182,19 +186,34 @@ void *arena_grow(
     return larger;
 }
 
-void arena_reset(arena_t *arena) {
-    if (!arena) return;
+arena_mark_t arena_mark(const arena_t *arena) {
+    CHECK_NULL(arena);
 
-    /* Free all blocks except the tail */
+    return (arena_mark_t){
+        .arena = arena,
+        .position = arena->current->base + arena->current->used,
+    };
+}
+
+void arena_reset(arena_t *arena, arena_mark_t mark) {
+    CHECK_NULL(arena);
+    CHECK_ARG(mark.arena == arena, "the mark was taken in another arena");
+
+    /* A block that begins at or past the mark was chained after it, and goes
+     * whole. The first block begins at position 0 and stays. */
     arena_block_t *b = arena->current;
-    while (b->next) {
+    while (b->next && b->base >= mark.position) {
         arena_block_t *next = b->next;
         free(b);
         b = next;
     }
-
-    b->used = 0;
     arena->current = b;
+
+    /* The mark's own block is rewound to it, never forward: a mark past the arena's
+     * position was dropped by an earlier reset to one below it. */
+    size_t used = mark.position - b->base;
+    CHECK_ARG(used <= b->used, "the mark is past the arena's position");
+    b->used = used;
 }
 
 void arena_free(arena_t *arena) {

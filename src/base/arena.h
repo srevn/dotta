@@ -3,7 +3,7 @@
  *
  * Chained-block arena: an allocation bumps a pointer within the current block;
  * one that does not fit chains a new block. Everything the arena holds is freed
- * in a single arena_free() call.
+ * in a single arena_free() call, and everything after a mark by arena_reset().
  *
  * An allocation cannot fail: it succeeds, or the run dies of exhaustion
  * (base/heap.h heap_die), so no answer here is NULL but the copy of a NULL string.
@@ -106,14 +106,41 @@ void *arena_grow(
 );
 
 /**
- * Reset arena to empty, retaining only the initial block.
+ * A position in an arena, for arena_reset to return to
  *
- * Frees all expansion blocks and resets the initial block's bump
- * pointer.  Pointers obtained before the reset become invalid.
- *
- * @param arena Arena (NULL is a no-op).
+ * A value arena_mark takes: nothing holds it, and nothing frees it.
  */
-void arena_reset(arena_t *arena);
+typedef struct {
+    const arena_t *arena;   /* the arena it was taken in */
+    size_t position;        /* the arena's bytes then, every older block's whole */
+} arena_mark_t;
+
+/**
+ * The arena's position, for arena_reset to return to
+ *
+ * Everything allocated after the mark goes at the reset — so an array made before
+ * the mark is never grown after it: its larger array would be allocated above
+ * the mark, and dropped with it. A walk takes a mark per frame, once its listing
+ * is made, and returns to it per entry.
+ *
+ * @param arena Arena (must not be NULL)
+ * @return The mark
+ */
+arena_mark_t arena_mark(const arena_t *arena);
+
+/**
+ * Return the arena to a mark: everything allocated after it is dropped
+ *
+ * The blocks chained after the mark are freed and the mark's own block rewound:
+ * what was allocated before the mark stands, and a pointer into what came after
+ * is no longer valid. "Empty" is the mark taken as the arena was created. A mark
+ * taken in another arena, or one past the arena's position — a mark an earlier
+ * reset to one below it dropped — is a caller's bug.
+ *
+ * @param arena Arena (must not be NULL)
+ * @param mark  A mark arena_mark took of this arena
+ */
+void arena_reset(arena_t *arena, arena_mark_t mark);
 
 /**
  * Free all blocks and the arena struct itself.

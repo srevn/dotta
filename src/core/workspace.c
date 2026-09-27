@@ -2483,6 +2483,7 @@ static error_t *scan_directory_for_untracked(
         string_array_free(listing);
         return ERROR(ERR_MEMORY, "Failed to allocate the scan's scratch");
     }
+    const arena_mark_t empty = arena_mark(scratch);
 
     /* "/" is the one directory whose spelling ends in its separator, and a tracked
      * directory can stand there: `add p /` writes a `root` item, a `home` or
@@ -2494,7 +2495,7 @@ static error_t *scan_directory_for_untracked(
     const char *separator = directory[1] ? "/" : "";
 
     for (size_t i = 0; i < listing->count; i++) {
-        arena_reset(scratch);
+        arena_reset(scratch, empty);
 
         const char *child = arena_str_format(
             scratch, "%s%s%s", directory, separator, listing->items[i]

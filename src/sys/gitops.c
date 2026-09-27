@@ -654,7 +654,6 @@ error_t *gitops_fetch_remote(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);
@@ -688,7 +687,6 @@ error_t *gitops_fetch_branch(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     /* The refspec's source is the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
@@ -741,7 +739,6 @@ error_t *gitops_fetch_branches(
     CHECK_NULL(remote_name);
     CHECK_NULL(branches);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
     CHECK_ARG(branches->count > 0, "branches must not be empty");
 
     /* Look up remote once */
@@ -828,7 +825,6 @@ error_t *gitops_push_branch(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
@@ -880,7 +876,6 @@ error_t *gitops_force_push_branch(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
@@ -933,7 +928,6 @@ error_t *gitops_delete_remote_branch(
     CHECK_NULL(remote_name);
     CHECK_NULL(branch_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     /* The refspec's halves are the branch's ref, spelled where every one is. */
     char refname[DOTTA_REFNAME_MAX];
@@ -1065,7 +1059,6 @@ error_t *gitops_get_remote_url(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(out_url);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     git_remote *remote = NULL;
     int err = git_remote_lookup(&remote, repo, remote_name);

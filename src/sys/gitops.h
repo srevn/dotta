@@ -624,6 +624,12 @@ error_t *gitops_get_remote_url(
  * SSH/anonymous still works), so this stays a happy-path outcome rather than an
  * error.
  *
+ * The name is the configuration's, as git lists it, and nothing here judges it:
+ * a name Git refuses — a hand-written `[remote ""]` among them — is refused by
+ * the lookup of whichever verb takes it, in Git's words. Every verb that takes
+ * a remote name looks it up before any other use of it, and none refuses one
+ * ahead of that lookup.
+ *
  * Outputs are arena-borrowed; the caller does not free them, and they remain
  * valid for the lifetime of the arena.
  *

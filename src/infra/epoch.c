@@ -395,7 +395,6 @@ error_t *epoch_push(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     /* Skip the network round-trip when the local ref does not exist — `dotta
      * init` populates it but a `dotta sync` on a freshly-cloned encryption-disabled
@@ -514,7 +513,6 @@ error_t *epoch_fetch(
     CHECK_NULL(repo);
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);
@@ -1125,7 +1123,6 @@ static error_t *inspect_remote_epoch(
     CHECK_NULL(remote_name);
     CHECK_NULL(xfer);
     CHECK_NULL(out_status);
-    CHECK_ARG(remote_name[0] != '\0', "Remote name cannot be empty");
 
     git_remote *remote = NULL;
     int git_err = git_remote_lookup(&remote, repo, remote_name);

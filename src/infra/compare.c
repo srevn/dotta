@@ -470,19 +470,17 @@ error_t *compare_generate_diff(
             out->diff_text = heap_strdup("File not deployed on disk");
             break;
 
-        case CMP_TYPE_DIFF: {
+        case CMP_TYPE_DIFF:
             /* Both kinds named, the disk's off this function's own look.
              * fs_stat_noun reads the type bits whole, so a directory or a device
              * standing here is named rather than folded into "regular file";
              * the expected kind is spelled in that same function's words, so
              * the two halves of one sentence name their kinds alike. */
-            int n = asprintf(
-                &out->diff_text, "Type mismatch: expected %s, found %s",
-                mode == GIT_FILEMODE_LINK ? "symlink" : "regular file", fs_stat_noun(&st)
+            out->diff_text = heap_str_format(
+                "Type mismatch: expected %s, found %s", mode == GIT_FILEMODE_LINK
+                ? "symlink" : "regular file", fs_stat_noun(&st)
             );
-            if (n < 0) out->diff_text = NULL;
             break;
-        }
 
         case CMP_DIFFERENT: {
             /* Which side the hunk shows first, read off the direction once for

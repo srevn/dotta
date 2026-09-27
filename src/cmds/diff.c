@@ -13,7 +13,6 @@
 
 #include "base/args.h"
 #include "base/error.h"
-#include "base/hashmap.h"
 #include "base/output.h"
 #include "base/refspec.h"
 #include "base/timeutil.h"

@@ -129,23 +129,20 @@ static error_t *require_disjoint(
  * the absent one — so no pattern lands at the head of the file, where a byte-order
  * mark in front of it would be the file's and not the pattern's.
  *
- * Contract: on success, *new_content is NULL iff *added_count == 0. The helper
- * never hands back a buffer that is byte-identical to its input, so callers can
- * treat NULL as "nothing changed" without further checks.
+ * Contract: the new content is NULL iff *added_count == 0. The helper never hands
+ * back a buffer that is byte-identical to its input, so callers can treat NULL
+ * as "nothing changed" without further checks.
  */
-static error_t *add_patterns_to_content(
+static char *add_patterns_to_content(
     const char *existing_content,
     char **patterns,
     size_t pattern_count,
-    char **new_content,
     size_t *added_count
 ) {
     CHECK_NULL(existing_content);
     CHECK_NULL(patterns);
-    CHECK_NULL(new_content);
     CHECK_NULL(added_count);
 
-    *new_content = NULL;
     *added_count = 0;
 
     size_t existing_len = strlen(existing_content);
@@ -195,8 +192,7 @@ static error_t *add_patterns_to_content(
         return NULL;
     }
 
-    *new_content = result;
-    return NULL;
+    return result;
 }
 
 /**
@@ -210,24 +206,21 @@ static error_t *add_patterns_to_content(
  * `foo` and `foo   ` — are one request, removed or not found once.
  * `*not_found_count` is always populated, whether or not the buffer changed.
  *
- * Contract: on success, *new_content is NULL iff *removed_count == 0. Callers
- * can treat NULL as "nothing changed" without a content compare.
+ * Contract: the new content is NULL iff *removed_count == 0. Callers can treat
+ * NULL as "nothing changed" without a content compare.
  */
-static error_t *remove_patterns_from_content(
+static char *remove_patterns_from_content(
     const char *existing_content,
     char **patterns,
     size_t pattern_count,
-    char **new_content,
     size_t *removed_count,
     size_t *not_found_count
 ) {
     CHECK_NULL(existing_content);
     CHECK_NULL(patterns);
-    CHECK_NULL(new_content);
     CHECK_NULL(removed_count);
     CHECK_NULL(not_found_count);
 
-    *new_content = NULL;
     *removed_count = 0;
     *not_found_count = 0;
 
@@ -312,8 +305,7 @@ static error_t *remove_patterns_from_content(
         return NULL;
     }
 
-    *new_content = result;
-    return NULL;
+    return result;
 }
 
 /**
@@ -552,14 +544,7 @@ static error_t *modify_dottaignore(
 
     if (add_count > 0) {
         size_t added = 0;
-        char *next = NULL;
-        err = add_patterns_to_content(
-            owned, add_patterns, add_count, &next, &added
-        );
-        if (err) {
-            free(owned);
-            return error_wrap(err, "Failed to add patterns");
-        }
+        char *next = add_patterns_to_content(owned, add_patterns, add_count, &added);
         if (next) {
             free(owned);
             owned = next;
@@ -570,14 +555,9 @@ static error_t *modify_dottaignore(
     if (remove_count > 0) {
         size_t removed = 0;
         size_t not_found = 0;
-        char *next = NULL;
-        err = remove_patterns_from_content(
-            owned, remove_patterns, remove_count, &next, &removed, &not_found
+        char *next = remove_patterns_from_content(
+            owned, remove_patterns, remove_count, &removed, &not_found
         );
-        if (err) {
-            free(owned);
-            return error_wrap(err, "Failed to remove patterns");
-        }
         /* not_found is populated whether or not the buffer changed — always capture
          * so the "patterns not found" diagnostic fires even when nothing was
          * removed. */

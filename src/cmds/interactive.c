@@ -340,7 +340,7 @@ static void plan_collect(arena_t *arena, view_t *view, plan_t *plan) {
  * names another directory), removal_names (arena-strdup'd so they outlive the
  * slice), and the spelling a retained binding keeps, copied onto the item that
  * offered another for it. */
-static error_t *plan_classify(
+static void plan_classify(
     arena_t *arena, state_t *deploy_state, plan_t *plan
 ) {
     state_profiles_t persisted = state_profiles(deploy_state);
@@ -418,8 +418,6 @@ static error_t *plan_classify(
             it->target = heap_strdup(persisted_target);
         }
     }
-
-    return NULL;
 }
 
 /* Phase: validate user-supplied targets at the boundary, mirroring the check
@@ -516,8 +514,7 @@ static error_t *save_order(
     error_t *err = state_begin(deploy_state);
     if (err) return err;
 
-    err = plan_classify(arena, deploy_state, &plan);
-    if (err) goto rollback;
+    plan_classify(arena, deploy_state, &plan);
 
     err = plan_validate(&plan);
     if (err) goto rollback;

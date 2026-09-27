@@ -300,14 +300,14 @@ static mode_t export_entry_mode(
  * it asks the profile's view, which is strict about the sheet by contract
  * (core/manifest.h), and inherits that answer.
  */
-static error_t *load_sheet(
+static metadata_t *load_sheet(
     const dotta_ctx_t *ctx,
     git_tree *tree,
-    const char *profile,
-    metadata_t **out
+    const char *profile
 ) {
-    error_t *err = metadata_load_from_tree(ctx->run.repo, tree, profile, out);
-    if (!err) return NULL;
+    metadata_t *metadata = NULL;
+    error_t *err = metadata_load_from_tree(ctx->run.repo, tree, profile, &metadata);
+    if (!err) return metadata;
 
     output_warning(
         ctx->out, OUTPUT_NORMAL,
@@ -316,8 +316,7 @@ static error_t *load_sheet(
     );
     error_free(err);
 
-    *out = metadata_create_empty();
-    return NULL;
+    return metadata_create_empty();
 }
 
 /**
@@ -560,10 +559,7 @@ static error_t *collect_profile(
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
-    metadata_t *metadata = NULL;
-
-    error_t *err = load_sheet(ctx, tree, profile, &metadata);
-    if (err) return err;
+    metadata_t *metadata = load_sheet(ctx, tree, profile);
 
     /* Under a directory destination the copy takes the profile's last segment
      * (hosts/mbp -> mbp). */
@@ -579,7 +575,7 @@ static error_t *collect_profile(
         .arena        = arena,
         .error        = NULL
     };
-    err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
+    error_t *err = gitops_tree_walk(tree, collect_tree_callback, &cctx);
     if (cctx.error) {
         /* The callback error is the cause; the walk's generic user-abort wrapper
          * is noise. */
@@ -628,11 +624,8 @@ static error_t *collect_storage(
     export_entry_list_t *list
 ) {
     arena_t *arena = ctx->arena;
-    metadata_t *metadata = NULL;
+    metadata_t *metadata = load_sheet(ctx, tree, profile);
     git_tree *subtree = NULL;
-
-    error_t *err = load_sheet(ctx, tree, profile, &metadata);
-    if (err) return err;
 
     list->basename = path_basename(name);
 
@@ -640,7 +633,7 @@ static error_t *collect_storage(
      * profile_holds) — the sheet as this verb read it, tolerantly (load_sheet),
      * so a damaged sheet costs the copy a claim and never the tree's answer. */
     profile_held_t held;
-    err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
+    error_t *err = profile_holds(ctx->run.repo, tree, metadata, profile, name, &held);
     if (err) goto cleanup;
 
     switch (held.kind) {

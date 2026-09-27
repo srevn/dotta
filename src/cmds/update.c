@@ -1216,9 +1216,8 @@ cleanup:
  *              context printed ahead of the census)
  * @param item_count Number of items
  * @param counts The accepted items counted by fate (must not be NULL)
- * @return Error or NULL on success
  */
-static error_t *update_print_preview(
+static void update_print_preview(
     output_t *out,
     const workspace_item_t **items,
     size_t item_count,
@@ -1457,8 +1456,6 @@ static error_t *update_print_preview(
             "narrow the pattern that matches it before this commit."
         );
     }
-
-    return NULL;
 }
 
 /**
@@ -1768,13 +1765,10 @@ error_t *cmd_update(const dotta_ctx_t *ctx, const cmd_update_options_t *opts) {
     }
 
     /* Preview: what this run will do, grouped by fate */
-    err = update_print_preview(
+    update_print_preview(
         out, (const workspace_item_t **) partition.accepted.entries,
         partition.accepted.count, &counts
     );
-    if (err) {
-        goto cleanup;
-    }
 
     /* The hooks fire around the work — after the nothing-exit (a no-op run fires
      * nothing), before the prompt: apply's order. The preview's verdicts predate

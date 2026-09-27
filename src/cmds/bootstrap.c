@@ -303,7 +303,7 @@ static error_t *bootstrap_show(
  * For each profile: green ✓ with path if the script exists, red ✗ otherwise.
  * Closes with a hint about how to create one.
  */
-static error_t *bootstrap_list(
+static void bootstrap_list(
     git_repository *repo,
     const string_array_t *profiles,
     output_t *out
@@ -311,7 +311,7 @@ static error_t *bootstrap_list(
     CHECK_NULL(repo);
     CHECK_NULL(profiles);
 
-    if (!out) return NULL;
+    if (!out) return;
 
     output_section(out, OUTPUT_NORMAL, "Bootstrap scripts");
 
@@ -335,7 +335,6 @@ static error_t *bootstrap_list(
     output_gap(out, OUTPUT_NORMAL);
     output_hint(out, OUTPUT_NORMAL, "Create a bootstrap script with:");
     output_hintline(out, OUTPUT_NORMAL, "  dotta bootstrap <profile> --edit");
-    return NULL;
 }
 
 /**
@@ -417,10 +416,7 @@ error_t *cmd_bootstrap(const dotta_ctx_t *ctx, const cmd_bootstrap_options_t *op
 
     /* Handle --list flag */
     if (opts->list) {
-        err = bootstrap_list(repo, profiles, out);
-        if (err) {
-            err = error_wrap(err, "Failed to list bootstrap scripts");
-        }
+        bootstrap_list(repo, profiles, out);
         goto cleanup;
     }
 

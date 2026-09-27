@@ -29,7 +29,7 @@ typedef enum {
  */
 typedef struct {
     const char *url;          /* Remote URL (required) */
-    const char *path;         /* Local path (NULL = auto-generate from URL) */
+    const char *path;         /* Local path (NULL = the configured location) */
     bool quiet;               /* Suppress output */
     bool verbose;             /* Verbose output */
     int bootstrap_mode;       /* clone_bootstrap_mode_t (int for ARGS_FLAG_SET) */

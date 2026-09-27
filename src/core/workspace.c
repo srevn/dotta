@@ -53,6 +53,7 @@
 #include "base/error.h"
 #include "base/gitignore.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/ignore.h"
 #include "core/manifest.h"
@@ -1357,10 +1358,10 @@ typedef enum {
  *   BACKED      the orphan is dotta's to prune, divergence permitting
  *   LOST        the claim is gone from Git; the caller writes
  *               WORKSPACE_STATE_RELEASED — left on disk, record retires
- *   UNVERIFIED  a lookup, a load or an allocation failed. LOST would retire the
- *               record and BACKED would prune the copy, so neither is guessed:
- *               the caller marks the orphan DIVERGENCE_UNVERIFIED and holds it
- *               until Git answers
+ *   UNVERIFIED  a lookup or a load failed. LOST would retire the record and
+ *               BACKED would prune the copy, so neither is guessed: the caller
+ *               marks the orphan DIVERGENCE_UNVERIFIED and holds it until Git
+ *               answers
  *
  * No failure is raised: each one says only that the probe could not answer, which
  * UNVERIFIED already says — the orphan's hold, never the load's, the rule every
@@ -1394,10 +1395,7 @@ static orphan_authority_t compute_orphan_authority(
 
         /* Cached only once answered: a failure above caches nothing, so a transient
          * one is the next row's to retry rather than the profile's verdict. */
-        cached = calloc(1, sizeof(*cached));
-        if (!cached) {
-            return ORPHAN_AUTHORITY_UNVERIFIED;
-        }
+        cached = heap_calloc(1, sizeof(*cached));
         cached->exists = exists;
         hashmap_set(cache, profile, cached);
     }
@@ -2075,14 +2073,13 @@ static void workspace_analyze_orphans(workspace_t *ws) {
             ws->repo, authority_cache, item->profile, item->storage_path, item->item_kind
             )) {
             case ORPHAN_AUTHORITY_UNVERIFIED:
-                /* Git could not vouch for the path — a lookup that failed, or
-                 * an allocation the probe needed — and neither LOST nor BACKED
-                 * is a guess to make: held. Not measured, unlike a backed copy
-                 * below: no reader shows a bit beside UNVERIFIED, so a compare
-                 * would only give the item a second reason for the fate it already
-                 * has. Its class is UNVERIFIED whatever went wrong: the probe
-                 * meets Git and its own allocations, never a key or a
-                 * permission. */
+                /* Git could not vouch for the path — a lookup that failed — and
+                 * neither LOST nor BACKED is a guess to make: held. Not measured,
+                 * unlike a backed copy below: no reader shows a bit beside
+                 * UNVERIFIED, so a compare would only give the item a second
+                 * reason for the fate it already has. Its class is UNVERIFIED
+                 * whatever went wrong: the probe meets Git alone, never a key
+                 * or a permission. */
                 item->divergence = DIVERGENCE_UNVERIFIED;
                 item->fault = WORKSPACE_FAULT_UNVERIFIED;
                 continue;
@@ -3093,10 +3090,7 @@ error_t *workspace_load(
     /* Zeroed: every count starts at none — analyzed_count stays so on a load
      * that declines the orphan analysis — and a zeroed ptr_array_t is the diverged
      * items' empty state */
-    workspace_t *ws = calloc(1, sizeof(*ws));
-    if (!ws) {
-        return ERROR(ERR_MEMORY, "Failed to allocate workspace");
-    }
+    workspace_t *ws = heap_calloc(1, sizeof(*ws));
 
     /* Borrow caller-owned resources. Lifetime guarantees: repo is ctx->run.repo
      * (command-scoped); state comes from ctx->run.state (command-scoped);

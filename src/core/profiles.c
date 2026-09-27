@@ -15,6 +15,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/manifest.h"
 #include "core/metadata.h"
@@ -133,9 +134,6 @@ error_t *profile_detect(
     CHECK_NULL(available_branches);
     CHECK_NULL(out_profiles);
 
-    error_t *err = NULL;
-    char *os_name = NULL;
-
     string_array_t *profiles = string_array_new(0);
 
     /* 1. "global" — always first if present */
@@ -146,11 +144,7 @@ error_t *profile_detect(
     /* 2. OS-specific profiles (darwin, linux, freebsd, ...) */
     struct utsname uts;
     if (uname(&uts) == 0) {
-        os_name = strdup(uts.sysname);
-        if (!os_name) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate OS name");
-            goto cleanup;
-        }
+        char *os_name = heap_strdup(uts.sysname);
 
         /* Safe tolower: cast to unsigned char to avoid UB with negative values */
         for (char *p = os_name; *p; p++) {
@@ -158,6 +152,7 @@ error_t *profile_detect(
         }
 
         match_hierarchical_profiles(available_branches, os_name, profiles);
+        free(os_name);
     }
     /* Non-fatal: skip OS profiles if uname() fails */
 
@@ -182,17 +177,9 @@ error_t *profile_detect(
      * every --all runs over its own set. */
     profile_order(profiles);
 
-    /* Success */
-    free(os_name);
     *out_profiles = profiles;
 
     return NULL;
-
-cleanup:
-    free(os_name);
-    string_array_free(profiles);
-
-    return err;
 }
 
 /**

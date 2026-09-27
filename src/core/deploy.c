@@ -204,11 +204,7 @@ error_t *deploy_plan_build(
     CHECK_NULL(out);
 
     /* calloc zeroes the eight ptr_array_t buckets — that IS their empty state */
-    deploy_plan_t *plan = calloc(1, sizeof(*plan));
-    if (!plan) {
-        return ERROR(ERR_MEMORY, "Failed to allocate deploy plan");
-    }
-
+    deploy_plan_t *plan = heap_calloc(1, sizeof(*plan));
     error_t *err = NULL;
 
     /* Directories then files — the order preflight decides and the run acts in.
@@ -707,10 +703,7 @@ static error_t *check_landing(
     const workspace_t *ws, const deploy_preflight_result_t *verdicts,
     const char *path, deploy_skip_t *skip
 ) {
-    char *scratch = strdup(path);
-    if (!scratch) {
-        return ERROR(ERR_MEMORY, "Failed to copy path for landing check");
-    }
+    char *scratch = heap_strdup(path);
 
     size_t slash;
     fs_occupant_t occ;
@@ -933,10 +926,7 @@ error_t *deploy_preflight(
     CHECK_NULL(opts);
     CHECK_NULL(out);
 
-    deploy_preflight_result_t *result = calloc(1, sizeof(deploy_preflight_result_t));
-    if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate preflight result");
-    }
+    deploy_preflight_result_t *result = heap_calloc(1, sizeof(deploy_preflight_result_t));
 
     result->warnings = string_array_new(0);
 
@@ -948,16 +938,10 @@ error_t *deploy_preflight(
     workspace_items_t dirs = workspace_items(&plan->directories.pending);
     workspace_items_t all_dirs = workspace_directories(ws);
 
-    result->directories.entries = calloc(dirs.count + 1, sizeof(deploy_verdict_t));
-    result->files.entries = calloc(files.count + 1, sizeof(deploy_verdict_t));
-    result->ancestors.entries = calloc(all_dirs.count + 1, sizeof(deploy_verdict_t));
-    result->skipped.entries = calloc(files.count + dirs.count + 1, sizeof(deploy_skip_t));
-
-    if (!result->directories.entries || !result->files.entries ||
-        !result->ancestors.entries || !result->skipped.entries) {
-        deploy_preflight_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate verdict arrays");
-    }
+    result->directories.entries = heap_calloc(dirs.count + 1, sizeof(deploy_verdict_t));
+    result->files.entries = heap_calloc(files.count + 1, sizeof(deploy_verdict_t));
+    result->ancestors.entries = heap_calloc(all_dirs.count + 1, sizeof(deploy_verdict_t));
+    result->skipped.entries = heap_calloc(files.count + dirs.count + 1, sizeof(deploy_skip_t));
 
     error_t *err = NULL;
 
@@ -1293,10 +1277,7 @@ static error_t *hold_directory(deploy_run_t *run, const char *path, mode_t mode)
         return NULL;
     }
 
-    held_directory_t *held = malloc(sizeof(*held));
-    if (!held) {
-        return ERROR(ERR_MEMORY, "Failed to record held directory '%s'", path);
-    }
+    held_directory_t *held = heap_alloc(sizeof(*held));
     held->path = path;
     held->mode = mode;
 
@@ -1516,10 +1497,7 @@ static error_t *open_landing_directory(
  * @return Error or NULL on success
  */
 static error_t *ensure_parents(deploy_run_t *run, const char *path) {
-    char *scratch = strdup(path);
-    if (!scratch) {
-        return ERROR(ERR_MEMORY, "Failed to copy path for parent creation");
-    }
+    char *scratch = heap_strdup(path);
 
     error_t *err = NULL;
     size_t ancestor_slash;
@@ -1824,10 +1802,7 @@ error_t *deploy_execute(
 
     error_t *err = NULL;
 
-    deploy_result_t *result = calloc(1, sizeof(deploy_result_t));
-    if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate deploy result");
-    }
+    deploy_result_t *result = heap_calloc(1, sizeof(deploy_result_t));
 
     /* The receipt is sized to the verdicts up front — one slot per verdict, zeroed,
      * filled in verdict order as each act lands (a zero count allocates one slot
@@ -1836,25 +1811,19 @@ error_t *deploy_execute(
      * row could fail. count gates what a consumer reads, so an untaken slot is
      * invisible and the receipt holds exactly what happened — for a landed file,
      * with its own write's stat. */
-    result->deployed.entries = calloc(
+    result->deployed.entries = heap_calloc(
         verdicts->files.count + 1, sizeof(*result->deployed.entries)
     );
-    result->converged.entries = calloc(
+    result->converged.entries = heap_calloc(
         verdicts->directories.count + 1, sizeof(*result->converged.entries)
     );
-    result->ancestors.entries = calloc(
+    result->ancestors.entries = heap_calloc(
         verdicts->ancestors.count + 1, sizeof(*result->ancestors.entries)
     );
-    result->failed.entries = calloc(
+    result->failed.entries = heap_calloc(
         verdicts->directories.count + verdicts->files.count + 1,
         sizeof(*result->failed.entries)
     );
-
-    if (!result->deployed.entries || !result->converged.entries ||
-        !result->ancestors.entries || !result->failed.entries) {
-        deploy_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate deployment receipt");
-    }
 
     deploy_run_t run = {
         .repo     = repo,

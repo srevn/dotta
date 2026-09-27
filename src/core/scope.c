@@ -10,6 +10,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/gitignore.h"
+#include "base/heap.h"
 #include "core/ignore.h"
 #include "core/profiles.h"
 #include "core/state.h"
@@ -76,11 +77,7 @@ error_t *scope_build(
 
     *out = NULL;
 
-    scope_t *s = calloc(1, sizeof(*s));
-    if (!s) {
-        return ERROR(ERR_MEMORY, "Failed to allocate scope");
-    }
-
+    scope_t *s = heap_calloc(1, sizeof(*s));
     error_t *err = NULL;
 
     /* 1. Resolve enabled (empty-on-ERR_NOT_FOUND). */

@@ -25,6 +25,7 @@
 #include "base/array.h"
 #include "base/error.h"
 #include "base/hashmap.h"
+#include "base/heap.h"
 #include "base/string.h"
 #include "core/scope.h"
 #include "core/state.h"
@@ -68,10 +69,7 @@ error_t *cleanup_plan_build(
     CHECK_NULL(out);
 
     /* calloc zeroes the three ptr_array_t buckets — that IS their empty state */
-    cleanup_plan_t *plan = calloc(1, sizeof(*plan));
-    if (!plan) {
-        return ERROR(ERR_MEMORY, "Failed to allocate cleanup plan");
-    }
+    cleanup_plan_t *plan = heap_calloc(1, sizeof(*plan));
 
     /* --keep-orphans: nothing is planned, by request. The empty plan is what
      * every later stage reads, so no stage re-encodes the flag. */
@@ -406,10 +404,7 @@ error_t *cleanup_preflight(
 
     /* calloc zeroes the ten buckets — an empty answer needs no NULL guard
      * downstream */
-    cleanup_preflight_result_t *verdicts = calloc(1, sizeof(*verdicts));
-    if (!verdicts) {
-        return ERROR(ERR_MEMORY, "Failed to allocate cleanup verdicts");
-    }
+    cleanup_preflight_result_t *verdicts = heap_calloc(1, sizeof(*verdicts));
 
     /* The fate of every present planned item, in one set: the directory pass
      * asks it about every entry it meets. Borrowed keys, all workspace-owned;
@@ -604,10 +599,7 @@ error_t *cleanup_execute(
     CHECK_NULL(verdicts);
     CHECK_NULL(out);
 
-    cleanup_result_t *result = calloc(1, sizeof(*result));
-    if (!result) {
-        return ERROR(ERR_MEMORY, "Failed to allocate cleanup result");
-    }
+    cleanup_result_t *result = heap_calloc(1, sizeof(*result));
 
     /* The receipt is sized to the promise up front — one slot per prunable item,
      * zeroed, filled in act order as each removal is attempted (a zero count
@@ -615,37 +607,30 @@ error_t *cleanup_execute(
      * failed bucket to both kinds together — every promised item could fail.
      * count gates what a consumer reads, so an untaken slot is invisible and
      * the receipt holds exactly what happened. */
-    result->pruned_files.entries = calloc(
+    result->pruned_files.entries = heap_calloc(
         verdicts->prunable_files.count + 1,
         sizeof(*result->pruned_files.entries)
     );
-    result->reclaimed_files.entries = calloc(
+    result->reclaimed_files.entries = heap_calloc(
         verdicts->prunable_files.count + 1,
         sizeof(*result->reclaimed_files.entries)
     );
-    result->pruned_dirs.entries = calloc(
+    result->pruned_dirs.entries = heap_calloc(
         verdicts->prunable_dirs.count + 1,
         sizeof(*result->pruned_dirs.entries)
     );
-    result->reclaimed_dirs.entries = calloc(
+    result->reclaimed_dirs.entries = heap_calloc(
         verdicts->prunable_dirs.count + 1,
         sizeof(*result->reclaimed_dirs.entries)
     );
-    result->skipped_dirs.entries = calloc(
+    result->skipped_dirs.entries = heap_calloc(
         verdicts->prunable_dirs.count + 1,
         sizeof(*result->skipped_dirs.entries)
     );
-    result->failed.entries = calloc(
+    result->failed.entries = heap_calloc(
         verdicts->prunable_files.count + verdicts->prunable_dirs.count + 1,
         sizeof(*result->failed.entries)
     );
-
-    if (!result->pruned_files.entries || !result->reclaimed_files.entries ||
-        !result->pruned_dirs.entries || !result->reclaimed_dirs.entries ||
-        !result->skipped_dirs.entries || !result->failed.entries) {
-        cleanup_result_free(result);
-        return ERROR(ERR_MEMORY, "Failed to allocate cleanup receipt");
-    }
 
     /* Step 1: Prune the orphaned files the verdicts cleared */
     workspace_items_t files = workspace_items(&verdicts->prunable_files);

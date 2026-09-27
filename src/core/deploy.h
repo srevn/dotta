@@ -814,11 +814,10 @@ error_t *deploy_preflight(
  * nothing — the directory stands, and children land in it or fail on their own
  * merits.
  *
- * The returned error is the run's infrastructure alone, and the receipt tells
- * the caller which: the receipt's own allocation failed (*out unset — nothing
- * ran, nothing to record), or the release of held modes failed (*out holds the
- * complete receipt beside the error — every row ran, and what landed is the
- * record's to keep). The held directories are released on every exit.
+ * The returned error is the run's infrastructure alone: the release of held modes
+ * failed, and *out holds the complete receipt beside it — every row ran, and
+ * what landed is the record's to keep. The held directories are released on every
+ * exit.
  *
  * View rows are self-contained (blob_oid, type, storage path); the content cache
  * handles encryption transparently. The record (path_records, observations) is

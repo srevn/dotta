@@ -58,17 +58,10 @@ struct metadata {
 error_t *metadata_create_empty(metadata_t **out) {
     CHECK_NULL(out);
 
-    metadata_t *metadata = calloc(1, sizeof(metadata_t));
-    if (!metadata) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata structure");
-    }
+    metadata_t *metadata = heap_calloc(1, sizeof(metadata_t));
 
     /* Allocate the item spine */
-    metadata->items = calloc(INITIAL_CAPACITY, sizeof(*metadata->items));
-    if (!metadata->items) {
-        free(metadata);
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata items array");
-    }
+    metadata->items = heap_calloc(INITIAL_CAPACITY, sizeof(*metadata->items));
 
     /* Create unified hashmap for O(1) lookups */
     metadata->index = hashmap_borrow(INITIAL_CAPACITY);
@@ -137,19 +130,10 @@ error_t *metadata_item_create_file(
         );
     }
 
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
-    }
+    metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
     item->kind = PATH_KIND_FILE;
-
-    item->key = strdup(storage_path);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-    }
-
+    item->key = heap_strdup(storage_path);
     item->mode = mode;
     item->owner = NULL;    /* Optional, set by caller if needed */
     item->group = NULL;    /* Optional, set by caller if needed */
@@ -180,19 +164,10 @@ error_t *metadata_item_create_directory(
         );
     }
 
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
-    }
+    metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
     item->kind = PATH_KIND_DIRECTORY;
-
-    item->key = strdup(storage_path);
-    if (!item->key) {
-        free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate storage path");
-    }
-
+    item->key = heap_strdup(storage_path);
     item->mode = mode;
     item->owner = NULL;      /* Optional, set by caller if needed */
     item->group = NULL;      /* Optional, set by caller if needed */
@@ -215,26 +190,16 @@ error_t *metadata_item_clone(
     CHECK_NULL(storage_path);
     CHECK_NULL(out);
 
-    metadata_item_t *item = calloc(1, sizeof(metadata_item_t));
-    if (!item) {
-        return ERROR(ERR_MEMORY, "Failed to allocate metadata item");
-    }
+    metadata_item_t *item = heap_calloc(1, sizeof(metadata_item_t));
 
     /* Everything that is not a pointer copies wholesale — kind, mode and the
      * two flags, so a field added later needs no line here. The three strings
-     * are then owned here: the key the caller named, the two ownership names
-     * the source carries, and the one refusal covers all three. */
+     * are then owned here: the key the caller named, and the two ownership names
+     * the source carries, an absent one copied as absent. */
     *item = *source;
-    item->key = strdup(storage_path);
-    item->owner = source->owner ? strdup(source->owner) : NULL;
-    item->group = source->group ? strdup(source->group) : NULL;
-
-    if (!item->key ||
-        (source->owner && !item->owner) ||
-        (source->group && !item->group)) {
-        metadata_item_free(item);
-        return ERROR(ERR_MEMORY, "Failed to duplicate metadata item strings");
-    }
+    item->key = heap_strdup(storage_path);
+    item->owner = heap_strdup(source->owner);
+    item->group = heap_strdup(source->group);
 
     *out = item;
     return NULL;
@@ -281,22 +246,17 @@ static error_t *ensure_capacity(metadata_t *metadata) {
         return NULL; /* No need to grow */
     }
 
+    /* The spine's bytes stand in memory, so its double cannot wrap; the double's
+     * bytes can, and that is exhaustion. */
     size_t new_capacity = metadata->capacity * 2;
-    if (new_capacity < metadata->capacity ||
-        new_capacity > SIZE_MAX / sizeof(*metadata->items)) {
-        return ERROR(ERR_MEMORY, "Metadata collection too large to grow");
+    if (new_capacity > SIZE_MAX / sizeof(*metadata->items)) {
+        heap_die(SIZE_MAX);
     }
 
-    metadata_item_t **new_items = realloc(
+    metadata->items = heap_realloc(
         metadata->items,
-        new_capacity * sizeof(*new_items)
+        new_capacity * sizeof(*metadata->items)
     );
-
-    if (!new_items) {
-        return ERROR(ERR_MEMORY, "Failed to grow metadata items array");
-    }
-
-    metadata->items = new_items;
     metadata->capacity = new_capacity;
 
     return NULL;
@@ -310,9 +270,7 @@ static error_t *ensure_capacity(metadata_t *metadata) {
  *
  * The collection stores pointers, so an item handed to it is taken rather than
  * copied: it keeps its place in memory, the collection keeps the pointer, and
- * the caller's handle is cleared. Both steps that can refuse — growing the spine
- * and indexing the item — run before anything is published, so a refusal leaves
- * the collection exactly as it was and the item still the caller's.
+ * the caller's handle is cleared.
  *
  * A mode arrives already validated: the two factories are the only construction
  * paths, metadata_item_clone copies an item one of them built, and no caller
@@ -354,10 +312,7 @@ error_t *metadata_add_item(
         return NULL;
     }
 
-    /* APPEND NEW ITEM
-     *
-     * The refusal comes first: a spine that cannot grow has published nothing,
-     * so the caller keeps the item and the collection is untouched. */
+    /* APPEND NEW ITEM */
     error_t *err = ensure_capacity(metadata);
     if (err) {
         return err;
@@ -688,10 +643,7 @@ static error_t *metadata_capture_ownership(
         );
     }
 
-    item->owner = strdup(pwd->pw_name);
-    if (!item->owner) {
-        return ERROR(ERR_MEMORY, "Failed to allocate owner string");
-    }
+    item->owner = heap_strdup(pwd->pw_name);
 
     /* Resolve GID to groupname: the owner brings its group with it */
     struct group *grp = getgrgid(st->st_gid);
@@ -702,10 +654,7 @@ static error_t *metadata_capture_ownership(
         );
     }
 
-    item->group = strdup(grp->gr_name);
-    if (!item->group) {
-        return ERROR(ERR_MEMORY, "Failed to allocate group string");
-    }
+    item->group = heap_strdup(grp->gr_name);
 
     return NULL;
 }
@@ -905,7 +854,7 @@ static error_t *capture_ancestor(
         /* A name this host cannot spell is the same silence as a path it cannot
          * see: a directory capture that fails loses a claim and nothing else,
          * so the rung keeps what it had and dotta creates it as it would have
-         * before. Anything else is the process failing, not the rung. */
+         * before. */
         if (err->code != ERR_NOT_FOUND) {
             return err;
         }
@@ -966,12 +915,7 @@ error_t *metadata_capture_ancestors(
      * all: each separator truncates it in place and is restored before the next
      * one extends past it. The scan reads the caller's string, which is never
      * written, so the cut is an offset into it. */
-    char *rung = strdup(storage_path);
-    if (!rung) {
-        return ERROR(
-            ERR_MEMORY, "Failed to copy path for the ancestry climb"
-        );
-    }
+    char *rung = heap_strdup(storage_path);
 
     error_t *err = NULL;
     for (const char *sep = first; sep; sep = strchr(sep + 1, '/')) {
@@ -1046,11 +990,7 @@ error_t *metadata_to_json(const metadata_t *metadata, buffer_t *out) {
      * edits, never on capture-order divergence. The sort is over a transient
      * copy of the spine; the collection's insertion order is untouched. */
     if (metadata->count > 0) {
-        sorted = malloc(metadata->count * sizeof(*sorted));
-        if (!sorted) {
-            err = ERROR(ERR_MEMORY, "Failed to allocate serialization order");
-            goto cleanup;
-        }
+        sorted = heap_calloc(metadata->count, sizeof(*sorted));
         memcpy(sorted, metadata->items, metadata->count * sizeof(*sorted));
         qsort(sorted, metadata->count, sizeof(*sorted), item_key_cmp);
     }
@@ -1422,11 +1362,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 );
                 goto cleanup;
             }
-            item->owner = strdup(owner_obj->valuestring);
-            if (!item->owner) {
-                err = ERROR(ERR_MEMORY, "Failed to duplicate owner string");
-                goto cleanup;
-            }
+            item->owner = heap_strdup(owner_obj->valuestring);
         }
 
         /* The group, the other half of the same overlay, by the same rule */
@@ -1440,11 +1376,7 @@ error_t *metadata_from_json(const char *json_str, metadata_t **out) {
                 );
                 goto cleanup;
             }
-            item->group = strdup(group_obj->valuestring);
-            if (!item->group) {
-                err = ERROR(ERR_MEMORY, "Failed to duplicate group string");
-                goto cleanup;
-            }
+            item->group = heap_strdup(group_obj->valuestring);
         }
 
         /* Hand the item to the collection; it takes it, and leaves the loop's

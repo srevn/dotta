@@ -606,10 +606,6 @@ static error_t *manifest_ascend(
     /* Nothing of the profile's above it: the root's own label, and the tail —
      * the word alone at the root itself. */
     *out_storage = label_compose(n->arena, root->label, tail);
-    if (!*out_storage) {
-        return ERROR(ERR_MEMORY, "Failed to compose the name");
-    }
-
     return NULL;
 }
 

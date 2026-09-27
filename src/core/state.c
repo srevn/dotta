@@ -28,6 +28,7 @@
 
 #include "base/arena.h"
 #include "base/error.h"
+#include "base/heap.h"
 #include "sys/filesystem.h"
 
 /* The database header's two fields that are the application's (SQLite's file
@@ -724,11 +725,7 @@ static error_t *state_read_profiles(state_t *state) {
         .count = rc == SQLITE_ROW ? (size_t) sqlite3_column_int64(stmt, 2) : 0,
     };
     if (rows.count > 0) {
-        rows.entries = calloc(rows.count, sizeof(*rows.entries));
-        if (!rows.entries) {
-            sqlite3_finalize(stmt);
-            return ERROR(ERR_MEMORY, "Failed to allocate profile row cache");
-        }
+        rows.entries = heap_calloc(rows.count, sizeof(*rows.entries));
     }
 
     error_t *err = NULL;
@@ -742,13 +739,14 @@ static error_t *state_read_profiles(state_t *state) {
         int target_type = sqlite3_column_type(stmt, 1);
         const char *target = (const char *) sqlite3_column_text(stmt, 1);
 
-        /* A copy that fails leaves its row half-built for the release below,
-         * which walks the whole allocation. */
+        /* Each copied as it comes, a NULL as NULL, so the arm reads a failed
+         * conversion off its copy; the row it stops is left half-built for the
+         * release below, which walks the whole allocation. */
         state_profile_entry_t *row = &rows.entries[i];
-        row->name = name ? strdup(name) : NULL;
-        row->target = target ? strdup(target) : NULL;
+        row->name = heap_strdup(name);
+        row->target = heap_strdup(target);
         if (!row->name || (target_type != SQLITE_NULL && !row->target)) {
-            err = ERROR(ERR_MEMORY, "Failed to copy enabled profile row");
+            err = ERROR(ERR_MEMORY, "Failed to read an enabled profile row");
             break;
         }
 
@@ -1233,10 +1231,7 @@ error_t *state_load(git_repository *repo, state_t **out) {
     CHECK_NULL(out);
     *out = NULL;
 
-    state_t *state = calloc(1, sizeof(*state));
-    if (!state) {
-        return ERROR(ERR_MEMORY, "Failed to allocate state");
-    }
+    state_t *state = heap_calloc(1, sizeof(*state));
 
     error_t *err = get_db_path(repo, &state->db_path);
     if (err) {
